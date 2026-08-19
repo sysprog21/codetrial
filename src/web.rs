@@ -73,11 +73,11 @@ pub struct WebServerConfig {
     /// client from `X-Forwarded-For`, which is only safe once every request is
     /// known to pass through that many proxies you control.
     pub trusted_proxy_hops: u32,
-    /// Every LiveKit project this server can hand a candidate to, primary first.
-    /// The single source: the primary used to be stored here and again in three
-    /// flat fields, which cost a fallback chain at every read and a dedup pass
-    /// over the policy that named it twice. An empty pool means no LiveKit
-    /// credentials are configured.
+    /// Every LiveKit project this server can hand a candidate to, primary
+    /// first. The single source: the primary used to be stored here and again
+    /// in three flat fields, which cost a fallback chain at every read and a
+    /// dedup pass over the policy that named it twice. An empty pool means no
+    /// LiveKit credentials are configured.
     pub pool: crate::config::ProviderPool,
 }
 
@@ -277,8 +277,6 @@ fn web_router(config: WebServerConfig, dispatcher: Option<Arc<dyn RoomDispatcher
 /// fallback in `web/runners.js`, because the policy below has to name the same
 /// origin the page will actually reach for.
 const COMPILER_EXPLORER_ORIGIN: &str = "https://godbolt.org";
-/// Pyodide's wasm and stdlib, pinned in `web/runners.js`.
-const PYODIDE_ORIGIN: &str = "https://cdn.jsdelivr.net";
 
 /// Built once, at startup. Parsing the policy per response was both wasted
 /// work and a silent fail-open: a header value that would not parse dropped
@@ -300,8 +298,12 @@ fn content_security_policy_header(config: &WebServerConfig) -> HeaderValue {
 /// rewriting, no plugins, no inline handlers (both pages carry zero), and a
 /// `connect-src` that names every origin the page is allowed to talk to
 /// instead of all of them.
+///
+/// Pyodide used to add `https://cdn.jsdelivr.net` to both `script-src` and
+/// `connect-src`. It is served from `web/vendor/pyodide/` now, so a page with
+/// compiled runs withdrawn names no third-party origin at all.
 fn content_security_policy(config: &WebServerConfig) -> String {
-    let mut connect = vec!["'self'".to_string(), PYODIDE_ORIGIN.to_string()];
+    let mut connect = vec!["'self'".to_string()];
     if config.compiler_explorer_enabled {
         connect.push(COMPILER_EXPLORER_ORIGIN.to_string());
     }
@@ -334,7 +336,7 @@ fn content_security_policy(config: &WebServerConfig) -> String {
         "img-src 'self' data: blob:".to_string(),
         "media-src 'self' blob:".to_string(),
         "worker-src 'self' blob:".to_string(),
-        format!("script-src 'self' blob: 'unsafe-eval' {PYODIDE_ORIGIN}"),
+        "script-src 'self' blob: 'unsafe-eval'".to_string(),
         // `blob:` is here for the avatar, and it is not optional. A .vrm is a
         // GLB, so its textures are always bufferView-backed, and GLTFLoader
         // mints a `blob:` URL per image and hands it to ImageBitmapLoader,
@@ -1184,8 +1186,8 @@ async fn token_handler(
         && !dispatcher.ensure_agent(&room_name, provider)
     {
         // Refusing is the honest failure. Handing out the token anyway would
-        // put the candidate in an empty room reading "Waiting" with nothing,
-        // on screen or in any log they can see, saying why.
+        // put the candidate in an empty room reading "Waiting" with nothing, on
+        // screen or in any log they can see, saying why.
         return json_response(
             StatusCode::SERVICE_UNAVAILABLE,
             json!({
@@ -1475,11 +1477,17 @@ fn content_type(path: &Path) -> Option<HeaderValue> {
         // `application/wasm`, and a body with no type at all is a coin toss for
         // any proxy in between.
         Some("wasm") => "application/wasm",
+
         // Same argument as `wasm`: a 15 MB untyped binary is exactly what a
         // proxy in between will try to sniff. GLTFLoader reads it as an
         // arraybuffer and does not care, but nothing else in the path is asked.
         Some("vrm" | "glb") => "model/gltf-binary",
         Some("tflite" | "binarypb") => "application/octet-stream",
+
+        // Pyodide's stdlib. Same argument again: 2.3 MB with no type is the
+        // kind of body a proxy in between decides to sniff, and `nosniff` on an
+        // untyped response is a promise about nothing.
+        Some("zip") => "application/zip",
         _ => return None,
     };
     Some(HeaderValue::from_static(value))

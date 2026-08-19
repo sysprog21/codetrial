@@ -80,7 +80,7 @@ with the hash, because a hash alone cannot tell you what to re-download.
 
 | Language | Runner | Notes |
 |---|---|---|
-| Python | Pyodide (CPython on WebAssembly) in a Worker | runs in the browser |
+| Python | Pyodide (CPython on WebAssembly) in a Worker | runs in the browser, served from `web/vendor/pyodide/` |
 | JavaScript | Web Worker | runs in the browser |
 | C, C++, Java | [Compiler Explorer](https://godbolt.org) | code leaves the machine |
 

@@ -47,6 +47,12 @@ DONT-MERGE/
 web/vendor/face-detection/*.binarypb
 web/vendor/face-detection/*.tflite
 web/vendor/face-detection/*.wasm
+# Same rule for Pyodide, pinned in web/vendor/pyodide/SHA256SUMS: 13.7 MB of
+# interpreter, glue and stdlib, none of which changes without a version bump.
+web/vendor/pyodide/*.js
+web/vendor/pyodide/*.wasm
+web/vendor/pyodide/*.zip
+web/vendor/pyodide/*.json
 # And the temp file a download in progress writes, which carries none of those
 # suffixes: a run killed outright leaves one, and it is the same megabytes.
 web/vendor/*/.*.part

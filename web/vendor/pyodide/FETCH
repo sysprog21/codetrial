@@ -1,0 +1,18 @@
+# Fetched at build time by scripts/fetch-vendor.sh, not committed: 13.7 MB of
+# wasm, emscripten glue and a stdlib zip that never change without a version
+# bump, and a git history carrying them costs every clone forever.
+#
+# First non-comment line is the base URL. Every line after it is a filename,
+# which must also appear in SHA256SUMS: the pin is the contract, this file only
+# says where to get the bytes. Bump the version here and the hashes there
+# together, and say in the commit message where the bytes came from.
+#
+# pyodide.js is the loader the page executes. It then reads the other four from
+# the same directory, which is why they are pinned too: pinning only the loader
+# verifies the doorman and waves the crowd through.
+https://cdn.jsdelivr.net/pyodide/v0.26.4/full/
+pyodide.js
+pyodide.asm.js
+pyodide.asm.wasm
+python_stdlib.zip
+pyodide-lock.json

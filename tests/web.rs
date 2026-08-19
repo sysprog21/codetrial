@@ -322,7 +322,10 @@ async fn responses_carry_baseline_security_headers() {
     // be named or the interview cannot connect.
     assert!(policy.contains("wss://example.livekit.cloud"), "{policy}");
     assert!(policy.contains("https://godbolt.org"), "{policy}");
-    assert!(policy.contains("https://cdn.jsdelivr.net"), "{policy}");
+
+    // Pyodide is served from web/vendor/pyodide/, so the CDN that used to
+    // deliver the interpreter must not be reachable from the page at all.
+    assert!(!policy.contains("cdn.jsdelivr.net"), "{policy}");
     // Loopback is a local-run affordance for the check harness only.
     assert!(policy.contains("http://127.0.0.1:*"), "{policy}");
 

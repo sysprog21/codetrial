@@ -29,21 +29,26 @@ const testTimeoutMs = 5000;
 /// execution budget failed the first compiled run of every interview and told
 /// the candidate to try again later.
 const compilerExplorerTimeoutMs = 20_000;
-/// Downloading and starting Pyodide is not a test run, so it gets its own,
-/// much longer budget. It exists only so a stalled CDN eventually gives up.
+/// Starting Pyodide is not a test run, so it gets its own, much longer budget.
+/// It exists only so a stalled or truncated download eventually gives up.
 const pythonBootTimeoutMs = 60_000;
 const compilerExplorer = {
   c: { compiler: "cclang1910", userArguments: "-O2 -std=c17" },
   cpp: { compiler: "g162", userArguments: "-O2 -std=c++20" },
   java: { compiler: "java2501", userArguments: "" },
 };
-const pyodideVersion = "0.26.4";
-// Pins the loader the browser executes. Regenerate with:
-//   curl -s https://cdn.jsdelivr.net/pyodide/v<version>/full/pyodide.js |
-//     openssl dgst -sha384 -binary | openssl base64 -A
-// The loader then pulls wasm and stdlib from the same pinned version directory;
-// those stay CDN-trusted, so self-host the full distribution if that matters.
-const pyodideIntegrity = "sha384-i3R37b3tF+HWudsUf1VSEOY2YxwSNMqY8DQa9Z0O3xh+NkJ9o+yjcGyIi5huj+nB";
+// Served from this origin, not a CDN. All five files are pinned by SHA-256 in
+// web/vendor/pyodide/SHA256SUMS and fetched by scripts/fetch-vendor.sh, which
+// refuses a hash it does not recognise. Pinning the loader in the browser and
+// letting it pull the wasm from a CDN unchecked, which is what this used to do,
+// verified the one file that does not execute candidate code.
+//
+// Absolute, not "/vendor/pyodide/". `loadPyodide` runs inside a Worker built
+// from a blob, whose base URL is the blob: URL rather than the page, so a
+// root-relative path there has no origin to resolve against. Resolved lazily
+// because the browser tests import this module under node, where there is no
+// `location`.
+const pyodideBaseUrl = () => new URL("/vendor/pyodide/", globalThis.location?.href ?? "http://localhost/").href;
 let pythonWorkerPromise = null;
 
 export async function runBrowserTests(problemId, code, language, onStatus = null) {
@@ -744,8 +749,8 @@ function pythonWorkerOnce() {
 /// download happens on this budget rather than eating a run's 5 seconds and
 /// getting reported as an infinite loop.
 async function startPythonWorker() {
-  const indexURL = `https://cdn.jsdelivr.net/pyodide/v${pyodideVersion}/full/`;
-  const loader = await verifiedPyodideLoader(`${indexURL}pyodide.js`);
+  const indexURL = pyodideBaseUrl();
+  const loader = await pyodideLoader(`${indexURL}pyodide.js`);
   const source = `${loader}
     const ready = loadPyodide({ indexURL: ${JSON.stringify(indexURL)} });
     ready.then(
@@ -793,15 +798,16 @@ async function startPythonWorker() {
 
 /// `importScripts` cannot carry subresource integrity, so the pin is checked
 /// here and the verified text is baked into the worker instead.
-async function verifiedPyodideLoader(url) {
-  // Without a deadline a stalled CDN leaves the Run button disabled forever.
+/// Read as text rather than `importScripts`d, because the Worker is built from
+/// a blob and the loader has to sit in the same source as the driver below.
+///
+/// No hash check here any more. The bytes are ours, `fetch-vendor` verified
+/// them against SHA256SUMS before they reached the disk, and `connect-src` no
+/// longer permits an origin that could substitute anything else.
+async function pyodideLoader(url) {
+  // Without a deadline a stalled response leaves the Run button disabled
+  // forever.
   const response = await fetch(url, { signal: AbortSignal.timeout(pythonBootTimeoutMs) });
-  if (!response.ok) throw new Error("Could not download the Python runtime.");
-  const source = await response.text();
-  const digest = await crypto.subtle.digest("SHA-384", new TextEncoder().encode(source));
-  const actual = `sha384-${btoa(String.fromCharCode(...new Uint8Array(digest)))}`;
-  if (actual !== pyodideIntegrity) {
-    throw new Error("The Python runtime failed its integrity check.");
-  }
-  return source;
+  if (!response.ok) throw new Error("Could not load the Python runtime.");
+  return response.text();
 }

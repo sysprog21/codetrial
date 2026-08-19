@@ -282,9 +282,10 @@ test("no test runner executes candidate code on the main thread", () => {
     budget("compilerExplorerTimeoutMs") > budget("testTimeoutMs"),
     "a remote compile needs a larger budget than local execution",
   );
-  // The pin only protects the loader when something actually checks it.
-  assert.match(script, /crypto\.subtle\.digest\("SHA-384"/);
-  assert.match(script, /actual !== pyodideIntegrity/);
+  // The interpreter has to come from this origin. A CDN URL here would put the
+  // bytes that execute candidate code back outside the SHA256SUMS pin.
+  assert.match(script, /vendor\/pyodide\//);
+  assert.doesNotMatch(script, /cdn\.jsdelivr\.net/);
 });
 
 test("runner progress statuses stay wired to each execution path", () => {
