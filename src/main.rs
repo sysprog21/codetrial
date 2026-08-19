@@ -22,8 +22,10 @@ struct CliOptions {
 }
 
 /// Every mode this binary has: its name, how many positionals it takes counting
-/// the mode word, how it is called, and what runs it. One table and not one list
-/// per question, because a mode that exists in the dispatch but not in the arity
+/// the mode word, how it is called, and what runs it. One table and not one
+/// list
+/// per question, because a mode that exists in the dispatch but not in the
+/// arity
 /// check is a mode that silently ignores its extra arguments.
 const MODES: [(&str, usize, &str, ModeFn); 4] = [
     ("web", 1, "codetrial web [OPTIONS]", |_, options| {
@@ -53,7 +55,8 @@ const MODES: [(&str, usize, &str, ModeFn); 4] = [
     ),
 ];
 
-/// Positionals include the mode word, and the arity above is what makes indexing
+/// Positionals include the mode word, and the arity above is what makes
+/// indexing
 /// past it safe.
 type ModeFn = fn(&[String], CliOptions) -> Result<(), String>;
 
@@ -204,10 +207,10 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     // this is the web half of a split deployment and agents arrive from
     // elsewhere. Deciding it by what is configured, rather than by a flag,
     // keeps a single-host production deployment working out of the box while
-    // leaving the split one exactly as it was.
-    // No `extend_pool` here on purpose. The dispatcher never looks a provider
-    // up: it is handed the one the token was minted from, so a second scan
-    // could only introduce a pool that disagrees with the web side's.
+    // leaving the split one exactly as it was. No `extend_pool` here on
+    // purpose. The dispatcher never looks a provider up: it is handed the one
+    // the token was minted from, so a second scan could only introduce a pool
+    // that disagrees with the web side's.
     let agent_config = codetrial::config::load_from_pairs(values).ok();
     if agent_config.is_none() {
         eprintln!(
@@ -261,6 +264,7 @@ impl RoomDispatcher for LocalDispatcher {
     fn ensure_agent(&self, room_name: &str, provider: &codetrial::config::Provider) -> bool {
         {
             let mut live = self.live.lock().unwrap_or_else(|error| error.into_inner());
+
             // A reload mints a token for the same fixed room in local mode, and
             // two agents in one room evict each other.
             if live.contains(room_name) {
@@ -275,6 +279,7 @@ impl RoomDispatcher for LocalDispatcher {
             live.insert(room_name.to_string());
         }
         let config = agent_config_for(&self.config, provider);
+
         // Released by dropping, not by a line at the end of the task: a panic
         // in the interview would otherwise skip that line and burn the slot for
         // the life of the process, and sixteen of those refuse every interview
@@ -283,6 +288,7 @@ impl RoomDispatcher for LocalDispatcher {
             live: Arc::clone(&self.live),
             room_name: room_name.to_string(),
         };
+
         // Spawned, not awaited: this runs on the request path, and the task
         // outlives the response by the length of the interview.
         self.runtime.spawn(async move {
@@ -426,7 +432,8 @@ async fn run_combined(
     //
     // So the agent gets a bounded number of restarts and the web server keeps
     // serving through them. Bounded, not infinite, because an unrecoverable
-    // cause such as a bad API key would otherwise spin forever and look healthy.
+    // cause such as a bad API key would otherwise spin forever and look
+    // healthy.
     tokio::select! {
         result = &mut web_task => {
             agent_task.abort();
@@ -553,10 +560,12 @@ fn run_gemini_check(config: AgentConfig, room_name: &str) -> Result<(), String> 
 }
 
 /// The room name carries the provider id, so an agent launched separately joins
-/// the same LiveKit project the candidate was handed a token for. Refusing beats
+/// the same LiveKit project the candidate was handed a token for. Refusing
+/// beats
 /// joining the wrong project and sitting in a room the candidate will never
 /// appear in, and the pool this process built is not evidence that the room is
-/// wrong: an agent that cannot see the config directory has a pool of one and an
+/// wrong: an agent that cannot see the config directory has a pool of one and
+/// an
 /// unresolvable id, which is exactly the case that has to fail loudly.
 ///
 /// `strict` is off only for `serve`, where the room name is the operator's own
@@ -637,7 +646,8 @@ fn read_config_file(path: &str) -> Result<Vec<(String, String)>, String> {
 
 /// Providers live beside the config file the operator named, so
 /// `--config /etc/codetrial/prod.env` discovers
-/// `/etc/codetrial/codetrial.env.<id>` rather than whatever `config/` happens to sit in the current directory. Both
+/// `/etc/codetrial/codetrial.env.<id>` rather than whatever `config/` happens
+/// to sit in the current directory. Both
 /// halves of a deployment are launched with the same `--config`, and that is
 /// what makes them agree on the pool.
 fn provider_dir(options: &CliOptions) -> PathBuf {
@@ -699,6 +709,7 @@ fn initialize_accounts(config: &WebServerConfig) -> Result<(), String> {
         Ok((sessions, users)) => {
             eprintln!("swept {sessions} expired session(s) and {users} throwaway account(s)");
         }
+
         // Not fatal: a sweep that fails is a database that keeps growing, which
         // is worse than a server that will not boot only if you value tidiness
         // over availability.
@@ -813,6 +824,7 @@ mod tests {
         .await;
 
         assert_eq!(error, "stop");
+
         // Two clean completions, then the failure and its restart budget. A
         // clean room end must never consume an attempt: `serve` hosts one room
         // and the agent returns every time a candidate leaves, so counting
@@ -840,6 +852,7 @@ mod tests {
         .await;
 
         assert_eq!(error, "give up");
+
         // Twenty failures survived because each was followed by a clean room.
         // Only the unbroken run at the end spends the budget.
         assert_eq!(attempts, 40 + 1 + super::AGENT_RESTART_ATTEMPTS as usize);

@@ -53,8 +53,10 @@ pub struct Provider {
 /// The policy for credentials is "not printable". `AgentConfig` gets that by
 /// having no `Debug` at all, which is the stronger form because the compiler
 /// keeps it true. `Provider` cannot: `ProviderPool` and `WebServerConfig` both
-/// derive `Debug`, so it needs an impl, and this one redacts. Add a secret field
-/// here and it must be added below too, which is exactly why the other type does
+/// derive `Debug`, so it needs an impl, and this one redacts. Add a secret
+/// field
+/// here and it must be added below too, which is exactly why the other type
+/// does
 /// not take this approach.
 impl fmt::Debug for Provider {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -173,9 +173,13 @@ def generated() -> dict[Path, str]:
     """Every file this script owns, as path -> exact contents."""
     files: dict[Path, str] = {}
     for problem in read_json(SOURCE):
-        files[OUTPUT_DIR / f"{problem['id']}.json"] = json.dumps(problem, indent=2) + "\n"
+        files[OUTPUT_DIR / f"{problem['id']}.json"] = (
+            json.dumps(problem, indent=2) + "\n"
+        )
     for problem_id, judge in read_json(JUDGE_SOURCE).items():
-        files[JUDGE_OUTPUT_DIR / f"{problem_id}.json"] = json.dumps(judge, indent=2) + "\n"
+        files[JUDGE_OUTPUT_DIR / f"{problem_id}.json"] = (
+            json.dumps(judge, indent=2) + "\n"
+        )
     return files
 
 
@@ -197,7 +201,9 @@ def drifted(files: dict[Path, str]) -> list[str]:
         for path, text in files.items()
         if not path.exists() or path.read_text() != text
     ]
-    removed = [f"{path.relative_to(ROOT)} (no longer in the bank)" for path in orphans(files)]
+    removed = [
+        f"{path.relative_to(ROOT)} (no longer in the bank)" for path in orphans(files)
+    ]
     return sorted(changed + removed)
 
 
@@ -225,7 +231,9 @@ def main() -> int:
         path.unlink()
     for path, text in files.items():
         path.write_text(text)
-    print(f"updated {len(files)} files under {' and '.join(str(d.relative_to(ROOT)) for d in DIRS)}")
+    print(
+        f"updated {len(files)} files under {' and '.join(str(d.relative_to(ROOT)) for d in DIRS)}"
+    )
     return 0
 
 
