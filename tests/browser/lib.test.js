@@ -6,11 +6,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  TIME_WARNING_S,
   acceptsReport,
   checkAnswer,
   clamp,
   codeUpdatePayload,
   canonicalJson,
+  countdown,
   deepEqual,
   endInterviewPayload,
   escapeHtml,
@@ -20,6 +22,7 @@ import {
   orPlaceholder,
   renderValue,
   sanitizeReport,
+  sessionReport,
   testPayload,
   timeWarningPayload,
   topics,
@@ -391,4 +394,111 @@ test("timer, clamp, and placeholder helpers", () => {
   assert.equal(clamp(500, 10, 90), 90);
   assert.deepEqual(orPlaceholder([]), ["(none captured)"]);
   assert.deepEqual(orPlaceholder(["kept"]), ["kept"]);
+});
+
+// The interview clock. Both assertions here are about a value that jumps: the
+// tab is throttled while hidden and stops entirely on an OS suspend, so every
+// rule below has to survive skipping straight past the number it cares about.
+test("the countdown derives from the deadline rather than accumulating", () => {
+  const endsAt = 1_000_000;
+
+  assert.equal(countdown(2700, endsAt, endsAt - 2_700_000).remaining, 2700);
+  assert.equal(countdown(45, endsAt, endsAt).remaining, 0);
+
+  // Never negative: an overdue deadline reads as no time left, not as a
+  // negative timer counting up.
+  assert.equal(countdown(1, endsAt, endsAt + 60_000).remaining, 0);
+});
+
+test("the time warning fires on the crossing, not on the number", () => {
+  const endsAt = 1_000_000;
+  const at = (remaining) => endsAt - remaining * 1000;
+
+  assert.equal(countdown(TIME_WARNING_S + 100, endsAt, at(TIME_WARNING_S)).warn, true);
+
+  // The failure this replaced: a throttled tab skipping from 400 to 240 never
+  // equals 300, so an equality test would let the interview run to the end with
+  // the agent never told the candidate was near time.
+  assert.equal(countdown(400, endsAt, at(240)).warn, true);
+
+  // Once, though. A warning re-sent on every later tick is a nag, and the agent
+  // treats each one as news.
+  assert.equal(countdown(TIME_WARNING_S, endsAt, at(240)).warn, false);
+  assert.equal(countdown(TIME_WARNING_S + 100, endsAt, at(TIME_WARNING_S + 1)).warn, false);
+
+  // `urgent` paints, so unlike `warn` it stays true for the rest of the run.
+  assert.equal(countdown(400, endsAt, at(240)).urgent, true);
+  assert.equal(countdown(TIME_WARNING_S, endsAt, at(240)).urgent, true);
+  assert.equal(countdown(400, endsAt, at(400)).urgent, false);
+
+  assert.equal(countdown(10, endsAt, endsAt).expired, true);
+  assert.equal(countdown(10, endsAt, at(1)).expired, false);
+});
+
+// The rule that decides whether this browser is allowed to put a hiring verdict
+// on the screen. It shipped wrong once, keyed off whether the socket was still
+// open, and rendered a green HIRE badge for a network failure.
+test("a session that reached an interviewer is never scored by the browser", () => {
+  const scored = { joinedRoom: false, passed: 10, total: 10, candidateTurns: 4 };
+
+  // Same passing session, but an interviewer was there: no score, no decision,
+  // and it says so rather than showing a blank card.
+  const graded = sessionReport({ ...scored, joinedRoom: true });
+  assert.equal(graded.incomplete, true);
+  assert.equal(graded.decision, undefined);
+  assert.equal(graded.codingScore, undefined);
+  assert.match(graded.summary, /interviewer never returned a report/);
+
+  // `joinedRoom` outranks everything, including a session that produced
+  // nothing: the interviewer was there, so the interviewer grades it.
+  assert.match(
+    sessionReport({ joinedRoom: true, passed: 0, total: 0, candidateTurns: 0 }).summary,
+    /interviewer never returned a report/,
+  );
+
+  assert.equal(sessionReport(scored).incomplete, undefined);
+  assert.equal(sessionReport(scored).decision, "HIRE");
+});
+
+test("offline practice scores only a session that actually did something", () => {
+  // Nothing ran and nobody spoke: there is no evidence to score, so this is
+  // reported as no evaluation rather than as a 40.
+  const empty = sessionReport({ joinedRoom: false, passed: 0, total: 0, candidateTurns: 0 });
+  assert.equal(empty.incomplete, true);
+  assert.match(empty.summary, /No interviewer joined/);
+
+  // Either one alone is enough to have produced something worth reporting.
+  assert.equal(
+    sessionReport({ joinedRoom: false, passed: 0, total: 0, candidateTurns: 1 }).incomplete,
+    undefined,
+  );
+  assert.equal(
+    sessionReport({ joinedRoom: false, passed: 0, total: 3, candidateTurns: 0 }).incomplete,
+    undefined,
+  );
+});
+
+// Through sessionReport rather than the scorer directly: the guard and the
+// scores are one decision, and a test that reaches past the guard would keep
+// passing if the guard stopped calling it.
+test("the offline decision follows the test cases and speaking follows the turns", () => {
+  const at = (passed, total, candidateTurns) =>
+    sessionReport({ joinedRoom: false, passed, total, candidateTurns });
+
+  assert.equal(at(10, 10, 1).codingScore, 100);
+  assert.equal(at(10, 10, 1).decision, "HIRE");
+
+  // The boundary is inclusive, and it is the only place a pass is decided.
+  assert.equal(at(7, 10, 1).codingScore, 70);
+  assert.equal(at(7, 10, 1).decision, "HIRE");
+  assert.equal(at(69, 100, 1).decision, "NO_HIRE");
+
+  // Being greeted is not communicating: only the candidate's own turns count,
+  // which is why this reads turns rather than transcript length.
+  assert.equal(at(10, 10, 0).communicationScore, 45);
+  assert.equal(at(10, 10, 3).communicationScore, 70);
+
+  // No tests run at all is not a zero, which would read as a failed attempt.
+  assert.equal(at(0, 0, 2).codingScore, 40);
+  assert.match(at(0, 0, 2).summary, /ended before tests were run/);
 });

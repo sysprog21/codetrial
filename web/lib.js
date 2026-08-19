@@ -369,3 +369,82 @@ function boundedText(value, max = MAX_REPORT_TEXT) {
 function stringList(value) {
   return Array.isArray(value) ? value.slice(0, 4).map((item) => boundedText(item)) : [];
 }
+
+/// When the interview starts reading as nearly over, both to the candidate and
+/// to the interviewer.
+export const TIME_WARNING_S = 300;
+
+/// How much time is left, and what crossing that number means.
+///
+/// Split from the tick that paints it because both decisions here are about a
+/// clock that jumps: a throttled or suspended tab skips whole minutes. That is
+/// why the warning is a crossing and not an equality, and why it needs the
+/// previous value rather than deriving everything from `endsAt` alone;
+/// `remaining === TIME_WARNING_S` never fires when the value goes from 400 to
+/// 240 in one tick. `now` is a parameter so this is assertable without waiting
+/// out an interview.
+export function countdown(previous, endsAt, now) {
+  const remaining = Math.max(0, Math.round((endsAt - now) / 1000));
+  return {
+    remaining,
+    urgent: remaining <= TIME_WARNING_S,
+    warn: previous > TIME_WARNING_S && remaining <= TIME_WARNING_S,
+    expired: remaining === 0,
+  };
+}
+
+/// Whether this browser is allowed to score anybody, and what to say if not.
+///
+/// A session that reached a real interviewer is graded by that interviewer or
+/// not at all. Asking whether the socket is open right now is the wrong
+/// question, and was asked here for one round: a dropped connection nulls the
+/// room, which routed a candidate who had passed their tests straight into
+/// `offlineReport` and rendered a green HIRE badge for a network failure, saved
+/// it to localStorage and POSTed it to `/api/reports`. Whether an interviewer
+/// was ever present is a different fact from whether the connection survived,
+/// and only the first one decides this.
+export function sessionReport({ joinedRoom, passed, total, candidateTurns }) {
+  if (joinedRoom) {
+    return {
+      incomplete: true,
+      summary:
+        "This interview did not produce an evaluation: the interviewer never returned a report. Nothing you did was assessed, and no result was recorded.",
+      hintsUsed: 0,
+    };
+  }
+
+  // Nothing ran and nobody spoke, so there is nothing to score even offline.
+  if (!total && !candidateTurns) {
+    return {
+      incomplete: true,
+      summary:
+        "No interviewer joined and this session produced no evaluation. Nothing you did was assessed, and no result was recorded.",
+      hintsUsed: 0,
+    };
+  }
+
+  return offlineReport({ passed, total, candidateTurns });
+}
+
+/// The offline-practice scores. Not an evaluation of the candidate by anyone,
+/// which is why the only path that reaches it is `sessionReport` deciding that
+/// tests actually ran or the candidate actually spoke. Unexported for that
+/// reason: reaching it directly would skip the decision that guards it.
+function offlineReport({ passed, total, candidateTurns }) {
+  const score = total ? Math.round((passed / total) * 100) : 40;
+  return {
+    codingScore: score,
+    communicationScore: candidateTurns ? 70 : 45,
+    decision: score >= 70 ? "HIRE" : "NO_HIRE",
+    summary: total ? `${passed}/${total} test cases passed in offline practice mode.` : "Offline practice ended before tests were run.",
+    codingFeedback: {
+      strengths: passed > 0 ? ["Made measurable progress against the test cases."] : [],
+      improvements: passed === total && total > 0 ? [] : ["Use the failing cases to tighten the implementation."],
+    },
+    communicationFeedback: {
+      strengths: candidateTurns ? ["Kept the session moving."] : [],
+      improvements: ["Narrate tradeoffs and edge cases as you code."],
+    },
+    hintsUsed: 0,
+  };
+}

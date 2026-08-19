@@ -20,12 +20,14 @@ import {
   acceptsReport,
   clamp,
   codeUpdatePayload,
+  countdown,
   endInterviewPayload,
   escapeHtml,
   formatTime,
   integrityEventPayload,
   isAgent,
   sanitizeReport,
+  sessionReport,
   testPayload,
   timeWarningPayload,
   topics,
@@ -1386,16 +1388,12 @@ async function postIntegrityFrame(source, track, video) {
 /// that hazard for the face sampler.
 function tickTimer() {
   if (state.phase !== "live") return;
-  const previous = state.remaining;
-  state.remaining = Math.max(0, Math.round((state.endsAt - Date.now()) / 1000));
-  nodes.timer.textContent = formatTime(state.remaining);
-  nodes.timer.classList.toggle("urgent", state.remaining <= 300);
-  // Crossed, not equalled. A throttled tab can skip whole minutes, and an
-  // equality test on a value that jumps never fires.
-  if (previous > 300 && state.remaining <= 300) {
-    publish(topics.control, timeWarningPayload(state.remaining));
-  }
-  if (state.remaining === 0) endInterview("time_up");
+  const tick = countdown(state.remaining, state.endsAt, Date.now());
+  state.remaining = tick.remaining;
+  nodes.timer.textContent = formatTime(tick.remaining);
+  nodes.timer.classList.toggle("urgent", tick.urgent);
+  if (tick.warn) publish(topics.control, timeWarningPayload(tick.remaining));
+  if (tick.expired) endInterview("time_up");
 }
 
 async function runTests() {
@@ -1502,49 +1500,18 @@ async function showReport() {
     .filter((row) => row.speaker !== "interviewer" && row.text.trim())
     .length;
 
-  // A session that reached a real interviewer is graded by that interviewer or
-  // not at all. `state.room` is the wrong question and was asked here for one
-  // round: a dropped connection nulls the room, which then routed a candidate
-  // who had passed their tests straight into offlineReport and rendered a green
-  // HIRE badge for a network failure, saved it to localStorage and POSTed it to
-  // /api/reports. Whether an interviewer was ever present is a different fact
-  // from whether the socket is open right now, and only the first one decides
-  // if this browser is allowed to score anybody.
-  if (state.joinedRoom || (!total && !candidateTurns)) {
-    state.report = {
-      incomplete: true,
-      summary: state.joinedRoom
-        ? "This interview did not produce an evaluation: the interviewer never returned a report. Nothing you did was assessed, and no result was recorded."
-        : "No interviewer joined and this session produced no evaluation. Nothing you did was assessed, and no result was recorded.",
-      hintsUsed: 0,
-    };
-  } else {
-    state.report = offlineReport({ passed, total, candidateTurns });
-  }
+  // `state.joinedRoom`, not `state.room`: whether an interviewer was ever
+  // present is a different fact from whether the connection survived, and only
+  // the first one decides if this browser may score anybody. The rule and the
+  // failure it came from live in `sessionReport`.
+  state.report = sessionReport({
+    joinedRoom: state.joinedRoom,
+    passed,
+    total,
+    candidateTurns,
+  });
   await saveHistory();
   renderReport();
-}
-
-/// The offline-practice scores. Not an evaluation of the candidate by anyone,
-/// which is why the only path that reaches it is one where tests actually ran
-/// or the candidate actually spoke.
-function offlineReport({ passed, total, candidateTurns }) {
-  const score = total ? Math.round((passed / total) * 100) : 40;
-  return {
-    codingScore: score,
-    communicationScore: candidateTurns ? 70 : 45,
-    decision: score >= 70 ? "HIRE" : "NO_HIRE",
-    summary: total ? `${passed}/${total} test cases passed in offline practice mode.` : "Offline practice ended before tests were run.",
-    codingFeedback: {
-      strengths: passed > 0 ? ["Made measurable progress against the test cases."] : [],
-      improvements: passed === total && total > 0 ? [] : ["Use the failing cases to tighten the implementation."],
-    },
-    communicationFeedback: {
-      strengths: candidateTurns ? ["Kept the session moving."] : [],
-      improvements: ["Narrate tradeoffs and edge cases as you code."],
-    },
-    hintsUsed: 0,
-  };
 }
 
 function renderReport() {
