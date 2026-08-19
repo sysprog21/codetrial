@@ -429,6 +429,20 @@ fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> D
     }
 }
 
+/// # What a passing run means
+///
+/// Nothing, on its own. `passed` and `total` are counted in the candidate's
+/// browser against a judge the candidate's browser holds, and
+/// `agent/integrity.rs` already says why that makes them an account rather than
+/// evidence: the reporter is the adversary. Believing the count here is a
+/// deliberate product choice, not an oversight. The interviewer reacts to what
+/// the candidate says happened, the same way a human interviewer reacts to
+/// "that one passes" without rerunning it.
+///
+/// So the numbers are safe to narrate and unsafe to score. What carries weight
+/// is the code itself, which the agent receives over the code topic and can
+/// read, and the room state it observes for itself. Anything that grades rather
+/// than converses has to judge server-side, against code the server holds.
 fn apply_test_results(
     state: &mut RuntimeState,
     payload: &serde_json::Value,

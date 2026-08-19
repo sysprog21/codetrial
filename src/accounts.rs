@@ -78,6 +78,13 @@ impl Accounts {
     /// Writes are rare and single-writer here, so one guarded connection beats
     /// a pool. Callers already run on the blocking pool, so holding the lock
     /// across the query parks no async worker.
+    ///
+    /// The ceiling, so the next person does not have to rediscover it: every
+    /// query in the process queues behind every other. These are indexed
+    /// point lookups on a small database, so they retire in tens of
+    /// microseconds, and it stops being enough when concurrent interviews
+    /// times queries per interview approaches that rate. A connection pool is
+    /// the answer at that point, not a second mutex.
     fn with<T>(
         &self,
         task: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>,
@@ -476,8 +483,9 @@ mod migration_tests {
                 Ok(rows)
             })
             .unwrap();
-        // -1 swept. -2 kept, its session is live. -3 kept, it owns a report.
-        // 7 kept, a real GitHub account outlives its sessions.
+
+        // -1 swept. -2 kept, its session is live. -3 kept, it owns a report. 7
+        // kept, a real GitHub account outlives its sessions.
         assert_eq!(remaining, vec![-3, -2, 7]);
 
         let _ = std::fs::remove_file(&path);

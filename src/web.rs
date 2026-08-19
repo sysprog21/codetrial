@@ -13,10 +13,7 @@ use axum::http::{HeaderValue, Method, Request, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{AppendHeaders, IntoResponse, Response};
 use axum::routing::{get, post};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
-use sha2::Sha256;
 
 use crate::accounts::{
     Accounts, GitHubLoginConfig, GitHubOauth, GitHubProfile, MAX_REPORTS_PER_USER, ReportSave,
@@ -39,7 +36,6 @@ pub const MAX_REPORT_BYTES: usize = 64 * 1024;
 const SESSION_COOKIE: &str = "codetrial_session";
 const OAUTH_STATE_COOKIE: &str = "codetrial_oauth_state";
 const OAUTH_STATE_TTL_SECONDS: i64 = 60 * 10;
-type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenConfig<'a> {
@@ -453,7 +449,54 @@ pub fn web_service_with_dispatcher(
     config: WebServerConfig,
     dispatcher: Option<Arc<dyn RoomDispatcher>>,
 ) -> IntoMakeServiceWithConnectInfo<Router, SocketAddr> {
+    warn_about_unfetched_vendor(&config.web_dir);
     web_router(config, dispatcher).into_make_service_with_connect_info::<SocketAddr>()
+}
+
+/// Says out loud at startup which vendored assets were never downloaded.
+///
+/// The megabytes under `web/vendor` are pinned but not committed:
+/// `scripts/fetch-vendor.sh` downloads them, and `make build`, `make serve` and
+/// `make web` all run it first. `cargo run -- serve` does not, and neither does
+/// a deployment that copies the tree without running the fetch. The failure
+/// then lands on a candidate as a Python runtime that will not start or a face
+/// detector that never loads, which is a long way from the cause.
+///
+/// A warning rather than a refusal: an interview without the browser Python
+/// runner is degraded, not broken, and a server that will not start is worse
+/// than one that says what is missing.
+///
+/// Silent when a vendor directory has no `SHA256SUMS`, which is what makes this
+/// quiet for the temporary web roots the tests stand up. The actionable state
+/// is a manifest present with its files absent.
+fn warn_about_unfetched_vendor(web_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(web_dir.join("vendor")) else {
+        return;
+    };
+    let mut missing = Vec::new();
+    for directory in entries.flatten().map(|entry| entry.path()) {
+        let Ok(manifest) = std::fs::read_to_string(directory.join("SHA256SUMS")) else {
+            continue;
+        };
+        missing.extend(
+            manifest
+                .lines()
+                .filter_map(|line| line.split_once("  "))
+                .map(|(_, name)| directory.join(name))
+                .filter(|path| !path.is_file())
+                .map(|path| path.display().to_string()),
+        );
+    }
+    if !missing.is_empty() {
+        eprintln!(
+            "{} vendored file(s) were never fetched, so the features that need them will fail in \
+             the browser; run scripts/fetch-vendor.sh:",
+            missing.len()
+        );
+        for path in missing {
+            eprintln!("  {path}");
+        }
+    }
 }
 
 pub fn login_config(config: &WebServerConfig) -> Option<GitHubLoginConfig> {
@@ -936,22 +979,12 @@ async fn current_user(
 }
 
 fn signed_cookie_value(value: &str, secret: &str) -> String {
-    format!("{value}.{}", sign_value(value, secret))
+    format!("{value}.{}", crate::token::sign_hs256(secret, value))
 }
 
 fn verified_cookie_value(value: &str, secret: &str) -> Option<String> {
     let (payload, signature) = value.rsplit_once('.')?;
-    let signature = URL_SAFE_NO_PAD.decode(signature).ok()?;
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).ok()?;
-    mac.update(payload.as_bytes());
-    mac.verify_slice(&signature).ok()?;
-    Some(payload.to_string())
-}
-
-fn sign_value(value: &str, secret: &str) -> String {
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key");
-    mac.update(value.as_bytes());
-    URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+    crate::token::verify_hs256(secret, payload, signature).then(|| payload.to_string())
 }
 
 fn cookie_value(headers: &header::HeaderMap, name: &str) -> Option<String> {
@@ -1092,7 +1125,7 @@ fn valid_candidate_identity(identity: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
 }
 
-pub fn static_file(root: &Path, path: &str) -> Option<PathBuf> {
+pub async fn static_file(root: &Path, path: &str) -> Option<PathBuf> {
     let clean = path.trim_start_matches('/');
     if clean
         .split('/')
@@ -1102,7 +1135,7 @@ pub fn static_file(root: &Path, path: &str) -> Option<PathBuf> {
     }
     if !clean.is_empty() && Path::new(clean).extension().is_some() {
         let path = root.join(clean);
-        return path.is_file().then_some(path);
+        return is_file(&path).await.then_some(path);
     }
     let candidates = if clean.is_empty() {
         vec![root.join("index.html")]
@@ -1114,7 +1147,25 @@ pub fn static_file(root: &Path, path: &str) -> Option<PathBuf> {
             root.join("index.html"),
         ]
     };
-    candidates.into_iter().find(|path| path.is_file())
+
+    // Sequential rather than joined: the first candidate answers almost every
+    // request, and probing four paths in parallel to save a hit that rarely
+    // happens costs three wasted stats on the one that usually does.
+    for path in candidates {
+        if is_file(&path).await {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// `Path::is_file` is a blocking `stat`, and a route with no extension probes
+/// up to four candidates. Four blocking syscalls on a runtime worker is four
+/// too many when the async form is already used ten lines further down.
+async fn is_file(path: &Path) -> bool {
+    tokio::fs::metadata(path)
+        .await
+        .is_ok_and(|metadata| metadata.is_file())
 }
 
 fn token_duration_min(value: Option<&Value>) -> Value {
@@ -1304,7 +1355,7 @@ async fn static_response(
     if_none_match: Option<&HeaderValue>,
     head_only: bool,
 ) -> Response {
-    let Some(path) = static_file(root, path) else {
+    let Some(path) = static_file(root, path).await else {
         return StatusCode::NOT_FOUND.into_response();
     };
 

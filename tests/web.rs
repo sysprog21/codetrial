@@ -362,20 +362,28 @@ async fn production_policy_names_no_loopback_origins() {
     server.abort();
 }
 
-#[test]
-fn static_file_rejects_traversal_and_dotfiles() {
-    assert!(static_file(Path::new("src/web"), "/../agent/.env").is_none());
-    assert!(static_file(Path::new("src/web"), "/.env.local").is_none());
+#[tokio::test]
+async fn static_file_rejects_traversal_and_dotfiles() {
+    assert!(
+        static_file(Path::new("src/web"), "/../agent/.env")
+            .await
+            .is_none()
+    );
+    assert!(
+        static_file(Path::new("src/web"), "/.env.local")
+            .await
+            .is_none()
+    );
 }
 
-#[test]
-fn static_file_falls_back_to_index_for_web_routes() {
+#[tokio::test]
+async fn static_file_falls_back_to_index_for_web_routes() {
     let root = std::env::temp_dir().join(format!("codetrial-web-test-{}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("index.html"), "").unwrap();
 
     assert_eq!(
-        static_file(&root, "/interview"),
+        static_file(&root, "/interview").await,
         Some(root.join("index.html"))
     );
 
