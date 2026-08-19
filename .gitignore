@@ -47,6 +47,10 @@ DONT-MERGE/
 web/vendor/face-detection/*.binarypb
 web/vendor/face-detection/*.tflite
 web/vendor/face-detection/*.wasm
+# Same rule for the avatar model, pinned in web/vendor/avatar/SHA256SUMS: 10.4 MB
+# of art asset with an upstream URL, listed in web/vendor/avatar/FETCH. Its
+# sibling three-vrm.js is built locally, not fetched, so it stays committed.
+web/vendor/avatar/jim.vrm
 # Same rule for Pyodide, pinned in web/vendor/pyodide/SHA256SUMS: 13.7 MB of
 # interpreter, glue and stdlib, none of which changes without a version bump.
 web/vendor/pyodide/*.js

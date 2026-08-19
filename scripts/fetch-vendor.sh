@@ -61,34 +61,46 @@ fetch_manifest() {
       continue
     fi
 
-    # The name is used both as a URL suffix and as a path under the vendor
-    # directory, so it takes only what a vendored filename can be. This rejects
-    # a stray carriage return from a CRLF checkout, which would otherwise 404
-    # against a URL that looks correct in the error message, and it rejects a
-    # `/` before one can write outside `web/vendor/`.
-    case "$line" in
-      *[!A-Za-z0-9._-]* | .*)
-        echo "fetch-vendor: ${manifest#"$ROOT"/} names an unusable file: $line" >&2
-        return 1
-        ;;
-    esac
+    # Two fields mean the upstream name differs from the one this tree serves:
+    # the avatar is Seed-san.vrm at its source and jim.vrm here, and renaming it
+    # locally would be a rename in every reference to it. One field, which is
+    # every other line in every manifest, means the two names are the same.
+    name=${line%% *}
+    remote=${line#"$name"}
+    remote=${remote# }
+    [ -n "$remote" ] || remote=$name
 
-    want=$(awk -v name="$line" '$2 == name { print $1 }' "$sums")
+    # Both halves are used as a URL suffix and as a path under the vendor
+    # directory, so each takes only what a vendored filename can be. This
+    # rejects a stray carriage return from a CRLF checkout, which would
+    # otherwise 404 against a URL that looks correct in the error message, and
+    # it rejects a `/` before one can write outside `web/vendor/`. Checking both
+    # also rejects a third field, which arrives here glued to the second.
+    for field in "$name" "$remote"; do
+      case "$field" in
+        *[!A-Za-z0-9._-]* | .*)
+          echo "fetch-vendor: ${manifest#"$ROOT"/} names an unusable file: $line" >&2
+          return 1
+          ;;
+      esac
+    done
+
+    want=$(awk -v name="$name" '$2 == name { print $1 }' "$sums")
     if [ -z "$want" ]; then
-      echo "fetch-vendor: $line is fetched but not pinned in ${sums#"$ROOT"/}" >&2
+      echo "fetch-vendor: $name is fetched but not pinned in ${sums#"$ROOT"/}" >&2
       return 1
     fi
 
-    if [ -f "$dir/$line" ] && [ "$(sha256 "$dir/$line")" = "$want" ]; then
+    if [ -f "$dir/$name" ] && [ "$(sha256 "$dir/$name")" = "$want" ]; then
       continue
     fi
 
-    echo "fetch-vendor: $line"
+    echo "fetch-vendor: $name"
 
     # Per-process, because `make -j` can run the fetch-vendor prerequisite of
     # build, serve, and web concurrently and a fixed name is a race.
-    tmp="$dir/.$line.$$.part"
-    download "$base$line" "$tmp" || {
+    tmp="$dir/.$name.$$.part"
+    download "$base$remote" "$tmp" || {
       rm -f "$tmp"
       return 1
     }
@@ -96,18 +108,18 @@ fetch_manifest() {
     got=$(sha256 "$tmp")
     if [ "$got" != "$want" ]; then
       rm -f "$tmp"
-      echo "fetch-vendor: $line hashed $got, pinned $want" >&2
+      echo "fetch-vendor: $name hashed $got, pinned $want" >&2
       return 1
     fi
 
-    if ! mv "$tmp" "$dir/$line"; then
+    if ! mv "$tmp" "$dir/$name"; then
 
       # errexit is suppressed for this whole function: it is called in a
       # `|| status=1` list. Without this check a failed move left the old bytes
       # in place, dropped a `.part` file that then fails verify-vendor forever,
       # and still exited 0.
       rm -f "$tmp"
-      echo "fetch-vendor: could not install $line into ${dir#"$ROOT"/}" >&2
+      echo "fetch-vendor: could not install $name into ${dir#"$ROOT"/}" >&2
       return 1
     fi
   done <"$manifest"

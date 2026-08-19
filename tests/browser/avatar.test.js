@@ -63,7 +63,10 @@ test("avatar vendor manifest pins every redistributed file", () => {
   // licenses are actually present rather than merely cited.
   const vendored = readdirSync(join(root, "web/vendor/avatar"));
   const hashed = new Set(captures(sums, / {2}(\S+)$/gm));
-  const exempt = new Set(["SHA256SUMS", "README.md", "LICENSE-three.txt", "LICENSE-three-vrm.txt", "LICENSE-jim-vrm.txt"]);
+  // FETCH says where bytes come from, SHA256SUMS says which bytes are correct.
+  // Only the second is a pin, so the manifest is exempt here for the same
+  // reason scripts/verify-vendor.sh skips it.
+  const exempt = new Set(["SHA256SUMS", "FETCH", "README.md", "LICENSE-three.txt", "LICENSE-three-vrm.txt", "LICENSE-jim-vrm.txt"]);
   assert.deepEqual(vendored.filter((name) => !hashed.has(name) && !exempt.has(name)), []);
   for (const license of ["LICENSE-three.txt", "LICENSE-three-vrm.txt"]) {
     assert.match(read(`web/vendor/avatar/${license}`), /MIT/, `${license} must carry its terms`);
