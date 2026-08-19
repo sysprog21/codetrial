@@ -470,19 +470,30 @@ pub fn web_service_with_dispatcher(
 /// quiet for the temporary web roots the tests stand up. The actionable state
 /// is a manifest present with its files absent.
 fn warn_about_unfetched_vendor(web_dir: &Path) {
-    let Ok(entries) = std::fs::read_dir(web_dir.join("vendor")) else {
+    let vendor = web_dir.join("vendor");
+    let Ok(entries) = std::fs::read_dir(&vendor) else {
         return;
     };
+
+    // The vendor root carries a manifest of its own, and the file it pins,
+    // `livekit-client.js`, is the one whose absence leaves the interview page
+    // unable to connect at all. Walking only the subdirectories would stay
+    // silent about exactly the worst case.
+    let directories = std::iter::once(vendor).chain(entries.flatten().map(|entry| entry.path()));
     let mut missing = Vec::new();
-    for directory in entries.flatten().map(|entry| entry.path()) {
+    for directory in directories {
         let Ok(manifest) = std::fs::read_to_string(directory.join("SHA256SUMS")) else {
             continue;
         };
         missing.extend(
             manifest
                 .lines()
-                .filter_map(|line| line.split_once("  "))
-                .map(|(_, name)| directory.join(name))
+                // Trimmed because a CRLF checkout would otherwise hand every
+                // name a trailing carriage return and report the whole manifest
+                // as missing.
+                .filter_map(|line| line.split_once("  ").map(|(_, name)| name.trim()))
+                .filter(|name| !name.is_empty())
+                .map(|name| directory.join(name))
                 .filter(|path| !path.is_file())
                 .map(|path| path.display().to_string()),
         );
@@ -1126,6 +1137,15 @@ fn valid_candidate_identity(identity: &str) -> bool {
 }
 
 pub async fn static_file(root: &Path, path: &str) -> Option<PathBuf> {
+    static_file_meta(root, path).await.map(|(path, _)| path)
+}
+
+/// The resolved path together with the `stat` that resolved it. Handed back
+/// rather than thrown away because `static_response` needs the same metadata
+/// for
+/// the ETag and the content length, and asking the kernel twice for an answer
+/// this walk already has is one syscall per request for nothing.
+async fn static_file_meta(root: &Path, path: &str) -> Option<(PathBuf, std::fs::Metadata)> {
     let clean = path.trim_start_matches('/');
     if clean
         .split('/')
@@ -1135,7 +1155,7 @@ pub async fn static_file(root: &Path, path: &str) -> Option<PathBuf> {
     }
     if !clean.is_empty() && Path::new(clean).extension().is_some() {
         let path = root.join(clean);
-        return is_file(&path).await.then_some(path);
+        return Some((path.clone(), file_metadata(&path).await?));
     }
     let candidates = if clean.is_empty() {
         vec![root.join("index.html")]
@@ -1152,8 +1172,8 @@ pub async fn static_file(root: &Path, path: &str) -> Option<PathBuf> {
     // request, and probing four paths in parallel to save a hit that rarely
     // happens costs three wasted stats on the one that usually does.
     for path in candidates {
-        if is_file(&path).await {
-            return Some(path);
+        if let Some(metadata) = file_metadata(&path).await {
+            return Some((path, metadata));
         }
     }
     None
@@ -1162,10 +1182,11 @@ pub async fn static_file(root: &Path, path: &str) -> Option<PathBuf> {
 /// `Path::is_file` is a blocking `stat`, and a route with no extension probes
 /// up to four candidates. Four blocking syscalls on a runtime worker is four
 /// too many when the async form is already used ten lines further down.
-async fn is_file(path: &Path) -> bool {
+async fn file_metadata(path: &Path) -> Option<std::fs::Metadata> {
     tokio::fs::metadata(path)
         .await
-        .is_ok_and(|metadata| metadata.is_file())
+        .ok()
+        .filter(std::fs::Metadata::is_file)
 }
 
 fn token_duration_min(value: Option<&Value>) -> Value {
@@ -1355,7 +1376,7 @@ async fn static_response(
     if_none_match: Option<&HeaderValue>,
     head_only: bool,
 ) -> Response {
-    let Some(path) = static_file(root, path).await else {
+    let Some((path, metadata)) = static_file_meta(root, path).await else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
@@ -1372,8 +1393,7 @@ async fn static_response(
     } else {
         STATIC_CACHE_CONTROL
     };
-    let metadata = tokio::fs::metadata(&path).await.ok();
-    let etag = metadata.as_ref().and_then(file_etag);
+    let etag = file_etag(&metadata);
 
     if let Some(etag) = &etag
         && Some(etag) == if_none_match
@@ -1402,9 +1422,6 @@ async fn static_response(
     // handler, so the avatar's "is a model published" probe would otherwise
     // read a 15 MB file into memory once per session and throw it away.
     if head_only {
-        let Some(metadata) = metadata else {
-            return StatusCode::NOT_FOUND.into_response();
-        };
         let mut response = StatusCode::OK.into_response();
         let response_headers = response.headers_mut();
         if let Some(content_type) = content_type(&path) {
