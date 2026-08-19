@@ -1576,7 +1576,9 @@ async fn token_api_matches_frontend_contract_over_http() {
 async fn token_api_rejects_malformed_body_and_defaults_an_empty_one() {
     let (mut config, cookie, db_path) = signed_in_web_config("body");
     config.fixed_room_name = Some("interview-local".to_string());
-    let (base, server) = spawn_web_server(config).await;
+    let dispatcher = std::sync::Arc::<RecordingDispatcher>::default();
+    let (base, server) =
+        spawn_web_server_with_dispatcher(config, std::sync::Arc::clone(&dispatcher)).await;
     let client = reqwest::Client::new();
 
     // A body that is present but unparsable is a client bug. Handing back a
@@ -1591,6 +1593,10 @@ async fn token_api_rejects_malformed_body_and_defaults_an_empty_one() {
         .await
         .unwrap();
     assert_eq!(malformed.status(), 400);
+    assert!(
+        dispatcher.rooms().is_empty(),
+        "invalid requests must not staff a room"
+    );
 
     // No body at all still means "give me the defaults".
     let body: Value = client
@@ -1610,6 +1616,7 @@ async fn token_api_rejects_malformed_body_and_defaults_an_empty_one() {
         claims["metadata"],
         serde_json::to_string(&json!({"problemId":"two-sum","durationMin":45})).unwrap()
     );
+    assert_eq!(dispatcher.rooms(), vec!["interview-local"]);
 
     server.abort();
     fs::remove_file(db_path).unwrap();
@@ -1803,7 +1810,9 @@ async fn token_api_still_works_without_a_dispatcher() {
 #[tokio::test]
 async fn token_api_rejects_oversize_body() {
     let (config, cookie, db_path) = signed_in_web_config("oversize");
-    let (base, server) = spawn_web_server(config).await;
+    let dispatcher = std::sync::Arc::<RecordingDispatcher>::default();
+    let (base, server) =
+        spawn_web_server_with_dispatcher(config, std::sync::Arc::clone(&dispatcher)).await;
     let response = reqwest::Client::new()
         .post(format!("{base}/api/token"))
         .header("cookie", &cookie)
@@ -1813,6 +1822,14 @@ async fn token_api_rejects_oversize_body() {
         .unwrap();
 
     assert_eq!(response.status(), 413);
+
+    // The other half of the refusal: a body too large to read is settled before
+    // an interviewer is sent anywhere, so the room this request never got is
+    // not left staffed for the length of an interview nobody is in.
+    assert!(
+        dispatcher.rooms().is_empty(),
+        "an oversize request must not staff a room"
+    );
 
     server.abort();
     fs::remove_file(db_path).unwrap();

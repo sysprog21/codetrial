@@ -1249,11 +1249,43 @@ async fn token_handler(
         );
     };
 
-    // Put an interviewer in the room before handing out a token for it. In
-    // production the name is invented here and nowhere else knows it, so
-    // without this the candidate joins a room no agent will ever be told about
-    // and waits forever. Idempotent per room, because a refresh mints a token
-    // for the same fixed room in local mode and must not start a second agent.
+    let Ok(body) = to_bytes(request.into_body(), MAX_BODY_BYTES).await else {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    };
+    let identity = generated_candidate_identity();
+    let response = match token_response(
+        &TokenConfig {
+            api_key: &provider.api_key,
+            api_secret: &provider.api_secret,
+            server_url: &provider.url,
+        },
+        body.as_ref(),
+        &room_name,
+        &identity,
+        current_epoch_seconds(),
+    ) {
+        Ok(response) => response,
+
+        // A body that would not parse is the caller's fault, not ours. The
+        // status comes from the one parse inside `token_response` rather than
+        // from a second copy of the same check out here.
+        Err(error) if error.is::<serde_json::Error>() => {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": "Session request must be JSON." }),
+            );
+        }
+        Err(error) => {
+            return json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": error.to_string() }),
+            );
+        }
+    };
+
+    // Validate the request before starting anything external. Otherwise a
+    // malformed body can leave an interviewer running for a request that got a
+    // 400 response.
     if let Some(dispatcher) = &state.dispatcher
         && !dispatcher.ensure_agent(&room_name, provider)
     {
@@ -1268,42 +1300,14 @@ async fn token_handler(
         );
     }
 
-    let Ok(body) = to_bytes(request.into_body(), MAX_BODY_BYTES).await else {
-        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
-    };
-    let identity = generated_candidate_identity();
-    match token_response(
-        &TokenConfig {
-            api_key: &provider.api_key,
-            api_secret: &provider.api_secret,
-            server_url: &provider.url,
-        },
-        body.as_ref(),
-        &room_name,
-        &identity,
-        current_epoch_seconds(),
-    ) {
-        Ok(response) => json_response(
-            StatusCode::OK,
-            json!({
-                "token": response.token,
-                "serverUrl": response.server_url,
-                "roomName": response.room_name
-            }),
-        ),
-
-        // A body that would not parse is the caller's fault, not ours. The
-        // status comes from the one parse inside `token_response` rather than
-        // from a second copy of the same check out here.
-        Err(error) if error.is::<serde_json::Error>() => json_response(
-            StatusCode::BAD_REQUEST,
-            json!({ "error": "Session request must be JSON." }),
-        ),
-        Err(error) => json_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            json!({ "error": error.to_string() }),
-        ),
-    }
+    json_response(
+        StatusCode::OK,
+        json!({
+            "token": response.token,
+            "serverUrl": response.server_url,
+            "roomName": response.room_name
+        }),
+    )
 }
 
 async fn web_static_handler(
