@@ -318,7 +318,7 @@ pub async fn run_room(
                     return Ok(());
                 };
                 let mut context = event_context!();
-                handle_gemini_event(&room, &mut context, event).await?;
+                handle_gemini_event(&room, &mut context, event, Interruptible::Yes).await?;
             }
             _ = tokio::time::sleep_until(output_audio.playout_deadline.into()), if activity.floor == Floor::AwaitingPlayout && output_audio.is_playing() => {
                 if output_audio.is_playing() {
@@ -960,6 +960,22 @@ struct GeminiEventContext<'a> {
     candidate_identity: Option<&'a str>,
 }
 
+/// Whether a candidate talking over the interviewer cuts it short.
+///
+/// Carried as an argument rather than a flag on the context. It was a field
+/// that `send_wrap_up_and_wait` set and restored, which is one early return
+/// away from leaving barge-in off for good, and it read as state when it is
+/// really a property of the turn being handled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Interruptible {
+    /// An ordinary exchange. The candidate speaking wins the floor.
+    Yes,
+    /// The closing message. Cutting it leaves the candidate without the ending,
+    /// and `wrap_up_settled` reads the emptied queue as the turn being over, so
+    /// a "thanks" mid sentence ended the interview there.
+    No,
+}
+
 /// One open turn per speaker. Gemini interleaves input and output
 /// transcription, so they cannot share a single accumulator.
 #[derive(Debug, Default)]
@@ -988,7 +1004,8 @@ async fn send_wrap_up_and_wait(
         tokio::select! {
             event = context.gemini.next_event() => {
                 let Some(event) = event else { return Ok(()) };
-                handle_gemini_event(room, context, event).await?;
+                // The closing message is the one turn that plays to the end.
+                handle_gemini_event(room, context, event, Interruptible::No).await?;
             }
             _ = tokio::time::sleep_until(context.output_audio.playout_deadline.into()), if context.activity.floor == Floor::AwaitingPlayout => {}
             _ = tokio::time::sleep_until(deadline.into()) => {
@@ -1016,8 +1033,10 @@ fn wrap_up_settled(output_audio: &OutputAudio, activity: &RuntimeActivity) -> bo
 async fn drop_stale_playout(
     room: &Room,
     context: &mut GeminiEventContext<'_>,
+    interruptible: Interruptible,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let Some(dropped) = take_stale_playout(context.activity, context.output_audio) else {
+    let Some(dropped) = take_stale_playout(context.activity, context.output_audio, interruptible)
+    else {
         return Ok(());
     };
     eprintln!(
@@ -1033,32 +1052,44 @@ async fn drop_stale_playout(
 /// the agent state attribute needs republishing and is the number worth
 /// logging: it is exactly the delay the candidate would otherwise have sat
 /// through before hearing an answer.
-fn take_stale_playout(
-    activity: &mut RuntimeActivity,
-    output_audio: &mut OutputAudio,
-) -> Option<Duration> {
-    if activity.floor != Floor::AwaitingPlayout || !output_audio.is_playing() {
-        return None;
-    }
-    let dropped = output_audio
+/// Ends a turn that will not finish: drops what is queued and hands the floor
+/// back. Returns how much speech was thrown away.
+///
+/// `mark_listening`, not a bare assignment to the floor. This used to assign it
+/// bare, on the reasoning that stamping agent speech would start the silence
+/// timers from the wrong instant. It does the opposite: `last_agent_speech` is
+/// parked at the playout deadline while audio is queued, and that deadline is
+/// in the future, so leaving it there after throwing the queue away suppresses
+/// the silence nudge for the whole length of speech nobody heard. `now` is the
+/// earlier of the two.
+fn cut_off_turn(activity: &mut RuntimeActivity, output_audio: &mut OutputAudio) -> Duration {
+    let unplayed = output_audio
         .playout_deadline
         .saturating_duration_since(Instant::now());
     output_audio.interrupt();
-
-    // `mark_listening`, not a bare assignment to the floor. `last_agent_speech`
-    // is parked at the playout deadline while audio is queued, and that
-    // deadline is in the future; leaving it there after throwing the queue away
-    // makes `idle_seconds` and `speech_gap_seconds` saturate to zero for as
-    // long as the discarded speech would have taken to play, so the silence
-    // nudge stays suppressed for audio nobody heard.
     activity.mark_listening();
-    Some(dropped)
+    unplayed
+}
+
+fn take_stale_playout(
+    activity: &mut RuntimeActivity,
+    output_audio: &mut OutputAudio,
+    interruptible: Interruptible,
+) -> Option<Duration> {
+    if interruptible == Interruptible::No
+        || activity.floor != Floor::AwaitingPlayout
+        || !output_audio.is_playing()
+    {
+        return None;
+    }
+    Some(cut_off_turn(activity, output_audio))
 }
 
 async fn handle_gemini_event(
     room: &Room,
     context: &mut GeminiEventContext<'_>,
     event: GeminiEvent,
+    interruptible: Interruptible,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match event {
         GeminiEvent::ToolCall(calls) => {
@@ -1089,7 +1120,7 @@ async fn handle_gemini_event(
                 // stopped generating; only this side knows the queue is still
                 // draining. Cut it here or the reply lands behind the rest of
                 // the old turn.
-                drop_stale_playout(room, context).await?;
+                drop_stale_playout(room, context, interruptible).await?;
                 context.activity.last_user_speech = Instant::now();
                 let turn = &mut context.turns.candidate;
                 let whole = turn
@@ -1118,7 +1149,13 @@ async fn handle_gemini_event(
             // point, so reaching here means Gemini answered something it never
             // transcribed. Backstop rather than the main path, and it must run
             // before `capture` or the new audio queues behind the old.
-            drop_stale_playout(room, context).await?;
+            //
+            // Only for a chunk that will actually be queued. Dropping ahead of
+            // a chunk `capture` rejects leaves the candidate with a sentence
+            // cut in half and no reply behind it.
+            if context.output_audio.accepts(&bytes, &mime_type) {
+                drop_stale_playout(room, context, interruptible).await?;
+            }
             if context.output_audio.capture(&bytes, &mime_type).await? {
                 if waited {
                     eprintln!(
@@ -1165,15 +1202,11 @@ async fn handle_gemini_event(
             // silently. If a turn is cut this way the candidate hears a
             // fragment or nothing, and without this line the log shows only the
             // consequence: a turn that completed with nothing left to play.
+            let unplayed = cut_off_turn(context.activity, context.output_audio);
             eprintln!(
                 "timing: Gemini cut its own turn, {:.1}s of it unplayed",
-                context
-                    .output_audio
-                    .playout_deadline
-                    .saturating_duration_since(Instant::now())
-                    .as_secs_f64()
+                unplayed.as_secs_f64()
             );
-            context.output_audio.interrupt();
 
             // A cut-off turn is still over. Without this the next thing either
             // party says appends to the abandoned turn under its segment id, so
@@ -1181,9 +1214,6 @@ async fn handle_gemini_event(
             // report prompt would read them as one line.
             close_turns(room, context).await?;
 
-            // Barge-in: the candidate cut in, so do not stamp this as agent
-            // speech or the silence timers start from the wrong instant.
-            context.activity.floor = Floor::Listening;
             set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
         }
         _ => {}
@@ -1243,14 +1273,22 @@ impl OutputAudio {
         Instant::now() < self.playout_deadline
     }
 
+    /// Whether `capture` would queue anything for this chunk.
+    ///
+    /// Split out so the caller can ask before dropping a turn that is still
+    /// playing. Dropping first and then finding the new chunk unusable cuts the
+    /// interviewer off mid-sentence with nothing behind it.
+    fn accepts(&self, bytes: &[u8], mime_type: &str) -> bool {
+        !bytes.is_empty()
+            && audio_sample_rate(mime_type, self.sample_rate) == Some(self.sample_rate)
+    }
+
     async fn capture(
         &mut self,
         bytes: &[u8],
         mime_type: &str,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        if bytes.is_empty()
-            || audio_sample_rate(mime_type, self.sample_rate) != Some(self.sample_rate)
-        {
+        if !self.accepts(bytes, mime_type) {
             return Ok(false);
         }
         let mut queued = false;
@@ -2211,6 +2249,71 @@ mod tests {
         assert_eq!(audio_sample_rate("audio/webm", 24_000), None);
     }
 
+    /// The closing message is the one turn barge-in must not touch. Cutting it
+    /// leaves the candidate without the ending, and `wrap_up_settled` reads the
+    /// emptied queue as the turn being over, so the interview ended there.
+    #[test]
+    fn the_closing_message_is_not_cut_short_by_a_candidate_talking_over_it() {
+        let (mut output_audio, _frames) = test_output_audio(Vec::new());
+        let closing = output_audio.output_cancellation.clone();
+        output_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
+        let mut activity = RuntimeActivity::new(Instant::now());
+        activity.floor = Floor::AwaitingPlayout;
+
+        assert!(take_stale_playout(&mut activity, &mut output_audio, Interruptible::No).is_none());
+
+        assert!(!closing.is_cancelled(), "the ending has to play out");
+        assert!(output_audio.is_playing());
+        assert_eq!(activity.floor, Floor::AwaitingPlayout);
+    }
+
+    /// Dropping ahead of a chunk `capture` will refuse leaves the interviewer
+    /// cut off mid-sentence with nothing behind it, which is worse than the
+    /// queueing this whole mechanism exists to avoid.
+    #[test]
+    fn only_a_chunk_that_will_be_queued_is_worth_dropping_a_turn_for() {
+        let (output_audio, _frames) = test_output_audio(Vec::new());
+        let rate = GEMINI_OUTPUT_AUDIO_SAMPLE_RATE;
+
+        assert!(output_audio.accepts(&[1, 0], &format!("audio/pcm;rate={rate}")));
+        assert!(
+            !output_audio.accepts(&[], &format!("audio/pcm;rate={rate}")),
+            "an empty chunk queues nothing"
+        );
+        assert!(
+            !output_audio.accepts(&[1, 0], "audio/pcm;rate=8000"),
+            "a rate this source cannot play queues nothing"
+        );
+        assert!(
+            !output_audio.accepts(&[1, 0], "audio/webm"),
+            "an unreadable mime type queues nothing"
+        );
+    }
+
+    /// `Interrupted` used to assign the floor bare. `last_agent_speech` is
+    /// parked at the playout deadline while audio is queued, so leaving it
+    /// there after discarding the queue suppressed the silence nudge for the
+    /// length of speech nobody heard.
+    #[test]
+    fn a_cut_off_turn_stamps_the_moment_it_was_cut_not_when_it_would_have_ended() {
+        let (mut output_audio, _frames) = test_output_audio(Vec::new());
+        let cut = output_audio.output_cancellation.clone();
+        output_audio.playout_deadline = Instant::now() + Duration::from_secs(15);
+        let mut activity = RuntimeActivity::new(Instant::now());
+        activity.last_agent_speech = output_audio.playout_deadline;
+        activity.floor = Floor::Speaking;
+
+        let unplayed = cut_off_turn(&mut activity, &mut output_audio);
+
+        assert!(unplayed >= Duration::from_secs(14), "reports {unplayed:?}");
+        assert!(cut.is_cancelled(), "queued frames must be dropped");
+        assert_eq!(activity.floor, Floor::Listening);
+        assert!(
+            activity.last_agent_speech <= Instant::now(),
+            "the stamp must not sit in the future, where it suppresses the nudge"
+        );
+    }
+
     /// The first candidate answer used to land behind the rest of the greeting.
     /// Gemini streams a twenty second greeting in about two, marks the turn
     /// complete, and then never reports an interruption, because from its side
@@ -2224,7 +2327,7 @@ mod tests {
         let mut activity = RuntimeActivity::new(Instant::now());
         activity.floor = Floor::AwaitingPlayout;
 
-        let dropped = take_stale_playout(&mut activity, &mut output_audio)
+        let dropped = take_stale_playout(&mut activity, &mut output_audio, Interruptible::Yes)
             .expect("a draining turn must be dropped");
         assert!(
             dropped >= Duration::from_secs(9),
@@ -2269,7 +2372,7 @@ mod tests {
             activity.floor = floor;
 
             assert!(
-                take_stale_playout(&mut activity, &mut output_audio).is_none(),
+                take_stale_playout(&mut activity, &mut output_audio, Interruptible::Yes).is_none(),
                 "{why}"
             );
             assert!(!live.is_cancelled(), "{why}");
