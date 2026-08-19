@@ -1,0 +1,39 @@
+{
+  "id": "simplify-path",
+  "title": "Simplify Path",
+  "difficulty": "Medium",
+  "topics": [
+    "String",
+    "Stack"
+  ],
+  "statement": [
+    "Given an absolute Unix-style path, return its simplified canonical path.",
+    "Single dots do nothing, double dots move up one directory when possible, and repeated slashes behave like one slash."
+  ],
+  "examples": [
+    {
+      "input": "path = \"/home/\"",
+      "output": "\"/home\""
+    },
+    {
+      "input": "path = \"/home//foo/\"",
+      "output": "\"/home/foo\""
+    },
+    {
+      "input": "path = \"/../\"",
+      "output": "\"/\""
+    }
+  ],
+  "constraints": [
+    "1 <= path.length <= 3000",
+    "path is an absolute path beginning with '/'.",
+    "path contains English letters, digits, '.', '/', and '_'."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def simplifyPath(self, path: str) -> str:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} path\n * @return {string}\n */\nfunction simplifyPath(path) {\n  // Think out loud as you go!\n}\n",
+    "c": "char* simplifyPath(char* path) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
+    "cpp": "class Solution {\npublic:\n    string simplifyPath(string path) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
+    "java": "class Solution {\n    public String simplifyPath(String path) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
+  }
+}

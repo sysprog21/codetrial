@@ -1,0 +1,36 @@
+{
+  "id": "jump-game-ii",
+  "title": "Jump Game II",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Dynamic Programming",
+    "Greedy"
+  ],
+  "statement": [
+    "Given an array nums where nums[i] is the farthest jump length from index i, return the fewest jumps needed to reach the last index.",
+    "The input always allows reaching the last index."
+  ],
+  "examples": [
+    {
+      "input": "nums = [2,3,1,1,4]",
+      "output": "2"
+    },
+    {
+      "input": "nums = [2,3,0,1,4]",
+      "output": "2"
+    }
+  ],
+  "constraints": [
+    "1 <= nums.length <= 10^4",
+    "0 <= nums[i] <= 1000",
+    "The last index is reachable."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def jump(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction jump(nums) {\n  // Think out loud as you go!\n}\n",
+    "c": "int jump(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int jump(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int jump(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

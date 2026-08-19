@@ -1,0 +1,35 @@
+{
+  "id": "product-of-array-except-self",
+  "title": "Product of Array Except Self",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Prefix Sum"
+  ],
+  "statement": [
+    "Given an integer array nums, return an array answer where answer[i] is the product of every nums[j] except nums[i].",
+    "Do this without using division."
+  ],
+  "examples": [
+    {
+      "input": "nums = [1,2,3,4]",
+      "output": "[24,12,8,6]"
+    },
+    {
+      "input": "nums = [-1,1,0,-3,3]",
+      "output": "[0,0,9,0,0]"
+    }
+  ],
+  "constraints": [
+    "2 <= nums.length <= 10^5",
+    "-30 <= nums[i] <= 30",
+    "The product of any prefix or suffix fits in a 32-bit integer."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def productExceptSelf(self, nums: list[int]) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} nums\n * @return {number[]}\n */\nfunction productExceptSelf(nums) {\n  // Think out loud as you go!\n}\n",
+    "c": "int* productExceptSelf(int* nums, int numsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+    "cpp": "class Solution {\npublic:\n    vector<int> productExceptSelf(vector<int>& nums) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+    "java": "class Solution {\n    public int[] productExceptSelf(int[] nums) {\n        // Think out loud as you go!\n        return new int[]{};\n    }\n}\n"
+  }
+}

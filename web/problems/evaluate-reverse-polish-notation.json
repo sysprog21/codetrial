@@ -1,0 +1,41 @@
+{
+  "id": "evaluate-reverse-polish-notation",
+  "title": "Evaluate Reverse Polish Notation",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Math",
+    "Stack"
+  ],
+  "statement": [
+    "Given tokens for a valid arithmetic expression in Reverse Polish Notation, evaluate the expression.",
+    "Operators are +, -, *, and /. Division between integers truncates toward zero."
+  ],
+  "examples": [
+    {
+      "input": "tokens = [\"2\",\"1\",\"+\",\"3\",\"*\"]",
+      "output": "9"
+    },
+    {
+      "input": "tokens = [\"4\",\"13\",\"5\",\"/\",\"+\"]",
+      "output": "6"
+    },
+    {
+      "input": "tokens = [\"10\",\"6\",\"9\",\"3\",\"+\",\"-11\",\"*\",\"/\",\"*\",\"17\",\"+\",\"5\",\"+\"]",
+      "output": "22"
+    }
+  ],
+  "constraints": [
+    "1 <= tokens.length <= 10^4",
+    "tokens[i] is an operator or an integer in range [-200, 200].",
+    "The input is a valid Reverse Polish Notation expression.",
+    "All intermediate and final results fit in a 32-bit signed integer."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def evalRPN(self, tokens: list[str]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string[]} tokens\n * @return {number}\n */\nfunction evalRPN(tokens) {\n  // Think out loud as you go!\n}\n",
+    "c": "int evalRPN(char** tokens, int tokensSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int evalRPN(vector<string>& tokens) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int evalRPN(String[] tokens) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

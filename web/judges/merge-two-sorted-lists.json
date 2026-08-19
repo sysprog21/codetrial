@@ -1,0 +1,85 @@
+{
+  "kind": "function",
+  "entry": "mergeTwoLists",
+  "checker": "exact",
+  "argTypes": [
+    "linkedList",
+    "linkedList"
+  ],
+  "outputType": "linkedList",
+  "cases": [
+    {
+      "label": "interleaved lists",
+      "input": [
+        [
+          1,
+          2,
+          4
+        ],
+        [
+          1,
+          3,
+          4
+        ]
+      ],
+      "expected": [
+        1,
+        1,
+        2,
+        3,
+        4,
+        4
+      ]
+    },
+    {
+      "label": "both empty",
+      "input": [
+        [],
+        []
+      ],
+      "expected": []
+    },
+    {
+      "label": "left empty",
+      "input": [
+        [],
+        [
+          0
+        ]
+      ],
+      "expected": [
+        0
+      ]
+    },
+    {
+      "label": "negative values",
+      "input": [
+        [
+          -3,
+          -1,
+          4
+        ],
+        [
+          -2,
+          2
+        ]
+      ],
+      "expected": [
+        -3,
+        -2,
+        -1,
+        2,
+        4
+      ]
+    }
+  ],
+  "paramNames": [
+    "list1",
+    "list2"
+  ],
+  "paramTypes": [
+    "ListNode",
+    "ListNode"
+  ],
+  "returnType": "ListNode"
+}

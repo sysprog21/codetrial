@@ -1,0 +1,72 @@
+{
+  "kind": "function",
+  "entry": "canJump",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "can hop over tail",
+      "input": [
+        [
+          2,
+          3,
+          1,
+          1,
+          4
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "label": "zero trap",
+      "input": [
+        [
+          3,
+          2,
+          1,
+          0,
+          4
+        ]
+      ],
+      "expected": false
+    },
+    {
+      "label": "single index",
+      "input": [
+        [
+          0
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "label": "reachable exact landing",
+      "input": [
+        [
+          2,
+          0,
+          0
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "label": "late unreachable gap",
+      "input": [
+        [
+          1,
+          0,
+          1,
+          0
+        ]
+      ],
+      "expected": false
+    }
+  ],
+  "paramNames": [
+    "nums"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "boolean"
+}

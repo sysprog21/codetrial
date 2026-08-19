@@ -1,0 +1,36 @@
+{
+  "id": "binary-search-tree-iterator",
+  "title": "Binary Search Tree Iterator",
+  "difficulty": "Medium",
+  "topics": [
+    "Stack",
+    "Tree",
+    "Design",
+    "Binary Search Tree",
+    "Binary Tree",
+    "Iterator"
+  ],
+  "statement": [
+    "Design an iterator over a binary search tree that returns values in ascending order.",
+    "BSTIterator(root) initializes the iterator. next() returns the next smallest value, and hasNext() reports whether another value remains."
+  ],
+  "examples": [
+    {
+      "input": "[\"BSTIterator\",\"next\",\"next\",\"hasNext\",\"next\",\"hasNext\",\"next\",\"hasNext\",\"next\",\"hasNext\"]\n[[[7,3,15,null,null,9,20]],[],[],[],[],[],[],[],[],[]]",
+      "output": "[null,3,7,true,9,true,15,true,20,false]"
+    }
+  ],
+  "constraints": [
+    "1 <= number of nodes <= 10^5",
+    "0 <= Node.val <= 10^6",
+    "At most 10^5 calls will be made to next and hasNext.",
+    "Calls to next are valid only when hasNext is true."
+  ],
+  "starterCode": {
+    "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass BSTIterator:\n    def __init__(self, root: Optional[TreeNode]):\n        pass\n\n    def next(self) -> int:\n        pass\n\n    def hasNext(self) -> bool:\n        pass\n",
+    "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *   this.val = (val===undefined ? 0 : val);\n *   this.left = (left===undefined ? null : left);\n *   this.right = (right===undefined ? null : right);\n * }\n */\n/** @param {TreeNode} root */\nvar BSTIterator = function(root) {\n  // Think out loud as you go!\n};\n\n/** @return {number} */\nBSTIterator.prototype.next = function() {\n};\n\n/** @return {boolean} */\nBSTIterator.prototype.hasNext = function() {\n};\n",
+    "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\ntypedef struct {\n    // Think out loud as you go!\n} BSTIterator;\n\nBSTIterator* bSTIteratorCreate(struct TreeNode* root) {\n    return NULL;\n}\n\nint bSTIteratorNext(BSTIterator* obj) {\n    return 0;\n}\n\nbool bSTIteratorHasNext(BSTIterator* obj) {\n    return false;\n}\n\nvoid bSTIteratorFree(BSTIterator* obj) {\n}\n",
+    "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass BSTIterator {\npublic:\n    BSTIterator(TreeNode* root) {\n    }\n\n    int next() {\n        return 0;\n    }\n\n    bool hasNext() {\n        return false;\n    }\n};\n",
+    "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass BSTIterator {\n    public BSTIterator(TreeNode root) {\n    }\n\n    public int next() {\n        return 0;\n    }\n\n    public boolean hasNext() {\n        return false;\n    }\n}\n"
+  }
+}

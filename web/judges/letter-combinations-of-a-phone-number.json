@@ -1,0 +1,73 @@
+{
+  "kind": "function",
+  "entry": "letterCombinations",
+  "checker": "arrayBag",
+  "cases": [
+    {
+      "label": "two digits",
+      "input": [
+        "23"
+      ],
+      "expected": [
+        "ad",
+        "ae",
+        "af",
+        "bd",
+        "be",
+        "bf",
+        "cd",
+        "ce",
+        "cf"
+      ]
+    },
+    {
+      "label": "single digit",
+      "input": [
+        "2"
+      ],
+      "expected": [
+        "a",
+        "b",
+        "c"
+      ]
+    },
+    {
+      "label": "empty digits",
+      "input": [
+        ""
+      ],
+      "expected": []
+    },
+    {
+      "label": "four choices digit",
+      "input": [
+        "79"
+      ],
+      "expected": [
+        "pw",
+        "px",
+        "py",
+        "pz",
+        "qw",
+        "qx",
+        "qy",
+        "qz",
+        "rw",
+        "rx",
+        "ry",
+        "rz",
+        "sw",
+        "sx",
+        "sy",
+        "sz"
+      ]
+    }
+  ],
+  "paramNames": [
+    "digits"
+  ],
+  "paramTypes": [
+    "string"
+  ],
+  "returnType": "list<string>"
+}

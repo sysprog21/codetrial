@@ -1,0 +1,84 @@
+{
+  "kind": "function",
+  "entry": "removeElement",
+  "checker": "arrayBag",
+  "outputPrefixParam": 0,
+  "cases": [
+    {
+      "label": "remove all 3s",
+      "input": [
+        [
+          3,
+          2,
+          2,
+          3
+        ],
+        3
+      ],
+      "expected": [
+        2,
+        2
+      ]
+    },
+    {
+      "label": "remove scattered 2s",
+      "input": [
+        [
+          0,
+          1,
+          2,
+          2,
+          3,
+          0,
+          4,
+          2
+        ],
+        2
+      ],
+      "expected": [
+        0,
+        1,
+        3,
+        0,
+        4
+      ]
+    },
+    {
+      "label": "value absent keeps all",
+      "input": [
+        [
+          1,
+          2,
+          3
+        ],
+        4
+      ],
+      "expected": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "label": "remove every element",
+      "input": [
+        [
+          7,
+          7,
+          7
+        ],
+        7
+      ],
+      "expected": []
+    }
+  ],
+  "paramNames": [
+    "nums",
+    "val"
+  ],
+  "paramTypes": [
+    "integer[]",
+    "integer"
+  ],
+  "returnType": "integer"
+}

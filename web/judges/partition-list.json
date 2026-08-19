@@ -1,0 +1,93 @@
+{
+  "kind": "function",
+  "entry": "partition",
+  "checker": "exact",
+  "argTypes": [
+    "linkedList",
+    null
+  ],
+  "outputType": "linkedList",
+  "cases": [
+    {
+      "label": "stable mixed partition",
+      "input": [
+        [
+          1,
+          4,
+          3,
+          2,
+          5,
+          2
+        ],
+        3
+      ],
+      "expected": [
+        1,
+        2,
+        2,
+        4,
+        3,
+        5
+      ]
+    },
+    {
+      "label": "head moves after smaller node",
+      "input": [
+        [
+          2,
+          1
+        ],
+        2
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "label": "all nodes stay before partition",
+      "input": [
+        [
+          1,
+          1,
+          1
+        ],
+        5
+      ],
+      "expected": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "label": "relative order preserved",
+      "input": [
+        [
+          3,
+          1,
+          2,
+          2,
+          4
+        ],
+        3
+      ],
+      "expected": [
+        1,
+        2,
+        2,
+        3,
+        4
+      ]
+    }
+  ],
+  "paramNames": [
+    "head",
+    "x"
+  ],
+  "paramTypes": [
+    "ListNode",
+    "integer"
+  ],
+  "returnType": "ListNode"
+}

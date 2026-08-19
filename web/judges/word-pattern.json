@@ -1,0 +1,56 @@
+{
+  "kind": "function",
+  "entry": "wordPattern",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "abba matches dog cat cat dog",
+      "input": [
+        "abba",
+        "dog cat cat dog"
+      ],
+      "expected": true
+    },
+    {
+      "label": "last word mismatch",
+      "input": [
+        "abba",
+        "dog cat cat fish"
+      ],
+      "expected": false
+    },
+    {
+      "label": "one pattern maps to many words",
+      "input": [
+        "aaaa",
+        "dog cat cat dog"
+      ],
+      "expected": false
+    },
+    {
+      "label": "many pattern letters share one word",
+      "input": [
+        "abba",
+        "dog dog dog dog"
+      ],
+      "expected": false
+    },
+    {
+      "label": "word count mismatch",
+      "input": [
+        "abba",
+        "dog cat cat dog fish"
+      ],
+      "expected": false
+    }
+  ],
+  "paramNames": [
+    "pattern",
+    "s"
+  ],
+  "paramTypes": [
+    "string",
+    "string"
+  ],
+  "returnType": "boolean"
+}

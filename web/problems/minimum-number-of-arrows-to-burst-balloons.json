@@ -1,0 +1,40 @@
+{
+  "id": "minimum-number-of-arrows-to-burst-balloons",
+  "title": "Minimum Number of Arrows to Burst Balloons",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Greedy",
+    "Sorting"
+  ],
+  "statement": [
+    "Each balloon is an interval on the x-axis. One arrow shot at x bursts every balloon whose interval contains x.",
+    "Return the minimum number of arrows needed to burst all balloons."
+  ],
+  "examples": [
+    {
+      "input": "points = [[10,16],[2,8],[1,6],[7,12]]",
+      "output": "2"
+    },
+    {
+      "input": "points = [[1,2],[3,4],[5,6],[7,8]]",
+      "output": "4"
+    },
+    {
+      "input": "points = [[1,2],[2,3],[3,4],[4,5]]",
+      "output": "2"
+    }
+  ],
+  "constraints": [
+    "1 <= points.length <= 10^5",
+    "points[i].length == 2",
+    "-2^31 <= x_start < x_end <= 2^31 - 1"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def findMinArrowShots(self, points: list[list[int]]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[][]} points\n * @return {number}\n */\nfunction findMinArrowShots(points) {\n  // Think out loud as you go!\n}\n",
+    "c": "int findMinArrowShots(int** points, int pointsSize, int* pointsColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int findMinArrowShots(vector<vector<int>>& points) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int findMinArrowShots(int[][] points) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

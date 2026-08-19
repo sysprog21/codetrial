@@ -1,0 +1,167 @@
+{
+  "kind": "class",
+  "entry": "minStack",
+  "className": "MinStack",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "classic negative minimum sequence",
+      "input": [
+        [
+          "MinStack",
+          "push",
+          "push",
+          "push",
+          "getMin",
+          "pop",
+          "top",
+          "getMin"
+        ],
+        [
+          [],
+          [
+            -2
+          ],
+          [
+            0
+          ],
+          [
+            -3
+          ],
+          [],
+          [],
+          [],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        null,
+        null,
+        -3,
+        null,
+        0,
+        -2
+      ]
+    },
+    {
+      "label": "duplicate minimum survives one pop",
+      "input": [
+        [
+          "MinStack",
+          "push",
+          "push",
+          "push",
+          "getMin",
+          "pop",
+          "getMin",
+          "pop",
+          "getMin"
+        ],
+        [
+          [],
+          [
+            2
+          ],
+          [
+            1
+          ],
+          [
+            1
+          ],
+          [],
+          [],
+          [],
+          [],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        null,
+        null,
+        1,
+        null,
+        1,
+        null,
+        2
+      ]
+    },
+    {
+      "label": "top after decreasing pushes",
+      "input": [
+        [
+          "MinStack",
+          "push",
+          "push",
+          "top",
+          "getMin",
+          "pop",
+          "top",
+          "getMin"
+        ],
+        [
+          [],
+          [
+            5
+          ],
+          [
+            3
+          ],
+          [],
+          [],
+          [],
+          [],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        null,
+        3,
+        3,
+        null,
+        5,
+        5
+      ]
+    },
+    {
+      "label": "negative minimum after positive values",
+      "input": [
+        [
+          "MinStack",
+          "push",
+          "push",
+          "push",
+          "getMin",
+          "top"
+        ],
+        [
+          [],
+          [
+            4
+          ],
+          [
+            6
+          ],
+          [
+            -1
+          ],
+          [],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        null,
+        null,
+        -1,
+        -1
+      ]
+    }
+  ]
+}

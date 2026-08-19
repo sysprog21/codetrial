@@ -1,0 +1,35 @@
+{
+  "id": "single-number-ii",
+  "title": "Single Number II",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Bit Manipulation"
+  ],
+  "statement": [
+    "Given an integer array where every value appears three times except one, return the value that appears once.",
+    "The solution should run in linear time and use constant extra space."
+  ],
+  "examples": [
+    {
+      "input": "nums = [2,2,3,2]",
+      "output": "3"
+    },
+    {
+      "input": "nums = [0,1,0,1,0,1,99]",
+      "output": "99"
+    }
+  ],
+  "constraints": [
+    "1 <= nums.length <= 3 * 10^4",
+    "-2^31 <= nums[i] <= 2^31 - 1",
+    "Every value appears three times except for one value that appears once."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def singleNumber(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction singleNumber(nums) {\n  // Think out loud as you go!\n}\n",
+    "c": "int singleNumber(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int singleNumber(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int singleNumber(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

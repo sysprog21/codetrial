@@ -1,0 +1,39 @@
+{
+  "id": "powx-n",
+  "title": "Pow(x, n)",
+  "difficulty": "Medium",
+  "topics": [
+    "Math",
+    "Recursion"
+  ],
+  "statement": [
+    "Implement exponentiation for a floating-point base x and an integer exponent n.",
+    "Negative exponents return the reciprocal of the corresponding positive power."
+  ],
+  "examples": [
+    {
+      "input": "x = 2.00000, n = 10",
+      "output": "1024.00000"
+    },
+    {
+      "input": "x = 2.10000, n = 3",
+      "output": "9.26100"
+    },
+    {
+      "input": "x = 2.00000, n = -2",
+      "output": "0.25000"
+    }
+  ],
+  "constraints": [
+    "-100.0 < x < 100.0",
+    "-2^31 <= n <= 2^31 - 1",
+    "n is an integer."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def myPow(self, x: float, n: int) -> float:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number} x\n * @param {number} n\n * @return {number}\n */\nfunction myPow(x, n) {\n  // Think out loud as you go!\n}\n",
+    "c": "double myPow(double x, int n) {\n    // Think out loud as you go!\n    return 0.0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    double myPow(double x, int n) {\n        // Think out loud as you go!\n        return 0.0;\n    }\n};\n",
+    "java": "class Solution {\n    public double myPow(double x, int n) {\n        // Think out loud as you go!\n        return 0.0;\n    }\n}\n"
+  }
+}

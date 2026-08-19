@@ -1,0 +1,42 @@
+{
+  "id": "merge-k-sorted-lists",
+  "title": "Merge k Sorted Lists",
+  "difficulty": "Hard",
+  "topics": [
+    "Linked List",
+    "Divide and Conquer",
+    "Heap",
+    "Merge Sort"
+  ],
+  "statement": [
+    "Given an array of sorted linked lists, merge all values into one sorted linked list.",
+    "Return the head of the merged list, or an empty list when there are no nodes."
+  ],
+  "examples": [
+    {
+      "input": "lists = [[1,4,5],[1,3,4],[2,6]]",
+      "output": "[1,1,2,3,4,4,5,6]"
+    },
+    {
+      "input": "lists = []",
+      "output": "[]"
+    },
+    {
+      "input": "lists = [[]]",
+      "output": "[]"
+    }
+  ],
+  "constraints": [
+    "0 <= lists.length <= 10^4",
+    "0 <= total number of nodes <= 10^4",
+    "-10^4 <= Node.val <= 10^4",
+    "Each linked list is sorted in ascending order."
+  ],
+  "starterCode": {
+    "python": "# Definition for singly-linked list.\n# class ListNode:\n#     def __init__(self, val=0, next=None):\n#         self.val = val\n#         self.next = next\nclass Solution:\n    def mergeKLists(self, lists: list[Optional[ListNode]]) -> Optional[ListNode]:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * Definition for singly-linked list.\n * function ListNode(val, next) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.next = (next === undefined ? null : next);\n * }\n */\n/**\n * @param {ListNode[]} lists\n * @return {ListNode}\n */\nfunction mergeKLists(lists) {\n  // Think out loud as you go!\n}\n",
+    "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* mergeKLists(struct ListNode** lists, int listsSize) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+    "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* mergeKLists(vector<ListNode*>& lists) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+    "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode mergeKLists(ListNode[] lists) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+  }
+}

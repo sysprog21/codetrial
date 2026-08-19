@@ -1,0 +1,37 @@
+{
+  "id": "spiral-matrix",
+  "title": "Spiral Matrix",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Matrix",
+    "Simulation"
+  ],
+  "statement": [
+    "Given an m x n matrix, return every value in clockwise spiral order.",
+    "Start at the top-left corner, walk across the top row, then continue around the remaining boundary until all cells are visited."
+  ],
+  "examples": [
+    {
+      "input": "matrix = [[1,2,3],[4,5,6],[7,8,9]]",
+      "output": "[1,2,3,6,9,8,7,4,5]"
+    },
+    {
+      "input": "matrix = [[1,2,3,4],[5,6,7,8],[9,10,11,12]]",
+      "output": "[1,2,3,4,8,12,11,10,9,5,6,7]"
+    }
+  ],
+  "constraints": [
+    "m == matrix.length",
+    "n == matrix[i].length",
+    "1 <= m, n <= 10",
+    "-100 <= matrix[i][j] <= 100"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def spiralOrder(self, matrix: list[list[int]]) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[][]} matrix\n * @return {number[]}\n */\nfunction spiralOrder(matrix) {\n  // Think out loud as you go!\n}\n",
+    "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* spiralOrder(int** matrix, int matrixSize, int* matrixColSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+    "cpp": "class Solution {\npublic:\n    vector<int> spiralOrder(vector<vector<int>>& matrix) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+    "java": "class Solution {\n    public List<Integer> spiralOrder(int[][] matrix) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
+  }
+}

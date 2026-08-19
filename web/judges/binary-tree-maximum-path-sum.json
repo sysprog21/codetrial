@@ -1,0 +1,65 @@
+{
+  "kind": "function",
+  "entry": "maxPathSum",
+  "checker": "exact",
+  "argTypes": [
+    "binaryTree"
+  ],
+  "cases": [
+    {
+      "label": "through root",
+      "input": [
+        [
+          1,
+          2,
+          3
+        ]
+      ],
+      "expected": 6
+    },
+    {
+      "label": "through inner node",
+      "input": [
+        [
+          -10,
+          9,
+          20,
+          null,
+          null,
+          15,
+          7
+        ]
+      ],
+      "expected": 42
+    },
+    {
+      "label": "all negative picks one node",
+      "input": [
+        [
+          -3,
+          -2,
+          -1
+        ]
+      ],
+      "expected": -1
+    },
+    {
+      "label": "one branch contribution",
+      "input": [
+        [
+          2,
+          -1,
+          -2
+        ]
+      ],
+      "expected": 2
+    }
+  ],
+  "paramNames": [
+    "root"
+  ],
+  "paramTypes": [
+    "TreeNode"
+  ],
+  "returnType": "integer"
+}

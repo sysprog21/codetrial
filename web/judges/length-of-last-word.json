@@ -1,0 +1,49 @@
+{
+  "kind": "function",
+  "entry": "lengthOfLastWord",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "two words",
+      "input": [
+        "Hello World"
+      ],
+      "expected": 5
+    },
+    {
+      "label": "trailing spaces",
+      "input": [
+        "   fly me   to   the moon  "
+      ],
+      "expected": 4
+    },
+    {
+      "label": "last word at end",
+      "input": [
+        "luffy is still joyboy"
+      ],
+      "expected": 6
+    },
+    {
+      "label": "single letter",
+      "input": [
+        "a"
+      ],
+      "expected": 1
+    },
+    {
+      "label": "single word with leading spaces",
+      "input": [
+        "   single"
+      ],
+      "expected": 6
+    }
+  ],
+  "paramNames": [
+    "s"
+  ],
+  "paramTypes": [
+    "string"
+  ],
+  "returnType": "integer"
+}

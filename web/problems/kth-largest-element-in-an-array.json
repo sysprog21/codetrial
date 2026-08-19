@@ -1,0 +1,37 @@
+{
+  "id": "kth-largest-element-in-an-array",
+  "title": "Kth Largest Element in an Array",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Divide and Conquer",
+    "Sorting",
+    "Heap",
+    "Quickselect"
+  ],
+  "statement": [
+    "Given an integer array and k, return the value that would appear in position k when the values are ordered from largest to smallest.",
+    "Duplicate values count as separate positions."
+  ],
+  "examples": [
+    {
+      "input": "nums = [3,2,1,5,6,4], k = 2",
+      "output": "5"
+    },
+    {
+      "input": "nums = [3,2,3,1,2,4,5,5,6], k = 4",
+      "output": "4"
+    }
+  ],
+  "constraints": [
+    "1 <= k <= nums.length <= 10^5",
+    "-10^4 <= nums[i] <= 10^4"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def findKthLargest(self, nums: list[int], k: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} nums\n * @param {number} k\n * @return {number}\n */\nfunction findKthLargest(nums, k) {\n  // Think out loud as you go!\n}\n",
+    "c": "int findKthLargest(int* nums, int numsSize, int k) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int findKthLargest(vector<int>& nums, int k) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int findKthLargest(int[] nums, int k) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

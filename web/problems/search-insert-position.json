@@ -1,0 +1,40 @@
+{
+  "id": "search-insert-position",
+  "title": "Search Insert Position",
+  "difficulty": "Easy",
+  "topics": [
+    "Array",
+    "Binary Search"
+  ],
+  "statement": [
+    "Given a sorted array of distinct integers and a target, return the index where the target is found.",
+    "If the target is absent, return the index where it should be inserted to keep the array sorted."
+  ],
+  "examples": [
+    {
+      "input": "nums = [1,3,5,6], target = 5",
+      "output": "2"
+    },
+    {
+      "input": "nums = [1,3,5,6], target = 2",
+      "output": "1"
+    },
+    {
+      "input": "nums = [1,3,5,6], target = 7",
+      "output": "4"
+    }
+  ],
+  "constraints": [
+    "1 <= nums.length <= 10^4",
+    "-10^4 <= nums[i] <= 10^4",
+    "nums is sorted in strictly increasing order.",
+    "-10^4 <= target <= 10^4"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def searchInsert(self, nums: list[int], target: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} nums\n * @param {number} target\n * @return {number}\n */\nfunction searchInsert(nums, target) {\n  // Think out loud as you go!\n}\n",
+    "c": "int searchInsert(int* nums, int numsSize, int target) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int searchInsert(vector<int>& nums, int target) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int searchInsert(int[] nums, int target) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

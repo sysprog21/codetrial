@@ -1,0 +1,39 @@
+{
+  "id": "ipo",
+  "title": "IPO",
+  "difficulty": "Hard",
+  "topics": [
+    "Array",
+    "Greedy",
+    "Sorting",
+    "Heap"
+  ],
+  "statement": [
+    "You start with capital w and may complete at most k projects. Each project requires a minimum capital amount and adds a profit after completion.",
+    "Return the largest capital possible after choosing up to k affordable projects."
+  ],
+  "examples": [
+    {
+      "input": "k = 2, w = 0, profits = [1,2,3], capital = [0,1,1]",
+      "output": "4"
+    },
+    {
+      "input": "k = 3, w = 0, profits = [1,2,3], capital = [0,1,2]",
+      "output": "6"
+    }
+  ],
+  "constraints": [
+    "1 <= k <= 10^5",
+    "0 <= w <= 10^9",
+    "1 <= profits.length == capital.length <= 10^5",
+    "0 <= profits[i] <= 10^4",
+    "0 <= capital[i] <= 10^9"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def findMaximizedCapital(self, k: int, w: int, profits: list[int], capital: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number} k\n * @param {number} w\n * @param {number[]} profits\n * @param {number[]} capital\n * @return {number}\n */\nfunction findMaximizedCapital(k, w, profits, capital) {\n  // Think out loud as you go!\n}\n",
+    "c": "int findMaximizedCapital(int k, int w, int* profits, int profitsSize, int* capital, int capitalSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int findMaximizedCapital(int k, int w, vector<int>& profits, vector<int>& capital) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int findMaximizedCapital(int k, int w, int[] profits, int[] capital) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

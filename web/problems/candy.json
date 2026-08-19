@@ -1,0 +1,34 @@
+{
+  "id": "candy",
+  "title": "Candy",
+  "difficulty": "Hard",
+  "topics": [
+    "Array",
+    "Greedy"
+  ],
+  "statement": [
+    "Given ratings for children standing in a line, give each child at least one candy.",
+    "Any child with a higher rating than an immediate neighbor must receive more candies than that neighbor. Return the minimum total candies needed."
+  ],
+  "examples": [
+    {
+      "input": "ratings = [1,0,2]",
+      "output": "5"
+    },
+    {
+      "input": "ratings = [1,2,2]",
+      "output": "4"
+    }
+  ],
+  "constraints": [
+    "1 <= ratings.length <= 2 * 10^4",
+    "0 <= ratings[i] <= 2 * 10^4"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def candy(self, ratings: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} ratings\n * @return {number}\n */\nfunction candy(ratings) {\n  // Think out loud as you go!\n}\n",
+    "c": "int candy(int* ratings, int ratingsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int candy(vector<int>& ratings) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int candy(int[] ratings) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

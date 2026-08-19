@@ -1,0 +1,86 @@
+{
+  "kind": "function",
+  "entry": "threeSum",
+  "checker": "tripletSet",
+  "cases": [
+    {
+      "label": "duplicates collapse",
+      "input": [
+        [
+          -1,
+          0,
+          1,
+          2,
+          -1,
+          -4
+        ]
+      ],
+      "expected": [
+        [
+          -1,
+          -1,
+          2
+        ],
+        [
+          -1,
+          0,
+          1
+        ]
+      ]
+    },
+    {
+      "label": "no triplet",
+      "input": [
+        [
+          0,
+          1,
+          1
+        ]
+      ],
+      "expected": []
+    },
+    {
+      "label": "all zeros once",
+      "input": [
+        [
+          0,
+          0,
+          0
+        ]
+      ],
+      "expected": [
+        [
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "label": "many duplicates",
+      "input": [
+        [
+          -2,
+          0,
+          0,
+          2,
+          2
+        ]
+      ],
+      "expected": [
+        [
+          -2,
+          0,
+          2
+        ]
+      ]
+    }
+  ],
+  "paramNames": [
+    "nums"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "list<list<integer>>"
+}

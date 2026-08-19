@@ -13,6 +13,35 @@ import { join } from "node:path";
 
 const web = join(root, "web");
 const read = (name) => readFileSync(join(web, name), "utf8");
+
+/// Stands in for the server: serves web/ off disk and 404s what is not there.
+/// Returns the undo, because a `globalThis.fetch` left installed makes the next
+/// test in the file depend on this one having run.
+function serveWebFromDisk(served = []) {
+  const previous = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    served.push(url);
+    const path = join(web, new URL(url, "http://localhost/").pathname);
+    try {
+      const body = readFileSync(path, "utf8");
+      return { ok: true, status: 200, json: async () => JSON.parse(body) };
+    } catch {
+      return { ok: false, status: 404, json: async () => null };
+    }
+  };
+  return () => {
+    globalThis.fetch = previous;
+  };
+}
+
+/// Same shape, for the paths where the bank cannot be reached at all.
+function failFetchWith(handler) {
+  const previous = globalThis.fetch;
+  globalThis.fetch = handler;
+  return () => {
+    globalThis.fetch = previous;
+  };
+}
 const scripts = readdirSync(web).filter((name) => name.endsWith(".js"));
 const pages = readdirSync(web).filter((name) => name.endsWith(".html"));
 
@@ -110,11 +139,77 @@ test("every module import resolves to a file that exists", () => {
   assert.deepEqual(missing, [], "a module import points at a missing file");
 });
 
-test("problem module exports the lookup used by the interview page", async () => {
-  const { getProblem } = await import(join(web, "problems.js"));
+test("problem loader fetches one problem and falls back to the default", async () => {
+  // Stands in for the server: serves web/ and 404s anything not on disk, which
+  // is what a request for a problem outside the bank gets.
+  const served = [];
+  const restore = serveWebFromDisk(served);
+  try {
+    const { loadProblem, loadJudge } = await import(join(web, "problem-data.js"));
 
-  assert.equal(getProblem("two-sum").id, "two-sum");
-  assert.equal(getProblem("missing").id, "two-sum");
+    assert.equal((await loadProblem("two-sum")).id, "two-sum");
+    assert.equal((await loadProblem("missing")).id, "two-sum");
+    assert.ok((await loadJudge("two-sum")).cases.length > 0);
+    assert.equal(await loadJudge("missing"), null);
+  } finally {
+    restore();
+  }
+
+  // The point of the split: one problem asked for is one problem fetched, not
+  // a module carrying the answers to the other 149.
+  assert.deepEqual(served, [
+    "/problems/two-sum.json",
+    "/problems/missing.json",
+    "/problems/two-sum.json",
+    "/judges/two-sum.json",
+    "/judges/missing.json",
+  ]);
+});
+
+test("an unreachable bank is reported as unreachable, not as an empty one", async () => {
+  // A 404 says the bank does not have it. Everything else says we could not
+  // find out, and the two must not arrive at the same answer: reporting a
+  // dropped connection as "no test cases are defined" tells a candidate to stop
+  // trying.
+  let attempts = 0;
+  let restore = failFetchWith(async () => {
+    attempts += 1;
+    throw new TypeError("Failed to fetch");
+  });
+  try {
+    const { loadProblem, loadJudge } = await import(`${join(web, "problem-data.js")}?unreachable`);
+
+    await assert.rejects(() => loadProblem("two-sum"), /could not be reached/);
+    await assert.rejects(() => loadJudge("two-sum"), /could not be reached/);
+    // One retry each, not none and not a storm.
+    assert.equal(attempts, 4);
+  } finally {
+    restore();
+  }
+
+  restore = failFetchWith(async () => ({ ok: false, status: 503, json: async () => null }));
+  try {
+    const { loadJudge } = await import(`${join(web, "problem-data.js")}?unavailable`);
+    await assert.rejects(() => loadJudge("two-sum"), /returned 503/);
+  } finally {
+    restore();
+  }
+});
+
+test("a judge that cannot be fetched is not a problem without tests", async () => {
+  const restore = failFetchWith(async () => {
+    throw new TypeError("Failed to fetch");
+  });
+  try {
+    const { runBrowserTests } = await import(`${join(web, "runners.js")}?judge-unreachable`);
+    const summary = await runBrowserTests("two-sum", "", "python");
+
+    assert.match(summary.setupError, /could not be loaded/);
+    assert.doesNotMatch(summary.setupError, /No test cases are defined/);
+    assert.equal(summary.total, 0);
+  } finally {
+    restore();
+  }
 });
 
 test("the interview page keeps the structure the script drives", () => {
@@ -176,6 +271,7 @@ test("output confirmation is required but not blocked by tone timing", () => {
 test("runtime config can withdraw compiled language test runs", async () => {
   const previous = globalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL;
   globalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = "";
+  const restore = serveWebFromDisk();
   try {
     const { runBrowserTests } = await import(`../../web/runners.js?compiled-runs-disabled=${Date.now()}`);
     for (const language of ["c", "cpp", "java"]) {
@@ -185,6 +281,7 @@ test("runtime config can withdraw compiled language test runs", async () => {
       assert.match(summary.setupError, /tests are not wired up yet/);
     }
   } finally {
+    restore();
     if (previous === undefined) {
       delete globalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL;
     } else {

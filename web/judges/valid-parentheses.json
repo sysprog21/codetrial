@@ -1,0 +1,63 @@
+{
+  "kind": "function",
+  "entry": "isValid",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "s=\"()\"",
+      "input": [
+        "()"
+      ],
+      "expected": true
+    },
+    {
+      "label": "s=\"()[]{}\"",
+      "input": [
+        "()[]{}"
+      ],
+      "expected": true
+    },
+    {
+      "label": "mismatched type: s=\"(]\"",
+      "input": [
+        "(]"
+      ],
+      "expected": false
+    },
+    {
+      "label": "interleaved: s=\"([)]\"",
+      "input": [
+        "([)]"
+      ],
+      "expected": false
+    },
+    {
+      "label": "nested: s=\"{[]}\"",
+      "input": [
+        "{[]}"
+      ],
+      "expected": true
+    },
+    {
+      "label": "unclosed: s=\"(\"",
+      "input": [
+        "("
+      ],
+      "expected": false
+    },
+    {
+      "label": "close first: s=\")(\"",
+      "input": [
+        ")("
+      ],
+      "expected": false
+    }
+  ],
+  "paramNames": [
+    "s"
+  ],
+  "paramTypes": [
+    "string"
+  ],
+  "returnType": "boolean"
+}

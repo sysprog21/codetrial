@@ -1,0 +1,56 @@
+{
+  "kind": "function",
+  "entry": "strStr",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "match at start",
+      "input": [
+        "sadbutsad",
+        "sad"
+      ],
+      "expected": 0
+    },
+    {
+      "label": "not found",
+      "input": [
+        "leetcode",
+        "leeto"
+      ],
+      "expected": -1
+    },
+    {
+      "label": "later occurrence",
+      "input": [
+        "mississippi",
+        "issip"
+      ],
+      "expected": 4
+    },
+    {
+      "label": "overlapping prefix",
+      "input": [
+        "aaaaa",
+        "bba"
+      ],
+      "expected": -1
+    },
+    {
+      "label": "needle equals haystack",
+      "input": [
+        "abc",
+        "abc"
+      ],
+      "expected": 0
+    }
+  ],
+  "paramNames": [
+    "haystack",
+    "needle"
+  ],
+  "paramTypes": [
+    "string",
+    "string"
+  ],
+  "returnType": "integer"
+}

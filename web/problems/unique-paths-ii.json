@@ -1,0 +1,35 @@
+{
+  "id": "unique-paths-ii",
+  "title": "Unique Paths II",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Dynamic Programming",
+    "Matrix"
+  ],
+  "statement": [
+    "Given a grid where 1 marks an obstacle and 0 marks an open cell, count paths from the top-left to the bottom-right cell.",
+    "Each move may go only right or down, and paths cannot pass through obstacles."
+  ],
+  "examples": [
+    {
+      "input": "obstacleGrid = [[0,0,0],[0,1,0],[0,0,0]]",
+      "output": "2"
+    },
+    {
+      "input": "obstacleGrid = [[0,1],[0,0]]",
+      "output": "1"
+    }
+  ],
+  "constraints": [
+    "1 <= m, n <= 100",
+    "obstacleGrid[i][j] is 0 or 1."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def uniquePathsWithObstacles(self, obstacleGrid: list[list[int]]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[][]} obstacleGrid\n * @return {number}\n */\nfunction uniquePathsWithObstacles(obstacleGrid) {\n  // Think out loud as you go!\n}\n",
+    "c": "int uniquePathsWithObstacles(int** obstacleGrid, int obstacleGridSize, int* obstacleGridColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int uniquePathsWithObstacles(vector<vector<int>>& obstacleGrid) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int uniquePathsWithObstacles(int[][] obstacleGrid) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

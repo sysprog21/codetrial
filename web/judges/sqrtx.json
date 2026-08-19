@@ -1,0 +1,49 @@
+{
+  "kind": "function",
+  "entry": "mySqrt",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "perfect square",
+      "input": [
+        4
+      ],
+      "expected": 2
+    },
+    {
+      "label": "round down",
+      "input": [
+        8
+      ],
+      "expected": 2
+    },
+    {
+      "label": "zero",
+      "input": [
+        0
+      ],
+      "expected": 0
+    },
+    {
+      "label": "one",
+      "input": [
+        1
+      ],
+      "expected": 1
+    },
+    {
+      "label": "large overflow guard",
+      "input": [
+        2147395600
+      ],
+      "expected": 46340
+    }
+  ],
+  "paramNames": [
+    "x"
+  ],
+  "paramTypes": [
+    "integer"
+  ],
+  "returnType": "integer"
+}

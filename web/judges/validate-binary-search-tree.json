@@ -1,0 +1,69 @@
+{
+  "kind": "function",
+  "entry": "isValidBST",
+  "checker": "exact",
+  "argTypes": [
+    "binaryTree"
+  ],
+  "cases": [
+    {
+      "label": "valid three nodes",
+      "input": [
+        [
+          2,
+          1,
+          3
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "label": "right child violates root",
+      "input": [
+        [
+          5,
+          1,
+          4,
+          null,
+          null,
+          3,
+          6
+        ]
+      ],
+      "expected": false
+    },
+    {
+      "label": "duplicates are invalid",
+      "input": [
+        [
+          2,
+          2,
+          2
+        ]
+      ],
+      "expected": false
+    },
+    {
+      "label": "deep descendant violates ancestor",
+      "input": [
+        [
+          5,
+          4,
+          6,
+          null,
+          null,
+          3,
+          7
+        ]
+      ],
+      "expected": false
+    }
+  ],
+  "paramNames": [
+    "root"
+  ],
+  "paramTypes": [
+    "TreeNode"
+  ],
+  "returnType": "boolean"
+}

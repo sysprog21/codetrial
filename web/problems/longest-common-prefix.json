@@ -1,0 +1,35 @@
+{
+  "id": "longest-common-prefix",
+  "title": "Longest Common Prefix",
+  "difficulty": "Easy",
+  "topics": [
+    "String",
+    "Trie"
+  ],
+  "statement": [
+    "Given an array of strings, return the longest prefix shared by every string.",
+    "If no non-empty prefix is common to all strings, return the empty string."
+  ],
+  "examples": [
+    {
+      "input": "strs = [\"flower\",\"flow\",\"flight\"]",
+      "output": "\"fl\""
+    },
+    {
+      "input": "strs = [\"dog\",\"racecar\",\"car\"]",
+      "output": "\"\""
+    }
+  ],
+  "constraints": [
+    "1 <= strs.length <= 200",
+    "0 <= strs[i].length <= 200",
+    "strs[i] contains only lowercase English letters when non-empty."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def longestCommonPrefix(self, strs: list[str]) -> str:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string[]} strs\n * @return {string}\n */\nfunction longestCommonPrefix(strs) {\n  // Think out loud as you go!\n}\n",
+    "c": "char* longestCommonPrefix(char** strs, int strsSize) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
+    "cpp": "class Solution {\npublic:\n    string longestCommonPrefix(vector<string>& strs) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
+    "java": "class Solution {\n    public String longestCommonPrefix(String[] strs) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
+  }
+}

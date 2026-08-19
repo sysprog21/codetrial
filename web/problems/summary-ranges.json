@@ -1,0 +1,34 @@
+{
+  "id": "summary-ranges",
+  "title": "Summary Ranges",
+  "difficulty": "Easy",
+  "topics": [
+    "Array"
+  ],
+  "statement": [
+    "Given a sorted unique integer array, summarize every maximal consecutive run.",
+    "A single number is written as itself, and a run of at least two numbers is written as start->end."
+  ],
+  "examples": [
+    {
+      "input": "nums = [0,1,2,4,5,7]",
+      "output": "[\"0->2\",\"4->5\",\"7\"]"
+    },
+    {
+      "input": "nums = [0,2,3,4,6,8,9]",
+      "output": "[\"0\",\"2->4\",\"6\",\"8->9\"]"
+    }
+  ],
+  "constraints": [
+    "0 <= nums.length <= 20",
+    "-2^31 <= nums[i] <= 2^31 - 1",
+    "nums is sorted in strictly increasing order."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def summaryRanges(self, nums: list[int]) -> list[str]:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} nums\n * @return {string[]}\n */\nfunction summaryRanges(nums) {\n  // Think out loud as you go!\n}\n",
+    "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nchar** summaryRanges(int* nums, int numsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+    "cpp": "class Solution {\npublic:\n    vector<string> summaryRanges(vector<int>& nums) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+    "java": "class Solution {\n    public List<String> summaryRanges(int[] nums) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
+  }
+}

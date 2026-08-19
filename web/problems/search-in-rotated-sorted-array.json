@@ -1,0 +1,40 @@
+{
+  "id": "search-in-rotated-sorted-array",
+  "title": "Search in Rotated Sorted Array",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Binary Search"
+  ],
+  "statement": [
+    "Given a unique sorted array that was rotated, return the index of target or -1 when it is absent.",
+    "The array may be rotated by any offset, including zero."
+  ],
+  "examples": [
+    {
+      "input": "nums = [4,5,6,7,0,1,2], target = 0",
+      "output": "4"
+    },
+    {
+      "input": "nums = [4,5,6,7,0,1,2], target = 3",
+      "output": "-1"
+    },
+    {
+      "input": "nums = [1], target = 0",
+      "output": "-1"
+    }
+  ],
+  "constraints": [
+    "1 <= nums.length <= 5000",
+    "-10^4 <= nums[i], target <= 10^4",
+    "All values in nums are unique.",
+    "nums is sorted and then rotated."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def search(self, nums: list[int], target: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} nums\n * @param {number} target\n * @return {number}\n */\nfunction search(nums, target) {\n  // Think out loud as you go!\n}\n",
+    "c": "int search(int* nums, int numsSize, int target) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int search(vector<int>& nums, int target) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int search(int[] nums, int target) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

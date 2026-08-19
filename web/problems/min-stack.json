@@ -1,0 +1,31 @@
+{
+  "id": "min-stack",
+  "title": "Min Stack",
+  "difficulty": "Medium",
+  "topics": [
+    "Stack",
+    "Design"
+  ],
+  "statement": [
+    "Design a stack that supports push, pop, top, and retrieving the current minimum value.",
+    "Each operation must run in O(1) time."
+  ],
+  "examples": [
+    {
+      "input": "[\"MinStack\",\"push\",\"push\",\"push\",\"getMin\",\"pop\",\"top\",\"getMin\"]\n[[],[-2],[0],[-3],[],[],[],[]]",
+      "output": "[null,null,null,null,-3,null,0,-2]"
+    }
+  ],
+  "constraints": [
+    "-2^31 <= value <= 2^31 - 1",
+    "Methods pop, top, and getMin are called only when the stack is non-empty.",
+    "At most 3 * 10^4 calls will be made."
+  ],
+  "starterCode": {
+    "python": "class MinStack:\n    def __init__(self):\n        pass\n\n    def push(self, value: int) -> None:\n        pass\n\n    def pop(self) -> None:\n        pass\n\n    def top(self) -> int:\n        pass\n\n    def getMin(self) -> int:\n        pass\n",
+    "javascript": "class MinStack {\n  constructor() {\n  }\n\n  /** @param {number} value @return {void} */\n  push(value) {\n  }\n\n  /** @return {void} */\n  pop() {\n  }\n\n  /** @return {number} */\n  top() {\n  }\n\n  /** @return {number} */\n  getMin() {\n  }\n}\n",
+    "c": "typedef struct {\n    // Think out loud as you go!\n} MinStack;\n\nMinStack* minStackCreate() {\n    return NULL;\n}\n\nvoid minStackPush(MinStack* obj, int value) {\n}\n\nvoid minStackPop(MinStack* obj) {\n}\n\nint minStackTop(MinStack* obj) {\n    return 0;\n}\n\nint minStackGetMin(MinStack* obj) {\n    return 0;\n}\n\nvoid minStackFree(MinStack* obj) {\n}\n",
+    "cpp": "class MinStack {\npublic:\n    MinStack() {\n    }\n\n    void push(int value) {\n    }\n\n    void pop() {\n    }\n\n    int top() {\n        return 0;\n    }\n\n    int getMin() {\n        return 0;\n    }\n};\n",
+    "java": "class MinStack {\n    public MinStack() {\n    }\n\n    public void push(int value) {\n    }\n\n    public void pop() {\n    }\n\n    public int top() {\n        return 0;\n    }\n\n    public int getMin() {\n        return 0;\n    }\n}\n"
+  }
+}

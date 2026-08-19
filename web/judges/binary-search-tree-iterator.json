@@ -1,0 +1,121 @@
+{
+  "kind": "class",
+  "className": "BSTIterator",
+  "checker": "exact",
+  "constructorArgTypes": [
+    "binaryTree"
+  ],
+  "cases": [
+    {
+      "label": "interleaved next and hasNext",
+      "input": [
+        [
+          "BSTIterator",
+          "next",
+          "next",
+          "hasNext",
+          "next",
+          "hasNext",
+          "next",
+          "hasNext",
+          "next",
+          "hasNext"
+        ],
+        [
+          [
+            [
+              7,
+              3,
+              15,
+              null,
+              null,
+              9,
+              20
+            ]
+          ],
+          [],
+          [],
+          [],
+          [],
+          [],
+          [],
+          [],
+          [],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        3,
+        7,
+        true,
+        9,
+        true,
+        15,
+        true,
+        20,
+        false
+      ]
+    },
+    {
+      "label": "single node",
+      "input": [
+        [
+          "BSTIterator",
+          "hasNext",
+          "next",
+          "hasNext"
+        ],
+        [
+          [
+            [
+              1
+            ]
+          ],
+          [],
+          [],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        true,
+        1,
+        false
+      ]
+    },
+    {
+      "label": "left skew bst",
+      "input": [
+        [
+          "BSTIterator",
+          "next",
+          "next",
+          "next",
+          "hasNext"
+        ],
+        [
+          [
+            [
+              3,
+              2,
+              null,
+              1
+            ]
+          ],
+          [],
+          [],
+          [],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        1,
+        2,
+        3,
+        false
+      ]
+    }
+  ]
+}

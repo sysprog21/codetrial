@@ -1,0 +1,71 @@
+{
+  "kind": "function",
+  "entry": "singleNumber",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "sample short",
+      "input": [
+        [
+          2,
+          2,
+          1
+        ]
+      ],
+      "expected": 1
+    },
+    {
+      "label": "sample mixed order",
+      "input": [
+        [
+          4,
+          1,
+          2,
+          1,
+          2
+        ]
+      ],
+      "expected": 4
+    },
+    {
+      "label": "single element",
+      "input": [
+        [
+          1
+        ]
+      ],
+      "expected": 1
+    },
+    {
+      "label": "negative unique value",
+      "input": [
+        [
+          -7,
+          3,
+          3
+        ]
+      ],
+      "expected": -7
+    },
+    {
+      "label": "zero is paired",
+      "input": [
+        [
+          0,
+          8,
+          0,
+          5,
+          5
+        ]
+      ],
+      "expected": 8
+    }
+  ],
+  "paramNames": [
+    "nums"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "integer"
+}

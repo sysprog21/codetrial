@@ -1,0 +1,106 @@
+{
+  "kind": "function",
+  "entry": "minimumTotal",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "sample triangle",
+      "input": [
+        [
+          [
+            2
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            6,
+            5,
+            7
+          ],
+          [
+            4,
+            1,
+            8,
+            3
+          ]
+        ]
+      ],
+      "expected": 11
+    },
+    {
+      "label": "single negative value",
+      "input": [
+        [
+          [
+            -10
+          ]
+        ]
+      ],
+      "expected": -10
+    },
+    {
+      "label": "two rows",
+      "input": [
+        [
+          [
+            1
+          ],
+          [
+            2,
+            3
+          ]
+        ]
+      ],
+      "expected": 3
+    },
+    {
+      "label": "greedy child fails",
+      "input": [
+        [
+          [
+            1
+          ],
+          [
+            2,
+            100
+          ],
+          [
+            100,
+            1,
+            1
+          ]
+        ]
+      ],
+      "expected": 4
+    },
+    {
+      "label": "negative path improves",
+      "input": [
+        [
+          [
+            2
+          ],
+          [
+            -3,
+            4
+          ],
+          [
+            6,
+            -5,
+            7
+          ]
+        ]
+      ],
+      "expected": -6
+    }
+  ],
+  "paramNames": [
+    "triangle"
+  ],
+  "paramTypes": [
+    "list<list<integer>>"
+  ],
+  "returnType": "integer"
+}

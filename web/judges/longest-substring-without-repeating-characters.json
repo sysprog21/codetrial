@@ -1,0 +1,49 @@
+{
+  "kind": "function",
+  "entry": "lengthOfLongestSubstring",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "repeat after window",
+      "input": [
+        "abcabcbb"
+      ],
+      "expected": 3
+    },
+    {
+      "label": "all same",
+      "input": [
+        "bbbbb"
+      ],
+      "expected": 1
+    },
+    {
+      "label": "substring not subsequence",
+      "input": [
+        "pwwkew"
+      ],
+      "expected": 3
+    },
+    {
+      "label": "left pointer must not move backward",
+      "input": [
+        "abba"
+      ],
+      "expected": 2
+    },
+    {
+      "label": "empty string",
+      "input": [
+        ""
+      ],
+      "expected": 0
+    }
+  ],
+  "paramNames": [
+    "s"
+  ],
+  "paramTypes": [
+    "string"
+  ],
+  "returnType": "integer"
+}

@@ -1,0 +1,59 @@
+{
+  "kind": "function",
+  "entry": "countNodes",
+  "checker": "exact",
+  "argTypes": [
+    "binaryTree"
+  ],
+  "cases": [
+    {
+      "label": "last level missing one",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      ],
+      "expected": 6
+    },
+    {
+      "label": "empty tree",
+      "input": [
+        []
+      ],
+      "expected": 0
+    },
+    {
+      "label": "single node",
+      "input": [
+        [
+          1
+        ]
+      ],
+      "expected": 1
+    },
+    {
+      "label": "partial final level",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          4
+        ]
+      ],
+      "expected": 4
+    }
+  ],
+  "paramNames": [
+    "root"
+  ],
+  "paramTypes": [
+    "TreeNode"
+  ],
+  "returnType": "integer"
+}

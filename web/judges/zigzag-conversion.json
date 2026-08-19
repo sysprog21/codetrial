@@ -1,0 +1,56 @@
+{
+  "kind": "function",
+  "entry": "convert",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "three rows",
+      "input": [
+        "PAYPALISHIRING",
+        3
+      ],
+      "expected": "PAHNAPLSIIGYIR"
+    },
+    {
+      "label": "four rows",
+      "input": [
+        "PAYPALISHIRING",
+        4
+      ],
+      "expected": "PINALSIGYAHRPI"
+    },
+    {
+      "label": "single row",
+      "input": [
+        "A",
+        1
+      ],
+      "expected": "A"
+    },
+    {
+      "label": "rows exceed length",
+      "input": [
+        "AB",
+        5
+      ],
+      "expected": "AB"
+    },
+    {
+      "label": "short cycle",
+      "input": [
+        "ABCDE",
+        2
+      ],
+      "expected": "ACEBD"
+    }
+  ],
+  "paramNames": [
+    "s",
+    "numRows"
+  ],
+  "paramTypes": [
+    "string",
+    "integer"
+  ],
+  "returnType": "string"
+}

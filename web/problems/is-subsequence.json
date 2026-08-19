@@ -1,0 +1,36 @@
+{
+  "id": "is-subsequence",
+  "title": "Is Subsequence",
+  "difficulty": "Easy",
+  "topics": [
+    "Two Pointers",
+    "String",
+    "Dynamic Programming"
+  ],
+  "statement": [
+    "Given strings s and t, return whether s is a subsequence of t.",
+    "A subsequence keeps relative order but may delete characters from t."
+  ],
+  "examples": [
+    {
+      "input": "s = \"abc\", t = \"ahbgdc\"",
+      "output": "true"
+    },
+    {
+      "input": "s = \"axc\", t = \"ahbgdc\"",
+      "output": "false"
+    }
+  ],
+  "constraints": [
+    "0 <= s.length <= 100",
+    "0 <= t.length <= 10^4",
+    "s and t consist only of lowercase English letters."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def isSubsequence(self, s: str, t: str) -> bool:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} s\n * @param {string} t\n * @return {boolean}\n */\nfunction isSubsequence(s, t) {\n  // Think out loud as you go!\n}\n",
+    "c": "bool isSubsequence(char* s, char* t) {\n    // Think out loud as you go!\n    return false;\n}\n",
+    "cpp": "class Solution {\npublic:\n    bool isSubsequence(string s, string t) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+    "java": "class Solution {\n    public boolean isSubsequence(String s, String t) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+  }
+}

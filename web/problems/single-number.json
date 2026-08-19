@@ -1,0 +1,39 @@
+{
+  "id": "single-number",
+  "title": "Single Number",
+  "difficulty": "Easy",
+  "topics": [
+    "Array",
+    "Bit Manipulation"
+  ],
+  "statement": [
+    "Given a non-empty integer array where every value appears twice except one, return the value that appears once.",
+    "The solution should run in linear time and use constant extra space."
+  ],
+  "examples": [
+    {
+      "input": "nums = [2,2,1]",
+      "output": "1"
+    },
+    {
+      "input": "nums = [4,1,2,1,2]",
+      "output": "4"
+    },
+    {
+      "input": "nums = [1]",
+      "output": "1"
+    }
+  ],
+  "constraints": [
+    "1 <= nums.length <= 3 * 10^4",
+    "-3 * 10^4 <= nums[i] <= 3 * 10^4",
+    "Every value appears twice except for one value that appears once."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def singleNumber(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction singleNumber(nums) {\n  // Think out loud as you go!\n}\n",
+    "c": "int singleNumber(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int singleNumber(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int singleNumber(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

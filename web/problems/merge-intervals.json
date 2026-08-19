@@ -1,0 +1,37 @@
+{
+  "id": "merge-intervals",
+  "title": "Merge Intervals",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Sorting"
+  ],
+  "statement": [
+    "Given an array of intervals where intervals[i] = [start_i, end_i], merge all overlapping intervals.",
+    "Return an array of the non-overlapping intervals that cover all the intervals in the input, sorted by start."
+  ],
+  "examples": [
+    {
+      "input": "intervals = [[1,3],[2,6],[8,10],[15,18]]",
+      "output": "[[1,6],[8,10],[15,18]]",
+      "explanation": "[1,3] and [2,6] overlap, so they merge into [1,6]."
+    },
+    {
+      "input": "intervals = [[1,4],[4,5]]",
+      "output": "[[1,5]]",
+      "explanation": "Touching endpoints count as overlapping."
+    }
+  ],
+  "constraints": [
+    "1 <= intervals.length <= 10^4",
+    "intervals[i].length == 2",
+    "0 <= start_i <= end_i <= 10^4"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def merge(self, intervals: list[list[int]]) -> list[list[int]]:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[][]} intervals\n * @return {number[][]}\n */\nfunction merge(intervals) {\n  // Think out loud as you go!\n}\n",
+    "c": "int** merge(int** intervals, int intervalsSize, int* intervalsColSize, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
+    "cpp": "class Solution {\npublic:\n    vector<vector<int>> merge(vector<vector<int>>& intervals) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+    "java": "class Solution {\n    public int[][] merge(int[][] intervals) {\n        // Think out loud as you go!\n        return new int[][]{};\n    }\n}\n"
+  }
+}

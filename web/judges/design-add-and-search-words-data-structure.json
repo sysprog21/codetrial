@@ -1,0 +1,158 @@
+{
+  "kind": "class",
+  "className": "WordDictionary",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "example wildcard searches",
+      "input": [
+        [
+          "WordDictionary",
+          "addWord",
+          "addWord",
+          "addWord",
+          "search",
+          "search",
+          "search",
+          "search"
+        ],
+        [
+          [],
+          [
+            "bad"
+          ],
+          [
+            "dad"
+          ],
+          [
+            "mad"
+          ],
+          [
+            "pad"
+          ],
+          [
+            "bad"
+          ],
+          [
+            ".ad"
+          ],
+          [
+            "b.."
+          ]
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        null,
+        null,
+        false,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "label": "dot matches exactly one letter",
+      "input": [
+        [
+          "WordDictionary",
+          "addWord",
+          "search",
+          "search",
+          "search"
+        ],
+        [
+          [],
+          [
+            "at"
+          ],
+          [
+            "."
+          ],
+          [
+            "a."
+          ],
+          [
+            ".."
+          ]
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        false,
+        true,
+        true
+      ]
+    },
+    {
+      "label": "branching wildcard",
+      "input": [
+        [
+          "WordDictionary",
+          "addWord",
+          "addWord",
+          "search",
+          "search",
+          "search"
+        ],
+        [
+          [],
+          [
+            "ran"
+          ],
+          [
+            "rune"
+          ],
+          [
+            "r.n"
+          ],
+          [
+            "ru.e"
+          ],
+          [
+            "r..e"
+          ]
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        null,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "label": "missing length",
+      "input": [
+        [
+          "WordDictionary",
+          "addWord",
+          "search",
+          "search"
+        ],
+        [
+          [],
+          [
+            "code"
+          ],
+          [
+            "co.e"
+          ],
+          [
+            "co..e"
+          ]
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        true,
+        false
+      ]
+    }
+  ]
+}

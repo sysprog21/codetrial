@@ -1,0 +1,75 @@
+{
+  "kind": "function",
+  "entry": "hasCycle",
+  "checker": "exact",
+  "argTypes": [
+    "linkedList",
+    "cyclePos"
+  ],
+  "cyclePosParam": 1,
+  "cases": [
+    {
+      "label": "cycle begins in middle",
+      "input": [
+        [
+          3,
+          2,
+          0,
+          -4
+        ],
+        1
+      ],
+      "expected": true
+    },
+    {
+      "label": "cycle at head",
+      "input": [
+        [
+          1,
+          2
+        ],
+        0
+      ],
+      "expected": true
+    },
+    {
+      "label": "single node no cycle",
+      "input": [
+        [
+          1
+        ],
+        -1
+      ],
+      "expected": false
+    },
+    {
+      "label": "empty list",
+      "input": [
+        [],
+        -1
+      ],
+      "expected": false
+    },
+    {
+      "label": "tail points to itself",
+      "input": [
+        [
+          5,
+          6,
+          7
+        ],
+        2
+      ],
+      "expected": true
+    }
+  ],
+  "paramNames": [
+    "head",
+    "pos"
+  ],
+  "paramTypes": [
+    "ListNode",
+    "integer"
+  ],
+  "returnType": "boolean"
+}

@@ -1,0 +1,85 @@
+{
+  "kind": "function",
+  "entry": "summaryRanges",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "mixed ranges and singles",
+      "input": [
+        [
+          0,
+          1,
+          2,
+          4,
+          5,
+          7
+        ]
+      ],
+      "expected": [
+        "0->2",
+        "4->5",
+        "7"
+      ]
+    },
+    {
+      "label": "starts with single",
+      "input": [
+        [
+          0,
+          2,
+          3,
+          4,
+          6,
+          8,
+          9
+        ]
+      ],
+      "expected": [
+        "0",
+        "2->4",
+        "6",
+        "8->9"
+      ]
+    },
+    {
+      "label": "empty input",
+      "input": [
+        []
+      ],
+      "expected": []
+    },
+    {
+      "label": "single value",
+      "input": [
+        [
+          -1
+        ]
+      ],
+      "expected": [
+        "-1"
+      ]
+    },
+    {
+      "label": "negative to positive range",
+      "input": [
+        [
+          -2,
+          -1,
+          0,
+          2
+        ]
+      ],
+      "expected": [
+        "-2->0",
+        "2"
+      ]
+    }
+  ],
+  "paramNames": [
+    "nums"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "list<string>"
+}

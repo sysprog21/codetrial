@@ -1,0 +1,49 @@
+{
+  "kind": "function",
+  "entry": "reverseWords",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "simple sentence",
+      "input": [
+        "the sky is blue"
+      ],
+      "expected": "blue is sky the"
+    },
+    {
+      "label": "trim outer spaces",
+      "input": [
+        "  hello world  "
+      ],
+      "expected": "world hello"
+    },
+    {
+      "label": "collapse internal spaces",
+      "input": [
+        "a good   example"
+      ],
+      "expected": "example good a"
+    },
+    {
+      "label": "single word with spaces",
+      "input": [
+        "  solo  "
+      ],
+      "expected": "solo"
+    },
+    {
+      "label": "digits are words",
+      "input": [
+        "one 2 three"
+      ],
+      "expected": "three 2 one"
+    }
+  ],
+  "paramNames": [
+    "s"
+  ],
+  "paramTypes": [
+    "string"
+  ],
+  "returnType": "string"
+}

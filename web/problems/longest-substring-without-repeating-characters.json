@@ -1,0 +1,39 @@
+{
+  "id": "longest-substring-without-repeating-characters",
+  "title": "Longest Substring Without Repeating Characters",
+  "difficulty": "Medium",
+  "topics": [
+    "Hash Table",
+    "String",
+    "Sliding Window"
+  ],
+  "statement": [
+    "Given a string, return the length of the longest substring that contains no repeated characters.",
+    "A substring must be contiguous."
+  ],
+  "examples": [
+    {
+      "input": "s = \"abcabcbb\"",
+      "output": "3"
+    },
+    {
+      "input": "s = \"bbbbb\"",
+      "output": "1"
+    },
+    {
+      "input": "s = \"pwwkew\"",
+      "output": "3"
+    }
+  ],
+  "constraints": [
+    "0 <= s.length <= 5 * 10^4",
+    "s consists of letters, digits, symbols, and spaces."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def lengthOfLongestSubstring(self, s: str) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} s\n * @return {number}\n */\nfunction lengthOfLongestSubstring(s) {\n  // Think out loud as you go!\n}\n",
+    "c": "int lengthOfLongestSubstring(char* s) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int lengthOfLongestSubstring(string s) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int lengthOfLongestSubstring(String s) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "kind": "function",
+  "entry": "canCompleteCircuit",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "start after deficit",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        [
+          3,
+          4,
+          5,
+          1,
+          2
+        ]
+      ],
+      "expected": 3
+    },
+    {
+      "label": "impossible total gas",
+      "input": [
+        [
+          2,
+          3,
+          4
+        ],
+        [
+          3,
+          4,
+          3
+        ]
+      ],
+      "expected": -1
+    },
+    {
+      "label": "wraparound start",
+      "input": [
+        [
+          5,
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          4,
+          4,
+          1,
+          5,
+          1
+        ]
+      ],
+      "expected": 4
+    },
+    {
+      "label": "single exact station",
+      "input": [
+        [
+          1
+        ],
+        [
+          1
+        ]
+      ],
+      "expected": 0
+    }
+  ],
+  "paramNames": [
+    "gas",
+    "cost"
+  ],
+  "paramTypes": [
+    "integer[]",
+    "integer[]"
+  ],
+  "returnType": "integer"
+}

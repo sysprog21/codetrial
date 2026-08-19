@@ -1,0 +1,39 @@
+{
+  "id": "interleaving-string",
+  "title": "Interleaving String",
+  "difficulty": "Medium",
+  "topics": [
+    "String",
+    "Dynamic Programming"
+  ],
+  "statement": [
+    "Given strings s1, s2, and s3, decide whether s3 can be formed by interleaving all characters from s1 and s2.",
+    "The relative order of characters from each source string must be preserved."
+  ],
+  "examples": [
+    {
+      "input": "s1 = \"aabcc\", s2 = \"dbbca\", s3 = \"aadbbcbcac\"",
+      "output": "true"
+    },
+    {
+      "input": "s1 = \"aabcc\", s2 = \"dbbca\", s3 = \"aadbbbaccc\"",
+      "output": "false"
+    },
+    {
+      "input": "s1 = \"\", s2 = \"\", s3 = \"\"",
+      "output": "true"
+    }
+  ],
+  "constraints": [
+    "0 <= s1.length, s2.length <= 100",
+    "0 <= s3.length <= 200",
+    "s1, s2, and s3 consist of lowercase English letters."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def isInterleave(self, s1: str, s2: str, s3: str) -> bool:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} s1\n * @param {string} s2\n * @param {string} s3\n * @return {boolean}\n */\nfunction isInterleave(s1, s2, s3) {\n  // Think out loud as you go!\n}\n",
+    "c": "bool isInterleave(char* s1, char* s2, char* s3) {\n    // Think out loud as you go!\n    return false;\n}\n",
+    "cpp": "class Solution {\npublic:\n    bool isInterleave(string s1, string s2, string s3) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+    "java": "class Solution {\n    public boolean isInterleave(String s1, String s2, String s3) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+  }
+}

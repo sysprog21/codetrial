@@ -1,0 +1,35 @@
+{
+  "id": "valid-anagram",
+  "title": "Valid Anagram",
+  "difficulty": "Easy",
+  "topics": [
+    "Hash Table",
+    "String",
+    "Sorting"
+  ],
+  "statement": [
+    "Given two strings s and t, return whether t is an anagram of s.",
+    "An anagram uses exactly the same characters with exactly the same counts, in any order."
+  ],
+  "examples": [
+    {
+      "input": "s = \"anagram\", t = \"nagaram\"",
+      "output": "true"
+    },
+    {
+      "input": "s = \"rat\", t = \"car\"",
+      "output": "false"
+    }
+  ],
+  "constraints": [
+    "1 <= s.length, t.length <= 5 * 10^4",
+    "s and t consist of lowercase English letters."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def isAnagram(self, s: str, t: str) -> bool:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} s\n * @param {string} t\n * @return {boolean}\n */\nfunction isAnagram(s, t) {\n  // Think out loud as you go!\n}\n",
+    "c": "bool isAnagram(char* s, char* t) {\n    // Think out loud as you go!\n    return false;\n}\n",
+    "cpp": "class Solution {\npublic:\n    bool isAnagram(string s, string t) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+    "java": "class Solution {\n    public boolean isAnagram(String s, String t) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+  }
+}

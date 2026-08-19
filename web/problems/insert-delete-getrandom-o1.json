@@ -1,0 +1,34 @@
+{
+  "id": "insert-delete-getrandom-o1",
+  "title": "Insert Delete GetRandom O(1)",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Hash Table",
+    "Math",
+    "Design",
+    "Randomized"
+  ],
+  "statement": [
+    "Design a set of integers that supports insert, remove, and getRandom.",
+    "insert(val) adds val if absent and reports whether it was added. remove(val) deletes val if present and reports whether it was removed. getRandom() returns one current value, with each stored value equally likely."
+  ],
+  "examples": [
+    {
+      "input": "[\"RandomizedSet\",\"insert\",\"remove\",\"insert\",\"getRandom\",\"remove\",\"insert\",\"getRandom\"]\n[[],[1],[2],[2],[],[1],[2],[]]",
+      "output": "[null,true,false,true,2,true,false,2]"
+    }
+  ],
+  "constraints": [
+    "-2^31 <= val <= 2^31 - 1",
+    "At most 2 * 10^5 calls will be made.",
+    "getRandom is called only when the set is non-empty."
+  ],
+  "starterCode": {
+    "python": "class RandomizedSet:\n    def __init__(self):\n        pass\n\n    def insert(self, val: int) -> bool:\n        pass\n\n    def remove(self, val: int) -> bool:\n        pass\n\n    def getRandom(self) -> int:\n        pass\n",
+    "javascript": "class RandomizedSet {\n  constructor() {\n  }\n\n  /** @param {number} val @return {boolean} */\n  insert(val) {\n  }\n\n  /** @param {number} val @return {boolean} */\n  remove(val) {\n  }\n\n  /** @return {number} */\n  getRandom() {\n  }\n}\n",
+    "c": "typedef struct {\n    // Think out loud as you go!\n} RandomizedSet;\n\nRandomizedSet* randomizedSetCreate() {\n    return NULL;\n}\n\nbool randomizedSetInsert(RandomizedSet* obj, int val) {\n    return false;\n}\n\nbool randomizedSetRemove(RandomizedSet* obj, int val) {\n    return false;\n}\n\nint randomizedSetGetRandom(RandomizedSet* obj) {\n    return 0;\n}\n\nvoid randomizedSetFree(RandomizedSet* obj) {\n}\n",
+    "cpp": "class RandomizedSet {\npublic:\n    RandomizedSet() {\n    }\n\n    bool insert(int val) {\n        return false;\n    }\n\n    bool remove(int val) {\n        return false;\n    }\n\n    int getRandom() {\n        return 0;\n    }\n};\n",
+    "java": "class RandomizedSet {\n    public RandomizedSet() {\n    }\n\n    public boolean insert(int val) {\n        return false;\n    }\n\n    public boolean remove(int val) {\n        return false;\n    }\n\n    public int getRandom() {\n        return 0;\n    }\n}\n"
+  }
+}

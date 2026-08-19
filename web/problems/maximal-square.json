@@ -1,0 +1,39 @@
+{
+  "id": "maximal-square",
+  "title": "Maximal Square",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Dynamic Programming",
+    "Matrix"
+  ],
+  "statement": [
+    "Given a binary matrix of characters '0' and '1', return the area of the largest square containing only '1' cells.",
+    "The answer is the square's area, not its side length."
+  ],
+  "examples": [
+    {
+      "input": "matrix = [[\"1\",\"0\",\"1\",\"0\",\"0\"],[\"1\",\"0\",\"1\",\"1\",\"1\"],[\"1\",\"1\",\"1\",\"1\",\"1\"],[\"1\",\"0\",\"0\",\"1\",\"0\"]]",
+      "output": "4"
+    },
+    {
+      "input": "matrix = [[\"0\",\"1\"],[\"1\",\"0\"]]",
+      "output": "1"
+    },
+    {
+      "input": "matrix = [[\"0\"]]",
+      "output": "0"
+    }
+  ],
+  "constraints": [
+    "1 <= m, n <= 300",
+    "matrix[i][j] is '0' or '1'."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def maximalSquare(self, matrix: list[list[str]]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {character[][]} matrix\n * @return {number}\n */\nfunction maximalSquare(matrix) {\n  // Think out loud as you go!\n}\n",
+    "c": "int maximalSquare(char** matrix, int matrixSize, int* matrixColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int maximalSquare(vector<vector<char>>& matrix) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int maximalSquare(char[][] matrix) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

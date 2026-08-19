@@ -1,0 +1,49 @@
+{
+  "kind": "function",
+  "entry": "hammingWeight",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "three set bits",
+      "input": [
+        11
+      ],
+      "expected": 3
+    },
+    {
+      "label": "single high bit",
+      "input": [
+        128
+      ],
+      "expected": 1
+    },
+    {
+      "label": "many set bits",
+      "input": [
+        2147483645
+      ],
+      "expected": 30
+    },
+    {
+      "label": "one",
+      "input": [
+        1
+      ],
+      "expected": 1
+    },
+    {
+      "label": "alternating bits",
+      "input": [
+        85
+      ],
+      "expected": 4
+    }
+  ],
+  "paramNames": [
+    "n"
+  ],
+  "paramTypes": [
+    "integer"
+  ],
+  "returnType": "integer"
+}

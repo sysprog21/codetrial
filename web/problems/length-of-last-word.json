@@ -1,0 +1,38 @@
+{
+  "id": "length-of-last-word",
+  "title": "Length of Last Word",
+  "difficulty": "Easy",
+  "topics": [
+    "String"
+  ],
+  "statement": [
+    "Given a string containing words separated by spaces, return the length of the final word.",
+    "A word is a maximal group of non-space characters, and the string may contain leading or trailing spaces."
+  ],
+  "examples": [
+    {
+      "input": "s = \"Hello World\"",
+      "output": "5"
+    },
+    {
+      "input": "s = \"   fly me   to   the moon  \"",
+      "output": "4"
+    },
+    {
+      "input": "s = \"luffy is still joyboy\"",
+      "output": "6"
+    }
+  ],
+  "constraints": [
+    "1 <= s.length <= 10^4",
+    "s consists of English letters and spaces.",
+    "There is at least one word in s."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def lengthOfLastWord(self, s: str) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} s\n * @return {number}\n */\nfunction lengthOfLastWord(s) {\n  // Think out loud as you go!\n}\n",
+    "c": "int lengthOfLastWord(char* s) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int lengthOfLastWord(string s) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int lengthOfLastWord(String s) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

@@ -1,0 +1,105 @@
+{
+  "kind": "function",
+  "entry": "merge",
+  "checker": "exact",
+  "outputParam": 0,
+  "cases": [
+    {
+      "label": "interleaved tail space",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          0,
+          0,
+          0
+        ],
+        3,
+        [
+          2,
+          5,
+          6
+        ],
+        3
+      ],
+      "expected": [
+        1,
+        2,
+        2,
+        3,
+        5,
+        6
+      ]
+    },
+    {
+      "label": "nums2 empty",
+      "input": [
+        [
+          1
+        ],
+        1,
+        [],
+        0
+      ],
+      "expected": [
+        1
+      ]
+    },
+    {
+      "label": "nums1 empty prefix",
+      "input": [
+        [
+          0
+        ],
+        0,
+        [
+          1
+        ],
+        1
+      ],
+      "expected": [
+        1
+      ]
+    },
+    {
+      "label": "duplicates and negatives",
+      "input": [
+        [
+          -3,
+          -1,
+          0,
+          0,
+          0
+        ],
+        2,
+        [
+          -2,
+          -1,
+          2
+        ],
+        3
+      ],
+      "expected": [
+        -3,
+        -2,
+        -1,
+        -1,
+        2
+      ]
+    }
+  ],
+  "paramNames": [
+    "nums1",
+    "m",
+    "nums2",
+    "n"
+  ],
+  "paramTypes": [
+    "integer[]",
+    "integer",
+    "integer[]",
+    "integer"
+  ],
+  "returnType": "void"
+}

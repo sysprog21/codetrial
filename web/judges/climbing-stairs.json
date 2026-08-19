@@ -1,0 +1,49 @@
+{
+  "kind": "function",
+  "entry": "climbStairs",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "two steps",
+      "input": [
+        2
+      ],
+      "expected": 2
+    },
+    {
+      "label": "three steps",
+      "input": [
+        3
+      ],
+      "expected": 3
+    },
+    {
+      "label": "one step",
+      "input": [
+        1
+      ],
+      "expected": 1
+    },
+    {
+      "label": "four steps",
+      "input": [
+        4
+      ],
+      "expected": 5
+    },
+    {
+      "label": "larger dynamic case",
+      "input": [
+        10
+      ],
+      "expected": 89
+    }
+  ],
+  "paramNames": [
+    "n"
+  ],
+  "paramTypes": [
+    "integer"
+  ],
+  "returnType": "integer"
+}

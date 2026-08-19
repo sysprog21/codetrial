@@ -1,0 +1,64 @@
+{
+  "kind": "function",
+  "entry": "minMutation",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "one mutation",
+      "input": [
+        "AACCGGTT",
+        "AACCGGTA",
+        [
+          "AACCGGTA"
+        ]
+      ],
+      "expected": 1
+    },
+    {
+      "label": "two step mutation",
+      "input": [
+        "AACCGGTT",
+        "AAACGGTA",
+        [
+          "AACCGGTA",
+          "AACCGCTA",
+          "AAACGGTA"
+        ]
+      ],
+      "expected": 2
+    },
+    {
+      "label": "end missing from bank",
+      "input": [
+        "AACCGGTT",
+        "AACCGGTA",
+        []
+      ],
+      "expected": -1
+    },
+    {
+      "label": "three step chain",
+      "input": [
+        "AAAAACCC",
+        "AACCCCCC",
+        [
+          "AAAACCCC",
+          "AAACCCCC",
+          "AACCCCCC"
+        ]
+      ],
+      "expected": 3
+    }
+  ],
+  "paramNames": [
+    "startGene",
+    "endGene",
+    "bank"
+  ],
+  "paramTypes": [
+    "string",
+    "string",
+    "string[]"
+  ],
+  "returnType": "integer"
+}

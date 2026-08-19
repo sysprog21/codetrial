@@ -1,0 +1,37 @@
+{
+  "id": "game-of-life",
+  "title": "Game of Life",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Matrix",
+    "Simulation"
+  ],
+  "statement": [
+    "Given a board of live cells (1) and dead cells (0), compute the next state of Conway's Game of Life.",
+    "Every cell updates simultaneously from the original board using its eight neighbors, and the board must be modified in place."
+  ],
+  "examples": [
+    {
+      "input": "board = [[0,1,0],[0,0,1],[1,1,1],[0,0,0]]",
+      "output": "[[0,0,0],[1,0,1],[0,1,1],[0,1,0]]"
+    },
+    {
+      "input": "board = [[1,1],[1,0]]",
+      "output": "[[1,1],[1,1]]"
+    }
+  ],
+  "constraints": [
+    "m == board.length",
+    "n == board[i].length",
+    "1 <= m, n <= 25",
+    "board[i][j] is 0 or 1."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def gameOfLife(self, board: list[list[int]]) -> None:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[][]} board\n * @return {void}\n */\nfunction gameOfLife(board) {\n  // Think out loud as you go!\n}\n",
+    "c": "void gameOfLife(int** board, int boardSize, int* boardColSize) {\n    // Think out loud as you go!\n}\n",
+    "cpp": "class Solution {\npublic:\n    void gameOfLife(vector<vector<int>>& board) {\n        // Think out loud as you go!\n    }\n};\n",
+    "java": "class Solution {\n    public void gameOfLife(int[][] board) {\n        // Think out loud as you go!\n    }\n}\n"
+  }
+}

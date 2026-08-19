@@ -1,0 +1,111 @@
+{
+  "kind": "function",
+  "entry": "maximalSquare",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "sample square area four",
+      "input": [
+        [
+          [
+            "1",
+            "0",
+            "1",
+            "0",
+            "0"
+          ],
+          [
+            "1",
+            "0",
+            "1",
+            "1",
+            "1"
+          ],
+          [
+            "1",
+            "1",
+            "1",
+            "1",
+            "1"
+          ],
+          [
+            "1",
+            "0",
+            "0",
+            "1",
+            "0"
+          ]
+        ]
+      ],
+      "expected": 4
+    },
+    {
+      "label": "diagonal ones",
+      "input": [
+        [
+          [
+            "0",
+            "1"
+          ],
+          [
+            "1",
+            "0"
+          ]
+        ]
+      ],
+      "expected": 1
+    },
+    {
+      "label": "single zero",
+      "input": [
+        [
+          [
+            "0"
+          ]
+        ]
+      ],
+      "expected": 0
+    },
+    {
+      "label": "single one",
+      "input": [
+        [
+          [
+            "1"
+          ]
+        ]
+      ],
+      "expected": 1
+    },
+    {
+      "label": "area not side length",
+      "input": [
+        [
+          [
+            "1",
+            "1",
+            "1"
+          ],
+          [
+            "1",
+            "1",
+            "1"
+          ],
+          [
+            "1",
+            "1",
+            "1"
+          ]
+        ]
+      ],
+      "expected": 9
+    }
+  ],
+  "paramNames": [
+    "matrix"
+  ],
+  "paramTypes": [
+    "character[][]"
+  ],
+  "returnType": "integer"
+}

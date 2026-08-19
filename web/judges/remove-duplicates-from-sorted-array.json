@@ -1,0 +1,70 @@
+{
+  "kind": "function",
+  "entry": "removeDuplicates",
+  "checker": "exact",
+  "outputPrefixParam": 0,
+  "cases": [
+    {
+      "label": "one duplicate pair",
+      "input": [
+        [
+          1,
+          1,
+          2
+        ]
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "label": "several duplicate runs",
+      "input": [
+        [
+          0,
+          0,
+          1,
+          1,
+          1,
+          2,
+          2,
+          3,
+          3,
+          4
+        ]
+      ],
+      "expected": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "label": "already unique",
+      "input": [
+        [
+          -2,
+          -1,
+          0,
+          3
+        ]
+      ],
+      "expected": [
+        -2,
+        -1,
+        0,
+        3
+      ]
+    }
+  ],
+  "paramNames": [
+    "nums"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "integer"
+}

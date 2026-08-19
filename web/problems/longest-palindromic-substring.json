@@ -1,0 +1,36 @@
+{
+  "id": "longest-palindromic-substring",
+  "title": "Longest Palindromic Substring",
+  "difficulty": "Medium",
+  "topics": [
+    "String",
+    "Dynamic Programming",
+    "Two Pointers"
+  ],
+  "statement": [
+    "Given a string s, return the longest substring of s that is a palindrome.",
+    "A palindrome reads the same forward and backward. If there are multiple answers of the same length, return any of them."
+  ],
+  "examples": [
+    {
+      "input": "s = \"babad\"",
+      "output": "\"bab\"",
+      "explanation": "\"aba\" is also a valid answer."
+    },
+    {
+      "input": "s = \"cbbd\"",
+      "output": "\"bb\""
+    }
+  ],
+  "constraints": [
+    "1 <= s.length <= 1000",
+    "s consists of digits and English letters."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def longestPalindrome(self, s: str) -> str:\n        pass\n",
+    "javascript": "/**\n * @param {string} s\n * @return {string}\n */\nfunction longestPalindrome(s) {\n}\n",
+    "c": "char* longestPalindrome(char* s) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
+    "cpp": "class Solution {\npublic:\n    string longestPalindrome(string s) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
+    "java": "class Solution {\n    public String longestPalindrome(String s) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
+  }
+}

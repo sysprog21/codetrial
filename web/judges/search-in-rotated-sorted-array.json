@@ -1,0 +1,87 @@
+{
+  "kind": "function",
+  "entry": "search",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "target in rotated suffix",
+      "input": [
+        [
+          4,
+          5,
+          6,
+          7,
+          0,
+          1,
+          2
+        ],
+        0
+      ],
+      "expected": 4
+    },
+    {
+      "label": "target absent",
+      "input": [
+        [
+          4,
+          5,
+          6,
+          7,
+          0,
+          1,
+          2
+        ],
+        3
+      ],
+      "expected": -1
+    },
+    {
+      "label": "single absent",
+      "input": [
+        [
+          1
+        ],
+        0
+      ],
+      "expected": -1
+    },
+    {
+      "label": "not rotated",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        3
+      ],
+      "expected": 2
+    },
+    {
+      "label": "target in rotated prefix",
+      "input": [
+        [
+          6,
+          7,
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        7
+      ],
+      "expected": 1
+    }
+  ],
+  "paramNames": [
+    "nums",
+    "target"
+  ],
+  "paramTypes": [
+    "integer[]",
+    "integer"
+  ],
+  "returnType": "integer"
+}

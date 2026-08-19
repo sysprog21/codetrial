@@ -1,0 +1,56 @@
+{
+  "kind": "function",
+  "entry": "isSubsequence",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "ordered match",
+      "input": [
+        "abc",
+        "ahbgdc"
+      ],
+      "expected": true
+    },
+    {
+      "label": "missing middle",
+      "input": [
+        "axc",
+        "ahbgdc"
+      ],
+      "expected": false
+    },
+    {
+      "label": "empty s",
+      "input": [
+        "",
+        "anything"
+      ],
+      "expected": true
+    },
+    {
+      "label": "repeated characters require order",
+      "input": [
+        "aaa",
+        "aa"
+      ],
+      "expected": false
+    },
+    {
+      "label": "not substring",
+      "input": [
+        "ace",
+        "abcde"
+      ],
+      "expected": true
+    }
+  ],
+  "paramNames": [
+    "s",
+    "t"
+  ],
+  "paramTypes": [
+    "string",
+    "string"
+  ],
+  "returnType": "boolean"
+}

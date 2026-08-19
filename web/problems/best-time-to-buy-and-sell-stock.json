@@ -1,0 +1,34 @@
+{
+  "id": "best-time-to-buy-and-sell-stock",
+  "title": "Best Time to Buy and Sell Stock",
+  "difficulty": "Easy",
+  "topics": [
+    "Array",
+    "Dynamic Programming"
+  ],
+  "statement": [
+    "Given daily stock prices, choose one day to buy and a later day to sell.",
+    "Return the largest possible profit. If no profitable sale exists, return 0."
+  ],
+  "examples": [
+    {
+      "input": "prices = [7,1,5,3,6,4]",
+      "output": "5"
+    },
+    {
+      "input": "prices = [7,6,4,3,1]",
+      "output": "0"
+    }
+  ],
+  "constraints": [
+    "1 <= prices.length <= 10^5",
+    "0 <= prices[i] <= 10^4"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def maxProfit(self, prices: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} prices\n * @return {number}\n */\nfunction maxProfit(prices) {\n  // Think out loud as you go!\n}\n",
+    "c": "int maxProfit(int* prices, int pricesSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int maxProfit(vector<int>& prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int maxProfit(int[] prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

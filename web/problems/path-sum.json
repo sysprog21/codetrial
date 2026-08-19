@@ -1,0 +1,41 @@
+{
+  "id": "path-sum",
+  "title": "Path Sum",
+  "difficulty": "Easy",
+  "topics": [
+    "Tree",
+    "DFS",
+    "BFS",
+    "Binary Tree"
+  ],
+  "statement": [
+    "Determine whether a binary tree has a root-to-leaf path whose node values add up to a target sum.",
+    "A valid path must start at the root and stop at a leaf node."
+  ],
+  "examples": [
+    {
+      "input": "root = [5,4,8,11,null,13,4,7,2,null,null,null,1], targetSum = 22",
+      "output": "true"
+    },
+    {
+      "input": "root = [1,2,3], targetSum = 5",
+      "output": "false"
+    },
+    {
+      "input": "root = [], targetSum = 0",
+      "output": "false"
+    }
+  ],
+  "constraints": [
+    "0 <= number of nodes <= 5000",
+    "-1000 <= Node.val <= 1000",
+    "-1000 <= targetSum <= 1000"
+  ],
+  "starterCode": {
+    "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def hasPathSum(self, root: Optional[TreeNode], targetSum: int) -> bool:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *     this.val = (val===undefined ? 0 : val)\n *     this.left = (left===undefined ? null : left)\n *     this.right = (right===undefined ? null : right)\n * }\n */\n/**\n * @param {TreeNode} root\n * @param {number} targetSum\n * @return {boolean}\n */\nfunction hasPathSum(root, targetSum) {\n  // Think out loud as you go!\n}\n",
+    "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nbool hasPathSum(struct TreeNode* root, int targetSum) {\n\t// Think out loud as you go!\n\treturn false;\n}\n",
+    "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    bool hasPathSum(TreeNode* root, int targetSum) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+    "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public boolean hasPathSum(TreeNode root, int targetSum) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+  }
+}

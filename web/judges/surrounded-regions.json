@@ -1,0 +1,165 @@
+{
+  "kind": "function",
+  "entry": "solve",
+  "checker": "exact",
+  "outputParam": 0,
+  "cases": [
+    {
+      "label": "enclosed region flips",
+      "input": [
+        [
+          [
+            "X",
+            "X",
+            "X",
+            "X"
+          ],
+          [
+            "X",
+            "O",
+            "O",
+            "X"
+          ],
+          [
+            "X",
+            "X",
+            "O",
+            "X"
+          ],
+          [
+            "X",
+            "O",
+            "X",
+            "X"
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          "X",
+          "X",
+          "X",
+          "X"
+        ],
+        [
+          "X",
+          "X",
+          "X",
+          "X"
+        ],
+        [
+          "X",
+          "X",
+          "X",
+          "X"
+        ],
+        [
+          "X",
+          "O",
+          "X",
+          "X"
+        ]
+      ]
+    },
+    {
+      "label": "single cell",
+      "input": [
+        [
+          [
+            "X"
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          "X"
+        ]
+      ]
+    },
+    {
+      "label": "border connected region stays",
+      "input": [
+        [
+          [
+            "O",
+            "O",
+            "O"
+          ],
+          [
+            "O",
+            "X",
+            "O"
+          ],
+          [
+            "O",
+            "O",
+            "O"
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          "O",
+          "O",
+          "O"
+        ],
+        [
+          "O",
+          "X",
+          "O"
+        ],
+        [
+          "O",
+          "O",
+          "O"
+        ]
+      ]
+    },
+    {
+      "label": "interior island flips",
+      "input": [
+        [
+          [
+            "X",
+            "X",
+            "X"
+          ],
+          [
+            "X",
+            "O",
+            "X"
+          ],
+          [
+            "X",
+            "X",
+            "X"
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          "X",
+          "X",
+          "X"
+        ],
+        [
+          "X",
+          "X",
+          "X"
+        ],
+        [
+          "X",
+          "X",
+          "X"
+        ]
+      ]
+    }
+  ],
+  "paramNames": [
+    "board"
+  ],
+  "paramTypes": [
+    "character[][]"
+  ],
+  "returnType": "void"
+}

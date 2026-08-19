@@ -4,7 +4,7 @@
 // Each returns the same summary shape, and each is interruptible: candidate code
 // that never returns costs one test run, not the interview.
 
-import { judges } from "./judges.js";
+import { loadJudge } from "./problem-data.js";
 import { generateHarness, mapCompilerResponse } from "./compiler-explorer.js";
 import { checkAnswer, renderValue } from "./lib.js";
 
@@ -52,9 +52,18 @@ const pyodideBaseUrl = () => new URL("/vendor/pyodide/", globalThis.location?.hr
 let pythonWorkerPromise = null;
 
 export async function runBrowserTests(problemId, code, language, onStatus = null) {
-  const spec = judges[problemId];
-  const base = { problemId, language, passed: 0, total: spec?.cases.length || 0, cases: [], at: Date.now() };
-  if (!spec) return { ...base, setupError: "No test cases are defined for this problem." };
+  const empty = { problemId, language, passed: 0, total: 0, cases: [], at: Date.now() };
+  // A judge that cannot be fetched is not a problem without tests. Reporting
+  // both the same way told a candidate on a flaky connection that their problem
+  // had no test cases, which is the one reading that makes them stop trying.
+  let spec;
+  try {
+    spec = await loadJudge(problemId);
+  } catch {
+    return { ...empty, setupError: "The test cases could not be loaded. Check your connection and run again." };
+  }
+  if (!spec) return { ...empty, setupError: "No test cases are defined for this problem." };
+  const base = { ...empty, total: spec.cases.length };
   if (pendingTestLanguages.has(language)) {
     return { ...base, setupError: `${languageLabel(language)} tests are not wired up yet. Keep using the editor; Jim can still review this code.` };
   }

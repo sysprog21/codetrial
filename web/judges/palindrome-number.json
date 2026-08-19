@@ -1,0 +1,49 @@
+{
+  "kind": "function",
+  "entry": "isPalindrome",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "positive palindrome",
+      "input": [
+        121
+      ],
+      "expected": true
+    },
+    {
+      "label": "negative number",
+      "input": [
+        -121
+      ],
+      "expected": false
+    },
+    {
+      "label": "trailing zero",
+      "input": [
+        10
+      ],
+      "expected": false
+    },
+    {
+      "label": "zero",
+      "input": [
+        0
+      ],
+      "expected": true
+    },
+    {
+      "label": "even length palindrome",
+      "input": [
+        1221
+      ],
+      "expected": true
+    }
+  ],
+  "paramNames": [
+    "x"
+  ],
+  "paramTypes": [
+    "integer"
+  ],
+  "returnType": "boolean"
+}

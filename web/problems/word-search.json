@@ -1,0 +1,38 @@
+{
+  "id": "word-search",
+  "title": "Word Search",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "String",
+    "Backtracking",
+    "Matrix"
+  ],
+  "statement": [
+    "Given a grid of characters and a word, decide whether the word can be formed by walking adjacent cells horizontally or vertically.",
+    "A path may not reuse the same cell more than once."
+  ],
+  "examples": [
+    {
+      "input": "board = [[\"A\",\"B\",\"C\",\"E\"],[\"S\",\"F\",\"C\",\"S\"],[\"A\",\"D\",\"E\",\"E\"]], word = \"ABCCED\"",
+      "output": "true"
+    },
+    {
+      "input": "board = [[\"A\",\"B\",\"C\",\"E\"],[\"S\",\"F\",\"C\",\"S\"],[\"A\",\"D\",\"E\",\"E\"]], word = \"ABCB\"",
+      "output": "false"
+    }
+  ],
+  "constraints": [
+    "m == board.length, n == board[i].length",
+    "1 <= m, n <= 6",
+    "1 <= word.length <= 15",
+    "board and word contain English letters."
+  ],
+  "starterCode": {
+    "cpp": "class Solution {\npublic:\n    bool exist(vector<vector<char>>& board, string word) {\n        \n    }\n};",
+    "java": "class Solution {\n    public boolean exist(char[][] board, String word) {\n        \n    }\n}",
+    "python": "class Solution:\n    def exist(self, board: List[List[str]], word: str) -> bool:\n        ",
+    "javascript": "/**\n * @param {character[][]} board\n * @param {string} word\n * @return {boolean}\n */\nvar exist = function(board, word) {\n    \n};",
+    "c": "bool exist(char** board, int boardSize, int* boardColSize, char* word) {\n    \n}"
+  }
+}

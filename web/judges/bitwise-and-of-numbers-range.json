@@ -1,0 +1,56 @@
+{
+  "kind": "function",
+  "entry": "rangeBitwiseAnd",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "sample range",
+      "input": [
+        5,
+        7
+      ],
+      "expected": 4
+    },
+    {
+      "label": "zero singleton",
+      "input": [
+        0,
+        0
+      ],
+      "expected": 0
+    },
+    {
+      "label": "large span clears all bits",
+      "input": [
+        1,
+        2147483647
+      ],
+      "expected": 0
+    },
+    {
+      "label": "same nonzero value",
+      "input": [
+        12,
+        12
+      ],
+      "expected": 12
+    },
+    {
+      "label": "shared prefix remains",
+      "input": [
+        24,
+        31
+      ],
+      "expected": 24
+    }
+  ],
+  "paramNames": [
+    "left",
+    "right"
+  ],
+  "paramTypes": [
+    "integer",
+    "integer"
+  ],
+  "returnType": "integer"
+}

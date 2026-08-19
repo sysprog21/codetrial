@@ -1,0 +1,75 @@
+{
+  "kind": "function",
+  "entry": "isSameTree",
+  "checker": "exact",
+  "argTypes": [
+    "binaryTree",
+    "binaryTree"
+  ],
+  "cases": [
+    {
+      "label": "identical trees",
+      "input": [
+        [
+          1,
+          2,
+          3
+        ],
+        [
+          1,
+          2,
+          3
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "label": "same values different null side",
+      "input": [
+        [
+          1,
+          2
+        ],
+        [
+          1,
+          null,
+          2
+        ]
+      ],
+      "expected": false
+    },
+    {
+      "label": "same shape different values",
+      "input": [
+        [
+          1,
+          2,
+          1
+        ],
+        [
+          1,
+          1,
+          2
+        ]
+      ],
+      "expected": false
+    },
+    {
+      "label": "both empty",
+      "input": [
+        [],
+        []
+      ],
+      "expected": true
+    }
+  ],
+  "paramNames": [
+    "p",
+    "q"
+  ],
+  "paramTypes": [
+    "TreeNode",
+    "TreeNode"
+  ],
+  "returnType": "boolean"
+}

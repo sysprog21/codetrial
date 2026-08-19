@@ -1,0 +1,56 @@
+{
+  "kind": "function",
+  "entry": "minWindow",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "classic shrink",
+      "input": [
+        "ADOBECODEBANC",
+        "ABC"
+      ],
+      "expected": "BANC"
+    },
+    {
+      "label": "single character",
+      "input": [
+        "a",
+        "a"
+      ],
+      "expected": "a"
+    },
+    {
+      "label": "not enough multiplicity",
+      "input": [
+        "a",
+        "aa"
+      ],
+      "expected": ""
+    },
+    {
+      "label": "duplicate required",
+      "input": [
+        "aa",
+        "aa"
+      ],
+      "expected": "aa"
+    },
+    {
+      "label": "case-sensitive",
+      "input": [
+        "ab",
+        "A"
+      ],
+      "expected": ""
+    }
+  ],
+  "paramNames": [
+    "s",
+    "t"
+  ],
+  "paramTypes": [
+    "string",
+    "string"
+  ],
+  "returnType": "string"
+}

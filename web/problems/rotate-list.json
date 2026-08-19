@@ -1,0 +1,34 @@
+{
+  "id": "rotate-list",
+  "title": "Rotate List",
+  "difficulty": "Medium",
+  "topics": [
+    "Linked List",
+    "Two Pointers"
+  ],
+  "statement": [
+    "Given the head of a linked list, rotate the list to the right by k places and return the new head."
+  ],
+  "examples": [
+    {
+      "input": "head = [1,2,3,4,5], k = 2",
+      "output": "[4,5,1,2,3]"
+    },
+    {
+      "input": "head = [0,1,2], k = 4",
+      "output": "[2,0,1]"
+    }
+  ],
+  "constraints": [
+    "0 <= number of nodes <= 500",
+    "-100 <= Node.val <= 100",
+    "0 <= k <= 2 * 10^9"
+  ],
+  "starterCode": {
+    "python": "# Definition for singly-linked list.\n# class ListNode:\n#     def __init__(self, val=0, next=None):\n#         self.val = val\n#         self.next = next\nclass Solution:\n    def rotateRight(self, head: Optional[ListNode], k: int) -> Optional[ListNode]:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * Definition for singly-linked list.\n * function ListNode(val, next) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.next = (next === undefined ? null : next);\n * }\n */\n/**\n * @param {ListNode} head\n * @param {number} k\n * @return {ListNode}\n */\nfunction rotateRight(head, k) {\n  // Think out loud as you go!\n}\n",
+    "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* rotateRight(struct ListNode* head, int k) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+    "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* rotateRight(ListNode* head, int k) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+    "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode rotateRight(ListNode head, int k) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+  }
+}

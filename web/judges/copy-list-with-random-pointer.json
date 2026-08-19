@@ -1,0 +1,124 @@
+{
+  "kind": "function",
+  "entry": "copyRandomList",
+  "checker": "exact",
+  "argTypes": [
+    "randomList"
+  ],
+  "outputType": "randomList",
+  "cases": [
+    {
+      "label": "mixed random pointers",
+      "input": [
+        [
+          [
+            7,
+            null
+          ],
+          [
+            13,
+            0
+          ],
+          [
+            11,
+            4
+          ],
+          [
+            10,
+            2
+          ],
+          [
+            1,
+            0
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          7,
+          null
+        ],
+        [
+          13,
+          0
+        ],
+        [
+          11,
+          4
+        ],
+        [
+          10,
+          2
+        ],
+        [
+          1,
+          0
+        ]
+      ]
+    },
+    {
+      "label": "self random pointer",
+      "input": [
+        [
+          [
+            1,
+            0
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          0
+        ]
+      ]
+    },
+    {
+      "label": "duplicate values different randoms",
+      "input": [
+        [
+          [
+            3,
+            null
+          ],
+          [
+            3,
+            0
+          ],
+          [
+            3,
+            null
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          3,
+          null
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          3,
+          null
+        ]
+      ]
+    },
+    {
+      "label": "empty random list",
+      "input": [
+        []
+      ],
+      "expected": []
+    }
+  ],
+  "paramNames": [
+    "head"
+  ],
+  "paramTypes": [
+    "Node"
+  ],
+  "returnType": "Node"
+}

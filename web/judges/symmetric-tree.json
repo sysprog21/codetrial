@@ -1,0 +1,70 @@
+{
+  "kind": "function",
+  "entry": "isSymmetric",
+  "checker": "exact",
+  "argTypes": [
+    "binaryTree"
+  ],
+  "cases": [
+    {
+      "label": "perfect mirror",
+      "input": [
+        [
+          1,
+          2,
+          2,
+          3,
+          4,
+          4,
+          3
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "label": "same values wrong sparse side",
+      "input": [
+        [
+          1,
+          2,
+          2,
+          null,
+          3,
+          null,
+          3
+        ]
+      ],
+      "expected": false
+    },
+    {
+      "label": "single node",
+      "input": [
+        [
+          1
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "label": "cross sparse mirror",
+      "input": [
+        [
+          1,
+          2,
+          2,
+          null,
+          3,
+          3
+        ]
+      ],
+      "expected": true
+    }
+  ],
+  "paramNames": [
+    "root"
+  ],
+  "paramTypes": [
+    "TreeNode"
+  ],
+  "returnType": "boolean"
+}

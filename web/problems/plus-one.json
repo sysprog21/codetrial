@@ -1,0 +1,39 @@
+{
+  "id": "plus-one",
+  "title": "Plus One",
+  "difficulty": "Easy",
+  "topics": [
+    "Array",
+    "Math"
+  ],
+  "statement": [
+    "Given the decimal digits of a non-negative integer, add one and return the resulting digits.",
+    "The input has no leading zeroes except for the number zero itself."
+  ],
+  "examples": [
+    {
+      "input": "digits = [1,2,3]",
+      "output": "[1,2,4]"
+    },
+    {
+      "input": "digits = [4,3,2,1]",
+      "output": "[4,3,2,2]"
+    },
+    {
+      "input": "digits = [9]",
+      "output": "[1,0]"
+    }
+  ],
+  "constraints": [
+    "1 <= digits.length <= 100",
+    "0 <= digits[i] <= 9",
+    "digits does not contain leading zeroes unless it is exactly [0]."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def plusOne(self, digits: list[int]) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} digits\n * @return {number[]}\n */\nfunction plusOne(digits) {\n  // Think out loud as you go!\n}\n",
+    "c": "int* plusOne(int* digits, int digitsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+    "cpp": "class Solution {\npublic:\n    vector<int> plusOne(vector<int>& digits) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+    "java": "class Solution {\n    public int[] plusOne(int[] digits) {\n        // Think out loud as you go!\n        return new int[0];\n    }\n}\n"
+  }
+}

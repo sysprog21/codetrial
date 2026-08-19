@@ -1,0 +1,35 @@
+{
+  "id": "best-time-to-buy-and-sell-stock-iv",
+  "title": "Best Time to Buy and Sell Stock IV",
+  "difficulty": "Hard",
+  "topics": [
+    "Array",
+    "Dynamic Programming"
+  ],
+  "statement": [
+    "Given at most k stock transactions and daily prices, return the maximum profit.",
+    "Each transaction is one buy followed by one later sell, and only one share can be held at a time."
+  ],
+  "examples": [
+    {
+      "input": "k = 2, prices = [2,4,1]",
+      "output": "2"
+    },
+    {
+      "input": "k = 2, prices = [3,2,6,5,0,3]",
+      "output": "7"
+    }
+  ],
+  "constraints": [
+    "0 <= k <= 100",
+    "1 <= prices.length <= 1000",
+    "0 <= prices[i] <= 1000"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def maxProfit(self, k: int, prices: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number} k\n * @param {number[]} prices\n * @return {number}\n */\nfunction maxProfit(k, prices) {\n  // Think out loud as you go!\n}\n",
+    "c": "int maxProfit(int k, int* prices, int pricesSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int maxProfit(int k, vector<int>& prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int maxProfit(int k, int[] prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

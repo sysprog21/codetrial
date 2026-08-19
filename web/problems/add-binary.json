@@ -1,0 +1,37 @@
+{
+  "id": "add-binary",
+  "title": "Add Binary",
+  "difficulty": "Easy",
+  "topics": [
+    "Math",
+    "String",
+    "Bit Manipulation",
+    "Simulation"
+  ],
+  "statement": [
+    "Given two binary strings, return their sum as a binary string.",
+    "The inputs contain only 0 and 1 and may be long enough that converting to a machine integer is unsafe."
+  ],
+  "examples": [
+    {
+      "input": "a = \"11\", b = \"1\"",
+      "output": "\"100\""
+    },
+    {
+      "input": "a = \"1010\", b = \"1011\"",
+      "output": "\"10101\""
+    }
+  ],
+  "constraints": [
+    "1 <= a.length, b.length <= 10^4",
+    "a and b contain only '0' and '1'.",
+    "Each input is either \"0\" or has no leading zeroes."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def addBinary(self, a: str, b: str) -> str:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} a\n * @param {string} b\n * @return {string}\n */\nfunction addBinary(a, b) {\n  // Think out loud as you go!\n}\n",
+    "c": "char* addBinary(char* a, char* b) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+    "cpp": "class Solution {\npublic:\n    string addBinary(string a, string b) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
+    "java": "class Solution {\n    public String addBinary(String a, String b) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "id": "find-k-pairs-with-smallest-sums",
+  "title": "Find K Pairs with Smallest Sums",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Heap",
+    "Priority Queue"
+  ],
+  "statement": [
+    "Given two sorted integer arrays, return k pairs [u, v] with the smallest sums where u comes from the first array and v comes from the second.",
+    "If fewer than k pairs exist, return all available pairs."
+  ],
+  "examples": [
+    {
+      "input": "nums1 = [1,7,11], nums2 = [2,4,6], k = 3",
+      "output": "[[1,2],[1,4],[1,6]]"
+    },
+    {
+      "input": "nums1 = [1,1,2], nums2 = [1,2,3], k = 2",
+      "output": "[[1,1],[1,1]]"
+    }
+  ],
+  "constraints": [
+    "1 <= nums1.length, nums2.length <= 10^5",
+    "-10^9 <= nums1[i], nums2[i] <= 10^9",
+    "nums1 and nums2 are sorted in nondecreasing order.",
+    "1 <= k <= 10^4"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def kSmallestPairs(self, nums1: list[int], nums2: list[int], k: int) -> list[list[int]]:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} nums1\n * @param {number[]} nums2\n * @param {number} k\n * @return {number[][]}\n */\nfunction kSmallestPairs(nums1, nums2, k) {\n  // Think out loud as you go!\n}\n",
+    "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** kSmallestPairs(int* nums1, int nums1Size, int* nums2, int nums2Size, int k, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
+    "cpp": "class Solution {\npublic:\n    vector<vector<int>> kSmallestPairs(vector<int>& nums1, vector<int>& nums2, int k) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+    "java": "class Solution {\n    public List<List<Integer>> kSmallestPairs(int[] nums1, int[] nums2, int k) {\n        // Think out loud as you go!\n        return List.of();\n    }\n}\n"
+  }
+}

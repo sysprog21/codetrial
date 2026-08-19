@@ -1,0 +1,39 @@
+{
+  "id": "isomorphic-strings",
+  "title": "Isomorphic Strings",
+  "difficulty": "Easy",
+  "topics": [
+    "Hash Table",
+    "String"
+  ],
+  "statement": [
+    "Given two strings s and t, return whether s can be transformed into t by replacing each character consistently.",
+    "Each character in s must always map to the same character in t, and no two different characters in s may map to the same character in t."
+  ],
+  "examples": [
+    {
+      "input": "s = \"egg\", t = \"add\"",
+      "output": "true"
+    },
+    {
+      "input": "s = \"foo\", t = \"bar\"",
+      "output": "false"
+    },
+    {
+      "input": "s = \"paper\", t = \"title\"",
+      "output": "true"
+    }
+  ],
+  "constraints": [
+    "1 <= s.length <= 5 * 10^4",
+    "t.length == s.length",
+    "s and t consist of ASCII characters."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def isIsomorphic(self, s: str, t: str) -> bool:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} s\n * @param {string} t\n * @return {boolean}\n */\nfunction isIsomorphic(s, t) {\n  // Think out loud as you go!\n}\n",
+    "c": "bool isIsomorphic(char* s, char* t) {\n    // Think out loud as you go!\n    return false;\n}\n",
+    "cpp": "class Solution {\npublic:\n    bool isIsomorphic(string s, string t) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+    "java": "class Solution {\n    public boolean isIsomorphic(String s, String t) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+  }
+}

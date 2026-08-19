@@ -1,0 +1,93 @@
+{
+  "kind": "function",
+  "entry": "uniquePathsWithObstacles",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "center obstacle",
+      "input": [
+        [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ]
+        ]
+      ],
+      "expected": 2
+    },
+    {
+      "label": "small detour",
+      "input": [
+        [
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            0
+          ]
+        ]
+      ],
+      "expected": 1
+    },
+    {
+      "label": "start blocked",
+      "input": [
+        [
+          [
+            1
+          ]
+        ]
+      ],
+      "expected": 0
+    },
+    {
+      "label": "finish blocked",
+      "input": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            1
+          ]
+        ]
+      ],
+      "expected": 0
+    },
+    {
+      "label": "single row blocked path",
+      "input": [
+        [
+          [
+            0,
+            1,
+            0
+          ]
+        ]
+      ],
+      "expected": 0
+    }
+  ],
+  "paramNames": [
+    "obstacleGrid"
+  ],
+  "paramTypes": [
+    "integer[][]"
+  ],
+  "returnType": "integer"
+}

@@ -1,0 +1,77 @@
+{
+  "kind": "function",
+  "entry": "singleNumber",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "short sample",
+      "input": [
+        [
+          2,
+          2,
+          3,
+          2
+        ]
+      ],
+      "expected": 3
+    },
+    {
+      "label": "zero and positive sample",
+      "input": [
+        [
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          99
+        ]
+      ],
+      "expected": 99
+    },
+    {
+      "label": "single element",
+      "input": [
+        [
+          7
+        ]
+      ],
+      "expected": 7
+    },
+    {
+      "label": "negative unique value",
+      "input": [
+        [
+          -4,
+          6,
+          6,
+          6
+        ]
+      ],
+      "expected": -4
+    },
+    {
+      "label": "xor pair logic fails",
+      "input": [
+        [
+          5,
+          5,
+          5,
+          8,
+          8,
+          8,
+          11
+        ]
+      ],
+      "expected": 11
+    }
+  ],
+  "paramNames": [
+    "nums"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "integer"
+}

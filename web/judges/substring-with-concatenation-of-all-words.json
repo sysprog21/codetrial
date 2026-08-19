@@ -1,0 +1,74 @@
+{
+  "kind": "function",
+  "entry": "findSubstring",
+  "checker": "arrayBag",
+  "cases": [
+    {
+      "label": "two words two positions",
+      "input": [
+        "barfoothefoobarman",
+        [
+          "foo",
+          "bar"
+        ]
+      ],
+      "expected": [
+        0,
+        9
+      ]
+    },
+    {
+      "label": "missing duplicate word",
+      "input": [
+        "wordgoodgoodgoodbestword",
+        [
+          "word",
+          "good",
+          "best",
+          "word"
+        ]
+      ],
+      "expected": []
+    },
+    {
+      "label": "overlapping windows",
+      "input": [
+        "barfoofoobarthefoobarman",
+        [
+          "bar",
+          "foo",
+          "the"
+        ]
+      ],
+      "expected": [
+        6,
+        9,
+        12
+      ]
+    },
+    {
+      "label": "duplicate words",
+      "input": [
+        "wordgoodgoodgoodbestword",
+        [
+          "word",
+          "good",
+          "best",
+          "good"
+        ]
+      ],
+      "expected": [
+        8
+      ]
+    }
+  ],
+  "paramNames": [
+    "s",
+    "words"
+  ],
+  "paramTypes": [
+    "string",
+    "string[]"
+  ],
+  "returnType": "list<integer>"
+}

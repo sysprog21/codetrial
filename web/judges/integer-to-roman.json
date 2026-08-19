@@ -1,0 +1,49 @@
+{
+  "kind": "function",
+  "entry": "intToRoman",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "large mixed value",
+      "input": [
+        3749
+      ],
+      "expected": "MMMDCCXLIX"
+    },
+    {
+      "label": "mixed additive",
+      "input": [
+        58
+      ],
+      "expected": "LVIII"
+    },
+    {
+      "label": "compound subtractive",
+      "input": [
+        1994
+      ],
+      "expected": "MCMXCIV"
+    },
+    {
+      "label": "single subtractive pair",
+      "input": [
+        4
+      ],
+      "expected": "IV"
+    },
+    {
+      "label": "hundreds tens and ones",
+      "input": [
+        944
+      ],
+      "expected": "CMXLIV"
+    }
+  ],
+  "paramNames": [
+    "num"
+  ],
+  "paramTypes": [
+    "integer"
+  ],
+  "returnType": "string"
+}

@@ -1,0 +1,39 @@
+{
+  "id": "construct-binary-tree-from-inorder-and-postorder-traversal",
+  "title": "Construct Binary Tree from Inorder and Postorder Traversal",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Hash Table",
+    "Divide and Conquer",
+    "Tree",
+    "Binary Tree"
+  ],
+  "statement": [
+    "Rebuild a binary tree from its inorder and postorder traversal arrays.",
+    "The values are unique, and the two arrays describe the same tree. Return the reconstructed root."
+  ],
+  "examples": [
+    {
+      "input": "inorder = [9,3,15,20,7], postorder = [9,15,7,20,3]",
+      "output": "[3,9,20,null,null,15,7]"
+    },
+    {
+      "input": "inorder = [-1], postorder = [-1]",
+      "output": "[-1]"
+    }
+  ],
+  "constraints": [
+    "1 <= inorder.length <= 3000",
+    "postorder.length == inorder.length",
+    "-3000 <= value <= 3000",
+    "All values are unique, and both arrays describe the same binary tree."
+  ],
+  "starterCode": {
+    "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def buildTree(self, inorder: list[int], postorder: list[int]) -> Optional[TreeNode]:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *     this.val = (val===undefined ? 0 : val)\n *     this.left = (left===undefined ? null : left)\n *     this.right = (right===undefined ? null : right)\n * }\n */\n/**\n * @param {number[]} inorder\n * @param {number[]} postorder\n * @return {TreeNode}\n */\nfunction buildTree(inorder, postorder) {\n  // Think out loud as you go!\n}\n",
+    "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nstruct TreeNode* buildTree(int* inorder, int inorderSize, int* postorder, int postorderSize) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+    "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    TreeNode* buildTree(vector<int>& inorder, vector<int>& postorder) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+    "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public TreeNode buildTree(int[] inorder, int[] postorder) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+  }
+}

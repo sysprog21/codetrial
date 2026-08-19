@@ -1,0 +1,42 @@
+{
+  "kind": "function",
+  "entry": "totalNQueens",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "four queens",
+      "input": [
+        4
+      ],
+      "expected": 2
+    },
+    {
+      "label": "single queen",
+      "input": [
+        1
+      ],
+      "expected": 1
+    },
+    {
+      "label": "two queens impossible",
+      "input": [
+        2
+      ],
+      "expected": 0
+    },
+    {
+      "label": "five queens",
+      "input": [
+        5
+      ],
+      "expected": 10
+    }
+  ],
+  "paramNames": [
+    "n"
+  ],
+  "paramTypes": [
+    "integer"
+  ],
+  "returnType": "integer"
+}

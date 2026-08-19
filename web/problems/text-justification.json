@@ -1,0 +1,38 @@
+{
+  "id": "text-justification",
+  "title": "Text Justification",
+  "difficulty": "Hard",
+  "topics": [
+    "Array",
+    "String",
+    "Simulation"
+  ],
+  "statement": [
+    "Given a list of words and a maximum line width, format the words into fully justified text.",
+    "Each line must have exactly maxWidth characters. Non-final lines spread spaces as evenly as possible, with extra spaces assigned to earlier gaps. The final line is left-justified."
+  ],
+  "examples": [
+    {
+      "input": "words = [\"This\", \"is\", \"an\", \"example\", \"of\", \"text\", \"justification.\"], maxWidth = 16",
+      "output": "[\"This    is    an\", \"example  of text\", \"justification.  \"]"
+    },
+    {
+      "input": "words = [\"What\",\"must\",\"be\",\"acknowledgment\",\"shall\",\"be\"], maxWidth = 16",
+      "output": "[\"What   must   be\", \"acknowledgment  \", \"shall be        \"]"
+    }
+  ],
+  "constraints": [
+    "1 <= words.length <= 300",
+    "1 <= words[i].length <= 20",
+    "words[i] contains only English letters and symbols.",
+    "1 <= maxWidth <= 100",
+    "words[i].length <= maxWidth"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def fullJustify(self, words: list[str], maxWidth: int) -> list[str]:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string[]} words\n * @param {number} maxWidth\n * @return {string[]}\n */\nfunction fullJustify(words, maxWidth) {\n  // Think out loud as you go!\n}\n",
+    "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nchar** fullJustify(char** words, int wordsSize, int maxWidth, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+    "cpp": "class Solution {\npublic:\n    vector<string> fullJustify(vector<string>& words, int maxWidth) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+    "java": "class Solution {\n    public List<String> fullJustify(String[] words, int maxWidth) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "id": "maximum-sum-circular-subarray",
+  "title": "Maximum Sum Circular Subarray",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Divide and Conquer",
+    "Dynamic Programming",
+    "Queue",
+    "Monotonic Queue"
+  ],
+  "statement": [
+    "Choose a non-empty contiguous run from an array arranged in a circle and return the largest possible sum.",
+    "A chosen run may wrap from the end of the array back to the beginning, but each index can be used at most once."
+  ],
+  "examples": [
+    {
+      "input": "nums = [1,-2,3,-2]",
+      "output": "3"
+    },
+    {
+      "input": "nums = [5,-3,5]",
+      "output": "10"
+    },
+    {
+      "input": "nums = [-3,-2,-3]",
+      "output": "-2"
+    }
+  ],
+  "constraints": [
+    "1 <= nums.length <= 3 * 10^4",
+    "-3 * 10^4 <= nums[i] <= 3 * 10^4"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def maxSubarraySumCircular(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction maxSubarraySumCircular(nums) {\n  // Think out loud as you go!\n}\n",
+    "c": "int maxSubarraySumCircular(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int maxSubarraySumCircular(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int maxSubarraySumCircular(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

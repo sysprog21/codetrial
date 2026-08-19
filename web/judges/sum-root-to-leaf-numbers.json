@@ -1,0 +1,63 @@
+{
+  "kind": "function",
+  "entry": "sumNumbers",
+  "checker": "exact",
+  "argTypes": [
+    "binaryTree"
+  ],
+  "cases": [
+    {
+      "label": "two leaves",
+      "input": [
+        [
+          1,
+          2,
+          3
+        ]
+      ],
+      "expected": 25
+    },
+    {
+      "label": "zero digit leaf",
+      "input": [
+        [
+          4,
+          9,
+          0,
+          5,
+          1
+        ]
+      ],
+      "expected": 1026
+    },
+    {
+      "label": "single zero",
+      "input": [
+        [
+          0
+        ]
+      ],
+      "expected": 0
+    },
+    {
+      "label": "skewed digits",
+      "input": [
+        [
+          1,
+          null,
+          2,
+          null,
+          3
+        ]
+      ],
+      "expected": 123
+    }
+  ],
+  "paramNames": [
+    "root"
+  ],
+  "paramTypes": [
+    "TreeNode"
+  ],
+  "returnType": "integer"
+}

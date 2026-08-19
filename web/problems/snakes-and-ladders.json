@@ -1,0 +1,38 @@
+{
+  "id": "snakes-and-ladders",
+  "title": "Snakes and Ladders",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "BFS",
+    "Matrix"
+  ],
+  "statement": [
+    "Given an n x n Snakes and Ladders board, return the fewest die rolls needed to reach square n squared from square 1.",
+    "Board numbering starts at the bottom-left, alternates direction each row, and a square value other than -1 sends the move to that destination once."
+  ],
+  "examples": [
+    {
+      "input": "board = [[-1,-1,-1,-1,-1,-1],[-1,-1,-1,-1,-1,-1],[-1,-1,-1,-1,-1,-1],[-1,35,-1,-1,13,-1],[-1,-1,-1,-1,-1,-1],[-1,15,-1,-1,-1,-1]]",
+      "output": "4"
+    },
+    {
+      "input": "board = [[-1,-1],[-1,3]]",
+      "output": "1"
+    }
+  ],
+  "constraints": [
+    "2 <= n <= 20",
+    "board.length == n",
+    "board[i].length == n",
+    "board[i][j] == -1 or 1 <= board[i][j] <= n^2",
+    "Squares 1 and n^2 do not start a snake or ladder."
+  ],
+  "starterCode": {
+    "cpp": "class Solution {\npublic:\n    int snakesAndLadders(vector<vector<int>>& board) {\n        \n    }\n};",
+    "java": "class Solution {\n    public int snakesAndLadders(int[][] board) {\n        \n    }\n}",
+    "python": "class Solution:\n    def snakesAndLadders(self, board: List[List[int]]) -> int:\n        ",
+    "javascript": "/**\n * @param {number[][]} board\n * @return {number}\n */\nvar snakesAndLadders = function(board) {\n    \n};",
+    "c": "int snakesAndLadders(int** board, int boardSize, int* boardColSize) {\n    \n}"
+  }
+}

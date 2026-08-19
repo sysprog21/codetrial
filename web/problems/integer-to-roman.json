@@ -1,0 +1,38 @@
+{
+  "id": "integer-to-roman",
+  "title": "Integer to Roman",
+  "difficulty": "Medium",
+  "topics": [
+    "Hash Table",
+    "Math",
+    "String"
+  ],
+  "statement": [
+    "Given an integer, convert it to a Roman numeral.",
+    "Use the standard subtractive forms such as IV, IX, XL, XC, CD, and CM when they apply."
+  ],
+  "examples": [
+    {
+      "input": "num = 3749",
+      "output": "\"MMMDCCXLIX\""
+    },
+    {
+      "input": "num = 58",
+      "output": "\"LVIII\""
+    },
+    {
+      "input": "num = 1994",
+      "output": "\"MCMXCIV\""
+    }
+  ],
+  "constraints": [
+    "1 <= num <= 3999"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def intToRoman(self, num: int) -> str:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number} num\n * @return {string}\n */\nfunction intToRoman(num) {\n  // Think out loud as you go!\n}\n",
+    "c": "char* intToRoman(int num) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
+    "cpp": "class Solution {\npublic:\n    string intToRoman(int num) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
+    "java": "class Solution {\n    public String intToRoman(int num) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
+  }
+}

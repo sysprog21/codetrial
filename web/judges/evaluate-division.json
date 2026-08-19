@@ -1,0 +1,190 @@
+{
+  "kind": "function",
+  "entry": "calcEquation",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "connected and unknown queries",
+      "input": [
+        [
+          [
+            "a",
+            "b"
+          ],
+          [
+            "b",
+            "c"
+          ]
+        ],
+        [
+          2,
+          3
+        ],
+        [
+          [
+            "a",
+            "c"
+          ],
+          [
+            "b",
+            "a"
+          ],
+          [
+            "a",
+            "e"
+          ],
+          [
+            "a",
+            "a"
+          ],
+          [
+            "x",
+            "x"
+          ]
+        ]
+      ],
+      "expected": [
+        6,
+        0.5,
+        -1,
+        1,
+        -1
+      ]
+    },
+    {
+      "label": "multi component reciprocal",
+      "input": [
+        [
+          [
+            "a",
+            "b"
+          ],
+          [
+            "b",
+            "c"
+          ],
+          [
+            "bc",
+            "cd"
+          ]
+        ],
+        [
+          1.5,
+          2.5,
+          5
+        ],
+        [
+          [
+            "a",
+            "c"
+          ],
+          [
+            "c",
+            "b"
+          ],
+          [
+            "bc",
+            "cd"
+          ],
+          [
+            "cd",
+            "bc"
+          ]
+        ]
+      ],
+      "expected": [
+        3.75,
+        0.4,
+        5,
+        0.2
+      ]
+    },
+    {
+      "label": "single equation unknowns",
+      "input": [
+        [
+          [
+            "a",
+            "b"
+          ]
+        ],
+        [
+          0.5
+        ],
+        [
+          [
+            "a",
+            "b"
+          ],
+          [
+            "b",
+            "a"
+          ],
+          [
+            "a",
+            "c"
+          ],
+          [
+            "x",
+            "y"
+          ]
+        ]
+      ],
+      "expected": [
+        0.5,
+        2,
+        -1,
+        -1
+      ]
+    },
+    {
+      "label": "disconnected components",
+      "input": [
+        [
+          [
+            "a",
+            "b"
+          ],
+          [
+            "c",
+            "d"
+          ]
+        ],
+        [
+          2,
+          4
+        ],
+        [
+          [
+            "a",
+            "d"
+          ],
+          [
+            "c",
+            "d"
+          ],
+          [
+            "d",
+            "c"
+          ]
+        ]
+      ],
+      "expected": [
+        -1,
+        4,
+        0.25
+      ]
+    }
+  ],
+  "paramNames": [
+    "equations",
+    "values",
+    "queries"
+  ],
+  "paramTypes": [
+    "list<list<string>>",
+    "double[]",
+    "list<list<string>>"
+  ],
+  "returnType": "double[]"
+}

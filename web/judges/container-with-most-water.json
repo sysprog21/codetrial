@@ -1,0 +1,78 @@
+{
+  "kind": "function",
+  "entry": "maxArea",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "wide best pair",
+      "input": [
+        [
+          1,
+          8,
+          6,
+          2,
+          5,
+          4,
+          8,
+          3,
+          7
+        ]
+      ],
+      "expected": 49
+    },
+    {
+      "label": "two lines",
+      "input": [
+        [
+          1,
+          1
+        ]
+      ],
+      "expected": 1
+    },
+    {
+      "label": "shorter wall limits",
+      "input": [
+        [
+          4,
+          3,
+          2,
+          1,
+          4
+        ]
+      ],
+      "expected": 16
+    },
+    {
+      "label": "interior best",
+      "input": [
+        [
+          1,
+          2,
+          4,
+          3
+        ]
+      ],
+      "expected": 4
+    },
+    {
+      "label": "zero height edge",
+      "input": [
+        [
+          0,
+          2,
+          0,
+          4
+        ]
+      ],
+      "expected": 4
+    }
+  ],
+  "paramNames": [
+    "height"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "integer"
+}

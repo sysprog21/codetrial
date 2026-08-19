@@ -1,0 +1,35 @@
+{
+  "id": "remove-duplicates-from-sorted-array-ii",
+  "title": "Remove Duplicates from Sorted Array II",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Two Pointers"
+  ],
+  "statement": [
+    "Given a nondecreasing integer array nums, compact it in place so each distinct value appears at most twice.",
+    "Return the length of the kept prefix. The first returned-length items must preserve the original sorted order."
+  ],
+  "examples": [
+    {
+      "input": "nums = [1,1,1,2,2,3]",
+      "output": "5, nums starts with [1,1,2,2,3]"
+    },
+    {
+      "input": "nums = [0,0,1,1,1,1,2,3,3]",
+      "output": "7, nums starts with [0,0,1,1,2,3,3]"
+    }
+  ],
+  "constraints": [
+    "1 <= nums.length <= 3 * 10^4",
+    "-10^4 <= nums[i] <= 10^4",
+    "nums is sorted in nondecreasing order."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def removeDuplicates(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction removeDuplicates(nums) {\n  // Think out loud as you go!\n}\n",
+    "c": "int removeDuplicates(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int removeDuplicates(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int removeDuplicates(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

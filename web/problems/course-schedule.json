@@ -1,0 +1,39 @@
+{
+  "id": "course-schedule",
+  "title": "Course Schedule",
+  "difficulty": "Medium",
+  "topics": [
+    "DFS",
+    "BFS",
+    "Graph",
+    "Topological Sort"
+  ],
+  "statement": [
+    "Given a number of courses and prerequisite pairs, determine whether all courses can be finished.",
+    "Each pair [course, prerequisite] means the prerequisite must be taken before that course."
+  ],
+  "examples": [
+    {
+      "input": "numCourses = 2, prerequisites = [[1,0]]",
+      "output": "true"
+    },
+    {
+      "input": "numCourses = 2, prerequisites = [[1,0],[0,1]]",
+      "output": "false"
+    }
+  ],
+  "constraints": [
+    "1 <= numCourses <= 2000",
+    "0 <= prerequisites.length <= 5000",
+    "prerequisites[i].length == 2",
+    "0 <= course, prerequisite < numCourses",
+    "All prerequisite pairs are unique."
+  ],
+  "starterCode": {
+    "cpp": "class Solution {\npublic:\n    bool canFinish(int numCourses, vector<vector<int>>& prerequisites) {\n        \n    }\n};",
+    "java": "class Solution {\n    public boolean canFinish(int numCourses, int[][] prerequisites) {\n        \n    }\n}",
+    "python": "class Solution:\n    def canFinish(self, numCourses: int, prerequisites: List[List[int]]) -> bool:\n        ",
+    "javascript": "/**\n * @param {number} numCourses\n * @param {number[][]} prerequisites\n * @return {boolean}\n */\nvar canFinish = function(numCourses, prerequisites) {\n    \n};",
+    "c": "bool canFinish(int numCourses, int** prerequisites, int prerequisitesSize, int* prerequisitesColSize) {\n    \n}"
+  }
+}

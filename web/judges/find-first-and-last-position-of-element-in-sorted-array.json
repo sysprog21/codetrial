@@ -1,0 +1,94 @@
+{
+  "kind": "function",
+  "entry": "searchRange",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "target appears twice",
+      "input": [
+        [
+          5,
+          7,
+          7,
+          8,
+          8,
+          10
+        ],
+        8
+      ],
+      "expected": [
+        3,
+        4
+      ]
+    },
+    {
+      "label": "target absent",
+      "input": [
+        [
+          5,
+          7,
+          7,
+          8,
+          8,
+          10
+        ],
+        6
+      ],
+      "expected": [
+        -1,
+        -1
+      ]
+    },
+    {
+      "label": "empty array",
+      "input": [
+        [],
+        0
+      ],
+      "expected": [
+        -1,
+        -1
+      ]
+    },
+    {
+      "label": "all values match",
+      "input": [
+        [
+          2,
+          2,
+          2
+        ],
+        2
+      ],
+      "expected": [
+        0,
+        2
+      ]
+    },
+    {
+      "label": "single match at end",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        4
+      ],
+      "expected": [
+        3,
+        3
+      ]
+    }
+  ],
+  "paramNames": [
+    "nums",
+    "target"
+  ],
+  "paramTypes": [
+    "integer[]",
+    "integer"
+  ],
+  "returnType": "integer[]"
+}

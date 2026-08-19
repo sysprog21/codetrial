@@ -1,0 +1,77 @@
+{
+  "kind": "function",
+  "entry": "jump",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "sample two jumps",
+      "input": [
+        [
+          2,
+          3,
+          1,
+          1,
+          4
+        ]
+      ],
+      "expected": 2
+    },
+    {
+      "label": "zero inside reachable path",
+      "input": [
+        [
+          2,
+          3,
+          0,
+          1,
+          4
+        ]
+      ],
+      "expected": 2
+    },
+    {
+      "label": "already at end",
+      "input": [
+        [
+          0
+        ]
+      ],
+      "expected": 0
+    },
+    {
+      "label": "greedy window needs three",
+      "input": [
+        [
+          1,
+          2,
+          1,
+          1,
+          1
+        ]
+      ],
+      "expected": 3
+    },
+    {
+      "label": "first jump can skip far",
+      "input": [
+        [
+          4,
+          1,
+          1,
+          3,
+          1,
+          1,
+          1
+        ]
+      ],
+      "expected": 2
+    }
+  ],
+  "paramNames": [
+    "nums"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "integer"
+}

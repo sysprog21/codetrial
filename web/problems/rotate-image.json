@@ -1,0 +1,36 @@
+{
+  "id": "rotate-image",
+  "title": "Rotate Image",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Math",
+    "Matrix"
+  ],
+  "statement": [
+    "Given an n x n matrix, rotate it 90 degrees clockwise in place.",
+    "Modify the input matrix directly; do not return a separate rotated matrix."
+  ],
+  "examples": [
+    {
+      "input": "matrix = [[1,2,3],[4,5,6],[7,8,9]]",
+      "output": "[[7,4,1],[8,5,2],[9,6,3]]"
+    },
+    {
+      "input": "matrix = [[5,1,9,11],[2,4,8,10],[13,3,6,7],[15,14,12,16]]",
+      "output": "[[15,13,2,5],[14,3,4,1],[12,6,8,9],[16,7,10,11]]"
+    }
+  ],
+  "constraints": [
+    "n == matrix.length == matrix[i].length",
+    "1 <= n <= 20",
+    "-1000 <= matrix[i][j] <= 1000"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def rotate(self, matrix: list[list[int]]) -> None:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[][]} matrix\n * @return {void}\n */\nfunction rotate(matrix) {\n  // Think out loud as you go!\n}\n",
+    "c": "void rotate(int** matrix, int matrixSize, int* matrixColSize) {\n    // Think out loud as you go!\n}\n",
+    "cpp": "class Solution {\npublic:\n    void rotate(vector<vector<int>>& matrix) {\n        // Think out loud as you go!\n    }\n};\n",
+    "java": "class Solution {\n    public void rotate(int[][] matrix) {\n        // Think out loud as you go!\n    }\n}\n"
+  }
+}

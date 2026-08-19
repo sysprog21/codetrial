@@ -1,0 +1,36 @@
+{
+  "id": "palindrome-number",
+  "title": "Palindrome Number",
+  "difficulty": "Easy",
+  "topics": [
+    "Math"
+  ],
+  "statement": [
+    "Given an integer x, return whether x reads the same forward and backward.",
+    "Negative numbers are not palindromes because of the minus sign."
+  ],
+  "examples": [
+    {
+      "input": "x = 121",
+      "output": "true"
+    },
+    {
+      "input": "x = -121",
+      "output": "false"
+    },
+    {
+      "input": "x = 10",
+      "output": "false"
+    }
+  ],
+  "constraints": [
+    "-2^31 <= x <= 2^31 - 1"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def isPalindrome(self, x: int) -> bool:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number} x\n * @return {boolean}\n */\nfunction isPalindrome(x) {\n  // Think out loud as you go!\n}\n",
+    "c": "bool isPalindrome(int x) {\n    // Think out loud as you go!\n    return false;\n}\n",
+    "cpp": "class Solution {\npublic:\n    bool isPalindrome(int x) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+    "java": "class Solution {\n    public boolean isPalindrome(int x) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+  }
+}

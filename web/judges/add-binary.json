@@ -1,0 +1,56 @@
+{
+  "kind": "function",
+  "entry": "addBinary",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "sample carry",
+      "input": [
+        "11",
+        "1"
+      ],
+      "expected": "100"
+    },
+    {
+      "label": "sample multi digit",
+      "input": [
+        "1010",
+        "1011"
+      ],
+      "expected": "10101"
+    },
+    {
+      "label": "zero plus zero",
+      "input": [
+        "0",
+        "0"
+      ],
+      "expected": "0"
+    },
+    {
+      "label": "cascading carry",
+      "input": [
+        "1111",
+        "1"
+      ],
+      "expected": "10000"
+    },
+    {
+      "label": "unequal lengths",
+      "input": [
+        "1",
+        "111"
+      ],
+      "expected": "1000"
+    }
+  ],
+  "paramNames": [
+    "a",
+    "b"
+  ],
+  "paramTypes": [
+    "string",
+    "string"
+  ],
+  "returnType": "string"
+}

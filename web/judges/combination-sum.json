@@ -1,0 +1,97 @@
+{
+  "kind": "function",
+  "entry": "combinationSum",
+  "checker": "integerCombinations",
+  "cases": [
+    {
+      "label": "reuse smaller candidate",
+      "input": [
+        [
+          2,
+          3,
+          6,
+          7
+        ],
+        7
+      ],
+      "expected": [
+        [
+          2,
+          2,
+          3
+        ],
+        [
+          7
+        ]
+      ]
+    },
+    {
+      "label": "multiple combinations",
+      "input": [
+        [
+          2,
+          3,
+          5
+        ],
+        8
+      ],
+      "expected": [
+        [
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2,
+          3,
+          3
+        ],
+        [
+          3,
+          5
+        ]
+      ]
+    },
+    {
+      "label": "no combination",
+      "input": [
+        [
+          2
+        ],
+        1
+      ],
+      "expected": []
+    },
+    {
+      "label": "unsorted candidates",
+      "input": [
+        [
+          7,
+          3,
+          2
+        ],
+        7
+      ],
+      "expected": [
+        [
+          2,
+          2,
+          3
+        ],
+        [
+          7
+        ]
+      ]
+    }
+  ],
+  "paramNames": [
+    "candidates",
+    "target"
+  ],
+  "paramTypes": [
+    "integer[]",
+    "integer"
+  ],
+  "returnType": "list<list<integer>>"
+}

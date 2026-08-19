@@ -1,0 +1,88 @@
+{
+  "kind": "function",
+  "entry": "minSubArrayLen",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "shrink to length two",
+      "input": [
+        7,
+        [
+          2,
+          3,
+          1,
+          2,
+          4,
+          3
+        ]
+      ],
+      "expected": 2
+    },
+    {
+      "label": "single element enough",
+      "input": [
+        4,
+        [
+          1,
+          4,
+          4
+        ]
+      ],
+      "expected": 1
+    },
+    {
+      "label": "no qualifying window",
+      "input": [
+        11,
+        [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      ],
+      "expected": 0
+    },
+    {
+      "label": "entire array required",
+      "input": [
+        15,
+        [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      ],
+      "expected": 5
+    },
+    {
+      "label": "late short window",
+      "input": [
+        8,
+        [
+          1,
+          1,
+          1,
+          1,
+          8
+        ]
+      ],
+      "expected": 1
+    }
+  ],
+  "paramNames": [
+    "target",
+    "nums"
+  ],
+  "paramTypes": [
+    "integer",
+    "integer[]"
+  ],
+  "returnType": "integer"
+}

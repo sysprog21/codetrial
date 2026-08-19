@@ -1,0 +1,34 @@
+{
+  "id": "happy-number",
+  "title": "Happy Number",
+  "difficulty": "Easy",
+  "topics": [
+    "Hash Table",
+    "Math",
+    "Two Pointers"
+  ],
+  "statement": [
+    "Repeatedly replace a positive integer with the sum of the squares of its digits.",
+    "Return true if the process reaches 1, and false if it enters a cycle that never reaches 1."
+  ],
+  "examples": [
+    {
+      "input": "n = 19",
+      "output": "true"
+    },
+    {
+      "input": "n = 2",
+      "output": "false"
+    }
+  ],
+  "constraints": [
+    "1 <= n <= 2^31 - 1"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def isHappy(self, n: int) -> bool:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number} n\n * @return {boolean}\n */\nfunction isHappy(n) {\n  // Think out loud as you go!\n}\n",
+    "c": "bool isHappy(int n) {\n    // Think out loud as you go!\n    return false;\n}\n",
+    "cpp": "class Solution {\npublic:\n    bool isHappy(int n) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+    "java": "class Solution {\n    public boolean isHappy(int n) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+  }
+}

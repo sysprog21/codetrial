@@ -1,0 +1,114 @@
+{
+  "kind": "function",
+  "entry": "searchMatrix",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "target present",
+      "input": [
+        [
+          [
+            1,
+            3,
+            5,
+            7
+          ],
+          [
+            10,
+            11,
+            16,
+            20
+          ],
+          [
+            23,
+            30,
+            34,
+            60
+          ]
+        ],
+        3
+      ],
+      "expected": true
+    },
+    {
+      "label": "target absent between rows",
+      "input": [
+        [
+          [
+            1,
+            3,
+            5,
+            7
+          ],
+          [
+            10,
+            11,
+            16,
+            20
+          ],
+          [
+            23,
+            30,
+            34,
+            60
+          ]
+        ],
+        13
+      ],
+      "expected": false
+    },
+    {
+      "label": "single cell present",
+      "input": [
+        [
+          [
+            1
+          ]
+        ],
+        1
+      ],
+      "expected": true
+    },
+    {
+      "label": "single row last value",
+      "input": [
+        [
+          [
+            1,
+            2,
+            3,
+            4
+          ]
+        ],
+        4
+      ],
+      "expected": true
+    },
+    {
+      "label": "before first value",
+      "input": [
+        [
+          [
+            5,
+            6
+          ],
+          [
+            8,
+            9
+          ]
+        ],
+        4
+      ],
+      "expected": false
+    }
+  ],
+  "paramNames": [
+    "matrix",
+    "target"
+  ],
+  "paramTypes": [
+    "integer[][]",
+    "integer"
+  ],
+  "returnType": "boolean"
+}

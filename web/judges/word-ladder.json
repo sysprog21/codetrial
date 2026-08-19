@@ -1,0 +1,79 @@
+{
+  "kind": "function",
+  "entry": "ladderLength",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "classic ladder",
+      "input": [
+        "hit",
+        "cog",
+        [
+          "hot",
+          "dot",
+          "dog",
+          "lot",
+          "log",
+          "cog"
+        ]
+      ],
+      "expected": 5
+    },
+    {
+      "label": "end word absent",
+      "input": [
+        "hit",
+        "cog",
+        [
+          "hot",
+          "dot",
+          "dog",
+          "lot",
+          "log"
+        ]
+      ],
+      "expected": 0
+    },
+    {
+      "label": "direct one letter change",
+      "input": [
+        "a",
+        "c",
+        [
+          "a",
+          "b",
+          "c"
+        ]
+      ],
+      "expected": 2
+    },
+    {
+      "label": "shorter route through decoy",
+      "input": [
+        "hit",
+        "cog",
+        [
+          "hot",
+          "dot",
+          "dog",
+          "lot",
+          "log",
+          "cog",
+          "hog"
+        ]
+      ],
+      "expected": 4
+    }
+  ],
+  "paramNames": [
+    "beginWord",
+    "endWord",
+    "wordList"
+  ],
+  "paramTypes": [
+    "string",
+    "string",
+    "list<string>"
+  ],
+  "returnType": "integer"
+}

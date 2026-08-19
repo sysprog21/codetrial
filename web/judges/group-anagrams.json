@@ -1,0 +1,109 @@
+{
+  "kind": "function",
+  "entry": "groupAnagrams",
+  "checker": "anagramGroups",
+  "cases": [
+    {
+      "label": "mixed groups",
+      "input": [
+        [
+          "eat",
+          "tea",
+          "tan",
+          "ate",
+          "nat",
+          "bat"
+        ]
+      ],
+      "expected": [
+        [
+          "eat",
+          "tea",
+          "ate"
+        ],
+        [
+          "tan",
+          "nat"
+        ],
+        [
+          "bat"
+        ]
+      ]
+    },
+    {
+      "label": "empty string group",
+      "input": [
+        [
+          ""
+        ]
+      ],
+      "expected": [
+        [
+          ""
+        ]
+      ]
+    },
+    {
+      "label": "single string group",
+      "input": [
+        [
+          "a"
+        ]
+      ],
+      "expected": [
+        [
+          "a"
+        ]
+      ]
+    },
+    {
+      "label": "duplicate words preserved",
+      "input": [
+        [
+          "eat",
+          "tea",
+          "eat"
+        ]
+      ],
+      "expected": [
+        [
+          "eat",
+          "tea",
+          "eat"
+        ]
+      ]
+    },
+    {
+      "label": "separate non-anagram groups",
+      "input": [
+        [
+          "abc",
+          "bca",
+          "foo",
+          "ofo",
+          "bar"
+        ]
+      ],
+      "expected": [
+        [
+          "abc",
+          "bca"
+        ],
+        [
+          "foo",
+          "ofo"
+        ],
+        [
+          "bar"
+        ]
+      ]
+    }
+  ],
+  "paramNames": [
+    "strs"
+  ],
+  "paramTypes": [
+    "string[]"
+  ],
+  "returnType": "list<list<string>>"
+}

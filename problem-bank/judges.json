@@ -1,4 +1,4 @@
-export const judges = {
+{
   "valid-parentheses": {
     "kind": "function",
     "entry": "isValid",
@@ -12129,10 +12129,10 @@ export const judges = {
       {
         "label": "positive exponent",
         "input": [
-          2.0,
+          2,
           10
         ],
-        "expected": 1024.0
+        "expected": 1024
       },
       {
         "label": "decimal base",
@@ -12145,7 +12145,7 @@ export const judges = {
       {
         "label": "negative exponent",
         "input": [
-          2.0,
+          2,
           -2
         ],
         "expected": 0.25
@@ -12156,15 +12156,15 @@ export const judges = {
           5.5,
           0
         ],
-        "expected": 1.0
+        "expected": 1
       },
       {
         "label": "minimum integer exponent reciprocal path",
         "input": [
-          1.0,
+          1,
           -2147483648
         ],
-        "expected": 1.0
+        "expected": 1
       }
     ],
     "paramNames": [
@@ -12507,7 +12507,7 @@ export const judges = {
             2
           ]
         ],
-        "expected": 2.0
+        "expected": 2
       },
       {
         "label": "even total sample",
@@ -12531,7 +12531,7 @@ export const judges = {
             1
           ]
         ],
-        "expected": 1.0
+        "expected": 1
       },
       {
         "label": "negative values even total",
@@ -12562,7 +12562,7 @@ export const judges = {
             7
           ]
         ],
-        "expected": 4.0
+        "expected": 4
       }
     ],
     "paramNames": [
@@ -13157,7 +13157,7 @@ export const judges = {
           null,
           1.5,
           null,
-          2.0
+          2
         ]
       },
       {
@@ -13192,7 +13192,7 @@ export const judges = {
           null,
           -1.5,
           null,
-          -1.0
+          -1
         ]
       },
       {
@@ -13224,7 +13224,7 @@ export const judges = {
           null,
           null,
           null,
-          5.0
+          5
         ]
       },
       {
@@ -13261,7 +13261,7 @@ export const judges = {
           null,
           null,
           null,
-          25.0
+          25
         ]
       },
       {
@@ -13296,7 +13296,7 @@ export const judges = {
           null,
           50.5,
           null,
-          2.0
+          2
         ]
       }
     ]
@@ -13475,4 +13475,4 @@ export const judges = {
       }
     ]
   }
-};
+}

@@ -1,0 +1,68 @@
+{
+  "kind": "function",
+  "entry": "findPeakElement",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "interior peak",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          1
+        ]
+      ],
+      "expected": 2
+    },
+    {
+      "label": "single value",
+      "input": [
+        [
+          1
+        ]
+      ],
+      "expected": 0
+    },
+    {
+      "label": "left edge peak",
+      "input": [
+        [
+          3,
+          2,
+          1
+        ]
+      ],
+      "expected": 0
+    },
+    {
+      "label": "right edge peak",
+      "input": [
+        [
+          1,
+          2,
+          3
+        ]
+      ],
+      "expected": 2
+    },
+    {
+      "label": "negative interior peak",
+      "input": [
+        [
+          -5,
+          -2,
+          -4
+        ]
+      ],
+      "expected": 1
+    }
+  ],
+  "paramNames": [
+    "nums"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "integer"
+}

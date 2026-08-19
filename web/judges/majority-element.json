@@ -1,0 +1,60 @@
+{
+  "kind": "function",
+  "entry": "majorityElement",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "majority at both ends",
+      "input": [
+        [
+          3,
+          2,
+          3
+        ]
+      ],
+      "expected": 3
+    },
+    {
+      "label": "majority after noise",
+      "input": [
+        [
+          2,
+          2,
+          1,
+          1,
+          1,
+          2,
+          2
+        ]
+      ],
+      "expected": 2
+    },
+    {
+      "label": "single item",
+      "input": [
+        [
+          1
+        ]
+      ],
+      "expected": 1
+    },
+    {
+      "label": "not the first value",
+      "input": [
+        [
+          6,
+          5,
+          5
+        ]
+      ],
+      "expected": 5
+    }
+  ],
+  "paramNames": [
+    "nums"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "integer"
+}

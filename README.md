@@ -422,16 +422,24 @@ interval) are constants at the top of `src/agent.rs`.
 ```
 src/            Rust: web server, LiveKit runner, Gemini client, prompts, problem bank
 web/            browser app, served as-is with no build step
-problem-bank/   problem source of truth; web/problems.js is generated from it
+problem-bank/   problem and judge source of truth; web/problems/ and web/judges/ are generated from it
 scripts/        the test gate and the credentialed checks
 tests/          Rust suites plus the browser suite under tests/browser
 ```
 
-`web/problems.js` and the problem cards in `web/index.html` are generated from
-`problem-bank/problems.json` by `scripts/gen-problems.py` and
+`web/problems/<id>.json`, `web/judges/<id>.json` and the problem cards in
+`web/index.html` are generated from `problem-bank/problems.json` and
+`problem-bank/judges.json` by `scripts/gen-problems.py` and
 `scripts/gen-problem-cards.py`. The gate fails if they drift. The interviewer's
 own problem notes in `src/agent.rs` are hand-written and pinned against
 `tests/golden/problems.json`.
+
+The browser fetches one statement and one judge per interview rather than a
+module holding all 150. A judge carries the expected output of every test case,
+so bundling them handed each candidate the answers to every other problem in the
+bank. Their own problem's judge is still reachable, because the runner is in the
+browser; `apply_test_results` in `src/agent.rs` says what that means for the
+report.
 
 ## Troubleshooting
 

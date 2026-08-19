@@ -1,0 +1,43 @@
+{
+  "id": "evaluate-division",
+  "title": "Evaluate Division",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "String",
+    "DFS",
+    "BFS",
+    "Union Find",
+    "Graph"
+  ],
+  "statement": [
+    "Given equations such as a / b = value, answer division queries using the implied ratios.",
+    "Return -1.0 when a query mentions an unknown variable or the two variables are disconnected."
+  ],
+  "examples": [
+    {
+      "input": "equations = [[\"a\",\"b\"],[\"b\",\"c\"]], values = [2.0,3.0], queries = [[\"a\",\"c\"],[\"b\",\"a\"],[\"a\",\"e\"],[\"a\",\"a\"],[\"x\",\"x\"]]",
+      "output": "[6.0,0.5,-1.0,1.0,-1.0]"
+    },
+    {
+      "input": "equations = [[\"a\",\"b\"],[\"b\",\"c\"],[\"bc\",\"cd\"]], values = [1.5,2.5,5.0], queries = [[\"a\",\"c\"],[\"c\",\"b\"],[\"bc\",\"cd\"],[\"cd\",\"bc\"]]",
+      "output": "[3.75,0.4,5.0,0.2]"
+    }
+  ],
+  "constraints": [
+    "1 <= equations.length <= 20",
+    "equations[i].length == 2",
+    "values.length == equations.length",
+    "1 <= queries.length <= 20",
+    "queries[i].length == 2",
+    "Each variable name contains lowercase English letters and digits.",
+    "0.0 < values[i] <= 20.0"
+  ],
+  "starterCode": {
+    "cpp": "class Solution {\npublic:\n    vector<double> calcEquation(vector<vector<string>>& equations, vector<double>& values, vector<vector<string>>& queries) {\n        \n    }\n};",
+    "java": "class Solution {\n    public double[] calcEquation(List<List<String>> equations, double[] values, List<List<String>> queries) {\n        \n    }\n}",
+    "python": "class Solution:\n    def calcEquation(self, equations: List[List[str]], values: List[float], queries: List[List[str]]) -> List[float]:\n        ",
+    "javascript": "/**\n * @param {string[][]} equations\n * @param {number[]} values\n * @param {string[][]} queries\n * @return {number[]}\n */\nvar calcEquation = function(equations, values, queries) {\n    \n};",
+    "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\ndouble* calcEquation(char*** equations, int equationsSize, int* equationsColSize, double* values, int valuesSize, char*** queries, int queriesSize, int* queriesColSize, int* returnSize) {\n    \n}"
+  }
+}

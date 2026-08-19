@@ -1,0 +1,78 @@
+{
+  "kind": "function",
+  "entry": "searchInsert",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "target present",
+      "input": [
+        [
+          1,
+          3,
+          5,
+          6
+        ],
+        5
+      ],
+      "expected": 2
+    },
+    {
+      "label": "insert in middle",
+      "input": [
+        [
+          1,
+          3,
+          5,
+          6
+        ],
+        2
+      ],
+      "expected": 1
+    },
+    {
+      "label": "append after all values",
+      "input": [
+        [
+          1,
+          3,
+          5,
+          6
+        ],
+        7
+      ],
+      "expected": 4
+    },
+    {
+      "label": "prepend before all values",
+      "input": [
+        [
+          1,
+          3,
+          5,
+          6
+        ],
+        0
+      ],
+      "expected": 0
+    },
+    {
+      "label": "single matching value",
+      "input": [
+        [
+          1
+        ],
+        1
+      ],
+      "expected": 0
+    }
+  ],
+  "paramNames": [
+    "nums",
+    "target"
+  ],
+  "paramTypes": [
+    "integer[]",
+    "integer"
+  ],
+  "returnType": "integer"
+}

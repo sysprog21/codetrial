@@ -1,0 +1,56 @@
+{
+  "kind": "function",
+  "entry": "myPow",
+  "checker": "approxNumber",
+  "cases": [
+    {
+      "label": "positive exponent",
+      "input": [
+        2,
+        10
+      ],
+      "expected": 1024
+    },
+    {
+      "label": "decimal base",
+      "input": [
+        2.1,
+        3
+      ],
+      "expected": 9.261
+    },
+    {
+      "label": "negative exponent",
+      "input": [
+        2,
+        -2
+      ],
+      "expected": 0.25
+    },
+    {
+      "label": "zero exponent",
+      "input": [
+        5.5,
+        0
+      ],
+      "expected": 1
+    },
+    {
+      "label": "minimum integer exponent reciprocal path",
+      "input": [
+        1,
+        -2147483648
+      ],
+      "expected": 1
+    }
+  ],
+  "paramNames": [
+    "x",
+    "n"
+  ],
+  "paramTypes": [
+    "double",
+    "integer"
+  ],
+  "returnType": "double"
+}

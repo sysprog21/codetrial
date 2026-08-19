@@ -1,0 +1,38 @@
+{
+  "id": "construct-quad-tree",
+  "title": "Construct Quad Tree",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Divide and Conquer",
+    "Matrix"
+  ],
+  "statement": [
+    "Given an n x n binary grid, build a quad tree representing the same values.",
+    "A leaf represents a square where every value is the same. Otherwise split the square into four equal quadrants in top-left, top-right, bottom-left, bottom-right order.",
+    "The value stored in an internal node is ignored."
+  ],
+  "examples": [
+    {
+      "input": "grid = [[0,1],[1,0]]",
+      "output": "[[0,1],[1,0],[1,1],[1,1],[1,0]]"
+    },
+    {
+      "input": "grid = [[1]]",
+      "output": "[[1,1]]"
+    }
+  ],
+  "constraints": [
+    "n == grid.length == grid[i].length",
+    "n is a power of two.",
+    "1 <= n <= 64",
+    "grid[i][j] is 0 or 1."
+  ],
+  "starterCode": {
+    "python": "\"\"\"\n# Definition for a QuadTree node.\nclass Node:\n    def __init__(self, val=False, isLeaf=False, topLeft=None, topRight=None, bottomLeft=None, bottomRight=None):\n        self.val = val\n        self.isLeaf = isLeaf\n        self.topLeft = topLeft\n        self.topRight = topRight\n        self.bottomLeft = bottomLeft\n        self.bottomRight = bottomRight\n\"\"\"\n\nclass Solution:\n    def construct(self, grid: list[list[int]]) -> 'Node':\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * Definition for a QuadTree node.\n * function Node(val, isLeaf, topLeft, topRight, bottomLeft, bottomRight) {\n *   this.val = (val === undefined ? false : val);\n *   this.isLeaf = (isLeaf === undefined ? false : isLeaf);\n *   this.topLeft = (topLeft === undefined ? null : topLeft);\n *   this.topRight = (topRight === undefined ? null : topRight);\n *   this.bottomLeft = (bottomLeft === undefined ? null : bottomLeft);\n *   this.bottomRight = (bottomRight === undefined ? null : bottomRight);\n * }\n */\n/**\n * @param {number[][]} grid\n * @return {Node}\n */\nfunction construct(grid) {\n  // Think out loud as you go!\n}\n",
+    "c": "/**\n * Definition for a QuadTree node.\n * struct Node {\n *     int val;\n *     struct Node *next;\n *     struct Node *random;\n *     struct Node **neighbors;\n *     int neighborsSize;\n *     struct Node *left;\n *     struct Node *right;\n *     bool isLeaf;\n *     struct Node *topLeft;\n *     struct Node *topRight;\n *     struct Node *bottomLeft;\n *     struct Node *bottomRight;\n * };\n */\nstruct Node* construct(int** grid, int gridSize, int* gridColSize) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+    "cpp": "/*\n// Definition for a QuadTree node.\nclass Node {\npublic:\n    int val;\n    bool isLeaf;\n    Node* topLeft;\n    Node* topRight;\n    Node* bottomLeft;\n    Node* bottomRight;\n\n    Node() : val(0), isLeaf(false), topLeft(nullptr), topRight(nullptr), bottomLeft(nullptr), bottomRight(nullptr) {}\n    Node(int _val, bool _isLeaf) : val(_val), isLeaf(_isLeaf), topLeft(nullptr), topRight(nullptr), bottomLeft(nullptr), bottomRight(nullptr) {}\n    Node(int _val, bool _isLeaf, Node* _topLeft, Node* _topRight, Node* _bottomLeft, Node* _bottomRight)\n        : val(_val), isLeaf(_isLeaf), topLeft(_topLeft), topRight(_topRight), bottomLeft(_bottomLeft), bottomRight(_bottomRight) {}\n};\n*/\n\nclass Solution {\npublic:\n    Node* construct(vector<vector<int>>& grid) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+    "java": "/*\n// Definition for a QuadTree node.\nclass Node {\n    public int val;\n    public boolean isLeaf;\n    public Node topLeft;\n    public Node topRight;\n    public Node bottomLeft;\n    public Node bottomRight;\n\n    public Node() {}\n    public Node(int val, boolean isLeaf) {\n        this.val = val;\n        this.isLeaf = isLeaf;\n    }\n    public Node(int val, boolean isLeaf, Node topLeft, Node topRight, Node bottomLeft, Node bottomRight) {\n        this.val = val;\n        this.isLeaf = isLeaf;\n        this.topLeft = topLeft;\n        this.topRight = topRight;\n        this.bottomLeft = bottomLeft;\n        this.bottomRight = bottomRight;\n    }\n}\n*/\n\nclass Solution {\n    public Node construct(int[][] grid) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+  }
+}

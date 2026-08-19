@@ -1,0 +1,82 @@
+{
+  "kind": "function",
+  "entry": "productExceptSelf",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "positive numbers",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          4
+        ]
+      ],
+      "expected": [
+        24,
+        12,
+        8,
+        6
+      ]
+    },
+    {
+      "label": "single zero",
+      "input": [
+        [
+          -1,
+          1,
+          0,
+          -3,
+          3
+        ]
+      ],
+      "expected": [
+        0,
+        0,
+        9,
+        0,
+        0
+      ]
+    },
+    {
+      "label": "two zeros",
+      "input": [
+        [
+          0,
+          4,
+          0
+        ]
+      ],
+      "expected": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "label": "negative product signs",
+      "input": [
+        [
+          -1,
+          2,
+          -3,
+          4
+        ]
+      ],
+      "expected": [
+        -24,
+        12,
+        -8,
+        6
+      ]
+    }
+  ],
+  "paramNames": [
+    "nums"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "integer[]"
+}

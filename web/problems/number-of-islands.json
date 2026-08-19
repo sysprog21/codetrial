@@ -1,0 +1,37 @@
+{
+  "id": "number-of-islands",
+  "title": "Number of Islands",
+  "difficulty": "Medium",
+  "topics": [
+    "Matrix",
+    "DFS",
+    "BFS",
+    "Union Find"
+  ],
+  "statement": [
+    "Given an m x n 2D binary grid which represents a map of '1's (land) and '0's (water), return the number of islands.",
+    "An island is surrounded by water and is formed by connecting adjacent lands horizontally or vertically. You may assume all four edges of the grid are surrounded by water."
+  ],
+  "examples": [
+    {
+      "input": "grid = [\n  [\"1\",\"1\",\"1\",\"1\",\"0\"],\n  [\"1\",\"1\",\"0\",\"1\",\"0\"],\n  [\"1\",\"1\",\"0\",\"0\",\"0\"],\n  [\"0\",\"0\",\"0\",\"0\",\"0\"]\n]",
+      "output": "1"
+    },
+    {
+      "input": "grid = [\n  [\"1\",\"1\",\"0\",\"0\",\"0\"],\n  [\"1\",\"1\",\"0\",\"0\",\"0\"],\n  [\"0\",\"0\",\"1\",\"0\",\"0\"],\n  [\"0\",\"0\",\"0\",\"1\",\"1\"]\n]",
+      "output": "3"
+    }
+  ],
+  "constraints": [
+    "m == grid.length, n == grid[i].length",
+    "1 <= m, n <= 300",
+    "grid[i][j] is '0' or '1'."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def numIslands(self, grid: list[list[str]]) -> int:\n        pass\n",
+    "javascript": "/**\n * @param {character[][]} grid\n * @return {number}\n */\nfunction numIslands(grid) {\n}\n",
+    "c": "int numIslands(char** grid, int gridSize, int* gridColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int numIslands(vector<vector<char>>& grid) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int numIslands(char[][] grid) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "id": "find-median-from-data-stream",
+  "title": "Find Median from Data Stream",
+  "difficulty": "Hard",
+  "topics": [
+    "Two Pointers",
+    "Design",
+    "Sorting",
+    "Heap",
+    "Data Stream"
+  ],
+  "statement": [
+    "Design a MedianFinder data structure that receives integers one at a time and returns the median of all values seen so far.",
+    "For an even count, the median is the average of the two middle values after sorting."
+  ],
+  "examples": [
+    {
+      "input": "addNum(1), addNum(2), findMedian(), addNum(3), findMedian()",
+      "output": "1.5, 2.0"
+    }
+  ],
+  "constraints": [
+    "-10^5 <= num <= 10^5",
+    "At least one number exists before each findMedian call.",
+    "At most 5 * 10^4 calls are made."
+  ],
+  "starterCode": {
+    "python": "class MedianFinder:\n    def __init__(self):\n        # Think out loud as you go!\n        pass\n\n    def addNum(self, num: int) -> None:\n        # Think out loud as you go!\n        pass\n\n    def findMedian(self) -> float:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "var MedianFinder = function() {\n  // Think out loud as you go!\n};\n\n/** \n * @param {number} num\n * @return {void}\n */\nMedianFinder.prototype.addNum = function(num) {\n  // Think out loud as you go!\n};\n\n/**\n * @return {number}\n */\nMedianFinder.prototype.findMedian = function() {\n  // Think out loud as you go!\n};\n",
+    "c": "// C class-style MedianFinder tests are not supported in this runner yet.\n",
+    "cpp": "class MedianFinder {\npublic:\n    MedianFinder() {\n        // Think out loud as you go!\n    }\n\n    void addNum(int num) {\n        // Think out loud as you go!\n    }\n\n    double findMedian() {\n        // Think out loud as you go!\n        return 0.0;\n    }\n};\n",
+    "java": "class MedianFinder {\n    public MedianFinder() {\n        // Think out loud as you go!\n    }\n\n    public void addNum(int num) {\n        // Think out loud as you go!\n    }\n\n    public double findMedian() {\n        // Think out loud as you go!\n        return 0.0;\n    }\n}\n"
+  }
+}

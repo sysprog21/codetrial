@@ -1,0 +1,75 @@
+{
+  "kind": "function",
+  "entry": "removeDuplicates",
+  "checker": "exact",
+  "outputPrefixParam": 0,
+  "cases": [
+    {
+      "label": "trim triple to two",
+      "input": [
+        [
+          1,
+          1,
+          1,
+          2,
+          2,
+          3
+        ]
+      ],
+      "expected": [
+        1,
+        1,
+        2,
+        2,
+        3
+      ]
+    },
+    {
+      "label": "mixed duplicate runs",
+      "input": [
+        [
+          0,
+          0,
+          1,
+          1,
+          1,
+          1,
+          2,
+          3,
+          3
+        ]
+      ],
+      "expected": [
+        0,
+        0,
+        1,
+        1,
+        2,
+        3,
+        3
+      ]
+    },
+    {
+      "label": "single repeated value",
+      "input": [
+        [
+          5,
+          5,
+          5,
+          5
+        ]
+      ],
+      "expected": [
+        5,
+        5
+      ]
+    }
+  ],
+  "paramNames": [
+    "nums"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "integer"
+}

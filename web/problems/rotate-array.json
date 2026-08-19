@@ -1,0 +1,36 @@
+{
+  "id": "rotate-array",
+  "title": "Rotate Array",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Math",
+    "Two Pointers"
+  ],
+  "statement": [
+    "Given an integer array nums, rotate it to the right by k steps in place.",
+    "After rotation, each element moves k positions to the right, wrapping around to the front as needed."
+  ],
+  "examples": [
+    {
+      "input": "nums = [1,2,3,4,5,6,7], k = 3",
+      "output": "[5,6,7,1,2,3,4]"
+    },
+    {
+      "input": "nums = [-1,-100,3,99], k = 2",
+      "output": "[3,99,-1,-100]"
+    }
+  ],
+  "constraints": [
+    "1 <= nums.length <= 10^5",
+    "-2^31 <= nums[i] <= 2^31 - 1",
+    "0 <= k <= 10^5"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def rotate(self, nums: list[int], k: int) -> None:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} nums\n * @param {number} k\n * @return {void}\n */\nfunction rotate(nums, k) {\n  // Think out loud as you go!\n}\n",
+    "c": "void rotate(int* nums, int numsSize, int k) {\n    // Think out loud as you go!\n}\n",
+    "cpp": "class Solution {\npublic:\n    void rotate(vector<int>& nums, int k) {\n        // Think out loud as you go!\n    }\n};\n",
+    "java": "class Solution {\n    public void rotate(int[] nums, int k) {\n        // Think out loud as you go!\n    }\n}\n"
+  }
+}

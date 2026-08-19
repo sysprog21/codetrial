@@ -1,0 +1,38 @@
+{
+  "id": "valid-palindrome",
+  "title": "Valid Palindrome",
+  "difficulty": "Easy",
+  "topics": [
+    "Two Pointers",
+    "String"
+  ],
+  "statement": [
+    "Given a string, determine whether it reads the same forward and backward after ignoring non-alphanumeric characters and letter case.",
+    "Digits and letters both count as comparable characters."
+  ],
+  "examples": [
+    {
+      "input": "s = \"A man, a plan, a canal: Panama\"",
+      "output": "true"
+    },
+    {
+      "input": "s = \"race a car\"",
+      "output": "false"
+    },
+    {
+      "input": "s = \" \"",
+      "output": "true"
+    }
+  ],
+  "constraints": [
+    "1 <= s.length <= 2 * 10^5",
+    "s consists of printable ASCII characters."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def isPalindrome(self, s: str) -> bool:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} s\n * @return {boolean}\n */\nfunction isPalindrome(s) {\n  // Think out loud as you go!\n}\n",
+    "c": "bool isPalindrome(char* s) {\n    // Think out loud as you go!\n    return false;\n}\n",
+    "cpp": "class Solution {\npublic:\n    bool isPalindrome(string s) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+    "java": "class Solution {\n    public boolean isPalindrome(String s) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+  }
+}

@@ -1,0 +1,126 @@
+{
+  "kind": "function",
+  "entry": "findMinArrowShots",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "overlapping clusters",
+      "input": [
+        [
+          [
+            10,
+            16
+          ],
+          [
+            2,
+            8
+          ],
+          [
+            1,
+            6
+          ],
+          [
+            7,
+            12
+          ]
+        ]
+      ],
+      "expected": 2
+    },
+    {
+      "label": "no overlaps",
+      "input": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            5,
+            6
+          ],
+          [
+            7,
+            8
+          ]
+        ]
+      ],
+      "expected": 4
+    },
+    {
+      "label": "touching endpoints share arrow",
+      "input": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            4,
+            5
+          ]
+        ]
+      ],
+      "expected": 2
+    },
+    {
+      "label": "nested balloons",
+      "input": [
+        [
+          [
+            1,
+            10
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            4,
+            5
+          ]
+        ]
+      ],
+      "expected": 2
+    },
+    {
+      "label": "negative coordinates",
+      "input": [
+        [
+          [
+            -3,
+            -1
+          ],
+          [
+            -2,
+            2
+          ],
+          [
+            3,
+            4
+          ]
+        ]
+      ],
+      "expected": 2
+    }
+  ],
+  "paramNames": [
+    "points"
+  ],
+  "paramTypes": [
+    "integer[][]"
+  ],
+  "returnType": "integer"
+}

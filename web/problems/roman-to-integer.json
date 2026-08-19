@@ -1,0 +1,40 @@
+{
+  "id": "roman-to-integer",
+  "title": "Roman to Integer",
+  "difficulty": "Easy",
+  "topics": [
+    "Hash Table",
+    "Math",
+    "String"
+  ],
+  "statement": [
+    "Given a valid Roman numeral, convert it to its integer value.",
+    "Roman symbols normally add from left to right, but a smaller symbol before a larger one subtracts instead."
+  ],
+  "examples": [
+    {
+      "input": "s = \"III\"",
+      "output": "3"
+    },
+    {
+      "input": "s = \"LVIII\"",
+      "output": "58"
+    },
+    {
+      "input": "s = \"MCMXCIV\"",
+      "output": "1994"
+    }
+  ],
+  "constraints": [
+    "1 <= s.length <= 15",
+    "s contains only I, V, X, L, C, D, and M.",
+    "s is a valid Roman numeral in the range 1 to 3999."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def romanToInt(self, s: str) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} s\n * @return {number}\n */\nfunction romanToInt(s) {\n  // Think out loud as you go!\n}\n",
+    "c": "int romanToInt(char* s) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int romanToInt(string s) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int romanToInt(String s) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

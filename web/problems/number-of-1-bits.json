@@ -1,0 +1,37 @@
+{
+  "id": "number-of-1-bits",
+  "title": "Number of 1 Bits",
+  "difficulty": "Easy",
+  "topics": [
+    "Divide and Conquer",
+    "Bit Manipulation"
+  ],
+  "statement": [
+    "Given a positive integer n, return how many 1 bits are present in its binary representation.",
+    "The input is treated as a fixed-width binary integer."
+  ],
+  "examples": [
+    {
+      "input": "n = 11",
+      "output": "3"
+    },
+    {
+      "input": "n = 128",
+      "output": "1"
+    },
+    {
+      "input": "n = 2147483645",
+      "output": "30"
+    }
+  ],
+  "constraints": [
+    "1 <= n <= 2^31 - 1"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def hammingWeight(self, n: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number} n\n * @return {number}\n */\nfunction hammingWeight(n) {\n  // Think out loud as you go!\n}\n",
+    "c": "int hammingWeight(int n) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int hammingWeight(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int hammingWeight(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

@@ -1,0 +1,118 @@
+{
+  "kind": "class",
+  "className": "RandomizedSet",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "sample singleton random",
+      "input": [
+        [
+          "RandomizedSet",
+          "insert",
+          "remove",
+          "insert",
+          "remove",
+          "getRandom",
+          "insert",
+          "getRandom"
+        ],
+        [
+          [],
+          [
+            1
+          ],
+          [
+            2
+          ],
+          [
+            2
+          ],
+          [
+            1
+          ],
+          [],
+          [
+            2
+          ],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        true,
+        false,
+        true,
+        true,
+        2,
+        false,
+        2
+      ]
+    },
+    {
+      "label": "duplicate insert and remove",
+      "input": [
+        [
+          "RandomizedSet",
+          "insert",
+          "insert",
+          "remove",
+          "remove"
+        ],
+        [
+          [],
+          [
+            5
+          ],
+          [
+            5
+          ],
+          [
+            5
+          ],
+          [
+            5
+          ]
+        ]
+      ],
+      "expected": [
+        null,
+        true,
+        false,
+        true,
+        false
+      ]
+    },
+    {
+      "label": "removed value is not random",
+      "input": [
+        [
+          "RandomizedSet",
+          "insert",
+          "insert",
+          "remove",
+          "getRandom"
+        ],
+        [
+          [],
+          [
+            1
+          ],
+          [
+            2
+          ],
+          [
+            1
+          ],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        true,
+        true,
+        true,
+        2
+      ]
+    }
+  ]
+}

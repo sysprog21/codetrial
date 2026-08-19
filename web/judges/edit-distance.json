@@ -1,0 +1,56 @@
+{
+  "kind": "function",
+  "entry": "minDistance",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "horse to ros",
+      "input": [
+        "horse",
+        "ros"
+      ],
+      "expected": 3
+    },
+    {
+      "label": "intention to execution",
+      "input": [
+        "intention",
+        "execution"
+      ],
+      "expected": 5
+    },
+    {
+      "label": "empty source",
+      "input": [
+        "",
+        "abc"
+      ],
+      "expected": 3
+    },
+    {
+      "label": "same word",
+      "input": [
+        "same",
+        "same"
+      ],
+      "expected": 0
+    },
+    {
+      "label": "replacement beats delete insert",
+      "input": [
+        "abc",
+        "adc"
+      ],
+      "expected": 1
+    }
+  ],
+  "paramNames": [
+    "word1",
+    "word2"
+  ],
+  "paramTypes": [
+    "string",
+    "string"
+  ],
+  "returnType": "integer"
+}

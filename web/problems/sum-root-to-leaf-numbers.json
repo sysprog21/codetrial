@@ -1,0 +1,36 @@
+{
+  "id": "sum-root-to-leaf-numbers",
+  "title": "Sum Root to Leaf Numbers",
+  "difficulty": "Medium",
+  "topics": [
+    "Tree",
+    "DFS",
+    "Binary Tree"
+  ],
+  "statement": [
+    "Each root-to-leaf path in a binary tree forms a base-10 number by reading node values from top to bottom.",
+    "Return the sum of all numbers formed by the tree's root-to-leaf paths."
+  ],
+  "examples": [
+    {
+      "input": "root = [1,2,3]",
+      "output": "25"
+    },
+    {
+      "input": "root = [4,9,0,5,1]",
+      "output": "1026"
+    }
+  ],
+  "constraints": [
+    "1 <= number of nodes <= 1000",
+    "0 <= Node.val <= 9",
+    "Tree depth is at most 10."
+  ],
+  "starterCode": {
+    "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def sumNumbers(self, root: Optional[TreeNode]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *     this.val = (val===undefined ? 0 : val)\n *     this.left = (left===undefined ? null : left)\n *     this.right = (right===undefined ? null : right)\n * }\n */\n/**\n * @param {TreeNode} root\n * @return {number}\n */\nfunction sumNumbers(root) {\n  // Think out loud as you go!\n}\n",
+    "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nint sumNumbers(struct TreeNode* root) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    int sumNumbers(TreeNode* root) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public int sumNumbers(TreeNode root) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

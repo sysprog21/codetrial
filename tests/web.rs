@@ -707,7 +707,7 @@ async fn static_home_markup_matches_frontend_contract() {
     // Every problem in the bank must reach the lobby. Read the titles from the
     // bank rather than restating them, so adding a problem cannot pass here by
     // being forgotten in two places at once.
-    let problems = static_export_json("web/problems.js", "export const problems = ");
+    let problems = browser_problem_bank();
     for problem in problems.as_array().unwrap() {
         let title = problem["title"].as_str().unwrap();
         assert!(
@@ -884,8 +884,8 @@ fn static_interview_script_reuses_candidate_identity_across_reload() {
 
 #[test]
 fn static_problem_bank_and_judges_cover_each_problem() {
-    let problems = static_export_json("web/problems.js", "export const problems = ");
-    let judges = static_export_json("web/judges.js", "export const judges = ");
+    let problems = browser_problem_bank();
+    let judges = browser_judges();
     let problems = problems.as_array().unwrap();
     let judges = judges.as_object().unwrap();
 
@@ -1274,13 +1274,13 @@ fn static_problem_bank_and_judges_cover_each_problem() {
 /// silently giving the agent a different problem than the candidate sees.
 #[test]
 fn rust_problem_bank_matches_the_browser_problem_bank() {
-    let browser = static_export_json("web/problems.js", "export const problems = ");
+    let browser = browser_problem_bank();
     let browser = browser.as_array().unwrap();
 
     assert_eq!(
         browser.len(),
         codetrial::agent::PROBLEMS.len(),
-        "problem count differs between web/problems.js and src/agent.rs"
+        "problem count differs between web/problems/ and src/agent.rs"
     );
 
     // Matched by id, not position: the browser list is in lobby display order.
@@ -1288,7 +1288,7 @@ fn rust_problem_bank_matches_the_browser_problem_bank() {
         let entry = browser
             .iter()
             .find(|entry| entry["id"].as_str() == Some(problem.id))
-            .unwrap_or_else(|| panic!("web/problems.js is missing {}", problem.id));
+            .unwrap_or_else(|| panic!("web/problems/ is missing {}", problem.id));
         assert_eq!(
             entry["title"].as_str(),
             Some(problem.title),
@@ -3007,17 +3007,39 @@ async fn spawn_mock_github() -> (String, tokio::task::JoinHandle<Result<(), std:
     (format!("http://{addr}"), server)
 }
 
-fn static_export_json(path: &str, prefix: &str) -> Value {
-    let source = fs::read_to_string(path).unwrap();
-    let mut json = source
-        .strip_prefix(prefix)
-        .unwrap_or_else(|| panic!("{path} missing export prefix"))
-        .trim();
-    if let Some((data, _)) = json.split_once("\n\nexport ") {
-        json = data.trim();
-    }
-    let json = json.trim_end_matches(';');
-    serde_json::from_str(json).unwrap_or_else(|error| panic!("{path} should parse: {error}"))
+/// The bank as the browser will see it, assembled from the per-problem files
+/// under `web/` rather than from `problem-bank/`.
+///
+/// Reading the generated side on purpose. `gen-problems.py --check` already
+/// proves the two agree, and reading the source here would make these tests
+/// pass on a tree where the files the browser actually fetches were never
+/// regenerated.
+fn browser_problem_bank() -> Value {
+    let mut problems: Vec<Value> = read_json_dir("web/problems").into_values().collect();
+    problems.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    Value::Array(problems)
+}
+
+fn browser_judges() -> Value {
+    Value::Object(read_json_dir("web/judges").into_iter().collect())
+}
+
+fn read_json_dir(path: &str) -> std::collections::BTreeMap<String, Value> {
+    fs::read_dir(path)
+        .unwrap_or_else(|error| panic!("{path} should be generated: {error}"))
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .map(|path| {
+            let id = path.file_stem().unwrap().to_str().unwrap().to_string();
+            let text = fs::read_to_string(&path).unwrap();
+            let value = serde_json::from_str(&text)
+                .unwrap_or_else(|error| panic!("{} should parse: {error}", path.display()));
+            (id, value)
+        })
+        .collect()
 }
 
 fn source_block<'a>(source: &'a str, start: &str, end: &str) -> &'a str {

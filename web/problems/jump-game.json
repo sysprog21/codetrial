@@ -1,0 +1,35 @@
+{
+  "id": "jump-game",
+  "title": "Jump Game",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Dynamic Programming",
+    "Greedy"
+  ],
+  "statement": [
+    "Given an array nums where nums[i] is the farthest jump length from index i, decide whether you can reach the last index from index 0.",
+    "You may choose any jump length from 0 up to nums[i] at each position."
+  ],
+  "examples": [
+    {
+      "input": "nums = [2,3,1,1,4]",
+      "output": "true"
+    },
+    {
+      "input": "nums = [3,2,1,0,4]",
+      "output": "false"
+    }
+  ],
+  "constraints": [
+    "1 <= nums.length <= 10^4",
+    "0 <= nums[i] <= 10^5"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def canJump(self, nums: list[int]) -> bool:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} nums\n * @return {boolean}\n */\nfunction canJump(nums) {\n  // Think out loud as you go!\n}\n",
+    "c": "bool canJump(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return false;\n}\n",
+    "cpp": "class Solution {\npublic:\n    bool canJump(vector<int>& nums) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+    "java": "class Solution {\n    public boolean canJump(int[] nums) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+  }
+}

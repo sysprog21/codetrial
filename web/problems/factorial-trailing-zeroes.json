@@ -1,0 +1,36 @@
+{
+  "id": "factorial-trailing-zeroes",
+  "title": "Factorial Trailing Zeroes",
+  "difficulty": "Medium",
+  "topics": [
+    "Math"
+  ],
+  "statement": [
+    "Given an integer n, return the number of trailing zeroes in n factorial.",
+    "The answer should be computed without building the full factorial value."
+  ],
+  "examples": [
+    {
+      "input": "n = 3",
+      "output": "0"
+    },
+    {
+      "input": "n = 5",
+      "output": "1"
+    },
+    {
+      "input": "n = 0",
+      "output": "0"
+    }
+  ],
+  "constraints": [
+    "0 <= n <= 10^4"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def trailingZeroes(self, n: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number} n\n * @return {number}\n */\nfunction trailingZeroes(n) {\n  // Think out loud as you go!\n}\n",
+    "c": "int trailingZeroes(int n) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int trailingZeroes(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int trailingZeroes(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

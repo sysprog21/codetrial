@@ -1,0 +1,40 @@
+{
+  "id": "contains-duplicate-ii",
+  "title": "Contains Duplicate II",
+  "difficulty": "Easy",
+  "topics": [
+    "Array",
+    "Hash Table",
+    "Sliding Window"
+  ],
+  "statement": [
+    "Given an integer array nums and an integer k, return whether two equal values appear at indices whose distance is at most k.",
+    "The pair must use different indices."
+  ],
+  "examples": [
+    {
+      "input": "nums = [1,2,3,1], k = 3",
+      "output": "true"
+    },
+    {
+      "input": "nums = [1,0,1,1], k = 1",
+      "output": "true"
+    },
+    {
+      "input": "nums = [1,2,3,1,2,3], k = 2",
+      "output": "false"
+    }
+  ],
+  "constraints": [
+    "1 <= nums.length <= 10^5",
+    "-10^9 <= nums[i] <= 10^9",
+    "0 <= k <= 10^5"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def containsNearbyDuplicate(self, nums: list[int], k: int) -> bool:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} nums\n * @param {number} k\n * @return {boolean}\n */\nfunction containsNearbyDuplicate(nums, k) {\n  // Think out loud as you go!\n}\n",
+    "c": "bool containsNearbyDuplicate(int* nums, int numsSize, int k) {\n    // Think out loud as you go!\n    return false;\n}\n",
+    "cpp": "class Solution {\npublic:\n    bool containsNearbyDuplicate(vector<int>& nums, int k) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+    "java": "class Solution {\n    public boolean containsNearbyDuplicate(int[] nums, int k) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+  }
+}

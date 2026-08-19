@@ -1,0 +1,85 @@
+{
+  "kind": "function",
+  "entry": "hasPathSum",
+  "checker": "exact",
+  "argTypes": [
+    "binaryTree",
+    null
+  ],
+  "cases": [
+    {
+      "label": "target reaches leaf",
+      "input": [
+        [
+          5,
+          4,
+          8,
+          11,
+          null,
+          13,
+          4,
+          7,
+          2,
+          null,
+          null,
+          null,
+          1
+        ],
+        22
+      ],
+      "expected": true
+    },
+    {
+      "label": "no root to leaf target",
+      "input": [
+        [
+          1,
+          2,
+          3
+        ],
+        5
+      ],
+      "expected": false
+    },
+    {
+      "label": "empty tree",
+      "input": [
+        [],
+        0
+      ],
+      "expected": false
+    },
+    {
+      "label": "prefix sum is not enough",
+      "input": [
+        [
+          1,
+          2
+        ],
+        1
+      ],
+      "expected": false
+    },
+    {
+      "label": "negative right path",
+      "input": [
+        [
+          -2,
+          null,
+          -3
+        ],
+        -5
+      ],
+      "expected": true
+    }
+  ],
+  "paramNames": [
+    "root",
+    "targetSum"
+  ],
+  "paramTypes": [
+    "TreeNode",
+    "integer"
+  ],
+  "returnType": "boolean"
+}

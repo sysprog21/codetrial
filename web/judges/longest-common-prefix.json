@@ -1,0 +1,66 @@
+{
+  "kind": "function",
+  "entry": "longestCommonPrefix",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "shared short prefix",
+      "input": [
+        [
+          "flower",
+          "flow",
+          "flight"
+        ]
+      ],
+      "expected": "fl"
+    },
+    {
+      "label": "no common first letter",
+      "input": [
+        [
+          "dog",
+          "racecar",
+          "car"
+        ]
+      ],
+      "expected": ""
+    },
+    {
+      "label": "single string",
+      "input": [
+        [
+          "alone"
+        ]
+      ],
+      "expected": "alone"
+    },
+    {
+      "label": "empty string in list",
+      "input": [
+        [
+          "",
+          "prefix"
+        ]
+      ],
+      "expected": ""
+    },
+    {
+      "label": "prefix is whole shortest word",
+      "input": [
+        [
+          "inter",
+          "internet",
+          "internal"
+        ]
+      ],
+      "expected": "inter"
+    }
+  ],
+  "paramNames": [
+    "strs"
+  ],
+  "paramTypes": [
+    "string[]"
+  ],
+  "returnType": "string"
+}

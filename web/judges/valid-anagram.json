@@ -1,0 +1,56 @@
+{
+  "kind": "function",
+  "entry": "isAnagram",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "letters reordered",
+      "input": [
+        "anagram",
+        "nagaram"
+      ],
+      "expected": true
+    },
+    {
+      "label": "different letters",
+      "input": [
+        "rat",
+        "car"
+      ],
+      "expected": false
+    },
+    {
+      "label": "length mismatch",
+      "input": [
+        "ab",
+        "a"
+      ],
+      "expected": false
+    },
+    {
+      "label": "same letters wrong multiplicity",
+      "input": [
+        "aacc",
+        "ccac"
+      ],
+      "expected": false
+    },
+    {
+      "label": "single repeated letter",
+      "input": [
+        "aaa",
+        "aaa"
+      ],
+      "expected": true
+    }
+  ],
+  "paramNames": [
+    "s",
+    "t"
+  ],
+  "paramTypes": [
+    "string",
+    "string"
+  ],
+  "returnType": "boolean"
+}

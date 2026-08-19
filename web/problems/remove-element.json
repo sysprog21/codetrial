@@ -1,0 +1,35 @@
+{
+  "id": "remove-element",
+  "title": "Remove Element",
+  "difficulty": "Easy",
+  "topics": [
+    "Array",
+    "Two Pointers"
+  ],
+  "statement": [
+    "Given an integer array nums and a value val, remove every occurrence of val in place.",
+    "Return the number of remaining elements. The first returned-length items of nums must contain exactly those remaining elements; their order does not matter."
+  ],
+  "examples": [
+    {
+      "input": "nums = [3,2,2,3], val = 3",
+      "output": "2, nums starts with [2,2]"
+    },
+    {
+      "input": "nums = [0,1,2,2,3,0,4,2], val = 2",
+      "output": "5, nums starts with [0,1,3,0,4] in any order"
+    }
+  ],
+  "constraints": [
+    "0 <= nums.length <= 100",
+    "0 <= nums[i] <= 50",
+    "0 <= val <= 100"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def removeElement(self, nums: list[int], val: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} nums\n * @param {number} val\n * @return {number}\n */\nfunction removeElement(nums, val) {\n  // Think out loud as you go!\n}\n",
+    "c": "int removeElement(int* nums, int numsSize, int val) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int removeElement(vector<int>& nums, int val) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int removeElement(int[] nums, int val) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

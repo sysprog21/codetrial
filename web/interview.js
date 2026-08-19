@@ -1,4 +1,4 @@
-import { getProblem } from "./problems.js";
+import { loadProblem } from "./problem-data.js";
 import {
   MIC_CONFIRM_FRAMES,
   mediaReadiness,
@@ -54,7 +54,18 @@ const AUDIO_OUTPUT_KEY = "codetrial:audioOutputId";
 const MEET_PRESENTATION_KEY = "codetrial:meetPresentation";
 const INTEGRITY_HEARTBEAT_MS = 5000;
 const params = new URLSearchParams(window.location.search);
-const problem = getProblem(params.get("problem"));
+// Top-level await: the whole module is written against a known problem, and
+// interview.html loads it as a module, so waiting here beats threading a
+// promise through every consumer below.
+//
+// The failure has to be said out loud. Every consumer below reads `problem`
+// unconditionally, so an unreachable bank would otherwise leave the page on its
+// "Loading interview..." heading forever with a console error nobody sees.
+const problem = await loadProblem(params.get("problem")).catch((error) => {
+  const title = document.querySelector("#problem-title");
+  if (title) title.textContent = "This interview could not load its problem. Reload the page.";
+  throw error;
+});
 const durationMin = clamp(Number.parseInt(params.get("duration") || "45", 10) || 45, 10, 90);
 const state = {
   codeByLanguage: { ...problem.starterCode },

@@ -1,0 +1,35 @@
+{
+  "id": "minimum-path-sum",
+  "title": "Minimum Path Sum",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Dynamic Programming",
+    "Matrix"
+  ],
+  "statement": [
+    "Given a grid of non-negative numbers, find the minimum path sum from the top-left cell to the bottom-right cell.",
+    "Each move may go only right or down."
+  ],
+  "examples": [
+    {
+      "input": "grid = [[1,3,1],[1,5,1],[4,2,1]]",
+      "output": "7"
+    },
+    {
+      "input": "grid = [[1,2,3],[4,5,6]]",
+      "output": "12"
+    }
+  ],
+  "constraints": [
+    "1 <= m, n <= 200",
+    "0 <= grid[i][j] <= 200"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def minPathSum(self, grid: list[list[int]]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[][]} grid\n * @return {number}\n */\nfunction minPathSum(grid) {\n  // Think out loud as you go!\n}\n",
+    "c": "int minPathSum(int** grid, int gridSize, int* gridColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int minPathSum(vector<vector<int>>& grid) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int minPathSum(int[][] grid) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

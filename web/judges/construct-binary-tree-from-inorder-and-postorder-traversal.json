@@ -1,0 +1,114 @@
+{
+  "kind": "function",
+  "entry": "buildTree",
+  "checker": "exact",
+  "outputType": "binaryTree",
+  "cases": [
+    {
+      "label": "balanced right subtree",
+      "input": [
+        [
+          9,
+          3,
+          15,
+          20,
+          7
+        ],
+        [
+          9,
+          15,
+          7,
+          20,
+          3
+        ]
+      ],
+      "expected": [
+        3,
+        9,
+        20,
+        null,
+        null,
+        15,
+        7
+      ]
+    },
+    {
+      "label": "single negative node",
+      "input": [
+        [
+          -1
+        ],
+        [
+          -1
+        ]
+      ],
+      "expected": [
+        -1
+      ]
+    },
+    {
+      "label": "right skew",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          4,
+          3,
+          2,
+          1
+        ]
+      ],
+      "expected": [
+        1,
+        null,
+        2,
+        null,
+        3,
+        null,
+        4
+      ]
+    },
+    {
+      "label": "mixed child positions",
+      "input": [
+        [
+          4,
+          2,
+          5,
+          1,
+          6,
+          3
+        ],
+        [
+          4,
+          5,
+          2,
+          6,
+          3,
+          1
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    }
+  ],
+  "paramNames": [
+    "inorder",
+    "postorder"
+  ],
+  "paramTypes": [
+    "integer[]",
+    "integer[]"
+  ],
+  "returnType": "TreeNode"
+}

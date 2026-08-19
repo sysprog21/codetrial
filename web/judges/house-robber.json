@@ -1,0 +1,71 @@
+{
+  "kind": "function",
+  "entry": "rob",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "sample alternating",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          1
+        ]
+      ],
+      "expected": 4
+    },
+    {
+      "label": "sample with middle peak",
+      "input": [
+        [
+          2,
+          7,
+          9,
+          3,
+          1
+        ]
+      ],
+      "expected": 12
+    },
+    {
+      "label": "single house",
+      "input": [
+        [
+          5
+        ]
+      ],
+      "expected": 5
+    },
+    {
+      "label": "all zeroes",
+      "input": [
+        [
+          0,
+          0,
+          0
+        ]
+      ],
+      "expected": 0
+    },
+    {
+      "label": "greedy local choice fails",
+      "input": [
+        [
+          2,
+          1,
+          1,
+          2
+        ]
+      ],
+      "expected": 4
+    }
+  ],
+  "paramNames": [
+    "nums"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "integer"
+}

@@ -1,0 +1,41 @@
+{
+  "id": "substring-with-concatenation-of-all-words",
+  "title": "Substring with Concatenation of All Words",
+  "difficulty": "Hard",
+  "topics": [
+    "Hash Table",
+    "String",
+    "Sliding Window"
+  ],
+  "statement": [
+    "Given a string and a list of equal-length words, return every starting index where a substring is formed by concatenating each word exactly once.",
+    "The words may be used in any order, but every listed word and its multiplicity must be used."
+  ],
+  "examples": [
+    {
+      "input": "s = \"barfoothefoobarman\", words = [\"foo\",\"bar\"]",
+      "output": "[0,9]"
+    },
+    {
+      "input": "s = \"wordgoodgoodgoodbestword\", words = [\"word\",\"good\",\"best\",\"word\"]",
+      "output": "[]"
+    },
+    {
+      "input": "s = \"barfoofoobarthefoobarman\", words = [\"bar\",\"foo\",\"the\"]",
+      "output": "[6,9,12]"
+    }
+  ],
+  "constraints": [
+    "1 <= s.length <= 10^4",
+    "1 <= words.length <= 5000",
+    "1 <= words[i].length <= 30",
+    "s and words[i] consist of lowercase English letters."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def findSubstring(self, s: str, words: list[str]) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} s\n * @param {string[]} words\n * @return {number[]}\n */\nfunction findSubstring(s, words) {\n  // Think out loud as you go!\n}\n",
+    "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* findSubstring(char* s, char** words, int wordsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+    "cpp": "class Solution {\npublic:\n    vector<int> findSubstring(string s, vector<string>& words) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+    "java": "class Solution {\n    public List<Integer> findSubstring(String s, String[] words) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "kind": "function",
+  "entry": "removeNthFromEnd",
+  "checker": "exact",
+  "argTypes": [
+    "linkedList",
+    null
+  ],
+  "outputType": "linkedList",
+  "cases": [
+    {
+      "label": "remove middle from end",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        2
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        5
+      ]
+    },
+    {
+      "label": "remove only node",
+      "input": [
+        [
+          1
+        ],
+        1
+      ],
+      "expected": []
+    },
+    {
+      "label": "remove tail",
+      "input": [
+        [
+          1,
+          2
+        ],
+        1
+      ],
+      "expected": [
+        1
+      ]
+    },
+    {
+      "label": "remove head",
+      "input": [
+        [
+          1,
+          2,
+          3
+        ],
+        3
+      ],
+      "expected": [
+        2,
+        3
+      ]
+    }
+  ],
+  "paramNames": [
+    "head",
+    "n"
+  ],
+  "paramTypes": [
+    "ListNode",
+    "integer"
+  ],
+  "returnType": "ListNode"
+}

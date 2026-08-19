@@ -1,0 +1,40 @@
+{
+  "id": "coin-change",
+  "title": "Coin Change",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Dynamic Programming",
+    "Breadth-First Search"
+  ],
+  "statement": [
+    "Given coin denominations and an amount, return the fewest coins needed to make that amount.",
+    "Return -1 when no combination of coins can make the amount."
+  ],
+  "examples": [
+    {
+      "input": "coins = [1,2,5], amount = 11",
+      "output": "3"
+    },
+    {
+      "input": "coins = [2], amount = 3",
+      "output": "-1"
+    },
+    {
+      "input": "coins = [1], amount = 0",
+      "output": "0"
+    }
+  ],
+  "constraints": [
+    "1 <= coins.length <= 12",
+    "1 <= coins[i] <= 2^31 - 1",
+    "0 <= amount <= 10^4"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def coinChange(self, coins: list[int], amount: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} coins\n * @param {number} amount\n * @return {number}\n */\nfunction coinChange(coins, amount) {\n  // Think out loud as you go!\n}\n",
+    "c": "int coinChange(int* coins, int coinsSize, int amount) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int coinChange(vector<int>& coins, int amount) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int coinChange(int[] coins, int amount) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "id": "reverse-words-in-a-string",
+  "title": "Reverse Words in a String",
+  "difficulty": "Medium",
+  "topics": [
+    "String",
+    "Two Pointers"
+  ],
+  "statement": [
+    "Given a string, return the words in reverse order separated by a single space.",
+    "Trim leading and trailing spaces, and collapse multiple spaces between words in the result."
+  ],
+  "examples": [
+    {
+      "input": "s = \"the sky is blue\"",
+      "output": "\"blue is sky the\""
+    },
+    {
+      "input": "s = \"  hello world  \"",
+      "output": "\"world hello\""
+    },
+    {
+      "input": "s = \"a good   example\"",
+      "output": "\"example good a\""
+    }
+  ],
+  "constraints": [
+    "1 <= s.length <= 10^4",
+    "s contains English letters, digits, and spaces.",
+    "There is at least one word in s."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def reverseWords(self, s: str) -> str:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} s\n * @return {string}\n */\nfunction reverseWords(s) {\n  // Think out loud as you go!\n}\n",
+    "c": "char* reverseWords(char* s) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
+    "cpp": "class Solution {\npublic:\n    string reverseWords(string s) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
+    "java": "class Solution {\n    public String reverseWords(String s) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
+  }
+}

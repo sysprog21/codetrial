@@ -1,0 +1,56 @@
+{
+  "kind": "function",
+  "entry": "canConstruct",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "missing letter",
+      "input": [
+        "a",
+        "b"
+      ],
+      "expected": false
+    },
+    {
+      "label": "insufficient multiplicity",
+      "input": [
+        "aa",
+        "ab"
+      ],
+      "expected": false
+    },
+    {
+      "label": "enough repeated letters",
+      "input": [
+        "aa",
+        "aab"
+      ],
+      "expected": true
+    },
+    {
+      "label": "uses all letters in any order",
+      "input": [
+        "aabb",
+        "bbaa"
+      ],
+      "expected": true
+    },
+    {
+      "label": "magazine too short despite matches",
+      "input": [
+        "abc",
+        "ab"
+      ],
+      "expected": false
+    }
+  ],
+  "paramNames": [
+    "ransomNote",
+    "magazine"
+  ],
+  "paramTypes": [
+    "string",
+    "string"
+  ],
+  "returnType": "boolean"
+}

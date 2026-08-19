@@ -1,0 +1,83 @@
+{
+  "kind": "function",
+  "entry": "findKthLargest",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "sample second largest",
+      "input": [
+        [
+          3,
+          2,
+          1,
+          5,
+          6,
+          4
+        ],
+        2
+      ],
+      "expected": 5
+    },
+    {
+      "label": "duplicates count",
+      "input": [
+        [
+          3,
+          2,
+          3,
+          1,
+          2,
+          4,
+          5,
+          5,
+          6
+        ],
+        4
+      ],
+      "expected": 4
+    },
+    {
+      "label": "single value",
+      "input": [
+        [
+          1
+        ],
+        1
+      ],
+      "expected": 1
+    },
+    {
+      "label": "k is length",
+      "input": [
+        [
+          2,
+          1
+        ],
+        2
+      ],
+      "expected": 1
+    },
+    {
+      "label": "negative values",
+      "input": [
+        [
+          -1,
+          -1,
+          -2,
+          -3
+        ],
+        2
+      ],
+      "expected": -1
+    }
+  ],
+  "paramNames": [
+    "nums",
+    "k"
+  ],
+  "paramTypes": [
+    "integer[]",
+    "integer"
+  ],
+  "returnType": "integer"
+}

@@ -1,0 +1,101 @@
+{
+  "kind": "function",
+  "entry": "addTwoNumbers",
+  "checker": "exact",
+  "argTypes": [
+    "linkedList",
+    "linkedList"
+  ],
+  "outputType": "linkedList",
+  "cases": [
+    {
+      "label": "same length with carry",
+      "input": [
+        [
+          2,
+          4,
+          3
+        ],
+        [
+          5,
+          6,
+          4
+        ]
+      ],
+      "expected": [
+        7,
+        0,
+        8
+      ]
+    },
+    {
+      "label": "zero plus zero",
+      "input": [
+        [
+          0
+        ],
+        [
+          0
+        ]
+      ],
+      "expected": [
+        0
+      ]
+    },
+    {
+      "label": "carry extends result",
+      "input": [
+        [
+          9,
+          9,
+          9,
+          9,
+          9,
+          9,
+          9
+        ],
+        [
+          9,
+          9,
+          9,
+          9
+        ]
+      ],
+      "expected": [
+        8,
+        9,
+        9,
+        9,
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "label": "different lengths",
+      "input": [
+        [
+          1,
+          8
+        ],
+        [
+          0
+        ]
+      ],
+      "expected": [
+        1,
+        8
+      ]
+    }
+  ],
+  "paramNames": [
+    "l1",
+    "l2"
+  ],
+  "paramTypes": [
+    "ListNode",
+    "ListNode"
+  ],
+  "returnType": "ListNode"
+}

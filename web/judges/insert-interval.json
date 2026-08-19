@@ -1,0 +1,165 @@
+{
+  "kind": "function",
+  "entry": "insert",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "merge middle overlap",
+      "input": [
+        [
+          [
+            1,
+            3
+          ],
+          [
+            6,
+            9
+          ]
+        ],
+        [
+          2,
+          5
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          5
+        ],
+        [
+          6,
+          9
+        ]
+      ]
+    },
+    {
+      "label": "merge several intervals",
+      "input": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            5
+          ],
+          [
+            6,
+            7
+          ],
+          [
+            8,
+            10
+          ],
+          [
+            12,
+            16
+          ]
+        ],
+        [
+          4,
+          8
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          2
+        ],
+        [
+          3,
+          10
+        ],
+        [
+          12,
+          16
+        ]
+      ]
+    },
+    {
+      "label": "insert before all",
+      "input": [
+        [
+          [
+            3,
+            5
+          ]
+        ],
+        [
+          1,
+          2
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          2
+        ],
+        [
+          3,
+          5
+        ]
+      ]
+    },
+    {
+      "label": "insert after all",
+      "input": [
+        [
+          [
+            1,
+            2
+          ]
+        ],
+        [
+          3,
+          5
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          2
+        ],
+        [
+          3,
+          5
+        ]
+      ]
+    },
+    {
+      "label": "touching endpoints merge",
+      "input": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            5,
+            6
+          ]
+        ],
+        [
+          2,
+          5
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          6
+        ]
+      ]
+    }
+  ],
+  "paramNames": [
+    "intervals",
+    "newInterval"
+  ],
+  "paramTypes": [
+    "integer[][]",
+    "integer[]"
+  ],
+  "returnType": "integer[][]"
+}

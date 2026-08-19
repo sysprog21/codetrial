@@ -1,0 +1,74 @@
+{
+  "kind": "function",
+  "entry": "wordBreak",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "leetcode sample",
+      "input": [
+        "leetcode",
+        [
+          "leet",
+          "code"
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "label": "reuse words",
+      "input": [
+        "applepenapple",
+        [
+          "apple",
+          "pen"
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "label": "missing middle segment",
+      "input": [
+        "catsandog",
+        [
+          "cats",
+          "dog",
+          "sand",
+          "and",
+          "cat"
+        ]
+      ],
+      "expected": false
+    },
+    {
+      "label": "single word",
+      "input": [
+        "a",
+        [
+          "a"
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "label": "prefix greedy fails",
+      "input": [
+        "cars",
+        [
+          "car",
+          "ca",
+          "rs"
+        ]
+      ],
+      "expected": true
+    }
+  ],
+  "paramNames": [
+    "s",
+    "wordDict"
+  ],
+  "paramTypes": [
+    "string",
+    "list<string>"
+  ],
+  "returnType": "boolean"
+}

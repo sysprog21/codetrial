@@ -1,0 +1,35 @@
+{
+  "id": "find-the-index-of-the-first-occurrence-in-a-string",
+  "title": "Find the Index of the First Occurrence in a String",
+  "difficulty": "Easy",
+  "topics": [
+    "Two Pointers",
+    "String",
+    "String Matching"
+  ],
+  "statement": [
+    "Given two strings, return the first index where needle appears in haystack.",
+    "Return -1 if needle is not present."
+  ],
+  "examples": [
+    {
+      "input": "haystack = \"sadbutsad\", needle = \"sad\"",
+      "output": "0"
+    },
+    {
+      "input": "haystack = \"leetcode\", needle = \"leeto\"",
+      "output": "-1"
+    }
+  ],
+  "constraints": [
+    "1 <= haystack.length, needle.length <= 10^4",
+    "haystack and needle consist of lowercase English letters."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def strStr(self, haystack: str, needle: str) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} haystack\n * @param {string} needle\n * @return {number}\n */\nfunction strStr(haystack, needle) {\n  // Think out loud as you go!\n}\n",
+    "c": "int strStr(char* haystack, char* needle) {\n    // Think out loud as you go!\n    return -1;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int strStr(string haystack, string needle) {\n        // Think out loud as you go!\n        return -1;\n    }\n};\n",
+    "java": "class Solution {\n    public int strStr(String haystack, String needle) {\n        // Think out loud as you go!\n        return -1;\n    }\n}\n"
+  }
+}

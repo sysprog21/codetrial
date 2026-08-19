@@ -1,0 +1,49 @@
+{
+  "kind": "function",
+  "entry": "isHappy",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "reaches one",
+      "input": [
+        19
+      ],
+      "expected": true
+    },
+    {
+      "label": "cycle at four",
+      "input": [
+        2
+      ],
+      "expected": false
+    },
+    {
+      "label": "already one",
+      "input": [
+        1
+      ],
+      "expected": true
+    },
+    {
+      "label": "larger happy",
+      "input": [
+        100
+      ],
+      "expected": true
+    },
+    {
+      "label": "larger cycle",
+      "input": [
+        116
+      ],
+      "expected": false
+    }
+  ],
+  "paramNames": [
+    "n"
+  ],
+  "paramTypes": [
+    "integer"
+  ],
+  "returnType": "boolean"
+}

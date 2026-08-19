@@ -1,0 +1,158 @@
+{
+  "kind": "class",
+  "className": "Trie",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "example operations",
+      "input": [
+        [
+          "Trie",
+          "insert",
+          "search",
+          "search",
+          "startsWith",
+          "insert",
+          "search"
+        ],
+        [
+          [],
+          [
+            "apple"
+          ],
+          [
+            "apple"
+          ],
+          [
+            "app"
+          ],
+          [
+            "app"
+          ],
+          [
+            "app"
+          ],
+          [
+            "app"
+          ]
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        true,
+        false,
+        true,
+        null,
+        true
+      ]
+    },
+    {
+      "label": "prefix is not word",
+      "input": [
+        [
+          "Trie",
+          "insert",
+          "startsWith",
+          "search",
+          "insert",
+          "search"
+        ],
+        [
+          [],
+          [
+            "app"
+          ],
+          [
+            "ap"
+          ],
+          [
+            "apple"
+          ],
+          [
+            "apple"
+          ],
+          [
+            "apple"
+          ]
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        true,
+        false,
+        null,
+        true
+      ]
+    },
+    {
+      "label": "shared prefix words",
+      "input": [
+        [
+          "Trie",
+          "insert",
+          "insert",
+          "search",
+          "search",
+          "startsWith"
+        ],
+        [
+          [],
+          [
+            "car"
+          ],
+          [
+            "cat"
+          ],
+          [
+            "car"
+          ],
+          [
+            "cap"
+          ],
+          [
+            "ca"
+          ]
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        null,
+        true,
+        false,
+        true
+      ]
+    },
+    {
+      "label": "missing prefix",
+      "input": [
+        [
+          "Trie",
+          "insert",
+          "startsWith",
+          "search"
+        ],
+        [
+          [],
+          [
+            "dog"
+          ],
+          [
+            "do"
+          ],
+          [
+            "dogs"
+          ]
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        true,
+        false
+      ]
+    }
+  ]
+}

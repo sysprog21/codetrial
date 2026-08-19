@@ -1,0 +1,42 @@
+{
+  "id": "basic-calculator",
+  "title": "Basic Calculator",
+  "difficulty": "Hard",
+  "topics": [
+    "Math",
+    "String",
+    "Stack",
+    "Recursion"
+  ],
+  "statement": [
+    "Given a valid arithmetic expression string s, evaluate it and return its integer value.",
+    "The expression may contain nonnegative integers, '+', '-', parentheses, and spaces."
+  ],
+  "examples": [
+    {
+      "input": "s = \"1 + 1\"",
+      "output": "2"
+    },
+    {
+      "input": "s = \" 2-1 + 2 \"",
+      "output": "3"
+    },
+    {
+      "input": "s = \"(1+(4+5+2)-3)+(6+8)\"",
+      "output": "23"
+    }
+  ],
+  "constraints": [
+    "1 <= s.length <= 3 * 10^5",
+    "s consists of digits, '+', '-', '(', ')', and spaces.",
+    "s is a valid expression.",
+    "Every number and final answer fits in a 32-bit signed integer."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def calculate(self, s: str) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} s\n * @return {number}\n */\nfunction calculate(s) {\n  // Think out loud as you go!\n}\n",
+    "c": "int calculate(char* s) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int calculate(string s) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int calculate(String s) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

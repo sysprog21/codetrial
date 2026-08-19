@@ -1,0 +1,73 @@
+{
+  "kind": "function",
+  "entry": "candy",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "valley needs both sides",
+      "input": [
+        [
+          1,
+          0,
+          2
+        ]
+      ],
+      "expected": 5
+    },
+    {
+      "label": "plateau is not greater",
+      "input": [
+        [
+          1,
+          2,
+          2
+        ]
+      ],
+      "expected": 4
+    },
+    {
+      "label": "long rising then drop",
+      "input": [
+        [
+          1,
+          3,
+          4,
+          5,
+          2
+        ]
+      ],
+      "expected": 11
+    },
+    {
+      "label": "plateau between slopes",
+      "input": [
+        [
+          1,
+          2,
+          87,
+          87,
+          87,
+          2,
+          1
+        ]
+      ],
+      "expected": 13
+    },
+    {
+      "label": "single child",
+      "input": [
+        [
+          5
+        ]
+      ],
+      "expected": 1
+    }
+  ],
+  "paramNames": [
+    "ratings"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "integer"
+}

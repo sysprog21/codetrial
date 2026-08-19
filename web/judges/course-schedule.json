@@ -1,0 +1,92 @@
+{
+  "kind": "function",
+  "entry": "canFinish",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "single prerequisite",
+      "input": [
+        2,
+        [
+          [
+            1,
+            0
+          ]
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "label": "two course cycle",
+      "input": [
+        2,
+        [
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            1
+          ]
+        ]
+      ],
+      "expected": false
+    },
+    {
+      "label": "disconnected courses",
+      "input": [
+        5,
+        [
+          [
+            1,
+            0
+          ],
+          [
+            2,
+            0
+          ],
+          [
+            3,
+            1
+          ]
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "label": "long cycle",
+      "input": [
+        4,
+        [
+          [
+            1,
+            0
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            3,
+            2
+          ],
+          [
+            1,
+            3
+          ]
+        ]
+      ],
+      "expected": false
+    }
+  ],
+  "paramNames": [
+    "numCourses",
+    "prerequisites"
+  ],
+  "paramTypes": [
+    "integer",
+    "integer[][]"
+  ],
+  "returnType": "boolean"
+}

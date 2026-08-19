@@ -1,0 +1,126 @@
+{
+  "kind": "function",
+  "entry": "lowestCommonAncestor",
+  "checker": "exact",
+  "argTypes": [
+    "binaryTree",
+    "treeNodeValue",
+    "treeNodeValue"
+  ],
+  "outputType": "binaryTree",
+  "cases": [
+    {
+      "label": "split at root",
+      "input": [
+        [
+          3,
+          5,
+          1,
+          6,
+          2,
+          0,
+          8,
+          null,
+          null,
+          7,
+          4
+        ],
+        5,
+        1
+      ],
+      "expected": [
+        3,
+        5,
+        1,
+        6,
+        2,
+        0,
+        8,
+        null,
+        null,
+        7,
+        4
+      ]
+    },
+    {
+      "label": "ancestor is one target",
+      "input": [
+        [
+          3,
+          5,
+          1,
+          6,
+          2,
+          0,
+          8,
+          null,
+          null,
+          7,
+          4
+        ],
+        5,
+        4
+      ],
+      "expected": [
+        5,
+        6,
+        2,
+        null,
+        null,
+        7,
+        4
+      ]
+    },
+    {
+      "label": "root is target",
+      "input": [
+        [
+          1,
+          2
+        ],
+        1,
+        2
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "label": "sibling leaves",
+      "input": [
+        [
+          3,
+          5,
+          1,
+          6,
+          2,
+          0,
+          8,
+          null,
+          null,
+          7,
+          4
+        ],
+        7,
+        4
+      ],
+      "expected": [
+        2,
+        7,
+        4
+      ]
+    }
+  ],
+  "paramNames": [
+    "root",
+    "p",
+    "q"
+  ],
+  "paramTypes": [
+    "TreeNode",
+    "integer",
+    "integer"
+  ],
+  "returnType": "TreeNode"
+}

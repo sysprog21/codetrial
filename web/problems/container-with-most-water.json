@@ -1,0 +1,35 @@
+{
+  "id": "container-with-most-water",
+  "title": "Container With Most Water",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Two Pointers",
+    "Greedy"
+  ],
+  "statement": [
+    "Given vertical line heights, choose two lines that form a container holding the most water.",
+    "The area is the distance between the two lines multiplied by the shorter height."
+  ],
+  "examples": [
+    {
+      "input": "height = [1,8,6,2,5,4,8,3,7]",
+      "output": "49"
+    },
+    {
+      "input": "height = [1,1]",
+      "output": "1"
+    }
+  ],
+  "constraints": [
+    "2 <= height.length <= 10^5",
+    "0 <= height[i] <= 10^4"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def maxArea(self, height: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} height\n * @return {number}\n */\nfunction maxArea(height) {\n  // Think out loud as you go!\n}\n",
+    "c": "int maxArea(int* height, int heightSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int maxArea(vector<int>& height) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int maxArea(int[] height) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

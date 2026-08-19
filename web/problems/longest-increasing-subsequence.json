@@ -1,0 +1,39 @@
+{
+  "id": "longest-increasing-subsequence",
+  "title": "Longest Increasing Subsequence",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Binary Search",
+    "Dynamic Programming"
+  ],
+  "statement": [
+    "Given an integer array, return the length of the longest strictly increasing subsequence.",
+    "The subsequence does not need to be contiguous, but element order must be preserved."
+  ],
+  "examples": [
+    {
+      "input": "nums = [10,9,2,5,3,7,101,18]",
+      "output": "4"
+    },
+    {
+      "input": "nums = [0,1,0,3,2,3]",
+      "output": "4"
+    },
+    {
+      "input": "nums = [7,7,7,7,7,7,7]",
+      "output": "1"
+    }
+  ],
+  "constraints": [
+    "1 <= nums.length <= 2500",
+    "-10^4 <= nums[i] <= 10^4"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def lengthOfLIS(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction lengthOfLIS(nums) {\n  // Think out loud as you go!\n}\n",
+    "c": "int lengthOfLIS(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int lengthOfLIS(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int lengthOfLIS(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

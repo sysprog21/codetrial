@@ -13,7 +13,11 @@ import {
   parseCompilerResults,
   stripAnsi,
 } from "../../web/compiler-explorer.js";
-import { judges } from "../../web/judges.js";
+import { readFileSync } from "node:fs";
+
+// The browser fetches one judge at a time now, so a test that wants the whole
+// bank reads the source the per-problem files are generated from.
+const judges = JSON.parse(readFileSync(new URL("../../problem-bank/judges.json", import.meta.url), "utf8"));
 
 const sampleValues = {
   boolean: true,

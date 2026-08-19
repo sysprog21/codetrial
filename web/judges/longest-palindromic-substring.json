@@ -1,0 +1,49 @@
+{
+  "kind": "function",
+  "entry": "longestPalindrome",
+  "checker": "palindrome",
+  "cases": [
+    {
+      "label": "s=\"babad\"",
+      "input": [
+        "babad"
+      ],
+      "expected": "bab"
+    },
+    {
+      "label": "s=\"cbbd\"",
+      "input": [
+        "cbbd"
+      ],
+      "expected": "bb"
+    },
+    {
+      "label": "single char: s=\"a\"",
+      "input": [
+        "a"
+      ],
+      "expected": "a"
+    },
+    {
+      "label": "no repeat: s=\"ac\"",
+      "input": [
+        "ac"
+      ],
+      "expected": "a"
+    },
+    {
+      "label": "whole string: s=\"racecar\"",
+      "input": [
+        "racecar"
+      ],
+      "expected": "racecar"
+    }
+  ],
+  "paramNames": [
+    "s"
+  ],
+  "paramTypes": [
+    "string"
+  ],
+  "returnType": "string"
+}

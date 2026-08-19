@@ -1,0 +1,174 @@
+{
+  "kind": "function",
+  "entry": "construct",
+  "paramNames": [
+    "grid"
+  ],
+  "paramTypes": [
+    "integer[][]"
+  ],
+  "returnType": "Node",
+  "checker": "exact",
+  "outputType": "quadTree",
+  "cases": [
+    {
+      "label": "single one",
+      "input": [
+        [
+          [
+            1
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "label": "single zero",
+      "input": [
+        [
+          [
+            0
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          0
+        ]
+      ]
+    },
+    {
+      "label": "checkerboard",
+      "input": [
+        [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            0
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          0
+        ]
+      ]
+    },
+    {
+      "label": "uniform two by two",
+      "input": [
+        [
+          [
+            1,
+            1
+          ],
+          [
+            1,
+            1
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "label": "mixed four by four",
+      "input": [
+        [
+          [
+            1,
+            1,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          0
+        ]
+      ]
+    }
+  ]
+}

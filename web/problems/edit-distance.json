@@ -1,0 +1,34 @@
+{
+  "id": "edit-distance",
+  "title": "Edit Distance",
+  "difficulty": "Medium",
+  "topics": [
+    "String",
+    "Dynamic Programming"
+  ],
+  "statement": [
+    "Given two words, return the minimum number of insertions, deletions, and replacements needed to convert the first word into the second.",
+    "Each operation changes one character or position."
+  ],
+  "examples": [
+    {
+      "input": "word1 = \"horse\", word2 = \"ros\"",
+      "output": "3"
+    },
+    {
+      "input": "word1 = \"intention\", word2 = \"execution\"",
+      "output": "5"
+    }
+  ],
+  "constraints": [
+    "0 <= word1.length, word2.length <= 500",
+    "word1 and word2 consist of lowercase English letters."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def minDistance(self, word1: str, word2: str) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} word1\n * @param {string} word2\n * @return {number}\n */\nfunction minDistance(word1, word2) {\n  // Think out loud as you go!\n}\n",
+    "c": "int minDistance(char* word1, char* word2) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int minDistance(string word1, string word2) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int minDistance(String word1, String word2) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

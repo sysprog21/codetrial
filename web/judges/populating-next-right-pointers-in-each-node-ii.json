@@ -1,0 +1,93 @@
+{
+  "kind": "function",
+  "entry": "connect",
+  "checker": "exact",
+  "argTypes": [
+    "nextTree"
+  ],
+  "outputType": "nextTree",
+  "cases": [
+    {
+      "label": "sparse final level",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          4,
+          5,
+          null,
+          7
+        ]
+      ],
+      "expected": [
+        [
+          1
+        ],
+        [
+          2,
+          3
+        ],
+        [
+          4,
+          5,
+          7
+        ]
+      ]
+    },
+    {
+      "label": "empty tree",
+      "input": [
+        []
+      ],
+      "expected": []
+    },
+    {
+      "label": "single node",
+      "input": [
+        [
+          1
+        ]
+      ],
+      "expected": [
+        [
+          1
+        ]
+      ]
+    },
+    {
+      "label": "missing middle children",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          null,
+          5,
+          null,
+          7
+        ]
+      ],
+      "expected": [
+        [
+          1
+        ],
+        [
+          2,
+          3
+        ],
+        [
+          5,
+          7
+        ]
+      ]
+    }
+  ],
+  "paramNames": [
+    "root"
+  ],
+  "paramTypes": [
+    "Node"
+  ],
+  "returnType": "Node"
+}

@@ -1,0 +1,39 @@
+{
+  "id": "ransom-note",
+  "title": "Ransom Note",
+  "difficulty": "Easy",
+  "topics": [
+    "Hash Table",
+    "String",
+    "Counting"
+  ],
+  "statement": [
+    "Given two strings, ransomNote and magazine, return whether ransomNote can be built using letters from magazine.",
+    "Each character from magazine may be used at most once."
+  ],
+  "examples": [
+    {
+      "input": "ransomNote = \"a\", magazine = \"b\"",
+      "output": "false"
+    },
+    {
+      "input": "ransomNote = \"aa\", magazine = \"ab\"",
+      "output": "false"
+    },
+    {
+      "input": "ransomNote = \"aa\", magazine = \"aab\"",
+      "output": "true"
+    }
+  ],
+  "constraints": [
+    "1 <= ransomNote.length, magazine.length <= 10^5",
+    "ransomNote and magazine consist of lowercase English letters."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def canConstruct(self, ransomNote: str, magazine: str) -> bool:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} ransomNote\n * @param {string} magazine\n * @return {boolean}\n */\nfunction canConstruct(ransomNote, magazine) {\n  // Think out loud as you go!\n}\n",
+    "c": "bool canConstruct(char* ransomNote, char* magazine) {\n    // Think out loud as you go!\n    return false;\n}\n",
+    "cpp": "class Solution {\npublic:\n    bool canConstruct(string ransomNote, string magazine) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+    "java": "class Solution {\n    public boolean canConstruct(String ransomNote, String magazine) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+  }
+}

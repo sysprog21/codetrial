@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate web/problems.js from the top-level problem bank."""
+"""Generate the per-problem statement and judge files the browser fetches."""
 
 from __future__ import annotations
 
@@ -14,7 +14,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "problem-bank" / "problems.json"
-OUTPUT = ROOT / "web" / "problems.js"
+JUDGE_SOURCE = ROOT / "problem-bank" / "judges.json"
+# One file per problem, fetched on demand, rather than one module holding all
+# 150. Two reasons, and the second is the important one:
+#
+#   - A candidate downloaded 288 KB of statements and 215 KB of judges to work
+#     on one problem, parsed as JavaScript source rather than as JSON.
+#   - The judge holds the expected output of every test case. Shipping all of
+#     them handed a candidate the answers to the other 149 problems along with
+#     their own. Their own is still there, because the runner is in the browser;
+#     this bounds the exposure rather than closing it. See the note on
+#     `apply_test_results` in src/agent.rs for where that boundary is drawn.
+OUTPUT_DIR = ROOT / "web" / "problems"
+JUDGE_OUTPUT_DIR = ROOT / "web" / "judges"
+DIRS = (OUTPUT_DIR, JUDGE_OUTPUT_DIR)
 MANIFEST = ROOT / "scripts" / "top-interview-150.json"
 CACHE = ROOT / "problem-bank" / "leetcode"
 ENDPOINT = "https://leetcode.com/graphql"
@@ -39,7 +52,7 @@ query questionData($titleSlug: String!) {
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--check", action="store_true", help="fail if web/problems.js is stale"
+        "--check", action="store_true", help="fail if the generated files are stale"
     )
     parser.add_argument(
         "--fetch",
@@ -156,18 +169,36 @@ def fetch(limit: int | None, delay_ms: int, force: bool) -> None:
     )
 
 
-def generated() -> str:
-    problems = read_json(SOURCE)
-    return "\n".join(
-        [
-            f"export const problems = {json.dumps(problems, indent=2)};",
-            "",
-            "export function getProblem(id) {",
-            '  return problems.find((problem) => problem.id === id) || problems.find((problem) => problem.id === "two-sum");',
-            "}",
-            "",
-        ]
-    )
+def generated() -> dict[Path, str]:
+    """Every file this script owns, as path -> exact contents."""
+    files: dict[Path, str] = {}
+    for problem in read_json(SOURCE):
+        files[OUTPUT_DIR / f"{problem['id']}.json"] = json.dumps(problem, indent=2) + "\n"
+    for problem_id, judge in read_json(JUDGE_SOURCE).items():
+        files[JUDGE_OUTPUT_DIR / f"{problem_id}.json"] = json.dumps(judge, indent=2) + "\n"
+    return files
+
+
+def orphans(files: dict[Path, str]) -> list[Path]:
+    """Generated files this run would not write.
+
+    A problem removed from the bank leaves its statement and its judge on disk
+    otherwise, and for the judge that means an answer key still being served for
+    a problem nobody can be given any more.
+    """
+    on_disk = (path for directory in DIRS for path in sorted(directory.glob("*.json")))
+    return [path for path in on_disk if path not in files]
+
+
+def drifted(files: dict[Path, str]) -> list[str]:
+    """What `--check` reports, as repo-relative paths, in either direction."""
+    changed = [
+        str(path.relative_to(ROOT))
+        for path, text in files.items()
+        if not path.exists() or path.read_text() != text
+    ]
+    removed = [f"{path.relative_to(ROOT)} (no longer in the bank)" for path in orphans(files)]
+    return sorted(changed + removed)
 
 
 def main() -> int:
@@ -175,17 +206,26 @@ def main() -> int:
     if args.fetch:
         fetch(args.limit, args.delay_ms, args.force)
 
-    output_text = generated()
+    files = generated()
     if args.check:
-        if OUTPUT.read_text() != output_text:
+        stale = drifted(files)
+        if stale:
             print(
-                "web/problems.js is stale; run: python3 scripts/gen-problems.py",
+                "stale generated files; run: python3 scripts/gen-problems.py",
                 file=sys.stderr,
             )
+            for path in stale:
+                print(f"  {path}", file=sys.stderr)
             return 1
         return 0
-    OUTPUT.write_text(output_text)
-    print(f"updated {OUTPUT.relative_to(ROOT)} from {SOURCE.relative_to(ROOT)}")
+
+    for directory in DIRS:
+        directory.mkdir(parents=True, exist_ok=True)
+    for path in orphans(files):
+        path.unlink()
+    for path, text in files.items():
+        path.write_text(text)
+    print(f"updated {len(files)} files under {' and '.join(str(d.relative_to(ROOT)) for d in DIRS)}")
     return 0
 
 

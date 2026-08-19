@@ -1,0 +1,77 @@
+{
+  "kind": "function",
+  "entry": "twoSum",
+  "checker": "twoSum",
+  "cases": [
+    {
+      "label": "nums=[2,7,11,15], target=9",
+      "input": [
+        [
+          2,
+          7,
+          11,
+          15
+        ],
+        9
+      ],
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "label": "nums=[3,2,4], target=6",
+      "input": [
+        [
+          3,
+          2,
+          4
+        ],
+        6
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "label": "duplicates: nums=[3,3], target=6",
+      "input": [
+        [
+          3,
+          3
+        ],
+        6
+      ],
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "label": "negatives: nums=[-3,4,3,90], target=0",
+      "input": [
+        [
+          -3,
+          4,
+          3,
+          90
+        ],
+        0
+      ],
+      "expected": [
+        0,
+        2
+      ]
+    }
+  ],
+  "paramNames": [
+    "nums",
+    "target"
+  ],
+  "paramTypes": [
+    "integer[]",
+    "integer"
+  ],
+  "returnType": "integer[]"
+}

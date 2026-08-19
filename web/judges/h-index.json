@@ -1,0 +1,59 @@
+{
+  "kind": "function",
+  "entry": "hIndex",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "mixed citation counts",
+      "input": [
+        [
+          3,
+          0,
+          6,
+          1,
+          5
+        ]
+      ],
+      "expected": 3
+    },
+    {
+      "label": "small h only",
+      "input": [
+        [
+          1,
+          3,
+          1
+        ]
+      ],
+      "expected": 1
+    },
+    {
+      "label": "all zero citations",
+      "input": [
+        [
+          0,
+          0,
+          0
+        ]
+      ],
+      "expected": 0
+    },
+    {
+      "label": "h capped by paper count",
+      "input": [
+        [
+          100,
+          100
+        ]
+      ],
+      "expected": 2
+    }
+  ],
+  "paramNames": [
+    "citations"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "integer"
+}

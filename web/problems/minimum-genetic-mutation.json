@@ -1,0 +1,38 @@
+{
+  "id": "minimum-genetic-mutation",
+  "title": "Minimum Genetic Mutation",
+  "difficulty": "Medium",
+  "topics": [
+    "Hash Table",
+    "String",
+    "BFS"
+  ],
+  "statement": [
+    "Given a start gene, an end gene, and a bank of valid genes, return the fewest one-character mutations needed to reach the end gene.",
+    "Every intermediate gene must be in the bank, and each mutation may change only one character to A, C, G, or T."
+  ],
+  "examples": [
+    {
+      "input": "startGene = \"AACCGGTT\", endGene = \"AACCGGTA\", bank = [\"AACCGGTA\"]",
+      "output": "1"
+    },
+    {
+      "input": "startGene = \"AACCGGTT\", endGene = \"AAACGGTA\", bank = [\"AACCGGTA\",\"AACCGCTA\",\"AAACGGTA\"]",
+      "output": "2"
+    }
+  ],
+  "constraints": [
+    "startGene.length == 8",
+    "endGene.length == 8",
+    "0 <= bank.length <= 10",
+    "bank[i].length == 8",
+    "Genes contain only A, C, G, and T."
+  ],
+  "starterCode": {
+    "cpp": "class Solution {\npublic:\n    int minMutation(string startGene, string endGene, vector<string>& bank) {\n        \n    }\n};",
+    "java": "class Solution {\n    public int minMutation(String startGene, String endGene, String[] bank) {\n        \n    }\n}",
+    "python": "class Solution:\n    def minMutation(self, startGene: str, endGene: str, bank: List[str]) -> int:\n        ",
+    "javascript": "/**\n * @param {string} startGene\n * @param {string} endGene\n * @param {string[]} bank\n * @return {number}\n */\nvar minMutation = function(startGene, endGene, bank) {\n    \n};",
+    "c": "int minMutation(char* startGene, char* endGene, char** bank, int bankSize) {\n    \n}"
+  }
+}

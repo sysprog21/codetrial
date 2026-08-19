@@ -1,0 +1,83 @@
+{
+  "kind": "function",
+  "entry": "maxProfit",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "single profitable trade",
+      "input": [
+        2,
+        [
+          2,
+          4,
+          1
+        ]
+      ],
+      "expected": 2
+    },
+    {
+      "label": "two transactions sample",
+      "input": [
+        2,
+        [
+          3,
+          2,
+          6,
+          5,
+          0,
+          3
+        ]
+      ],
+      "expected": 7
+    },
+    {
+      "label": "zero transactions",
+      "input": [
+        0,
+        [
+          1,
+          3,
+          2,
+          8
+        ]
+      ],
+      "expected": 0
+    },
+    {
+      "label": "large k behaves unlimited",
+      "input": [
+        100,
+        [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      ],
+      "expected": 4
+    },
+    {
+      "label": "k limits trades",
+      "input": [
+        1,
+        [
+          1,
+          4,
+          2,
+          7
+        ]
+      ],
+      "expected": 6
+    }
+  ],
+  "paramNames": [
+    "k",
+    "prices"
+  ],
+  "paramTypes": [
+    "integer",
+    "integer[]"
+  ],
+  "returnType": "integer"
+}

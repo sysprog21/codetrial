@@ -1,0 +1,82 @@
+{
+  "kind": "function",
+  "entry": "deleteDuplicates",
+  "checker": "exact",
+  "argTypes": [
+    "linkedList"
+  ],
+  "outputType": "linkedList",
+  "cases": [
+    {
+      "label": "middle duplicates removed",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          3,
+          4,
+          4,
+          5
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        5
+      ]
+    },
+    {
+      "label": "head duplicates removed",
+      "input": [
+        [
+          1,
+          1,
+          1,
+          2,
+          3
+        ]
+      ],
+      "expected": [
+        2,
+        3
+      ]
+    },
+    {
+      "label": "all values duplicated",
+      "input": [
+        [
+          1,
+          1,
+          2,
+          2
+        ]
+      ],
+      "expected": []
+    },
+    {
+      "label": "negative duplicates",
+      "input": [
+        [
+          -2,
+          -2,
+          -1,
+          0,
+          0,
+          1
+        ]
+      ],
+      "expected": [
+        -1,
+        1
+      ]
+    }
+  ],
+  "paramNames": [
+    "head"
+  ],
+  "paramTypes": [
+    "ListNode"
+  ],
+  "returnType": "ListNode"
+}

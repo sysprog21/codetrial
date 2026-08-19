@@ -1,0 +1,35 @@
+{
+  "id": "triangle",
+  "title": "Triangle",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Dynamic Programming"
+  ],
+  "statement": [
+    "A triangle-shaped list of rows gives a value at each position; choose a connected route from the top row to the bottom row with the smallest total.",
+    "From row i and column j, the next step may go to column j or j + 1 in row i + 1."
+  ],
+  "examples": [
+    {
+      "input": "triangle = [[2],[3,4],[6,5,7],[4,1,8,3]]",
+      "output": "11"
+    },
+    {
+      "input": "triangle = [[-10]]",
+      "output": "-10"
+    }
+  ],
+  "constraints": [
+    "1 <= triangle.length <= 200",
+    "triangle[i].length == triangle[i - 1].length + 1",
+    "-10^4 <= triangle[i][j] <= 10^4"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def minimumTotal(self, triangle: list[list[int]]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[][]} triangle\n * @return {number}\n */\nfunction minimumTotal(triangle) {\n  // Think out loud as you go!\n}\n",
+    "c": "int minimumTotal(int** triangle, int triangleSize, int* triangleColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int minimumTotal(vector<vector<int>>& triangle) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int minimumTotal(List<List<Integer>> triangle) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "kind": "function",
+  "entry": "maxSubarraySumCircular",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "non-wrapping sample",
+      "input": [
+        [
+          1,
+          -2,
+          3,
+          -2
+        ]
+      ],
+      "expected": 3
+    },
+    {
+      "label": "wrapping sample",
+      "input": [
+        [
+          5,
+          -3,
+          5
+        ]
+      ],
+      "expected": 10
+    },
+    {
+      "label": "all negative",
+      "input": [
+        [
+          -3,
+          -2,
+          -3
+        ]
+      ],
+      "expected": -2
+    },
+    {
+      "label": "single value",
+      "input": [
+        [
+          7
+        ]
+      ],
+      "expected": 7
+    },
+    {
+      "label": "wrap beats middle",
+      "input": [
+        [
+          8,
+          -1,
+          -3,
+          8
+        ]
+      ],
+      "expected": 16
+    }
+  ],
+  "paramNames": [
+    "nums"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "integer"
+}

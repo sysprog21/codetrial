@@ -1,0 +1,81 @@
+{
+  "kind": "function",
+  "entry": "rotateRight",
+  "checker": "exact",
+  "argTypes": [
+    "linkedList",
+    null
+  ],
+  "outputType": "linkedList",
+  "cases": [
+    {
+      "label": "rotate by two",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        2
+      ],
+      "expected": [
+        4,
+        5,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "label": "k larger than length",
+      "input": [
+        [
+          0,
+          1,
+          2
+        ],
+        4
+      ],
+      "expected": [
+        2,
+        0,
+        1
+      ]
+    },
+    {
+      "label": "k multiple of length",
+      "input": [
+        [
+          1,
+          2,
+          3
+        ],
+        6
+      ],
+      "expected": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "label": "empty list",
+      "input": [
+        [],
+        3
+      ],
+      "expected": []
+    }
+  ],
+  "paramNames": [
+    "head",
+    "k"
+  ],
+  "paramTypes": [
+    "ListNode",
+    "integer"
+  ],
+  "returnType": "ListNode"
+}

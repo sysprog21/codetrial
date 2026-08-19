@@ -1,0 +1,36 @@
+{
+  "id": "bitwise-and-of-numbers-range",
+  "title": "Bitwise AND of Numbers Range",
+  "difficulty": "Medium",
+  "topics": [
+    "Bit Manipulation"
+  ],
+  "statement": [
+    "Given two integers left and right, return the bitwise AND of every integer in the inclusive range from left to right.",
+    "The range may be large, so iterating over every value is not the intended approach."
+  ],
+  "examples": [
+    {
+      "input": "left = 5, right = 7",
+      "output": "4"
+    },
+    {
+      "input": "left = 0, right = 0",
+      "output": "0"
+    },
+    {
+      "input": "left = 1, right = 2147483647",
+      "output": "0"
+    }
+  ],
+  "constraints": [
+    "0 <= left <= right <= 2^31 - 1"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def rangeBitwiseAnd(self, left: int, right: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number} left\n * @param {number} right\n * @return {number}\n */\nfunction rangeBitwiseAnd(left, right) {\n  // Think out loud as you go!\n}\n",
+    "c": "int rangeBitwiseAnd(int left, int right) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int rangeBitwiseAnd(int left, int right) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+    "java": "class Solution {\n    public int rangeBitwiseAnd(int left, int right) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+  }
+}

@@ -1,0 +1,181 @@
+{
+  "kind": "class",
+  "className": "MedianFinder",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "sample odd after even",
+      "input": [
+        [
+          "MedianFinder",
+          "addNum",
+          "addNum",
+          "findMedian",
+          "addNum",
+          "findMedian"
+        ],
+        [
+          [],
+          [
+            1
+          ],
+          [
+            2
+          ],
+          [],
+          [
+            3
+          ],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        null,
+        1.5,
+        null,
+        2
+      ]
+    },
+    {
+      "label": "negative and positive values",
+      "input": [
+        [
+          "MedianFinder",
+          "addNum",
+          "addNum",
+          "findMedian",
+          "addNum",
+          "findMedian"
+        ],
+        [
+          [],
+          [
+            -1
+          ],
+          [
+            -2
+          ],
+          [],
+          [
+            3
+          ],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        null,
+        -1.5,
+        null,
+        -1
+      ]
+    },
+    {
+      "label": "duplicates keep median stable",
+      "input": [
+        [
+          "MedianFinder",
+          "addNum",
+          "addNum",
+          "addNum",
+          "findMedian"
+        ],
+        [
+          [],
+          [
+            5
+          ],
+          [
+            5
+          ],
+          [
+            5
+          ],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        null,
+        null,
+        5
+      ]
+    },
+    {
+      "label": "even average after four values",
+      "input": [
+        [
+          "MedianFinder",
+          "addNum",
+          "addNum",
+          "addNum",
+          "addNum",
+          "findMedian"
+        ],
+        [
+          [],
+          [
+            10
+          ],
+          [
+            20
+          ],
+          [
+            30
+          ],
+          [
+            40
+          ],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        25
+      ]
+    },
+    {
+      "label": "median shifts down",
+      "input": [
+        [
+          "MedianFinder",
+          "addNum",
+          "addNum",
+          "findMedian",
+          "addNum",
+          "findMedian"
+        ],
+        [
+          [],
+          [
+            100
+          ],
+          [
+            1
+          ],
+          [],
+          [
+            2
+          ],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        null,
+        50.5,
+        null,
+        2
+      ]
+    }
+  ]
+}

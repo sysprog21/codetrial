@@ -1,0 +1,68 @@
+{
+  "kind": "function",
+  "entry": "generateParenthesis",
+  "checker": "arrayBag",
+  "cases": [
+    {
+      "label": "three pairs",
+      "input": [
+        3
+      ],
+      "expected": [
+        "((()))",
+        "(()())",
+        "(())()",
+        "()(())",
+        "()()()"
+      ]
+    },
+    {
+      "label": "single pair",
+      "input": [
+        1
+      ],
+      "expected": [
+        "()"
+      ]
+    },
+    {
+      "label": "two pairs",
+      "input": [
+        2
+      ],
+      "expected": [
+        "(())",
+        "()()"
+      ]
+    },
+    {
+      "label": "four pairs",
+      "input": [
+        4
+      ],
+      "expected": [
+        "(((())))",
+        "((()()))",
+        "((())())",
+        "((()))()",
+        "(()(()))",
+        "(()()())",
+        "(()())()",
+        "(())(())",
+        "(())()()",
+        "()((()))",
+        "()(()())",
+        "()(())()",
+        "()()(())",
+        "()()()()"
+      ]
+    }
+  ],
+  "paramNames": [
+    "n"
+  ],
+  "paramTypes": [
+    "integer"
+  ],
+  "returnType": "list<string>"
+}

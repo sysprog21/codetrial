@@ -1,0 +1,89 @@
+{
+  "kind": "function",
+  "entry": "findOrder",
+  "checker": "topologicalOrder",
+  "cases": [
+    {
+      "label": "single prerequisite order",
+      "input": [
+        2,
+        [
+          [
+            1,
+            0
+          ]
+        ]
+      ],
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "label": "branching prerequisites",
+      "input": [
+        4,
+        [
+          [
+            1,
+            0
+          ],
+          [
+            2,
+            0
+          ],
+          [
+            3,
+            1
+          ],
+          [
+            3,
+            2
+          ]
+        ]
+      ],
+      "expected": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "label": "single course no prerequisites",
+      "input": [
+        1,
+        []
+      ],
+      "expected": [
+        0
+      ]
+    },
+    {
+      "label": "cycle returns empty",
+      "input": [
+        2,
+        [
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            1
+          ]
+        ]
+      ],
+      "expected": []
+    }
+  ],
+  "paramNames": [
+    "numCourses",
+    "prerequisites"
+  ],
+  "paramTypes": [
+    "integer",
+    "integer[][]"
+  ],
+  "returnType": "integer[]"
+}

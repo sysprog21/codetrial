@@ -1,0 +1,49 @@
+{
+  "kind": "function",
+  "entry": "romanToInt",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "simple repeats",
+      "input": [
+        "III"
+      ],
+      "expected": 3
+    },
+    {
+      "label": "mixed additive",
+      "input": [
+        "LVIII"
+      ],
+      "expected": 58
+    },
+    {
+      "label": "compound subtractive",
+      "input": [
+        "MCMXCIV"
+      ],
+      "expected": 1994
+    },
+    {
+      "label": "single subtractive pair",
+      "input": [
+        "IV"
+      ],
+      "expected": 4
+    },
+    {
+      "label": "lower and upper subtractive",
+      "input": [
+        "XLIX"
+      ],
+      "expected": 49
+    }
+  ],
+  "paramNames": [
+    "s"
+  ],
+  "paramTypes": [
+    "string"
+  ],
+  "returnType": "integer"
+}

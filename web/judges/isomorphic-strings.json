@@ -1,0 +1,56 @@
+{
+  "kind": "function",
+  "entry": "isIsomorphic",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "egg maps to add",
+      "input": [
+        "egg",
+        "add"
+      ],
+      "expected": true
+    },
+    {
+      "label": "inconsistent source mapping",
+      "input": [
+        "foo",
+        "bar"
+      ],
+      "expected": false
+    },
+    {
+      "label": "paper maps to title",
+      "input": [
+        "paper",
+        "title"
+      ],
+      "expected": true
+    },
+    {
+      "label": "two sources one target",
+      "input": [
+        "ab",
+        "aa"
+      ],
+      "expected": false
+    },
+    {
+      "label": "late target collision",
+      "input": [
+        "badc",
+        "baba"
+      ],
+      "expected": false
+    }
+  ],
+  "paramNames": [
+    "s",
+    "t"
+  ],
+  "paramTypes": [
+    "string",
+    "string"
+  ],
+  "returnType": "boolean"
+}

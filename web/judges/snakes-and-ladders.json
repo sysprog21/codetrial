@@ -1,0 +1,141 @@
+{
+  "kind": "function",
+  "entry": "snakesAndLadders",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "example board four moves",
+      "input": [
+        [
+          [
+            -1,
+            -1,
+            -1,
+            -1,
+            -1,
+            -1
+          ],
+          [
+            -1,
+            -1,
+            -1,
+            -1,
+            -1,
+            -1
+          ],
+          [
+            -1,
+            -1,
+            -1,
+            -1,
+            -1,
+            -1
+          ],
+          [
+            -1,
+            35,
+            -1,
+            -1,
+            13,
+            -1
+          ],
+          [
+            -1,
+            -1,
+            -1,
+            -1,
+            -1,
+            -1
+          ],
+          [
+            -1,
+            15,
+            -1,
+            -1,
+            -1,
+            -1
+          ]
+        ]
+      ],
+      "expected": 4
+    },
+    {
+      "label": "ladder reaches finish",
+      "input": [
+        [
+          [
+            -1,
+            -1
+          ],
+          [
+            -1,
+            3
+          ]
+        ]
+      ],
+      "expected": 1
+    },
+    {
+      "label": "unreachable trap",
+      "input": [
+        [
+          [
+            -1,
+            1,
+            1,
+            1
+          ],
+          [
+            -1,
+            1,
+            1,
+            1
+          ],
+          [
+            -1,
+            1,
+            1,
+            1
+          ],
+          [
+            -1,
+            1,
+            1,
+            -1
+          ]
+        ]
+      ],
+      "expected": -1
+    },
+    {
+      "label": "plain three by three",
+      "input": [
+        [
+          [
+            -1,
+            -1,
+            -1
+          ],
+          [
+            -1,
+            -1,
+            -1
+          ],
+          [
+            -1,
+            -1,
+            -1
+          ]
+        ]
+      ],
+      "expected": 2
+    }
+  ],
+  "paramNames": [
+    "board"
+  ],
+  "paramTypes": [
+    "integer[][]"
+  ],
+  "returnType": "integer"
+}

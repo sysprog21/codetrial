@@ -1,0 +1,88 @@
+{
+  "kind": "function",
+  "entry": "plusOne",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "no carry",
+      "input": [
+        [
+          1,
+          2,
+          3
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        4
+      ]
+    },
+    {
+      "label": "carry through final digit",
+      "input": [
+        [
+          1,
+          2,
+          9
+        ]
+      ],
+      "expected": [
+        1,
+        3,
+        0
+      ]
+    },
+    {
+      "label": "all nines grow length",
+      "input": [
+        [
+          9,
+          9,
+          9
+        ]
+      ],
+      "expected": [
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "label": "zero",
+      "input": [
+        [
+          0
+        ]
+      ],
+      "expected": [
+        1
+      ]
+    },
+    {
+      "label": "longer no carry sample",
+      "input": [
+        [
+          4,
+          3,
+          2,
+          1
+        ]
+      ],
+      "expected": [
+        4,
+        3,
+        2,
+        2
+      ]
+    }
+  ],
+  "paramNames": [
+    "digits"
+  ],
+  "paramTypes": [
+    "integer[]"
+  ],
+  "returnType": "integer[]"
+}

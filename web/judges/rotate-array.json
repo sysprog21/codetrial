@@ -1,0 +1,89 @@
+{
+  "kind": "function",
+  "entry": "rotate",
+  "checker": "exact",
+  "outputParam": 0,
+  "cases": [
+    {
+      "label": "right rotate by three",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ],
+        3
+      ],
+      "expected": [
+        5,
+        6,
+        7,
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "label": "negative values",
+      "input": [
+        [
+          -1,
+          -100,
+          3,
+          99
+        ],
+        2
+      ],
+      "expected": [
+        3,
+        99,
+        -1,
+        -100
+      ]
+    },
+    {
+      "label": "k larger than length",
+      "input": [
+        [
+          1,
+          2
+        ],
+        3
+      ],
+      "expected": [
+        2,
+        1
+      ]
+    },
+    {
+      "label": "k is zero",
+      "input": [
+        [
+          4,
+          5,
+          6
+        ],
+        0
+      ],
+      "expected": [
+        4,
+        5,
+        6
+      ]
+    }
+  ],
+  "paramNames": [
+    "nums",
+    "k"
+  ],
+  "paramTypes": [
+    "integer[]",
+    "integer"
+  ],
+  "returnType": "void"
+}

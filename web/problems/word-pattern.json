@@ -1,0 +1,40 @@
+{
+  "id": "word-pattern",
+  "title": "Word Pattern",
+  "difficulty": "Easy",
+  "topics": [
+    "Hash Table",
+    "String"
+  ],
+  "statement": [
+    "Given a pattern and a space-separated string s, return whether s follows the same pattern.",
+    "There must be a one-to-one mapping between each pattern character and each word in s."
+  ],
+  "examples": [
+    {
+      "input": "pattern = \"abba\", s = \"dog cat cat dog\"",
+      "output": "true"
+    },
+    {
+      "input": "pattern = \"abba\", s = \"dog cat cat fish\"",
+      "output": "false"
+    },
+    {
+      "input": "pattern = \"aaaa\", s = \"dog cat cat dog\"",
+      "output": "false"
+    }
+  ],
+  "constraints": [
+    "1 <= pattern.length <= 300",
+    "pattern contains lowercase English letters.",
+    "1 <= s.length <= 3000",
+    "s contains lowercase English letters and spaces, with words separated by a single space."
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def wordPattern(self, pattern: str, s: str) -> bool:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {string} pattern\n * @param {string} s\n * @return {boolean}\n */\nfunction wordPattern(pattern, s) {\n  // Think out loud as you go!\n}\n",
+    "c": "bool wordPattern(char* pattern, char* s) {\n    // Think out loud as you go!\n    return false;\n}\n",
+    "cpp": "class Solution {\npublic:\n    bool wordPattern(string pattern, string s) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+    "java": "class Solution {\n    public boolean wordPattern(String pattern, String s) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+  }
+}

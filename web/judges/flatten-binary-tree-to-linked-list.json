@@ -1,0 +1,83 @@
+{
+  "kind": "function",
+  "entry": "flatten",
+  "checker": "exact",
+  "argTypes": [
+    "binaryTree"
+  ],
+  "outputParam": 0,
+  "outputType": "binaryTree",
+  "cases": [
+    {
+      "label": "branching preorder chain",
+      "input": [
+        [
+          1,
+          2,
+          5,
+          3,
+          4,
+          null,
+          6
+        ]
+      ],
+      "expected": [
+        1,
+        null,
+        2,
+        null,
+        3,
+        null,
+        4,
+        null,
+        5,
+        null,
+        6
+      ]
+    },
+    {
+      "label": "empty tree",
+      "input": [
+        []
+      ],
+      "expected": []
+    },
+    {
+      "label": "single zero node",
+      "input": [
+        [
+          0
+        ]
+      ],
+      "expected": [
+        0
+      ]
+    },
+    {
+      "label": "already right chain",
+      "input": [
+        [
+          1,
+          null,
+          2,
+          null,
+          3
+        ]
+      ],
+      "expected": [
+        1,
+        null,
+        2,
+        null,
+        3
+      ]
+    }
+  ],
+  "paramNames": [
+    "root"
+  ],
+  "paramTypes": [
+    "TreeNode"
+  ],
+  "returnType": "void"
+}

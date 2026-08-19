@@ -1,0 +1,49 @@
+{
+  "kind": "function",
+  "entry": "reverseBits",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "sample bit pattern",
+      "input": [
+        43261596
+      ],
+      "expected": 964176192
+    },
+    {
+      "label": "zero",
+      "input": [
+        0
+      ],
+      "expected": 0
+    },
+    {
+      "label": "single low-safe bit",
+      "input": [
+        2
+      ],
+      "expected": 1073741824
+    },
+    {
+      "label": "two low-safe bits",
+      "input": [
+        6
+      ],
+      "expected": 1610612736
+    },
+    {
+      "label": "alternating pattern signed-safe",
+      "input": [
+        715827882
+      ],
+      "expected": 1431655764
+    }
+  ],
+  "paramNames": [
+    "n"
+  ],
+  "paramTypes": [
+    "integer"
+  ],
+  "returnType": "integer"
+}

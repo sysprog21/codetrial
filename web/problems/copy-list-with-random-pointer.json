@@ -1,0 +1,39 @@
+{
+  "id": "copy-list-with-random-pointer",
+  "title": "Copy List with Random Pointer",
+  "difficulty": "Medium",
+  "topics": [
+    "Hash Table",
+    "Linked List"
+  ],
+  "statement": [
+    "Given the head of a linked list where each node has next and random pointers, return a deep copy of the list.",
+    "Each copied node must have the same value and pointer relationships as the original, but no copied node may be one of the original nodes."
+  ],
+  "examples": [
+    {
+      "input": "head = [[7,null],[13,0],[11,4],[10,2],[1,0]]",
+      "output": "[[7,null],[13,0],[11,4],[10,2],[1,0]]"
+    },
+    {
+      "input": "head = [[1,1],[2,1]]",
+      "output": "[[1,1],[2,1]]"
+    },
+    {
+      "input": "head = [[3,null],[3,0],[3,null]]",
+      "output": "[[3,null],[3,0],[3,null]]"
+    }
+  ],
+  "constraints": [
+    "0 <= number of nodes <= 1000",
+    "-10^4 <= Node.val <= 10^4",
+    "Each random pointer is null or points to a node in the list."
+  ],
+  "starterCode": {
+    "python": "\"\"\"\n# Definition for a Node.\nclass Node:\n    def __init__(self, x: int, next: 'Node' = None, random: 'Node' = None):\n        self.val = int(x)\n        self.next = next\n        self.random = random\n\"\"\"\n\nclass Solution:\n    def copyRandomList(self, head: 'Optional[Node]') -> 'Optional[Node]':\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * Definition for a _Node.\n * function _Node(val, next, random) {\n *   this.val = val;\n *   this.next = next;\n *   this.random = random;\n * }\n */\n\n/**\n * @param {_Node} head\n * @return {_Node}\n */\nfunction copyRandomList(head) {\n  // Think out loud as you go!\n}\n",
+    "c": "/**\n * Definition for a Node.\n * struct Node {\n *     int val;\n *     struct Node *next;\n *     struct Node *random;\n * };\n */\n\nstruct Node* copyRandomList(struct Node* head) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+    "cpp": "/*\n// Definition for a Node.\nclass Node {\npublic:\n    int val;\n    Node* next;\n    Node* random;\n\n    Node(int _val) {\n        val = _val;\n        next = NULL;\n        random = NULL;\n    }\n};\n*/\n\nclass Solution {\npublic:\n    Node* copyRandomList(Node* head) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+    "java": "/*\n// Definition for a Node.\nclass Node {\n    int val;\n    Node next;\n    Node random;\n\n    public Node(int val) {\n        this.val = val;\n        this.next = null;\n        this.random = null;\n    }\n}\n*/\n\nclass Solution {\n    public Node copyRandomList(Node head) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+  }
+}

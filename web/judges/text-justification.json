@@ -1,0 +1,85 @@
+{
+  "kind": "function",
+  "entry": "fullJustify",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "uneven spaces go left",
+      "input": [
+        [
+          "This",
+          "is",
+          "an",
+          "example",
+          "of",
+          "text",
+          "justification."
+        ],
+        16
+      ],
+      "expected": [
+        "This    is    an",
+        "example  of text",
+        "justification.  "
+      ]
+    },
+    {
+      "label": "single word line",
+      "input": [
+        [
+          "What",
+          "must",
+          "be",
+          "acknowledgment",
+          "shall",
+          "be"
+        ],
+        16
+      ],
+      "expected": [
+        "What   must   be",
+        "acknowledgment  ",
+        "shall be        "
+      ]
+    },
+    {
+      "label": "last line left justified",
+      "input": [
+        [
+          "a",
+          "b",
+          "c",
+          "d",
+          "e"
+        ],
+        3
+      ],
+      "expected": [
+        "a b",
+        "c d",
+        "e  "
+      ]
+    },
+    {
+      "label": "one exact-width word",
+      "input": [
+        [
+          "Longword"
+        ],
+        8
+      ],
+      "expected": [
+        "Longword"
+      ]
+    }
+  ],
+  "paramNames": [
+    "words",
+    "maxWidth"
+  ],
+  "paramTypes": [
+    "string[]",
+    "integer"
+  ],
+  "returnType": "list<string>"
+}

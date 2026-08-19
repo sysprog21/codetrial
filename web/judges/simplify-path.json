@@ -1,0 +1,49 @@
+{
+  "kind": "function",
+  "entry": "simplifyPath",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "trailing slash removed",
+      "input": [
+        "/home/"
+      ],
+      "expected": "/home"
+    },
+    {
+      "label": "repeated slashes collapsed",
+      "input": [
+        "/home//foo/"
+      ],
+      "expected": "/home/foo"
+    },
+    {
+      "label": "parent from root stays root",
+      "input": [
+        "/../"
+      ],
+      "expected": "/"
+    },
+    {
+      "label": "dot names are directories",
+      "input": [
+        "/.../a/../b/c/../d/./"
+      ],
+      "expected": "/.../b/d"
+    },
+    {
+      "label": "multiple parent pops",
+      "input": [
+        "/a/./b/../../c/"
+      ],
+      "expected": "/c"
+    }
+  ],
+  "paramNames": [
+    "path"
+  ],
+  "paramTypes": [
+    "string"
+  ],
+  "returnType": "string"
+}

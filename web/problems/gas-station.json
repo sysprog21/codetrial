@@ -1,0 +1,35 @@
+{
+  "id": "gas-station",
+  "title": "Gas Station",
+  "difficulty": "Medium",
+  "topics": [
+    "Array",
+    "Greedy"
+  ],
+  "statement": [
+    "There are gas stations arranged in a circle. gas[i] is the fuel gained at station i, and cost[i] is the fuel needed to drive from station i to the next station.",
+    "Return the index of a station from which you can complete the full circuit, or -1 if no such start exists."
+  ],
+  "examples": [
+    {
+      "input": "gas = [1,2,3,4,5], cost = [3,4,5,1,2]",
+      "output": "3"
+    },
+    {
+      "input": "gas = [2,3,4], cost = [3,4,3]",
+      "output": "-1"
+    }
+  ],
+  "constraints": [
+    "gas.length == cost.length",
+    "1 <= gas.length <= 10^5",
+    "0 <= gas[i], cost[i] <= 10^4"
+  ],
+  "starterCode": {
+    "python": "class Solution:\n    def canCompleteCircuit(self, gas: list[int], cost: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+    "javascript": "/**\n * @param {number[]} gas\n * @param {number[]} cost\n * @return {number}\n */\nfunction canCompleteCircuit(gas, cost) {\n  // Think out loud as you go!\n}\n",
+    "c": "int canCompleteCircuit(int* gas, int gasSize, int* cost, int costSize) {\n    // Think out loud as you go!\n    return -1;\n}\n",
+    "cpp": "class Solution {\npublic:\n    int canCompleteCircuit(vector<int>& gas, vector<int>& cost) {\n        // Think out loud as you go!\n        return -1;\n    }\n};\n",
+    "java": "class Solution {\n    public int canCompleteCircuit(int[] gas, int[] cost) {\n        // Think out loud as you go!\n        return -1;\n    }\n}\n"
+  }
+}

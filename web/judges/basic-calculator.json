@@ -1,0 +1,56 @@
+{
+  "kind": "function",
+  "entry": "calculate",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "simple addition",
+      "input": [
+        "1 + 1"
+      ],
+      "expected": 2
+    },
+    {
+      "label": "spaces and subtraction",
+      "input": [
+        " 2-1 + 2 "
+      ],
+      "expected": 3
+    },
+    {
+      "label": "nested parentheses",
+      "input": [
+        "(1+(4+5+2)-3)+(6+8)"
+      ],
+      "expected": 23
+    },
+    {
+      "label": "parenthesized subtraction",
+      "input": [
+        "2-(5-6)"
+      ],
+      "expected": 3
+    },
+    {
+      "label": "nested subtraction",
+      "input": [
+        "1-(2-(3+4))"
+      ],
+      "expected": 6
+    },
+    {
+      "label": "multi digit with nested signs",
+      "input": [
+        "10-(2+(3-4))"
+      ],
+      "expected": 9
+    }
+  ],
+  "paramNames": [
+    "s"
+  ],
+  "paramTypes": [
+    "string"
+  ],
+  "returnType": "integer"
+}
