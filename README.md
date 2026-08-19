@@ -332,7 +332,7 @@ The Makefile keeps the common commands short:
 ```bash
 make build       # release build
 make check       # the test gate, plus a live Gemini credential check
-make indent      # format and lint
+make indent      # format and lint: cargo fmt + clippy, ruff, shfmt
 make serve       # run the web server and agent together
 make web         # run the web server only
 make fetch-vendor  # download the pinned MediaPipe binaries (build does this)
@@ -365,9 +365,10 @@ when a data-channel payload builder in `web/lib.js` changes without
 regenerating the fixture the Rust consumer is tested against; every topic has
 two implementations, and `tests/fixtures/README.md` records what happened the
 last time they were only tested against themselves.
-`scripts/check-todo-deps.py` fails when a task in `TODO.md` names a dependency
-that does not exist or when the dependency graph closes a cycle, and skips
-silently when `TODO.md` is absent, which it is in a fresh clone.
+`scripts/check-todo-deps.py` fails when a task in the working task list names a
+dependency that does not exist or when the dependency graph closes a cycle. The
+task list is untracked, so the check skips when it is absent, which it is in a
+fresh clone.
 
 Checks that need credentials, a browser download, or a running binary stay out
 of the default run:

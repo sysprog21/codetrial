@@ -61,13 +61,18 @@ def main() -> int:
     start = html_text.find(START)
     end = html_text.find(END, start)
     if start == -1 or end == -1:
-        print(f"{INDEX}: could not find the problem-grid section markers", file=sys.stderr)
+        print(
+            f"{INDEX}: could not find the problem-grid section markers", file=sys.stderr
+        )
         return 1
 
     updated = html_text[:start] + generated() + html_text[end + len(END) :]
     if args.check:
         if updated != html_text:
-            print("web/index.html problem cards are stale; run: python3 scripts/gen-problem-cards.py", file=sys.stderr)
+            print(
+                "web/index.html problem cards are stale; run: python3 scripts/gen-problem-cards.py",
+                file=sys.stderr,
+            )
             return 1
         return 0
 

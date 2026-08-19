@@ -11,9 +11,9 @@ login_session_cookie() {
   cookie=$(curl -sS -X POST \
     -H "Content-Type: application/json" \
     -d "{\"login\":\"$handle\"}" \
-    -D - -o /dev/null "$base_url/api/login" \
-    | grep -i '^set-cookie:' \
-    | sed -n 's/.*\(codetrial_session=[^;]*\).*/\1/p')
+    -D - -o /dev/null "$base_url/api/login" |
+    grep -i '^set-cookie:' |
+    sed -n 's/.*\(codetrial_session=[^;]*\).*/\1/p')
   if [ -z "$cookie" ]; then
     echo "$base_url/api/login did not return a session cookie." >&2
     return 1

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check that TODO.md's task dependency graph resolves and is acyclic.
+"""Check that the task list's dependency graph resolves and is acyclic.
 
 The recording section carries a hand-maintained dependency graph, and prose in
 that file shows it was debugged by hand: task 5 explains that it cannot own the
@@ -17,7 +17,7 @@ It deliberately does not parse the "Execution order" prose. That block is
 written for people, and a parser for it would fail on the writing rather than
 on the graph.
 
-TODO.md is untracked by design, so a missing file is a skip, not a failure.
+The task list is untracked by design, so a missing file is a skip, not a failure.
 """
 
 import re
@@ -26,6 +26,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TODO = ROOT / "TODO.md"
+LABEL = TODO.name
 
 # Each section numbers its tasks from scratch, so "task 1" means different work
 # depending on where it is written. A reference carries its section only when it
@@ -190,13 +191,13 @@ def main():
 
     sections = parse(TODO.read_text())
     if not sections:
-        # TODO.md is untracked and per-developer, so a contributor keeping their
-        # own notes there has no task sections and must not get a red gate on a
-        # file that is not part of the repo. Said out loud rather than passed in
+        # The task list is untracked and per-developer, so a contributor keeping
+        # their own notes there has no task sections and must not get a red gate
+        # on a file that is not in the repo. Said out loud rather than passed in
         # silence: if a section was renamed, this is the only thing that says the
         # graph stopped being checked.
         print(
-            "check-todo-deps: TODO.md has none of the known task sections "
+            f"check-todo-deps: {LABEL} has none of the known task sections "
             f"({', '.join(sorted(SECTIONS))}); nothing to check",
             file=sys.stderr,
         )
@@ -210,7 +211,7 @@ def main():
             found = references(task["body"], name)
             if found is None:
                 problems.append(
-                    f"TODO.md:{task['line']}: task {task_id} in the {name} section "
+                    f"{LABEL}:{task['line']}: task {task_id} in the {name} section "
                     f"has no readable 'Depends on' clause; write 'Depends on none.' "
                     f"if it has none, and keep ranges as `1-3` or `1\u20133`"
                 )
@@ -221,7 +222,7 @@ def main():
                 # which is indistinguishable from a task with no dependencies.
                 # Silence is the one answer a dependency checker must not give.
                 problems.append(
-                    f"TODO.md:{task['line']}: task {task_id} names a 'Depends on' "
+                    f"{LABEL}:{task['line']}: task {task_id} names a 'Depends on' "
                     f"clause that parsed to nothing; say 'Depends on none.' or "
                     f"write the references so they can be read"
                 )
@@ -229,12 +230,12 @@ def main():
             for section, ref in edges:
                 if ref not in sections.get(section, {}):
                     problems.append(
-                        f"TODO.md:{task['line']}: task {task_id} depends on "
+                        f"{LABEL}:{task['line']}: task {task_id} depends on "
                         f"{section} task {ref}, which does not exist"
                     )
                 elif (section, ref) == node:
                     problems.append(
-                        f"TODO.md:{task['line']}: task {task_id} depends on itself"
+                        f"{LABEL}:{task['line']}: task {task_id} depends on itself"
                     )
             graph[node] = edges
 
@@ -249,9 +250,9 @@ def main():
             if edge not in colour:
                 continue
             if colour[edge] == GREY:
-                loop = path[path.index(edge):] + [edge]
+                loop = path[path.index(edge) :] + [edge]
                 problems.append(
-                    "TODO.md: dependency cycle: "
+                    f"{LABEL}: dependency cycle: "
                     + " -> ".join(f"{section}/{task}" for section, task in loop)
                 )
             elif colour[edge] == WHITE:

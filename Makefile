@@ -8,9 +8,26 @@ build: fetch-vendor
 clean:
 	cargo clean
 
+# Rust, then Python, then shell. `cargo fmt` ships with the toolchain, but ruff
+# and shfmt do not, so a missing one is a skip with a message rather than a
+# failed target: formatting is not part of the gate for these two, and someone
+# without the tools should not be blocked from running the half that works.
+#
+# shfmt takes its style from .editorconfig, which already declares this repo's
+# shell settings, so the rules live in one place rather than in a flag here.
 indent:
 	cargo fmt
 	cargo clippy --all-targets -- -D warnings
+	@if command -v ruff >/dev/null 2>&1; then \
+		ruff format scripts; \
+	else \
+		echo "ruff not installed; skipping Python formatting"; \
+	fi
+	@if command -v shfmt >/dev/null 2>&1; then \
+		shfmt -w scripts/*.sh; \
+	else \
+		echo "shfmt not installed; skipping shell formatting"; \
+	fi
 
 # No verify-vendor prerequisite: scripts/test.sh runs it, and having both hash
 # 12MB of wasm twice per check bought nothing.

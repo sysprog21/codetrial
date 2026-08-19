@@ -38,8 +38,14 @@ query questionData($titleSlug: String!) {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--check", action="store_true", help="fail if web/problems.js is stale")
-    parser.add_argument("--fetch", action="store_true", help="fetch LeetCode metadata into problem-bank/leetcode")
+    parser.add_argument(
+        "--check", action="store_true", help="fail if web/problems.js is stale"
+    )
+    parser.add_argument(
+        "--fetch",
+        action="store_true",
+        help="fetch LeetCode metadata into problem-bank/leetcode",
+    )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--delay-ms", type=int, default=250)
     parser.add_argument("--force", action="store_true")
@@ -65,7 +71,9 @@ def request_json(url: str, *, body: object | None = None) -> object:
     if body is not None:
         data = json.dumps(body).encode()
         headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(url, data=data, headers=headers, method="POST" if data else "GET")
+    request = urllib.request.Request(
+        url, data=data, headers=headers, method="POST" if data else "GET"
+    )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.loads(response.read())
@@ -105,7 +113,9 @@ def cached_detail(slug: str, force: bool) -> tuple[bool, object]:
     file = CACHE / f"{slug}.json"
     if file.exists() and not force:
         return True, read_json(file)
-    body = request_json(ENDPOINT, body={"query": DETAIL_QUERY, "variables": {"titleSlug": slug}})
+    body = request_json(
+        ENDPOINT, body={"query": DETAIL_QUERY, "variables": {"titleSlug": slug}}
+    )
     detail = body.get("data", {}).get("question")
     if not detail:
         raise RuntimeError(f"{slug}: missing question detail")
@@ -132,7 +142,18 @@ def fetch(limit: int | None, delay_ms: int, force: bool) -> None:
         cached += int(was_cached)
         if not was_cached and index + 1 < len(wanted):
             time.sleep(delay_ms / 1000)
-    print(json.dumps({"requested": len(wanted), "fetched": fetched, "cached": cached, "skipped": skipped, "cacheDir": str(CACHE)}, indent=2))
+    print(
+        json.dumps(
+            {
+                "requested": len(wanted),
+                "fetched": fetched,
+                "cached": cached,
+                "skipped": skipped,
+                "cacheDir": str(CACHE),
+            },
+            indent=2,
+        )
+    )
 
 
 def generated() -> str:
@@ -142,7 +163,7 @@ def generated() -> str:
             f"export const problems = {json.dumps(problems, indent=2)};",
             "",
             "export function getProblem(id) {",
-            "  return problems.find((problem) => problem.id === id) || problems.find((problem) => problem.id === \"two-sum\");",
+            '  return problems.find((problem) => problem.id === id) || problems.find((problem) => problem.id === "two-sum");',
             "}",
             "",
         ]
@@ -157,7 +178,10 @@ def main() -> int:
     output_text = generated()
     if args.check:
         if OUTPUT.read_text() != output_text:
-            print("web/problems.js is stale; run: python3 scripts/gen-problems.py", file=sys.stderr)
+            print(
+                "web/problems.js is stale; run: python3 scripts/gen-problems.py",
+                file=sys.stderr,
+            )
             return 1
         return 0
     OUTPUT.write_text(output_text)
