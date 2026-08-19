@@ -1362,7 +1362,14 @@ fn jpeg_frame_geometry(width: u32, height: u32) -> Option<(u16, u16, usize)> {
     ))
 }
 
-fn encode_video_frame_jpeg(frame: &BoxVideoFrame, quality: u8) -> Result<Vec<u8>, String> {
+/// Converts a frame to packed R, G, B, A bytes.
+///
+/// The format name is a trap. libyuv names its 32-bit formats after the
+/// little-endian word rather than the byte order, so `ABGR` is the variant that
+/// writes R, G, B, A into memory and `RGBA` writes A, B, G, R. Asking for
+/// `RGBA` pins the red channel to the alpha constant and transposes green and
+/// blue, which `channel_order_survives_the_libyuv_naming_trap` pins down.
+fn frame_to_rgba(frame: &BoxVideoFrame) -> Result<(Vec<u8>, u16, u16), String> {
     let width = frame.buffer.as_ref().width();
     let height = frame.buffer.as_ref().height();
 
@@ -1375,12 +1382,17 @@ fn encode_video_frame_jpeg(frame: &BoxVideoFrame, quality: u8) -> Result<Vec<u8>
     };
     let mut rgba = vec![0; rgba_len];
     frame.buffer.as_ref().to_argb(
-        VideoFormatType::RGBA,
+        VideoFormatType::ABGR,
         &mut rgba,
         width * 4,
         width as i32,
         height as i32,
     );
+    Ok((rgba, jpeg_width, jpeg_height))
+}
+
+fn encode_video_frame_jpeg(frame: &BoxVideoFrame, quality: u8) -> Result<Vec<u8>, String> {
+    let (rgba, jpeg_width, jpeg_height) = frame_to_rgba(frame)?;
 
     // Chroma is subsampled 2x2 here, because that is what `Encoder::new` picks
     // below quality 90 and nothing below overrides it. Deliberate: the source
@@ -2142,5 +2154,32 @@ mod tests {
 
         assert!(bytes.starts_with(&[0xff, 0xd8]));
         assert!(bytes.ends_with(&[0xff, 0xd9]));
+    }
+
+    /// A black frame cannot catch a permuted channel, because every channel
+    /// holds the same value. This one is solid red in BT.601 limited range, so
+    /// the four libyuv layouts land on four different byte patterns.
+    #[test]
+    fn channel_order_survives_the_libyuv_naming_trap() {
+        let mut buffer = I420Buffer::new(16, 16);
+        let (luma, blue, red) = buffer.data_mut();
+        luma.fill(81);
+        blue.fill(90);
+        red.fill(240);
+        let frame = VideoFrame {
+            rotation: VideoRotation::VideoRotation0,
+            timestamp_us: 0,
+            frame_metadata: None,
+            buffer: Box::new(buffer) as Box<dyn VideoBuffer>,
+        };
+
+        let (rgba, width, height) = frame_to_rgba(&frame).unwrap();
+
+        assert_eq!((width, height), (16, 16));
+        let pixel = &rgba[..4];
+        assert!(pixel[0] > 200, "red belongs in byte 0, got {pixel:?}");
+        assert!(pixel[1] < 60, "green belongs in byte 1, got {pixel:?}");
+        assert!(pixel[2] < 60, "blue belongs in byte 2, got {pixel:?}");
+        assert_eq!(pixel[3], 255, "alpha belongs in byte 3, got {pixel:?}");
     }
 }
