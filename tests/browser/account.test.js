@@ -1,0 +1,106 @@
+// Run with: node --test tests/browser/*.test.js
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { historyKey, saveReportHistory } from "../../web/history.js";
+
+const web = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web");
+const read = (name) => readFileSync(join(web, name), "utf8");
+
+test("lobby exposes signed in and signed out account hooks", () => {
+  const page = read("index.html");
+  const script = read("app.js");
+
+  for (const id of ["account-status", "github-login", "login-link", "logout", "history"]) {
+    assert.match(page, new RegExp(`id="${id}"`), `index.html must keep #${id}`);
+  }
+  assert.match(script, /fetch\("\/api\/login", \{/);
+  assert.ok(script.includes('replace(/^@+/, "")'), "GitHub username entry accepts a leading @ handle");
+  assert.doesNotMatch(script, /window\.location\.href = "\/api\/login"/);
+  assert.match(script, /fetchJson\("\/api\/session"\)/);
+  assert.match(script, /fetchJson\("\/api\/reports"\)/);
+  assert.match(script, /fetch\("\/api\/logout", \{ method: "POST" \}\)/);
+  assert.match(script, /readLocalHistory\(\)/);
+  assert.match(script, /setStartGate\(true\)/, "GitHub username must gate interview start when required");
+});
+
+test("interview history routes through the shared persistence helper", () => {
+  const script = read("interview.js");
+  const saveHistory = script.slice(script.indexOf("function saveHistory"));
+
+  assert.match(script, /import \{ saveReportHistory \} from "\.\/history\.js"/);
+  assert.match(saveHistory, /return saveReportHistory\(entry\)/);
+});
+
+test("report history writes local storage before account sync", async () => {
+  const storage = memoryStorage();
+  const entry = { id: "r1", problemId: "two-sum", report: { decision: "HIRE" } };
+  let releaseSession;
+  const session = new Promise((resolve) => {
+    releaseSession = () => resolve(response({ signedIn: true }));
+  });
+  const posts = [];
+  const saved = saveReportHistory(entry, {
+    storage,
+    fetcher: async (url, options) => {
+      if (url === "/api/session") return session;
+      posts.push({ url, options });
+      return response({ id: "r1" });
+    },
+  });
+
+  assert.equal(JSON.parse(storage.getItem(historyKey))[0].id, "r1");
+  assert.deepEqual(posts, []);
+
+  releaseSession();
+  assert.equal(await saved, true);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].url, "/api/reports");
+  assert.equal(posts[0].options.method, "POST");
+});
+
+test("report history keeps anonymous and failed account saves local", async () => {
+  const anonymous = memoryStorage();
+  assert.equal(
+    await saveReportHistory({ id: "anon", problemId: "two-sum" }, {
+      storage: anonymous,
+      fetcher: async () => response({ signedIn: false }),
+    }),
+    false,
+  );
+  assert.equal(JSON.parse(anonymous.getItem(historyKey))[0].id, "anon");
+
+  const failed = memoryStorage();
+  const calls = [];
+  assert.equal(
+    await saveReportHistory({ id: "fail", problemId: "two-sum" }, {
+      storage: failed,
+      fetcher: async (url) => {
+        calls.push(url);
+        return url === "/api/session" ? response({ signedIn: true }) : response({}, false);
+      },
+    }),
+    false,
+  );
+  assert.deepEqual(calls, ["/api/session", "/api/reports"]);
+  assert.equal(JSON.parse(failed.getItem(historyKey))[0].id, "fail");
+});
+
+function memoryStorage() {
+  const data = new Map();
+  return {
+    getItem: (key) => data.get(key) || null,
+    setItem: (key, value) => data.set(key, String(value)),
+  };
+}
+
+function response(body, ok = true) {
+  return {
+    ok,
+    json: async () => body,
+  };
+}

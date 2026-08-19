@@ -1,0 +1,267 @@
+{
+  "source": "https://leetcode.com/studyplan/top-interview-150/",
+  "titleSource": "https://github.com/logreg-n-coffee/leetcode-top-interview-150",
+  "slugSource": "https://leetcode.com/api/problems/all/",
+  "sections": [
+    {
+      "topic": "Array and String",
+      "slugs": [
+        "merge-sorted-array",
+        "remove-element",
+        "remove-duplicates-from-sorted-array",
+        "remove-duplicates-from-sorted-array-ii",
+        "majority-element",
+        "rotate-array",
+        "best-time-to-buy-and-sell-stock",
+        "best-time-to-buy-and-sell-stock-ii",
+        "jump-game",
+        "jump-game-ii",
+        "h-index",
+        "insert-delete-getrandom-o1",
+        "product-of-array-except-self",
+        "gas-station",
+        "candy",
+        "trapping-rain-water",
+        "roman-to-integer",
+        "integer-to-roman",
+        "length-of-last-word",
+        "longest-common-prefix",
+        "reverse-words-in-a-string",
+        "zigzag-conversion",
+        "find-the-index-of-the-first-occurrence-in-a-string",
+        "text-justification"
+      ]
+    },
+    {
+      "topic": "Two Pointers",
+      "slugs": [
+        "valid-palindrome",
+        "is-subsequence",
+        "container-with-most-water",
+        "two-sum-ii-input-array-is-sorted",
+        "3sum",
+        "happy-number"
+      ]
+    },
+    {
+      "topic": "Sliding Window",
+      "slugs": [
+        "longest-substring-without-repeating-characters",
+        "minimum-window-substring",
+        "substring-with-concatenation-of-all-words",
+        "minimum-size-subarray-sum"
+      ]
+    },
+    {
+      "topic": "Matrix",
+      "slugs": [
+        "valid-sudoku",
+        "spiral-matrix",
+        "rotate-image",
+        "set-matrix-zeroes",
+        "game-of-life"
+      ]
+    },
+    {
+      "topic": "Hashmap",
+      "slugs": [
+        "ransom-note",
+        "isomorphic-strings",
+        "word-pattern",
+        "valid-anagram",
+        "group-anagrams",
+        "two-sum",
+        "contains-duplicate-ii",
+        "longest-consecutive-sequence"
+      ]
+    },
+    {
+      "topic": "Intervals",
+      "slugs": [
+        "summary-ranges",
+        "merge-intervals",
+        "insert-interval",
+        "minimum-number-of-arrows-to-burst-balloons"
+      ]
+    },
+    {
+      "topic": "Stack",
+      "slugs": [
+        "valid-parentheses",
+        "simplify-path",
+        "min-stack",
+        "evaluate-reverse-polish-notation",
+        "basic-calculator"
+      ]
+    },
+    {
+      "topic": "Linked List",
+      "slugs": [
+        "linked-list-cycle",
+        "add-two-numbers",
+        "merge-two-sorted-lists",
+        "copy-list-with-random-pointer",
+        "reverse-linked-list",
+        "reverse-nodes-in-k-group",
+        "remove-nth-node-from-end-of-list",
+        "remove-duplicates-from-sorted-list-ii",
+        "rotate-list",
+        "partition-list",
+        "lru-cache"
+      ]
+    },
+    {
+      "topic": "Binary Tree - General",
+      "slugs": [
+        "maximum-depth-of-binary-tree",
+        "same-tree",
+        "invert-binary-tree",
+        "symmetric-tree",
+        "construct-binary-tree-from-preorder-and-inorder-traversal",
+        "construct-binary-tree-from-inorder-and-postorder-traversal",
+        "populating-next-right-pointers-in-each-node-ii",
+        "flatten-binary-tree-to-linked-list",
+        "path-sum",
+        "sum-root-to-leaf-numbers",
+        "binary-tree-maximum-path-sum",
+        "binary-search-tree-iterator",
+        "count-complete-tree-nodes",
+        "lowest-common-ancestor-of-a-binary-tree"
+      ]
+    },
+    {
+      "topic": "Binary Tree - BFS",
+      "slugs": [
+        "binary-tree-right-side-view",
+        "average-of-levels-in-binary-tree",
+        "binary-tree-level-order-traversal",
+        "binary-tree-zigzag-level-order-traversal",
+        "minimum-absolute-difference-in-bst",
+        "kth-smallest-element-in-a-bst",
+        "validate-binary-search-tree"
+      ]
+    },
+    {
+      "topic": "Graph - General",
+      "slugs": [
+        "number-of-islands",
+        "surrounded-regions",
+        "clone-graph",
+        "evaluate-division",
+        "course-schedule",
+        "course-schedule-ii"
+      ]
+    },
+    {
+      "topic": "Graph - BFS",
+      "slugs": [
+        "snakes-and-ladders",
+        "minimum-genetic-mutation",
+        "word-ladder"
+      ]
+    },
+    {
+      "topic": "Trie",
+      "slugs": [
+        "implement-trie-prefix-tree",
+        "design-add-and-search-words-data-structure",
+        "word-search-ii"
+      ]
+    },
+    {
+      "topic": "Backtracking",
+      "slugs": [
+        "letter-combinations-of-a-phone-number",
+        "combinations",
+        "permutations",
+        "combination-sum",
+        "n-queens-ii",
+        "generate-parentheses",
+        "word-search"
+      ]
+    },
+    {
+      "topic": "Divide and Conquer",
+      "slugs": [
+        "convert-sorted-array-to-binary-search-tree",
+        "sort-list",
+        "construct-quad-tree",
+        "merge-k-sorted-lists"
+      ]
+    },
+    {
+      "topic": "Kadane's Algorithm",
+      "slugs": [
+        "maximum-subarray",
+        "maximum-sum-circular-subarray"
+      ]
+    },
+    {
+      "topic": "Binary Search",
+      "slugs": [
+        "search-insert-position",
+        "search-a-2d-matrix",
+        "find-peak-element",
+        "search-in-rotated-sorted-array",
+        "find-first-and-last-position-of-element-in-sorted-array",
+        "find-minimum-in-rotated-sorted-array",
+        "median-of-two-sorted-arrays"
+      ]
+    },
+    {
+      "topic": "Heap",
+      "slugs": [
+        "kth-largest-element-in-an-array",
+        "ipo",
+        "find-k-pairs-with-smallest-sums",
+        "find-median-from-data-stream"
+      ]
+    },
+    {
+      "topic": "Bit Manipulation",
+      "slugs": [
+        "add-binary",
+        "reverse-bits",
+        "number-of-1-bits",
+        "single-number",
+        "single-number-ii",
+        "bitwise-and-of-numbers-range"
+      ]
+    },
+    {
+      "topic": "Math",
+      "slugs": [
+        "palindrome-number",
+        "plus-one",
+        "factorial-trailing-zeroes",
+        "sqrtx",
+        "powx-n",
+        "max-points-on-a-line"
+      ]
+    },
+    {
+      "topic": "1D Dynamic Programming",
+      "slugs": [
+        "climbing-stairs",
+        "house-robber",
+        "word-break",
+        "coin-change",
+        "longest-increasing-subsequence"
+      ]
+    },
+    {
+      "topic": "Multidimensional Dynamic Programming",
+      "slugs": [
+        "triangle",
+        "minimum-path-sum",
+        "unique-paths-ii",
+        "longest-palindromic-substring",
+        "interleaving-string",
+        "edit-distance",
+        "best-time-to-buy-and-sell-stock-iii",
+        "best-time-to-buy-and-sell-stock-iv",
+        "maximal-square"
+      ]
+    }
+  ]
+}

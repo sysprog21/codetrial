@@ -1,0 +1,5633 @@
+export const problems = [
+  {
+    "id": "valid-parentheses",
+    "title": "Valid Parentheses",
+    "difficulty": "Easy",
+    "topics": [
+      "String",
+      "Stack"
+    ],
+    "statement": [
+      "Given a string s containing just the characters '(', ')', '{', '}', '[' and ']', determine if the input string is valid.",
+      "An input string is valid if open brackets are closed by the same type of bracket, open brackets are closed in the correct order, and every close bracket has a corresponding open bracket of the same type."
+    ],
+    "examples": [
+      {
+        "input": "s = \"()\"",
+        "output": "true"
+      },
+      {
+        "input": "s = \"()[]{}\"",
+        "output": "true"
+      },
+      {
+        "input": "s = \"(]\"",
+        "output": "false"
+      },
+      {
+        "input": "s = \"([)]\"",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "1 <= s.length <= 10^4",
+      "s consists of parentheses only: '()[]{}'."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def isValid(self, s: str) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} s\n * @return {boolean}\n */\nfunction isValid(s) {\n  // Think out loud as you go!\n}\n",
+      "c": "bool isValid(char* s) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "class Solution {\npublic:\n    bool isValid(string s) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "class Solution {\n    public boolean isValid(String s) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "two-sum",
+    "title": "Two Sum",
+    "difficulty": "Easy",
+    "topics": [
+      "Array",
+      "Hash Table"
+    ],
+    "statement": [
+      "Given an array of integers nums and an integer target, return the indices of the two numbers such that they add up to target.",
+      "You may assume that each input has exactly one solution, and you may not use the same element twice.",
+      "You can return the answer in any order."
+    ],
+    "examples": [
+      {
+        "input": "nums = [2,7,11,15], target = 9",
+        "output": "[0,1]",
+        "explanation": "nums[0] + nums[1] == 9, so we return [0, 1]."
+      },
+      {
+        "input": "nums = [3,2,4], target = 6",
+        "output": "[1,2]"
+      },
+      {
+        "input": "nums = [3,3], target = 6",
+        "output": "[0,1]"
+      }
+    ],
+    "constraints": [
+      "2 <= nums.length <= 10^4",
+      "-10^9 <= nums[i] <= 10^9",
+      "-10^9 <= target <= 10^9",
+      "Exactly one valid answer exists."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def twoSum(self, nums: list[int], target: int) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @param {number} target\n * @return {number[]}\n */\nfunction twoSum(nums, target) {\n  // Think out loud as you go!\n}\n",
+      "c": "int* twoSum(int* nums, int numsSize, int target, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+      "cpp": "class Solution {\npublic:\n    vector<int> twoSum(vector<int>& nums, int target) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "class Solution {\n    public int[] twoSum(int[] nums, int target) {\n        // Think out loud as you go!\n        return new int[]{};\n    }\n}\n"
+    }
+  },
+  {
+    "id": "merge-sorted-array",
+    "title": "Merge Sorted Array",
+    "difficulty": "Easy",
+    "topics": [
+      "Array",
+      "Two Pointers",
+      "Sorting"
+    ],
+    "statement": [
+      "You are given two nondecreasing integer arrays, nums1 and nums2, plus counts m and n for their initialized portions.",
+      "nums1 has length m + n, with its final n slots reserved as empty space. Merge nums2 into nums1 so nums1 becomes one sorted array in place."
+    ],
+    "examples": [
+      {
+        "input": "nums1 = [1,2,3,0,0,0], m = 3, nums2 = [2,5,6], n = 3",
+        "output": "[1,2,2,3,5,6]"
+      },
+      {
+        "input": "nums1 = [1], m = 1, nums2 = [], n = 0",
+        "output": "[1]"
+      },
+      {
+        "input": "nums1 = [0], m = 0, nums2 = [1], n = 1",
+        "output": "[1]"
+      }
+    ],
+    "constraints": [
+      "nums1.length == m + n",
+      "nums2.length == n",
+      "0 <= m, n <= 200",
+      "1 <= m + n <= 200",
+      "-10^9 <= nums1[i], nums2[j] <= 10^9"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def merge(self, nums1: list[int], m: int, nums2: list[int], n: int) -> None:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums1\n * @param {number} m\n * @param {number[]} nums2\n * @param {number} n\n * @return {void}\n */\nfunction merge(nums1, m, nums2, n) {\n  // Think out loud as you go!\n}\n",
+      "c": "void merge(int* nums1, int nums1Size, int m, int* nums2, int nums2Size, int n) {\n    // Think out loud as you go!\n}\n",
+      "cpp": "class Solution {\npublic:\n    void merge(vector<int>& nums1, int m, vector<int>& nums2, int n) {\n        // Think out loud as you go!\n    }\n};\n",
+      "java": "class Solution {\n    public void merge(int[] nums1, int m, int[] nums2, int n) {\n        // Think out loud as you go!\n    }\n}\n"
+    }
+  },
+  {
+    "id": "remove-element",
+    "title": "Remove Element",
+    "difficulty": "Easy",
+    "topics": [
+      "Array",
+      "Two Pointers"
+    ],
+    "statement": [
+      "Given an integer array nums and a value val, remove every occurrence of val in place.",
+      "Return the number of remaining elements. The first returned-length items of nums must contain exactly those remaining elements; their order does not matter."
+    ],
+    "examples": [
+      {
+        "input": "nums = [3,2,2,3], val = 3",
+        "output": "2, nums starts with [2,2]"
+      },
+      {
+        "input": "nums = [0,1,2,2,3,0,4,2], val = 2",
+        "output": "5, nums starts with [0,1,3,0,4] in any order"
+      }
+    ],
+    "constraints": [
+      "0 <= nums.length <= 100",
+      "0 <= nums[i] <= 50",
+      "0 <= val <= 100"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def removeElement(self, nums: list[int], val: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @param {number} val\n * @return {number}\n */\nfunction removeElement(nums, val) {\n  // Think out loud as you go!\n}\n",
+      "c": "int removeElement(int* nums, int numsSize, int val) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int removeElement(vector<int>& nums, int val) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int removeElement(int[] nums, int val) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "remove-duplicates-from-sorted-array",
+    "title": "Remove Duplicates from Sorted Array",
+    "difficulty": "Easy",
+    "topics": [
+      "Array",
+      "Two Pointers"
+    ],
+    "statement": [
+      "Given a nondecreasing integer array nums, compact it in place so each distinct value appears once.",
+      "Return the number of distinct values. The first returned-length items of nums must hold those values in their original sorted order."
+    ],
+    "examples": [
+      {
+        "input": "nums = [1,1,2]",
+        "output": "2, nums starts with [1,2]"
+      },
+      {
+        "input": "nums = [0,0,1,1,1,2,2,3,3,4]",
+        "output": "5, nums starts with [0,1,2,3,4]"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 3 * 10^4",
+      "-100 <= nums[i] <= 100",
+      "nums is sorted in nondecreasing order."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def removeDuplicates(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction removeDuplicates(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "int removeDuplicates(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int removeDuplicates(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int removeDuplicates(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "remove-duplicates-from-sorted-array-ii",
+    "title": "Remove Duplicates from Sorted Array II",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Two Pointers"
+    ],
+    "statement": [
+      "Given a nondecreasing integer array nums, compact it in place so each distinct value appears at most twice.",
+      "Return the length of the kept prefix. The first returned-length items must preserve the original sorted order."
+    ],
+    "examples": [
+      {
+        "input": "nums = [1,1,1,2,2,3]",
+        "output": "5, nums starts with [1,1,2,2,3]"
+      },
+      {
+        "input": "nums = [0,0,1,1,1,1,2,3,3]",
+        "output": "7, nums starts with [0,0,1,1,2,3,3]"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 3 * 10^4",
+      "-10^4 <= nums[i] <= 10^4",
+      "nums is sorted in nondecreasing order."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def removeDuplicates(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction removeDuplicates(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "int removeDuplicates(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int removeDuplicates(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int removeDuplicates(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "majority-element",
+    "title": "Majority Element",
+    "difficulty": "Easy",
+    "topics": [
+      "Array",
+      "Hash Table",
+      "Divide and Conquer",
+      "Counting"
+    ],
+    "statement": [
+      "Given an integer array nums, return the value that appears more than half of the time.",
+      "The input always contains such a majority value."
+    ],
+    "examples": [
+      {
+        "input": "nums = [3,2,3]",
+        "output": "3"
+      },
+      {
+        "input": "nums = [2,2,1,1,1,2,2]",
+        "output": "2"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 5 * 10^4",
+      "-10^9 <= nums[i] <= 10^9",
+      "A majority element always exists."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def majorityElement(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction majorityElement(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "int majorityElement(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int majorityElement(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int majorityElement(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "rotate-array",
+    "title": "Rotate Array",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Math",
+      "Two Pointers"
+    ],
+    "statement": [
+      "Given an integer array nums, rotate it to the right by k steps in place.",
+      "After rotation, each element moves k positions to the right, wrapping around to the front as needed."
+    ],
+    "examples": [
+      {
+        "input": "nums = [1,2,3,4,5,6,7], k = 3",
+        "output": "[5,6,7,1,2,3,4]"
+      },
+      {
+        "input": "nums = [-1,-100,3,99], k = 2",
+        "output": "[3,99,-1,-100]"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 10^5",
+      "-2^31 <= nums[i] <= 2^31 - 1",
+      "0 <= k <= 10^5"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def rotate(self, nums: list[int], k: int) -> None:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @param {number} k\n * @return {void}\n */\nfunction rotate(nums, k) {\n  // Think out loud as you go!\n}\n",
+      "c": "void rotate(int* nums, int numsSize, int k) {\n    // Think out loud as you go!\n}\n",
+      "cpp": "class Solution {\npublic:\n    void rotate(vector<int>& nums, int k) {\n        // Think out loud as you go!\n    }\n};\n",
+      "java": "class Solution {\n    public void rotate(int[] nums, int k) {\n        // Think out loud as you go!\n    }\n}\n"
+    }
+  },
+  {
+    "id": "best-time-to-buy-and-sell-stock",
+    "title": "Best Time to Buy and Sell Stock",
+    "difficulty": "Easy",
+    "topics": [
+      "Array",
+      "Dynamic Programming"
+    ],
+    "statement": [
+      "Given daily stock prices, choose one day to buy and a later day to sell.",
+      "Return the largest possible profit. If no profitable sale exists, return 0."
+    ],
+    "examples": [
+      {
+        "input": "prices = [7,1,5,3,6,4]",
+        "output": "5"
+      },
+      {
+        "input": "prices = [7,6,4,3,1]",
+        "output": "0"
+      }
+    ],
+    "constraints": [
+      "1 <= prices.length <= 10^5",
+      "0 <= prices[i] <= 10^4"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def maxProfit(self, prices: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} prices\n * @return {number}\n */\nfunction maxProfit(prices) {\n  // Think out loud as you go!\n}\n",
+      "c": "int maxProfit(int* prices, int pricesSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int maxProfit(vector<int>& prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int maxProfit(int[] prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "best-time-to-buy-and-sell-stock-ii",
+    "title": "Best Time to Buy and Sell Stock II",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Dynamic Programming",
+      "Greedy"
+    ],
+    "statement": [
+      "Given daily stock prices, return the largest profit you can make with as many buy-sell transactions as you want.",
+      "You may hold at most one share at a time, so each sell must happen before the next buy."
+    ],
+    "examples": [
+      {
+        "input": "prices = [7,1,5,3,6,4]",
+        "output": "7"
+      },
+      {
+        "input": "prices = [1,2,3,4,5]",
+        "output": "4"
+      },
+      {
+        "input": "prices = [7,6,4,3,1]",
+        "output": "0"
+      }
+    ],
+    "constraints": [
+      "1 <= prices.length <= 3 * 10^4",
+      "0 <= prices[i] <= 10^4"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def maxProfit(self, prices: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} prices\n * @return {number}\n */\nfunction maxProfit(prices) {\n  // Think out loud as you go!\n}\n",
+      "c": "int maxProfit(int* prices, int pricesSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int maxProfit(vector<int>& prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int maxProfit(int[] prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "jump-game",
+    "title": "Jump Game",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Dynamic Programming",
+      "Greedy"
+    ],
+    "statement": [
+      "Given an array nums where nums[i] is the farthest jump length from index i, decide whether you can reach the last index from index 0.",
+      "You may choose any jump length from 0 up to nums[i] at each position."
+    ],
+    "examples": [
+      {
+        "input": "nums = [2,3,1,1,4]",
+        "output": "true"
+      },
+      {
+        "input": "nums = [3,2,1,0,4]",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 10^4",
+      "0 <= nums[i] <= 10^5"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def canJump(self, nums: list[int]) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {boolean}\n */\nfunction canJump(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "bool canJump(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "class Solution {\npublic:\n    bool canJump(vector<int>& nums) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "class Solution {\n    public boolean canJump(int[] nums) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "jump-game-ii",
+    "title": "Jump Game II",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Dynamic Programming",
+      "Greedy"
+    ],
+    "statement": [
+      "Given an array nums where nums[i] is the farthest jump length from index i, return the fewest jumps needed to reach the last index.",
+      "The input always allows reaching the last index."
+    ],
+    "examples": [
+      {
+        "input": "nums = [2,3,1,1,4]",
+        "output": "2"
+      },
+      {
+        "input": "nums = [2,3,0,1,4]",
+        "output": "2"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 10^4",
+      "0 <= nums[i] <= 1000",
+      "The last index is reachable."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def jump(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction jump(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "int jump(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int jump(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int jump(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "h-index",
+    "title": "H-Index",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Sorting",
+      "Counting Sort"
+    ],
+    "statement": [
+      "Given an array citations where citations[i] is the citation count for one paper, return the researcher's h-index.",
+      "The h-index is the largest h such that at least h papers have h or more citations."
+    ],
+    "examples": [
+      {
+        "input": "citations = [3,0,6,1,5]",
+        "output": "3"
+      },
+      {
+        "input": "citations = [1,3,1]",
+        "output": "1"
+      }
+    ],
+    "constraints": [
+      "1 <= citations.length <= 5000",
+      "0 <= citations[i] <= 1000"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def hIndex(self, citations: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} citations\n * @return {number}\n */\nfunction hIndex(citations) {\n  // Think out loud as you go!\n}\n",
+      "c": "int hIndex(int* citations, int citationsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int hIndex(vector<int>& citations) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int hIndex(int[] citations) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "insert-delete-getrandom-o1",
+    "title": "Insert Delete GetRandom O(1)",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Hash Table",
+      "Math",
+      "Design",
+      "Randomized"
+    ],
+    "statement": [
+      "Design a set of integers that supports insert, remove, and getRandom.",
+      "insert(val) adds val if absent and reports whether it was added. remove(val) deletes val if present and reports whether it was removed. getRandom() returns one current value, with each stored value equally likely."
+    ],
+    "examples": [
+      {
+        "input": "[\"RandomizedSet\",\"insert\",\"remove\",\"insert\",\"getRandom\",\"remove\",\"insert\",\"getRandom\"]\n[[],[1],[2],[2],[],[1],[2],[]]",
+        "output": "[null,true,false,true,2,true,false,2]"
+      }
+    ],
+    "constraints": [
+      "-2^31 <= val <= 2^31 - 1",
+      "At most 2 * 10^5 calls will be made.",
+      "getRandom is called only when the set is non-empty."
+    ],
+    "starterCode": {
+      "python": "class RandomizedSet:\n    def __init__(self):\n        pass\n\n    def insert(self, val: int) -> bool:\n        pass\n\n    def remove(self, val: int) -> bool:\n        pass\n\n    def getRandom(self) -> int:\n        pass\n",
+      "javascript": "class RandomizedSet {\n  constructor() {\n  }\n\n  /** @param {number} val @return {boolean} */\n  insert(val) {\n  }\n\n  /** @param {number} val @return {boolean} */\n  remove(val) {\n  }\n\n  /** @return {number} */\n  getRandom() {\n  }\n}\n",
+      "c": "typedef struct {\n    // Think out loud as you go!\n} RandomizedSet;\n\nRandomizedSet* randomizedSetCreate() {\n    return NULL;\n}\n\nbool randomizedSetInsert(RandomizedSet* obj, int val) {\n    return false;\n}\n\nbool randomizedSetRemove(RandomizedSet* obj, int val) {\n    return false;\n}\n\nint randomizedSetGetRandom(RandomizedSet* obj) {\n    return 0;\n}\n\nvoid randomizedSetFree(RandomizedSet* obj) {\n}\n",
+      "cpp": "class RandomizedSet {\npublic:\n    RandomizedSet() {\n    }\n\n    bool insert(int val) {\n        return false;\n    }\n\n    bool remove(int val) {\n        return false;\n    }\n\n    int getRandom() {\n        return 0;\n    }\n};\n",
+      "java": "class RandomizedSet {\n    public RandomizedSet() {\n    }\n\n    public boolean insert(int val) {\n        return false;\n    }\n\n    public boolean remove(int val) {\n        return false;\n    }\n\n    public int getRandom() {\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "product-of-array-except-self",
+    "title": "Product of Array Except Self",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Prefix Sum"
+    ],
+    "statement": [
+      "Given an integer array nums, return an array answer where answer[i] is the product of every nums[j] except nums[i].",
+      "Do this without using division."
+    ],
+    "examples": [
+      {
+        "input": "nums = [1,2,3,4]",
+        "output": "[24,12,8,6]"
+      },
+      {
+        "input": "nums = [-1,1,0,-3,3]",
+        "output": "[0,0,9,0,0]"
+      }
+    ],
+    "constraints": [
+      "2 <= nums.length <= 10^5",
+      "-30 <= nums[i] <= 30",
+      "The product of any prefix or suffix fits in a 32-bit integer."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def productExceptSelf(self, nums: list[int]) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {number[]}\n */\nfunction productExceptSelf(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "int* productExceptSelf(int* nums, int numsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+      "cpp": "class Solution {\npublic:\n    vector<int> productExceptSelf(vector<int>& nums) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "class Solution {\n    public int[] productExceptSelf(int[] nums) {\n        // Think out loud as you go!\n        return new int[]{};\n    }\n}\n"
+    }
+  },
+  {
+    "id": "gas-station",
+    "title": "Gas Station",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Greedy"
+    ],
+    "statement": [
+      "There are gas stations arranged in a circle. gas[i] is the fuel gained at station i, and cost[i] is the fuel needed to drive from station i to the next station.",
+      "Return the index of a station from which you can complete the full circuit, or -1 if no such start exists."
+    ],
+    "examples": [
+      {
+        "input": "gas = [1,2,3,4,5], cost = [3,4,5,1,2]",
+        "output": "3"
+      },
+      {
+        "input": "gas = [2,3,4], cost = [3,4,3]",
+        "output": "-1"
+      }
+    ],
+    "constraints": [
+      "gas.length == cost.length",
+      "1 <= gas.length <= 10^5",
+      "0 <= gas[i], cost[i] <= 10^4"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def canCompleteCircuit(self, gas: list[int], cost: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} gas\n * @param {number[]} cost\n * @return {number}\n */\nfunction canCompleteCircuit(gas, cost) {\n  // Think out loud as you go!\n}\n",
+      "c": "int canCompleteCircuit(int* gas, int gasSize, int* cost, int costSize) {\n    // Think out loud as you go!\n    return -1;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int canCompleteCircuit(vector<int>& gas, vector<int>& cost) {\n        // Think out loud as you go!\n        return -1;\n    }\n};\n",
+      "java": "class Solution {\n    public int canCompleteCircuit(int[] gas, int[] cost) {\n        // Think out loud as you go!\n        return -1;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "candy",
+    "title": "Candy",
+    "difficulty": "Hard",
+    "topics": [
+      "Array",
+      "Greedy"
+    ],
+    "statement": [
+      "Given ratings for children standing in a line, give each child at least one candy.",
+      "Any child with a higher rating than an immediate neighbor must receive more candies than that neighbor. Return the minimum total candies needed."
+    ],
+    "examples": [
+      {
+        "input": "ratings = [1,0,2]",
+        "output": "5"
+      },
+      {
+        "input": "ratings = [1,2,2]",
+        "output": "4"
+      }
+    ],
+    "constraints": [
+      "1 <= ratings.length <= 2 * 10^4",
+      "0 <= ratings[i] <= 2 * 10^4"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def candy(self, ratings: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} ratings\n * @return {number}\n */\nfunction candy(ratings) {\n  // Think out loud as you go!\n}\n",
+      "c": "int candy(int* ratings, int ratingsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int candy(vector<int>& ratings) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int candy(int[] ratings) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "trapping-rain-water",
+    "title": "Trapping Rain Water",
+    "difficulty": "Hard",
+    "topics": [
+      "Array",
+      "Two Pointers",
+      "Dynamic Programming",
+      "Stack",
+      "Monotonic Stack"
+    ],
+    "statement": [
+      "Given nonnegative bar heights, compute how much rain water is trapped after raining.",
+      "Water above a position is limited by the shorter of the tallest bar to its left and the tallest bar to its right."
+    ],
+    "examples": [
+      {
+        "input": "height = [0,1,0,2,1,0,1,3,2,1,2,1]",
+        "output": "6"
+      },
+      {
+        "input": "height = [4,2,0,3,2,5]",
+        "output": "9"
+      }
+    ],
+    "constraints": [
+      "1 <= height.length <= 2 * 10^4",
+      "0 <= height[i] <= 10^5"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def trap(self, height: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} height\n * @return {number}\n */\nfunction trap(height) {\n  // Think out loud as you go!\n}\n",
+      "c": "int trap(int* height, int heightSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int trap(vector<int>& height) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int trap(int[] height) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "roman-to-integer",
+    "title": "Roman to Integer",
+    "difficulty": "Easy",
+    "topics": [
+      "Hash Table",
+      "Math",
+      "String"
+    ],
+    "statement": [
+      "Given a valid Roman numeral, convert it to its integer value.",
+      "Roman symbols normally add from left to right, but a smaller symbol before a larger one subtracts instead."
+    ],
+    "examples": [
+      {
+        "input": "s = \"III\"",
+        "output": "3"
+      },
+      {
+        "input": "s = \"LVIII\"",
+        "output": "58"
+      },
+      {
+        "input": "s = \"MCMXCIV\"",
+        "output": "1994"
+      }
+    ],
+    "constraints": [
+      "1 <= s.length <= 15",
+      "s contains only I, V, X, L, C, D, and M.",
+      "s is a valid Roman numeral in the range 1 to 3999."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def romanToInt(self, s: str) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} s\n * @return {number}\n */\nfunction romanToInt(s) {\n  // Think out loud as you go!\n}\n",
+      "c": "int romanToInt(char* s) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int romanToInt(string s) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int romanToInt(String s) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "integer-to-roman",
+    "title": "Integer to Roman",
+    "difficulty": "Medium",
+    "topics": [
+      "Hash Table",
+      "Math",
+      "String"
+    ],
+    "statement": [
+      "Given an integer, convert it to a Roman numeral.",
+      "Use the standard subtractive forms such as IV, IX, XL, XC, CD, and CM when they apply."
+    ],
+    "examples": [
+      {
+        "input": "num = 3749",
+        "output": "\"MMMDCCXLIX\""
+      },
+      {
+        "input": "num = 58",
+        "output": "\"LVIII\""
+      },
+      {
+        "input": "num = 1994",
+        "output": "\"MCMXCIV\""
+      }
+    ],
+    "constraints": [
+      "1 <= num <= 3999"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def intToRoman(self, num: int) -> str:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number} num\n * @return {string}\n */\nfunction intToRoman(num) {\n  // Think out loud as you go!\n}\n",
+      "c": "char* intToRoman(int num) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
+      "cpp": "class Solution {\npublic:\n    string intToRoman(int num) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
+      "java": "class Solution {\n    public String intToRoman(int num) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
+    }
+  },
+  {
+    "id": "length-of-last-word",
+    "title": "Length of Last Word",
+    "difficulty": "Easy",
+    "topics": [
+      "String"
+    ],
+    "statement": [
+      "Given a string containing words separated by spaces, return the length of the final word.",
+      "A word is a maximal group of non-space characters, and the string may contain leading or trailing spaces."
+    ],
+    "examples": [
+      {
+        "input": "s = \"Hello World\"",
+        "output": "5"
+      },
+      {
+        "input": "s = \"   fly me   to   the moon  \"",
+        "output": "4"
+      },
+      {
+        "input": "s = \"luffy is still joyboy\"",
+        "output": "6"
+      }
+    ],
+    "constraints": [
+      "1 <= s.length <= 10^4",
+      "s consists of English letters and spaces.",
+      "There is at least one word in s."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def lengthOfLastWord(self, s: str) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} s\n * @return {number}\n */\nfunction lengthOfLastWord(s) {\n  // Think out loud as you go!\n}\n",
+      "c": "int lengthOfLastWord(char* s) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int lengthOfLastWord(string s) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int lengthOfLastWord(String s) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "longest-common-prefix",
+    "title": "Longest Common Prefix",
+    "difficulty": "Easy",
+    "topics": [
+      "String",
+      "Trie"
+    ],
+    "statement": [
+      "Given an array of strings, return the longest prefix shared by every string.",
+      "If no non-empty prefix is common to all strings, return the empty string."
+    ],
+    "examples": [
+      {
+        "input": "strs = [\"flower\",\"flow\",\"flight\"]",
+        "output": "\"fl\""
+      },
+      {
+        "input": "strs = [\"dog\",\"racecar\",\"car\"]",
+        "output": "\"\""
+      }
+    ],
+    "constraints": [
+      "1 <= strs.length <= 200",
+      "0 <= strs[i].length <= 200",
+      "strs[i] contains only lowercase English letters when non-empty."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def longestCommonPrefix(self, strs: list[str]) -> str:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string[]} strs\n * @return {string}\n */\nfunction longestCommonPrefix(strs) {\n  // Think out loud as you go!\n}\n",
+      "c": "char* longestCommonPrefix(char** strs, int strsSize) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
+      "cpp": "class Solution {\npublic:\n    string longestCommonPrefix(vector<string>& strs) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
+      "java": "class Solution {\n    public String longestCommonPrefix(String[] strs) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
+    }
+  },
+  {
+    "id": "reverse-words-in-a-string",
+    "title": "Reverse Words in a String",
+    "difficulty": "Medium",
+    "topics": [
+      "String",
+      "Two Pointers"
+    ],
+    "statement": [
+      "Given a string, return the words in reverse order separated by a single space.",
+      "Trim leading and trailing spaces, and collapse multiple spaces between words in the result."
+    ],
+    "examples": [
+      {
+        "input": "s = \"the sky is blue\"",
+        "output": "\"blue is sky the\""
+      },
+      {
+        "input": "s = \"  hello world  \"",
+        "output": "\"world hello\""
+      },
+      {
+        "input": "s = \"a good   example\"",
+        "output": "\"example good a\""
+      }
+    ],
+    "constraints": [
+      "1 <= s.length <= 10^4",
+      "s contains English letters, digits, and spaces.",
+      "There is at least one word in s."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def reverseWords(self, s: str) -> str:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} s\n * @return {string}\n */\nfunction reverseWords(s) {\n  // Think out loud as you go!\n}\n",
+      "c": "char* reverseWords(char* s) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
+      "cpp": "class Solution {\npublic:\n    string reverseWords(string s) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
+      "java": "class Solution {\n    public String reverseWords(String s) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
+    }
+  },
+  {
+    "id": "zigzag-conversion",
+    "title": "Zigzag Conversion",
+    "difficulty": "Medium",
+    "topics": [
+      "String"
+    ],
+    "statement": [
+      "Write the characters of a string across a zigzag pattern with the given number of rows, then read the rows from top to bottom.",
+      "Return the resulting string without drawing the grid explicitly."
+    ],
+    "examples": [
+      {
+        "input": "s = \"PAYPALISHIRING\", numRows = 3",
+        "output": "\"PAHNAPLSIIGYIR\""
+      },
+      {
+        "input": "s = \"PAYPALISHIRING\", numRows = 4",
+        "output": "\"PINALSIGYAHRPI\""
+      },
+      {
+        "input": "s = \"A\", numRows = 1",
+        "output": "\"A\""
+      }
+    ],
+    "constraints": [
+      "1 <= s.length <= 1000",
+      "1 <= numRows <= 1000",
+      "s consists of English letters, comma, and period."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def convert(self, s: str, numRows: int) -> str:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} s\n * @param {number} numRows\n * @return {string}\n */\nfunction convert(s, numRows) {\n  // Think out loud as you go!\n}\n",
+      "c": "char* convert(char* s, int numRows) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
+      "cpp": "class Solution {\npublic:\n    string convert(string s, int numRows) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
+      "java": "class Solution {\n    public String convert(String s, int numRows) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
+    }
+  },
+  {
+    "id": "find-the-index-of-the-first-occurrence-in-a-string",
+    "title": "Find the Index of the First Occurrence in a String",
+    "difficulty": "Easy",
+    "topics": [
+      "Two Pointers",
+      "String",
+      "String Matching"
+    ],
+    "statement": [
+      "Given two strings, return the first index where needle appears in haystack.",
+      "Return -1 if needle is not present."
+    ],
+    "examples": [
+      {
+        "input": "haystack = \"sadbutsad\", needle = \"sad\"",
+        "output": "0"
+      },
+      {
+        "input": "haystack = \"leetcode\", needle = \"leeto\"",
+        "output": "-1"
+      }
+    ],
+    "constraints": [
+      "1 <= haystack.length, needle.length <= 10^4",
+      "haystack and needle consist of lowercase English letters."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def strStr(self, haystack: str, needle: str) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} haystack\n * @param {string} needle\n * @return {number}\n */\nfunction strStr(haystack, needle) {\n  // Think out loud as you go!\n}\n",
+      "c": "int strStr(char* haystack, char* needle) {\n    // Think out loud as you go!\n    return -1;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int strStr(string haystack, string needle) {\n        // Think out loud as you go!\n        return -1;\n    }\n};\n",
+      "java": "class Solution {\n    public int strStr(String haystack, String needle) {\n        // Think out loud as you go!\n        return -1;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "text-justification",
+    "title": "Text Justification",
+    "difficulty": "Hard",
+    "topics": [
+      "Array",
+      "String",
+      "Simulation"
+    ],
+    "statement": [
+      "Given a list of words and a maximum line width, format the words into fully justified text.",
+      "Each line must have exactly maxWidth characters. Non-final lines spread spaces as evenly as possible, with extra spaces assigned to earlier gaps. The final line is left-justified."
+    ],
+    "examples": [
+      {
+        "input": "words = [\"This\", \"is\", \"an\", \"example\", \"of\", \"text\", \"justification.\"], maxWidth = 16",
+        "output": "[\"This    is    an\", \"example  of text\", \"justification.  \"]"
+      },
+      {
+        "input": "words = [\"What\",\"must\",\"be\",\"acknowledgment\",\"shall\",\"be\"], maxWidth = 16",
+        "output": "[\"What   must   be\", \"acknowledgment  \", \"shall be        \"]"
+      }
+    ],
+    "constraints": [
+      "1 <= words.length <= 300",
+      "1 <= words[i].length <= 20",
+      "words[i] contains only English letters and symbols.",
+      "1 <= maxWidth <= 100",
+      "words[i].length <= maxWidth"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def fullJustify(self, words: list[str], maxWidth: int) -> list[str]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string[]} words\n * @param {number} maxWidth\n * @return {string[]}\n */\nfunction fullJustify(words, maxWidth) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nchar** fullJustify(char** words, int wordsSize, int maxWidth, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+      "cpp": "class Solution {\npublic:\n    vector<string> fullJustify(vector<string>& words, int maxWidth) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "class Solution {\n    public List<String> fullJustify(String[] words, int maxWidth) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
+    }
+  },
+  {
+    "id": "valid-palindrome",
+    "title": "Valid Palindrome",
+    "difficulty": "Easy",
+    "topics": [
+      "Two Pointers",
+      "String"
+    ],
+    "statement": [
+      "Given a string, determine whether it reads the same forward and backward after ignoring non-alphanumeric characters and letter case.",
+      "Digits and letters both count as comparable characters."
+    ],
+    "examples": [
+      {
+        "input": "s = \"A man, a plan, a canal: Panama\"",
+        "output": "true"
+      },
+      {
+        "input": "s = \"race a car\"",
+        "output": "false"
+      },
+      {
+        "input": "s = \" \"",
+        "output": "true"
+      }
+    ],
+    "constraints": [
+      "1 <= s.length <= 2 * 10^5",
+      "s consists of printable ASCII characters."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def isPalindrome(self, s: str) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} s\n * @return {boolean}\n */\nfunction isPalindrome(s) {\n  // Think out loud as you go!\n}\n",
+      "c": "bool isPalindrome(char* s) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "class Solution {\npublic:\n    bool isPalindrome(string s) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "class Solution {\n    public boolean isPalindrome(String s) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "is-subsequence",
+    "title": "Is Subsequence",
+    "difficulty": "Easy",
+    "topics": [
+      "Two Pointers",
+      "String",
+      "Dynamic Programming"
+    ],
+    "statement": [
+      "Given strings s and t, return whether s is a subsequence of t.",
+      "A subsequence keeps relative order but may delete characters from t."
+    ],
+    "examples": [
+      {
+        "input": "s = \"abc\", t = \"ahbgdc\"",
+        "output": "true"
+      },
+      {
+        "input": "s = \"axc\", t = \"ahbgdc\"",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "0 <= s.length <= 100",
+      "0 <= t.length <= 10^4",
+      "s and t consist only of lowercase English letters."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def isSubsequence(self, s: str, t: str) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} s\n * @param {string} t\n * @return {boolean}\n */\nfunction isSubsequence(s, t) {\n  // Think out loud as you go!\n}\n",
+      "c": "bool isSubsequence(char* s, char* t) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "class Solution {\npublic:\n    bool isSubsequence(string s, string t) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "class Solution {\n    public boolean isSubsequence(String s, String t) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "container-with-most-water",
+    "title": "Container With Most Water",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Two Pointers",
+      "Greedy"
+    ],
+    "statement": [
+      "Given vertical line heights, choose two lines that form a container holding the most water.",
+      "The area is the distance between the two lines multiplied by the shorter height."
+    ],
+    "examples": [
+      {
+        "input": "height = [1,8,6,2,5,4,8,3,7]",
+        "output": "49"
+      },
+      {
+        "input": "height = [1,1]",
+        "output": "1"
+      }
+    ],
+    "constraints": [
+      "2 <= height.length <= 10^5",
+      "0 <= height[i] <= 10^4"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def maxArea(self, height: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} height\n * @return {number}\n */\nfunction maxArea(height) {\n  // Think out loud as you go!\n}\n",
+      "c": "int maxArea(int* height, int heightSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int maxArea(vector<int>& height) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int maxArea(int[] height) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "two-sum-ii-input-array-is-sorted",
+    "title": "Two Sum II - Input Array Is Sorted",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Two Pointers",
+      "Binary Search"
+    ],
+    "statement": [
+      "Given a 1-indexed sorted array of integers, return the two indices whose values add to target.",
+      "Exactly one answer exists, and the first returned index must be smaller than the second."
+    ],
+    "examples": [
+      {
+        "input": "numbers = [2,7,11,15], target = 9",
+        "output": "[1,2]"
+      },
+      {
+        "input": "numbers = [2,3,4], target = 6",
+        "output": "[1,3]"
+      },
+      {
+        "input": "numbers = [-1,0], target = -1",
+        "output": "[1,2]"
+      }
+    ],
+    "constraints": [
+      "2 <= numbers.length <= 3 * 10^4",
+      "-1000 <= numbers[i] <= 1000",
+      "numbers is sorted in non-decreasing order.",
+      "-1000 <= target <= 1000",
+      "Exactly one solution exists."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def twoSum(self, numbers: list[int], target: int) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} numbers\n * @param {number} target\n * @return {number[]}\n */\nfunction twoSum(numbers, target) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* twoSum(int* numbers, int numbersSize, int target, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+      "cpp": "class Solution {\npublic:\n    vector<int> twoSum(vector<int>& numbers, int target) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "class Solution {\n    public int[] twoSum(int[] numbers, int target) {\n        // Think out loud as you go!\n        return new int[]{};\n    }\n}\n"
+    }
+  },
+  {
+    "id": "3sum",
+    "title": "3Sum",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Two Pointers",
+      "Sorting"
+    ],
+    "statement": [
+      "Given an integer array, return all unique triplets whose values sum to zero.",
+      "The output must not contain duplicate triplets."
+    ],
+    "examples": [
+      {
+        "input": "nums = [-1,0,1,2,-1,-4]",
+        "output": "[[-1,-1,2],[-1,0,1]]"
+      },
+      {
+        "input": "nums = [0,1,1]",
+        "output": "[]"
+      },
+      {
+        "input": "nums = [0,0,0]",
+        "output": "[[0,0,0]]"
+      }
+    ],
+    "constraints": [
+      "3 <= nums.length <= 3000",
+      "-10^5 <= nums[i] <= 10^5"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def threeSum(self, nums: list[int]) -> list[list[int]]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {number[][]}\n */\nfunction threeSum(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** threeSum(int* nums, int numsSize, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+      "cpp": "class Solution {\npublic:\n    vector<vector<int>> threeSum(vector<int>& nums) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "class Solution {\n    public List<List<Integer>> threeSum(int[] nums) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
+    }
+  },
+  {
+    "id": "happy-number",
+    "title": "Happy Number",
+    "difficulty": "Easy",
+    "topics": [
+      "Hash Table",
+      "Math",
+      "Two Pointers"
+    ],
+    "statement": [
+      "Repeatedly replace a positive integer with the sum of the squares of its digits.",
+      "Return true if the process reaches 1, and false if it enters a cycle that never reaches 1."
+    ],
+    "examples": [
+      {
+        "input": "n = 19",
+        "output": "true"
+      },
+      {
+        "input": "n = 2",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "1 <= n <= 2^31 - 1"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def isHappy(self, n: int) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number} n\n * @return {boolean}\n */\nfunction isHappy(n) {\n  // Think out loud as you go!\n}\n",
+      "c": "bool isHappy(int n) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "class Solution {\npublic:\n    bool isHappy(int n) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "class Solution {\n    public boolean isHappy(int n) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "longest-substring-without-repeating-characters",
+    "title": "Longest Substring Without Repeating Characters",
+    "difficulty": "Medium",
+    "topics": [
+      "Hash Table",
+      "String",
+      "Sliding Window"
+    ],
+    "statement": [
+      "Given a string, return the length of the longest substring that contains no repeated characters.",
+      "A substring must be contiguous."
+    ],
+    "examples": [
+      {
+        "input": "s = \"abcabcbb\"",
+        "output": "3"
+      },
+      {
+        "input": "s = \"bbbbb\"",
+        "output": "1"
+      },
+      {
+        "input": "s = \"pwwkew\"",
+        "output": "3"
+      }
+    ],
+    "constraints": [
+      "0 <= s.length <= 5 * 10^4",
+      "s consists of letters, digits, symbols, and spaces."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def lengthOfLongestSubstring(self, s: str) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} s\n * @return {number}\n */\nfunction lengthOfLongestSubstring(s) {\n  // Think out loud as you go!\n}\n",
+      "c": "int lengthOfLongestSubstring(char* s) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int lengthOfLongestSubstring(string s) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int lengthOfLongestSubstring(String s) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "minimum-window-substring",
+    "title": "Minimum Window Substring",
+    "difficulty": "Hard",
+    "topics": [
+      "Hash Table",
+      "String",
+      "Sliding Window"
+    ],
+    "statement": [
+      "Given strings s and t, return the shortest substring of s containing every character from t with the required multiplicity.",
+      "Return the empty string if no such window exists."
+    ],
+    "examples": [
+      {
+        "input": "s = \"ADOBECODEBANC\", t = \"ABC\"",
+        "output": "\"BANC\""
+      },
+      {
+        "input": "s = \"a\", t = \"a\"",
+        "output": "\"a\""
+      },
+      {
+        "input": "s = \"a\", t = \"aa\"",
+        "output": "\"\""
+      }
+    ],
+    "constraints": [
+      "1 <= s.length, t.length <= 10^5",
+      "s and t consist of English letters.",
+      "The answer is unique when it exists."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def minWindow(self, s: str, t: str) -> str:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} s\n * @param {string} t\n * @return {string}\n */\nfunction minWindow(s, t) {\n  // Think out loud as you go!\n}\n",
+      "c": "char* minWindow(char* s, char* t) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
+      "cpp": "class Solution {\npublic:\n    string minWindow(string s, string t) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
+      "java": "class Solution {\n    public String minWindow(String s, String t) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
+    }
+  },
+  {
+    "id": "substring-with-concatenation-of-all-words",
+    "title": "Substring with Concatenation of All Words",
+    "difficulty": "Hard",
+    "topics": [
+      "Hash Table",
+      "String",
+      "Sliding Window"
+    ],
+    "statement": [
+      "Given a string and a list of equal-length words, return every starting index where a substring is formed by concatenating each word exactly once.",
+      "The words may be used in any order, but every listed word and its multiplicity must be used."
+    ],
+    "examples": [
+      {
+        "input": "s = \"barfoothefoobarman\", words = [\"foo\",\"bar\"]",
+        "output": "[0,9]"
+      },
+      {
+        "input": "s = \"wordgoodgoodgoodbestword\", words = [\"word\",\"good\",\"best\",\"word\"]",
+        "output": "[]"
+      },
+      {
+        "input": "s = \"barfoofoobarthefoobarman\", words = [\"bar\",\"foo\",\"the\"]",
+        "output": "[6,9,12]"
+      }
+    ],
+    "constraints": [
+      "1 <= s.length <= 10^4",
+      "1 <= words.length <= 5000",
+      "1 <= words[i].length <= 30",
+      "s and words[i] consist of lowercase English letters."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def findSubstring(self, s: str, words: list[str]) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} s\n * @param {string[]} words\n * @return {number[]}\n */\nfunction findSubstring(s, words) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* findSubstring(char* s, char** words, int wordsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+      "cpp": "class Solution {\npublic:\n    vector<int> findSubstring(string s, vector<string>& words) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "class Solution {\n    public List<Integer> findSubstring(String s, String[] words) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
+    }
+  },
+  {
+    "id": "minimum-size-subarray-sum",
+    "title": "Minimum Size Subarray Sum",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Binary Search",
+      "Sliding Window",
+      "Prefix Sum"
+    ],
+    "statement": [
+      "Given a target and an array of positive integers, return the smallest length of a contiguous subarray whose sum is at least target.",
+      "Return 0 if no such subarray exists."
+    ],
+    "examples": [
+      {
+        "input": "target = 7, nums = [2,3,1,2,4,3]",
+        "output": "2"
+      },
+      {
+        "input": "target = 4, nums = [1,4,4]",
+        "output": "1"
+      },
+      {
+        "input": "target = 11, nums = [1,1,1,1,1,1,1,1]",
+        "output": "0"
+      }
+    ],
+    "constraints": [
+      "1 <= target <= 10^9",
+      "1 <= nums.length <= 10^5",
+      "1 <= nums[i] <= 10^4"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def minSubArrayLen(self, target: int, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number} target\n * @param {number[]} nums\n * @return {number}\n */\nfunction minSubArrayLen(target, nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "int minSubArrayLen(int target, int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int minSubArrayLen(int target, vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int minSubArrayLen(int target, int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "valid-sudoku",
+    "title": "Valid Sudoku",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Hash Table",
+      "Matrix"
+    ],
+    "statement": [
+      "Given a 9 x 9 Sudoku board, determine whether the filled cells obey Sudoku rules.",
+      "Each row, each column, and each 3 x 3 box may contain digits 1 through 9 at most once. Empty cells are marked with '.'."
+    ],
+    "examples": [
+      {
+        "input": "board = [[\"5\",\"3\",\".\",\".\",\"7\",\".\",\".\",\".\",\".\"],[\"6\",\".\",\".\",\"1\",\"9\",\"5\",\".\",\".\",\".\"],[\".\",\"9\",\"8\",\".\",\".\",\".\",\".\",\"6\",\".\"],[\"8\",\".\",\".\",\".\",\"6\",\".\",\".\",\".\",\"3\"],[\"4\",\".\",\".\",\"8\",\".\",\"3\",\".\",\".\",\"1\"],[\"7\",\".\",\".\",\".\",\"2\",\".\",\".\",\".\",\"6\"],[\".\",\"6\",\".\",\".\",\".\",\".\",\"2\",\"8\",\".\"],[\".\",\".\",\".\",\"4\",\"1\",\"9\",\".\",\".\",\"5\"],[\".\",\".\",\".\",\".\",\"8\",\".\",\".\",\"7\",\"9\"]]",
+        "output": "true"
+      },
+      {
+        "input": "board = [[\"8\",\"3\",\".\",\".\",\"7\",\".\",\".\",\".\",\".\"],[\"6\",\".\",\".\",\"1\",\"9\",\"5\",\".\",\".\",\".\"],[\".\",\"9\",\"8\",\".\",\".\",\".\",\".\",\"6\",\".\"],[\"8\",\".\",\".\",\".\",\"6\",\".\",\".\",\".\",\"3\"],[\"4\",\".\",\".\",\"8\",\".\",\"3\",\".\",\".\",\"1\"],[\"7\",\".\",\".\",\".\",\"2\",\".\",\".\",\".\",\"6\"],[\".\",\"6\",\".\",\".\",\".\",\".\",\"2\",\"8\",\".\"],[\".\",\".\",\".\",\"4\",\"1\",\"9\",\".\",\".\",\"5\"],[\".\",\".\",\".\",\".\",\"8\",\".\",\".\",\"7\",\"9\"]]",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "board.length == 9",
+      "board[i].length == 9",
+      "board[i][j] is a digit '1' through '9' or '.'."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def isValidSudoku(self, board: list[list[str]]) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {character[][]} board\n * @return {boolean}\n */\nfunction isValidSudoku(board) {\n  // Think out loud as you go!\n}\n",
+      "c": "bool isValidSudoku(char** board, int boardSize, int* boardColSize) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "class Solution {\npublic:\n    bool isValidSudoku(vector<vector<char>>& board) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "class Solution {\n    public boolean isValidSudoku(char[][] board) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "spiral-matrix",
+    "title": "Spiral Matrix",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Matrix",
+      "Simulation"
+    ],
+    "statement": [
+      "Given an m x n matrix, return every value in clockwise spiral order.",
+      "Start at the top-left corner, walk across the top row, then continue around the remaining boundary until all cells are visited."
+    ],
+    "examples": [
+      {
+        "input": "matrix = [[1,2,3],[4,5,6],[7,8,9]]",
+        "output": "[1,2,3,6,9,8,7,4,5]"
+      },
+      {
+        "input": "matrix = [[1,2,3,4],[5,6,7,8],[9,10,11,12]]",
+        "output": "[1,2,3,4,8,12,11,10,9,5,6,7]"
+      }
+    ],
+    "constraints": [
+      "m == matrix.length",
+      "n == matrix[i].length",
+      "1 <= m, n <= 10",
+      "-100 <= matrix[i][j] <= 100"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def spiralOrder(self, matrix: list[list[int]]) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[][]} matrix\n * @return {number[]}\n */\nfunction spiralOrder(matrix) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* spiralOrder(int** matrix, int matrixSize, int* matrixColSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+      "cpp": "class Solution {\npublic:\n    vector<int> spiralOrder(vector<vector<int>>& matrix) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "class Solution {\n    public List<Integer> spiralOrder(int[][] matrix) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
+    }
+  },
+  {
+    "id": "rotate-image",
+    "title": "Rotate Image",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Math",
+      "Matrix"
+    ],
+    "statement": [
+      "Given an n x n matrix, rotate it 90 degrees clockwise in place.",
+      "Modify the input matrix directly; do not return a separate rotated matrix."
+    ],
+    "examples": [
+      {
+        "input": "matrix = [[1,2,3],[4,5,6],[7,8,9]]",
+        "output": "[[7,4,1],[8,5,2],[9,6,3]]"
+      },
+      {
+        "input": "matrix = [[5,1,9,11],[2,4,8,10],[13,3,6,7],[15,14,12,16]]",
+        "output": "[[15,13,2,5],[14,3,4,1],[12,6,8,9],[16,7,10,11]]"
+      }
+    ],
+    "constraints": [
+      "n == matrix.length == matrix[i].length",
+      "1 <= n <= 20",
+      "-1000 <= matrix[i][j] <= 1000"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def rotate(self, matrix: list[list[int]]) -> None:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[][]} matrix\n * @return {void}\n */\nfunction rotate(matrix) {\n  // Think out loud as you go!\n}\n",
+      "c": "void rotate(int** matrix, int matrixSize, int* matrixColSize) {\n    // Think out loud as you go!\n}\n",
+      "cpp": "class Solution {\npublic:\n    void rotate(vector<vector<int>>& matrix) {\n        // Think out loud as you go!\n    }\n};\n",
+      "java": "class Solution {\n    public void rotate(int[][] matrix) {\n        // Think out loud as you go!\n    }\n}\n"
+    }
+  },
+  {
+    "id": "set-matrix-zeroes",
+    "title": "Set Matrix Zeroes",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Hash Table",
+      "Matrix"
+    ],
+    "statement": [
+      "Given an m x n integer matrix, if any cell is 0, set its entire row and column to 0.",
+      "Modify the matrix in place, and base all changes on the zeroes present before the update starts."
+    ],
+    "examples": [
+      {
+        "input": "matrix = [[1,1,1],[1,0,1],[1,1,1]]",
+        "output": "[[1,0,1],[0,0,0],[1,0,1]]"
+      },
+      {
+        "input": "matrix = [[0,1,2,0],[3,4,5,2],[1,3,1,5]]",
+        "output": "[[0,0,0,0],[0,4,5,0],[0,3,1,0]]"
+      }
+    ],
+    "constraints": [
+      "m == matrix.length",
+      "n == matrix[i].length",
+      "1 <= m, n <= 200",
+      "-2^31 <= matrix[i][j] <= 2^31 - 1"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def setZeroes(self, matrix: list[list[int]]) -> None:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[][]} matrix\n * @return {void}\n */\nfunction setZeroes(matrix) {\n  // Think out loud as you go!\n}\n",
+      "c": "void setZeroes(int** matrix, int matrixSize, int* matrixColSize) {\n    // Think out loud as you go!\n}\n",
+      "cpp": "class Solution {\npublic:\n    void setZeroes(vector<vector<int>>& matrix) {\n        // Think out loud as you go!\n    }\n};\n",
+      "java": "class Solution {\n    public void setZeroes(int[][] matrix) {\n        // Think out loud as you go!\n    }\n}\n"
+    }
+  },
+  {
+    "id": "game-of-life",
+    "title": "Game of Life",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Matrix",
+      "Simulation"
+    ],
+    "statement": [
+      "Given a board of live cells (1) and dead cells (0), compute the next state of Conway's Game of Life.",
+      "Every cell updates simultaneously from the original board using its eight neighbors, and the board must be modified in place."
+    ],
+    "examples": [
+      {
+        "input": "board = [[0,1,0],[0,0,1],[1,1,1],[0,0,0]]",
+        "output": "[[0,0,0],[1,0,1],[0,1,1],[0,1,0]]"
+      },
+      {
+        "input": "board = [[1,1],[1,0]]",
+        "output": "[[1,1],[1,1]]"
+      }
+    ],
+    "constraints": [
+      "m == board.length",
+      "n == board[i].length",
+      "1 <= m, n <= 25",
+      "board[i][j] is 0 or 1."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def gameOfLife(self, board: list[list[int]]) -> None:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[][]} board\n * @return {void}\n */\nfunction gameOfLife(board) {\n  // Think out loud as you go!\n}\n",
+      "c": "void gameOfLife(int** board, int boardSize, int* boardColSize) {\n    // Think out loud as you go!\n}\n",
+      "cpp": "class Solution {\npublic:\n    void gameOfLife(vector<vector<int>>& board) {\n        // Think out loud as you go!\n    }\n};\n",
+      "java": "class Solution {\n    public void gameOfLife(int[][] board) {\n        // Think out loud as you go!\n    }\n}\n"
+    }
+  },
+  {
+    "id": "ransom-note",
+    "title": "Ransom Note",
+    "difficulty": "Easy",
+    "topics": [
+      "Hash Table",
+      "String",
+      "Counting"
+    ],
+    "statement": [
+      "Given two strings, ransomNote and magazine, return whether ransomNote can be built using letters from magazine.",
+      "Each character from magazine may be used at most once."
+    ],
+    "examples": [
+      {
+        "input": "ransomNote = \"a\", magazine = \"b\"",
+        "output": "false"
+      },
+      {
+        "input": "ransomNote = \"aa\", magazine = \"ab\"",
+        "output": "false"
+      },
+      {
+        "input": "ransomNote = \"aa\", magazine = \"aab\"",
+        "output": "true"
+      }
+    ],
+    "constraints": [
+      "1 <= ransomNote.length, magazine.length <= 10^5",
+      "ransomNote and magazine consist of lowercase English letters."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def canConstruct(self, ransomNote: str, magazine: str) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} ransomNote\n * @param {string} magazine\n * @return {boolean}\n */\nfunction canConstruct(ransomNote, magazine) {\n  // Think out loud as you go!\n}\n",
+      "c": "bool canConstruct(char* ransomNote, char* magazine) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "class Solution {\npublic:\n    bool canConstruct(string ransomNote, string magazine) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "class Solution {\n    public boolean canConstruct(String ransomNote, String magazine) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "isomorphic-strings",
+    "title": "Isomorphic Strings",
+    "difficulty": "Easy",
+    "topics": [
+      "Hash Table",
+      "String"
+    ],
+    "statement": [
+      "Given two strings s and t, return whether s can be transformed into t by replacing each character consistently.",
+      "Each character in s must always map to the same character in t, and no two different characters in s may map to the same character in t."
+    ],
+    "examples": [
+      {
+        "input": "s = \"egg\", t = \"add\"",
+        "output": "true"
+      },
+      {
+        "input": "s = \"foo\", t = \"bar\"",
+        "output": "false"
+      },
+      {
+        "input": "s = \"paper\", t = \"title\"",
+        "output": "true"
+      }
+    ],
+    "constraints": [
+      "1 <= s.length <= 5 * 10^4",
+      "t.length == s.length",
+      "s and t consist of ASCII characters."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def isIsomorphic(self, s: str, t: str) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} s\n * @param {string} t\n * @return {boolean}\n */\nfunction isIsomorphic(s, t) {\n  // Think out loud as you go!\n}\n",
+      "c": "bool isIsomorphic(char* s, char* t) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "class Solution {\npublic:\n    bool isIsomorphic(string s, string t) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "class Solution {\n    public boolean isIsomorphic(String s, String t) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "word-pattern",
+    "title": "Word Pattern",
+    "difficulty": "Easy",
+    "topics": [
+      "Hash Table",
+      "String"
+    ],
+    "statement": [
+      "Given a pattern and a space-separated string s, return whether s follows the same pattern.",
+      "There must be a one-to-one mapping between each pattern character and each word in s."
+    ],
+    "examples": [
+      {
+        "input": "pattern = \"abba\", s = \"dog cat cat dog\"",
+        "output": "true"
+      },
+      {
+        "input": "pattern = \"abba\", s = \"dog cat cat fish\"",
+        "output": "false"
+      },
+      {
+        "input": "pattern = \"aaaa\", s = \"dog cat cat dog\"",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "1 <= pattern.length <= 300",
+      "pattern contains lowercase English letters.",
+      "1 <= s.length <= 3000",
+      "s contains lowercase English letters and spaces, with words separated by a single space."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def wordPattern(self, pattern: str, s: str) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} pattern\n * @param {string} s\n * @return {boolean}\n */\nfunction wordPattern(pattern, s) {\n  // Think out loud as you go!\n}\n",
+      "c": "bool wordPattern(char* pattern, char* s) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "class Solution {\npublic:\n    bool wordPattern(string pattern, string s) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "class Solution {\n    public boolean wordPattern(String pattern, String s) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "valid-anagram",
+    "title": "Valid Anagram",
+    "difficulty": "Easy",
+    "topics": [
+      "Hash Table",
+      "String",
+      "Sorting"
+    ],
+    "statement": [
+      "Given two strings s and t, return whether t is an anagram of s.",
+      "An anagram uses exactly the same characters with exactly the same counts, in any order."
+    ],
+    "examples": [
+      {
+        "input": "s = \"anagram\", t = \"nagaram\"",
+        "output": "true"
+      },
+      {
+        "input": "s = \"rat\", t = \"car\"",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "1 <= s.length, t.length <= 5 * 10^4",
+      "s and t consist of lowercase English letters."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def isAnagram(self, s: str, t: str) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} s\n * @param {string} t\n * @return {boolean}\n */\nfunction isAnagram(s, t) {\n  // Think out loud as you go!\n}\n",
+      "c": "bool isAnagram(char* s, char* t) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "class Solution {\npublic:\n    bool isAnagram(string s, string t) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "class Solution {\n    public boolean isAnagram(String s, String t) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "group-anagrams",
+    "title": "Group Anagrams",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Hash Table",
+      "String",
+      "Sorting"
+    ],
+    "statement": [
+      "Given an array of strings, group together strings that are anagrams of each other.",
+      "The groups and the strings inside each group may be returned in any order."
+    ],
+    "examples": [
+      {
+        "input": "strs = [\"eat\",\"tea\",\"tan\",\"ate\",\"nat\",\"bat\"]",
+        "output": "[[\"bat\"],[\"nat\",\"tan\"],[\"ate\",\"eat\",\"tea\"]]"
+      },
+      {
+        "input": "strs = [\"\"]",
+        "output": "[[\"\"]]"
+      },
+      {
+        "input": "strs = [\"a\"]",
+        "output": "[[\"a\"]]"
+      }
+    ],
+    "constraints": [
+      "1 <= strs.length <= 10^4",
+      "0 <= strs[i].length <= 100",
+      "strs[i] consists of lowercase English letters."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def groupAnagrams(self, strs: list[str]) -> list[list[str]]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string[]} strs\n * @return {string[][]}\n */\nfunction groupAnagrams(strs) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nchar*** groupAnagrams(char** strs, int strsSize, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
+      "cpp": "class Solution {\npublic:\n    vector<vector<string>> groupAnagrams(vector<string>& strs) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "class Solution {\n    public List<List<String>> groupAnagrams(String[] strs) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
+    }
+  },
+  {
+    "id": "contains-duplicate-ii",
+    "title": "Contains Duplicate II",
+    "difficulty": "Easy",
+    "topics": [
+      "Array",
+      "Hash Table",
+      "Sliding Window"
+    ],
+    "statement": [
+      "Given an integer array nums and an integer k, return whether two equal values appear at indices whose distance is at most k.",
+      "The pair must use different indices."
+    ],
+    "examples": [
+      {
+        "input": "nums = [1,2,3,1], k = 3",
+        "output": "true"
+      },
+      {
+        "input": "nums = [1,0,1,1], k = 1",
+        "output": "true"
+      },
+      {
+        "input": "nums = [1,2,3,1,2,3], k = 2",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 10^5",
+      "-10^9 <= nums[i] <= 10^9",
+      "0 <= k <= 10^5"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def containsNearbyDuplicate(self, nums: list[int], k: int) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @param {number} k\n * @return {boolean}\n */\nfunction containsNearbyDuplicate(nums, k) {\n  // Think out loud as you go!\n}\n",
+      "c": "bool containsNearbyDuplicate(int* nums, int numsSize, int k) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "class Solution {\npublic:\n    bool containsNearbyDuplicate(vector<int>& nums, int k) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "class Solution {\n    public boolean containsNearbyDuplicate(int[] nums, int k) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "longest-consecutive-sequence",
+    "title": "Longest Consecutive Sequence",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Hash Table",
+      "Union Find"
+    ],
+    "statement": [
+      "Given an unsorted integer array nums, return the length of the longest run of consecutive integer values.",
+      "The values in the run do not need to appear next to each other in the array."
+    ],
+    "examples": [
+      {
+        "input": "nums = [100,4,200,1,3,2]",
+        "output": "4"
+      },
+      {
+        "input": "nums = [0,3,7,2,5,8,4,6,0,1]",
+        "output": "9"
+      },
+      {
+        "input": "nums = [1,0,1,2]",
+        "output": "3"
+      }
+    ],
+    "constraints": [
+      "0 <= nums.length <= 10^5",
+      "-10^9 <= nums[i] <= 10^9"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def longestConsecutive(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction longestConsecutive(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "int longestConsecutive(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int longestConsecutive(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int longestConsecutive(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "summary-ranges",
+    "title": "Summary Ranges",
+    "difficulty": "Easy",
+    "topics": [
+      "Array"
+    ],
+    "statement": [
+      "Given a sorted unique integer array, summarize every maximal consecutive run.",
+      "A single number is written as itself, and a run of at least two numbers is written as start->end."
+    ],
+    "examples": [
+      {
+        "input": "nums = [0,1,2,4,5,7]",
+        "output": "[\"0->2\",\"4->5\",\"7\"]"
+      },
+      {
+        "input": "nums = [0,2,3,4,6,8,9]",
+        "output": "[\"0\",\"2->4\",\"6\",\"8->9\"]"
+      }
+    ],
+    "constraints": [
+      "0 <= nums.length <= 20",
+      "-2^31 <= nums[i] <= 2^31 - 1",
+      "nums is sorted in strictly increasing order."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def summaryRanges(self, nums: list[int]) -> list[str]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {string[]}\n */\nfunction summaryRanges(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nchar** summaryRanges(int* nums, int numsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+      "cpp": "class Solution {\npublic:\n    vector<string> summaryRanges(vector<int>& nums) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "class Solution {\n    public List<String> summaryRanges(int[] nums) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
+    }
+  },
+  {
+    "id": "insert-interval",
+    "title": "Insert Interval",
+    "difficulty": "Medium",
+    "topics": [
+      "Array"
+    ],
+    "statement": [
+      "Given sorted non-overlapping intervals and one new interval, insert the new interval and merge overlaps.",
+      "Return sorted non-overlapping intervals covering the original intervals plus the new one."
+    ],
+    "examples": [
+      {
+        "input": "intervals = [[1,3],[6,9]], newInterval = [2,5]",
+        "output": "[[1,5],[6,9]]"
+      },
+      {
+        "input": "intervals = [[1,2],[3,5],[6,7],[8,10],[12,16]], newInterval = [4,8]",
+        "output": "[[1,2],[3,10],[12,16]]"
+      }
+    ],
+    "constraints": [
+      "0 <= intervals.length <= 10^4",
+      "intervals[i].length == 2",
+      "newInterval.length == 2",
+      "0 <= start_i <= end_i <= 10^5",
+      "intervals is sorted by start and has no overlaps."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def insert(self, intervals: list[list[int]], newInterval: list[int]) -> list[list[int]]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[][]} intervals\n * @param {number[]} newInterval\n * @return {number[][]}\n */\nfunction insert(intervals, newInterval) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** insert(int** intervals, int intervalsSize, int* intervalsColSize, int* newInterval, int newIntervalSize, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
+      "cpp": "class Solution {\npublic:\n    vector<vector<int>> insert(vector<vector<int>>& intervals, vector<int>& newInterval) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "class Solution {\n    public int[][] insert(int[][] intervals, int[] newInterval) {\n        // Think out loud as you go!\n        return new int[][]{};\n    }\n}\n"
+    }
+  },
+  {
+    "id": "minimum-number-of-arrows-to-burst-balloons",
+    "title": "Minimum Number of Arrows to Burst Balloons",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Greedy",
+      "Sorting"
+    ],
+    "statement": [
+      "Each balloon is an interval on the x-axis. One arrow shot at x bursts every balloon whose interval contains x.",
+      "Return the minimum number of arrows needed to burst all balloons."
+    ],
+    "examples": [
+      {
+        "input": "points = [[10,16],[2,8],[1,6],[7,12]]",
+        "output": "2"
+      },
+      {
+        "input": "points = [[1,2],[3,4],[5,6],[7,8]]",
+        "output": "4"
+      },
+      {
+        "input": "points = [[1,2],[2,3],[3,4],[4,5]]",
+        "output": "2"
+      }
+    ],
+    "constraints": [
+      "1 <= points.length <= 10^5",
+      "points[i].length == 2",
+      "-2^31 <= x_start < x_end <= 2^31 - 1"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def findMinArrowShots(self, points: list[list[int]]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[][]} points\n * @return {number}\n */\nfunction findMinArrowShots(points) {\n  // Think out loud as you go!\n}\n",
+      "c": "int findMinArrowShots(int** points, int pointsSize, int* pointsColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int findMinArrowShots(vector<vector<int>>& points) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int findMinArrowShots(int[][] points) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "simplify-path",
+    "title": "Simplify Path",
+    "difficulty": "Medium",
+    "topics": [
+      "String",
+      "Stack"
+    ],
+    "statement": [
+      "Given an absolute Unix-style path, return its simplified canonical path.",
+      "Single dots do nothing, double dots move up one directory when possible, and repeated slashes behave like one slash."
+    ],
+    "examples": [
+      {
+        "input": "path = \"/home/\"",
+        "output": "\"/home\""
+      },
+      {
+        "input": "path = \"/home//foo/\"",
+        "output": "\"/home/foo\""
+      },
+      {
+        "input": "path = \"/../\"",
+        "output": "\"/\""
+      }
+    ],
+    "constraints": [
+      "1 <= path.length <= 3000",
+      "path is an absolute path beginning with '/'.",
+      "path contains English letters, digits, '.', '/', and '_'."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def simplifyPath(self, path: str) -> str:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} path\n * @return {string}\n */\nfunction simplifyPath(path) {\n  // Think out loud as you go!\n}\n",
+      "c": "char* simplifyPath(char* path) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
+      "cpp": "class Solution {\npublic:\n    string simplifyPath(string path) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
+      "java": "class Solution {\n    public String simplifyPath(String path) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
+    }
+  },
+  {
+    "id": "min-stack",
+    "title": "Min Stack",
+    "difficulty": "Medium",
+    "topics": [
+      "Stack",
+      "Design"
+    ],
+    "statement": [
+      "Design a stack that supports push, pop, top, and retrieving the current minimum value.",
+      "Each operation must run in O(1) time."
+    ],
+    "examples": [
+      {
+        "input": "[\"MinStack\",\"push\",\"push\",\"push\",\"getMin\",\"pop\",\"top\",\"getMin\"]\n[[],[-2],[0],[-3],[],[],[],[]]",
+        "output": "[null,null,null,null,-3,null,0,-2]"
+      }
+    ],
+    "constraints": [
+      "-2^31 <= value <= 2^31 - 1",
+      "Methods pop, top, and getMin are called only when the stack is non-empty.",
+      "At most 3 * 10^4 calls will be made."
+    ],
+    "starterCode": {
+      "python": "class MinStack:\n    def __init__(self):\n        pass\n\n    def push(self, value: int) -> None:\n        pass\n\n    def pop(self) -> None:\n        pass\n\n    def top(self) -> int:\n        pass\n\n    def getMin(self) -> int:\n        pass\n",
+      "javascript": "class MinStack {\n  constructor() {\n  }\n\n  /** @param {number} value @return {void} */\n  push(value) {\n  }\n\n  /** @return {void} */\n  pop() {\n  }\n\n  /** @return {number} */\n  top() {\n  }\n\n  /** @return {number} */\n  getMin() {\n  }\n}\n",
+      "c": "typedef struct {\n    // Think out loud as you go!\n} MinStack;\n\nMinStack* minStackCreate() {\n    return NULL;\n}\n\nvoid minStackPush(MinStack* obj, int value) {\n}\n\nvoid minStackPop(MinStack* obj) {\n}\n\nint minStackTop(MinStack* obj) {\n    return 0;\n}\n\nint minStackGetMin(MinStack* obj) {\n    return 0;\n}\n\nvoid minStackFree(MinStack* obj) {\n}\n",
+      "cpp": "class MinStack {\npublic:\n    MinStack() {\n    }\n\n    void push(int value) {\n    }\n\n    void pop() {\n    }\n\n    int top() {\n        return 0;\n    }\n\n    int getMin() {\n        return 0;\n    }\n};\n",
+      "java": "class MinStack {\n    public MinStack() {\n    }\n\n    public void push(int value) {\n    }\n\n    public void pop() {\n    }\n\n    public int top() {\n        return 0;\n    }\n\n    public int getMin() {\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "evaluate-reverse-polish-notation",
+    "title": "Evaluate Reverse Polish Notation",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Math",
+      "Stack"
+    ],
+    "statement": [
+      "Given tokens for a valid arithmetic expression in Reverse Polish Notation, evaluate the expression.",
+      "Operators are +, -, *, and /. Division between integers truncates toward zero."
+    ],
+    "examples": [
+      {
+        "input": "tokens = [\"2\",\"1\",\"+\",\"3\",\"*\"]",
+        "output": "9"
+      },
+      {
+        "input": "tokens = [\"4\",\"13\",\"5\",\"/\",\"+\"]",
+        "output": "6"
+      },
+      {
+        "input": "tokens = [\"10\",\"6\",\"9\",\"3\",\"+\",\"-11\",\"*\",\"/\",\"*\",\"17\",\"+\",\"5\",\"+\"]",
+        "output": "22"
+      }
+    ],
+    "constraints": [
+      "1 <= tokens.length <= 10^4",
+      "tokens[i] is an operator or an integer in range [-200, 200].",
+      "The input is a valid Reverse Polish Notation expression.",
+      "All intermediate and final results fit in a 32-bit signed integer."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def evalRPN(self, tokens: list[str]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string[]} tokens\n * @return {number}\n */\nfunction evalRPN(tokens) {\n  // Think out loud as you go!\n}\n",
+      "c": "int evalRPN(char** tokens, int tokensSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int evalRPN(vector<string>& tokens) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int evalRPN(String[] tokens) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "basic-calculator",
+    "title": "Basic Calculator",
+    "difficulty": "Hard",
+    "topics": [
+      "Math",
+      "String",
+      "Stack",
+      "Recursion"
+    ],
+    "statement": [
+      "Given a valid arithmetic expression string s, evaluate it and return its integer value.",
+      "The expression may contain nonnegative integers, '+', '-', parentheses, and spaces."
+    ],
+    "examples": [
+      {
+        "input": "s = \"1 + 1\"",
+        "output": "2"
+      },
+      {
+        "input": "s = \" 2-1 + 2 \"",
+        "output": "3"
+      },
+      {
+        "input": "s = \"(1+(4+5+2)-3)+(6+8)\"",
+        "output": "23"
+      }
+    ],
+    "constraints": [
+      "1 <= s.length <= 3 * 10^5",
+      "s consists of digits, '+', '-', '(', ')', and spaces.",
+      "s is a valid expression.",
+      "Every number and final answer fits in a 32-bit signed integer."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def calculate(self, s: str) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} s\n * @return {number}\n */\nfunction calculate(s) {\n  // Think out loud as you go!\n}\n",
+      "c": "int calculate(char* s) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int calculate(string s) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int calculate(String s) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "linked-list-cycle",
+    "title": "Linked List Cycle",
+    "difficulty": "Easy",
+    "topics": [
+      "Hash Table",
+      "Linked List",
+      "Two Pointers"
+    ],
+    "statement": [
+      "Given the head of a singly linked list, determine whether the list contains a cycle.",
+      "A cycle exists if following next pointers can revisit a node already seen."
+    ],
+    "examples": [
+      {
+        "input": "head = [3,2,0,-4], pos = 1",
+        "output": "true"
+      },
+      {
+        "input": "head = [1,2], pos = 0",
+        "output": "true"
+      },
+      {
+        "input": "head = [1], pos = -1",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 10^4",
+      "-10^5 <= Node.val <= 10^5",
+      "pos is -1 or a valid node index and is used only to describe the cycle."
+    ],
+    "starterCode": {
+      "python": "# Definition for singly-linked list.\n# class ListNode:\n#     def __init__(self, x):\n#         self.val = x\n#         self.next = None\n\nclass Solution:\n    def hasCycle(self, head: Optional[ListNode]) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for singly-linked list.\n * function ListNode(val) {\n *   this.val = val;\n *   this.next = null;\n * }\n */\n\n/**\n * @param {ListNode} head\n * @return {boolean}\n */\nfunction hasCycle(head) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nbool hasCycle(struct ListNode *head) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode(int x) : val(x), next(NULL) {}\n * };\n */\nclass Solution {\npublic:\n    bool hasCycle(ListNode *head) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "/**\n * Definition for singly-linked list.\n * class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode(int x) {\n *         val = x;\n *         next = null;\n *     }\n * }\n */\npublic class Solution {\n    public boolean hasCycle(ListNode head) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "add-two-numbers",
+    "title": "Add Two Numbers",
+    "difficulty": "Medium",
+    "topics": [
+      "Linked List",
+      "Math",
+      "Recursion"
+    ],
+    "statement": [
+      "Two non-empty linked lists store nonnegative integers in reverse digit order, one digit per node.",
+      "Add the numbers and return the sum as a linked list in the same reverse digit order."
+    ],
+    "examples": [
+      {
+        "input": "l1 = [2,4,3], l2 = [5,6,4]",
+        "output": "[7,0,8]"
+      },
+      {
+        "input": "l1 = [0], l2 = [0]",
+        "output": "[0]"
+      },
+      {
+        "input": "l1 = [9,9,9,9,9,9,9], l2 = [9,9,9,9]",
+        "output": "[8,9,9,9,0,0,0,1]"
+      }
+    ],
+    "constraints": [
+      "1 <= list length <= 100",
+      "0 <= Node.val <= 9",
+      "The numbers have no leading zero except the number 0 itself."
+    ],
+    "starterCode": {
+      "python": "# Definition for singly-linked list.\n# class ListNode:\n#     def __init__(self, val=0, next=None):\n#         self.val = val\n#         self.next = next\nclass Solution:\n    def addTwoNumbers(self, l1: Optional[ListNode], l2: Optional[ListNode]) -> Optional[ListNode]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for singly-linked list.\n * function ListNode(val, next) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.next = (next === undefined ? null : next);\n * }\n */\n/**\n * @param {ListNode} l1\n * @param {ListNode} l2\n * @return {ListNode}\n */\nfunction addTwoNumbers(l1, l2) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* addTwoNumbers(struct ListNode* l1, struct ListNode* l2) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* addTwoNumbers(ListNode* l1, ListNode* l2) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode addTwoNumbers(ListNode l1, ListNode l2) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "merge-two-sorted-lists",
+    "title": "Merge Two Sorted Lists",
+    "difficulty": "Easy",
+    "topics": [
+      "Linked List",
+      "Recursion"
+    ],
+    "statement": [
+      "Given the heads of two sorted linked lists, merge them into one sorted linked list.",
+      "Return the head of the merged list."
+    ],
+    "examples": [
+      {
+        "input": "list1 = [1,2,4], list2 = [1,3,4]",
+        "output": "[1,1,2,3,4,4]"
+      },
+      {
+        "input": "list1 = [], list2 = []",
+        "output": "[]"
+      },
+      {
+        "input": "list1 = [], list2 = [0]",
+        "output": "[0]"
+      }
+    ],
+    "constraints": [
+      "0 <= list length <= 50",
+      "-100 <= Node.val <= 100",
+      "Both lists are sorted in nondecreasing order."
+    ],
+    "starterCode": {
+      "python": "# Definition for singly-linked list.\n# class ListNode:\n#     def __init__(self, val=0, next=None):\n#         self.val = val\n#         self.next = next\nclass Solution:\n    def mergeTwoLists(self, list1: Optional[ListNode], list2: Optional[ListNode]) -> Optional[ListNode]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for singly-linked list.\n * function ListNode(val, next) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.next = (next === undefined ? null : next);\n * }\n */\n/**\n * @param {ListNode} list1\n * @param {ListNode} list2\n * @return {ListNode}\n */\nfunction mergeTwoLists(list1, list2) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* mergeTwoLists(struct ListNode* list1, struct ListNode* list2) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* mergeTwoLists(ListNode* list1, ListNode* list2) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode mergeTwoLists(ListNode list1, ListNode list2) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "copy-list-with-random-pointer",
+    "title": "Copy List with Random Pointer",
+    "difficulty": "Medium",
+    "topics": [
+      "Hash Table",
+      "Linked List"
+    ],
+    "statement": [
+      "Given the head of a linked list where each node has next and random pointers, return a deep copy of the list.",
+      "Each copied node must have the same value and pointer relationships as the original, but no copied node may be one of the original nodes."
+    ],
+    "examples": [
+      {
+        "input": "head = [[7,null],[13,0],[11,4],[10,2],[1,0]]",
+        "output": "[[7,null],[13,0],[11,4],[10,2],[1,0]]"
+      },
+      {
+        "input": "head = [[1,1],[2,1]]",
+        "output": "[[1,1],[2,1]]"
+      },
+      {
+        "input": "head = [[3,null],[3,0],[3,null]]",
+        "output": "[[3,null],[3,0],[3,null]]"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 1000",
+      "-10^4 <= Node.val <= 10^4",
+      "Each random pointer is null or points to a node in the list."
+    ],
+    "starterCode": {
+      "python": "\"\"\"\n# Definition for a Node.\nclass Node:\n    def __init__(self, x: int, next: 'Node' = None, random: 'Node' = None):\n        self.val = int(x)\n        self.next = next\n        self.random = random\n\"\"\"\n\nclass Solution:\n    def copyRandomList(self, head: 'Optional[Node]') -> 'Optional[Node]':\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a _Node.\n * function _Node(val, next, random) {\n *   this.val = val;\n *   this.next = next;\n *   this.random = random;\n * }\n */\n\n/**\n * @param {_Node} head\n * @return {_Node}\n */\nfunction copyRandomList(head) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a Node.\n * struct Node {\n *     int val;\n *     struct Node *next;\n *     struct Node *random;\n * };\n */\n\nstruct Node* copyRandomList(struct Node* head) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/*\n// Definition for a Node.\nclass Node {\npublic:\n    int val;\n    Node* next;\n    Node* random;\n\n    Node(int _val) {\n        val = _val;\n        next = NULL;\n        random = NULL;\n    }\n};\n*/\n\nclass Solution {\npublic:\n    Node* copyRandomList(Node* head) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/*\n// Definition for a Node.\nclass Node {\n    int val;\n    Node next;\n    Node random;\n\n    public Node(int val) {\n        this.val = val;\n        this.next = null;\n        this.random = null;\n    }\n}\n*/\n\nclass Solution {\n    public Node copyRandomList(Node head) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "reverse-linked-list",
+    "title": "Reverse Linked List",
+    "difficulty": "Easy",
+    "topics": [
+      "Linked List",
+      "Recursion"
+    ],
+    "statement": [
+      "Given the head of a singly linked list, reverse the list and return the new head."
+    ],
+    "examples": [
+      {
+        "input": "head = [1,2,3,4,5]",
+        "output": "[5,4,3,2,1]"
+      },
+      {
+        "input": "head = [1,2]",
+        "output": "[2,1]"
+      },
+      {
+        "input": "head = []",
+        "output": "[]"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 5000",
+      "-5000 <= Node.val <= 5000"
+    ],
+    "starterCode": {
+      "python": "# Definition for singly-linked list.\n# class ListNode:\n#     def __init__(self, val=0, next=None):\n#         self.val = val\n#         self.next = next\nclass Solution:\n    def reverseList(self, head: Optional[ListNode]) -> Optional[ListNode]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for singly-linked list.\n * function ListNode(val, next) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.next = (next === undefined ? null : next);\n * }\n */\n/**\n * @param {ListNode} head\n * @return {ListNode}\n */\nfunction reverseList(head) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* reverseList(struct ListNode* head) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* reverseList(ListNode* head) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode reverseList(ListNode head) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "reverse-nodes-in-k-group",
+    "title": "Reverse Nodes in k-Group",
+    "difficulty": "Hard",
+    "topics": [
+      "Linked List",
+      "Recursion"
+    ],
+    "statement": [
+      "Given the head of a linked list, reverse the nodes k at a time and return the modified list.",
+      "Nodes in a final group smaller than k must stay in their original order."
+    ],
+    "examples": [
+      {
+        "input": "head = [1,2,3,4,5], k = 2",
+        "output": "[2,1,4,3,5]"
+      },
+      {
+        "input": "head = [1,2,3,4,5], k = 3",
+        "output": "[3,2,1,4,5]"
+      }
+    ],
+    "constraints": [
+      "1 <= number of nodes <= 5000",
+      "0 <= Node.val <= 1000",
+      "1 <= k <= number of nodes",
+      "Only node links may be changed; node values should not be modified."
+    ],
+    "starterCode": {
+      "python": "# Definition for singly-linked list.\n# class ListNode:\n#     def __init__(self, val=0, next=None):\n#         self.val = val\n#         self.next = next\nclass Solution:\n    def reverseKGroup(self, head: Optional[ListNode], k: int) -> Optional[ListNode]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for singly-linked list.\n * function ListNode(val, next) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.next = (next === undefined ? null : next);\n * }\n */\n/**\n * @param {ListNode} head\n * @param {number} k\n * @return {ListNode}\n */\nfunction reverseKGroup(head, k) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* reverseKGroup(struct ListNode* head, int k) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* reverseKGroup(ListNode* head, int k) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode reverseKGroup(ListNode head, int k) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "remove-nth-node-from-end-of-list",
+    "title": "Remove Nth Node From End of List",
+    "difficulty": "Medium",
+    "topics": [
+      "Linked List",
+      "Two Pointers"
+    ],
+    "statement": [
+      "Given the head of a linked list, remove the nth node from the end of the list and return the head of the modified list."
+    ],
+    "examples": [
+      {
+        "input": "head = [1,2,3,4,5], n = 2",
+        "output": "[1,2,3,5]"
+      },
+      {
+        "input": "head = [1], n = 1",
+        "output": "[]"
+      },
+      {
+        "input": "head = [1,2], n = 1",
+        "output": "[1]"
+      }
+    ],
+    "constraints": [
+      "1 <= number of nodes <= 30",
+      "0 <= Node.val <= 100",
+      "1 <= n <= number of nodes"
+    ],
+    "starterCode": {
+      "python": "# Definition for singly-linked list.\n# class ListNode:\n#     def __init__(self, val=0, next=None):\n#         self.val = val\n#         self.next = next\nclass Solution:\n    def removeNthFromEnd(self, head: Optional[ListNode], n: int) -> Optional[ListNode]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for singly-linked list.\n * function ListNode(val, next) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.next = (next === undefined ? null : next);\n * }\n */\n/**\n * @param {ListNode} head\n * @param {number} n\n * @return {ListNode}\n */\nfunction removeNthFromEnd(head, n) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* removeNthFromEnd(struct ListNode* head, int n) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* removeNthFromEnd(ListNode* head, int n) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode removeNthFromEnd(ListNode head, int n) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "remove-duplicates-from-sorted-list-ii",
+    "title": "Remove Duplicates from Sorted List II",
+    "difficulty": "Medium",
+    "topics": [
+      "Linked List",
+      "Two Pointers"
+    ],
+    "statement": [
+      "Given the head of a sorted linked list, delete every value that appears more than once.",
+      "Return the sorted list containing only values that were unique in the original list."
+    ],
+    "examples": [
+      {
+        "input": "head = [1,2,3,3,4,4,5]",
+        "output": "[1,2,5]"
+      },
+      {
+        "input": "head = [1,1,1,2,3]",
+        "output": "[2,3]"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 300",
+      "-100 <= Node.val <= 100",
+      "The list is sorted in ascending order."
+    ],
+    "starterCode": {
+      "python": "# Definition for singly-linked list.\n# class ListNode:\n#     def __init__(self, val=0, next=None):\n#         self.val = val\n#         self.next = next\nclass Solution:\n    def deleteDuplicates(self, head: Optional[ListNode]) -> Optional[ListNode]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for singly-linked list.\n * function ListNode(val, next) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.next = (next === undefined ? null : next);\n * }\n */\n/**\n * @param {ListNode} head\n * @return {ListNode}\n */\nfunction deleteDuplicates(head) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* deleteDuplicates(struct ListNode* head) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* deleteDuplicates(ListNode* head) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode deleteDuplicates(ListNode head) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "rotate-list",
+    "title": "Rotate List",
+    "difficulty": "Medium",
+    "topics": [
+      "Linked List",
+      "Two Pointers"
+    ],
+    "statement": [
+      "Given the head of a linked list, rotate the list to the right by k places and return the new head."
+    ],
+    "examples": [
+      {
+        "input": "head = [1,2,3,4,5], k = 2",
+        "output": "[4,5,1,2,3]"
+      },
+      {
+        "input": "head = [0,1,2], k = 4",
+        "output": "[2,0,1]"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 500",
+      "-100 <= Node.val <= 100",
+      "0 <= k <= 2 * 10^9"
+    ],
+    "starterCode": {
+      "python": "# Definition for singly-linked list.\n# class ListNode:\n#     def __init__(self, val=0, next=None):\n#         self.val = val\n#         self.next = next\nclass Solution:\n    def rotateRight(self, head: Optional[ListNode], k: int) -> Optional[ListNode]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for singly-linked list.\n * function ListNode(val, next) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.next = (next === undefined ? null : next);\n * }\n */\n/**\n * @param {ListNode} head\n * @param {number} k\n * @return {ListNode}\n */\nfunction rotateRight(head, k) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* rotateRight(struct ListNode* head, int k) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* rotateRight(ListNode* head, int k) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode rotateRight(ListNode head, int k) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "partition-list",
+    "title": "Partition List",
+    "difficulty": "Medium",
+    "topics": [
+      "Linked List",
+      "Two Pointers"
+    ],
+    "statement": [
+      "Given the head of a linked list and a value x, partition the list so all nodes with values less than x come before nodes with values greater than or equal to x.",
+      "The original relative order within each partition must be preserved."
+    ],
+    "examples": [
+      {
+        "input": "head = [1,4,3,2,5,2], x = 3",
+        "output": "[1,2,2,4,3,5]"
+      },
+      {
+        "input": "head = [2,1], x = 2",
+        "output": "[1,2]"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 200",
+      "-100 <= Node.val <= 100",
+      "-200 <= x <= 200"
+    ],
+    "starterCode": {
+      "python": "# Definition for singly-linked list.\n# class ListNode:\n#     def __init__(self, val=0, next=None):\n#         self.val = val\n#         self.next = next\nclass Solution:\n    def partition(self, head: Optional[ListNode], x: int) -> Optional[ListNode]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for singly-linked list.\n * function ListNode(val, next) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.next = (next === undefined ? null : next);\n * }\n */\n/**\n * @param {ListNode} head\n * @param {number} x\n * @return {ListNode}\n */\nfunction partition(head, x) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* partition(struct ListNode* head, int x) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* partition(ListNode* head, int x) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode partition(ListNode head, int x) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "lru-cache",
+    "title": "LRU Cache",
+    "difficulty": "Medium",
+    "topics": [
+      "Hash Table",
+      "Linked List",
+      "Design"
+    ],
+    "statement": [
+      "Design a data structure that follows the constraints of a Least Recently Used (LRU) cache.",
+      "Implement the LRUCache class: LRUCache(capacity) initializes the cache with a positive capacity. get(key) returns the value of the key if it exists, otherwise -1. put(key, value) updates the value if the key exists; otherwise adds the pair. If the number of keys exceeds capacity, evict the least recently used key.",
+      "The functions get and put must each run in O(1) average time complexity."
+    ],
+    "examples": [
+      {
+        "input": "[\"LRUCache\",\"put\",\"put\",\"get\",\"put\",\"get\",\"put\",\"get\",\"get\",\"get\"]\n[[2],[1,1],[2,2],[1],[3,3],[2],[4,4],[1],[3],[4]]",
+        "output": "[null,null,null,1,null,-1,null,-1,3,4]",
+        "explanation": "Capacity 2. get(1)=1; put(3,3) evicts key 2; get(2)=-1; put(4,4) evicts key 1; get(1)=-1; get(3)=3; get(4)=4."
+      }
+    ],
+    "constraints": [
+      "1 <= capacity <= 3000",
+      "0 <= key <= 10^4",
+      "0 <= value <= 10^5",
+      "At most 2 * 10^5 calls will be made to get and put."
+    ],
+    "starterCode": {
+      "python": "class LRUCache:\n    def __init__(self, capacity: int):\n        pass\n\n    def get(self, key: int) -> int:\n        pass\n\n    def put(self, key: int, value: int) -> None:\n        pass\n",
+      "javascript": "class LRUCache {\n  /** @param {number} capacity */\n  constructor(capacity) {\n  }\n\n  /** @param {number} key @return {number} */\n  get(key) {\n  }\n\n  /** @param {number} key @param {number} value @return {void} */\n  put(key, value) {\n  }\n}\n",
+      "c": "typedef struct {\n    // Think out loud as you go!\n} LRUCache;\n\nLRUCache* lRUCacheCreate(int capacity) {\n    return NULL;\n}\n\nint lRUCacheGet(LRUCache* obj, int key) {\n    return -1;\n}\n\nvoid lRUCachePut(LRUCache* obj, int key, int value) {\n}\n\nvoid lRUCacheFree(LRUCache* obj) {\n}\n",
+      "cpp": "class LRUCache {\npublic:\n    LRUCache(int capacity) {\n    }\n\n    int get(int key) {\n        return -1;\n    }\n\n    void put(int key, int value) {\n    }\n};\n",
+      "java": "class LRUCache {\n    public LRUCache(int capacity) {\n    }\n\n    public int get(int key) {\n        return -1;\n    }\n\n    public void put(int key, int value) {\n    }\n}\n"
+    }
+  },
+  {
+    "id": "maximum-depth-of-binary-tree",
+    "title": "Maximum Depth of Binary Tree",
+    "difficulty": "Easy",
+    "topics": [
+      "Tree",
+      "DFS",
+      "BFS",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Measure how tall a binary tree is from its root.",
+      "Return the node count along the deepest path that starts at the root and ends at any leaf."
+    ],
+    "examples": [
+      {
+        "input": "root = [3,9,20,null,null,15,7]",
+        "output": "3"
+      },
+      {
+        "input": "root = [1,null,2]",
+        "output": "2"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 10^4",
+      "-100 <= Node.val <= 100"
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def maxDepth(self, root: Optional[TreeNode]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.left = (left === undefined ? null : left);\n *   this.right = (right === undefined ? null : right);\n * }\n */\n/**\n * @param {TreeNode} root\n * @return {number}\n */\nfunction maxDepth(root) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nint maxDepth(struct TreeNode* root) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    int maxDepth(TreeNode* root) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public int maxDepth(TreeNode root) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "same-tree",
+    "title": "Same Tree",
+    "difficulty": "Easy",
+    "topics": [
+      "Tree",
+      "DFS",
+      "BFS",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Given the roots of two binary trees, determine whether the trees are structurally identical and have the same node values."
+    ],
+    "examples": [
+      {
+        "input": "p = [1,2,3], q = [1,2,3]",
+        "output": "true"
+      },
+      {
+        "input": "p = [1,2], q = [1,null,2]",
+        "output": "false"
+      },
+      {
+        "input": "p = [1,2,1], q = [1,1,2]",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 100",
+      "-10^4 <= Node.val <= 10^4"
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def isSameTree(self, p: Optional[TreeNode], q: Optional[TreeNode]) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.left = (left === undefined ? null : left);\n *   this.right = (right === undefined ? null : right);\n * }\n */\n/**\n * @param {TreeNode} p\n * @param {TreeNode} q\n * @return {boolean}\n */\nfunction isSameTree(p, q) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nbool isSameTree(struct TreeNode* p, struct TreeNode* q) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    bool isSameTree(TreeNode* p, TreeNode* q) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public boolean isSameTree(TreeNode p, TreeNode q) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "invert-binary-tree",
+    "title": "Invert Binary Tree",
+    "difficulty": "Easy",
+    "topics": [
+      "Tree",
+      "DFS",
+      "BFS",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Given the root of a binary tree, invert the tree by swapping every node's left and right children, then return the root."
+    ],
+    "examples": [
+      {
+        "input": "root = [4,2,7,1,3,6,9]",
+        "output": "[4,7,2,9,6,3,1]"
+      },
+      {
+        "input": "root = [2,1,3]",
+        "output": "[2,3,1]"
+      },
+      {
+        "input": "root = []",
+        "output": "[]"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 100",
+      "-100 <= Node.val <= 100"
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def invertTree(self, root: Optional[TreeNode]) -> Optional[TreeNode]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.left = (left === undefined ? null : left);\n *   this.right = (right === undefined ? null : right);\n * }\n */\n/**\n * @param {TreeNode} root\n * @return {TreeNode}\n */\nfunction invertTree(root) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nstruct TreeNode* invertTree(struct TreeNode* root) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    TreeNode* invertTree(TreeNode* root) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public TreeNode invertTree(TreeNode root) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "symmetric-tree",
+    "title": "Symmetric Tree",
+    "difficulty": "Easy",
+    "topics": [
+      "Tree",
+      "DFS",
+      "BFS",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Check whether a binary tree mirrors itself around its center line.",
+      "For every position on the left side, the matching position on the right side must exist and carry the same value."
+    ],
+    "examples": [
+      {
+        "input": "root = [1,2,2,3,4,4,3]",
+        "output": "true"
+      },
+      {
+        "input": "root = [1,2,2,null,3,null,3]",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "1 <= number of nodes <= 1000",
+      "-100 <= Node.val <= 100"
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def isSymmetric(self, root: Optional[TreeNode]) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *     this.val = (val===undefined ? 0 : val)\n *     this.left = (left===undefined ? null : left)\n *     this.right = (right===undefined ? null : right)\n * }\n */\n/**\n * @param {TreeNode} root\n * @return {boolean}\n */\nfunction isSymmetric(root) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nbool isSymmetric(struct TreeNode* root) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    bool isSymmetric(TreeNode* root) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public boolean isSymmetric(TreeNode root) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "construct-binary-tree-from-preorder-and-inorder-traversal",
+    "title": "Construct Binary Tree from Preorder and Inorder Traversal",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Hash Table",
+      "Divide and Conquer",
+      "Tree",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Rebuild a binary tree from its preorder and inorder traversal arrays.",
+      "The values are unique, and the two arrays describe the same tree. Return the reconstructed root."
+    ],
+    "examples": [
+      {
+        "input": "preorder = [3,9,20,15,7], inorder = [9,3,15,20,7]",
+        "output": "[3,9,20,null,null,15,7]"
+      },
+      {
+        "input": "preorder = [-1], inorder = [-1]",
+        "output": "[-1]"
+      }
+    ],
+    "constraints": [
+      "1 <= preorder.length <= 3000",
+      "inorder.length == preorder.length",
+      "-3000 <= value <= 3000",
+      "All values are unique, and both arrays describe the same binary tree."
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def buildTree(self, preorder: list[int], inorder: list[int]) -> Optional[TreeNode]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *     this.val = (val===undefined ? 0 : val)\n *     this.left = (left===undefined ? null : left)\n *     this.right = (right===undefined ? null : right)\n * }\n */\n/**\n * @param {number[]} preorder\n * @param {number[]} inorder\n * @return {TreeNode}\n */\nfunction buildTree(preorder, inorder) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nstruct TreeNode* buildTree(int* preorder, int preorderSize, int* inorder, int inorderSize) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    TreeNode* buildTree(vector<int>& preorder, vector<int>& inorder) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public TreeNode buildTree(int[] preorder, int[] inorder) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "construct-binary-tree-from-inorder-and-postorder-traversal",
+    "title": "Construct Binary Tree from Inorder and Postorder Traversal",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Hash Table",
+      "Divide and Conquer",
+      "Tree",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Rebuild a binary tree from its inorder and postorder traversal arrays.",
+      "The values are unique, and the two arrays describe the same tree. Return the reconstructed root."
+    ],
+    "examples": [
+      {
+        "input": "inorder = [9,3,15,20,7], postorder = [9,15,7,20,3]",
+        "output": "[3,9,20,null,null,15,7]"
+      },
+      {
+        "input": "inorder = [-1], postorder = [-1]",
+        "output": "[-1]"
+      }
+    ],
+    "constraints": [
+      "1 <= inorder.length <= 3000",
+      "postorder.length == inorder.length",
+      "-3000 <= value <= 3000",
+      "All values are unique, and both arrays describe the same binary tree."
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def buildTree(self, inorder: list[int], postorder: list[int]) -> Optional[TreeNode]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *     this.val = (val===undefined ? 0 : val)\n *     this.left = (left===undefined ? null : left)\n *     this.right = (right===undefined ? null : right)\n * }\n */\n/**\n * @param {number[]} inorder\n * @param {number[]} postorder\n * @return {TreeNode}\n */\nfunction buildTree(inorder, postorder) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nstruct TreeNode* buildTree(int* inorder, int inorderSize, int* postorder, int postorderSize) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    TreeNode* buildTree(vector<int>& inorder, vector<int>& postorder) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public TreeNode buildTree(int[] inorder, int[] postorder) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "populating-next-right-pointers-in-each-node-ii",
+    "title": "Populating Next Right Pointers in Each Node II",
+    "difficulty": "Medium",
+    "topics": [
+      "Linked List",
+      "Tree",
+      "DFS",
+      "BFS",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Given any binary tree, connect each node's next pointer to the node immediately to its right on the same level.",
+      "If a node is the rightmost node of its level, its next pointer should be null. Return the root after wiring the pointers."
+    ],
+    "examples": [
+      {
+        "input": "root = [1,2,3,4,5,null,7]",
+        "output": "[[1],[2,3],[4,5,7]]"
+      },
+      {
+        "input": "root = []",
+        "output": "[]"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 6000",
+      "-100 <= Node.val <= 100"
+    ],
+    "starterCode": {
+      "python": "\"\"\"\n# Definition for a Node.\nclass Node:\n    def __init__(self, val: int = 0, left: 'Node' = None, right: 'Node' = None, next: 'Node' = None):\n        self.val = val\n        self.left = left\n        self.right = right\n        self.next = next\n\"\"\"\n\nclass Solution:\n    def connect(self, root: 'Node') -> 'Node':\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * // Definition for a _Node.\n * function _Node(val, left, right, next) {\n *    this.val = val === undefined ? null : val;\n *    this.left = left === undefined ? null : left;\n *    this.right = right === undefined ? null : right;\n *    this.next = next === undefined ? null : next;\n * }\n */\n\n/**\n * @param {_Node} root\n * @return {_Node}\n */\nfunction connect(root) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a Node.\n * struct Node {\n *     int val;\n *     struct Node *left;\n *     struct Node *right;\n *     struct Node *next;\n * };\n */\n\nstruct Node* connect(struct Node* root) {\n\t// Think out loud as you go!\n\treturn NULL;\n}\n",
+      "cpp": "/*\n// Definition for a Node.\nclass Node {\npublic:\n    int val;\n    Node* left;\n    Node* right;\n    Node* next;\n\n    Node() : val(0), left(NULL), right(NULL), next(NULL) {}\n\n    Node(int _val) : val(_val), left(NULL), right(NULL), next(NULL) {}\n\n    Node(int _val, Node* _left, Node* _right, Node* _next)\n        : val(_val), left(_left), right(_right), next(_next) {}\n};\n*/\n\nclass Solution {\npublic:\n    Node* connect(Node* root) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/*\n// Definition for a Node.\nclass Node {\n    public int val;\n    public Node left;\n    public Node right;\n    public Node next;\n\n    public Node() {}\n    \n    public Node(int _val) {\n        val = _val;\n    }\n\n    public Node(int _val, Node _left, Node _right, Node _next) {\n        val = _val;\n        left = _left;\n        right = _right;\n        next = _next;\n    }\n};\n*/\n\nclass Solution {\n    public Node connect(Node root) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "flatten-binary-tree-to-linked-list",
+    "title": "Flatten Binary Tree to Linked List",
+    "difficulty": "Medium",
+    "topics": [
+      "Linked List",
+      "Stack",
+      "Tree",
+      "DFS",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Rewrite a binary tree in place so it becomes a single right-child chain following preorder traversal.",
+      "Every left child must be set to null, and the original root remains the head of the chain."
+    ],
+    "examples": [
+      {
+        "input": "root = [1,2,5,3,4,null,6]",
+        "output": "[1,null,2,null,3,null,4,null,5,null,6]"
+      },
+      {
+        "input": "root = []",
+        "output": "[]"
+      },
+      {
+        "input": "root = [0]",
+        "output": "[0]"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 2000",
+      "-100 <= Node.val <= 100"
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def flatten(self, root: Optional[TreeNode]) -> None:\n        \"\"\"\n        Do not return anything, modify root in-place instead.\n        \"\"\"\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *     this.val = (val===undefined ? 0 : val)\n *     this.left = (left===undefined ? null : left)\n *     this.right = (right===undefined ? null : right)\n * }\n */\n/**\n * @param {TreeNode} root\n * @return {void} Do not return anything, modify root in-place instead.\n */\nfunction flatten(root) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nvoid flatten(struct TreeNode* root) {\n\t// Think out loud as you go!\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    void flatten(TreeNode* root) {\n        // Think out loud as you go!\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public void flatten(TreeNode root) {\n        // Think out loud as you go!\n    }\n}\n"
+    }
+  },
+  {
+    "id": "path-sum",
+    "title": "Path Sum",
+    "difficulty": "Easy",
+    "topics": [
+      "Tree",
+      "DFS",
+      "BFS",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Determine whether a binary tree has a root-to-leaf path whose node values add up to a target sum.",
+      "A valid path must start at the root and stop at a leaf node."
+    ],
+    "examples": [
+      {
+        "input": "root = [5,4,8,11,null,13,4,7,2,null,null,null,1], targetSum = 22",
+        "output": "true"
+      },
+      {
+        "input": "root = [1,2,3], targetSum = 5",
+        "output": "false"
+      },
+      {
+        "input": "root = [], targetSum = 0",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 5000",
+      "-1000 <= Node.val <= 1000",
+      "-1000 <= targetSum <= 1000"
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def hasPathSum(self, root: Optional[TreeNode], targetSum: int) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *     this.val = (val===undefined ? 0 : val)\n *     this.left = (left===undefined ? null : left)\n *     this.right = (right===undefined ? null : right)\n * }\n */\n/**\n * @param {TreeNode} root\n * @param {number} targetSum\n * @return {boolean}\n */\nfunction hasPathSum(root, targetSum) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nbool hasPathSum(struct TreeNode* root, int targetSum) {\n\t// Think out loud as you go!\n\treturn false;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    bool hasPathSum(TreeNode* root, int targetSum) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public boolean hasPathSum(TreeNode root, int targetSum) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "sum-root-to-leaf-numbers",
+    "title": "Sum Root to Leaf Numbers",
+    "difficulty": "Medium",
+    "topics": [
+      "Tree",
+      "DFS",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Each root-to-leaf path in a binary tree forms a base-10 number by reading node values from top to bottom.",
+      "Return the sum of all numbers formed by the tree's root-to-leaf paths."
+    ],
+    "examples": [
+      {
+        "input": "root = [1,2,3]",
+        "output": "25"
+      },
+      {
+        "input": "root = [4,9,0,5,1]",
+        "output": "1026"
+      }
+    ],
+    "constraints": [
+      "1 <= number of nodes <= 1000",
+      "0 <= Node.val <= 9",
+      "Tree depth is at most 10."
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def sumNumbers(self, root: Optional[TreeNode]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *     this.val = (val===undefined ? 0 : val)\n *     this.left = (left===undefined ? null : left)\n *     this.right = (right===undefined ? null : right)\n * }\n */\n/**\n * @param {TreeNode} root\n * @return {number}\n */\nfunction sumNumbers(root) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nint sumNumbers(struct TreeNode* root) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    int sumNumbers(TreeNode* root) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public int sumNumbers(TreeNode root) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "binary-tree-maximum-path-sum",
+    "title": "Binary Tree Maximum Path Sum",
+    "difficulty": "Hard",
+    "topics": [
+      "Dynamic Programming",
+      "Tree",
+      "DFS",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Find the largest sum obtainable from any path in a non-empty binary tree.",
+      "A path may start and end at any nodes, but each connected node can appear at most once."
+    ],
+    "examples": [
+      {
+        "input": "root = [1,2,3]",
+        "output": "6"
+      },
+      {
+        "input": "root = [-10,9,20,null,null,15,7]",
+        "output": "42"
+      }
+    ],
+    "constraints": [
+      "1 <= number of nodes <= 3 * 10^4",
+      "-1000 <= Node.val <= 1000"
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def maxPathSum(self, root: Optional[TreeNode]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *     this.val = (val===undefined ? 0 : val)\n *     this.left = (left===undefined ? null : left)\n *     this.right = (right===undefined ? null : right)\n * }\n */\n/**\n * @param {TreeNode} root\n * @return {number}\n */\nfunction maxPathSum(root) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nint maxPathSum(struct TreeNode* root) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    int maxPathSum(TreeNode* root) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public int maxPathSum(TreeNode root) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "binary-search-tree-iterator",
+    "title": "Binary Search Tree Iterator",
+    "difficulty": "Medium",
+    "topics": [
+      "Stack",
+      "Tree",
+      "Design",
+      "Binary Search Tree",
+      "Binary Tree",
+      "Iterator"
+    ],
+    "statement": [
+      "Design an iterator over a binary search tree that returns values in ascending order.",
+      "BSTIterator(root) initializes the iterator. next() returns the next smallest value, and hasNext() reports whether another value remains."
+    ],
+    "examples": [
+      {
+        "input": "[\"BSTIterator\",\"next\",\"next\",\"hasNext\",\"next\",\"hasNext\",\"next\",\"hasNext\",\"next\",\"hasNext\"]\n[[[7,3,15,null,null,9,20]],[],[],[],[],[],[],[],[],[]]",
+        "output": "[null,3,7,true,9,true,15,true,20,false]"
+      }
+    ],
+    "constraints": [
+      "1 <= number of nodes <= 10^5",
+      "0 <= Node.val <= 10^6",
+      "At most 10^5 calls will be made to next and hasNext.",
+      "Calls to next are valid only when hasNext is true."
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass BSTIterator:\n    def __init__(self, root: Optional[TreeNode]):\n        pass\n\n    def next(self) -> int:\n        pass\n\n    def hasNext(self) -> bool:\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *   this.val = (val===undefined ? 0 : val);\n *   this.left = (left===undefined ? null : left);\n *   this.right = (right===undefined ? null : right);\n * }\n */\n/** @param {TreeNode} root */\nvar BSTIterator = function(root) {\n  // Think out loud as you go!\n};\n\n/** @return {number} */\nBSTIterator.prototype.next = function() {\n};\n\n/** @return {boolean} */\nBSTIterator.prototype.hasNext = function() {\n};\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\ntypedef struct {\n    // Think out loud as you go!\n} BSTIterator;\n\nBSTIterator* bSTIteratorCreate(struct TreeNode* root) {\n    return NULL;\n}\n\nint bSTIteratorNext(BSTIterator* obj) {\n    return 0;\n}\n\nbool bSTIteratorHasNext(BSTIterator* obj) {\n    return false;\n}\n\nvoid bSTIteratorFree(BSTIterator* obj) {\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass BSTIterator {\npublic:\n    BSTIterator(TreeNode* root) {\n    }\n\n    int next() {\n        return 0;\n    }\n\n    bool hasNext() {\n        return false;\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass BSTIterator {\n    public BSTIterator(TreeNode root) {\n    }\n\n    public int next() {\n        return 0;\n    }\n\n    public boolean hasNext() {\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "count-complete-tree-nodes",
+    "title": "Count Complete Tree Nodes",
+    "difficulty": "Medium",
+    "topics": [
+      "Binary Search",
+      "Bit Manipulation",
+      "Tree",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Count the nodes in a complete binary tree.",
+      "A complete tree has every level filled except possibly the last, and the last level is filled from left to right."
+    ],
+    "examples": [
+      {
+        "input": "root = [1,2,3,4,5,6]",
+        "output": "6"
+      },
+      {
+        "input": "root = []",
+        "output": "0"
+      },
+      {
+        "input": "root = [1]",
+        "output": "1"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 5 * 10^4",
+      "0 <= Node.val <= 5 * 10^4",
+      "The tree is complete."
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def countNodes(self, root: Optional[TreeNode]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *   this.val = (val===undefined ? 0 : val);\n *   this.left = (left===undefined ? null : left);\n *   this.right = (right===undefined ? null : right);\n * }\n */\n/**\n * @param {TreeNode} root\n * @return {number}\n */\nfunction countNodes(root) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nint countNodes(struct TreeNode* root) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    int countNodes(TreeNode* root) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public int countNodes(TreeNode root) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "lowest-common-ancestor-of-a-binary-tree",
+    "title": "Lowest Common Ancestor of a Binary Tree",
+    "difficulty": "Medium",
+    "topics": [
+      "Tree",
+      "DFS",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Given a binary tree and two nodes in it, return their lowest common ancestor.",
+      "The lowest common ancestor is the deepest node that has both targets in its subtree, where a node may be an ancestor of itself."
+    ],
+    "examples": [
+      {
+        "input": "root = [3,5,1,6,2,0,8,null,null,7,4], p = 5, q = 1",
+        "output": "3"
+      },
+      {
+        "input": "root = [3,5,1,6,2,0,8,null,null,7,4], p = 5, q = 4",
+        "output": "5"
+      },
+      {
+        "input": "root = [1,2], p = 1, q = 2",
+        "output": "1"
+      }
+    ],
+    "constraints": [
+      "2 <= number of nodes <= 10^5",
+      "-10^9 <= Node.val <= 10^9",
+      "All node values are unique.",
+      "p and q are different nodes and both exist in the tree."
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, x):\n#         self.val = x\n#         self.left = None\n#         self.right = None\nclass Solution:\n    def lowestCommonAncestor(self, root: 'TreeNode', p: 'TreeNode', q: 'TreeNode') -> 'TreeNode':\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val) {\n *   this.val = val;\n *   this.left = this.right = null;\n * }\n */\n/**\n * @param {TreeNode} root\n * @param {TreeNode} p\n * @param {TreeNode} q\n * @return {TreeNode}\n */\nfunction lowestCommonAncestor(root, p, q) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nstruct TreeNode* lowestCommonAncestor(struct TreeNode* root, struct TreeNode* p, struct TreeNode* q) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode(int x) : val(x), left(NULL), right(NULL) {}\n * };\n */\nclass Solution {\npublic:\n    TreeNode* lowestCommonAncestor(TreeNode* root, TreeNode* p, TreeNode* q) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode(int x) { val = x; }\n * }\n */\nclass Solution {\n    public TreeNode lowestCommonAncestor(TreeNode root, TreeNode p, TreeNode q) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "binary-tree-right-side-view",
+    "title": "Binary Tree Right Side View",
+    "difficulty": "Medium",
+    "topics": [
+      "Tree",
+      "DFS",
+      "BFS",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Return the values visible when looking at a binary tree from its right side.",
+      "For each depth, include the value of the rightmost node at that level."
+    ],
+    "examples": [
+      {
+        "input": "root = [1,2,3,null,5,null,4]",
+        "output": "[1,3,4]"
+      },
+      {
+        "input": "root = [1,2,3,4,null,null,null,5]",
+        "output": "[1,3,4,5]"
+      },
+      {
+        "input": "root = [1,null,3]",
+        "output": "[1,3]"
+      },
+      {
+        "input": "root = []",
+        "output": "[]"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 100",
+      "-100 <= Node.val <= 100"
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def rightSideView(self, root: Optional[TreeNode]) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *   this.val = (val===undefined ? 0 : val);\n *   this.left = (left===undefined ? null : left);\n *   this.right = (right===undefined ? null : right);\n * }\n */\n/**\n * @param {TreeNode} root\n * @return {number[]}\n */\nfunction rightSideView(root) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\n/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* rightSideView(struct TreeNode* root, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    vector<int> rightSideView(TreeNode* root) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public List<Integer> rightSideView(TreeNode root) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
+    }
+  },
+  {
+    "id": "average-of-levels-in-binary-tree",
+    "title": "Average of Levels in Binary Tree",
+    "difficulty": "Easy",
+    "topics": [
+      "Tree",
+      "DFS",
+      "BFS",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Return the average node value for each depth of a binary tree.",
+      "The result should list levels from the root downward."
+    ],
+    "examples": [
+      {
+        "input": "root = [3,9,20,null,null,15,7]",
+        "output": "[3.0,14.5,11.0]"
+      },
+      {
+        "input": "root = [3,9,20,15,7]",
+        "output": "[3.0,14.5,11.0]"
+      }
+    ],
+    "constraints": [
+      "1 <= number of nodes <= 10^4",
+      "-2^31 <= Node.val <= 2^31 - 1"
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def averageOfLevels(self, root: Optional[TreeNode]) -> list[float]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *   this.val = (val===undefined ? 0 : val);\n *   this.left = (left===undefined ? null : left);\n *   this.right = (right===undefined ? null : right);\n * }\n */\n/**\n * @param {TreeNode} root\n * @return {number[]}\n */\nfunction averageOfLevels(root) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\n/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\ndouble* averageOfLevels(struct TreeNode* root, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    vector<double> averageOfLevels(TreeNode* root) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public List<Double> averageOfLevels(TreeNode root) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
+    }
+  },
+  {
+    "id": "binary-tree-level-order-traversal",
+    "title": "Binary Tree Level Order Traversal",
+    "difficulty": "Medium",
+    "topics": [
+      "Tree",
+      "BFS",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Return the values of a binary tree grouped by depth from top to bottom.",
+      "Within each level, preserve left-to-right order."
+    ],
+    "examples": [
+      {
+        "input": "root = [3,9,20,null,null,15,7]",
+        "output": "[[3],[9,20],[15,7]]"
+      },
+      {
+        "input": "root = [1]",
+        "output": "[[1]]"
+      },
+      {
+        "input": "root = []",
+        "output": "[]"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 2000",
+      "-1000 <= Node.val <= 1000"
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def levelOrder(self, root: Optional[TreeNode]) -> list[list[int]]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *   this.val = (val===undefined ? 0 : val);\n *   this.left = (left===undefined ? null : left);\n *   this.right = (right===undefined ? null : right);\n * }\n */\n/**\n * @param {TreeNode} root\n * @return {number[][]}\n */\nfunction levelOrder(root) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\n/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** levelOrder(struct TreeNode* root, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    vector<vector<int>> levelOrder(TreeNode* root) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public List<List<Integer>> levelOrder(TreeNode root) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
+    }
+  },
+  {
+    "id": "binary-tree-zigzag-level-order-traversal",
+    "title": "Binary Tree Zigzag Level Order Traversal",
+    "difficulty": "Medium",
+    "topics": [
+      "Tree",
+      "BFS",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Return the values of a binary tree level by level, alternating direction each row.",
+      "The first level is read left to right, the next right to left, and so on."
+    ],
+    "examples": [
+      {
+        "input": "root = [3,9,20,null,null,15,7]",
+        "output": "[[3],[20,9],[15,7]]"
+      },
+      {
+        "input": "root = [1]",
+        "output": "[[1]]"
+      },
+      {
+        "input": "root = []",
+        "output": "[]"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 2000",
+      "-100 <= Node.val <= 100"
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def zigzagLevelOrder(self, root: Optional[TreeNode]) -> list[list[int]]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *   this.val = (val===undefined ? 0 : val);\n *   this.left = (left===undefined ? null : left);\n *   this.right = (right===undefined ? null : right);\n * }\n */\n/**\n * @param {TreeNode} root\n * @return {number[][]}\n */\nfunction zigzagLevelOrder(root) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\n/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** zigzagLevelOrder(struct TreeNode* root, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    vector<vector<int>> zigzagLevelOrder(TreeNode* root) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public List<List<Integer>> zigzagLevelOrder(TreeNode root) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
+    }
+  },
+  {
+    "id": "minimum-absolute-difference-in-bst",
+    "title": "Minimum Absolute Difference in BST",
+    "difficulty": "Easy",
+    "topics": [
+      "Tree",
+      "DFS",
+      "BFS",
+      "Binary Search Tree",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Use the sorted order implied by a BST to find the closest pair of node values.",
+      "Return the distance between those two values."
+    ],
+    "examples": [
+      {
+        "input": "root = [4,2,6,1,3]",
+        "output": "1"
+      },
+      {
+        "input": "root = [1,0,48,null,null,12,49]",
+        "output": "1"
+      }
+    ],
+    "constraints": [
+      "2 <= number of nodes <= 10^4",
+      "0 <= Node.val <= 10^5"
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def getMinimumDifference(self, root: Optional[TreeNode]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *   this.val = (val===undefined ? 0 : val);\n *   this.left = (left===undefined ? null : left);\n *   this.right = (right===undefined ? null : right);\n * }\n */\n/**\n * @param {TreeNode} root\n * @return {number}\n */\nfunction getMinimumDifference(root) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nint getMinimumDifference(struct TreeNode* root) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    int getMinimumDifference(TreeNode* root) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public int getMinimumDifference(TreeNode root) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "kth-smallest-element-in-a-bst",
+    "title": "Kth Smallest Element in a BST",
+    "difficulty": "Medium",
+    "topics": [
+      "Tree",
+      "DFS",
+      "Binary Search Tree",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Use the ordering of a binary search tree to identify the value that appears in sorted position k.",
+      "k is one-indexed, and the input always contains at least k nodes."
+    ],
+    "examples": [
+      {
+        "input": "root = [3,1,4,null,2], k = 1",
+        "output": "1"
+      },
+      {
+        "input": "root = [5,3,6,2,4,null,null,1], k = 3",
+        "output": "3"
+      }
+    ],
+    "constraints": [
+      "1 <= k <= number of nodes <= 10^4",
+      "0 <= Node.val <= 10^4"
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def kthSmallest(self, root: Optional[TreeNode], k: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *   this.val = (val===undefined ? 0 : val);\n *   this.left = (left===undefined ? null : left);\n *   this.right = (right===undefined ? null : right);\n * }\n */\n/**\n * @param {TreeNode} root\n * @param {number} k\n * @return {number}\n */\nfunction kthSmallest(root, k) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nint kthSmallest(struct TreeNode* root, int k) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    int kthSmallest(TreeNode* root, int k) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public int kthSmallest(TreeNode root, int k) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "validate-binary-search-tree",
+    "title": "Validate Binary Search Tree",
+    "difficulty": "Medium",
+    "topics": [
+      "Tree",
+      "DFS",
+      "BFS",
+      "Binary Search Tree",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Determine whether a binary tree satisfies the binary search tree ordering rule.",
+      "Every node in a left subtree must be strictly smaller than the node, and every node in a right subtree must be strictly larger."
+    ],
+    "examples": [
+      {
+        "input": "root = [2,1,3]",
+        "output": "true"
+      },
+      {
+        "input": "root = [5,1,4,null,null,3,6]",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "1 <= number of nodes <= 10^4",
+      "-2^31 <= Node.val <= 2^31 - 1"
+    ],
+    "starterCode": {
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def isValidBST(self, root: Optional[TreeNode]) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *   this.val = (val===undefined ? 0 : val);\n *   this.left = (left===undefined ? null : left);\n *   this.right = (right===undefined ? null : right);\n * }\n */\n/**\n * @param {TreeNode} root\n * @return {boolean}\n */\nfunction isValidBST(root) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nbool isValidBST(struct TreeNode* root) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    bool isValidBST(TreeNode* root) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public boolean isValidBST(TreeNode root) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "number-of-islands",
+    "title": "Number of Islands",
+    "difficulty": "Medium",
+    "topics": [
+      "Matrix",
+      "DFS",
+      "BFS",
+      "Union Find"
+    ],
+    "statement": [
+      "Given an m x n 2D binary grid which represents a map of '1's (land) and '0's (water), return the number of islands.",
+      "An island is surrounded by water and is formed by connecting adjacent lands horizontally or vertically. You may assume all four edges of the grid are surrounded by water."
+    ],
+    "examples": [
+      {
+        "input": "grid = [\n  [\"1\",\"1\",\"1\",\"1\",\"0\"],\n  [\"1\",\"1\",\"0\",\"1\",\"0\"],\n  [\"1\",\"1\",\"0\",\"0\",\"0\"],\n  [\"0\",\"0\",\"0\",\"0\",\"0\"]\n]",
+        "output": "1"
+      },
+      {
+        "input": "grid = [\n  [\"1\",\"1\",\"0\",\"0\",\"0\"],\n  [\"1\",\"1\",\"0\",\"0\",\"0\"],\n  [\"0\",\"0\",\"1\",\"0\",\"0\"],\n  [\"0\",\"0\",\"0\",\"1\",\"1\"]\n]",
+        "output": "3"
+      }
+    ],
+    "constraints": [
+      "m == grid.length, n == grid[i].length",
+      "1 <= m, n <= 300",
+      "grid[i][j] is '0' or '1'."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def numIslands(self, grid: list[list[str]]) -> int:\n        pass\n",
+      "javascript": "/**\n * @param {character[][]} grid\n * @return {number}\n */\nfunction numIslands(grid) {\n}\n",
+      "c": "int numIslands(char** grid, int gridSize, int* gridColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int numIslands(vector<vector<char>>& grid) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int numIslands(char[][] grid) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "surrounded-regions",
+    "title": "Surrounded Regions",
+    "difficulty": "Medium",
+    "topics": [
+      "Matrix",
+      "DFS",
+      "BFS",
+      "Union Find"
+    ],
+    "statement": [
+      "Given an m x n board of 'X' and 'O', flip every 'O' region that is fully enclosed by 'X'.",
+      "An 'O' connected to a border 'O' horizontally or vertically remains unchanged; modify the board in place."
+    ],
+    "examples": [
+      {
+        "input": "board = [[\"X\",\"X\",\"X\",\"X\"],[\"X\",\"O\",\"O\",\"X\"],[\"X\",\"X\",\"O\",\"X\"],[\"X\",\"O\",\"X\",\"X\"]]",
+        "output": "[[\"X\",\"X\",\"X\",\"X\"],[\"X\",\"X\",\"X\",\"X\"],[\"X\",\"X\",\"X\",\"X\"],[\"X\",\"O\",\"X\",\"X\"]]"
+      },
+      {
+        "input": "board = [[\"X\"]]",
+        "output": "[[\"X\"]]"
+      }
+    ],
+    "constraints": [
+      "m == board.length, n == board[i].length",
+      "1 <= m, n <= 200",
+      "board[i][j] is 'X' or 'O'."
+    ],
+    "starterCode": {
+      "cpp": "class Solution {\npublic:\n    void solve(vector<vector<char>>& board) {\n        \n    }\n};",
+      "java": "class Solution {\n    public void solve(char[][] board) {\n        \n    }\n}",
+      "python": "class Solution:\n    def solve(self, board: List[List[str]]) -> None:\n        \"\"\"\n        Do not return anything, modify board in-place instead.\n        \"\"\"\n        ",
+      "javascript": "/**\n * @param {character[][]} board\n * @return {void} Do not return anything, modify board in-place instead.\n */\nvar solve = function(board) {\n    \n};",
+      "c": "void solve(char** board, int boardSize, int* boardColSize) {\n    \n}"
+    }
+  },
+  {
+    "id": "clone-graph",
+    "title": "Clone Graph",
+    "difficulty": "Medium",
+    "topics": [
+      "Hash Table",
+      "DFS",
+      "BFS",
+      "Graph"
+    ],
+    "statement": [
+      "Given a reference to a node in an undirected connected graph, return a deep copy of the graph.",
+      "Each node has a unique value and a list of neighbor nodes; the copied graph must not reuse any original node."
+    ],
+    "examples": [
+      {
+        "input": "adjList = [[2,4],[1,3],[2,4],[1,3]]",
+        "output": "[[2,4],[1,3],[2,4],[1,3]]"
+      },
+      {
+        "input": "adjList = [[]]",
+        "output": "[[]]"
+      },
+      {
+        "input": "adjList = []",
+        "output": "[]"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 100",
+      "1 <= Node.val <= 100",
+      "Node values are unique and match their 1-indexed position in the adjacency list.",
+      "The graph is connected when the input node is not null.",
+      "There are no repeated edges and no self-loops."
+    ],
+    "starterCode": {
+      "cpp": "/*\n// Definition for a Node.\nclass Node {\npublic:\n    int val;\n    vector<Node*> neighbors;\n    Node() {\n        val = 0;\n        neighbors = vector<Node*>();\n    }\n    Node(int _val) {\n        val = _val;\n        neighbors = vector<Node*>();\n    }\n    Node(int _val, vector<Node*> _neighbors) {\n        val = _val;\n        neighbors = _neighbors;\n    }\n};\n*/\n\nclass Solution {\npublic:\n    Node* cloneGraph(Node* node) {\n        \n    }\n};",
+      "java": "/*\n// Definition for a Node.\nclass Node {\n    public int val;\n    public List<Node> neighbors;\n    public Node() {\n        val = 0;\n        neighbors = new ArrayList<Node>();\n    }\n    public Node(int _val) {\n        val = _val;\n        neighbors = new ArrayList<Node>();\n    }\n    public Node(int _val, ArrayList<Node> _neighbors) {\n        val = _val;\n        neighbors = _neighbors;\n    }\n}\n*/\n\nclass Solution {\n    public Node cloneGraph(Node node) {\n        \n    }\n}",
+      "python": "\"\"\"\n# Definition for a Node.\nclass Node:\n    def __init__(self, val = 0, neighbors = None):\n        self.val = val\n        self.neighbors = neighbors if neighbors is not None else []\n\"\"\"\n\nfrom typing import Optional\nclass Solution:\n    def cloneGraph(self, node: Optional['Node']) -> Optional['Node']:\n        ",
+      "javascript": "/**\n * // Definition for a _Node.\n * function _Node(val, neighbors) {\n *    this.val = val === undefined ? 0 : val;\n *    this.neighbors = neighbors === undefined ? [] : neighbors;\n * };\n */\n\n/**\n * @param {_Node} node\n * @return {_Node}\n */\nvar cloneGraph = function(node) {\n    \n};",
+      "c": "/**\n * Definition for a Node.\n * struct Node {\n *     int val;\n *     int numNeighbors;\n *     struct Node** neighbors;\n * };\n */\n\nstruct Node *cloneGraph(struct Node *s) {\n\t\n}"
+    }
+  },
+  {
+    "id": "evaluate-division",
+    "title": "Evaluate Division",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "String",
+      "DFS",
+      "BFS",
+      "Union Find",
+      "Graph"
+    ],
+    "statement": [
+      "Given equations such as a / b = value, answer division queries using the implied ratios.",
+      "Return -1.0 when a query mentions an unknown variable or the two variables are disconnected."
+    ],
+    "examples": [
+      {
+        "input": "equations = [[\"a\",\"b\"],[\"b\",\"c\"]], values = [2.0,3.0], queries = [[\"a\",\"c\"],[\"b\",\"a\"],[\"a\",\"e\"],[\"a\",\"a\"],[\"x\",\"x\"]]",
+        "output": "[6.0,0.5,-1.0,1.0,-1.0]"
+      },
+      {
+        "input": "equations = [[\"a\",\"b\"],[\"b\",\"c\"],[\"bc\",\"cd\"]], values = [1.5,2.5,5.0], queries = [[\"a\",\"c\"],[\"c\",\"b\"],[\"bc\",\"cd\"],[\"cd\",\"bc\"]]",
+        "output": "[3.75,0.4,5.0,0.2]"
+      }
+    ],
+    "constraints": [
+      "1 <= equations.length <= 20",
+      "equations[i].length == 2",
+      "values.length == equations.length",
+      "1 <= queries.length <= 20",
+      "queries[i].length == 2",
+      "Each variable name contains lowercase English letters and digits.",
+      "0.0 < values[i] <= 20.0"
+    ],
+    "starterCode": {
+      "cpp": "class Solution {\npublic:\n    vector<double> calcEquation(vector<vector<string>>& equations, vector<double>& values, vector<vector<string>>& queries) {\n        \n    }\n};",
+      "java": "class Solution {\n    public double[] calcEquation(List<List<String>> equations, double[] values, List<List<String>> queries) {\n        \n    }\n}",
+      "python": "class Solution:\n    def calcEquation(self, equations: List[List[str]], values: List[float], queries: List[List[str]]) -> List[float]:\n        ",
+      "javascript": "/**\n * @param {string[][]} equations\n * @param {number[]} values\n * @param {string[][]} queries\n * @return {number[]}\n */\nvar calcEquation = function(equations, values, queries) {\n    \n};",
+      "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\ndouble* calcEquation(char*** equations, int equationsSize, int* equationsColSize, double* values, int valuesSize, char*** queries, int queriesSize, int* queriesColSize, int* returnSize) {\n    \n}"
+    }
+  },
+  {
+    "id": "course-schedule",
+    "title": "Course Schedule",
+    "difficulty": "Medium",
+    "topics": [
+      "DFS",
+      "BFS",
+      "Graph",
+      "Topological Sort"
+    ],
+    "statement": [
+      "Given a number of courses and prerequisite pairs, determine whether all courses can be finished.",
+      "Each pair [course, prerequisite] means the prerequisite must be taken before that course."
+    ],
+    "examples": [
+      {
+        "input": "numCourses = 2, prerequisites = [[1,0]]",
+        "output": "true"
+      },
+      {
+        "input": "numCourses = 2, prerequisites = [[1,0],[0,1]]",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "1 <= numCourses <= 2000",
+      "0 <= prerequisites.length <= 5000",
+      "prerequisites[i].length == 2",
+      "0 <= course, prerequisite < numCourses",
+      "All prerequisite pairs are unique."
+    ],
+    "starterCode": {
+      "cpp": "class Solution {\npublic:\n    bool canFinish(int numCourses, vector<vector<int>>& prerequisites) {\n        \n    }\n};",
+      "java": "class Solution {\n    public boolean canFinish(int numCourses, int[][] prerequisites) {\n        \n    }\n}",
+      "python": "class Solution:\n    def canFinish(self, numCourses: int, prerequisites: List[List[int]]) -> bool:\n        ",
+      "javascript": "/**\n * @param {number} numCourses\n * @param {number[][]} prerequisites\n * @return {boolean}\n */\nvar canFinish = function(numCourses, prerequisites) {\n    \n};",
+      "c": "bool canFinish(int numCourses, int** prerequisites, int prerequisitesSize, int* prerequisitesColSize) {\n    \n}"
+    }
+  },
+  {
+    "id": "course-schedule-ii",
+    "title": "Course Schedule II",
+    "difficulty": "Medium",
+    "topics": [
+      "DFS",
+      "BFS",
+      "Graph",
+      "Topological Sort"
+    ],
+    "statement": [
+      "Given a number of courses and prerequisite pairs, return an order in which all courses can be completed.",
+      "Return an empty array when no ordering exists. Any valid ordering is acceptable."
+    ],
+    "examples": [
+      {
+        "input": "numCourses = 2, prerequisites = [[1,0]]",
+        "output": "[0,1]"
+      },
+      {
+        "input": "numCourses = 4, prerequisites = [[1,0],[2,0],[3,1],[3,2]]",
+        "output": "[0,2,1,3]"
+      }
+    ],
+    "constraints": [
+      "1 <= numCourses <= 2000",
+      "0 <= prerequisites.length <= 5000",
+      "prerequisites[i].length == 2",
+      "0 <= course, prerequisite < numCourses",
+      "All prerequisite pairs are unique."
+    ],
+    "starterCode": {
+      "cpp": "class Solution {\npublic:\n    vector<int> findOrder(int numCourses, vector<vector<int>>& prerequisites) {\n        \n    }\n};",
+      "java": "class Solution {\n    public int[] findOrder(int numCourses, int[][] prerequisites) {\n        \n    }\n}",
+      "python": "class Solution:\n    def findOrder(self, numCourses: int, prerequisites: List[List[int]]) -> List[int]:\n        ",
+      "javascript": "/**\n * @param {number} numCourses\n * @param {number[][]} prerequisites\n * @return {number[]}\n */\nvar findOrder = function(numCourses, prerequisites) {\n    \n};",
+      "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* findOrder(int numCourses, int** prerequisites, int prerequisitesSize, int* prerequisitesColSize, int* returnSize) {\n    \n}"
+    }
+  },
+  {
+    "id": "snakes-and-ladders",
+    "title": "Snakes and Ladders",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "BFS",
+      "Matrix"
+    ],
+    "statement": [
+      "Given an n x n Snakes and Ladders board, return the fewest die rolls needed to reach square n squared from square 1.",
+      "Board numbering starts at the bottom-left, alternates direction each row, and a square value other than -1 sends the move to that destination once."
+    ],
+    "examples": [
+      {
+        "input": "board = [[-1,-1,-1,-1,-1,-1],[-1,-1,-1,-1,-1,-1],[-1,-1,-1,-1,-1,-1],[-1,35,-1,-1,13,-1],[-1,-1,-1,-1,-1,-1],[-1,15,-1,-1,-1,-1]]",
+        "output": "4"
+      },
+      {
+        "input": "board = [[-1,-1],[-1,3]]",
+        "output": "1"
+      }
+    ],
+    "constraints": [
+      "2 <= n <= 20",
+      "board.length == n",
+      "board[i].length == n",
+      "board[i][j] == -1 or 1 <= board[i][j] <= n^2",
+      "Squares 1 and n^2 do not start a snake or ladder."
+    ],
+    "starterCode": {
+      "cpp": "class Solution {\npublic:\n    int snakesAndLadders(vector<vector<int>>& board) {\n        \n    }\n};",
+      "java": "class Solution {\n    public int snakesAndLadders(int[][] board) {\n        \n    }\n}",
+      "python": "class Solution:\n    def snakesAndLadders(self, board: List[List[int]]) -> int:\n        ",
+      "javascript": "/**\n * @param {number[][]} board\n * @return {number}\n */\nvar snakesAndLadders = function(board) {\n    \n};",
+      "c": "int snakesAndLadders(int** board, int boardSize, int* boardColSize) {\n    \n}"
+    }
+  },
+  {
+    "id": "minimum-genetic-mutation",
+    "title": "Minimum Genetic Mutation",
+    "difficulty": "Medium",
+    "topics": [
+      "Hash Table",
+      "String",
+      "BFS"
+    ],
+    "statement": [
+      "Given a start gene, an end gene, and a bank of valid genes, return the fewest one-character mutations needed to reach the end gene.",
+      "Every intermediate gene must be in the bank, and each mutation may change only one character to A, C, G, or T."
+    ],
+    "examples": [
+      {
+        "input": "startGene = \"AACCGGTT\", endGene = \"AACCGGTA\", bank = [\"AACCGGTA\"]",
+        "output": "1"
+      },
+      {
+        "input": "startGene = \"AACCGGTT\", endGene = \"AAACGGTA\", bank = [\"AACCGGTA\",\"AACCGCTA\",\"AAACGGTA\"]",
+        "output": "2"
+      }
+    ],
+    "constraints": [
+      "startGene.length == 8",
+      "endGene.length == 8",
+      "0 <= bank.length <= 10",
+      "bank[i].length == 8",
+      "Genes contain only A, C, G, and T."
+    ],
+    "starterCode": {
+      "cpp": "class Solution {\npublic:\n    int minMutation(string startGene, string endGene, vector<string>& bank) {\n        \n    }\n};",
+      "java": "class Solution {\n    public int minMutation(String startGene, String endGene, String[] bank) {\n        \n    }\n}",
+      "python": "class Solution:\n    def minMutation(self, startGene: str, endGene: str, bank: List[str]) -> int:\n        ",
+      "javascript": "/**\n * @param {string} startGene\n * @param {string} endGene\n * @param {string[]} bank\n * @return {number}\n */\nvar minMutation = function(startGene, endGene, bank) {\n    \n};",
+      "c": "int minMutation(char* startGene, char* endGene, char** bank, int bankSize) {\n    \n}"
+    }
+  },
+  {
+    "id": "word-ladder",
+    "title": "Word Ladder",
+    "difficulty": "Hard",
+    "topics": [
+      "Hash Table",
+      "String",
+      "BFS"
+    ],
+    "statement": [
+      "Given a begin word, an end word, and a word list, return the number of words in the shortest transformation sequence.",
+      "Each step changes exactly one character and every intermediate word must appear in the list; return 0 when no sequence reaches the end word."
+    ],
+    "examples": [
+      {
+        "input": "beginWord = \"hit\", endWord = \"cog\", wordList = [\"hot\",\"dot\",\"dog\",\"lot\",\"log\",\"cog\"]",
+        "output": "5"
+      },
+      {
+        "input": "beginWord = \"hit\", endWord = \"cog\", wordList = [\"hot\",\"dot\",\"dog\",\"lot\",\"log\"]",
+        "output": "0"
+      }
+    ],
+    "constraints": [
+      "1 <= beginWord.length <= 10",
+      "endWord.length == beginWord.length",
+      "1 <= wordList.length <= 5000",
+      "wordList[i].length == beginWord.length",
+      "Words contain lowercase English letters."
+    ],
+    "starterCode": {
+      "cpp": "class Solution {\npublic:\n    int ladderLength(string beginWord, string endWord, vector<string>& wordList) {\n        \n    }\n};",
+      "java": "class Solution {\n    public int ladderLength(String beginWord, String endWord, List<String> wordList) {\n        \n    }\n}",
+      "python": "class Solution:\n    def ladderLength(self, beginWord: str, endWord: str, wordList: List[str]) -> int:\n        ",
+      "javascript": "/**\n * @param {string} beginWord\n * @param {string} endWord\n * @param {string[]} wordList\n * @return {number}\n */\nvar ladderLength = function(beginWord, endWord, wordList) {\n    \n};",
+      "c": "int ladderLength(char* beginWord, char* endWord, char** wordList, int wordListSize) {\n    \n}"
+    }
+  },
+  {
+    "id": "implement-trie-prefix-tree",
+    "title": "Implement Trie (Prefix Tree)",
+    "difficulty": "Medium",
+    "topics": [
+      "Hash Table",
+      "String",
+      "Design",
+      "Trie"
+    ],
+    "statement": [
+      "Implement a Trie with insert, search, and startsWith operations for lowercase words.",
+      "search returns true only for a complete inserted word, while startsWith returns true for any prefix of an inserted word."
+    ],
+    "examples": [
+      {
+        "input": "[\"Trie\",\"insert\",\"search\",\"search\",\"startsWith\",\"insert\",\"search\"], [[],[\"apple\"],[\"apple\"],[\"app\"],[\"app\"],[\"app\"],[\"app\"]]",
+        "output": "[null,null,true,false,true,null,true]"
+      }
+    ],
+    "constraints": [
+      "1 <= word.length, prefix.length <= 2000",
+      "Words and prefixes contain lowercase English letters.",
+      "At most 3 * 10^4 calls are made to insert, search, and startsWith."
+    ],
+    "starterCode": {
+      "cpp": "class Trie {\npublic:\n    Trie() {\n        \n    }\n    \n    void insert(string word) {\n        \n    }\n    \n    bool search(string word) {\n        \n    }\n    \n    bool startsWith(string prefix) {\n        \n    }\n};\n\n/**\n * Your Trie object will be instantiated and called as such:\n * Trie* obj = new Trie();\n * obj->insert(word);\n * bool param_2 = obj->search(word);\n * bool param_3 = obj->startsWith(prefix);\n */",
+      "java": "class Trie {\n\n    public Trie() {\n        \n    }\n    \n    public void insert(String word) {\n        \n    }\n    \n    public boolean search(String word) {\n        \n    }\n    \n    public boolean startsWith(String prefix) {\n        \n    }\n}\n\n/**\n * Your Trie object will be instantiated and called as such:\n * Trie obj = new Trie();\n * obj.insert(word);\n * boolean param_2 = obj.search(word);\n * boolean param_3 = obj.startsWith(prefix);\n */",
+      "python": "class Trie:\n\n    def __init__(self):\n        \n\n    def insert(self, word: str) -> None:\n        \n\n    def search(self, word: str) -> bool:\n        \n\n    def startsWith(self, prefix: str) -> bool:\n        \n\n\n# Your Trie object will be instantiated and called as such:\n# obj = Trie()\n# obj.insert(word)\n# param_2 = obj.search(word)\n# param_3 = obj.startsWith(prefix)",
+      "javascript": "\nvar Trie = function() {\n    \n};\n\n/** \n * @param {string} word\n * @return {void}\n */\nTrie.prototype.insert = function(word) {\n    \n};\n\n/** \n * @param {string} word\n * @return {boolean}\n */\nTrie.prototype.search = function(word) {\n    \n};\n\n/** \n * @param {string} prefix\n * @return {boolean}\n */\nTrie.prototype.startsWith = function(prefix) {\n    \n};\n\n/** \n * Your Trie object will be instantiated and called as such:\n * var obj = new Trie()\n * obj.insert(word)\n * var param_2 = obj.search(word)\n * var param_3 = obj.startsWith(prefix)\n */",
+      "c": "\n\n\ntypedef struct {\n    \n} Trie;\n\n\nTrie* trieCreate() {\n    \n}\n\nvoid trieInsert(Trie* obj, char* word) {\n    \n}\n\nbool trieSearch(Trie* obj, char* word) {\n    \n}\n\nbool trieStartsWith(Trie* obj, char* prefix) {\n    \n}\n\nvoid trieFree(Trie* obj) {\n    \n}\n\n/**\n * Your Trie struct will be instantiated and called as such:\n * Trie* obj = trieCreate();\n * trieInsert(obj, word);\n \n * bool param_2 = trieSearch(obj, word);\n \n * bool param_3 = trieStartsWith(obj, prefix);\n \n * trieFree(obj);\n*/"
+    }
+  },
+  {
+    "id": "design-add-and-search-words-data-structure",
+    "title": "Design Add and Search Words Data Structure",
+    "difficulty": "Medium",
+    "topics": [
+      "String",
+      "DFS",
+      "Design",
+      "Trie"
+    ],
+    "statement": [
+      "Design a word dictionary that supports adding words and searching words later.",
+      "A search pattern may contain dots, where each dot matches exactly one lowercase letter."
+    ],
+    "examples": [
+      {
+        "input": "[\"WordDictionary\",\"addWord\",\"addWord\",\"addWord\",\"search\",\"search\",\"search\",\"search\"], [[],[\"bad\"],[\"dad\"],[\"mad\"],[\"pad\"],[\"bad\"],[\".ad\"],[\"b..\"]]",
+        "output": "[null,null,null,null,false,true,true,true]"
+      }
+    ],
+    "constraints": [
+      "1 <= word.length <= 25",
+      "Words contain lowercase English letters.",
+      "Search patterns contain lowercase English letters or dots.",
+      "At most 10^4 calls are made to addWord and search."
+    ],
+    "starterCode": {
+      "cpp": "class WordDictionary {\npublic:\n    WordDictionary() {\n        \n    }\n    \n    void addWord(string word) {\n        \n    }\n    \n    bool search(string word) {\n        \n    }\n};\n\n/**\n * Your WordDictionary object will be instantiated and called as such:\n * WordDictionary* obj = new WordDictionary();\n * obj->addWord(word);\n * bool param_2 = obj->search(word);\n */",
+      "java": "class WordDictionary {\n\n    public WordDictionary() {\n        \n    }\n    \n    public void addWord(String word) {\n        \n    }\n    \n    public boolean search(String word) {\n        \n    }\n}\n\n/**\n * Your WordDictionary object will be instantiated and called as such:\n * WordDictionary obj = new WordDictionary();\n * obj.addWord(word);\n * boolean param_2 = obj.search(word);\n */",
+      "python": "class WordDictionary:\n\n    def __init__(self):\n        \n\n    def addWord(self, word: str) -> None:\n        \n\n    def search(self, word: str) -> bool:\n        \n\n\n# Your WordDictionary object will be instantiated and called as such:\n# obj = WordDictionary()\n# obj.addWord(word)\n# param_2 = obj.search(word)",
+      "javascript": "\nvar WordDictionary = function() {\n    \n};\n\n/** \n * @param {string} word\n * @return {void}\n */\nWordDictionary.prototype.addWord = function(word) {\n    \n};\n\n/** \n * @param {string} word\n * @return {boolean}\n */\nWordDictionary.prototype.search = function(word) {\n    \n};\n\n/** \n * Your WordDictionary object will be instantiated and called as such:\n * var obj = new WordDictionary()\n * obj.addWord(word)\n * var param_2 = obj.search(word)\n */",
+      "c": "\n\n\ntypedef struct {\n    \n} WordDictionary;\n\n\nWordDictionary* wordDictionaryCreate() {\n    \n}\n\nvoid wordDictionaryAddWord(WordDictionary* obj, char* word) {\n    \n}\n\nbool wordDictionarySearch(WordDictionary* obj, char* word) {\n    \n}\n\nvoid wordDictionaryFree(WordDictionary* obj) {\n    \n}\n\n/**\n * Your WordDictionary struct will be instantiated and called as such:\n * WordDictionary* obj = wordDictionaryCreate();\n * wordDictionaryAddWord(obj, word);\n \n * bool param_2 = wordDictionarySearch(obj, word);\n \n * wordDictionaryFree(obj);\n*/"
+    }
+  },
+  {
+    "id": "word-search-ii",
+    "title": "Word Search II",
+    "difficulty": "Hard",
+    "topics": [
+      "Array",
+      "String",
+      "Backtracking",
+      "Trie",
+      "Matrix"
+    ],
+    "statement": [
+      "Given a letter board and a list of words, return all words that can be formed by walking adjacent cells horizontally or vertically.",
+      "Each board cell may be used at most once in a single word path."
+    ],
+    "examples": [
+      {
+        "input": "board = [[\"o\",\"a\",\"a\",\"n\"],[\"e\",\"t\",\"a\",\"e\"],[\"i\",\"h\",\"k\",\"r\"],[\"i\",\"f\",\"l\",\"v\"]], words = [\"oath\",\"pea\",\"eat\",\"rain\"]",
+        "output": "[\"eat\",\"oath\"]"
+      },
+      {
+        "input": "board = [[\"a\",\"b\"],[\"c\",\"d\"]], words = [\"abcb\"]",
+        "output": "[]"
+      }
+    ],
+    "constraints": [
+      "m == board.length, n == board[i].length",
+      "1 <= m, n <= 12",
+      "board[i][j] is a lowercase English letter.",
+      "1 <= words.length <= 3 * 10^4",
+      "1 <= words[i].length <= 10",
+      "All words are unique."
+    ],
+    "starterCode": {
+      "cpp": "class Solution {\npublic:\n    vector<string> findWords(vector<vector<char>>& board, vector<string>& words) {\n        \n    }\n};",
+      "java": "class Solution {\n    public List<String> findWords(char[][] board, String[] words) {\n        \n    }\n}",
+      "python": "class Solution:\n    def findWords(self, board: List[List[str]], words: List[str]) -> List[str]:\n        ",
+      "javascript": "/**\n * @param {character[][]} board\n * @param {string[]} words\n * @return {string[]}\n */\nvar findWords = function(board, words) {\n    \n};",
+      "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nchar** findWords(char** board, int boardSize, int* boardColSize, char** words, int wordsSize, int* returnSize) {\n    \n}"
+    }
+  },
+  {
+    "id": "letter-combinations-of-a-phone-number",
+    "title": "Letter Combinations of a Phone Number",
+    "difficulty": "Medium",
+    "topics": [
+      "Hash Table",
+      "String",
+      "Backtracking"
+    ],
+    "statement": [
+      "Given a string of digits from 2 through 9, return every possible letter combination from the telephone keypad mapping.",
+      "Return an empty list when the input digit string is empty."
+    ],
+    "examples": [
+      {
+        "input": "digits = \"23\"",
+        "output": "[\"ad\",\"ae\",\"af\",\"bd\",\"be\",\"bf\",\"cd\",\"ce\",\"cf\"]"
+      },
+      {
+        "input": "digits = \"2\"",
+        "output": "[\"a\",\"b\",\"c\"]"
+      }
+    ],
+    "constraints": [
+      "0 <= digits.length <= 4",
+      "digits[i] is between 2 and 9."
+    ],
+    "starterCode": {
+      "cpp": "class Solution {\npublic:\n    vector<string> letterCombinations(string digits) {\n        \n    }\n};",
+      "java": "class Solution {\n    public List<String> letterCombinations(String digits) {\n        \n    }\n}",
+      "python": "class Solution:\n    def letterCombinations(self, digits: str) -> List[str]:\n        ",
+      "javascript": "/**\n * @param {string} digits\n * @return {string[]}\n */\nvar letterCombinations = function(digits) {\n    \n};",
+      "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nchar** letterCombinations(char* digits, int* returnSize) {\n    \n}"
+    }
+  },
+  {
+    "id": "combinations",
+    "title": "Combinations",
+    "difficulty": "Medium",
+    "topics": [
+      "Backtracking"
+    ],
+    "statement": [
+      "Given integers n and k, return all possible groups of k distinct numbers chosen from 1 through n.",
+      "The answer may be returned in any order."
+    ],
+    "examples": [
+      {
+        "input": "n = 4, k = 2",
+        "output": "[[1,2],[1,3],[1,4],[2,3],[2,4],[3,4]]"
+      },
+      {
+        "input": "n = 1, k = 1",
+        "output": "[[1]]"
+      }
+    ],
+    "constraints": [
+      "1 <= n <= 20",
+      "1 <= k <= n"
+    ],
+    "starterCode": {
+      "cpp": "class Solution {\npublic:\n    vector<vector<int>> combine(int n, int k) {\n        \n    }\n};",
+      "java": "class Solution {\n    public List<List<Integer>> combine(int n, int k) {\n        \n    }\n}",
+      "python": "class Solution:\n    def combine(self, n: int, k: int) -> List[List[int]]:\n        ",
+      "javascript": "/**\n * @param {number} n\n * @param {number} k\n * @return {number[][]}\n */\nvar combine = function(n, k) {\n    \n};",
+      "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** combine(int n, int k, int* returnSize, int** returnColumnSizes) {\n    \n}"
+    }
+  },
+  {
+    "id": "permutations",
+    "title": "Permutations",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Backtracking"
+    ],
+    "statement": [
+      "Given an array of distinct integers, return every possible ordering of its values.",
+      "The list of permutations may be returned in any order."
+    ],
+    "examples": [
+      {
+        "input": "nums = [1,2,3]",
+        "output": "[[1,2,3],[1,3,2],[2,1,3],[2,3,1],[3,1,2],[3,2,1]]"
+      },
+      {
+        "input": "nums = [0,1]",
+        "output": "[[0,1],[1,0]]"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 6",
+      "-10 <= nums[i] <= 10",
+      "All values in nums are unique."
+    ],
+    "starterCode": {
+      "cpp": "class Solution {\npublic:\n    vector<vector<int>> permute(vector<int>& nums) {\n        \n    }\n};",
+      "java": "class Solution {\n    public List<List<Integer>> permute(int[] nums) {\n        \n    }\n}",
+      "python": "class Solution:\n    def permute(self, nums: List[int]) -> List[List[int]]:\n        ",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {number[][]}\n */\nvar permute = function(nums) {\n    \n};",
+      "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** permute(int* nums, int numsSize, int* returnSize, int** returnColumnSizes) {\n    \n}"
+    }
+  },
+  {
+    "id": "combination-sum",
+    "title": "Combination Sum",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Backtracking"
+    ],
+    "statement": [
+      "Given distinct candidate numbers and a target, return all unique combinations whose values sum to the target.",
+      "Each candidate may be used more than once, and the answer may be returned in any order."
+    ],
+    "examples": [
+      {
+        "input": "candidates = [2,3,6,7], target = 7",
+        "output": "[[2,2,3],[7]]"
+      },
+      {
+        "input": "candidates = [2,3,5], target = 8",
+        "output": "[[2,2,2,2],[2,3,3],[3,5]]"
+      }
+    ],
+    "constraints": [
+      "1 <= candidates.length <= 30",
+      "2 <= candidates[i] <= 40",
+      "All candidates are distinct.",
+      "1 <= target <= 40"
+    ],
+    "starterCode": {
+      "cpp": "class Solution {\npublic:\n    vector<vector<int>> combinationSum(vector<int>& candidates, int target) {\n        \n    }\n};",
+      "java": "class Solution {\n    public List<List<Integer>> combinationSum(int[] candidates, int target) {\n        \n    }\n}",
+      "python": "class Solution:\n    def combinationSum(self, candidates: List[int], target: int) -> List[List[int]]:\n        ",
+      "javascript": "/**\n * @param {number[]} candidates\n * @param {number} target\n * @return {number[][]}\n */\nvar combinationSum = function(candidates, target) {\n    \n};",
+      "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** combinationSum(int* candidates, int candidatesSize, int target, int* returnSize, int** returnColumnSizes) {\n    \n}"
+    }
+  },
+  {
+    "id": "n-queens-ii",
+    "title": "N-Queens II",
+    "difficulty": "Hard",
+    "topics": [
+      "Backtracking"
+    ],
+    "statement": [
+      "Given n, count how many distinct ways n queens can be placed on an n by n chessboard.",
+      "Queens attack along rows, columns, and both diagonals, so no two placed queens may attack each other."
+    ],
+    "examples": [
+      {
+        "input": "n = 4",
+        "output": "2"
+      },
+      {
+        "input": "n = 1",
+        "output": "1"
+      }
+    ],
+    "constraints": [
+      "1 <= n <= 9"
+    ],
+    "starterCode": {
+      "cpp": "class Solution {\npublic:\n    int totalNQueens(int n) {\n        \n    }\n};",
+      "java": "class Solution {\n    public int totalNQueens(int n) {\n        \n    }\n}",
+      "python": "class Solution:\n    def totalNQueens(self, n: int) -> int:\n        ",
+      "javascript": "/**\n * @param {number} n\n * @return {number}\n */\nvar totalNQueens = function(n) {\n    \n};",
+      "c": "int totalNQueens(int n) {\n    \n}"
+    }
+  },
+  {
+    "id": "generate-parentheses",
+    "title": "Generate Parentheses",
+    "difficulty": "Medium",
+    "topics": [
+      "String",
+      "Dynamic Programming",
+      "Backtracking"
+    ],
+    "statement": [
+      "Given n pairs of parentheses, return every string that uses all pairs and is balanced.",
+      "The answer may be returned in any order."
+    ],
+    "examples": [
+      {
+        "input": "n = 3",
+        "output": "[\"((()))\",\"(()())\",\"(())()\",\"()(())\",\"()()()\"]"
+      },
+      {
+        "input": "n = 1",
+        "output": "[\"()\"]"
+      }
+    ],
+    "constraints": [
+      "1 <= n <= 8"
+    ],
+    "starterCode": {
+      "cpp": "class Solution {\npublic:\n    vector<string> generateParenthesis(int n) {\n        \n    }\n};",
+      "java": "class Solution {\n    public List<String> generateParenthesis(int n) {\n        \n    }\n}",
+      "python": "class Solution:\n    def generateParenthesis(self, n: int) -> List[str]:\n        ",
+      "javascript": "/**\n * @param {number} n\n * @return {string[]}\n */\nvar generateParenthesis = function(n) {\n    \n};",
+      "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nchar** generateParenthesis(int n, int* returnSize) {\n    \n}"
+    }
+  },
+  {
+    "id": "word-search",
+    "title": "Word Search",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "String",
+      "Backtracking",
+      "Matrix"
+    ],
+    "statement": [
+      "Given a grid of characters and a word, decide whether the word can be formed by walking adjacent cells horizontally or vertically.",
+      "A path may not reuse the same cell more than once."
+    ],
+    "examples": [
+      {
+        "input": "board = [[\"A\",\"B\",\"C\",\"E\"],[\"S\",\"F\",\"C\",\"S\"],[\"A\",\"D\",\"E\",\"E\"]], word = \"ABCCED\"",
+        "output": "true"
+      },
+      {
+        "input": "board = [[\"A\",\"B\",\"C\",\"E\"],[\"S\",\"F\",\"C\",\"S\"],[\"A\",\"D\",\"E\",\"E\"]], word = \"ABCB\"",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "m == board.length, n == board[i].length",
+      "1 <= m, n <= 6",
+      "1 <= word.length <= 15",
+      "board and word contain English letters."
+    ],
+    "starterCode": {
+      "cpp": "class Solution {\npublic:\n    bool exist(vector<vector<char>>& board, string word) {\n        \n    }\n};",
+      "java": "class Solution {\n    public boolean exist(char[][] board, String word) {\n        \n    }\n}",
+      "python": "class Solution:\n    def exist(self, board: List[List[str]], word: str) -> bool:\n        ",
+      "javascript": "/**\n * @param {character[][]} board\n * @param {string} word\n * @return {boolean}\n */\nvar exist = function(board, word) {\n    \n};",
+      "c": "bool exist(char** board, int boardSize, int* boardColSize, char* word) {\n    \n}"
+    }
+  },
+  {
+    "id": "convert-sorted-array-to-binary-search-tree",
+    "title": "Convert Sorted Array to Binary Search Tree",
+    "difficulty": "Easy",
+    "topics": [
+      "Array",
+      "Divide and Conquer",
+      "Tree",
+      "Binary Search Tree",
+      "Binary Tree"
+    ],
+    "statement": [
+      "Given an integer array sorted in ascending order, build a height-balanced binary search tree containing exactly those values.",
+      "A height-balanced tree keeps the depths of the two child subtrees of every node within one."
+    ],
+    "examples": [
+      {
+        "input": "nums = [-10,-3,0,5,9]",
+        "output": "[0,-3,9,-10,null,5]"
+      },
+      {
+        "input": "nums = [1,3]",
+        "output": "[1,null,3]"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 10^4",
+      "-10^4 <= nums[i] <= 10^4",
+      "nums is sorted in strictly increasing order."
+    ],
+    "starterCode": {
+      "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    TreeNode* sortedArrayToBST(vector<int>& nums) {\n        \n    }\n};",
+      "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public TreeNode sortedArrayToBST(int[] nums) {\n        \n    }\n}",
+      "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def sortedArrayToBST(self, nums: List[int]) -> Optional[TreeNode]:\n        ",
+      "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *     this.val = (val===undefined ? 0 : val)\n *     this.left = (left===undefined ? null : left)\n *     this.right = (right===undefined ? null : right)\n * }\n */\n/**\n * @param {number[]} nums\n * @return {TreeNode}\n */\nvar sortedArrayToBST = function(nums) {\n    \n};",
+      "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nstruct TreeNode* sortedArrayToBST(int* nums, int numsSize) {\n    \n}"
+    }
+  },
+  {
+    "id": "merge-intervals",
+    "title": "Merge Intervals",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Sorting"
+    ],
+    "statement": [
+      "Given an array of intervals where intervals[i] = [start_i, end_i], merge all overlapping intervals.",
+      "Return an array of the non-overlapping intervals that cover all the intervals in the input, sorted by start."
+    ],
+    "examples": [
+      {
+        "input": "intervals = [[1,3],[2,6],[8,10],[15,18]]",
+        "output": "[[1,6],[8,10],[15,18]]",
+        "explanation": "[1,3] and [2,6] overlap, so they merge into [1,6]."
+      },
+      {
+        "input": "intervals = [[1,4],[4,5]]",
+        "output": "[[1,5]]",
+        "explanation": "Touching endpoints count as overlapping."
+      }
+    ],
+    "constraints": [
+      "1 <= intervals.length <= 10^4",
+      "intervals[i].length == 2",
+      "0 <= start_i <= end_i <= 10^4"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def merge(self, intervals: list[list[int]]) -> list[list[int]]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[][]} intervals\n * @return {number[][]}\n */\nfunction merge(intervals) {\n  // Think out loud as you go!\n}\n",
+      "c": "int** merge(int** intervals, int intervalsSize, int* intervalsColSize, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
+      "cpp": "class Solution {\npublic:\n    vector<vector<int>> merge(vector<vector<int>>& intervals) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "class Solution {\n    public int[][] merge(int[][] intervals) {\n        // Think out loud as you go!\n        return new int[][]{};\n    }\n}\n"
+    }
+  },
+  {
+    "id": "longest-palindromic-substring",
+    "title": "Longest Palindromic Substring",
+    "difficulty": "Medium",
+    "topics": [
+      "String",
+      "Dynamic Programming",
+      "Two Pointers"
+    ],
+    "statement": [
+      "Given a string s, return the longest substring of s that is a palindrome.",
+      "A palindrome reads the same forward and backward. If there are multiple answers of the same length, return any of them."
+    ],
+    "examples": [
+      {
+        "input": "s = \"babad\"",
+        "output": "\"bab\"",
+        "explanation": "\"aba\" is also a valid answer."
+      },
+      {
+        "input": "s = \"cbbd\"",
+        "output": "\"bb\""
+      }
+    ],
+    "constraints": [
+      "1 <= s.length <= 1000",
+      "s consists of digits and English letters."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def longestPalindrome(self, s: str) -> str:\n        pass\n",
+      "javascript": "/**\n * @param {string} s\n * @return {string}\n */\nfunction longestPalindrome(s) {\n}\n",
+      "c": "char* longestPalindrome(char* s) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
+      "cpp": "class Solution {\npublic:\n    string longestPalindrome(string s) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
+      "java": "class Solution {\n    public String longestPalindrome(String s) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
+    }
+  },
+  {
+    "id": "search-insert-position",
+    "title": "Search Insert Position",
+    "difficulty": "Easy",
+    "topics": [
+      "Array",
+      "Binary Search"
+    ],
+    "statement": [
+      "Given a sorted array of distinct integers and a target, return the index where the target is found.",
+      "If the target is absent, return the index where it should be inserted to keep the array sorted."
+    ],
+    "examples": [
+      {
+        "input": "nums = [1,3,5,6], target = 5",
+        "output": "2"
+      },
+      {
+        "input": "nums = [1,3,5,6], target = 2",
+        "output": "1"
+      },
+      {
+        "input": "nums = [1,3,5,6], target = 7",
+        "output": "4"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 10^4",
+      "-10^4 <= nums[i] <= 10^4",
+      "nums is sorted in strictly increasing order.",
+      "-10^4 <= target <= 10^4"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def searchInsert(self, nums: list[int], target: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @param {number} target\n * @return {number}\n */\nfunction searchInsert(nums, target) {\n  // Think out loud as you go!\n}\n",
+      "c": "int searchInsert(int* nums, int numsSize, int target) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int searchInsert(vector<int>& nums, int target) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int searchInsert(int[] nums, int target) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "plus-one",
+    "title": "Plus One",
+    "difficulty": "Easy",
+    "topics": [
+      "Array",
+      "Math"
+    ],
+    "statement": [
+      "Given the decimal digits of a non-negative integer, add one and return the resulting digits.",
+      "The input has no leading zeroes except for the number zero itself."
+    ],
+    "examples": [
+      {
+        "input": "digits = [1,2,3]",
+        "output": "[1,2,4]"
+      },
+      {
+        "input": "digits = [4,3,2,1]",
+        "output": "[4,3,2,2]"
+      },
+      {
+        "input": "digits = [9]",
+        "output": "[1,0]"
+      }
+    ],
+    "constraints": [
+      "1 <= digits.length <= 100",
+      "0 <= digits[i] <= 9",
+      "digits does not contain leading zeroes unless it is exactly [0]."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def plusOne(self, digits: list[int]) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} digits\n * @return {number[]}\n */\nfunction plusOne(digits) {\n  // Think out loud as you go!\n}\n",
+      "c": "int* plusOne(int* digits, int digitsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+      "cpp": "class Solution {\npublic:\n    vector<int> plusOne(vector<int>& digits) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "class Solution {\n    public int[] plusOne(int[] digits) {\n        // Think out loud as you go!\n        return new int[0];\n    }\n}\n"
+    }
+  },
+  {
+    "id": "add-binary",
+    "title": "Add Binary",
+    "difficulty": "Easy",
+    "topics": [
+      "Math",
+      "String",
+      "Bit Manipulation",
+      "Simulation"
+    ],
+    "statement": [
+      "Given two binary strings, return their sum as a binary string.",
+      "The inputs contain only 0 and 1 and may be long enough that converting to a machine integer is unsafe."
+    ],
+    "examples": [
+      {
+        "input": "a = \"11\", b = \"1\"",
+        "output": "\"100\""
+      },
+      {
+        "input": "a = \"1010\", b = \"1011\"",
+        "output": "\"10101\""
+      }
+    ],
+    "constraints": [
+      "1 <= a.length, b.length <= 10^4",
+      "a and b contain only '0' and '1'.",
+      "Each input is either \"0\" or has no leading zeroes."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def addBinary(self, a: str, b: str) -> str:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} a\n * @param {string} b\n * @return {string}\n */\nfunction addBinary(a, b) {\n  // Think out loud as you go!\n}\n",
+      "c": "char* addBinary(char* a, char* b) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "class Solution {\npublic:\n    string addBinary(string a, string b) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
+      "java": "class Solution {\n    public String addBinary(String a, String b) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
+    }
+  },
+  {
+    "id": "single-number",
+    "title": "Single Number",
+    "difficulty": "Easy",
+    "topics": [
+      "Array",
+      "Bit Manipulation"
+    ],
+    "statement": [
+      "Given a non-empty integer array where every value appears twice except one, return the value that appears once.",
+      "The solution should run in linear time and use constant extra space."
+    ],
+    "examples": [
+      {
+        "input": "nums = [2,2,1]",
+        "output": "1"
+      },
+      {
+        "input": "nums = [4,1,2,1,2]",
+        "output": "4"
+      },
+      {
+        "input": "nums = [1]",
+        "output": "1"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 3 * 10^4",
+      "-3 * 10^4 <= nums[i] <= 3 * 10^4",
+      "Every value appears twice except for one value that appears once."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def singleNumber(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction singleNumber(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "int singleNumber(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int singleNumber(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int singleNumber(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "palindrome-number",
+    "title": "Palindrome Number",
+    "difficulty": "Easy",
+    "topics": [
+      "Math"
+    ],
+    "statement": [
+      "Given an integer x, return whether x reads the same forward and backward.",
+      "Negative numbers are not palindromes because of the minus sign."
+    ],
+    "examples": [
+      {
+        "input": "x = 121",
+        "output": "true"
+      },
+      {
+        "input": "x = -121",
+        "output": "false"
+      },
+      {
+        "input": "x = 10",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "-2^31 <= x <= 2^31 - 1"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def isPalindrome(self, x: int) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number} x\n * @return {boolean}\n */\nfunction isPalindrome(x) {\n  // Think out loud as you go!\n}\n",
+      "c": "bool isPalindrome(int x) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "class Solution {\npublic:\n    bool isPalindrome(int x) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "class Solution {\n    public boolean isPalindrome(int x) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "climbing-stairs",
+    "title": "Climbing Stairs",
+    "difficulty": "Easy",
+    "topics": [
+      "Math",
+      "Dynamic Programming",
+      "Memoization"
+    ],
+    "statement": [
+      "You are climbing a staircase with n steps and can move either one or two steps at a time.",
+      "Return how many distinct ways there are to reach the top."
+    ],
+    "examples": [
+      {
+        "input": "n = 2",
+        "output": "2"
+      },
+      {
+        "input": "n = 3",
+        "output": "3"
+      }
+    ],
+    "constraints": [
+      "1 <= n <= 45"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def climbStairs(self, n: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number} n\n * @return {number}\n */\nfunction climbStairs(n) {\n  // Think out loud as you go!\n}\n",
+      "c": "int climbStairs(int n) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int climbStairs(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int climbStairs(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "sqrtx",
+    "title": "Sqrt(x)",
+    "difficulty": "Easy",
+    "topics": [
+      "Math",
+      "Binary Search"
+    ],
+    "statement": [
+      "Given a non-negative integer x, return the integer part of its square root.",
+      "The result is rounded down to the nearest integer."
+    ],
+    "examples": [
+      {
+        "input": "x = 4",
+        "output": "2"
+      },
+      {
+        "input": "x = 8",
+        "output": "2"
+      }
+    ],
+    "constraints": [
+      "0 <= x <= 2^31 - 1"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def mySqrt(self, x: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number} x\n * @return {number}\n */\nfunction mySqrt(x) {\n  // Think out loud as you go!\n}\n",
+      "c": "int mySqrt(int x) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int mySqrt(int x) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int mySqrt(int x) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "factorial-trailing-zeroes",
+    "title": "Factorial Trailing Zeroes",
+    "difficulty": "Medium",
+    "topics": [
+      "Math"
+    ],
+    "statement": [
+      "Given an integer n, return the number of trailing zeroes in n factorial.",
+      "The answer should be computed without building the full factorial value."
+    ],
+    "examples": [
+      {
+        "input": "n = 3",
+        "output": "0"
+      },
+      {
+        "input": "n = 5",
+        "output": "1"
+      },
+      {
+        "input": "n = 0",
+        "output": "0"
+      }
+    ],
+    "constraints": [
+      "0 <= n <= 10^4"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def trailingZeroes(self, n: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number} n\n * @return {number}\n */\nfunction trailingZeroes(n) {\n  // Think out loud as you go!\n}\n",
+      "c": "int trailingZeroes(int n) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int trailingZeroes(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int trailingZeroes(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "house-robber",
+    "title": "House Robber",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Dynamic Programming"
+    ],
+    "statement": [
+      "Given non-negative amounts of money in a row of houses, return the maximum amount that can be robbed.",
+      "Adjacent houses cannot both be robbed."
+    ],
+    "examples": [
+      {
+        "input": "nums = [1,2,3,1]",
+        "output": "4"
+      },
+      {
+        "input": "nums = [2,7,9,3,1]",
+        "output": "12"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 100",
+      "0 <= nums[i] <= 400"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def rob(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction rob(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "int rob(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int rob(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int rob(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "maximum-subarray",
+    "title": "Maximum Subarray",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Divide and Conquer",
+      "Dynamic Programming"
+    ],
+    "statement": [
+      "Given an integer array, return the largest possible sum of a non-empty contiguous subarray.",
+      "The subarray must contain at least one element."
+    ],
+    "examples": [
+      {
+        "input": "nums = [-2,1,-3,4,-1,2,1,-5,4]",
+        "output": "6"
+      },
+      {
+        "input": "nums = [1]",
+        "output": "1"
+      },
+      {
+        "input": "nums = [5,4,-1,7,8]",
+        "output": "23"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 10^5",
+      "-10^4 <= nums[i] <= 10^4"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def maxSubArray(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction maxSubArray(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "int maxSubArray(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int maxSubArray(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int maxSubArray(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "coin-change",
+    "title": "Coin Change",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Dynamic Programming",
+      "Breadth-First Search"
+    ],
+    "statement": [
+      "Given coin denominations and an amount, return the fewest coins needed to make that amount.",
+      "Return -1 when no combination of coins can make the amount."
+    ],
+    "examples": [
+      {
+        "input": "coins = [1,2,5], amount = 11",
+        "output": "3"
+      },
+      {
+        "input": "coins = [2], amount = 3",
+        "output": "-1"
+      },
+      {
+        "input": "coins = [1], amount = 0",
+        "output": "0"
+      }
+    ],
+    "constraints": [
+      "1 <= coins.length <= 12",
+      "1 <= coins[i] <= 2^31 - 1",
+      "0 <= amount <= 10^4"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def coinChange(self, coins: list[int], amount: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} coins\n * @param {number} amount\n * @return {number}\n */\nfunction coinChange(coins, amount) {\n  // Think out loud as you go!\n}\n",
+      "c": "int coinChange(int* coins, int coinsSize, int amount) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int coinChange(vector<int>& coins, int amount) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int coinChange(int[] coins, int amount) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "longest-increasing-subsequence",
+    "title": "Longest Increasing Subsequence",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Binary Search",
+      "Dynamic Programming"
+    ],
+    "statement": [
+      "Given an integer array, return the length of the longest strictly increasing subsequence.",
+      "The subsequence does not need to be contiguous, but element order must be preserved."
+    ],
+    "examples": [
+      {
+        "input": "nums = [10,9,2,5,3,7,101,18]",
+        "output": "4"
+      },
+      {
+        "input": "nums = [0,1,0,3,2,3]",
+        "output": "4"
+      },
+      {
+        "input": "nums = [7,7,7,7,7,7,7]",
+        "output": "1"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 2500",
+      "-10^4 <= nums[i] <= 10^4"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def lengthOfLIS(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction lengthOfLIS(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "int lengthOfLIS(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int lengthOfLIS(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int lengthOfLIS(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "search-a-2d-matrix",
+    "title": "Search a 2D Matrix",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Binary Search",
+      "Matrix"
+    ],
+    "statement": [
+      "Given an m by n matrix whose rows are sorted and whose first value in each row is greater than the last value of the previous row, return whether target is present.",
+      "Treating the matrix as one sorted sequence is allowed."
+    ],
+    "examples": [
+      {
+        "input": "matrix = [[1,3,5,7],[10,11,16,20],[23,30,34,60]], target = 3",
+        "output": "true"
+      },
+      {
+        "input": "matrix = [[1,3,5,7],[10,11,16,20],[23,30,34,60]], target = 13",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "1 <= m, n <= 100",
+      "-10^4 <= matrix[i][j], target <= 10^4",
+      "Each row is sorted in strictly increasing order.",
+      "The first value of each row is greater than the last value of the previous row."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def searchMatrix(self, matrix: list[list[int]], target: int) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[][]} matrix\n * @param {number} target\n * @return {boolean}\n */\nfunction searchMatrix(matrix, target) {\n  // Think out loud as you go!\n}\n",
+      "c": "bool searchMatrix(int** matrix, int matrixSize, int* matrixColSize, int target) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "class Solution {\npublic:\n    bool searchMatrix(vector<vector<int>>& matrix, int target) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "class Solution {\n    public boolean searchMatrix(int[][] matrix, int target) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "find-peak-element",
+    "title": "Find Peak Element",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Binary Search"
+    ],
+    "statement": [
+      "Given an array where adjacent values are different, return the index of any peak element.",
+      "A peak is greater than its neighbors, and values outside the array are treated as negative infinity."
+    ],
+    "examples": [
+      {
+        "input": "nums = [1,2,3,1]",
+        "output": "2"
+      },
+      {
+        "input": "nums = [1,2,1,3,5,6,4]",
+        "output": "1 or 5"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 1000",
+      "-2^31 <= nums[i] <= 2^31 - 1",
+      "nums[i] != nums[i + 1] for every valid i."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def findPeakElement(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction findPeakElement(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "int findPeakElement(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int findPeakElement(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int findPeakElement(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "find-minimum-in-rotated-sorted-array",
+    "title": "Find Minimum in Rotated Sorted Array",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Binary Search"
+    ],
+    "statement": [
+      "Given a sorted array of unique values that was rotated, return its minimum value.",
+      "The array may have been rotated any number of times, including zero."
+    ],
+    "examples": [
+      {
+        "input": "nums = [3,4,5,1,2]",
+        "output": "1"
+      },
+      {
+        "input": "nums = [4,5,6,7,0,1,2]",
+        "output": "0"
+      },
+      {
+        "input": "nums = [11,13,15,17]",
+        "output": "11"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 5000",
+      "-5000 <= nums[i] <= 5000",
+      "All values in nums are unique.",
+      "nums is a sorted array that has been rotated between 0 and nums.length times."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def findMin(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction findMin(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "int findMin(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int findMin(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int findMin(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "minimum-path-sum",
+    "title": "Minimum Path Sum",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Dynamic Programming",
+      "Matrix"
+    ],
+    "statement": [
+      "Given a grid of non-negative numbers, find the minimum path sum from the top-left cell to the bottom-right cell.",
+      "Each move may go only right or down."
+    ],
+    "examples": [
+      {
+        "input": "grid = [[1,3,1],[1,5,1],[4,2,1]]",
+        "output": "7"
+      },
+      {
+        "input": "grid = [[1,2,3],[4,5,6]]",
+        "output": "12"
+      }
+    ],
+    "constraints": [
+      "1 <= m, n <= 200",
+      "0 <= grid[i][j] <= 200"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def minPathSum(self, grid: list[list[int]]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[][]} grid\n * @return {number}\n */\nfunction minPathSum(grid) {\n  // Think out loud as you go!\n}\n",
+      "c": "int minPathSum(int** grid, int gridSize, int* gridColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int minPathSum(vector<vector<int>>& grid) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int minPathSum(int[][] grid) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "unique-paths-ii",
+    "title": "Unique Paths II",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Dynamic Programming",
+      "Matrix"
+    ],
+    "statement": [
+      "Given a grid where 1 marks an obstacle and 0 marks an open cell, count paths from the top-left to the bottom-right cell.",
+      "Each move may go only right or down, and paths cannot pass through obstacles."
+    ],
+    "examples": [
+      {
+        "input": "obstacleGrid = [[0,0,0],[0,1,0],[0,0,0]]",
+        "output": "2"
+      },
+      {
+        "input": "obstacleGrid = [[0,1],[0,0]]",
+        "output": "1"
+      }
+    ],
+    "constraints": [
+      "1 <= m, n <= 100",
+      "obstacleGrid[i][j] is 0 or 1."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def uniquePathsWithObstacles(self, obstacleGrid: list[list[int]]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[][]} obstacleGrid\n * @return {number}\n */\nfunction uniquePathsWithObstacles(obstacleGrid) {\n  // Think out loud as you go!\n}\n",
+      "c": "int uniquePathsWithObstacles(int** obstacleGrid, int obstacleGridSize, int* obstacleGridColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int uniquePathsWithObstacles(vector<vector<int>>& obstacleGrid) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int uniquePathsWithObstacles(int[][] obstacleGrid) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "word-break",
+    "title": "Word Break",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Hash Table",
+      "String",
+      "Dynamic Programming",
+      "Trie",
+      "Memoization"
+    ],
+    "statement": [
+      "Given a string and a dictionary of words, return whether the string can be segmented into one or more dictionary words.",
+      "Words from the dictionary may be reused."
+    ],
+    "examples": [
+      {
+        "input": "s = \"leetcode\", wordDict = [\"leet\",\"code\"]",
+        "output": "true"
+      },
+      {
+        "input": "s = \"applepenapple\", wordDict = [\"apple\",\"pen\"]",
+        "output": "true"
+      },
+      {
+        "input": "s = \"catsandog\", wordDict = [\"cats\",\"dog\",\"sand\",\"and\",\"cat\"]",
+        "output": "false"
+      }
+    ],
+    "constraints": [
+      "1 <= s.length <= 300",
+      "1 <= wordDict.length <= 1000",
+      "1 <= wordDict[i].length <= 20",
+      "s and wordDict[i] consist of lowercase English letters.",
+      "All strings in wordDict are unique."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def wordBreak(self, s: str, wordDict: list[str]) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} s\n * @param {string[]} wordDict\n * @return {boolean}\n */\nfunction wordBreak(s, wordDict) {\n  // Think out loud as you go!\n}\n",
+      "c": "bool wordBreak(char* s, char** wordDict, int wordDictSize) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "class Solution {\npublic:\n    bool wordBreak(string s, vector<string>& wordDict) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "class Solution {\n    public boolean wordBreak(String s, List<String> wordDict) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "number-of-1-bits",
+    "title": "Number of 1 Bits",
+    "difficulty": "Easy",
+    "topics": [
+      "Divide and Conquer",
+      "Bit Manipulation"
+    ],
+    "statement": [
+      "Given a positive integer n, return how many 1 bits are present in its binary representation.",
+      "The input is treated as a fixed-width binary integer."
+    ],
+    "examples": [
+      {
+        "input": "n = 11",
+        "output": "3"
+      },
+      {
+        "input": "n = 128",
+        "output": "1"
+      },
+      {
+        "input": "n = 2147483645",
+        "output": "30"
+      }
+    ],
+    "constraints": [
+      "1 <= n <= 2^31 - 1"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def hammingWeight(self, n: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number} n\n * @return {number}\n */\nfunction hammingWeight(n) {\n  // Think out loud as you go!\n}\n",
+      "c": "int hammingWeight(int n) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int hammingWeight(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int hammingWeight(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "single-number-ii",
+    "title": "Single Number II",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Bit Manipulation"
+    ],
+    "statement": [
+      "Given an integer array where every value appears three times except one, return the value that appears once.",
+      "The solution should run in linear time and use constant extra space."
+    ],
+    "examples": [
+      {
+        "input": "nums = [2,2,3,2]",
+        "output": "3"
+      },
+      {
+        "input": "nums = [0,1,0,1,0,1,99]",
+        "output": "99"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 3 * 10^4",
+      "-2^31 <= nums[i] <= 2^31 - 1",
+      "Every value appears three times except for one value that appears once."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def singleNumber(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction singleNumber(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "int singleNumber(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int singleNumber(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int singleNumber(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "bitwise-and-of-numbers-range",
+    "title": "Bitwise AND of Numbers Range",
+    "difficulty": "Medium",
+    "topics": [
+      "Bit Manipulation"
+    ],
+    "statement": [
+      "Given two integers left and right, return the bitwise AND of every integer in the inclusive range from left to right.",
+      "The range may be large, so iterating over every value is not the intended approach."
+    ],
+    "examples": [
+      {
+        "input": "left = 5, right = 7",
+        "output": "4"
+      },
+      {
+        "input": "left = 0, right = 0",
+        "output": "0"
+      },
+      {
+        "input": "left = 1, right = 2147483647",
+        "output": "0"
+      }
+    ],
+    "constraints": [
+      "0 <= left <= right <= 2^31 - 1"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def rangeBitwiseAnd(self, left: int, right: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number} left\n * @param {number} right\n * @return {number}\n */\nfunction rangeBitwiseAnd(left, right) {\n  // Think out loud as you go!\n}\n",
+      "c": "int rangeBitwiseAnd(int left, int right) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int rangeBitwiseAnd(int left, int right) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int rangeBitwiseAnd(int left, int right) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "triangle",
+    "title": "Triangle",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Dynamic Programming"
+    ],
+    "statement": [
+      "A triangle-shaped list of rows gives a value at each position; choose a connected route from the top row to the bottom row with the smallest total.",
+      "From row i and column j, the next step may go to column j or j + 1 in row i + 1."
+    ],
+    "examples": [
+      {
+        "input": "triangle = [[2],[3,4],[6,5,7],[4,1,8,3]]",
+        "output": "11"
+      },
+      {
+        "input": "triangle = [[-10]]",
+        "output": "-10"
+      }
+    ],
+    "constraints": [
+      "1 <= triangle.length <= 200",
+      "triangle[i].length == triangle[i - 1].length + 1",
+      "-10^4 <= triangle[i][j] <= 10^4"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def minimumTotal(self, triangle: list[list[int]]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[][]} triangle\n * @return {number}\n */\nfunction minimumTotal(triangle) {\n  // Think out loud as you go!\n}\n",
+      "c": "int minimumTotal(int** triangle, int triangleSize, int* triangleColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int minimumTotal(vector<vector<int>>& triangle) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int minimumTotal(List<List<Integer>> triangle) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "edit-distance",
+    "title": "Edit Distance",
+    "difficulty": "Medium",
+    "topics": [
+      "String",
+      "Dynamic Programming"
+    ],
+    "statement": [
+      "Given two words, return the minimum number of insertions, deletions, and replacements needed to convert the first word into the second.",
+      "Each operation changes one character or position."
+    ],
+    "examples": [
+      {
+        "input": "word1 = \"horse\", word2 = \"ros\"",
+        "output": "3"
+      },
+      {
+        "input": "word1 = \"intention\", word2 = \"execution\"",
+        "output": "5"
+      }
+    ],
+    "constraints": [
+      "0 <= word1.length, word2.length <= 500",
+      "word1 and word2 consist of lowercase English letters."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def minDistance(self, word1: str, word2: str) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} word1\n * @param {string} word2\n * @return {number}\n */\nfunction minDistance(word1, word2) {\n  // Think out loud as you go!\n}\n",
+      "c": "int minDistance(char* word1, char* word2) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int minDistance(string word1, string word2) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int minDistance(String word1, String word2) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "maximal-square",
+    "title": "Maximal Square",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Dynamic Programming",
+      "Matrix"
+    ],
+    "statement": [
+      "Given a binary matrix of characters '0' and '1', return the area of the largest square containing only '1' cells.",
+      "The answer is the square's area, not its side length."
+    ],
+    "examples": [
+      {
+        "input": "matrix = [[\"1\",\"0\",\"1\",\"0\",\"0\"],[\"1\",\"0\",\"1\",\"1\",\"1\"],[\"1\",\"1\",\"1\",\"1\",\"1\"],[\"1\",\"0\",\"0\",\"1\",\"0\"]]",
+        "output": "4"
+      },
+      {
+        "input": "matrix = [[\"0\",\"1\"],[\"1\",\"0\"]]",
+        "output": "1"
+      },
+      {
+        "input": "matrix = [[\"0\"]]",
+        "output": "0"
+      }
+    ],
+    "constraints": [
+      "1 <= m, n <= 300",
+      "matrix[i][j] is '0' or '1'."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def maximalSquare(self, matrix: list[list[str]]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {character[][]} matrix\n * @return {number}\n */\nfunction maximalSquare(matrix) {\n  // Think out loud as you go!\n}\n",
+      "c": "int maximalSquare(char** matrix, int matrixSize, int* matrixColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int maximalSquare(vector<vector<char>>& matrix) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int maximalSquare(char[][] matrix) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "maximum-sum-circular-subarray",
+    "title": "Maximum Sum Circular Subarray",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Divide and Conquer",
+      "Dynamic Programming",
+      "Queue",
+      "Monotonic Queue"
+    ],
+    "statement": [
+      "Choose a non-empty contiguous run from an array arranged in a circle and return the largest possible sum.",
+      "A chosen run may wrap from the end of the array back to the beginning, but each index can be used at most once."
+    ],
+    "examples": [
+      {
+        "input": "nums = [1,-2,3,-2]",
+        "output": "3"
+      },
+      {
+        "input": "nums = [5,-3,5]",
+        "output": "10"
+      },
+      {
+        "input": "nums = [-3,-2,-3]",
+        "output": "-2"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 3 * 10^4",
+      "-3 * 10^4 <= nums[i] <= 3 * 10^4"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def maxSubarraySumCircular(self, nums: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction maxSubarraySumCircular(nums) {\n  // Think out loud as you go!\n}\n",
+      "c": "int maxSubarraySumCircular(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int maxSubarraySumCircular(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int maxSubarraySumCircular(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "search-in-rotated-sorted-array",
+    "title": "Search in Rotated Sorted Array",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Binary Search"
+    ],
+    "statement": [
+      "Given a unique sorted array that was rotated, return the index of target or -1 when it is absent.",
+      "The array may be rotated by any offset, including zero."
+    ],
+    "examples": [
+      {
+        "input": "nums = [4,5,6,7,0,1,2], target = 0",
+        "output": "4"
+      },
+      {
+        "input": "nums = [4,5,6,7,0,1,2], target = 3",
+        "output": "-1"
+      },
+      {
+        "input": "nums = [1], target = 0",
+        "output": "-1"
+      }
+    ],
+    "constraints": [
+      "1 <= nums.length <= 5000",
+      "-10^4 <= nums[i], target <= 10^4",
+      "All values in nums are unique.",
+      "nums is sorted and then rotated."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def search(self, nums: list[int], target: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @param {number} target\n * @return {number}\n */\nfunction search(nums, target) {\n  // Think out loud as you go!\n}\n",
+      "c": "int search(int* nums, int numsSize, int target) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int search(vector<int>& nums, int target) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int search(int[] nums, int target) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "kth-largest-element-in-an-array",
+    "title": "Kth Largest Element in an Array",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Divide and Conquer",
+      "Sorting",
+      "Heap",
+      "Quickselect"
+    ],
+    "statement": [
+      "Given an integer array and k, return the value that would appear in position k when the values are ordered from largest to smallest.",
+      "Duplicate values count as separate positions."
+    ],
+    "examples": [
+      {
+        "input": "nums = [3,2,1,5,6,4], k = 2",
+        "output": "5"
+      },
+      {
+        "input": "nums = [3,2,3,1,2,4,5,5,6], k = 4",
+        "output": "4"
+      }
+    ],
+    "constraints": [
+      "1 <= k <= nums.length <= 10^5",
+      "-10^4 <= nums[i] <= 10^4"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def findKthLargest(self, nums: list[int], k: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @param {number} k\n * @return {number}\n */\nfunction findKthLargest(nums, k) {\n  // Think out loud as you go!\n}\n",
+      "c": "int findKthLargest(int* nums, int numsSize, int k) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int findKthLargest(vector<int>& nums, int k) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int findKthLargest(int[] nums, int k) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "find-first-and-last-position-of-element-in-sorted-array",
+    "title": "Find First and Last Position of Element in Sorted Array",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Binary Search"
+    ],
+    "statement": [
+      "Given a sorted integer array, return the first and last index where target appears.",
+      "Return [-1, -1] when target does not appear."
+    ],
+    "examples": [
+      {
+        "input": "nums = [5,7,7,8,8,10], target = 8",
+        "output": "[3,4]"
+      },
+      {
+        "input": "nums = [5,7,7,8,8,10], target = 6",
+        "output": "[-1,-1]"
+      },
+      {
+        "input": "nums = [], target = 0",
+        "output": "[-1,-1]"
+      }
+    ],
+    "constraints": [
+      "0 <= nums.length <= 10^5",
+      "-10^9 <= nums[i], target <= 10^9",
+      "nums is sorted in nondecreasing order."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def searchRange(self, nums: list[int], target: int) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @param {number} target\n * @return {number[]}\n */\nfunction searchRange(nums, target) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* searchRange(int* nums, int numsSize, int target, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+      "cpp": "class Solution {\npublic:\n    vector<int> searchRange(vector<int>& nums, int target) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "class Solution {\n    public int[] searchRange(int[] nums, int target) {\n        // Think out loud as you go!\n        return new int[0];\n    }\n}\n"
+    }
+  },
+  {
+    "id": "powx-n",
+    "title": "Pow(x, n)",
+    "difficulty": "Medium",
+    "topics": [
+      "Math",
+      "Recursion"
+    ],
+    "statement": [
+      "Implement exponentiation for a floating-point base x and an integer exponent n.",
+      "Negative exponents return the reciprocal of the corresponding positive power."
+    ],
+    "examples": [
+      {
+        "input": "x = 2.00000, n = 10",
+        "output": "1024.00000"
+      },
+      {
+        "input": "x = 2.10000, n = 3",
+        "output": "9.26100"
+      },
+      {
+        "input": "x = 2.00000, n = -2",
+        "output": "0.25000"
+      }
+    ],
+    "constraints": [
+      "-100.0 < x < 100.0",
+      "-2^31 <= n <= 2^31 - 1",
+      "n is an integer."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def myPow(self, x: float, n: int) -> float:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number} x\n * @param {number} n\n * @return {number}\n */\nfunction myPow(x, n) {\n  // Think out loud as you go!\n}\n",
+      "c": "double myPow(double x, int n) {\n    // Think out loud as you go!\n    return 0.0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    double myPow(double x, int n) {\n        // Think out loud as you go!\n        return 0.0;\n    }\n};\n",
+      "java": "class Solution {\n    public double myPow(double x, int n) {\n        // Think out loud as you go!\n        return 0.0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "interleaving-string",
+    "title": "Interleaving String",
+    "difficulty": "Medium",
+    "topics": [
+      "String",
+      "Dynamic Programming"
+    ],
+    "statement": [
+      "Given strings s1, s2, and s3, decide whether s3 can be formed by interleaving all characters from s1 and s2.",
+      "The relative order of characters from each source string must be preserved."
+    ],
+    "examples": [
+      {
+        "input": "s1 = \"aabcc\", s2 = \"dbbca\", s3 = \"aadbbcbcac\"",
+        "output": "true"
+      },
+      {
+        "input": "s1 = \"aabcc\", s2 = \"dbbca\", s3 = \"aadbbbaccc\"",
+        "output": "false"
+      },
+      {
+        "input": "s1 = \"\", s2 = \"\", s3 = \"\"",
+        "output": "true"
+      }
+    ],
+    "constraints": [
+      "0 <= s1.length, s2.length <= 100",
+      "0 <= s3.length <= 200",
+      "s1, s2, and s3 consist of lowercase English letters."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def isInterleave(self, s1: str, s2: str, s3: str) -> bool:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {string} s1\n * @param {string} s2\n * @param {string} s3\n * @return {boolean}\n */\nfunction isInterleave(s1, s2, s3) {\n  // Think out loud as you go!\n}\n",
+      "c": "bool isInterleave(char* s1, char* s2, char* s3) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "class Solution {\npublic:\n    bool isInterleave(string s1, string s2, string s3) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "class Solution {\n    public boolean isInterleave(String s1, String s2, String s3) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "best-time-to-buy-and-sell-stock-iii",
+    "title": "Best Time to Buy and Sell Stock III",
+    "difficulty": "Hard",
+    "topics": [
+      "Array",
+      "Dynamic Programming"
+    ],
+    "statement": [
+      "Given daily stock prices, return the maximum profit from at most two buy-sell transactions.",
+      "You may hold at most one share at a time, so a new buy must happen after the previous sell."
+    ],
+    "examples": [
+      {
+        "input": "prices = [3,3,5,0,0,3,1,4]",
+        "output": "6"
+      },
+      {
+        "input": "prices = [1,2,3,4,5]",
+        "output": "4"
+      },
+      {
+        "input": "prices = [7,6,4,3,1]",
+        "output": "0"
+      }
+    ],
+    "constraints": [
+      "1 <= prices.length <= 10^5",
+      "0 <= prices[i] <= 10^5"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def maxProfit(self, prices: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} prices\n * @return {number}\n */\nfunction maxProfit(prices) {\n  // Think out loud as you go!\n}\n",
+      "c": "int maxProfit(int* prices, int pricesSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int maxProfit(vector<int>& prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int maxProfit(int[] prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "best-time-to-buy-and-sell-stock-iv",
+    "title": "Best Time to Buy and Sell Stock IV",
+    "difficulty": "Hard",
+    "topics": [
+      "Array",
+      "Dynamic Programming"
+    ],
+    "statement": [
+      "Given at most k stock transactions and daily prices, return the maximum profit.",
+      "Each transaction is one buy followed by one later sell, and only one share can be held at a time."
+    ],
+    "examples": [
+      {
+        "input": "k = 2, prices = [2,4,1]",
+        "output": "2"
+      },
+      {
+        "input": "k = 2, prices = [3,2,6,5,0,3]",
+        "output": "7"
+      }
+    ],
+    "constraints": [
+      "0 <= k <= 100",
+      "1 <= prices.length <= 1000",
+      "0 <= prices[i] <= 1000"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def maxProfit(self, k: int, prices: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number} k\n * @param {number[]} prices\n * @return {number}\n */\nfunction maxProfit(k, prices) {\n  // Think out loud as you go!\n}\n",
+      "c": "int maxProfit(int k, int* prices, int pricesSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int maxProfit(int k, vector<int>& prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int maxProfit(int k, int[] prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "sort-list",
+    "title": "Sort List",
+    "difficulty": "Medium",
+    "topics": [
+      "Linked List",
+      "Two Pointers",
+      "Divide and Conquer",
+      "Sorting",
+      "Merge Sort"
+    ],
+    "statement": [
+      "Given the head of a linked list, return a linked list containing the same values in ascending order.",
+      "The returned list should contain every original value exactly once."
+    ],
+    "examples": [
+      {
+        "input": "head = [4,2,1,3]",
+        "output": "[1,2,3,4]"
+      },
+      {
+        "input": "head = [-1,5,3,4,0]",
+        "output": "[-1,0,3,4,5]"
+      },
+      {
+        "input": "head = []",
+        "output": "[]"
+      }
+    ],
+    "constraints": [
+      "0 <= number of nodes <= 5 * 10^4",
+      "-10^5 <= Node.val <= 10^5"
+    ],
+    "starterCode": {
+      "python": "# Definition for singly-linked list.\n# class ListNode:\n#     def __init__(self, val=0, next=None):\n#         self.val = val\n#         self.next = next\nclass Solution:\n    def sortList(self, head: Optional[ListNode]) -> Optional[ListNode]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for singly-linked list.\n * function ListNode(val, next) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.next = (next === undefined ? null : next);\n * }\n */\n/**\n * @param {ListNode} head\n * @return {ListNode}\n */\nfunction sortList(head) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* sortList(struct ListNode* head) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* sortList(ListNode* head) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode sortList(ListNode head) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "median-of-two-sorted-arrays",
+    "title": "Median of Two Sorted Arrays",
+    "difficulty": "Hard",
+    "topics": [
+      "Array",
+      "Binary Search",
+      "Divide and Conquer"
+    ],
+    "statement": [
+      "Given two sorted integer arrays, return the median value of all numbers across both arrays.",
+      "The total number of values is positive, and the answer may be fractional."
+    ],
+    "examples": [
+      {
+        "input": "nums1 = [1,3], nums2 = [2]",
+        "output": "2.00000"
+      },
+      {
+        "input": "nums1 = [1,2], nums2 = [3,4]",
+        "output": "2.50000"
+      }
+    ],
+    "constraints": [
+      "0 <= nums1.length, nums2.length <= 1000",
+      "1 <= nums1.length + nums2.length",
+      "-10^6 <= nums1[i], nums2[i] <= 10^6",
+      "nums1 and nums2 are sorted in nondecreasing order."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def findMedianSortedArrays(self, nums1: list[int], nums2: list[int]) -> float:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums1\n * @param {number[]} nums2\n * @return {number}\n */\nfunction findMedianSortedArrays(nums1, nums2) {\n  // Think out loud as you go!\n}\n",
+      "c": "double findMedianSortedArrays(int* nums1, int nums1Size, int* nums2, int nums2Size) {\n    // Think out loud as you go!\n    return 0.0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    double findMedianSortedArrays(vector<int>& nums1, vector<int>& nums2) {\n        // Think out loud as you go!\n        return 0.0;\n    }\n};\n",
+      "java": "class Solution {\n    public double findMedianSortedArrays(int[] nums1, int[] nums2) {\n        // Think out loud as you go!\n        return 0.0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "max-points-on-a-line",
+    "title": "Max Points on a Line",
+    "difficulty": "Hard",
+    "topics": [
+      "Array",
+      "Hash Table",
+      "Math",
+      "Geometry"
+    ],
+    "statement": [
+      "Given a set of 2D points, return the largest number of points that lie on one straight line.",
+      "A line may be vertical, horizontal, or diagonal."
+    ],
+    "examples": [
+      {
+        "input": "points = [[1,1],[2,2],[3,3]]",
+        "output": "3"
+      },
+      {
+        "input": "points = [[1,1],[3,2],[5,3],[4,1],[2,3],[1,4]]",
+        "output": "4"
+      }
+    ],
+    "constraints": [
+      "1 <= points.length <= 300",
+      "points[i].length == 2",
+      "-10^4 <= points[i][0], points[i][1] <= 10^4",
+      "All points are unique."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def maxPoints(self, points: list[list[int]]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[][]} points\n * @return {number}\n */\nfunction maxPoints(points) {\n  // Think out loud as you go!\n}\n",
+      "c": "int maxPoints(int** points, int pointsSize, int* pointsColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int maxPoints(vector<vector<int>>& points) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int maxPoints(int[][] points) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "reverse-bits",
+    "title": "Reverse Bits",
+    "difficulty": "Easy",
+    "topics": [
+      "Divide and Conquer",
+      "Bit Manipulation"
+    ],
+    "statement": [
+      "Given a 32-bit integer value, return the integer represented by its bits in reverse order.",
+      "Treat the input as exactly 32 bits when moving bits from low positions to high positions."
+    ],
+    "examples": [
+      {
+        "input": "n = 43261596",
+        "output": "964176192"
+      },
+      {
+        "input": "n = 0",
+        "output": "0"
+      }
+    ],
+    "constraints": [
+      "0 <= n <= 2^31 - 1 for this runner-safe problem bank entry.",
+      "The reversed 32-bit value for provided tests fits in a signed 32-bit integer."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def reverseBits(self, n: int) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number} n\n * @return {number}\n */\nfunction reverseBits(n) {\n  // Think out loud as you go!\n}\n",
+      "c": "int reverseBits(int n) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int reverseBits(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int reverseBits(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "ipo",
+    "title": "IPO",
+    "difficulty": "Hard",
+    "topics": [
+      "Array",
+      "Greedy",
+      "Sorting",
+      "Heap"
+    ],
+    "statement": [
+      "You start with capital w and may complete at most k projects. Each project requires a minimum capital amount and adds a profit after completion.",
+      "Return the largest capital possible after choosing up to k affordable projects."
+    ],
+    "examples": [
+      {
+        "input": "k = 2, w = 0, profits = [1,2,3], capital = [0,1,1]",
+        "output": "4"
+      },
+      {
+        "input": "k = 3, w = 0, profits = [1,2,3], capital = [0,1,2]",
+        "output": "6"
+      }
+    ],
+    "constraints": [
+      "1 <= k <= 10^5",
+      "0 <= w <= 10^9",
+      "1 <= profits.length == capital.length <= 10^5",
+      "0 <= profits[i] <= 10^4",
+      "0 <= capital[i] <= 10^9"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def findMaximizedCapital(self, k: int, w: int, profits: list[int], capital: list[int]) -> int:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number} k\n * @param {number} w\n * @param {number[]} profits\n * @param {number[]} capital\n * @return {number}\n */\nfunction findMaximizedCapital(k, w, profits, capital) {\n  // Think out loud as you go!\n}\n",
+      "c": "int findMaximizedCapital(int k, int w, int* profits, int profitsSize, int* capital, int capitalSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
+      "cpp": "class Solution {\npublic:\n    int findMaximizedCapital(int k, int w, vector<int>& profits, vector<int>& capital) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
+      "java": "class Solution {\n    public int findMaximizedCapital(int k, int w, int[] profits, int[] capital) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "find-k-pairs-with-smallest-sums",
+    "title": "Find K Pairs with Smallest Sums",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Heap",
+      "Priority Queue"
+    ],
+    "statement": [
+      "Given two sorted integer arrays, return k pairs [u, v] with the smallest sums where u comes from the first array and v comes from the second.",
+      "If fewer than k pairs exist, return all available pairs."
+    ],
+    "examples": [
+      {
+        "input": "nums1 = [1,7,11], nums2 = [2,4,6], k = 3",
+        "output": "[[1,2],[1,4],[1,6]]"
+      },
+      {
+        "input": "nums1 = [1,1,2], nums2 = [1,2,3], k = 2",
+        "output": "[[1,1],[1,1]]"
+      }
+    ],
+    "constraints": [
+      "1 <= nums1.length, nums2.length <= 10^5",
+      "-10^9 <= nums1[i], nums2[i] <= 10^9",
+      "nums1 and nums2 are sorted in nondecreasing order.",
+      "1 <= k <= 10^4"
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def kSmallestPairs(self, nums1: list[int], nums2: list[int], k: int) -> list[list[int]]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums1\n * @param {number[]} nums2\n * @param {number} k\n * @return {number[][]}\n */\nfunction kSmallestPairs(nums1, nums2, k) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** kSmallestPairs(int* nums1, int nums1Size, int* nums2, int nums2Size, int k, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
+      "cpp": "class Solution {\npublic:\n    vector<vector<int>> kSmallestPairs(vector<int>& nums1, vector<int>& nums2, int k) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "class Solution {\n    public List<List<Integer>> kSmallestPairs(int[] nums1, int[] nums2, int k) {\n        // Think out loud as you go!\n        return List.of();\n    }\n}\n"
+    }
+  },
+  {
+    "id": "merge-k-sorted-lists",
+    "title": "Merge k Sorted Lists",
+    "difficulty": "Hard",
+    "topics": [
+      "Linked List",
+      "Divide and Conquer",
+      "Heap",
+      "Merge Sort"
+    ],
+    "statement": [
+      "Given an array of sorted linked lists, merge all values into one sorted linked list.",
+      "Return the head of the merged list, or an empty list when there are no nodes."
+    ],
+    "examples": [
+      {
+        "input": "lists = [[1,4,5],[1,3,4],[2,6]]",
+        "output": "[1,1,2,3,4,4,5,6]"
+      },
+      {
+        "input": "lists = []",
+        "output": "[]"
+      },
+      {
+        "input": "lists = [[]]",
+        "output": "[]"
+      }
+    ],
+    "constraints": [
+      "0 <= lists.length <= 10^4",
+      "0 <= total number of nodes <= 10^4",
+      "-10^4 <= Node.val <= 10^4",
+      "Each linked list is sorted in ascending order."
+    ],
+    "starterCode": {
+      "python": "# Definition for singly-linked list.\n# class ListNode:\n#     def __init__(self, val=0, next=None):\n#         self.val = val\n#         self.next = next\nclass Solution:\n    def mergeKLists(self, lists: list[Optional[ListNode]]) -> Optional[ListNode]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for singly-linked list.\n * function ListNode(val, next) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.next = (next === undefined ? null : next);\n * }\n */\n/**\n * @param {ListNode[]} lists\n * @return {ListNode}\n */\nfunction mergeKLists(lists) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* mergeKLists(struct ListNode** lists, int listsSize) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* mergeKLists(vector<ListNode*>& lists) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode mergeKLists(ListNode[] lists) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "find-median-from-data-stream",
+    "title": "Find Median from Data Stream",
+    "difficulty": "Hard",
+    "topics": [
+      "Two Pointers",
+      "Design",
+      "Sorting",
+      "Heap",
+      "Data Stream"
+    ],
+    "statement": [
+      "Design a MedianFinder data structure that receives integers one at a time and returns the median of all values seen so far.",
+      "For an even count, the median is the average of the two middle values after sorting."
+    ],
+    "examples": [
+      {
+        "input": "addNum(1), addNum(2), findMedian(), addNum(3), findMedian()",
+        "output": "1.5, 2.0"
+      }
+    ],
+    "constraints": [
+      "-10^5 <= num <= 10^5",
+      "At least one number exists before each findMedian call.",
+      "At most 5 * 10^4 calls are made."
+    ],
+    "starterCode": {
+      "python": "class MedianFinder:\n    def __init__(self):\n        # Think out loud as you go!\n        pass\n\n    def addNum(self, num: int) -> None:\n        # Think out loud as you go!\n        pass\n\n    def findMedian(self) -> float:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "var MedianFinder = function() {\n  // Think out loud as you go!\n};\n\n/** \n * @param {number} num\n * @return {void}\n */\nMedianFinder.prototype.addNum = function(num) {\n  // Think out loud as you go!\n};\n\n/**\n * @return {number}\n */\nMedianFinder.prototype.findMedian = function() {\n  // Think out loud as you go!\n};\n",
+      "c": "// C class-style MedianFinder tests are not supported in this runner yet.\n",
+      "cpp": "class MedianFinder {\npublic:\n    MedianFinder() {\n        // Think out loud as you go!\n    }\n\n    void addNum(int num) {\n        // Think out loud as you go!\n    }\n\n    double findMedian() {\n        // Think out loud as you go!\n        return 0.0;\n    }\n};\n",
+      "java": "class MedianFinder {\n    public MedianFinder() {\n        // Think out loud as you go!\n    }\n\n    public void addNum(int num) {\n        // Think out loud as you go!\n    }\n\n    public double findMedian() {\n        // Think out loud as you go!\n        return 0.0;\n    }\n}\n"
+    }
+  },
+  {
+    "id": "construct-quad-tree",
+    "title": "Construct Quad Tree",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Divide and Conquer",
+      "Matrix"
+    ],
+    "statement": [
+      "Given an n x n binary grid, build a quad tree representing the same values.",
+      "A leaf represents a square where every value is the same. Otherwise split the square into four equal quadrants in top-left, top-right, bottom-left, bottom-right order.",
+      "The value stored in an internal node is ignored."
+    ],
+    "examples": [
+      {
+        "input": "grid = [[0,1],[1,0]]",
+        "output": "[[0,1],[1,0],[1,1],[1,1],[1,0]]"
+      },
+      {
+        "input": "grid = [[1]]",
+        "output": "[[1,1]]"
+      }
+    ],
+    "constraints": [
+      "n == grid.length == grid[i].length",
+      "n is a power of two.",
+      "1 <= n <= 64",
+      "grid[i][j] is 0 or 1."
+    ],
+    "starterCode": {
+      "python": "\"\"\"\n# Definition for a QuadTree node.\nclass Node:\n    def __init__(self, val=False, isLeaf=False, topLeft=None, topRight=None, bottomLeft=None, bottomRight=None):\n        self.val = val\n        self.isLeaf = isLeaf\n        self.topLeft = topLeft\n        self.topRight = topRight\n        self.bottomLeft = bottomLeft\n        self.bottomRight = bottomRight\n\"\"\"\n\nclass Solution:\n    def construct(self, grid: list[list[int]]) -> 'Node':\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for a QuadTree node.\n * function Node(val, isLeaf, topLeft, topRight, bottomLeft, bottomRight) {\n *   this.val = (val === undefined ? false : val);\n *   this.isLeaf = (isLeaf === undefined ? false : isLeaf);\n *   this.topLeft = (topLeft === undefined ? null : topLeft);\n *   this.topRight = (topRight === undefined ? null : topRight);\n *   this.bottomLeft = (bottomLeft === undefined ? null : bottomLeft);\n *   this.bottomRight = (bottomRight === undefined ? null : bottomRight);\n * }\n */\n/**\n * @param {number[][]} grid\n * @return {Node}\n */\nfunction construct(grid) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for a QuadTree node.\n * struct Node {\n *     int val;\n *     struct Node *next;\n *     struct Node *random;\n *     struct Node **neighbors;\n *     int neighborsSize;\n *     struct Node *left;\n *     struct Node *right;\n *     bool isLeaf;\n *     struct Node *topLeft;\n *     struct Node *topRight;\n *     struct Node *bottomLeft;\n *     struct Node *bottomRight;\n * };\n */\nstruct Node* construct(int** grid, int gridSize, int* gridColSize) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/*\n// Definition for a QuadTree node.\nclass Node {\npublic:\n    int val;\n    bool isLeaf;\n    Node* topLeft;\n    Node* topRight;\n    Node* bottomLeft;\n    Node* bottomRight;\n\n    Node() : val(0), isLeaf(false), topLeft(nullptr), topRight(nullptr), bottomLeft(nullptr), bottomRight(nullptr) {}\n    Node(int _val, bool _isLeaf) : val(_val), isLeaf(_isLeaf), topLeft(nullptr), topRight(nullptr), bottomLeft(nullptr), bottomRight(nullptr) {}\n    Node(int _val, bool _isLeaf, Node* _topLeft, Node* _topRight, Node* _bottomLeft, Node* _bottomRight)\n        : val(_val), isLeaf(_isLeaf), topLeft(_topLeft), topRight(_topRight), bottomLeft(_bottomLeft), bottomRight(_bottomRight) {}\n};\n*/\n\nclass Solution {\npublic:\n    Node* construct(vector<vector<int>>& grid) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/*\n// Definition for a QuadTree node.\nclass Node {\n    public int val;\n    public boolean isLeaf;\n    public Node topLeft;\n    public Node topRight;\n    public Node bottomLeft;\n    public Node bottomRight;\n\n    public Node() {}\n    public Node(int val, boolean isLeaf) {\n        this.val = val;\n        this.isLeaf = isLeaf;\n    }\n    public Node(int val, boolean isLeaf, Node topLeft, Node topRight, Node bottomLeft, Node bottomRight) {\n        this.val = val;\n        this.isLeaf = isLeaf;\n        this.topLeft = topLeft;\n        this.topRight = topRight;\n        this.bottomLeft = bottomLeft;\n        this.bottomRight = bottomRight;\n    }\n}\n*/\n\nclass Solution {\n    public Node construct(int[][] grid) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+    }
+  }
+];
+
+export function getProblem(id) {
+  return problems.find((problem) => problem.id === id) || problems.find((problem) => problem.id === "two-sum");
+}

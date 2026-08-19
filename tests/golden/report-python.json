@@ -1,0 +1,15 @@
+{
+  "mode": "python",
+  "flow": "report",
+  "problemTitle": "Two Sum",
+  "testResultText": "Test results · 0/4",
+  "reportKeys": [
+    "codingFeedback",
+    "codingScore",
+    "communicationFeedback",
+    "communicationScore",
+    "decision",
+    "hintsUsed",
+    "summary"
+  ]
+}

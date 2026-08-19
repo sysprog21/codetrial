@@ -1,0 +1,983 @@
+:root {
+  color-scheme: dark;
+  --page: #11110f;
+  --surface: #1b1b18;
+  --ink: #f6f3ea;
+  --sub: #b7b2a5;
+  --muted: #7d776a;
+  --hairline: #2d2b26;
+  --accent: #3987e5;
+  --accent-deep: #2069bd;
+  --good: #24b47e;
+  --critical: #ff6b6b;
+  /* The floating avatar stage. Opaque on purpose: this sits over the editor,
+     which repaints on every keystroke, and a backdrop-filter under it re-ran a
+     blur pass per repaint for an effect 82% opaque paint already hid. */
+  --float-surface: #24241f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.captions-bar {
+  margin: 0.5rem 0;
+  padding: 0.375rem 0.625rem;
+  background: var(--hairline);
+  border-radius: 4px;
+  font-size: 0.8125rem;
+  color: var(--ink);
+  line-height: 1.3;
+}
+
+.captions-label {
+  font-weight: 600;
+  color: var(--accent);
+  margin-right: 0.375rem;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button {
+  font: inherit;
+}
+
+main {
+  width: min(100%, 64rem);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 2.5rem 1.25rem;
+}
+
+@media (min-width: 640px) {
+  main {
+    padding-right: 2rem;
+    padding-left: 2rem;
+  }
+}
+
+header {
+  margin-bottom: 1.5rem;
+}
+
+.brand {
+  margin-bottom: 0.75rem;
+  color: var(--accent);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.account-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  color: var(--sub);
+  font-size: 0.875rem;
+}
+
+.account-link {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.account-link:hover {
+  color: var(--ink);
+}
+
+.account-input {
+  width: 12rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+}
+
+h1 {
+  max-width: 56rem;
+  margin: 0;
+  font-size: clamp(2.25rem, 7vw, 3.75rem);
+  line-height: 1;
+}
+
+p {
+  max-width: 48rem;
+  margin: 1rem 0 0;
+  color: var(--sub);
+}
+
+.problem-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 0.75rem;
+}
+
+.problem-card {
+  min-height: 8rem;
+  padding: 1rem;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+  transition: border-color 120ms ease;
+}
+
+.problem-card:hover,
+.problem-card.selected {
+  border-color: var(--accent);
+}
+
+.problem-title,
+.problem-meta {
+  display: block;
+}
+
+.problem-title {
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.problem-meta {
+  margin-top: 1.25rem;
+  color: var(--sub);
+  font-size: 0.875rem;
+}
+
+.duration-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+}
+
+.duration-button,
+.start-button {
+  border: 1px solid var(--hairline);
+  cursor: pointer;
+  font-weight: 700;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.duration-button {
+  border-radius: 999px;
+  padding: 0.5rem 1rem;
+  background: var(--surface);
+  color: var(--sub);
+}
+
+.duration-button:hover,
+.duration-button.selected {
+  border-color: var(--accent);
+}
+
+.duration-button.selected,
+.start-button {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.start-row {
+  margin-top: 1rem;
+}
+
+.start-button {
+  border-color: var(--accent);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+.start-button:hover {
+  background: var(--accent-deep);
+}
+
+.start-button:disabled {
+  opacity: 0.6;
+}
+
+/* Reads as not-yet-actionable while staying clickable, so a candidate who
+   presses it early gets told why instead of nothing happening. */
+.pill-button.waiting,
+.pill-button:disabled {
+  opacity: 0.6;
+}
+
+.history {
+  margin-top: 1rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.interview-shell {
+  display: grid;
+  width: 100%;
+  max-width: none;
+  min-height: 100vh;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.hidden-media {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.interview-sidebar,
+.editor-panel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.interview-sidebar {
+  display: flex;
+  flex-direction: column;
+}
+
+.interview-header {
+  margin: 0;
+  padding: 1rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.interview-header h1 {
+  font-size: 1.25rem;
+}
+
+.status-row,
+.control-row,
+.tab-row,
+.editor-toolbar,
+.language-tabs,
+.report-header,
+.report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.status-row {
+  margin-top: 1rem;
+}
+
+/* Floating, not docked. Fixed to the editor's top-right and clear of the
+   toolbar, so it never covers Run tests and never competes with the sidebar
+   for width. pointer-events are off for the stage and back on only for the
+   credit link, so the avatar can never swallow a click meant for the editor. */
+.jim-stage {
+  position: fixed;
+  top: 4.25rem;
+  right: 1.5rem;
+  z-index: 5;
+  width: 168px;
+  pointer-events: none;
+}
+
+/* One box, two looks. The canvas and the neutral panel are stacked and the
+   state attribute picks which one is visible, so nothing reflows when the
+   model finishes loading or fails to. */
+.jim-avatar {
+  position: relative;
+  height: 158px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--float-surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+/* Under the avatar, and only as wide as it. It grows to fit the turn instead of
+   clamping: a fixed max-height cut sentences in half behind a scrollbar nobody
+   in an interview is going to reach for. `CAPTION_MAX_CHARS` already bounds the
+   text, and the viewport cap is a backstop, not the normal case. */
+.jim-stage .captions-bar {
+  margin: 0.35rem 0 0;
+  max-height: min(40vh, 20rem);
+  overflow-y: auto;
+  background: var(--float-surface);
+  border: 1px solid var(--hairline);
+  font-size: 0.75rem;
+  pointer-events: auto;
+}
+
+.jim-stage .captions-label {
+  display: block;
+}
+
+@media (max-width: 1200px) {
+  /* Below this the editor is narrow enough that a floating panel starts eating
+     code rather than decorating it. The AVATAR goes, not the stage: captions
+     are the accessible transcript of what Jim is saying, and hiding the whole
+     stage took them away from exactly the narrow windows most likely to need
+     them. They move to the bottom corner, clear of the toolbar entirely. */
+  .jim-avatar {
+    display: none;
+  }
+
+  .jim-stage {
+    top: auto;
+    bottom: 1.5rem;
+    width: 260px;
+  }
+}
+
+.jim-avatar-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.jim-avatar-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  margin: 0;
+  text-align: center;
+}
+
+.jim-avatar-initial {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  background: #33332c;
+  color: var(--sub);
+  font-weight: 700;
+}
+
+.jim-avatar[data-avatar-state="ready"] .jim-avatar-fallback {
+  display: none;
+}
+
+/* The avatar credit lives in the lobby footer rather than under the avatar,
+   where it crowded the interview. It is a license term, so it is displayed
+   unconditionally: a checkout with no model still ships the credit. */
+.site-credits {
+  margin: 2rem 0 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--hairline);
+  font-size: 0.75rem;
+}
+
+.presence-banner {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  background: rgba(255, 107, 107, 0.12);
+  color: #ff9b9b;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.agent-pill,
+.timer,
+.pill-button,
+.tab-button,
+.language-button,
+.run-button {
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: #24241f;
+  color: var(--sub);
+}
+
+.agent-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.agent-pill.ready {
+  border-color: rgba(45, 212, 132, 0.65);
+  background: rgba(45, 212, 132, 0.12);
+  color: #d7f7e5;
+  box-shadow: 0 0 0 3px rgba(45, 212, 132, 0.08);
+}
+
+.agent-viz {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+}
+
+.agent-viz span {
+  width: 4px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.agent-pill.ready .agent-viz span {
+  background: #2dd484;
+}
+
+.timer {
+  padding: 0.375rem 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 700;
+}
+
+.timer.urgent {
+  color: #ff6b6b;
+}
+
+.control-row {
+  margin-top: 0.75rem;
+}
+
+/* Collapsed by default: it is setup advice, not interview state. <details>
+   carries the open/close behavior, so none of it needs script. */
+.meet-mode {
+  margin-top: 0.75rem;
+  border: 1px solid var(--hairline);
+  border-radius: 0.5rem;
+  background: #24241f;
+  font-size: 0.75rem;
+}
+
+.meet-mode > summary {
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+  color: var(--sub);
+  font-weight: 700;
+}
+
+.meet-mode-body {
+  padding: 0 0.75rem 0.75rem;
+}
+
+.meet-mode-steps {
+  margin: 0 0 0.5rem;
+  padding-left: 1.1rem;
+  color: var(--sub);
+  line-height: 1.5;
+}
+
+.meet-mode-reminder {
+  margin: 0 0 0.5rem;
+  color: #f4dc9a;
+  line-height: 1.5;
+}
+
+.meet-mode-output {
+  margin: 0.5rem 0;
+}
+
+.meet-mode-output label {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--sub);
+  font-weight: 700;
+}
+
+.meet-mode-output select {
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--hairline);
+  border-radius: 0.375rem;
+  background: var(--surface);
+  color: var(--sub);
+  font: inherit;
+}
+
+.pill-button,
+.tab-button,
+.language-button,
+.run-button {
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.pill-button.danger {
+  border-color: #c44545;
+  background: #c44545;
+  color: white;
+}
+
+.tab-row {
+  min-height: 2.5rem;
+  padding: 0 0.75rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.tab-button.selected,
+.language-button.selected {
+  background: #2f2f29;
+  color: var(--ink);
+}
+
+.side-panel {
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.problem-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  color: var(--sub);
+}
+
+.problem-detail h2 {
+  margin: 0 0 0.4rem;
+  color: var(--ink);
+  font-size: 0.875rem;
+}
+
+.problem-detail pre,
+.results-body pre,
+.report-card pre {
+  overflow-x: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: #151512;
+  padding: 0.75rem;
+  color: var(--sub);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+}
+
+.hint-box {
+  border: 1px solid rgba(57, 135, 229, 0.3);
+  border-radius: 8px;
+  background: rgba(57, 135, 229, 0.08);
+  padding: 0.75rem;
+}
+
+.empty-transcript {
+  display: flex;
+  min-height: 20rem;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.editor-panel {
+  display: flex;
+  min-height: 34rem;
+  flex-direction: column;
+  background: #1e1e1e;
+}
+
+.editor-toolbar {
+  justify-content: space-between;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+  padding: 0.5rem 0.75rem;
+}
+
+.sync-state {
+  display: none;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.compile-disclosure {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.sync-state span {
+  display: inline-block;
+  width: 0.4rem;
+  height: 0.4rem;
+  margin-right: 0.35rem;
+  border-radius: 999px;
+  background: #24b47e;
+}
+
+.run-button {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: white;
+}
+
+.editor-stack {
+  position: relative;
+  flex: 1;
+  min-height: 25rem;
+  background: #1e1e1e;
+}
+
+/* The overlay and the textarea must agree on every metric that affects where a
+   glyph lands, or the painted text drifts away from the caret. */
+#editor,
+#editor-highlight {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  border: 0;
+  padding: 1rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  tab-size: 4;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  overflow: auto;
+}
+
+#editor-highlight {
+  pointer-events: none;
+  color: #d4d4d4;
+  overflow: hidden;
+}
+
+#editor {
+  resize: none;
+  outline: 0;
+  background: transparent;
+  /* Transparent glyphs: the overlay supplies the visible, colored ones. */
+  color: transparent;
+  caret-color: #f4f4f0;
+}
+
+#editor::selection {
+  background: #264f78;
+}
+
+.tok-keyword {
+  color: #569cd6;
+}
+
+.tok-string {
+  color: #ce9178;
+}
+
+.tok-comment {
+  color: #6a9955;
+}
+
+.tok-number {
+  color: #b5cea8;
+}
+
+.tok-literal {
+  color: #569cd6;
+}
+
+.test-drawer {
+  border-top: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+#results-toggle {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  border: 0;
+  background: transparent;
+  color: var(--sub);
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.results-body {
+  max-height: 14rem;
+  overflow-y: auto;
+  border-top: 1px solid var(--hairline);
+  padding: 0.75rem 1rem;
+}
+
+.small {
+  font-size: 0.75rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.good {
+  color: var(--good);
+}
+
+.critical {
+  color: var(--critical);
+}
+
+.result-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+}
+
+.result-list li {
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+}
+
+.transcript-row {
+  display: flex;
+  margin-bottom: 0.75rem;
+}
+
+.transcript-row.you {
+  justify-content: flex-end;
+}
+
+.transcript-row > div {
+  max-width: 85%;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: #24241f;
+  padding: 0.5rem 0.75rem;
+}
+
+.transcript-row.alex > div {
+  border-color: rgba(57, 135, 229, 0.3);
+  background: rgba(57, 135, 229, 0.1);
+}
+
+.transcript-row p:first-child {
+  margin: 0 0 0.2rem;
+  color: var(--accent);
+  font-size: 0.625rem;
+  font-weight: 700;
+}
+
+.transcript-row p:last-child {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  background: rgba(17, 17, 15, 0.95);
+  padding: 1rem;
+}
+
+.spinner {
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 2px solid var(--hairline);
+  border-top-color: var(--accent);
+  border-radius: 999px;
+  animation: spin 900ms linear infinite;
+}
+
+.report-card {
+  width: min(100%, 48rem);
+  max-height: 92vh;
+  overflow-y: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 1.5rem;
+}
+
+.report-header {
+  justify-content: space-between;
+}
+
+.report-header h2 {
+  margin: 0;
+}
+
+.score-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.score-grid > div {
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: #24241f;
+  padding: 1rem;
+}
+
+.score-grid strong {
+  font-size: 2rem;
+}
+
+.score-grid span {
+  color: var(--muted);
+  font-size: 1rem;
+}
+
+.report-actions {
+  justify-content: flex-end;
+}
+
+.report-actions button {
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (min-width: 1024px) {
+  .interview-shell {
+    height: 100vh;
+    grid-template-columns: minmax(17.5rem, 22.5rem) minmax(0, 1fr);
+  }
+
+  .sync-state {
+    display: block;
+  }
+}
+
+/* Pre-flight media gate. Sits above the shell until required local media
+   passes, so the candidate never meets the interviewer through dead devices. */
+.audio-check-card {
+  width: min(32rem, 90vw);
+  padding: 1.75rem;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--surface);
+  text-align: left;
+}
+
+.audio-check-card h2 {
+  margin: 0 0 0.5rem;
+}
+
+.audio-check-step {
+  margin: 1.25rem 0;
+}
+
+.audio-check-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.audio-meter {
+  height: 0.6rem;
+  margin-top: 0.5rem;
+  border-radius: 999px;
+  background: var(--hairline);
+  overflow: hidden;
+}
+
+.audio-meter span {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--good);
+  transition: width 80ms linear;
+}
+
+#audio-check-status.critical {
+  color: var(--critical);
+}
+
+/* Each step ticks itself off the moment it passes, so the candidate can see
+   which half is still missing rather than reading the status line. */
+.step-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-right: 0.5rem;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  color: transparent;
+  font-size: 0.75rem;
+  font-weight: 700;
+  vertical-align: -0.2rem;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.step-mark::before {
+  content: "✓";
+}
+
+.audio-check-step.done .step-mark {
+  border-color: var(--good);
+  background: var(--good);
+  color: #0d1f17;
+}
+
+.audio-check-step.done strong {
+  color: var(--good);
+}
+
+/* Once both checks pass the only thing left to do is start, so the button
+   takes focus and says so rather than quietly turning blue. */
+.start-button.ready {
+  box-shadow: 0 0 0 3px rgba(57, 135, 229, 0.35);
+  animation: start-ready 1.6s ease-in-out 3;
+}
+
+@keyframes start-ready {
+  50% {
+    box-shadow: 0 0 0 7px rgba(57, 135, 229, 0.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .start-button.ready {
+    animation: none;
+  }
+}

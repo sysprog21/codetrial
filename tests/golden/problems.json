@@ -1,0 +1,1205 @@
+{
+  "defaultProblemId": "two-sum",
+  "problems": [
+    {
+      "difficulty": "Medium",
+      "id": "3sum",
+      "optimal": "Sort the array, fix one number, and use a two-pointer sweep for the remaining pair while skipping duplicate fixed and pointer values. O(n^2) time and O(1) extra space outside the output.",
+      "pitfalls": "Returning duplicate triplets; forgetting to sort before the two-pointer sweep; moving pointers incorrectly after a match; treating output order as important; using the same element twice.",
+      "summary": "Given an integer array, return all unique triplets whose values sum to zero.",
+      "title": "3Sum"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "add-binary",
+      "optimal": "Scan both strings from right to left with a carry, append each sum bit, then reverse the built result. O(n + m) time and output space.",
+      "pitfalls": "Parsing the strings into fixed-width integers; forgetting a final carry; stopping when the shorter string ends; building the answer in reverse without reversing it before return.",
+      "summary": "Add two binary strings and return their sum as a binary string.",
+      "title": "Add Binary"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "add-two-numbers",
+      "optimal": "Walk both lists together with a carry, appending sum % 10 to a dummy-tail result and carrying sum / 10. Continue while either list or carry remains. O(max(m,n)) time and output space.",
+      "pitfalls": "Forgetting the final carry; stopping when the shorter list ends; treating digits as forward-order numbers; mutating input unexpectedly; mishandling zero-only lists.",
+      "summary": "Given two non-empty linked lists storing digits in reverse order, add the represented numbers and return the sum in the same linked-list format.",
+      "title": "Add Two Numbers"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "average-of-levels-in-binary-tree",
+      "optimal": "BFS by level, accumulating sum and count for each row, then append sum / count. DFS with per-depth sums and counts is equivalent. O(n) time and O(w) queue or O(h) stack.",
+      "pitfalls": "Averaging child pairs instead of whole levels; integer division; overflow if sums use too-small integer types; failing negative values.",
+      "summary": "Given a binary tree root, return the average node value at each depth from top to bottom.",
+      "title": "Average of Levels in Binary Tree"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "basic-calculator",
+      "optimal": "Scan once while building multi-digit numbers and tracking the current sign. Use a stack of prior result/sign pairs when entering parentheses, or use recursive descent over parenthesized subexpressions. O(n) time and O(n) space.",
+      "pitfalls": "Applying a sign outside parentheses only to the first number inside; losing multi-digit numbers; forgetting to skip spaces; using eval instead of parsing; assuming '*' or '/' operators are present.",
+      "summary": "Given a valid arithmetic expression string containing nonnegative integers, '+', '-', parentheses, and spaces, evaluate and return its integer value.",
+      "title": "Basic Calculator"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "best-time-to-buy-and-sell-stock",
+      "optimal": "Scan once while tracking the lowest price seen so far and the best profit from selling today. O(n) time, O(1) space.",
+      "pitfalls": "Allowing a sell before the buy by using max-min without order; returning a negative profit on decreasing prices; resetting the minimum after calculating profit in the wrong order; solving the multi-transaction variant.",
+      "summary": "Given daily prices, choose one buy day and one later sell day to maximize profit, or return 0 if every sale loses money.",
+      "title": "Best Time to Buy and Sell Stock"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "best-time-to-buy-and-sell-stock-ii",
+      "optimal": "Add every positive day-to-day price increase. This is equivalent to buying before each rising run and selling at its peak. O(n) time, O(1) space.",
+      "pitfalls": "Solving the one-transaction version; holding more than one share at once; adding negative drops; missing several small rises that together beat one wide trade.",
+      "summary": "Given daily prices, make any number of non-overlapping buy-sell transactions to maximize total profit.",
+      "title": "Best Time to Buy and Sell Stock II"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "best-time-to-buy-and-sell-stock-iii",
+      "optimal": "Track four states while scanning prices: best after first buy, first sell, second buy, and second sell. O(n) time, O(1) space.",
+      "pitfalls": "Solving only one transaction or unlimited transactions; allowing overlapping holdings; updating transaction states in an order that reuses a price incorrectly; returning negative profit on falling prices.",
+      "summary": "Maximize profit from at most two stock transactions while holding at most one share at a time.",
+      "title": "Best Time to Buy and Sell Stock III"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "best-time-to-buy-and-sell-stock-iv",
+      "optimal": "Use dynamic programming over transaction count with buy[t] and sell[t] states, plus the unlimited-transactions shortcut when k is at least half the number of days. O(nk) time, O(k) space.",
+      "pitfalls": "Ignoring the k limit; using O(nk) when k is effectively unlimited; allowing multiple shares at once; mishandling k = 0 or a one-day price list.",
+      "summary": "Maximize stock profit with at most k buy-sell transactions and no overlapping holdings.",
+      "title": "Best Time to Buy and Sell Stock IV"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "binary-search-tree-iterator",
+      "optimal": "Maintain a stack of the path to the next smallest node. Push all left descendants initially and after each next() on the popped node's right child. next() and hasNext() are amortized O(1), with O(h) space.",
+      "pitfalls": "Flattening the whole tree when asked for iterator space behavior; returning preorder instead of inorder; not handling left-skewed trees; making hasNext() advance the iterator.",
+      "summary": "Design an iterator over a BST that returns values in ascending order and reports whether another value is available.",
+      "title": "Binary Search Tree Iterator"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "binary-tree-level-order-traversal",
+      "optimal": "Use a queue and process one level size at a time, appending values in encounter order. O(n) time and O(w) space.",
+      "pitfalls": "Mixing values from adjacent levels; using DFS without tracking depth; reversing child order; failing empty trees.",
+      "summary": "Given a binary tree root, return node values grouped by level from top to bottom and left to right.",
+      "title": "Binary Tree Level Order Traversal"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "binary-tree-maximum-path-sum",
+      "optimal": "Postorder DFS returns the best one-sided gain to the parent while updating a global answer with node.val plus positive left and right gains. O(n) time and O(h) stack.",
+      "pitfalls": "Forcing the path to include the root; allowing negative child gains to lower the sum; returning a split path to the parent; failing all-negative trees.",
+      "summary": "Given a non-empty binary tree, return the maximum sum over any connected path with no repeated node.",
+      "title": "Binary Tree Maximum Path Sum"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "binary-tree-right-side-view",
+      "optimal": "Use BFS level order and record the last node of each level, or DFS visiting right before left and record the first node seen at each depth. O(n) time and O(w) queue or O(h) stack.",
+      "pitfalls": "Taking only the right child chain; missing left nodes visible after right branches end; appending multiple nodes per depth; failing empty trees.",
+      "summary": "Given a binary tree root, return the rightmost visible value at each depth.",
+      "title": "Binary Tree Right Side View"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "binary-tree-zigzag-level-order-traversal",
+      "optimal": "BFS by level with a direction flag, reversing each row or filling a deque/indexed row from the correct side. O(n) time and O(w) space.",
+      "pitfalls": "Reversing traversal order instead of only output order; forgetting to flip every level; mishandling sparse nodes; failing empty trees.",
+      "summary": "Given a binary tree root, return level-order values while alternating each level's output direction.",
+      "title": "Binary Tree Zigzag Level Order Traversal"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "bitwise-and-of-numbers-range",
+      "optimal": "Find the common binary prefix of left and right by shifting both right until equal, then shift the prefix back. O(log right) time, O(1) space.",
+      "pitfalls": "Iterating every number in a huge range; missing that any changing lower bit becomes zero; failing singleton ranges; off-by-one range handling.",
+      "summary": "Compute the bitwise AND of every number in the inclusive range from left to right.",
+      "title": "Bitwise AND of Numbers Range"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "candy",
+      "optimal": "Two passes: left-to-right enforces increases from the left, right-to-left enforces increases from the right, summing the max requirement per child. O(n) time and O(n) space; slope counting can reduce space.",
+      "pitfalls": "Treating equal ratings as needing more candy; only scanning one direction; missing valleys that need both sides; failing a single child or long descending tail.",
+      "summary": "Given child ratings in a line, assign the fewest candies so every child has at least one and higher-rated neighbors get more.",
+      "title": "Candy"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "climbing-stairs",
+      "optimal": "This is the Fibonacci recurrence: ways(n) = ways(n-1) + ways(n-2). Iterate with two rolling counts from the base cases. O(n) time, O(1) space.",
+      "pitfalls": "Using exponential recursion without memoization; off-by-one base cases for n=1 or n=2; starting the sequence at the wrong values; allocating a full DP array when two variables are enough.",
+      "summary": "Count how many ways to climb n steps when each move takes either one or two steps.",
+      "title": "Climbing Stairs"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "clone-graph",
+      "optimal": "Traverse with DFS or BFS while keeping a map from original node to cloned node. Create each clone once, then wire cloned neighbors through the map. O(V+E) time and O(V) space.",
+      "pitfalls": "Recursing forever on cycles; keying clones by value without checking uniqueness assumptions; reusing original neighbor nodes; failing the null or single-node graph.",
+      "summary": "Given a node in an undirected graph, return a deep copy of every reachable node and edge.",
+      "title": "Clone Graph"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "coin-change",
+      "optimal": "Use bottom-up dynamic programming where dp[a] is the fewest coins needed for amount a. For each amount and coin, relax dp[a] from dp[a - coin] + 1. O(amount * coins) time, O(amount) space.",
+      "pitfalls": "Using greedy choice on denominations where it fails; returning a large sentinel instead of -1; mishandling amount 0; treating each coin as usable only once.",
+      "summary": "Return the fewest coins needed to make an amount from given denominations, or -1 if impossible.",
+      "title": "Coin Change"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "combination-sum",
+      "optimal": "Sort or index candidates and backtrack with a remaining target. At each step either reuse the current candidate or move forward, keeping choices nondecreasing to avoid duplicate combinations. Output size dominates.",
+      "pitfalls": "Using each candidate only once; producing duplicate combinations in different orders; failing to stop when the remaining target is negative; mishandling unsorted candidates; missing the no-solution case.",
+      "summary": "Given distinct candidates and a target, return all unique combinations that sum to the target, allowing each candidate to be reused.",
+      "title": "Combination Sum"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "combinations",
+      "optimal": "Backtrack from a start value, append choices in increasing order, and stop when the path length reaches k. Prune when not enough values remain. Output size dominates; auxiliary stack is O(k).",
+      "pitfalls": "Generating permutations instead of combinations; reusing a number; off-by-one around n; missing the k == n and k == 1 cases; copying the path too late and mutating emitted rows.",
+      "summary": "Given n and k, return every size-k group of distinct numbers chosen from 1 through n.",
+      "title": "Combinations"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "construct-binary-tree-from-inorder-and-postorder-traversal",
+      "optimal": "Postorder gives each subtree root last. Use an inorder index map and consume postorder from the end, building right before left so the traversal order lines up. O(n) time and O(n) space.",
+      "pitfalls": "Building left before right while consuming postorder backward; repeated linear searches; incorrect inclusive or exclusive bounds; mishandling single-node and skewed trees.",
+      "summary": "Given inorder and postorder traversal arrays with unique values, reconstruct the binary tree and return its root.",
+      "title": "Construct Binary Tree from Inorder and Postorder Traversal"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "construct-binary-tree-from-preorder-and-inorder-traversal",
+      "optimal": "Preorder gives each subtree root first. Use a value-to-index map for inorder, then recursively split left and right ranges while advancing through preorder. O(n) time and O(n) space.",
+      "pitfalls": "Searching the inorder array on every recursive call; off-by-one range splits; building right before left while consuming preorder; assuming balanced trees; losing skewed subtree shape.",
+      "summary": "Given preorder and inorder traversal arrays with unique values, reconstruct the binary tree and return its root.",
+      "title": "Construct Binary Tree from Preorder and Inorder Traversal"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "construct-quad-tree",
+      "optimal": "Use recursive divide and conquer. For each square, scan until a different value is found; if all cells match, return a leaf. Otherwise split into four equal quadrants in top-left, top-right, bottom-left, bottom-right order. With n <= 64, direct uniform scans are simple and fast enough.",
+      "pitfalls": "Returning a leaf for only 1x1 cells; using the wrong child order; forgetting that internal node values are ignored; storing integers where the language starter expects booleans or vice versa; assuming non-power-of-two sizes.",
+      "summary": "Given an n by n binary grid, build a quad tree whose leaves represent uniform square regions.",
+      "title": "Construct Quad Tree"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "container-with-most-water",
+      "optimal": "Use two pointers at the ends. Record each area, then move the pointer at the shorter height because only a taller boundary can compensate for reduced width. O(n) time and O(1) space.",
+      "pitfalls": "Moving the taller pointer; using the taller height for area; missing the width calculation; trying all pairs at O(n^2) without recognizing the greedy proof.",
+      "summary": "Given line heights, choose two positions that maximize width times the shorter height.",
+      "title": "Container With Most Water"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "contains-duplicate-ii",
+      "optimal": "Track the most recent index for each value in a hash map; when a value repeats, check the distance before updating the index. O(n) time and O(n) space. A sliding set of the last k values also works.",
+      "pitfalls": "Solving Contains Duplicate I and ignoring k; using the same index twice when k is zero; failing negative values; keeping the first index forever instead of the most recent one.",
+      "summary": "Given nums and k, return whether the same value appears at two different indices whose absolute difference is at most k.",
+      "title": "Contains Duplicate II"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "convert-sorted-array-to-binary-search-tree",
+      "optimal": "Choose the middle array value as the root, recursively build left and right subtrees from the two halves, and return the root. Either middle choice for even lengths is valid if every subtree remains height-balanced. O(n) time and O(log n) recursion depth for balanced splits.",
+      "pitfalls": "Building a linked list shaped tree instead of a balanced tree; dropping or duplicating values; using array indexes with off-by-one errors; rejecting a valid alternate middle choice; violating BST inorder order.",
+      "summary": "Given a strictly increasing array, build a height-balanced binary search tree containing the same values.",
+      "title": "Convert Sorted Array to Binary Search Tree"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "copy-list-with-random-pointer",
+      "optimal": "Use a hash map from original node to copied node, then wire each copy's next and random pointers from the map. O(n) time and O(n) space. The interleaving-node approach is also O(n) time with O(1) extra space.",
+      "pitfalls": "Returning original nodes instead of a deep copy; copying next pointers but not random pointers; using node values as map keys when values can repeat; failing null random pointers; losing the original list while interleaving.",
+      "summary": "Given a linked list whose nodes have next and random pointers, return a deep copy with the same values and pointer relationships.",
+      "title": "Copy List with Random Pointer"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "count-complete-tree-nodes",
+      "optimal": "Compare leftmost and rightmost heights to detect perfect subtrees in O(log n), otherwise recurse into children. This gives O(log^2 n) time and O(log n) stack on complete trees; plain traversal is O(n).",
+      "pitfalls": "Ignoring the complete-tree property; off-by-one height counts; treating null as height one; assuming every complete tree is perfect; failing empty and single-node trees.",
+      "summary": "Given a complete binary tree root, return the number of nodes in the tree.",
+      "title": "Count Complete Tree Nodes"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "course-schedule",
+      "optimal": "Model prerequisites as a directed graph and detect whether it has a cycle. Kahn's algorithm with indegrees or DFS coloring both run in O(V+E) time and O(V+E) space.",
+      "pitfalls": "Reversing edge direction and misreading [course, prerequisite]; failing disconnected components; not decrementing indegrees correctly; treating a repeated visit in DFS as a cycle instead of only the active recursion stack.",
+      "summary": "Given course count and prerequisite pairs, decide whether every course can be completed.",
+      "title": "Course Schedule"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "course-schedule-ii",
+      "optimal": "Run topological sort. Kahn's algorithm appends zero-indegree courses while removing outgoing edges; DFS postorder with cycle coloring also works. Return all courses only when no cycle is found. O(V+E) time and O(V+E) space.",
+      "pitfalls": "Expecting one unique order; returning a partial order after a cycle; reversing prerequisite edges; forgetting isolated courses; duplicate or missing course ids in the result.",
+      "summary": "Given course count and prerequisite pairs, return any valid order to complete all courses, or an empty array if impossible.",
+      "title": "Course Schedule II"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "design-add-and-search-words-data-structure",
+      "optimal": "Use a trie. addWord inserts characters and marks the final node. search runs DFS over the pattern, branching across children when it sees '.', and only accepts complete word endings. O(L) for literal searches and worst-case branching for wildcard-heavy patterns.",
+      "pitfalls": "Letting '.' match zero or multiple letters; treating prefixes as whole words; not branching across all children for wildcards; forgetting that pattern length must match word length.",
+      "summary": "Design a word dictionary supporting addWord and search, where search patterns may contain '.' as a single-letter wildcard.",
+      "title": "Design Add and Search Words Data Structure"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "edit-distance",
+      "optimal": "Dynamic programming over prefixes: dp[i][j] is the edit distance between word1[..i] and word2[..j]. Matching characters copy the diagonal; otherwise take one plus min(insert, delete, replace). O(mn) time and O(n) space with a rolling row.",
+      "pitfalls": "Forgetting empty-string base cases; counting only insertions and deletions; treating replacement as two edits; off-by-one errors between string indexes and DP prefix lengths.",
+      "summary": "Compute the minimum insertions, deletions, and replacements needed to transform one word into another.",
+      "title": "Edit Distance"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "evaluate-division",
+      "optimal": "Build a weighted bidirectional graph where a/b has weight value and b/a has reciprocal weight. For each query, DFS/BFS from numerator to denominator multiplying edge weights. Weighted union-find is also strong. O(E+Q*(V+E)) for search, or near O((E+Q)*alpha(V)) with union-find.",
+      "pitfalls": "Missing reciprocal edges; returning 1.0 for unknown x/x; not tracking visited nodes in cyclic graphs; accumulating the product in the wrong direction.",
+      "summary": "Given division equations and values, answer ratio queries or return -1.0 when variables are unknown or disconnected.",
+      "title": "Evaluate Division"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "evaluate-reverse-polish-notation",
+      "optimal": "Use a stack of integers. Push operands; for an operator, pop right then left operands, apply the operation, and push the result. O(n) time and O(n) space.",
+      "pitfalls": "Reversing operand order for '-' or '/'; using floor division for negative values instead of truncating toward zero; treating negative numbers as operators; failing multi-digit numbers.",
+      "summary": "Given a valid Reverse Polish Notation token list, evaluate it using integer arithmetic with division truncating toward zero.",
+      "title": "Evaluate Reverse Polish Notation"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "factorial-trailing-zeroes",
+      "optimal": "Each trailing zero comes from a factor pair of 2 and 5, and 5s are rarer. Sum n/5 + n/25 + n/125 + ... until the divisor exceeds n. O(log_5 n) time, O(1) space.",
+      "pitfalls": "Computing the factorial and overflowing; counting only multiples of 10; missing extra factors from 25, 125, and higher powers; mishandling n = 0.",
+      "summary": "Count how many trailing zeroes appear in n factorial without constructing the factorial.",
+      "title": "Factorial Trailing Zeroes"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "find-first-and-last-position-of-element-in-sorted-array",
+      "optimal": "Run two binary searches: one for the first index with value >= target and one for the first index with value > target, then validate the range. O(log n) time, O(1) space.",
+      "pitfalls": "Using linear scans; returning only one matching index; off-by-one errors at the right boundary; failing empty arrays or all-target arrays.",
+      "summary": "Return the first and last positions of a target in a sorted array, or [-1, -1] if it is absent.",
+      "title": "Find First and Last Position of Element in Sorted Array"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "find-k-pairs-with-smallest-sums",
+      "optimal": "Use a min-heap seeded with the first pair from each relevant row, then pop the smallest pair and push the next pair from that same row. O(k log min(k, m)) time.",
+      "pitfalls": "Generating every pair for large arrays; losing duplicate pairs from duplicate values; returning more than k pairs; assuming result order matters more than pair sums; failing when k is zero.",
+      "summary": "Return k pairs drawn from two sorted arrays whose sums are smallest, or all pairs if fewer exist.",
+      "title": "Find K Pairs with Smallest Sums"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "find-median-from-data-stream",
+      "optimal": "Maintain two heaps: a max-heap for the lower half and a min-heap for the upper half. Rebalance so their sizes differ by at most one, then read the median from one or both heap tops. addNum is O(log n), findMedian is O(1).",
+      "pitfalls": "Sorting the full stream on every query; failing to rebalance heap sizes; putting equal values inconsistently and breaking ordering; using integer division for even-count medians; calling findMedian before any value despite the stated precondition.",
+      "summary": "Design a data structure that accepts numbers from a stream and returns the current median.",
+      "title": "Find Median from Data Stream"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "find-minimum-in-rotated-sorted-array",
+      "optimal": "Binary search against the rightmost value: when nums[mid] > nums[right], the minimum is to the right; otherwise it is at mid or to the left. O(log n) time, O(1) space.",
+      "pitfalls": "Using linear search; failing the not-rotated case; losing the candidate minimum by moving the right boundary past mid; assuming duplicates exist and adding unnecessary duplicate handling.",
+      "summary": "Find the smallest value in a unique sorted array that may have been rotated.",
+      "title": "Find Minimum in Rotated Sorted Array"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "find-peak-element",
+      "optimal": "Binary search on the slope: if nums[mid] < nums[mid + 1], a peak exists to the right; otherwise one exists at mid or to the left. O(log n) time, O(1) space.",
+      "pitfalls": "Assuming the peak must be the global maximum; rejecting edge peaks; reading outside the array; returning a value instead of an index.",
+      "summary": "Return an index whose value is greater than its neighbors, treating positions outside the array as negative infinity.",
+      "title": "Find Peak Element"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "find-the-index-of-the-first-occurrence-in-a-string",
+      "optimal": "For interview purposes, a clear scan checking each possible start is acceptable at O(n*m) for these constraints; KMP or another linear string-matching algorithm is the deeper optimization if asked.",
+      "pitfalls": "Returning the last match instead of the first; stopping before checking the final possible start; mishandling overlapping partial matches; treating a failed partial match as proof the needle never appears later.",
+      "summary": "Given haystack and needle strings, return the first index where needle appears in haystack, or -1 if it does not appear.",
+      "title": "Find the Index of the First Occurrence in a String"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "flatten-binary-tree-to-linked-list",
+      "optimal": "Use reverse preorder recursion with a previous pointer, or splice each left subtree between the node and its right subtree. O(n) time; O(h) stack for recursion or O(1) extra space for iterative splicing.",
+      "pitfalls": "Leaving any left pointers non-null; using inorder instead of preorder; losing the original right subtree when moving the left subtree; returning a separate list instead of mutating root.",
+      "summary": "Given a binary tree root, mutate it into a right-child-only chain in preorder traversal order.",
+      "title": "Flatten Binary Tree to Linked List"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "game-of-life",
+      "optimal": "Encode transitional states in place, such as live-to-dead and dead-to-live sentinel values, while neighbor counts read the original live/dead state. Then make a final pass to collapse sentinels to 0 or 1. O(m*n) time and O(1) extra space.",
+      "pitfalls": "Updating cells immediately and letting earlier changes affect later neighbor counts; checking only four neighbors; getting boundary checks wrong; forgetting live cells survive with exactly two or three live neighbors.",
+      "summary": "Given a board of 0/1 cells, update it in place to the next Conway's Game of Life state using all eight neighbors and simultaneous updates.",
+      "title": "Game of Life"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "gas-station",
+      "optimal": "If total gas is less than total cost, no solution exists. Otherwise scan once with a running tank; whenever it drops below zero, the next station becomes the only possible new start. O(n) time, O(1) space.",
+      "pitfalls": "Trying every start for O(n^2); forgetting the total feasibility check; returning the first locally positive station; mishandling wraparound or a single exact station.",
+      "summary": "Given gas and travel costs around a circular route, return a starting station that can complete the circuit, or -1 if none exists.",
+      "title": "Gas Station"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "generate-parentheses",
+      "optimal": "Backtrack over the output string, adding '(' while opens remain and ')' only when it would not exceed the number of opens already placed. Emit when length reaches 2n. Output size is the nth Catalan number.",
+      "pitfalls": "Generating all 2^(2n) strings and filtering; allowing a prefix with more closes than opens; returning duplicates; stopping before all n pairs are used; assuming the judge requires one fixed order.",
+      "summary": "Given n pairs of parentheses, return every balanced string that uses exactly those n opening and n closing parentheses.",
+      "title": "Generate Parentheses"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "group-anagrams",
+      "optimal": "Build a hash map keyed by each word's sorted characters or by its 26-count signature, appending each original word to that key's group. O(total characters log word length) with sorted keys, or O(total characters) with count keys.",
+      "pitfalls": "Returning only one representative per group; losing duplicate input strings; making output order part of the logic; using a key that collides for non-anagrams such as only string length.",
+      "summary": "Given a list of strings, return groups where each group contains strings that are anagrams of one another.",
+      "title": "Group Anagrams"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "h-index",
+      "optimal": "Sort citations descending and find the last position where citations[i] >= i+1, or use buckets capped at n for O(n). Sorting is O(n log n) time and O(1) to O(n) space depending on language.",
+      "pitfalls": "Confusing h with the maximum citation count; forgetting h cannot exceed the number of papers; mishandling all-zero inputs; using > instead of >= at the threshold.",
+      "summary": "Given citation counts for a researcher's papers, return the largest h such that at least h papers have h or more citations.",
+      "title": "H-Index"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "happy-number",
+      "optimal": "Detect cycles with a set or Floyd's slow/fast pointers over the digit-square transform. Reaching 1 means happy; revisiting a value means not happy. O(log n) per transform and bounded sequence length.",
+      "pitfalls": "Looping forever on unhappy cycles; summing digits instead of squared digits; mishandling n = 1; assuming values always shrink immediately.",
+      "summary": "Repeatedly replace a positive integer by the sum of squared digits and decide whether the sequence reaches 1.",
+      "title": "Happy Number"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "house-robber",
+      "optimal": "Dynamic programming with two rolling values: for each house, choose max(skip current, rob current plus best before previous). O(n) time, O(1) space.",
+      "pitfalls": "Greedily picking local larger houses; robbing adjacent houses; failing one-house or all-zero inputs; allocating a full table when only two previous states are needed.",
+      "summary": "Choose non-adjacent houses to maximize the robbed amount from a row of non-negative values.",
+      "title": "House Robber"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "implement-trie-prefix-tree",
+      "optimal": "Store children per character at each node and a boolean end-of-word marker. insert creates nodes along the path; search requires the final node to be marked as a complete word; startsWith only requires the path to exist. O(L) per operation.",
+      "pitfalls": "Treating any prefix as a full word in search; forgetting to mark inserted word endings; sharing mutable child maps incorrectly; mishandling words that are prefixes of longer words.",
+      "summary": "Implement a trie supporting insert, exact word search, and prefix search for lowercase words.",
+      "title": "Implement Trie (Prefix Tree)"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "insert-delete-getrandom-o1",
+      "optimal": "Store values in an array plus a hash map from value to index. Insert appends, remove swaps the removed value with the last array item and updates its index before popping, and getRandom indexes the array. O(1) expected time.",
+      "pitfalls": "Using a set alone and making getRandom O(n); removing from the middle of an array without the swap-with-last trick; failing duplicate insert or missing remove return values; leaving stale indices after a remove.",
+      "summary": "Design an integer set with insert, remove, and getRandom, each expected O(1), with getRandom choosing uniformly among current values.",
+      "title": "Insert Delete GetRandom O(1)"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "insert-interval",
+      "optimal": "Append all intervals ending before the new interval, merge every interval starting before or at the new interval's end, append the merged interval, then append the rest. O(n) time and O(n) output space.",
+      "pitfalls": "Not merging touching endpoints; losing intervals before or after the insertion point; assuming the new interval always overlaps; mutating newInterval boundaries in the wrong order.",
+      "summary": "Given sorted non-overlapping intervals and a new interval, insert it and merge overlaps to return sorted non-overlapping coverage.",
+      "title": "Insert Interval"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "integer-to-roman",
+      "optimal": "Greedily append symbols from largest to smallest, including subtractive entries like CM, XC, and IV in the table. O(1) time for the bounded range and O(1) extra space outside the output.",
+      "pitfalls": "Omitting subtractive forms; generating repeated symbols like IIII or DCCCC; processing digits without place value; mishandling the upper bound near 3999.",
+      "summary": "Given an integer from 1 to 3999, return its Roman numeral representation.",
+      "title": "Integer to Roman"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "interleaving-string",
+      "optimal": "Use dynamic programming where dp[i][j] means s3[..i+j] can be formed from s1[..i] and s2[..j]. O(mn) time and O(n) space with a rolling row.",
+      "pitfalls": "Ignoring the length check; greedily taking matching characters from one string; allowing characters from a source to be reordered; exponential recursion without memoization.",
+      "summary": "Decide whether s3 can be built from all characters of s1 and s2 while preserving each source string's order.",
+      "title": "Interleaving String"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "invert-binary-tree",
+      "optimal": "DFS or BFS over every node, swapping left and right children in place, then return the original root. O(n) time and O(h) recursion stack or O(w) queue space.",
+      "pitfalls": "Swapping only the root's children; losing a subtree during the swap; failing empty trees; returning a newly built partial tree; not preserving sparse child positions.",
+      "summary": "Given a binary tree root, swap every node's left and right children and return the root.",
+      "title": "Invert Binary Tree"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "ipo",
+      "optimal": "Sort projects by required capital, push newly affordable profits into a max-heap as capital grows, and repeatedly take the largest available profit. O(n log n + k log n) time.",
+      "pitfalls": "Choosing projects by profit before they are affordable; using a min-heap for profits; forgetting that each completed project increases capital for later choices; continuing when no project is affordable.",
+      "summary": "Choose up to k affordable projects to maximize final capital, where each chosen project's profit is added to available capital.",
+      "title": "IPO"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "is-subsequence",
+      "optimal": "Walk t with one pointer into s, advancing the s pointer only on matches. When the pointer reaches the end of s, it is a subsequence. O(|t|) time and O(1) space.",
+      "pitfalls": "Checking for substring instead of subsequence; mishandling an empty s; consuming repeated characters out of order; requiring characters to be contiguous.",
+      "summary": "Given strings s and t, decide whether s can be formed by deleting zero or more characters from t without changing order.",
+      "title": "Is Subsequence"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "isomorphic-strings",
+      "optimal": "Track mappings in both directions while scanning: s char to t char and t char back to s char. Any conflicting existing mapping fails. O(n) time and O(alphabet) space.",
+      "pitfalls": "Only checking the forward mapping and allowing two source characters to map to one target; comparing character frequency counts instead of positions; forgetting mappings must stay consistent across the whole string.",
+      "summary": "Given equal-length strings s and t, return whether each character in s can be replaced consistently to produce t with a one-to-one mapping.",
+      "title": "Isomorphic Strings"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "jump-game",
+      "optimal": "Scan while tracking the farthest reachable index; if the scan index ever exceeds it, return false, otherwise extend it and succeed once the end is reachable. O(n) time, O(1) space.",
+      "pitfalls": "Using local largest jumps instead of reachability; failing the single-element array; getting stuck on zeros that can be jumped over; using exponential DFS without memoization.",
+      "summary": "Given maximum jump lengths from each index, return whether index 0 can reach the last index.",
+      "title": "Jump Game"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "jump-game-ii",
+      "optimal": "Greedy level scan: track the end of the current jump window and the farthest index reachable from it; when the scan reaches the window end, take one jump and advance the window. O(n) time, O(1) space.",
+      "pitfalls": "Returning reachability instead of a count; incrementing jumps for every index; failing an already-at-end array; choosing the locally largest nums[i] instead of farthest i + nums[i].",
+      "summary": "Given reachable maximum jump lengths from each index, return the minimum number of jumps needed to reach the last index.",
+      "title": "Jump Game II"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "kth-largest-element-in-an-array",
+      "optimal": "Use Quickselect for expected O(n) time by partitioning around the target index, or maintain a size-k min-heap for O(n log k). Sorting is simpler at O(n log n) and acceptable only if performance pressure is low.",
+      "pitfalls": "Returning the kth distinct value instead of counting duplicates; off-by-one errors between kth largest and zero-based indexes; sorting ascending and taking the wrong side; mutating assumptions about input order.",
+      "summary": "Return the kth value in descending order from an unsorted array, counting duplicate values as separate positions.",
+      "title": "Kth Largest Element in an Array"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "kth-smallest-element-in-a-bst",
+      "optimal": "Inorder traversal yields sorted values. Stop when the kth value is reached, either recursively with a counter or iteratively with a stack. O(h + k) time and O(h) space.",
+      "pitfalls": "Using preorder or level order; off-by-one on k; traversing the whole tree unnecessarily; mishandling left-skewed trees.",
+      "summary": "Given a BST root and one-indexed k, return the kth smallest node value.",
+      "title": "Kth Smallest Element in a BST"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "length-of-last-word",
+      "optimal": "Skip trailing spaces from the end, then count characters backward until the next space or the beginning. O(n) time in the worst case and O(1) space.",
+      "pitfalls": "Counting trailing spaces as part of the word; splitting in a way that keeps empty tokens; assuming there are exactly two words; failing a one-word string with leading spaces.",
+      "summary": "Given a string containing words and spaces, return the length of the final word.",
+      "title": "Length of Last Word"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "letter-combinations-of-a-phone-number",
+      "optimal": "Backtrack over the digit string, appending each mapped character for the current digit and emitting a combination when all digits are consumed. O(product of choices) time and output space.",
+      "pitfalls": "Returning one empty string for empty input instead of an empty list; including digits 0 or 1 mappings; mutating one shared buffer incorrectly; missing four-letter digits 7 and 9.",
+      "summary": "Given digits 2 through 9, return all strings represented by the phone keypad letter mapping.",
+      "title": "Letter Combinations of a Phone Number"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "linked-list-cycle",
+      "optimal": "Use Floyd's slow and fast pointers: move slow one step and fast two steps, returning true if they meet and false if fast reaches the end. O(n) time and O(1) space.",
+      "pitfalls": "Dereferencing fast.next without checking fast first; comparing node values instead of node identity; failing empty or single-node lists; using extra memory when asked for constant space.",
+      "summary": "Given the head of a singly linked list, determine whether following next pointers ever revisits a node.",
+      "title": "Linked List Cycle"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "longest-common-prefix",
+      "optimal": "Keep a candidate prefix and shrink it until every string starts with it, or compare characters column by column until a mismatch. O(total characters inspected) time and O(1) extra space outside the returned prefix.",
+      "pitfalls": "Assuming at least two strings; forgetting an empty string makes the answer empty; reading past the shortest string; returning a prefix shared by only adjacent or sorted-looking examples.",
+      "summary": "Given an array of strings, return the longest prefix shared by every string, or the empty string if none exists.",
+      "title": "Longest Common Prefix"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "longest-consecutive-sequence",
+      "optimal": "Insert all values into a hash set. Only start counting from a value when value - 1 is absent, then walk upward until the run ends. Each value is visited at most once across starts, so this is O(n) time and O(n) space.",
+      "pitfalls": "Sorting when the expected optimal answer is linear; letting duplicate values extend a run; starting a scan from every value and drifting to O(n^2); forgetting the empty array returns 0.",
+      "summary": "Given an unsorted array, return the length of the longest consecutive integer run, regardless of the values' positions in the array.",
+      "title": "Longest Consecutive Sequence"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "longest-increasing-subsequence",
+      "optimal": "Maintain tails where tails[len] is the smallest possible ending value of an increasing subsequence of that length; binary search replacement positions for O(n log n) time and O(n) space. O(n^2) DP is acceptable for the listed constraints.",
+      "pitfalls": "Solving longest increasing contiguous subarray instead of subsequence; allowing equal values in a strictly increasing sequence; losing order by sorting the input; returning the sequence when only length is required.",
+      "summary": "Return the length of the longest strictly increasing subsequence while preserving input order.",
+      "title": "Longest Increasing Subsequence"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "longest-palindromic-substring",
+      "optimal": "Expand around center over all 2n-1 centers (odd and even), tracking the best window; O(n^2) time, O(1) space. DP table is also acceptable at O(n^2)/O(n^2). Manacher's O(n) is a bonus, not expected.",
+      "pitfalls": "Handling only odd-length centers (fails 'abba'); off-by-one when converting the expanded pointers back to a substring slice; pointer overshooting the string bounds during expansion; confusing substring with subsequence.",
+      "summary": "Given a string s, return the longest substring of s that is a palindrome.",
+      "title": "Longest Palindromic Substring"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "longest-substring-without-repeating-characters",
+      "optimal": "Maintain a sliding window and a map from character to most recent index. When a duplicate appears inside the current window, move the left boundary just past its previous index. O(n) time and O(min(n, alphabet)) space.",
+      "pitfalls": "Treating subsequences as valid; moving the left boundary backward on an old duplicate; off-by-one in window length; failing the empty string.",
+      "summary": "Given a string, return the length of the longest contiguous substring with no repeated characters.",
+      "title": "Longest Substring Without Repeating Characters"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "lowest-common-ancestor-of-a-binary-tree",
+      "optimal": "DFS returns the current node if it matches either target, otherwise returns a non-null child result. If both sides return non-null, the current node is the LCA. O(n) time and O(h) stack.",
+      "pitfalls": "Assuming BST ordering; comparing only node values when references are available; failing when one target is an ancestor of the other; searching the same subtree repeatedly.",
+      "summary": "Given a binary tree root and two nodes in the tree, return the deepest node that has both targets in its subtree.",
+      "title": "Lowest Common Ancestor of a Binary Tree"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "lru-cache",
+      "optimal": "Hash map pointing into a doubly linked list (or an ordered dict): map for O(1) lookup, list for O(1) recency reordering and eviction from the tail. Both get and put must refresh recency.",
+      "pitfalls": "Forgetting that get() also refreshes recency; forgetting that put() on an existing key updates the value AND recency without evicting; evicting before checking whether the key already exists; O(n) recency updates via a plain list; off-by-one on the capacity check.",
+      "summary": "Design a data structure implementing a Least Recently Used cache with a fixed capacity. get(key) returns the value or -1; put(key, value) inserts or updates and evicts the least recently used entry when over capacity. Both operations should run in O(1) average time.",
+      "title": "LRU Cache"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "majority-element",
+      "optimal": "Boyer-Moore voting keeps one candidate and a counter, canceling different values as it scans. Because a majority is guaranteed, the final candidate is the answer. O(n) time, O(1) space.",
+      "pitfalls": "Returning the first or most recent value without counting; using a map when asked for constant space; forgetting the guarantee and adding unnecessary no-answer behavior; mishandling negative values or a one-element input.",
+      "summary": "Given an array where one value appears more than half the time, return that majority value.",
+      "title": "Majority Element"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "max-points-on-a-line",
+      "optimal": "For each anchor point, count normalized slopes to every later point using dx and dy divided by their gcd, with a canonical sign for vertical, horizontal, and negative slopes. O(n^2) time, O(n) space per anchor.",
+      "pitfalls": "Using floating-point slopes and losing precision; failing to normalize equivalent slopes; mishandling vertical or horizontal lines; double-counting the anchor; ignoring that all points are unique.",
+      "summary": "Find the largest number of given 2D points that lie on a single straight line.",
+      "title": "Max Points on a Line"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "maximal-square",
+      "optimal": "Dynamic programming: for a 1 cell, its largest square side is 1 plus the minimum of top, left, and top-left neighbor sides; track the largest side and return side squared. O(mn) time and O(n) space with a rolling row.",
+      "pitfalls": "Returning side length instead of area; counting rectangles; treating character '0' as truthy; failing first-row or first-column cells.",
+      "summary": "Find the area of the largest all-1 square in a binary character matrix.",
+      "title": "Maximal Square"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "maximum-depth-of-binary-tree",
+      "optimal": "Use DFS recursion returning 1 + max(left depth, right depth), with 0 for null nodes. Iterative BFS level counting is also O(n). O(n) time and O(h) recursion stack.",
+      "pitfalls": "Returning edges instead of nodes; failing empty trees; ignoring one side of an unbalanced tree; recursing without a null base case; stack depth on highly skewed trees.",
+      "summary": "Given a binary tree root, return the number of nodes on the longest root-to-leaf path.",
+      "title": "Maximum Depth of Binary Tree"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "maximum-subarray",
+      "optimal": "Kadane's algorithm scans once, keeping the best subarray sum ending at the current index and the best sum seen overall. O(n) time, O(1) space.",
+      "pitfalls": "Returning zero for all-negative arrays; allowing an empty subarray; using a non-contiguous subsequence; failing to restart after a harmful prefix.",
+      "summary": "Find the largest sum of any non-empty contiguous subarray.",
+      "title": "Maximum Subarray"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "maximum-sum-circular-subarray",
+      "optimal": "Compute the best non-wrapping subarray with Kadane's algorithm and the best wrapping subarray as total sum minus the minimum subarray. If all values are negative, return the non-wrapping best. O(n) time, O(1) space.",
+      "pitfalls": "Returning zero for all-negative input; allowing the wrap case to select no elements; solving only the ordinary maximum subarray; double-counting indexes across the circular join.",
+      "summary": "Find the largest sum of a non-empty contiguous segment when the array is considered circular.",
+      "title": "Maximum Sum Circular Subarray"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "median-of-two-sorted-arrays",
+      "optimal": "Binary search the partition point in the smaller array so the left partition contains half the values and every left value is <= every right value. O(log min(m, n)) time, O(1) space.",
+      "pitfalls": "Fully merging both arrays; binary searching the longer array without boundary care; off-by-one errors for odd versus even totals; failing when one array is empty; using integer division for fractional medians.",
+      "summary": "Return the median of two sorted arrays considered as one sorted sequence.",
+      "title": "Median of Two Sorted Arrays"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "merge-intervals",
+      "optimal": "Sort by start, then sweep once: extend the current merged interval while the next start <= current end, otherwise emit and restart. O(n log n) time for the sort, O(n) space for the output.",
+      "pitfalls": "Forgetting to sort first (fails unsorted input); using < instead of <= so touching intervals like [1,4],[4,5] don't merge; not taking max(current end, next end) for contained intervals like [1,10],[2,3]; mutating the input while iterating over it.",
+      "summary": "Given an array of [start, end] intervals, merge all overlapping intervals and return the non-overlapping result sorted by start.",
+      "title": "Merge Intervals"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "merge-k-sorted-lists",
+      "optimal": "Use a min-heap keyed by node value, seeded with each non-empty list head, repeatedly popping the smallest node and pushing its next node. O(n log k) time, O(k) space. Divide-and-conquer pairwise merge is also O(n log k).",
+      "pitfalls": "Flattening all values and sorting when linked-list merging is expected; losing next pointers while appending nodes; failing empty input or empty lists; using O(k) linear scans for every node; dropping duplicate values.",
+      "summary": "Merge an array of sorted linked lists into one sorted linked list.",
+      "title": "Merge k Sorted Lists"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "merge-sorted-array",
+      "optimal": "Work backward from the initialized tails of `nums1` and `nums2`, writing the larger value into the last open slot. This avoids shifting and runs in O(m+n) time with O(1) extra space.",
+      "pitfalls": "Merging forward overwrites unread values in `nums1`; forgetting that the output is the mutated `nums1`; mishandling m=0 or n=0; failing duplicates or negative numbers by using set-like logic instead of stable comparisons.",
+      "summary": "Given two sorted arrays where `nums1` has trailing empty slots, merge `nums2` into `nums1` in place so `nums1` ends sorted.",
+      "title": "Merge Sorted Array"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "merge-two-sorted-lists",
+      "optimal": "Use a dummy head and tail pointer, repeatedly attach the smaller current node, then append the remaining suffix. O(m+n) time and O(1) extra space if nodes are reused.",
+      "pitfalls": "Dropping the remaining suffix after one list empties; advancing the wrong pointer; losing the head without a dummy node; mishandling empty lists; using < when <= is needed for stable ordering.",
+      "summary": "Given two sorted linked lists, merge their nodes into one sorted linked list and return its head.",
+      "title": "Merge Two Sorted Lists"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "min-stack",
+      "optimal": "Keep a normal value stack plus a min stack storing the minimum at each depth or storing value/count pairs for minima. Push and pop update both stacks so getMin reads the current minimum directly.",
+      "pitfalls": "Recomputing the minimum by scanning on every getMin; losing duplicate minima after one pop; not updating min state on pop; returning stale minima after the minimum value is removed.",
+      "summary": "Design a stack supporting push, pop, top, and getMin, where getMin returns the current minimum value and every operation is O(1).",
+      "title": "Min Stack"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "minimum-absolute-difference-in-bst",
+      "optimal": "Inorder traversal visits values sorted. Track the previous value and the best adjacent difference. O(n) time and O(h) stack.",
+      "pitfalls": "Comparing only parent-child pairs; ignoring values across subtree boundaries; not using strict sorted inorder order; failing two-node trees.",
+      "summary": "Given a BST root, return the smallest absolute difference between any pair of node values.",
+      "title": "Minimum Absolute Difference in BST"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "minimum-genetic-mutation",
+      "optimal": "Treat bank genes as graph nodes connected when they differ by one character. BFS from startGene to endGene gives the shortest mutation count. Generate neighbors by trying A/C/G/T at each position or by scanning the small bank. O(B^2 * L) or O(B * L * 4) depending on neighbor generation.",
+      "pitfalls": "Returning a path when endGene is not in the bank; using DFS and missing the shortest path; allowing multi-character jumps; revisiting genes and cycling; counting genes instead of mutation edges.",
+      "summary": "Given start and end genes plus a bank of valid genes, return the minimum number of one-character mutations needed to reach the end gene.",
+      "title": "Minimum Genetic Mutation"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "minimum-number-of-arrows-to-burst-balloons",
+      "optimal": "Sort by interval end, shoot at the earliest possible end, and start a new arrow only when the next balloon starts after the current arrow position. O(n log n) time and O(1) extra space after sorting.",
+      "pitfalls": "Sorting by start and choosing arrows too late; treating touching endpoints as non-overlapping; using < instead of <= around the arrow position; overflowing comparisons by subtracting large endpoints.",
+      "summary": "Given balloon intervals on an x-axis, return the fewest arrow positions needed so every interval contains at least one arrow.",
+      "title": "Minimum Number of Arrows to Burst Balloons"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "minimum-path-sum",
+      "optimal": "Dynamic programming over the grid: each cell's best cost is its value plus the minimum of the best cost from above or left. O(mn) time and O(n) space with a rolling row.",
+      "pitfalls": "Greedily choosing the smaller immediate neighbor; allowing moves up or left; mishandling the first row or first column; forgetting the single-cell grid.",
+      "summary": "Find the minimum sum along a path from the top-left to bottom-right of a non-negative grid, moving only right or down.",
+      "title": "Minimum Path Sum"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "minimum-size-subarray-sum",
+      "optimal": "Use a sliding window because all numbers are positive: expand right to grow the sum, then shrink left while the sum still meets the target. O(n) time and O(1) space. Prefix sums with binary search are also valid at O(n log n).",
+      "pitfalls": "Using a fixed-size window; forgetting to return 0 when no window qualifies; failing to shrink after reaching the target; applying this sliding-window proof to arrays with negative numbers.",
+      "summary": "Given a target and positive integers, return the smallest contiguous subarray length with sum at least the target, or 0 if none exists.",
+      "title": "Minimum Size Subarray Sum"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "minimum-window-substring",
+      "optimal": "Count required characters from t, expand the right edge until all requirements are met, then shrink the left edge while preserving validity. Track the best valid window. O(|s| + |t|) time and O(alphabet) space.",
+      "pitfalls": "Ignoring duplicate required characters; treating character case as interchangeable; stopping at the first valid window instead of shrinking; returning a window when no valid one exists.",
+      "summary": "Given strings s and t, return the shortest substring of s that contains every character required by t, including duplicates.",
+      "title": "Minimum Window Substring"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "n-queens-ii",
+      "optimal": "Backtrack row by row, tracking occupied columns and both diagonal families in sets or bit masks. Try each free column for the current row and count complete placements. Bit masks keep the state compact; the search space is still exponential.",
+      "pitfalls": "Counting board layouts with attacking diagonal queens; forgetting to unmark columns or diagonals on backtrack; treating rotations as duplicates even though placements are counted separately; missing n == 1 and impossible small boards.",
+      "summary": "Given n, count the distinct ways to place n queens on an n by n board so no two queens attack each other.",
+      "title": "N-Queens II"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "number-of-1-bits",
+      "optimal": "Use Brian Kernighan's trick: repeatedly clear the lowest set bit with n &= n - 1 and count iterations. O(number of set bits) time, O(1) space.",
+      "pitfalls": "Looping over decimal digits; using string conversion when bit operations are expected; mishandling powers of two; failing to make progress when clearing bits.",
+      "summary": "Count how many bits are set to 1 in the binary representation of an integer.",
+      "title": "Number of 1 Bits"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "number-of-islands",
+      "optimal": "Scan every cell; when you hit unvisited land, increment the count and flood-fill (DFS/BFS) to sink the whole island. O(m*n) time. Marking visited by mutating the grid in place is fine if the candidate calls it out.",
+      "pitfalls": "Missing bounds checks in the flood fill; counting diagonal neighbors; forgetting to mark cells visited (infinite recursion); recursion depth on huge grids (worth probing: could you do it iteratively/BFS?); comparing against integer 1 when the grid holds the character '1'.",
+      "summary": "Given an m x n grid of '1' (land) and '0' (water), count the number of islands. An island is a group of adjacent land cells connected horizontally or vertically (not diagonally).",
+      "title": "Number of Islands"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "palindrome-number",
+      "optimal": "Reject negatives and trailing-zero nonzero values, then reverse half of the digits and compare it with the remaining half. O(log n) time, O(1) space.",
+      "pitfalls": "Treating negative numbers as palindromes after ignoring the sign; accepting numbers like 10; reversing the full integer and risking overflow; forgetting odd digit counts can drop the middle digit.",
+      "summary": "Return whether an integer reads the same forward and backward, with negative values rejected.",
+      "title": "Palindrome Number"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "partition-list",
+      "optimal": "Build two chains with dummy heads: one for nodes less than x and one for nodes greater than or equal to x, then terminate the second chain and concatenate. O(n) time and O(1) extra node space.",
+      "pitfalls": "Sorting instead of stable partitioning; losing relative order within a partition; forgetting to terminate the greater-or-equal chain; dropping nodes equal to x; creating unnecessary new nodes.",
+      "summary": "Given a linked list and x, reorder nodes so values less than x come first while preserving relative order inside both partitions.",
+      "title": "Partition List"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "path-sum",
+      "optimal": "DFS subtracts each node value from the remaining target and succeeds only at a leaf when the remainder equals the leaf value. O(n) time and O(h) recursion stack; iterative stack is equivalent.",
+      "pitfalls": "Accepting a prefix path that stops before a leaf; treating an empty tree with target 0 as true; mishandling negative values; checking only one branch.",
+      "summary": "Given a binary tree root and target sum, decide whether any root-to-leaf path sums exactly to the target.",
+      "title": "Path Sum"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "permutations",
+      "optimal": "Backtrack by choosing each unused value for the current position, or swap in place from the current index onward. Emit a copy when the permutation is complete. O(n*n!) time including output and O(n) recursion state.",
+      "pitfalls": "Treating permutations as combinations and losing row order; forgetting to unmark or swap back; mutating emitted rows; assuming sorted input; missing negative or zero values.",
+      "summary": "Given distinct integers, return every possible ordering of the array.",
+      "title": "Permutations"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "plus-one",
+      "optimal": "Walk from the last digit leftward, turning trailing 9s into 0s until a digit can be incremented; if every digit was 9, prepend 1. O(n) time, O(1) extra space besides any required output growth.",
+      "pitfalls": "Converting the whole number to a fixed-width integer; forgetting the all-9s length increase; stopping after changing a 9 to 0 without carrying; adding leading zeroes.",
+      "summary": "Add one to an integer represented as decimal digits and return the resulting digit array.",
+      "title": "Plus One"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "populating-next-right-pointers-in-each-node-ii",
+      "optimal": "Walk one level using existing next pointers while building the next level with a dummy head and tail pointer. This uses O(1) extra space beyond the traversal variables and O(n) time. A queue-based BFS is acceptable if space constraints are discussed.",
+      "pitfalls": "Assuming the tree is perfect; missing gaps between sparse children; forgetting to terminate the end of each level with null; overwriting child links; returning a new tree instead of the original root.",
+      "summary": "Given any binary tree, set each node's next pointer to its neighbor on the same level, or null for the rightmost node.",
+      "title": "Populating Next Right Pointers in Each Node II"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "powx-n",
+      "optimal": "Use exponentiation by squaring, converting n to a wider signed value before negating it for negative exponents. O(log |n|) time, O(1) space.",
+      "pitfalls": "Multiplying x n times; overflowing when negating the minimum 32-bit integer; forgetting reciprocal handling for negative n; treating n = 0 incorrectly.",
+      "summary": "Compute x raised to an integer exponent n, including negative exponents.",
+      "title": "Pow(x, n)"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "product-of-array-except-self",
+      "optimal": "Write prefix products into the output, then scan from the right with a running suffix product and multiply it into each slot. O(n) time, O(1) extra space beyond the output.",
+      "pitfalls": "Using division, which breaks the constraint and zeros; mishandling one or two zeros; allocating separate prefix and suffix arrays unnecessarily; sign mistakes with negative values.",
+      "summary": "Given nums, return an array where each position contains the product of every other value, without using division.",
+      "title": "Product of Array Except Self"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "ransom-note",
+      "optimal": "Count magazine characters, then consume counts for each ransomNote character, failing when a needed count is missing. With lowercase letters, a fixed 26-slot array is enough. O(n + m) time and O(1) space.",
+      "pitfalls": "Checking only whether each distinct letter exists and ignoring multiplicity; decrementing counts below zero; accidentally treating order as important; using nested scans that become O(n*m).",
+      "summary": "Given ransomNote and magazine strings, return whether the note can be built from magazine characters using each magazine character at most once.",
+      "title": "Ransom Note"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "remove-duplicates-from-sorted-array",
+      "optimal": "Keep a write pointer for the next unique slot and copy a value only when it differs from the previous kept value. O(n) time, O(1) extra space.",
+      "pitfalls": "Using a set and losing order or in-place behavior; counting unique values but not writing the prefix; mishandling all-unique or all-duplicate arrays; comparing against the previous read value instead of the previous kept value in variants.",
+      "summary": "Given a sorted array, compact it in place so each distinct value appears once and return the length of that unique prefix.",
+      "title": "Remove Duplicates from Sorted Array"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "remove-duplicates-from-sorted-array-ii",
+      "optimal": "Scan left to right with a write pointer; keep a value when fewer than two copies are already in the written prefix, commonly by checking `nums[write - 2] != value`. O(n) time, O(1) extra space.",
+      "pitfalls": "Solving the easier one-copy version; allowing three copies after long duplicate runs; using extra arrays instead of in-place writes; failing short arrays where every value should be kept.",
+      "summary": "Given a sorted array, compact it in place so each distinct value appears at most twice and return the length of the kept prefix.",
+      "title": "Remove Duplicates from Sorted Array II"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "remove-duplicates-from-sorted-list-ii",
+      "optimal": "Use a dummy node before head and scan groups of equal values. If a group has duplicates, skip the whole group; otherwise keep it and advance the predecessor. O(n) time and O(1) space.",
+      "pitfalls": "Keeping one copy of a duplicated value; failing duplicate runs at the head or tail; advancing the predecessor after deleting a group; mishandling an all-duplicate list.",
+      "summary": "Given a sorted linked list, delete every value that appears more than once so only originally unique values remain.",
+      "title": "Remove Duplicates from Sorted List II"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "remove-element",
+      "optimal": "Use a write pointer: scan every value, copy non-target values into the next kept slot, and return the write count. O(n) time, O(1) extra space.",
+      "pitfalls": "Returning the original length; deleting while iterating and skipping adjacent targets; preserving values after the returned prefix instead of focusing on the kept prefix; assuming output order matters when it does not.",
+      "summary": "Given an array and a target value, remove all target occurrences in place and return how many elements remain; only the kept prefix matters.",
+      "title": "Remove Element"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "remove-nth-node-from-end-of-list",
+      "optimal": "Use a dummy node and two pointers. Advance fast n steps, then move fast and slow together until fast reaches the tail; slow.next is the node to remove. O(n) time and O(1) space.",
+      "pitfalls": "Failing when the head is removed; off-by-one spacing between fast and slow; not handling a one-node list; doing two passes when one pass was requested; returning the old head instead of dummy.next.",
+      "summary": "Given a linked list head, remove the nth node from the end and return the modified head.",
+      "title": "Remove Nth Node From End of List"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "reverse-bits",
+      "optimal": "Iterate exactly 32 times, shifting the answer left, adding the current low bit, and shifting the input right. O(32) time and O(1) space.",
+      "pitfalls": "Reversing decimal digits or a trimmed binary string; looping only until n becomes zero and dropping leading zeros; off-by-one on the 32 iterations; using signed overflow-prone cases without a clear unsigned model.",
+      "summary": "Reverse the 32-bit representation of an integer and return the resulting value.",
+      "title": "Reverse Bits"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "reverse-linked-list",
+      "optimal": "Iterate with previous, current, and next pointers, flipping current.next to previous until the list ends. O(n) time and O(1) extra space. A recursive solution is acceptable if stack depth is discussed.",
+      "pitfalls": "Losing the next pointer before rewiring; returning the old head; mishandling empty or single-node lists; creating unnecessary new nodes; recursive stack overflow on long lists.",
+      "summary": "Given the head of a singly linked list, reverse the list and return the new head.",
+      "title": "Reverse Linked List"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "reverse-nodes-in-k-group",
+      "optimal": "Use a dummy node and group predecessor. For each group, first verify k nodes exist, reverse exactly that block in place, reconnect it, and advance to the next group. O(n) time and O(1) extra space.",
+      "pitfalls": "Reversing the final group with fewer than k nodes; losing the next group boundary; off-by-one errors when locating the kth node; changing node values instead of links; mishandling k = 1.",
+      "summary": "Given a linked list and k, reverse nodes in complete groups of k while leaving a final short group unchanged.",
+      "title": "Reverse Nodes in k-Group"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "reverse-words-in-a-string",
+      "optimal": "Split into non-empty words, reverse their order, and join with single spaces. O(n) time and O(n) space; in-place reversal is possible in mutable languages if asked.",
+      "pitfalls": "Preserving leading, trailing, or duplicate internal spaces; reversing characters instead of word order; treating punctuation specially when spaces alone separate words; failing a one-word input.",
+      "summary": "Given a string of words separated by spaces, return the words in reverse order with exactly one space between them.",
+      "title": "Reverse Words in a String"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "roman-to-integer",
+      "optimal": "Scan left to right with a symbol-value map. If a symbol is smaller than the next symbol, subtract it; otherwise add it. O(n) time and O(1) space because the symbol set is fixed.",
+      "pitfalls": "Adding every symbol without handling subtractive pairs; trying to special-case only IV and IX; reading past the end when comparing with the next symbol; accepting invalid input when the prompt guarantees validity.",
+      "summary": "Given a valid Roman numeral string, return its integer value.",
+      "title": "Roman to Integer"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "rotate-array",
+      "optimal": "Reduce k modulo n, then reverse the whole array, reverse the first k elements, and reverse the remaining suffix. O(n) time, O(1) extra space.",
+      "pitfalls": "Forgetting k can exceed the array length; rotating left instead of right; allocating a second array despite the in-place requirement; off-by-one errors in reversal boundaries; breaking k=0 or n=1.",
+      "summary": "Given an array and k, rotate the array to the right by k steps in place.",
+      "title": "Rotate Array"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "rotate-image",
+      "optimal": "Either transpose across the main diagonal then reverse every row, or rotate four cells at a time layer by layer. Both run in O(n^2) time and O(1) extra space.",
+      "pitfalls": "Returning a new matrix without mutating the input; rotating counterclockwise; failing odd-sized matrices with a center cell; overwriting values before saving the four-way swap.",
+      "summary": "Given an n x n matrix, rotate it 90 degrees clockwise in place.",
+      "title": "Rotate Image"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "rotate-list",
+      "optimal": "Compute length and tail, reduce k modulo length, connect tail to head temporarily, then break the cycle at length - k steps to form the rotated list. O(n) time and O(1) space.",
+      "pitfalls": "Not reducing k modulo length; failing empty or single-node lists; breaking at the wrong node; leaving a cycle in the result; treating rotation left instead of right.",
+      "summary": "Given a linked list head and integer k, rotate the list right by k places and return the new head.",
+      "title": "Rotate List"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "same-tree",
+      "optimal": "Traverse both trees together. Two null nodes match; exactly one null node fails; otherwise values must match and both child pairs must match. O(n) time and O(h) stack.",
+      "pitfalls": "Comparing only traversal value sequences; ignoring null child positions; accepting same values in different shapes; failing when both trees are empty.",
+      "summary": "Given two binary tree roots, determine whether both trees have identical structure and node values.",
+      "title": "Same Tree"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "search-a-2d-matrix",
+      "optimal": "Treat the m by n matrix as a flat sorted array and binary search indexes 0..m*n-1, mapping mid to row mid/n and column mid%n. O(log(mn)) time, O(1) space.",
+      "pitfalls": "Searching each row linearly; forgetting the row-to-row ordering; off-by-one errors when mapping flat indexes; mishandling single-row or single-cell matrices.",
+      "summary": "Search for a target in a matrix whose rows form one globally sorted sequence.",
+      "title": "Search a 2D Matrix"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "search-in-rotated-sorted-array",
+      "optimal": "Binary search while identifying which half is sorted at each step, then keep the half that can contain target. O(log n) time, O(1) space.",
+      "pitfalls": "Using linear search; assuming the array is not rotated; discarding the sorted half that contains target; mishandling single-element or not-rotated arrays.",
+      "summary": "Return the index of a target in a unique sorted array that may have been rotated, or -1 if absent.",
+      "title": "Search in Rotated Sorted Array"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "search-insert-position",
+      "optimal": "Binary search for the first index whose value is greater than or equal to target; return the left boundary after the loop. O(log n) time, O(1) space.",
+      "pitfalls": "Scanning linearly; losing the insertion slot when target is absent; returning the value instead of the index; mishandling before-first, after-last, or single-element inputs.",
+      "summary": "Find where target belongs in a sorted distinct array, returning an existing index or the insertion point.",
+      "title": "Search Insert Position"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "set-matrix-zeroes",
+      "optimal": "Use the first row and first column as marker storage, plus two booleans for whether they originally contained zero. Mark rows and columns from the interior, zero marked interiors, then handle the first row and column. O(m*n) time and O(1) extra space.",
+      "pitfalls": "Letting newly written zeroes cascade into extra rows or columns; mishandling zeroes in the first row or first column when using them as markers; returning a new matrix without mutating; assuming the matrix is square.",
+      "summary": "Given an m x n matrix, if any original cell is zero, set that cell's entire row and column to zero in place.",
+      "title": "Set Matrix Zeroes"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "simplify-path",
+      "optimal": "Split on '/', use a stack of directory names, skip empty segments and '.', pop for '..' when possible, and join with leading '/'. O(n) time and O(n) space.",
+      "pitfalls": "Treating names like '...' as parent directories; popping above root; leaving repeated or trailing slashes; forgetting that the input is absolute and output must start with '/'.",
+      "summary": "Given an absolute Unix-style path, return its canonical simplified form with single slashes, no '.' segments, and resolved '..' segments.",
+      "title": "Simplify Path"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "single-number",
+      "optimal": "XOR every value together. Duplicate pairs cancel to zero and zero XOR the unique value leaves that value. O(n) time, O(1) space.",
+      "pitfalls": "Using a set or map despite the constant-space target; assuming values are positive; returning the first unpaired-looking value before scanning all input; sorting when linear time is expected.",
+      "summary": "Find the only integer that appears once when every other integer in the array appears exactly twice.",
+      "title": "Single Number"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "single-number-ii",
+      "optimal": "Track bit counts modulo 3, either per bit or with two bitmask states for bits seen once and twice. The remaining modulo-1 bits form the answer. O(n) time, O(1) space.",
+      "pitfalls": "Using the XOR solution for the twice-duplicate variant; ignoring negative numbers; using a hash map despite the constant-space target; forgetting bit counts must be reduced modulo 3.",
+      "summary": "Find the only integer that appears once when every other integer appears exactly three times.",
+      "title": "Single Number II"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "snakes-and-ladders",
+      "optimal": "Convert square numbers to board coordinates using the alternating row direction, then BFS from square 1 over die rolls 1 through 6. Apply at most one snake or ladder per move and mark visited destinations. O(n^2) time and space.",
+      "pitfalls": "Mapping rows from the top instead of bottom; applying chains of snakes/ladders in one move; marking pre-teleport squares instead of destinations; using DFS for a shortest path; off-by-one around square numbers.",
+      "summary": "Given a square Snakes and Ladders board, return the fewest die rolls to reach the final square, or -1 if it cannot be reached.",
+      "title": "Snakes and Ladders"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "sort-list",
+      "optimal": "Use merge sort on the linked list: split with slow/fast pointers, recursively sort halves, and merge sorted lists by rewiring nodes. O(n log n) time and O(log n) recursion stack, or O(1) extra space with bottom-up merge sort.",
+      "pitfalls": "Copying all values into an array when list-node sorting is expected; failing to cut the list before recursing; losing nodes during merge; not preserving duplicate values; mishandling empty or single-node lists.",
+      "summary": "Sort a singly linked list in ascending order and return the new head.",
+      "title": "Sort List"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "spiral-matrix",
+      "optimal": "Maintain top, bottom, left, and right boundaries. Traverse the current top row, right column, bottom row, and left column while tightening bounds and guarding single remaining rows or columns. O(m*n) time and O(1) extra space besides the output.",
+      "pitfalls": "Assuming the matrix is square; double-visiting the middle row or column; stopping before all cells are emitted; mixing up boundary updates after each side.",
+      "summary": "Given an m x n matrix, return its values in clockwise spiral order starting from the top-left corner.",
+      "title": "Spiral Matrix"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "sqrtx",
+      "optimal": "Binary search the largest integer r such that r * r <= x, using division or a wider type to avoid overflow. O(log x) time, O(1) space.",
+      "pitfalls": "Returning a rounded floating result instead of flooring; overflowing mid * mid near the 32-bit limit; mishandling x = 0 or x = 1; stopping one step too early on non-perfect squares.",
+      "summary": "Return the integer square root of a non-negative integer, rounded down.",
+      "title": "Sqrt(x)"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "substring-with-concatenation-of-all-words",
+      "optimal": "Use word-length aligned sliding windows. For each offset, count fixed-size word chunks, shrink when a count exceeds what is required, and record starts when the window holds all words. O(n * word length) substring work, usually described as O(n) chunk scans.",
+      "pitfalls": "Ignoring duplicate words; scanning only offset zero; allowing partial-word starts; accepting windows with too many copies of a word; rebuilding every candidate from scratch.",
+      "summary": "Given a string and equal-length words, return every start index where a substring concatenates all words exactly once in any order.",
+      "title": "Substring with Concatenation of All Words"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "sum-root-to-leaf-numbers",
+      "optimal": "DFS carries the current number as current * 10 + node.val and adds it only at leaves. O(n) time and O(h) recursion stack; iterative stack with accumulated values is equivalent.",
+      "pitfalls": "Adding partial prefixes before reaching leaves; treating paths as digit sums instead of decimal numbers; mishandling zero digits; forgetting skewed trees.",
+      "summary": "Given a binary tree whose node values are digits, sum the numbers represented by every root-to-leaf path.",
+      "title": "Sum Root to Leaf Numbers"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "summary-ranges",
+      "optimal": "Scan once with a start index for the current run. When the next value is not current + 1 or the array ends, emit either the single value or start->end, then begin the next run. O(n) time and O(1) extra space besides output.",
+      "pitfalls": "Forgetting empty input; formatting singletons as ranges; off-by-one when flushing the final run; failing negative numbers or runs crossing zero.",
+      "summary": "Given a sorted unique array, compress each maximal consecutive run into either a single number string or a start->end range string.",
+      "title": "Summary Ranges"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "surrounded-regions",
+      "optimal": "Start from border 'O' cells and mark all connected safe cells with DFS/BFS. Then scan the board: flip unmarked 'O' cells to 'X' and restore safe marks. O(m*n) time and O(m*n) worst-case space, or O(1) extra besides recursion if mutating marks count as in-place.",
+      "pitfalls": "Starting from interior cells and trying to prove enclosure directly; treating diagonal contact as connected; forgetting to restore border-connected cells; returning a new board instead of mutating in place.",
+      "summary": "Given a board of 'X' and 'O', flip every 'O' region fully enclosed by 'X' while preserving any 'O' connected to the border.",
+      "title": "Surrounded Regions"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "symmetric-tree",
+      "optimal": "Compare node pairs from the outside inward: left.left with right.right and left.right with right.left. Recursion or a queue both run in O(n) time with O(h) stack or O(w) queue space.",
+      "pitfalls": "Comparing ordinary traversals without null markers; checking equal child values but not mirrored positions; accepting same values on the wrong sparse side; failing single-node trees.",
+      "summary": "Given a binary tree root, decide whether the left and right halves are mirror images in both structure and value.",
+      "title": "Symmetric Tree"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "text-justification",
+      "optimal": "Greedily pack as many words as fit per line. For non-final lines, divide spaces across gaps with earlier gaps receiving extras; for final or single-word lines, left-justify and pad the right. O(total output size) time.",
+      "pitfalls": "Forgetting every line must be exactly maxWidth characters; giving extra spaces to the rightmost gaps; fully justifying the final line; dividing by zero on a single-word line; accidentally trimming required trailing spaces.",
+      "summary": "Given words and a maximum width, pack words into lines and distribute spaces so each line has exactly that width.",
+      "title": "Text Justification"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "trapping-rain-water",
+      "optimal": "Use two pointers with left and right maxima: advance the side with the lower max and add trapped water there. O(n) time, O(1) space. Prefix/suffix max arrays are also acceptable at O(n) space.",
+      "pitfalls": "Using only the nearest walls instead of max walls; double-counting basins; missing flat or monotonic arrays; off-by-one around the endpoints, which cannot trap water.",
+      "summary": "Given bar heights, compute the total water trapped between bars after raining.",
+      "title": "Trapping Rain Water"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "triangle",
+      "optimal": "Use bottom-up dynamic programming: start from the last row and fold upward, replacing each cell with its value plus the cheaper of its two children. O(n^2) time and O(n) space.",
+      "pitfalls": "Greedily choosing the smaller immediate child; ignoring negative values; treating the triangle as a rectangular grid; using the wrong adjacent indexes in the next row.",
+      "summary": "Find the minimum top-to-bottom path sum through a triangle, moving only to adjacent positions in the next row.",
+      "title": "Triangle"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "two-sum",
+      "optimal": "One-pass hash map: for each value, check whether (target - value) was already seen; O(n) time, O(n) space. Brute force is O(n^2).",
+      "pitfalls": "Using the same element twice; returning values instead of indices; breaking on duplicate values (e.g. [3,3] target 6); claiming sorting + two pointers works without noticing it destroys the original indices.",
+      "summary": "Given an array of integers `nums` and an integer `target`, return the indices of the two numbers that add up to `target`. Exactly one solution exists and the same element may not be used twice.",
+      "title": "Two Sum"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "two-sum-ii-input-array-is-sorted",
+      "optimal": "Use left and right pointers. If the sum is too small, move left; if too large, move right; otherwise return 1-indexed positions. O(n) time and O(1) space.",
+      "pitfalls": "Returning zero-indexed positions; missing duplicate values; moving both pointers after a mismatch; ignoring that the input is sorted and falling back to extra hash storage.",
+      "summary": "Given a sorted 1-indexed integer array and a target, return the two indices whose values add to the target.",
+      "title": "Two Sum II - Input Array Is Sorted"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "unique-paths-ii",
+      "optimal": "Dynamic programming: blocked cells contribute zero paths, and open cells receive paths from the top and left neighbors. O(mn) time and O(n) space with a rolling row.",
+      "pitfalls": "Counting paths through obstacles; forgetting blocked start or finish cells; mishandling first-row or first-column obstacles; using the obstacle grid as if every cell were open.",
+      "summary": "Count right-and-down paths through a grid from start to finish while avoiding obstacle cells.",
+      "title": "Unique Paths II"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "valid-anagram",
+      "optimal": "Reject different lengths, then count characters from one string and decrement with the other. For lowercase English letters, a 26-slot array is enough; sorting both strings is simpler at O(n log n).",
+      "pitfalls": "Checking only distinct character sets and missing multiplicity; forgetting the length check; using substring or order-sensitive comparison; assuming Unicode behavior when the constraints are lowercase English letters.",
+      "summary": "Given strings s and t, return whether they contain exactly the same characters with the same multiplicities, regardless of order.",
+      "title": "Valid Anagram"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "valid-palindrome",
+      "optimal": "Use two pointers from both ends, skipping non-alphanumeric characters and comparing lowercase forms. O(n) time and O(1) space.",
+      "pitfalls": "Comparing punctuation or spaces; forgetting digits are valid characters; lowercasing only one side; building a filtered string when asked for constant space.",
+      "summary": "Given a string, decide whether its alphanumeric characters form a palindrome when compared case-insensitively.",
+      "title": "Valid Palindrome"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "valid-parentheses",
+      "optimal": "Single pass with a stack: push open brackets, and on a close bracket check the top of the stack matches; valid iff the stack is empty at the end. O(n) time, O(n) space.",
+      "pitfalls": "Popping from an empty stack on a leading close bracket like ')('; forgetting the final stack-empty check for unclosed brackets like '('; only counting bracket totals (fails '([)]'); slow repeated string replacement of '()' pairs instead of a stack.",
+      "summary": "Given a string of only '()[]{}', return whether the brackets are valid: every open bracket is closed by the same type, in the correct order.",
+      "title": "Valid Parentheses"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "valid-sudoku",
+      "optimal": "Scan all 81 cells, skip '.', and track seen digits for each row, column, and box. A duplicate in any unit makes the board invalid. O(1) time and space because the board size is fixed.",
+      "pitfalls": "Checking rows but forgetting columns or boxes; treating '.' as a duplicate value; validating whether the puzzle is solvable instead of only the current filled cells; computing the box index incorrectly.",
+      "summary": "Given a 9 x 9 partially filled Sudoku board, return whether every filled row, column, and 3 x 3 box contains no repeated digit.",
+      "title": "Valid Sudoku"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "validate-binary-search-tree",
+      "optimal": "DFS with open lower and upper bounds, or inorder traversal requiring a strictly increasing sequence. O(n) time and O(h) stack.",
+      "pitfalls": "Checking only immediate children; allowing duplicate values; using non-strict inequalities; overflowing fixed sentinel bounds near integer limits.",
+      "summary": "Given a binary tree root, determine whether every node satisfies strict BST ordering against all ancestors.",
+      "title": "Validate Binary Search Tree"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "word-break",
+      "optimal": "Use dynamic programming where dp[i] says the prefix s[..i] can be segmented; for each reachable prefix, test dictionary words or previous split points with a word set. O(n^2) substring checks in the common form.",
+      "pitfalls": "Using greedy longest or shortest prefix selection; treating dictionary words as usable only once; missing reuse cases; exponential recursion without memoization.",
+      "summary": "Decide whether a string can be segmented into one or more dictionary words, reusing dictionary words as needed.",
+      "title": "Word Break"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "word-ladder",
+      "optimal": "Run BFS over words, changing one position at a time and checking membership in an unvisited word set, or precompute wildcard buckets. Count levels as number of words in the sequence. O(N * L * alphabet) with direct generation, plus set lookups.",
+      "pitfalls": "Returning edge count instead of word count; forgetting that endWord must be in the list; revisiting words; accepting changes of more than one character; using DFS for shortest path.",
+      "summary": "Given a begin word, an end word, and a word list, return the word count in the shortest one-letter-at-a-time transformation sequence.",
+      "title": "Word Ladder"
+    },
+    {
+      "difficulty": "Easy",
+      "id": "word-pattern",
+      "optimal": "Split the sentence into words, reject length mismatches, then scan with maps in both directions from pattern character to word and word to pattern character. O(n) time and space for the words and maps.",
+      "pitfalls": "Not checking word count against pattern length; only mapping pattern to word and allowing two pattern letters to share one word; treating the sentence as characters instead of words; mishandling repeated words.",
+      "summary": "Given a pattern string and a space-separated sentence, return whether pattern characters and words have a one-to-one correspondence.",
+      "title": "Word Pattern"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "word-search",
+      "optimal": "Start DFS from each cell matching the first character. During a path, mark the cell visited, search the four neighbors for the next character, then restore the mark before returning. O(m*n*4^L) worst case.",
+      "pitfalls": "Allowing diagonal moves; reusing a cell in one word path; mutating the board without restoring it; skipping possible start cells; confusing case-sensitive characters.",
+      "summary": "Given a character grid and a word, return whether the word can be formed by walking adjacent horizontal or vertical cells without reusing a cell.",
+      "title": "Word Search"
+    },
+    {
+      "difficulty": "Hard",
+      "id": "word-search-ii",
+      "optimal": "Build a trie from words, then DFS from each board cell through matching trie edges. Mark cells visited during the current path, emit each found word once, and optionally prune exhausted trie branches. O(m*n*4^L) worst case, greatly reduced by trie pruning.",
+      "pitfalls": "Searching each word independently without pruning; allowing diagonal moves or cell reuse; returning duplicate words from multiple paths; mutating the board without restoring it; missing words that share prefixes.",
+      "summary": "Given a board and a list of words, return every listed word that can be formed by walking adjacent board cells without reusing a cell in one word.",
+      "title": "Word Search II"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "zigzag-conversion",
+      "optimal": "Append each character to its current row while walking the row index down and up between the bounds. O(n) time and O(n) space for row buffers. Return the original string immediately when numRows is 1 or at least the string length.",
+      "pitfalls": "Dividing by a zero-length cycle when numRows is 1; mishandling the turn at the top or bottom row; allocating a full grid unnecessarily; losing character order within each row.",
+      "summary": "Given a string and row count, place characters along a down-and-up zigzag path and read the rows in order.",
+      "title": "Zigzag Conversion"
+    }
+  ]
+}

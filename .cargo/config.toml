@@ -1,0 +1,8 @@
+# libwebrtc.a (pulled in by livekit -> webrtc-sys) carries Objective-C
+# categories. Without -ObjC the linker drops those object files and the
+# failure surfaces at runtime as a missing selector, not as a link error.
+# webrtc-sys links the frameworks but leaves this flag to the final binary.
+# Note that a RUSTFLAGS env var replaces these flags rather than adding to
+# them, so exporting RUSTFLAGS on macOS means appending -Clink-arg=-ObjC too.
+[target.'cfg(target_vendor = "apple")']
+rustflags = ["-Clink-arg=-ObjC"]

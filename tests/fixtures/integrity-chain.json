@@ -1,0 +1,62 @@
+[
+  {
+    "seq": 1,
+    "prevHash": "",
+    "type": "SESSION_START",
+    "at": "2026-08-18T06:36:26.727Z",
+    "severity": "info",
+    "source": "media",
+    "durationMs": 0,
+    "detail": null,
+    "sourceEventIds": [],
+    "hash": "79a2ca5b222537d2c0087f672a2cace3650abd87d698f1b2ac5954389f958692"
+  },
+  {
+    "seq": 2,
+    "prevHash": "79a2ca5b222537d2c0087f672a2cace3650abd87d698f1b2ac5954389f958692",
+    "type": "MEDIA_PREFLIGHT_PASSED",
+    "at": "2026-08-18T06:36:26.734Z",
+    "severity": "info",
+    "source": "preflight",
+    "durationMs": 0,
+    "detail": null,
+    "sourceEventIds": [],
+    "hash": "0749b15cc3173c5d25f2518b58e85d904e247ee6f480d2eb378b8f39ac487b89"
+  },
+  {
+    "seq": 3,
+    "prevHash": "0749b15cc3173c5d25f2518b58e85d904e247ee6f480d2eb378b8f39ac487b89",
+    "type": "INTEGRITY_HEARTBEAT",
+    "at": "2026-08-18T06:36:26.734Z",
+    "severity": "info",
+    "source": "media",
+    "durationMs": 0,
+    "detail": "analyzer=source=camera;analysis=face_detect,tracking;frames=3;transport=ImageBit",
+    "sourceEventIds": [],
+    "hash": "5a12fdff6601c1a876eda79bf34e8159b4fae5f68781d349bd74d7915ed4a54a"
+  },
+  {
+    "seq": 4,
+    "prevHash": "5a12fdff6601c1a876eda79bf34e8159b4fae5f68781d349bd74d7915ed4a54a",
+    "type": "FACE_MISSING",
+    "at": "2026-08-18T06:36:26.734Z",
+    "severity": "warning",
+    "source": "camera",
+    "durationMs": 2000,
+    "detail": "faces=0",
+    "sourceEventIds": [],
+    "hash": "3c24c6d36da457fe9fbd1ddfc106580a09c13767cb4ac20970640bd1aeccf546"
+  },
+  {
+    "seq": 5,
+    "prevHash": "3c24c6d36da457fe9fbd1ddfc106580a09c13767cb4ac20970640bd1aeccf546",
+    "type": "INTEGRITY_HEARTBEAT",
+    "at": "2026-08-18T06:36:26.735Z",
+    "severity": "info",
+    "source": "media",
+    "durationMs": 0,
+    "detail": "analyzer=source=camera;analysis=tracking;frames=1;transport=ImageBitmap",
+    "sourceEventIds": [],
+    "hash": "d9677569c8a6d02da847762ef253dbcd44f8e01de563ca7e82387e0b32edba04"
+  }
+]

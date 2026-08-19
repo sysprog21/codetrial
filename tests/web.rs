@@ -1,0 +1,3026 @@
+use std::fs;
+use std::path::Path;
+use std::process::Command;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use hmac::{Hmac, Mac};
+use serde_json::{Value, json};
+use sha2::Sha256;
+
+use codetrial::accounts::MAX_REPORTS_PER_USER;
+use codetrial::config::DEFAULT_WEB_DIR;
+use codetrial::runtime::{
+    TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_REPORT, TOPIC_TEST_RESULTS,
+    TOPIC_TRANSCRIPTION,
+};
+use codetrial::token::{
+    LivekitTokenInput, TOKEN_TTL_SECONDS, livekit_room_admin_token, livekit_token,
+};
+use codetrial::web::{
+    MAX_BODY_BYTES, MAX_REPORT_BYTES, RoomDispatcher, TOKEN_RATE_LIMIT, TokenConfig,
+    WebServerConfig, initialize_account_database, login_config, static_file, token_response,
+};
+
+type HmacSha256 = Hmac<Sha256>;
+
+fn claims(token: &str) -> Value {
+    serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(token.split('.').nth(1).unwrap())
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn token_has_livekit_video_grant_and_metadata() {
+    let token = livekit_token(LivekitTokenInput {
+        api_key: "key",
+        api_secret: "secret",
+        name: "Candidate",
+        identity: "candidate-abc",
+        room: "interview-abc",
+        metadata: r#"{"problemId":"two-sum","durationMin":45}"#,
+        now_seconds: 1000,
+        agent: false,
+    })
+    .unwrap();
+    let claims = claims(&token);
+
+    assert_eq!(claims["iss"], "key");
+    assert_eq!(claims["sub"], "candidate-abc");
+    assert_eq!(claims["name"], "Candidate");
+    assert_eq!(claims["exp"], 8200);
+    assert_eq!(claims["video"]["room"], "interview-abc");
+    assert_eq!(claims["video"]["roomJoin"], true);
+    assert_eq!(claims["video"]["canPublish"], true);
+    assert_eq!(claims["video"]["canSubscribe"], true);
+    assert_eq!(claims["video"]["canPublishData"], true);
+    assert_eq!(claims["video"]["agent"], false);
+    assert_eq!(claims["video"]["canUpdateOwnMetadata"], false);
+    assert!(claims.get("kind").is_none());
+    assert_eq!(
+        claims["metadata"],
+        r#"{"problemId":"two-sum","durationMin":45}"#
+    );
+}
+
+#[test]
+fn agent_token_carries_agent_kind_and_metadata_grant() {
+    let token = livekit_token(LivekitTokenInput {
+        api_key: "devkey",
+        api_secret: "devsecret",
+        name: "Jim",
+        identity: "interviewer-interview-fixed",
+        room: "interview-fixed",
+        metadata: r#"{"problemId":"merge-intervals","durationMin":30}"#,
+        now_seconds: 2000,
+        agent: true,
+    })
+    .unwrap();
+    let claims = claims(&token);
+
+    assert_eq!(claims["iss"], "devkey");
+    assert_eq!(claims["sub"], "interviewer-interview-fixed");
+    assert_eq!(claims["name"], "Jim");
+    assert_eq!(claims["video"]["room"], "interview-fixed");
+    assert_eq!(claims["video"]["agent"], true);
+    assert_eq!(claims["video"]["canUpdateOwnMetadata"], true);
+    assert_eq!(claims["kind"], "agent");
+    assert_eq!(
+        claims["metadata"],
+        r#"{"problemId":"merge-intervals","durationMin":30}"#
+    );
+}
+
+#[test]
+fn room_admin_token_can_manage_only_the_target_room() {
+    let token = livekit_room_admin_token("key", "secret", "interview-abc", 1000).unwrap();
+    let claims = claims(&token);
+
+    assert_eq!(claims["iss"], "key");
+    assert_eq!(claims["sub"], "room-admin");
+    assert_eq!(claims["exp"], 8200);
+    assert_eq!(claims["video"]["room"], "interview-abc");
+    assert_eq!(claims["video"]["roomAdmin"], true);
+    assert!(claims["video"].get("roomJoin").is_none());
+}
+
+#[test]
+fn token_response_matches_frontend_contract() {
+    let response = token_response(
+        &TokenConfig {
+            api_key: "devkey",
+            api_secret: "devsecret",
+            server_url: "wss://example.livekit.cloud",
+        },
+        br#"{"problemId":"merge-intervals","durationMin":120}"#,
+        "interview-fixed",
+        "candidate-fixed",
+        2000,
+    )
+    .unwrap();
+    let claims = claims(&response.token);
+
+    assert_eq!(response.server_url, "wss://example.livekit.cloud");
+    assert_eq!(response.room_name, "interview-fixed");
+    assert_eq!(claims["name"], "Candidate");
+    assert_eq!(claims["sub"], "candidate-fixed");
+    assert_eq!(claims["video"]["room"], response.room_name);
+    assert_eq!(
+        claims["metadata"],
+        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90})).unwrap()
+    );
+}
+
+#[test]
+fn token_response_preserves_valid_browser_session_identity() {
+    let response = token_response(
+        &TokenConfig {
+            api_key: "devkey",
+            api_secret: "devsecret",
+            server_url: "wss://example.livekit.cloud",
+        },
+        br#"{"candidateIdentity":"candidate-a1b2c3"}"#,
+        "interview-fixed",
+        "candidate-fallback",
+        2000,
+    )
+    .unwrap();
+
+    assert_eq!(claims(&response.token)["sub"], "candidate-a1b2c3");
+}
+
+#[test]
+fn token_response_rejects_malformed_browser_session_identity() {
+    let response = token_response(
+        &TokenConfig {
+            api_key: "devkey",
+            api_secret: "devsecret",
+            server_url: "wss://example.livekit.cloud",
+        },
+        br#"{"candidateIdentity":"agent-interview-fixed"}"#,
+        "interview-fixed",
+        "candidate-fallback",
+        2000,
+    )
+    .unwrap();
+
+    assert_eq!(claims(&response.token)["sub"], "candidate-fallback");
+}
+
+#[test]
+fn token_duration_matches_current_frontend_clamp() {
+    for (input, expected) in [
+        (json!(1), 10),
+        (json!(45), 45),
+        (json!(120), 90),
+        (json!("bad"), 45),
+        (json!("30"), 30),
+        (json!(" 30 "), 30),
+        (json!(false), 45),
+        (json!(true), 10),
+    ] {
+        let body = serde_json::to_vec(&json!({"durationMin": input})).unwrap();
+        let response = token_response(
+            &TokenConfig {
+                api_key: "devkey",
+                api_secret: "devsecret",
+                server_url: "wss://example.livekit.cloud",
+            },
+            &body,
+            "interview-fixed",
+            "candidate-fixed",
+            2000,
+        )
+        .unwrap();
+        let claims = claims(&response.token);
+
+        assert_eq!(
+            serde_json::from_str::<Value>(claims["metadata"].as_str().unwrap()).unwrap()["durationMin"],
+            expected
+        );
+    }
+}
+
+#[test]
+fn token_duration_preserves_fractional_frontend_metadata() {
+    let response = token_response(
+        &TokenConfig {
+            api_key: "devkey",
+            api_secret: "devsecret",
+            server_url: "wss://example.livekit.cloud",
+        },
+        br#"{"durationMin":42.8}"#,
+        "interview-fixed",
+        "candidate-fixed",
+        2000,
+    )
+    .unwrap();
+    let claims = claims(&response.token);
+
+    assert_eq!(
+        serde_json::from_str::<Value>(claims["metadata"].as_str().unwrap()).unwrap()["durationMin"],
+        json!(42.8)
+    );
+}
+
+#[tokio::test]
+async fn token_endpoint_rate_limits_a_noisy_client() {
+    let (config, cookie, db_path) = signed_in_web_config("rate-limit");
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+    let url = format!("{base}/api/token");
+    let body = json!({"problemId":"two-sum","durationMin":45});
+
+    for attempt in 1..=TOKEN_RATE_LIMIT {
+        let response = client
+            .post(&url)
+            .header("cookie", &cookie)
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            200,
+            "request {attempt} should be allowed"
+        );
+    }
+
+    let blocked = client
+        .post(&url)
+        .header("cookie", &cookie)
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(blocked.status(), 429);
+    assert_eq!(blocked.headers().get("retry-after").unwrap(), "60");
+
+    server.abort();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[tokio::test]
+async fn responses_carry_baseline_security_headers() {
+    let (base, server) = spawn_web_server(WebServerConfig {
+        web_dir: Path::new("web").to_path_buf(),
+        ..web_config()
+    })
+    .await;
+
+    let home = reqwest::get(&base).await.unwrap();
+
+    assert_eq!(
+        home.headers().get("x-content-type-options").unwrap(),
+        "nosniff"
+    );
+    assert_eq!(
+        home.headers().get("referrer-policy").unwrap(),
+        "same-origin"
+    );
+
+    let policy = home
+        .headers()
+        .get("content-security-policy")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    for directive in [
+        "default-src 'self'",
+        "base-uri 'self'",
+        "object-src 'none'",
+        "frame-ancestors 'none'",
+        "form-action 'self'",
+        "style-src 'self'",
+        "worker-src 'self' blob:",
+    ] {
+        assert!(policy.contains(directive), "{directive} missing: {policy}");
+    }
+
+    // The runner evaluates candidate code in a blob Worker, which inherits this
+    // document's policy, so dropping `unsafe-eval` would silently break test
+    // runs rather than fail a check. Pinned so the trade-off stays deliberate.
+    assert!(
+        policy.contains("script-src 'self' blob: 'unsafe-eval'"),
+        "{policy}"
+    );
+
+    // A .vrm is a GLB, so its textures are always bufferView-backed: GLTFLoader
+    // mints a `blob:` URL per image and ImageBitmapLoader reads it with `fetch`,
+    // which `connect-src` governs. Without `blob:` every texture fails and the
+    // avatar falls back to its neutral panel with no stated reason. Nothing
+    // else can catch this until a model ships, so it is pinned here.
+    assert!(policy.contains("connect-src blob:"), "{policy}");
+
+    // The page reaches LiveKit and Compiler Explorer directly, so each has to
+    // be named or the interview cannot connect.
+    assert!(policy.contains("wss://example.livekit.cloud"), "{policy}");
+    assert!(policy.contains("https://godbolt.org"), "{policy}");
+    assert!(policy.contains("https://cdn.jsdelivr.net"), "{policy}");
+    // Loopback is a local-run affordance for the check harness only.
+    assert!(policy.contains("http://127.0.0.1:*"), "{policy}");
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn production_policy_names_no_loopback_origins() {
+    let (base, server) = spawn_web_server(WebServerConfig {
+        web_dir: Path::new("web").to_path_buf(),
+        production: true,
+        compiler_explorer_enabled: false,
+        ..web_config()
+    })
+    .await;
+
+    let policy = reqwest::get(&base)
+        .await
+        .unwrap()
+        .headers()
+        .get("content-security-policy")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    assert!(!policy.contains("127.0.0.1"), "{policy}");
+    assert!(!policy.contains("localhost"), "{policy}");
+    assert!(
+        !policy.contains("godbolt.org"),
+        "a server that withdrew compiled runs must not permit the origin: {policy}"
+    );
+
+    server.abort();
+}
+
+#[test]
+fn static_file_rejects_traversal_and_dotfiles() {
+    assert!(static_file(Path::new("src/web"), "/../agent/.env").is_none());
+    assert!(static_file(Path::new("src/web"), "/.env.local").is_none());
+}
+
+#[test]
+fn static_file_falls_back_to_index_for_web_routes() {
+    let root = std::env::temp_dir().join(format!("codetrial-web-test-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("index.html"), "").unwrap();
+
+    assert_eq!(
+        static_file(&root, "/interview"),
+        Some(root.join("index.html"))
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// A 200 here proves the file resolved, so there is no separate resolve-only
+/// test restating the same names. These two headers are what decide whether the
+/// detector loads at all and how long a stale copy survives an upgrade, and
+/// neither is visible from `static_file`.
+#[tokio::test]
+async fn vendored_assets_are_served_typed_and_cached() {
+    let mut config = web_config();
+    config.web_dir = std::path::PathBuf::from(DEFAULT_WEB_DIR);
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+
+    for (file, content_type) in [
+        // `WebAssembly.instantiateStreaming` refuses anything else.
+        ("face_detection_solution_wasm_bin.wasm", "application/wasm"),
+        (
+            "face_detection_short_range.tflite",
+            "application/octet-stream",
+        ),
+        ("face_detection_short.binarypb", "application/octet-stream"),
+        ("face_detection.js", "text/javascript; charset=utf-8"),
+    ] {
+        let response = client
+            .get(format!("{base}/vendor/face-detection/{file}"))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 200, "{file}");
+        assert_eq!(response.headers()["content-type"], content_type, "{file}");
+
+        // Long enough to skip revalidating 11.8 MB on a reload, short enough
+        // that an in-place vendor upgrade reaches a browser that cached it.
+        assert_eq!(response.headers()["cache-control"], "public, max-age=86400");
+        assert!(response.headers().contains_key("etag"), "{file}");
+    }
+
+    // Everything outside the vendor tree keeps revalidating.
+    let response = client
+        .get(format!("{base}/interview.js"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.headers()["cache-control"], "no-cache");
+
+    // The avatar asks whether a model is published with a HEAD before it
+    // imports 730 KB of renderer, so HEAD has to answer from metadata. Axum
+    // routes it to the same handler, which would otherwise read the whole
+    // 15 MB model into memory once per interview and discard the body.
+    let head = client
+        .head(format!("{base}/vendor/face-detection/face_detection.js"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(head.status(), 200);
+    assert!(head.headers().contains_key("content-length"));
+    assert!(head.headers().contains_key("etag"));
+    assert_eq!(head.bytes().await.unwrap().len(), 0);
+
+    // The probe's real target. A published model answers HEAD with its type and
+    // length and no body at all.
+    let model = client
+        .head(format!("{base}/vendor/avatar/jim.vrm"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(model.status(), 200);
+    assert_eq!(model.headers()["content-type"], "model/gltf-binary");
+    // Compared against the file, not against a number copied out of it once.
+    // The model is a swappable art asset, and a literal here turns "somebody
+    // re-exported jim.vrm" into a failing HTTP header test that names neither.
+    let model_bytes = std::fs::metadata(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/web/vendor/avatar/jim.vrm"
+    ))
+    .unwrap()
+    .len();
+    assert_eq!(model.headers()["content-length"], model_bytes.to_string());
+    let model_etag = model.headers()["etag"].clone();
+    assert_eq!(model.bytes().await.unwrap().len(), 0);
+
+    // A conditional HEAD is a revalidation, so it answers 304 rather than
+    // claiming the cached copy was replaced.
+    let revalidated = client
+        .head(format!("{base}/vendor/avatar/jim.vrm"))
+        .header("if-none-match", model_etag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revalidated.status(), 304);
+
+    // And a HEAD for something absent is still a 404, or the probe would treat
+    // every missing model as published and import 730 KB of renderer to find
+    // out otherwise.
+    let missing = client
+        .head(format!("{base}/vendor/avatar/no-such-model.vrm"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+
+    // The one asset the compression layer must leave alone. A .vrm is a GLB,
+    // whose textures are already PNG or JPEG, so gzip spends seconds of CPU per
+    // request for a few percent, and that is most of the delay before Jim has a
+    // face. The exclusion keys off the exact content type above, which is why it
+    // is asserted here and not in a comment: retyping the extension would put
+    // the stall back with nothing failing.
+    let verbatim = client
+        .get(format!("{base}/vendor/avatar/jim.vrm"))
+        .header("accept-encoding", "gzip")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(verbatim.status(), 200);
+    assert_eq!(
+        verbatim.headers().get("content-encoding"),
+        None,
+        "jim.vrm must be served verbatim"
+    );
+
+    // And the rest of the tree still compresses, or the exclusion would have
+    // taken the whole layer with it: the wasm is 11 MB and the ratio there is
+    // real.
+    let compressed = client
+        .get(format!("{base}/vendor/face-detection/face_detection.js"))
+        .header("accept-encoding", "gzip")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(compressed.headers()["content-encoding"], "gzip");
+
+    server.abort();
+}
+
+/// Pins a file's modification time so a cache test can state the exact case it
+/// means instead of hoping the clock cooperates.
+fn set_modified(path: &Path, at: SystemTime) {
+    fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(at)
+        .unwrap();
+}
+
+#[tokio::test]
+async fn static_server_serves_health_fixture_and_missing_asset() {
+    let root = std::env::temp_dir().join(format!(
+        "codetrial-web-server-test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("index.html"), "<h1>CodeTrial</h1>").unwrap();
+    fs::write(root.join("app.js"), "globalThis.loaded = true;").unwrap();
+
+    let (base, server) = spawn_web_server(WebServerConfig {
+        web_dir: root.clone(),
+        ..web_config()
+    })
+    .await;
+    let client = reqwest::Client::new();
+
+    let health = client.get(format!("{base}/healthz")).send().await.unwrap();
+    assert_eq!(health.status(), 200);
+    assert_eq!(health.text().await.unwrap(), "ok\n");
+
+    let asset = client.get(format!("{base}/app.js")).send().await.unwrap();
+    assert_eq!(asset.status(), 200);
+    assert_eq!(
+        asset.headers().get("content-type").unwrap(),
+        "text/javascript; charset=utf-8"
+    );
+    assert_eq!(asset.headers().get("cache-control").unwrap(), "no-cache");
+    let etag = asset.headers().get("etag").unwrap().clone();
+    assert!(
+        etag.to_str().unwrap().starts_with("W/\""),
+        "the validator is weak, so it still matches once responses are compressed"
+    );
+    assert_eq!(asset.text().await.unwrap(), "globalThis.loaded = true;");
+
+    // `web/` is 13 MB, so revalidation has to cost a 304 rather than a resend.
+    let revalidated = client
+        .get(format!("{base}/app.js"))
+        .header("if-none-match", &etag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revalidated.status(), 304);
+
+    // RFC 9110 requires a 304 to repeat the validator and the `Vary` its 200
+    // carried, so a shared cache still knows what it confirmed and which
+    // encoding it holds.
+    assert_eq!(revalidated.headers().get("etag").unwrap(), &etag);
+    assert_eq!(
+        revalidated.headers().get("vary").unwrap(),
+        "accept-encoding"
+    );
+    assert_eq!(revalidated.text().await.unwrap(), "");
+
+    // The validator is modification time and length, so the case that decides
+    // whether it works is the one where length cannot help: an edit inside the
+    // same second that leaves the file exactly as long. Both timestamps are
+    // pinned rather than taken from the clock, because two real writes almost
+    // always land on different nanoseconds anyway, and then this passes without
+    // ever exercising sub-second resolution. `= true;` and `= null;` are both
+    // 25 bytes, so length is identical on purpose.
+    let app_js = root.join("app.js");
+    let same_second = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    set_modified(&app_js, same_second);
+    let pinned = client.get(format!("{base}/app.js")).send().await.unwrap();
+    let pinned_etag = pinned.headers().get("etag").unwrap().clone();
+
+    fs::write(&app_js, "globalThis.loaded = null;").unwrap();
+    set_modified(&app_js, same_second + Duration::from_nanos(1));
+
+    let changed = client
+        .get(format!("{base}/app.js"))
+        .header("if-none-match", &pinned_etag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        changed.status(),
+        200,
+        "a same-length edit one nanosecond later must still invalidate the cache"
+    );
+    assert_eq!(changed.text().await.unwrap(), "globalThis.loaded = null;");
+
+    // A stale validator must not be honored, or an edit would never reach the
+    // browser that cached the file before it.
+    let changed = client
+        .get(format!("{base}/app.js"))
+        .header("if-none-match", "W/\"0-1\"")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(changed.status(), 200);
+    assert_eq!(changed.text().await.unwrap(), "globalThis.loaded = null;");
+
+    let missing = client
+        .get(format!("{base}/missing.js"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+
+    server.abort();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn runtime_config_can_disable_compiled_language_runs() {
+    let (enabled_base, enabled_server) = spawn_web_server(web_config()).await;
+    let client = reqwest::Client::new();
+
+    let enabled = client
+        .get(format!("{enabled_base}/runtime-config.js"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(enabled.status(), 200);
+    assert_eq!(
+        enabled.headers().get("content-type").unwrap(),
+        "text/javascript; charset=utf-8"
+    );
+    assert_eq!(enabled.headers().get("cache-control").unwrap(), "no-store");
+    assert_eq!(
+        enabled.text().await.unwrap(),
+        "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = true;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"https://godbolt.org\";\n"
+    );
+    enabled_server.abort();
+
+    let mut disabled_config = web_config();
+    disabled_config.compiler_explorer_enabled = false;
+    let (disabled_base, disabled_server) = spawn_web_server(disabled_config).await;
+    let disabled = client
+        .get(format!("{disabled_base}/runtime-config.js"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(disabled.status(), 200);
+    assert_eq!(
+        disabled.text().await.unwrap(),
+        "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = false;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"\";\n"
+    );
+    disabled_server.abort();
+}
+
+#[tokio::test]
+async fn static_home_markup_matches_frontend_contract() {
+    let (base, server) = spawn_web_server(WebServerConfig {
+        web_dir: Path::new("web").to_path_buf(),
+        github_client_id: None,
+        github_client_secret: None,
+        session_secret: None,
+        db_path: None,
+        github_oauth_base_url: None,
+        github_api_base_url: None,
+        room_prefix: "interview".to_string(),
+        fixed_room_name: None,
+        production: false,
+        compiler_explorer_enabled: true,
+        trusted_proxy_hops: 0,
+        pool: Default::default(),
+    })
+    .await;
+    let html = reqwest::get(base).await.unwrap().text().await.unwrap();
+
+    for text in [
+        "Practice a live technical interview",
+        "30 min",
+        "45 min",
+        "60 min",
+        "Start interview",
+    ] {
+        assert!(html.contains(text), "missing home contract text: {text}");
+    }
+
+    // Every problem in the bank must reach the lobby. Read the titles from the
+    // bank rather than restating them, so adding a problem cannot pass here by
+    // being forgotten in two places at once.
+    let problems = static_export_json("web/problems.js", "export const problems = ");
+    for problem in problems.as_array().unwrap() {
+        let title = problem["title"].as_str().unwrap();
+        assert!(
+            html.contains(title),
+            "lobby is missing problem card: {title}"
+        );
+    }
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn static_interview_markup_exposes_offline_surface() {
+    let (base, server) = spawn_web_server(WebServerConfig {
+        web_dir: Path::new("web").to_path_buf(),
+        github_client_id: None,
+        github_client_secret: None,
+        session_secret: None,
+        db_path: None,
+        github_oauth_base_url: None,
+        github_api_base_url: None,
+        room_prefix: "interview".to_string(),
+        fixed_room_name: None,
+        production: false,
+        compiler_explorer_enabled: true,
+        trusted_proxy_hops: 0,
+        pool: Default::default(),
+    })
+    .await;
+    let html = reqwest::get(format!("{base}/interview"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    for text in [
+        "CODETRIAL",
+        "Problem",
+        "Transcript",
+        "Python 3",
+        "JavaScript",
+        "C",
+        "C++",
+        "Java",
+        "Run tests",
+        "End interview",
+        "Test results",
+    ] {
+        assert!(
+            html.contains(text),
+            "missing interview contract text: {text}"
+        );
+    }
+
+    server.abort();
+}
+
+#[test]
+fn static_interview_script_keeps_data_topic_publish_contract() {
+    let topics = fs::read_to_string("web/lib.js").unwrap();
+    let source = fs::read_to_string("web/interview.js").unwrap();
+
+    // The browser topic table is compared against the Rust constants
+    // themselves, so renaming a topic on either side fails here rather than
+    // silently splitting the two halves of the data channel. The payload shapes
+    // behind these topics are asserted in tests/browser/lib.test.js.
+    for (key, topic) in [
+        ("code", TOPIC_CODE_UPDATE),
+        ("control", TOPIC_CONTROL),
+        ("integrity", TOPIC_INTEGRITY),
+        ("report", TOPIC_REPORT),
+        ("tests", TOPIC_TEST_RESULTS),
+        ("transcript", TOPIC_TRANSCRIPTION),
+    ] {
+        let entry = format!("{key}: {topic:?}");
+        assert!(
+            topics.contains(&entry),
+            "web/lib.js topics must carry {entry}"
+        );
+    }
+    assert!(
+        source.contains("publishData(new TextEncoder().encode(JSON.stringify(payload))"),
+        "publish must send JSON-encoded payloads on the data channel"
+    );
+}
+
+#[test]
+fn static_interview_script_keeps_transcript_and_report_contract() {
+    let source = fs::read_to_string("web/interview.js").unwrap();
+    let transcript = source_block(
+        &source,
+        "async function consumeTranscript",
+        "async function toggleMicrophone",
+    );
+    let guard = source_block(
+        &source,
+        "room.on(livekit.RoomEvent.DataReceived",
+        "room.on(livekit.RoomEvent.ParticipantAttributesChanged",
+    );
+    let report = source_block(
+        &source,
+        "function receiveReport",
+        "function playRemoteAudio",
+    );
+
+    // acceptsReport itself is covered by tests/browser/lib.test.js; this only
+    // pins that the handler still consults it before touching the report.
+    assert!(
+        guard.contains("if (!acceptsReport(topic, participant)) return"),
+        "report handler must stay gated on acceptsReport"
+    );
+
+    // LiveKit stream attribute names, which the Rust side sets in
+    // transcript_stream_options.
+    for snippet in [
+        r#"attrs["lk.segment_id"]"#,
+        r#"attrs["lk.transcription_final"] === "true""#,
+        r#"participant?.identity === room.localParticipant.identity ? "you" : "interviewer""#,
+        "updateTranscriptSegment(id, speaker, text",
+    ] {
+        assert!(
+            transcript.contains(snippet),
+            "missing static transcript contract: {snippet}"
+        );
+    }
+
+    // The report card and markdown export are asserted behaviorally in
+    // tests/browser/render.test.js. What only Rust can check is that the
+    // browser still routes a report through the sanitizer before rendering it.
+    for snippet in [
+        "sanitizeReport(JSON.parse(new TextDecoder().decode(payload)))",
+        "setLocalAudioEnabled(false)",
+        "saveHistory()",
+        "renderReport()",
+        "room.disconnect()",
+        "state.room = null",
+    ] {
+        assert!(
+            report.contains(snippet),
+            "missing static report receive contract: {snippet}"
+        );
+    }
+
+    // The report card and the markdown export are asserted behaviorally in
+    // tests/browser/render.test.js; what only Rust can see is that the browser
+    // still routes both through the sanitizer before rendering.
+}
+
+#[test]
+fn static_interview_script_reuses_candidate_identity_across_reload() {
+    let source = fs::read_to_string("web/interview.js").unwrap();
+
+    assert!(source.contains(r#"const CANDIDATE_IDENTITY_KEY = "codetrial:candidateIdentity""#));
+    assert!(source.contains("const candidateIdentity = sessionCandidateIdentity()"));
+    assert!(
+        source
+            .contains("JSON.stringify({ problemId: problem.id, durationMin, candidateIdentity })")
+    );
+
+    // The fact, not the spelling: the identity round-trips through
+    // sessionStorage under that key. Naming the helper here pinned an
+    // implementation detail and broke on a rename that changed no behavior.
+    assert!(source.contains("readStored(CANDIDATE_IDENTITY_KEY, sessionStorage)"));
+    assert!(source.contains("writeStored(CANDIDATE_IDENTITY_KEY, identity, sessionStorage)"));
+
+    // The browser's shape has to be the one src/web.rs accepts back, or a
+    // stored identity is refused and the reload fix quietly stops working.
+    assert!(
+        source.contains("/^candidate-[a-z0-9]{6}$/"),
+        "browser identity shape drifted from valid_candidate_identity"
+    );
+}
+
+#[test]
+fn static_problem_bank_and_judges_cover_each_problem() {
+    let problems = static_export_json("web/problems.js", "export const problems = ");
+    let judges = static_export_json("web/judges.js", "export const judges = ");
+    let problems = problems.as_array().unwrap();
+    let judges = judges.as_object().unwrap();
+
+    let supported_arg_type = |arg_type: &serde_json::Value| {
+        arg_type.is_null()
+            || matches!(
+                arg_type.as_str(),
+                Some(
+                    "linkedList"
+                        | "linkedListArray"
+                        | "randomList"
+                        | "graphNode"
+                        | "binaryTree"
+                        | "nextTree"
+                        | "treeNodeValue"
+                        | "cyclePos",
+                )
+            )
+    };
+    let supported_signature_type = |signature_type: &serde_json::Value| {
+        matches!(
+            signature_type.as_str(),
+            Some(
+                "boolean"
+                    | "character[][]"
+                    | "double"
+                    | "double[]"
+                    | "integer"
+                    | "integer[]"
+                    | "integer[][]"
+                    | "list<double>"
+                    | "list<integer>"
+                    | "list<list<integer>>"
+                    | "list<list<string>>"
+                    | "list<string>"
+                    | "ListNode"
+                    | "ListNode[]"
+                    | "Node"
+                    | "string"
+                    | "string[]"
+                    | "TreeNode"
+                    | "void",
+            )
+        )
+    };
+
+    for problem in problems {
+        let id = problem["id"].as_str().unwrap();
+        let spec = judges
+            .get(id)
+            .unwrap_or_else(|| panic!("missing judge for {id}"));
+        assert!(
+            spec["cases"].as_array().unwrap().len() >= 3,
+            "not enough judge cases for {id}"
+        );
+        for language in ["python", "javascript", "c", "cpp", "java"] {
+            assert!(
+                problem["starterCode"].get(language).is_some(),
+                "missing {language} starter for {id}"
+            );
+        }
+        if spec["kind"] == "class" {
+            assert!(
+                spec["className"]
+                    .as_str()
+                    .is_some_and(|name| !name.is_empty()),
+                "missing class name for {id}"
+            );
+        }
+        if spec["kind"] == "function" {
+            let param_names = spec["paramNames"]
+                .as_array()
+                .unwrap_or_else(|| panic!("paramNames must be an array for {id}"));
+            let param_types = spec["paramTypes"]
+                .as_array()
+                .unwrap_or_else(|| panic!("paramTypes must be an array for {id}"));
+            assert_eq!(
+                param_names.len(),
+                param_types.len(),
+                "paramNames length must match paramTypes length for {id}"
+            );
+            for case in spec["cases"].as_array().unwrap() {
+                assert_eq!(
+                    param_types.len(),
+                    case["input"].as_array().unwrap().len(),
+                    "paramTypes length must match case input arity for {id}"
+                );
+            }
+            for param_name in param_names {
+                assert!(
+                    param_name.as_str().is_some_and(|name| !name.is_empty()),
+                    "empty paramName for {id}"
+                );
+            }
+            for param_type in param_types {
+                assert!(
+                    supported_signature_type(param_type),
+                    "unsupported paramType for {id}: {param_type:?}"
+                );
+            }
+            assert!(
+                supported_signature_type(&spec["returnType"]),
+                "unsupported returnType for {id}: {:?}",
+                spec["returnType"]
+            );
+        }
+        if let Some(arg_types) = spec.get("argTypes") {
+            let arg_types = arg_types
+                .as_array()
+                .unwrap_or_else(|| panic!("argTypes must be an array for {id}"));
+            for case in spec["cases"].as_array().unwrap() {
+                assert_eq!(
+                    arg_types.len(),
+                    case["input"].as_array().unwrap().len(),
+                    "argTypes length must match case input arity for {id}"
+                );
+            }
+            for arg_type in arg_types {
+                assert!(
+                    supported_arg_type(arg_type),
+                    "unsupported argType for {id}: {arg_type:?}"
+                );
+            }
+        }
+        if let Some(arg_types) = spec.get("constructorArgTypes") {
+            let arg_types = arg_types
+                .as_array()
+                .unwrap_or_else(|| panic!("constructorArgTypes must be an array for {id}"));
+            for case in spec["cases"].as_array().unwrap() {
+                let args = &case["input"].as_array().unwrap()[1].as_array().unwrap()[0];
+                assert_eq!(
+                    arg_types.len(),
+                    args.as_array().unwrap().len(),
+                    "constructorArgTypes length must match constructor arity for {id}"
+                );
+            }
+            for arg_type in arg_types {
+                assert!(
+                    supported_arg_type(arg_type),
+                    "unsupported constructorArgType for {id}: {arg_type:?}"
+                );
+            }
+        }
+        if matches!(
+            spec.get("outputType").and_then(|value| value.as_str()),
+            Some(
+                "linkedList" | "randomList" | "graphNode" | "binaryTree" | "nextTree" | "quadTree"
+            )
+        ) {
+            for case in spec["cases"].as_array().unwrap() {
+                assert!(
+                    case["expected"].as_array().is_some(),
+                    "list output expected value must be an array for {id}"
+                );
+            }
+        }
+        if let Some(output_param) = spec.get("outputParam") {
+            let output_param = output_param
+                .as_u64()
+                .unwrap_or_else(|| panic!("outputParam must be a number for {id}"));
+            for case in spec["cases"].as_array().unwrap() {
+                assert!(
+                    case["input"]
+                        .as_array()
+                        .is_some_and(|input| (output_param as usize) < input.len()),
+                    "outputParam out of bounds for {id}"
+                );
+            }
+        }
+        if let Some(output_param) = spec.get("outputPrefixParam") {
+            let output_param = output_param
+                .as_u64()
+                .unwrap_or_else(|| panic!("outputPrefixParam must be a number for {id}"));
+            for case in spec["cases"].as_array().unwrap() {
+                assert!(
+                    case["input"]
+                        .as_array()
+                        .is_some_and(|input| (output_param as usize) < input.len()),
+                    "outputPrefixParam out of bounds for {id}"
+                );
+                assert!(
+                    case["expected"].as_array().is_some(),
+                    "outputPrefixParam expected output must be an array for {id}"
+                );
+            }
+        }
+    }
+
+    // Problems whose judges cannot be plain equality need their custom checker,
+    // and the tricky inputs must stay in the fixture set.
+    assert_eq!(judges["two-sum"]["checker"], "twoSum");
+    assert_eq!(
+        judges["longest-palindromic-substring"]["checker"],
+        "palindrome"
+    );
+    assert_eq!(judges["course-schedule-ii"]["checker"], "topologicalOrder");
+    assert_eq!(
+        judges["convert-sorted-array-to-binary-search-tree"]["checker"],
+        "balancedBst"
+    );
+    for (id, label) in [
+        ("two-sum", "duplicates"),
+        ("merge-sorted-array", "duplicates"),
+        ("remove-element", "remove every"),
+        ("remove-duplicates-from-sorted-array", "several duplicate"),
+        ("remove-duplicates-from-sorted-array-ii", "single repeated"),
+        ("majority-element", "not the first"),
+        ("rotate-array", "k larger"),
+        ("best-time-to-buy-and-sell-stock", "decreasing"),
+        ("best-time-to-buy-and-sell-stock-ii", "multiple small rises"),
+        ("jump-game", "late unreachable"),
+        ("jump-game-ii", "greedy window"),
+        ("h-index", "h capped"),
+        ("insert-delete-getrandom-o1", "removed value"),
+        ("product-of-array-except-self", "two zeros"),
+        ("gas-station", "wraparound"),
+        ("candy", "plateau between"),
+        ("trapping-rain-water", "right boundary"),
+        ("roman-to-integer", "compound subtractive"),
+        ("integer-to-roman", "compound subtractive"),
+        ("length-of-last-word", "trailing spaces"),
+        ("longest-common-prefix", "empty string"),
+        ("reverse-words-in-a-string", "collapse internal spaces"),
+        ("zigzag-conversion", "single row"),
+        (
+            "find-the-index-of-the-first-occurrence-in-a-string",
+            "later occurrence",
+        ),
+        ("text-justification", "uneven spaces go left"),
+        ("valid-palindrome", "digits count"),
+        ("is-subsequence", "not substring"),
+        ("container-with-most-water", "interior best"),
+        ("two-sum-ii-input-array-is-sorted", "duplicate values"),
+        ("3sum", "many duplicates"),
+        ("happy-number", "cycle at four"),
+        (
+            "longest-substring-without-repeating-characters",
+            "left pointer",
+        ),
+        ("minimum-window-substring", "duplicate required"),
+        (
+            "substring-with-concatenation-of-all-words",
+            "duplicate words",
+        ),
+        ("minimum-size-subarray-sum", "no qualifying window"),
+        ("valid-sudoku", "duplicate in box only"),
+        ("spiral-matrix", "single column"),
+        ("rotate-image", "negative values"),
+        ("set-matrix-zeroes", "first column marker"),
+        ("game-of-life", "simultaneous blinker"),
+        ("ransom-note", "insufficient multiplicity"),
+        ("isomorphic-strings", "two sources one target"),
+        ("word-pattern", "many pattern letters share one word"),
+        ("valid-anagram", "same letters wrong multiplicity"),
+        ("group-anagrams", "duplicate words preserved"),
+        ("contains-duplicate-ii", "k zero"),
+        ("longest-consecutive-sequence", "duplicates in long run"),
+        ("summary-ranges", "negative to positive range"),
+        ("insert-interval", "touching endpoints merge"),
+        (
+            "minimum-number-of-arrows-to-burst-balloons",
+            "touching endpoints share arrow",
+        ),
+        ("simplify-path", "dot names are directories"),
+        ("min-stack", "duplicate minimum survives one pop"),
+        (
+            "evaluate-reverse-polish-notation",
+            "negative division truncates toward zero",
+        ),
+        ("basic-calculator", "nested subtraction"),
+        ("linked-list-cycle", "tail points to itself"),
+        ("add-two-numbers", "carry extends result"),
+        ("merge-two-sorted-lists", "negative values"),
+        ("copy-list-with-random-pointer", "duplicate values"),
+        ("reverse-linked-list", "negative values"),
+        ("reverse-nodes-in-k-group", "k equals one"),
+        ("remove-nth-node-from-end-of-list", "remove head"),
+        (
+            "remove-duplicates-from-sorted-list-ii",
+            "all values duplicated",
+        ),
+        ("rotate-list", "k larger than length"),
+        ("partition-list", "relative order preserved"),
+        ("maximum-depth-of-binary-tree", "left skew depth four"),
+        ("same-tree", "same values different null side"),
+        ("invert-binary-tree", "sparse tree keeps null positions"),
+        ("symmetric-tree", "cross sparse mirror"),
+        (
+            "construct-binary-tree-from-preorder-and-inorder-traversal",
+            "left skew",
+        ),
+        (
+            "construct-binary-tree-from-inorder-and-postorder-traversal",
+            "right skew",
+        ),
+        (
+            "populating-next-right-pointers-in-each-node-ii",
+            "missing middle children",
+        ),
+        (
+            "flatten-binary-tree-to-linked-list",
+            "branching preorder chain",
+        ),
+        ("path-sum", "prefix sum is not enough"),
+        ("sum-root-to-leaf-numbers", "skewed digits"),
+        (
+            "binary-tree-maximum-path-sum",
+            "all negative picks one node",
+        ),
+        ("binary-search-tree-iterator", "left skew bst"),
+        ("count-complete-tree-nodes", "partial final level"),
+        (
+            "lowest-common-ancestor-of-a-binary-tree",
+            "ancestor is one target",
+        ),
+        (
+            "binary-tree-right-side-view",
+            "left depth visible after right ends",
+        ),
+        ("average-of-levels-in-binary-tree", "mixed signs average"),
+        (
+            "binary-tree-level-order-traversal",
+            "sparse keeps left to right",
+        ),
+        (
+            "binary-tree-zigzag-level-order-traversal",
+            "four levels alternate",
+        ),
+        (
+            "minimum-absolute-difference-in-bst",
+            "minimum not parent child",
+        ),
+        ("kth-smallest-element-in-a-bst", "left skew middle"),
+        (
+            "validate-binary-search-tree",
+            "deep descendant violates ancestor",
+        ),
+        ("surrounded-regions", "border connected region stays"),
+        ("clone-graph", "chain graph deep copy"),
+        ("evaluate-division", "disconnected components"),
+        ("course-schedule", "long cycle"),
+        ("course-schedule-ii", "branching prerequisites"),
+        ("snakes-and-ladders", "unreachable trap"),
+        ("minimum-genetic-mutation", "end missing from bank"),
+        ("word-ladder", "shorter route through decoy"),
+        ("implement-trie-prefix-tree", "prefix is not word"),
+        (
+            "design-add-and-search-words-data-structure",
+            "dot matches exactly one letter",
+        ),
+        ("word-search-ii", "duplicate board paths return word once"),
+        (
+            "letter-combinations-of-a-phone-number",
+            "four choices digit",
+        ),
+        ("combinations", "choose all numbers"),
+        ("permutations", "negative value"),
+        ("combination-sum", "unsorted candidates"),
+        ("n-queens-ii", "two queens impossible"),
+        ("generate-parentheses", "four pairs"),
+        ("word-search", "cannot reuse cell"),
+        (
+            "convert-sorted-array-to-binary-search-tree",
+            "two values allow either root",
+        ),
+        ("merge-intervals", "unsorted"),
+        ("valid-parentheses", "interleaved"),
+    ] {
+        let labels = judges[id]["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|case| case["label"].as_str())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            labels.contains(label),
+            "{id} judge fixtures should cover the {label} case, got: {labels}"
+        );
+    }
+}
+
+/// The rubric (optimal approach, pitfalls) must stay server-side, so the Rust
+/// table cannot simply be generated from the browser bank. Cross-check the
+/// fields both sides duplicate instead, so drift fails here rather than
+/// silently giving the agent a different problem than the candidate sees.
+#[test]
+fn rust_problem_bank_matches_the_browser_problem_bank() {
+    let browser = static_export_json("web/problems.js", "export const problems = ");
+    let browser = browser.as_array().unwrap();
+
+    assert_eq!(
+        browser.len(),
+        codetrial::agent::PROBLEMS.len(),
+        "problem count differs between web/problems.js and src/agent.rs"
+    );
+
+    // Matched by id, not position: the browser list is in lobby display order.
+    for problem in codetrial::agent::PROBLEMS {
+        let entry = browser
+            .iter()
+            .find(|entry| entry["id"].as_str() == Some(problem.id))
+            .unwrap_or_else(|| panic!("web/problems.js is missing {}", problem.id));
+        assert_eq!(
+            entry["title"].as_str(),
+            Some(problem.title),
+            "title differs for {}",
+            problem.id
+        );
+        assert_eq!(
+            entry["difficulty"].as_str(),
+            Some(problem.difficulty),
+            "difficulty differs for {}",
+            problem.id
+        );
+    }
+}
+
+#[tokio::test]
+async fn server_check_accepts_running_rust_server() {
+    let (mut config, cookie, db_path) = signed_in_web_config("server-check");
+    config.web_dir = Path::new("web").to_path_buf();
+    config.pool = Default::default();
+    let (base, server) = spawn_web_server(config).await;
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new("scripts/server-check.sh")
+            .env("CODETRIAL_WEB_URL", base)
+            .env("SERVER_CHECK_SESSION_COOKIE", cookie)
+            .output()
+    })
+    .await
+    .unwrap()
+    .expect("frontend check should run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    server.abort();
+    fs::remove_file(db_path).unwrap();
+}
+
+/// The check signs itself in through `/api/login` rather than being handed a
+/// cookie, so it works against a server it did not start.
+#[tokio::test]
+async fn server_check_signs_itself_in_against_an_external_server() {
+    let (mut config, _, db_path) = signed_in_web_config("server-check-cookie");
+    config.web_dir = Path::new("web").to_path_buf();
+    config.pool = Default::default();
+    let (base, server) = spawn_web_server(config).await;
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new("scripts/server-check.sh")
+            .env("CODETRIAL_WEB_URL", base)
+            .env_remove("SERVER_CHECK_SESSION_COOKIE")
+            .output()
+    })
+    .await
+    .unwrap()
+    .expect("frontend check should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    server.abort();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[tokio::test]
+#[ignore = "browser-dependent; run with `cargo test --test web -- --ignored` when validating static interview flow"]
+async fn browser_check_accepts_running_rust_server_offline_interview() {
+    let (mut config, cookie, db_path) = signed_in_web_config("browser-offline");
+    config.web_dir = Path::new("web").to_path_buf();
+    config.pool = Default::default();
+    let (base, server) = spawn_web_server(config).await;
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new("scripts/browser-check.sh")
+            .env("CODETRIAL_WEB_URL", base)
+            .env("BROWSER_CHECK_AGENT", "offline")
+            .env("BROWSER_CHECK_SESSION_COOKIE", cookie)
+            .output()
+    })
+    .await
+    .unwrap()
+    .expect("browser check should run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    server.abort();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[tokio::test]
+#[ignore = "credentialed browser check; requires LiveKit and Google env"]
+async fn browser_check_accepts_running_rust_server_with_rust_agent() {
+    let (mut config, cookie, db_path) = signed_in_web_config("browser-rust");
+    config.web_dir = Path::new("web").to_path_buf();
+    config.pool = primary_pool(
+        &std::env::var("LIVEKIT_URL").expect("set LIVEKIT_URL"),
+        &std::env::var("LIVEKIT_API_KEY").expect("set LIVEKIT_API_KEY"),
+        &std::env::var("LIVEKIT_API_SECRET").expect("set LIVEKIT_API_SECRET"),
+    );
+    let (base, server) = spawn_web_server(config).await;
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new("scripts/browser-check.sh")
+            .env("CODETRIAL_WEB_URL", base)
+            .env("BROWSER_CHECK_AGENT", "rust")
+            .env("BROWSER_CHECK_SESSION_COOKIE", cookie)
+            .output()
+    })
+    .await
+    .unwrap()
+    .expect("browser check should run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    server.abort();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn browser_check_loads_credentials_for_external_rust_server() {
+    let env_file = std::env::temp_dir().join(format!(
+        "codetrial-env-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::write(
+        &env_file,
+        "LIVEKIT_URL=wss://example.livekit.cloud\nLIVEKIT_API_KEY=key\nLIVEKIT_API_SECRET=secret\nGOOGLE_API_KEY=google\n",
+    )
+    .unwrap();
+
+    let output = Command::new("scripts/browser-check.sh")
+        .env("CODETRIAL_WEB_URL", "http://127.0.0.1:1")
+        .env("CODETRIAL_CONFIG_ENV", &env_file)
+        .env("BROWSER_CHECK_AGENT", "rust")
+        .env("BROWSER_CHECK_VALIDATE_ENV_ONLY", "1")
+        .env_remove("LIVEKIT_URL")
+        .env_remove("LIVEKIT_API_KEY")
+        .env_remove("LIVEKIT_API_SECRET")
+        .env_remove("GOOGLE_API_KEY")
+        .output()
+        .expect("browser check should run");
+
+    fs::remove_file(env_file).unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn browser_check_prints_server_log_on_node_failure() {
+    let script = fs::read_to_string("scripts/browser-check.sh").unwrap();
+    let driver = fs::read_to_string("scripts/browser-check.cjs").unwrap();
+
+    assert!(script.contains("SERVER_LOG=\"$SERVER_LOG\""));
+    assert!(script.contains("scripts/browser-check.cjs"));
+    assert!(driver.contains("fs.readFileSync(process.env.SERVER_LOG"));
+}
+
+#[test]
+fn static_interview_script_keeps_exit_fallback_short() {
+    let source = fs::read_to_string("web/interview.js").unwrap();
+    let ending = source_block(&source, "function endInterview", "function leaveRoom");
+
+    // Short, but never shorter than the agent takes to answer: REPORT_TIMEOUT
+    // bounds report generation at 45s and a timer-driven end spends
+    // WRAP_UP_WAIT before that. Revealing the escape hatch first loses reports
+    // that arrive.
+    assert!(ending.contains("55000"));
+    assert!(!ending.contains("25000"), "shorter than REPORT_TIMEOUT");
+}
+
+#[test]
+fn static_interview_script_flushes_code_before_tests() {
+    let source = fs::read_to_string("web/interview.js").unwrap();
+    let run_tests = source_block(
+        &source,
+        "async function runTests",
+        "\nfunction renderResults",
+    );
+
+    assert!(source.contains("function flushPendingCodePublish"));
+    assert!(
+        run_tests.find("flushPendingCodePublish()").unwrap()
+            < run_tests.find("runBrowserTests").unwrap()
+    );
+    assert!(
+        run_tests.find("flushPendingCodePublish()").unwrap()
+            < run_tests.find("publish(topics.tests").unwrap()
+    );
+}
+
+#[test]
+fn static_interview_script_has_no_audio_unlock_overlay() {
+    let source = fs::read_to_string("web/interview.js").unwrap();
+    let styles = fs::read_to_string("web/styles.css").unwrap();
+
+    assert!(!source.contains("Click to enable interviewer audio"));
+    assert!(!source.contains("showAudioUnlock"));
+    assert!(!styles.contains("audio-unlock"));
+}
+
+#[test]
+fn static_interview_script_marks_agent_ready_visually() {
+    let source = fs::read_to_string("web/interview.js").unwrap();
+    let styles = fs::read_to_string("web/styles.css").unwrap();
+
+    assert!(source.contains("function setAgentStateLabel"));
+    assert!(source.contains(r#"setAgentStateLabel("Waiting", false)"#));
+    assert!(
+        source
+            .contains(r#"setAgentStateLabel(labels[value] || "Listening", value === "listening")"#)
+    );
+    assert!(source.contains(r#"classList.toggle("ready", ready)"#));
+    assert!(styles.contains(".agent-pill.ready"));
+}
+
+#[tokio::test]
+async fn token_api_matches_frontend_contract_over_http() {
+    let (config, cookie, db_path) = signed_in_web_config("contract");
+    let (base, server) = spawn_web_server(config).await;
+    let response = reqwest::Client::new()
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .json(&json!({"problemId":"merge-intervals","durationMin":120}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.unwrap();
+    let mut keys = body.as_object().unwrap().keys().collect::<Vec<_>>();
+    keys.sort();
+    assert_eq!(keys, ["roomName", "serverUrl", "token"]);
+    assert_eq!(body["serverUrl"], "wss://example.livekit.cloud");
+    assert!(body["roomName"].as_str().unwrap().starts_with("interview-"));
+
+    let claims = claims(body["token"].as_str().unwrap());
+    assert_eq!(claims["name"], "Candidate");
+    assert!(claims["sub"].as_str().unwrap().starts_with("candidate-"));
+    assert_eq!(
+        claims["exp"].as_u64().unwrap() - claims["nbf"].as_u64().unwrap(),
+        TOKEN_TTL_SECONDS
+    );
+    assert_eq!(claims["video"]["room"], body["roomName"]);
+    assert_eq!(claims["video"]["roomJoin"], true);
+    assert_eq!(claims["video"]["canPublish"], true);
+    assert_eq!(claims["video"]["canSubscribe"], true);
+    assert_eq!(claims["video"]["canPublishData"], true);
+    assert_eq!(
+        claims["metadata"],
+        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90})).unwrap()
+    );
+
+    server.abort();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[tokio::test]
+async fn token_api_rejects_malformed_body_and_defaults_an_empty_one() {
+    let (mut config, cookie, db_path) = signed_in_web_config("body");
+    config.fixed_room_name = Some("interview-local".to_string());
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+
+    // A body that is present but unparsable is a client bug. Handing back a
+    // default interview would hide it until the candidate is already in the
+    // room looking at the wrong problem.
+    let malformed = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .header("content-type", "application/json")
+        .body("not json")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(malformed.status(), 400);
+
+    // No body at all still means "give me the defaults".
+    let body: Value = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let claims = claims(body["token"].as_str().unwrap());
+
+    assert_eq!(body["roomName"], "interview-local");
+    assert_eq!(claims["video"]["room"], "interview-local");
+    assert_eq!(
+        claims["metadata"],
+        serde_json::to_string(&json!({"problemId":"two-sum","durationMin":45})).unwrap()
+    );
+
+    server.abort();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[tokio::test]
+async fn token_api_ignores_empty_and_production_fixed_room() {
+    let (mut empty_config, empty_cookie, empty_db_path) = signed_in_web_config("empty-room");
+    empty_config.fixed_room_name = Some(String::new());
+    let (empty_base, empty_server) = spawn_web_server(empty_config).await;
+    let empty_body: Value = reqwest::Client::new()
+        .post(format!("{empty_base}/api/token"))
+        .header("cookie", &empty_cookie)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        empty_body["roomName"]
+            .as_str()
+            .unwrap()
+            .starts_with("interview-")
+    );
+    empty_server.abort();
+    fs::remove_file(empty_db_path).unwrap();
+
+    let (mut production_config, production_cookie, production_db_path) =
+        signed_in_web_config("production-room");
+    production_config.fixed_room_name = Some("interview-local".to_string());
+    production_config.production = true;
+    let (production_base, production_server) = spawn_web_server(production_config).await;
+    let production_body: Value = reqwest::Client::new()
+        .post(format!("{production_base}/api/token"))
+        .header("cookie", &production_cookie)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        production_body["roomName"]
+            .as_str()
+            .unwrap()
+            .starts_with("interview-")
+    );
+    production_server.abort();
+    fs::remove_file(production_db_path).unwrap();
+}
+
+/// The production hole this closes: `/api/token` invented a room name per
+/// request and nothing else in the system ever learned it, so a candidate in
+/// production joined a room no interviewer could be told to join and waited
+/// forever. The room in the response and the room staffed must be the same
+/// string, and every minted room must be staffed.
+#[tokio::test]
+async fn token_api_staffs_every_room_it_hands_out() {
+    let (mut config, cookie, db_path) = signed_in_web_config("dispatch");
+    config.production = true;
+    config.fixed_room_name = None;
+    let dispatcher = std::sync::Arc::<RecordingDispatcher>::default();
+    let (base, server) =
+        spawn_web_server_with_dispatcher(config, std::sync::Arc::clone(&dispatcher)).await;
+    let client = reqwest::Client::new();
+
+    let mut handed_out = Vec::new();
+    for _ in 0..2 {
+        let body: Value = client
+            .post(format!("{base}/api/token"))
+            .header("cookie", &cookie)
+            .json(&json!({"problemId":"two-sum","durationMin":45}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        handed_out.push(body["roomName"].as_str().unwrap().to_string());
+    }
+
+    assert_eq!(dispatcher.rooms(), handed_out);
+    assert_ne!(
+        handed_out[0], handed_out[1],
+        "production must not put two candidates in one room"
+    );
+
+    server.abort();
+    fs::remove_file(db_path).unwrap();
+}
+
+/// The interviewer must be sent to the same LiveKit project whose secret signed
+/// the candidate's token. Deriving that a second time from the room name, out
+/// of a pool built by a second directory scan, is how the two disagree; the
+/// dispatcher is handed the provider instead, and this is what says so.
+#[tokio::test]
+async fn a_staffed_room_names_the_project_that_signed_the_token() {
+    let (mut config, cookie, db_path) = signed_in_web_config("dispatch-provider");
+    config.room_prefix = "interview".to_string();
+    config.fixed_room_name = None;
+    config.production = true;
+    config.pool = codetrial::config::ProviderPool {
+        providers: vec![provider("eu", "eu")],
+    };
+    let dispatcher = std::sync::Arc::<RecordingDispatcher>::default();
+    let (base, server) =
+        spawn_web_server_with_dispatcher(config, std::sync::Arc::clone(&dispatcher)).await;
+
+    let body: Value = reqwest::Client::new()
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(body["serverUrl"], "wss://eu.livekit.cloud");
+    assert_eq!(
+        dispatcher.staffed(),
+        vec![(
+            body["roomName"].as_str().unwrap().to_string(),
+            "wss://eu.livekit.cloud".to_string()
+        )]
+    );
+
+    server.abort();
+    fs::remove_file(db_path).unwrap();
+}
+
+/// At capacity the honest answer is no. Handing out the token anyway puts the
+/// candidate alone in a room reading "Waiting", with nothing on screen or in
+/// any log they can see saying why.
+#[tokio::test]
+async fn a_room_that_cannot_be_staffed_is_refused_rather_than_sold() {
+    let (mut config, cookie, db_path) = signed_in_web_config("dispatch-capacity");
+    config.production = true;
+    config.fixed_room_name = None;
+    let dispatcher = std::sync::Arc::<RecordingDispatcher>::default();
+    dispatcher
+        .at_capacity
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let (base, server) =
+        spawn_web_server_with_dispatcher(config, std::sync::Arc::clone(&dispatcher)).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .json(&json!({"problemId":"two-sum","durationMin":45}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 503);
+    let body: Value = response.json().await.unwrap();
+    assert!(
+        body["error"].as_str().unwrap().contains("Try again"),
+        "the refusal must tell the candidate what to do: {body}"
+    );
+    assert!(body.get("token").is_none(), "a refused room has no token");
+
+    server.abort();
+    fs::remove_file(db_path).unwrap();
+}
+
+/// A web-only deployment, the other half of a split install, must keep working
+/// exactly as it did: no dispatcher, no agent started here, still a token.
+#[tokio::test]
+async fn token_api_still_works_without_a_dispatcher() {
+    let (config, cookie, db_path) = signed_in_web_config("no-dispatch");
+    let (base, server) = spawn_web_server(config).await;
+    let response = reqwest::Client::new()
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .json(&json!({"problemId":"two-sum","durationMin":45}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    server.abort();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[tokio::test]
+async fn token_api_rejects_oversize_body() {
+    let (config, cookie, db_path) = signed_in_web_config("oversize");
+    let (base, server) = spawn_web_server(config).await;
+    let response = reqwest::Client::new()
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .body(vec![b'a'; MAX_BODY_BYTES + 1])
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 413);
+
+    server.abort();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[tokio::test]
+async fn token_api_fails_closed_with_frontend_error_shape_without_livekit_credentials() {
+    let (mut config, cookie, db_path) = signed_in_web_config("missing-livekit");
+    config.pool = Default::default();
+    let (base, server) = spawn_web_server(config).await;
+    let response = reqwest::Client::new()
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .json(&json!({"problemId":"two-sum","durationMin":45}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 500);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(
+        body["error"],
+        "Server is missing LiveKit credentials. Create config/codetrial.env.local or set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET."
+    );
+
+    server.abort();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn account_recording_config_does_not_require_github_oauth() {
+    let mut config = web_config();
+
+    assert!(login_config(&config).is_none());
+
+    config.session_secret = Some("session".to_string());
+    config.db_path = Some(Path::new("codetrial.db").to_path_buf());
+
+    let login = login_config(&config).expect("recording config should enable account sessions");
+
+    assert_eq!(
+        login.oauth, None,
+        "no OAuth app means no credentials, not blank ones"
+    );
+    assert_eq!(login.session_secret, "session");
+    assert_eq!(login.db_path, Path::new("codetrial.db"));
+}
+
+#[test]
+fn account_database_schema_creates_login_tables() {
+    let path = std::env::temp_dir().join(format!(
+        "codetrial-accounts-{}-{}.db",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+
+    initialize_account_database(&path).unwrap();
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let mut statement = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        .unwrap();
+    let tables = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert!(tables.contains(&"users".to_string()));
+    assert!(tables.contains(&"sessions".to_string()));
+    assert!(tables.contains(&"reports".to_string()));
+
+    for (table, expected) in [
+        (
+            "users",
+            [
+                "github_id INTEGER NOT NULL UNIQUE",
+                "login TEXT NOT NULL",
+                "created_at INTEGER NOT NULL",
+                "updated_at INTEGER NOT NULL",
+            ]
+            .as_slice(),
+        ),
+        (
+            "sessions",
+            [
+                "user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE",
+                "expires_at INTEGER NOT NULL",
+                "created_at INTEGER NOT NULL",
+            ]
+            .as_slice(),
+        ),
+        (
+            "reports",
+            [
+                "user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE",
+                "problem_id TEXT NOT NULL",
+                "payload TEXT NOT NULL",
+                "created_at INTEGER NOT NULL",
+                "updated_at INTEGER NOT NULL",
+            ]
+            .as_slice(),
+        ),
+    ] {
+        let sql: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |row| row.get(0),
+            )
+            .unwrap();
+        for snippet in expected {
+            assert!(
+                sql.contains(snippet),
+                "{table} schema should contain {snippet}, got {sql}"
+            );
+        }
+    }
+
+    fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
+async fn account_routes_record_interviewee_github_login() {
+    let (base, server, path, client) = account_server("record-login").await;
+
+    let login = client
+        .get(format!("{base}/api/login"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 400);
+    assert_eq!(
+        login.json::<Value>().await.unwrap()["error"],
+        "Submit a GitHub username to start an interview."
+    );
+
+    let invalid = client
+        .post(format!("{base}/api/login"))
+        .json(&json!({"login":"-bad-"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), 400);
+
+    let session_cookie = record_login(&client, &base, "@Octo-Cat").await;
+
+    // No OAuth app is configured, so there is no code to exchange and the
+    // callback must say so instead of posting empty credentials to GitHub.
+    let callback = client
+        .get(format!("{base}/api/callback?code=x&state=y"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(callback.status(), 400);
+
+    let session = client
+        .get(format!("{base}/api/session"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(session.status(), 200);
+
+    assert_eq!(
+        session.json::<Value>().await.unwrap(),
+        json!({"signedIn": false, "loginRequired": true})
+    );
+
+    let signed_in = client
+        .get(format!("{base}/api/session"))
+        .header("cookie", session_cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(signed_in["signedIn"], true);
+    assert_eq!(signed_in["user"]["login"], "octo-cat");
+
+    let reports = client
+        .get(format!("{base}/api/reports"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reports.status(), 401);
+    let save_report = client
+        .post(format!("{base}/api/reports"))
+        .json(&json!({"problemId":"two-sum"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(save_report.status(), 401);
+
+    server.abort();
+    fs::remove_file(path).unwrap();
+}
+
+/// A typed handle is not proof of anything, so it must not be the key an
+/// account is found by. If it were, typing a name someone else used would hand
+/// over their interview history, and nothing stops anyone typing any name.
+#[tokio::test]
+async fn a_claimed_handle_does_not_reach_an_earlier_candidates_reports() {
+    let (base, server, path, client) = account_server("claimed-handle").await;
+
+    let first = record_login(&client, &base, "octocat").await;
+    let saved = client
+        .post(format!("{base}/api/reports"))
+        .header("cookie", &first)
+        .json(&json!({"id":"report-one","problemId":"two-sum","score":8}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), 200);
+
+    let second = record_login(&client, &base, "octocat").await;
+    assert_ne!(first, second, "each recorded login is its own account");
+
+    let reports = client
+        .get(format!("{base}/api/reports"))
+        .header("cookie", &second)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        reports["reports"].as_array().unwrap().len(),
+        0,
+        "claiming a handle must not inherit the reports filed under it"
+    );
+
+    let mine = client
+        .get(format!("{base}/api/reports"))
+        .header("cookie", &first)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(mine["reports"][0]["id"], "report-one");
+
+    server.abort();
+    fs::remove_file(path).unwrap();
+}
+
+/// `/api/token` needs a session, and this is where sessions come from, so an
+/// unlimited login endpoint just moves the flood one door back and grows the
+/// account database while it is at it.
+/// A database that will not open must not read as "this server has no
+/// accounts". That would drop the sign-in gate over a bad path: the browser
+/// would be told login is optional and let anyone start an interview.
+#[tokio::test]
+async fn an_unopenable_account_database_refuses_rather_than_disabling_login() {
+    // A directory is a path SQLite cannot open as a database file.
+    let path = account_db_path("unopenable");
+    fs::create_dir_all(&path).unwrap();
+    let mut config = web_config();
+    config.session_secret = Some("session-secret".to_string());
+    config.db_path = Some(path.clone());
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+
+    let session = client
+        .get(format!("{base}/api/session"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        session,
+        json!({"signedIn": false, "loginRequired": true}),
+        "a broken database still requires a login; it cannot serve one"
+    );
+
+    let token = client
+        .post(format!("{base}/api/token"))
+        .json(&json!({"problemId":"two-sum","durationMin":45}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        token.status(),
+        503,
+        "unavailable, not 404: the operator has a broken database, not an unconfigured one"
+    );
+
+    let login = client
+        .post(format!("{base}/api/login"))
+        .json(&json!({"login":"octocat"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 503);
+
+    server.abort();
+    fs::remove_dir_all(path).unwrap();
+}
+
+#[tokio::test]
+async fn login_endpoint_rate_limits_a_noisy_client() {
+    let (base, server, path, client) = account_server("login-rate-limit").await;
+    let url = format!("{base}/api/login");
+
+    for attempt in 1..=TOKEN_RATE_LIMIT {
+        let response = client
+            .post(&url)
+            .json(&json!({"login":"octocat"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "attempt {attempt} should pass");
+    }
+
+    let blocked = client
+        .post(&url)
+        .json(&json!({"login":"octocat"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(blocked.status(), 429);
+    assert_eq!(blocked.headers().get("retry-after").unwrap(), "60");
+
+    server.abort();
+    fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
+async fn login_rejects_a_body_that_is_not_json() {
+    let (base, server, path, client) = account_server("login-malformed").await;
+
+    let malformed = client
+        .post(format!("{base}/api/login"))
+        .header("content-type", "application/json")
+        .body("not json")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(malformed.status(), 400);
+
+    let oversize = client
+        .post(format!("{base}/api/login"))
+        .body(vec![b'a'; MAX_BODY_BYTES + 1])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(oversize.status(), 413);
+
+    for handle in ["", "-bad-", "bad name", &"a".repeat(40)] {
+        let rejected = client
+            .post(format!("{base}/api/login"))
+            .json(&json!({ "login": handle }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), 400, "{handle:?} is not a GitHub handle");
+    }
+
+    server.abort();
+    fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
+async fn github_callback_sets_session_and_clears_oauth_state() {
+    let (github_base, github_server) = spawn_mock_github().await;
+    let path = std::env::temp_dir().join(format!(
+        "codetrial-callback-accounts-{}-{}.db",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut config = web_config();
+    config.github_client_id = Some("client".to_string());
+    config.github_client_secret = Some("secret".to_string());
+    config.session_secret = Some("session-secret".to_string());
+    config.db_path = Some(path.clone());
+    config.github_oauth_base_url = Some(github_base.clone());
+    config.github_api_base_url = Some(github_base);
+
+    // The schema is created once at startup, not per request, so a caller that
+    // builds the router directly has to do what `main` does.
+    initialize_account_database(&path).unwrap();
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    let response = client
+        .get(format!("{base}/api/callback?code=ok&state=state-token"))
+        .header(
+            "cookie",
+            format!(
+                "codetrial_oauth_state={}",
+                signed_cookie("state-token", "session-secret")
+            ),
+        )
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 302);
+    let cookies = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(cookies.len(), 2);
+    let session_cookie = cookies
+        .iter()
+        .find(|cookie| cookie.starts_with("codetrial_session="))
+        .expect("callback should set session cookie")
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    assert!(
+        cookies
+            .iter()
+            .any(|cookie| cookie.starts_with("codetrial_oauth_state=; Max-Age=0")),
+        "callback should clear oauth state cookie"
+    );
+
+    let session = reqwest::Client::new()
+        .get(format!("{base}/api/session"))
+        .header("cookie", session_cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(session["signedIn"], true);
+    assert_eq!(session["user"]["login"], "octocat");
+
+    server.abort();
+    github_server.abort();
+    fs::remove_file(path).unwrap();
+}
+
+/// Hiding the start button proves nothing: /interview is a URL anyone can open,
+/// and the token is a live LiveKit credential. Where accounts exist, the
+/// credential is what has to refuse.
+#[tokio::test]
+async fn token_requires_a_session_once_accounts_exist() {
+    let path = std::env::temp_dir().join(format!(
+        "codetrial-token-gate-{}-{}.db",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    initialize_account_database(&path).unwrap();
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "INSERT INTO users (id, github_id, login, created_at, updated_at) VALUES (1, 101, 'one', 1, 1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES ('session-one', 1, 9999999999, 1)",
+                [],
+            )
+            .unwrap();
+    }
+
+    let mut config = web_config();
+    config.github_client_id = Some("client".to_string());
+    config.github_client_secret = Some("secret".to_string());
+    config.session_secret = Some("session-secret".to_string());
+    config.db_path = Some(path.clone());
+    let (base, server) = spawn_web_server(config).await;
+    let url = format!("{base}/api/token");
+    let body = json!({"problemId": "two-sum", "durationMin": 45});
+
+    let anonymous = reqwest::Client::new()
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anonymous.status(), 401);
+    assert!(
+        anonymous.json::<Value>().await.unwrap()["error"]
+            .as_str()
+            .unwrap()
+            .contains("GitHub username"),
+        "the refusal has to say what to do about it"
+    );
+
+    let signed_in = reqwest::Client::new()
+        .post(&url)
+        .header(
+            "cookie",
+            format!(
+                "codetrial_session={}",
+                signed_cookie("session-one", "session-secret")
+            ),
+        )
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(signed_in.status(), 200);
+    assert!(signed_in.json::<Value>().await.unwrap()["token"].is_string());
+
+    server.abort();
+    fs::remove_file(path).unwrap();
+}
+
+/// The rate limit is keyed by address. If anonymous callers could spend it, a
+/// stranger on the same NAT could lock the signed-in candidate out of their own
+/// interview without ever holding a session.
+#[tokio::test]
+async fn anonymous_requests_cannot_spend_the_signed_in_budget() {
+    let path = std::env::temp_dir().join(format!(
+        "codetrial-token-budget-{}-{}.db",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    initialize_account_database(&path).unwrap();
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "INSERT INTO users (id, github_id, login, created_at, updated_at) VALUES (1, 101, 'one', 1, 1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES ('session-one', 1, 9999999999, 1)",
+                [],
+            )
+            .unwrap();
+    }
+
+    let mut config = web_config();
+    config.github_client_id = Some("client".to_string());
+    config.github_client_secret = Some("secret".to_string());
+    config.session_secret = Some("session-secret".to_string());
+    config.db_path = Some(path.clone());
+    let (base, server) = spawn_web_server(config).await;
+    let url = format!("{base}/api/token");
+    let client = reqwest::Client::new();
+
+    // Twice the whole budget, all of it unauthenticated.
+    for _ in 0..(TOKEN_RATE_LIMIT * 2) {
+        let refused = client.post(&url).json(&json!({})).send().await.unwrap();
+        assert_eq!(refused.status(), 401);
+    }
+
+    let signed_in = client
+        .post(&url)
+        .header(
+            "cookie",
+            format!(
+                "codetrial_session={}",
+                signed_cookie("session-one", "session-secret")
+            ),
+        )
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        signed_in.status(),
+        200,
+        "the candidate's budget was spent by people who never signed in"
+    );
+
+    server.abort();
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn github_oauth_config_is_optional_for_recorded_login() {
+    let mut config = web_config();
+    assert!(login_config(&config).is_none());
+
+    config.github_client_id = Some("client".to_string());
+    config.db_path = Some(Path::new("accounts.db").to_path_buf());
+    assert!(
+        login_config(&config).is_none(),
+        "a database with no cookie secret cannot hold a session"
+    );
+
+    config.session_secret = Some("secret".to_string());
+    assert!(
+        login_config(&config).is_some(),
+        "a cookie secret and a database are all a recorded login needs"
+    );
+}
+
+/// Interview LiveKit credentials always belong to a signed-in GitHub user.
+#[tokio::test]
+async fn token_requires_recorded_github_login() {
+    let path = std::env::temp_dir().join(format!(
+        "codetrial-token-record-login-{}-{}.db",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    initialize_account_database(&path).unwrap();
+    let mut config = web_config();
+    config.session_secret = Some("secret".to_string());
+    config.db_path = Some(path.clone());
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+
+    let anonymous = client
+        .post(format!("{base}/api/token"))
+        .json(&json!({"problemId": "two-sum", "durationMin": 45}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(anonymous.status(), 401);
+
+    let session_cookie = record_login(&client, &base, "octocat").await;
+    let signed_in = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", session_cookie)
+        .json(&json!({"problemId": "two-sum", "durationMin": 45}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(signed_in.status(), 200);
+    server.abort();
+    fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
+async fn account_reports_are_scoped_to_the_signed_in_user() {
+    let path = std::env::temp_dir().join(format!(
+        "codetrial-route-accounts-{}-{}.db",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    initialize_account_database(&path).unwrap();
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection.execute(
+            "INSERT INTO users (id, github_id, login, created_at, updated_at) VALUES (1, 101, 'one', 1, 1)",
+            [],
+        ).unwrap();
+        connection.execute(
+            "INSERT INTO users (id, github_id, login, created_at, updated_at) VALUES (2, 202, 'two', 1, 1)",
+            [],
+        ).unwrap();
+        connection
+            .execute(
+                "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES ('session-one', 1, 9999999999, 1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES ('session-two', 2, 9999999999, 1)",
+                [],
+            )
+            .unwrap();
+        connection.execute(
+            "INSERT INTO reports (id, user_id, problem_id, payload, created_at, updated_at) VALUES ('report-one', 1, 'two-sum', '{\"problemId\":\"two-sum\",\"score\":8}', 1, 1)",
+            [],
+        ).unwrap();
+        connection.execute(
+            "INSERT INTO reports (id, user_id, problem_id, payload, created_at, updated_at) VALUES ('report-two', 2, 'merge-intervals', '{\"problemId\":\"merge-intervals\",\"score\":4}', 1, 1)",
+            [],
+        ).unwrap();
+    }
+
+    let mut config = web_config();
+    config.github_client_id = Some("client".to_string());
+    config.github_client_secret = Some("secret".to_string());
+    config.session_secret = Some("session-secret".to_string());
+    config.db_path = Some(path.clone());
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+    let user_one_cookie = format!(
+        "codetrial_session={}",
+        signed_cookie("session-one", "session-secret")
+    );
+    let user_two_cookie = format!(
+        "codetrial_session={}",
+        signed_cookie("session-two", "session-secret")
+    );
+
+    let session = client
+        .get(format!("{base}/api/session"))
+        .header("cookie", &user_one_cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(session["signedIn"], true);
+    assert_eq!(session["user"]["login"], "one");
+
+    let reports = client
+        .get(format!("{base}/api/reports"))
+        .header("cookie", &user_one_cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(reports["reports"].as_array().unwrap().len(), 1);
+    assert_eq!(reports["reports"][0]["id"], "report-one");
+
+    let saved = client
+        .post(format!("{base}/api/reports"))
+        .header("cookie", &user_one_cookie)
+        .json(&json!({"id":"new-report","problemId":"three-sum","score":9}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), 200);
+    assert_eq!(saved.json::<Value>().await.unwrap()["id"], "new-report");
+
+    let blocked = client
+        .post(format!("{base}/api/reports"))
+        .header("cookie", &user_two_cookie)
+        .json(&json!({"id":"new-report","problemId":"three-sum","score":1}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(blocked.status(), 409);
+
+    let user_two_reports = client
+        .get(format!("{base}/api/reports"))
+        .header("cookie", &user_two_cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let ids = user_two_reports["reports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|report| report["id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["report-two"]);
+
+    let logout = client
+        .post(format!("{base}/api/logout"))
+        .header("cookie", &user_one_cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(logout.status(), 200);
+    let signed_out = client
+        .get(format!("{base}/api/session"))
+        .header("cookie", &user_one_cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        signed_out,
+        json!({"signedIn": false, "loginRequired": true}),
+        "accounts exist here, so the browser has to know to demand a sign-in"
+    );
+
+    server.abort();
+    fs::remove_file(path).unwrap();
+}
+
+/// `/api/reports` is an authenticated write with no rate limit, and the client
+/// picks its own row ids, so without a ceiling one account can grow the
+/// database until the disk runs out. 507 rather than 429: waiting does not
+/// help, so telling the client to retry would be a lie.
+#[tokio::test]
+async fn a_full_account_cannot_grow_the_report_database() {
+    let (config, cookie, path) = signed_in_web_config("report-quota");
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        for index in 0..MAX_REPORTS_PER_USER {
+            connection.execute(
+                "INSERT INTO reports (id, user_id, problem_id, payload, created_at, updated_at) VALUES (?1, 1, 'two-sum', '{}', 1, 1)",
+                [format!("seeded-{index}")],
+            ).unwrap();
+        }
+    }
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+
+    let refused = client
+        .post(format!("{base}/api/reports"))
+        .header("cookie", &cookie)
+        .json(&json!({"id":"one-too-many","problemId":"three-sum","score":9}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 507);
+
+    // The interview in progress still has to be able to save, or the ceiling
+    // breaks the feature it protects.
+    let rewritten = client
+        .post(format!("{base}/api/reports"))
+        .header("cookie", &cookie)
+        .json(&json!({"id":"seeded-0","problemId":"two-sum","score":10}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rewritten.status(), 200);
+
+    let stored = client
+        .get(format!("{base}/api/reports"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        stored["reports"].as_array().unwrap().len() as i64,
+        MAX_REPORTS_PER_USER,
+        "the refused write must not have landed",
+    );
+
+    server.abort();
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn body_limit_matches_non_working_reference() {
+    assert_eq!(MAX_BODY_BYTES, 8192);
+
+    // Reports carry graded prose, so they get their own, larger ceiling; the
+    // browser's per-field caps in web/lib.js are sized against this one.
+    assert_eq!(MAX_REPORT_BYTES, 65536);
+    assert_eq!(DEFAULT_WEB_DIR, "web");
+}
+
+/// A pool holding just the primary, which is what a single-project deployment
+/// has. The credentials used to sit in three flat `WebServerConfig` fields
+/// beside the pool; the pool is now the only place they live.
+fn primary_pool(url: &str, api_key: &str, api_secret: &str) -> codetrial::config::ProviderPool {
+    codetrial::config::ProviderPool {
+        providers: vec![codetrial::config::Provider {
+            id: codetrial::config::PRIMARY_PROVIDER_ID.to_string(),
+            url: url.to_string(),
+            api_key: api_key.to_string(),
+            api_secret: api_secret.to_string(),
+            google_api_key: String::new(),
+        }],
+    }
+}
+
+fn provider(id: &str, host: &str) -> codetrial::config::Provider {
+    codetrial::config::Provider {
+        id: id.to_string(),
+        url: format!("wss://{host}.livekit.cloud"),
+        api_key: format!("{id}-key"),
+        api_secret: format!("{id}-secret"),
+        google_api_key: format!("{id}-google"),
+    }
+}
+
+/// The property that matters is not that the web process picks a provider, it
+/// is
+/// that the agent process, which only ever receives the room name, resolves the
+/// same one. Asserting that by calling the selector the handler itself uses
+/// would pass for any implementation that is merely self-consistent, so this
+/// walks the path the agent walks: read the id out of the room name, look it
+/// up,
+/// and check the token was signed with that provider's secret.
+#[tokio::test]
+async fn a_minted_room_name_routes_the_agent_to_the_provider_that_signed_it() {
+    let (mut config, cookie, db_path) = signed_in_web_config("provider-routing");
+    config.room_prefix = "interview".to_string();
+    config.fixed_room_name = None;
+    config.pool = codetrial::config::ProviderPool {
+        providers: vec![
+            provider(codetrial::config::PRIMARY_PROVIDER_ID, "primary"),
+            provider("eu", "eu"),
+            provider("us", "us"),
+        ],
+    };
+    let pool = config.pool.clone();
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+
+    let mut served = Vec::new();
+    for _ in 0..6 {
+        let response = client
+            .post(format!("{base}/api/token"))
+            .header("cookie", &cookie)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = response.json::<Value>().await.unwrap();
+        let room_name = body["roomName"].as_str().unwrap().to_string();
+
+        // The same call the agent makes, given nothing but the room name.
+        let expected = pool.for_room(&room_name, "interview").unwrap();
+
+        assert_eq!(body["serverUrl"], expected.url);
+
+        // A URL from one project and a signature from another would still look
+        // right in the response body and fail at the SFU.
+        let token = body["token"].as_str().unwrap();
+        assert_eq!(claims(token)["iss"], expected.api_key);
+        assert!(verify_signature(token, &expected.api_secret));
+        served.push(expected.id.clone());
+    }
+
+    // Round robin, so six requests over three providers use all three. The old
+    // room-name hash could send every room to the same one.
+    served.sort();
+    served.dedup();
+    assert_eq!(served, vec!["eu", "primary", "us"]);
+
+    server.abort();
+    fs::remove_file(db_path).unwrap();
+}
+
+/// A fixed room name is handed to the agent verbatim, so the handler has to
+/// read
+/// the provider out of it rather than take the next one off the counter.
+#[tokio::test]
+async fn a_fixed_room_name_pins_the_provider_it_names() {
+    let (mut config, cookie, db_path) = signed_in_web_config("provider-fixed-room");
+    config.room_prefix = "interview".to_string();
+    config.fixed_room_name = Some("interview-eu-fixed".to_string());
+    config.production = false;
+    config.pool = codetrial::config::ProviderPool {
+        providers: vec![
+            provider(codetrial::config::PRIMARY_PROVIDER_ID, "primary"),
+            provider("eu", "eu"),
+        ],
+    };
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+
+    for _ in 0..3 {
+        let body = client
+            .post(format!("{base}/api/token"))
+            .header("cookie", &cookie)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        assert_eq!(body["roomName"], "interview-eu-fixed");
+        assert_eq!(body["serverUrl"], "wss://eu.livekit.cloud");
+    }
+
+    server.abort();
+    fs::remove_file(db_path).unwrap();
+}
+
+fn web_config() -> WebServerConfig {
+    WebServerConfig {
+        web_dir: std::env::temp_dir(),
+        github_client_id: None,
+        github_client_secret: None,
+        session_secret: None,
+        db_path: None,
+        github_oauth_base_url: None,
+        github_api_base_url: None,
+        room_prefix: "interview".to_string(),
+        fixed_room_name: None,
+        production: false,
+        compiler_explorer_enabled: true,
+        trusted_proxy_hops: 0,
+        pool: primary_pool("wss://example.livekit.cloud", "devkey", "devsecret"),
+    }
+}
+
+fn signed_in_web_config(label: &str) -> (WebServerConfig, String, std::path::PathBuf) {
+    let db_path = account_db_path(label);
+    initialize_account_database(&db_path).unwrap();
+    {
+        let connection = rusqlite::Connection::open(&db_path).unwrap();
+        connection
+            .execute(
+                "INSERT INTO users (id, github_id, login, created_at, updated_at) VALUES (1, 101, 'one', 1, 1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES ('session-one', 1, 9999999999, 1)",
+                [],
+            )
+            .unwrap();
+    }
+
+    let mut config = web_config();
+    config.session_secret = Some("session-secret".to_string());
+    config.db_path = Some(db_path.clone());
+    (
+        config,
+        format!(
+            "codetrial_session={}",
+            signed_cookie("session-one", "session-secret")
+        ),
+        db_path,
+    )
+}
+
+fn account_db_path(label: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "codetrial-{label}-{}-{}.db",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ))
+}
+
+/// A server with accounts enabled and nobody signed in yet, which is where
+/// every login test starts.
+async fn account_server(
+    label: &str,
+) -> (
+    String,
+    tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    std::path::PathBuf,
+    reqwest::Client,
+) {
+    let db_path = account_db_path(label);
+    initialize_account_database(&db_path).unwrap();
+    let mut config = web_config();
+    config.session_secret = Some("session-secret".to_string());
+    config.db_path = Some(db_path.clone());
+    let (base, server) = spawn_web_server(config).await;
+    (base, server, db_path, reqwest::Client::new())
+}
+
+/// Signs in the way the browser does, so a test that cares about who owns what
+/// does not have to hand-write rows and cookie signatures.
+async fn record_login(client: &reqwest::Client, base: &str, handle: &str) -> String {
+    let response = client
+        .post(format!("{base}/api/login"))
+        .json(&json!({ "login": handle }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200, "recording {handle} should succeed");
+    response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().unwrap())
+        .find(|cookie| cookie.starts_with("codetrial_session="))
+        .expect("login should set a session cookie")
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+/// A LiveKit token names its project in `iss` and proves it in the signature.
+/// Checking only `iss` would miss a token minted with one provider's key and
+/// another's secret, which the SFU rejects and the response body does not show.
+fn verify_signature(token: &str, secret: &str) -> bool {
+    // A JWS is `<signed>.<signature>`, the same shape `signed_cookie` builds,
+    // so re-signing and comparing beats a second HMAC spelled out here.
+    let (signed, _) = token.rsplit_once('.').unwrap();
+    signed_cookie(signed, secret) == token
+}
+
+fn signed_cookie(value: &str, secret: &str) -> String {
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+    mac.update(value.as_bytes());
+    format!(
+        "{value}.{}",
+        URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+    )
+}
+
+async fn spawn_web_server(
+    config: WebServerConfig,
+) -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server =
+        tokio::spawn(
+            async move { axum::serve(listener, codetrial::web::web_service(config)).await },
+        );
+    (format!("http://{addr}"), server)
+}
+
+/// Records what it was asked to staff, so a test can assert that the room a
+/// candidate is handed is the room an interviewer was sent to, on the LiveKit
+/// project whose secret signed that candidate's token.
+#[derive(Default)]
+struct RecordingDispatcher {
+    staffed: std::sync::Mutex<Vec<(String, String)>>,
+    /// Set to refuse, standing in for a process already at capacity.
+    at_capacity: std::sync::atomic::AtomicBool,
+}
+
+impl RoomDispatcher for RecordingDispatcher {
+    fn ensure_agent(&self, room_name: &str, provider: &codetrial::config::Provider) -> bool {
+        if self.at_capacity.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        self.staffed
+            .lock()
+            .unwrap()
+            .push((room_name.to_string(), provider.url.clone()));
+        true
+    }
+}
+
+impl RecordingDispatcher {
+    fn rooms(&self) -> Vec<String> {
+        self.staffed
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(room_name, _)| room_name.clone())
+            .collect()
+    }
+
+    fn staffed(&self) -> Vec<(String, String)> {
+        self.staffed.lock().unwrap().clone()
+    }
+}
+
+async fn spawn_web_server_with_dispatcher(
+    config: WebServerConfig,
+    dispatcher: std::sync::Arc<RecordingDispatcher>,
+) -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            codetrial::web::web_service_with_dispatcher(config, Some(dispatcher)),
+        )
+        .await
+    });
+    (format!("http://{addr}"), server)
+}
+
+async fn spawn_mock_github() -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = axum::Router::new()
+        .route(
+            "/login/oauth/access_token",
+            axum::routing::post(|| async {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    json!({"access_token":"mock-token"}).to_string(),
+                )
+            }),
+        )
+        .route(
+            "/user",
+            axum::routing::get(|| async {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    json!({"id":303,"login":"octocat","avatar_url":"https://example.test/avatar.png"}).to_string(),
+                )
+            }),
+        );
+    let server = tokio::spawn(async move { axum::serve(listener, router).await });
+    (format!("http://{addr}"), server)
+}
+
+fn static_export_json(path: &str, prefix: &str) -> Value {
+    let source = fs::read_to_string(path).unwrap();
+    let mut json = source
+        .strip_prefix(prefix)
+        .unwrap_or_else(|| panic!("{path} missing export prefix"))
+        .trim();
+    if let Some((data, _)) = json.split_once("\n\nexport ") {
+        json = data.trim();
+    }
+    let json = json.trim_end_matches(';');
+    serde_json::from_str(json).unwrap_or_else(|error| panic!("{path} should parse: {error}"))
+}
+
+fn source_block<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+    let start_index = source
+        .find(start)
+        .unwrap_or_else(|| panic!("missing {start}"));
+    let end_index = source[start_index..]
+        .find(end)
+        .map(|index| start_index + index)
+        .unwrap_or_else(|| panic!("missing {end}"));
+    &source[start_index..end_index]
+}

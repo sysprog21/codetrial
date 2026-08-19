@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CodeTrial - Interview</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/vendor/livekit-client.js"></script>
+    <script src="/runtime-config.js"></script>
+    <script type="module" src="/interview.js"></script>
+  </head>
+  <body>
+    <main class="interview-shell">
+      <aside class="interview-sidebar">
+        <header class="interview-header">
+          <div class="brand">CODETRIAL</div>
+          <h1 id="problem-title">Loading interview...</h1>
+          <p id="problem-meta"></p>
+          <div class="status-row">
+            <div class="agent-pill" title="AI interviewer status">
+              <span class="agent-viz" aria-hidden="true">
+                <span></span><span></span><span></span><span></span><span></span>
+              </span>
+              <span id="agent-state">Connecting...</span>
+            </div>
+            <div id="timer" class="timer" title="Time remaining">00:00</div>
+          </div>
+          <div id="presence-banner" class="presence-banner" hidden role="alert" aria-live="assertive"></div>
+          <div class="control-row">
+            <button id="mic" class="pill-button" type="button">Mic on</button>
+            <button id="end" class="pill-button danger" type="button">End interview</button>
+          </div>
+
+          <!-- Meet is a presentation channel, not CodeTrial's audio transport:
+               LiveKit plays Jim into this tab and Meet re-shares the tab. -->
+          <details id="meet-mode" class="meet-mode">
+            <summary id="meet-mode-summary">Present in Google Meet</summary>
+            <div class="meet-mode-body">
+              <ol id="meet-mode-steps" class="meet-mode-steps">
+                <li>Start the CodeTrial interview and confirm the media preflight.</li>
+                <li>In Meet, click Present now.</li>
+                <li>Choose <strong>A tab</strong>.</li>
+                <li>Select the CodeTrial tab.</li>
+                <li>Enable <strong>Share tab audio</strong> before clicking Share.</li>
+              </ol>
+              <p id="meet-mode-reminder" class="meet-mode-reminder">
+                Share <strong>A tab</strong>, not a window or your whole screen, and turn on
+                <strong>Share tab audio</strong>. Without tab audio the interviewer sees you but never hears Jim.
+              </p>
+              <p id="meet-mode-mic-note" class="muted small">
+                Your microphone stays with CodeTrial and cannot also serve Meet, so the interviewer
+                hears you by joining the interview room, not through Meet. Leave your camera off in
+                Meet only if you did not tick the presentation box during the media check. Wear
+                headphones so Jim is not re-captured by your mic.
+              </p>
+              <div id="meet-output-row" class="meet-mode-output">
+                <label for="meet-output-select">Play Jim through</label>
+                <select id="meet-output-select"></select>
+              </div>
+              <p id="meet-output-note" class="muted small" hidden></p>
+              <p id="meet-mode-privacy" class="muted small">
+                Once you share the tab, Google Meet controls who receives this interview. Recordings or
+                copies made in Meet, or by anyone in the call, are outside CodeTrial's control.
+              </p>
+            </div>
+          </details>
+
+        </header>
+
+        <nav class="tab-row" aria-label="Interview details">
+          <button id="problem-tab" class="tab-button selected" type="button">Problem</button>
+          <button id="transcript-tab" class="tab-button" type="button">Transcript</button>
+        </nav>
+
+        <section id="problem-panel" class="side-panel"></section>
+        <section id="transcript-panel" class="side-panel" hidden>
+          <div class="empty-transcript">
+            <span aria-hidden="true">...</span>
+            <p>No conversation yet</p>
+            <p>Everything you and Jim say appears here in real time, and is included in your downloadable report.</p>
+          </div>
+        </section>
+      </aside>
+
+      <section class="editor-panel">
+        <div class="editor-toolbar">
+          <div class="language-tabs" aria-label="Language">
+            <button class="language-button selected" type="button" data-language="python">Python 3</button>
+            <button class="language-button" type="button" data-language="javascript">JavaScript</button>
+            <button class="language-button" type="button" data-language="c">C</button>
+            <button class="language-button" type="button" data-language="cpp">C++</button>
+            <button class="language-button" type="button" data-language="java">Java</button>
+          </div>
+          <p class="compile-disclosure">C, C++ and Java runs are sent to Compiler Explorer.</p>
+          <div class="sync-state"><span></span>Live-synced to Jim</div>
+          <button id="run-tests" class="run-button" type="button">Run tests</button>
+        </div>
+        <!-- The textarea stays the source of truth and keeps native editing;
+             the pre behind it only paints the colors. -->
+        <div class="editor-stack">
+          <pre id="editor-highlight" aria-hidden="true"><code></code></pre>
+          <textarea id="editor" spellcheck="false" aria-label="Code editor"></textarea>
+        </div>
+        <section class="test-drawer">
+          <button id="results-toggle" type="button">
+            <span id="results-label">Test results</span>
+            <span id="results-chevron">v</span>
+          </button>
+          <div id="results-body" class="results-body">
+            <p class="muted small">Run the test cases any time - Jim sees your results too.</p>
+          </div>
+        </section>
+      </section>
+
+      <!-- Shown before the room is joined: the interview starts only after
+           required local media is proven. -->
+      <section id="audio-check" class="overlay">
+        <div class="audio-check-card">
+          <h2>Media preflight</h2>
+          <p>Confirm output, microphone, and camera before the interview starts.</p>
+
+          <div class="audio-check-step" id="audio-step-output">
+            <p><span class="step-mark" aria-hidden="true"></span><strong>Output</strong> — <span id="audio-output-state" aria-live="polite">play a short tone.</span></p>
+            <div class="audio-check-actions">
+              <button id="audio-test-tone" class="pill-button" type="button">Play test tone</button>
+              <button id="audio-heard" class="pill-button waiting" type="button" aria-disabled="true">I heard it</button>
+            </div>
+          </div>
+
+          <div class="audio-check-step" id="audio-step-mic">
+            <p><span class="step-mark" aria-hidden="true"></span><strong>Microphone</strong> — say something and watch the level.</p>
+            <div class="audio-meter" role="img" aria-label="Microphone input level">
+              <span id="audio-meter-fill"></span>
+            </div>
+          </div>
+
+          <div class="audio-check-step" id="audio-step-camera">
+            <p><span class="step-mark" aria-hidden="true"></span><strong>Camera</strong> — <span id="camera-state" aria-live="polite">grant access and keep video on.</span></p>
+          </div>
+
+          <!-- Decided here, not in the sidebar: it changes which tracks the
+               interview publishes, so it has to be settled before the room
+               starts. -->
+          <div class="audio-check-step" id="audio-step-meet">
+            <p>
+              <label for="meet-presentation">
+                <input type="checkbox" id="meet-presentation">
+                I will present this interview in Google Meet
+              </label>
+            </p>
+            <p class="muted small">
+              CodeTrial hands the camera to Meet after this check and stops watching it, so
+              camera integrity is off for this interview and the report says so. Your microphone
+              stays with CodeTrial.
+            </p>
+          </div>
+
+          <p id="audio-check-status" class="muted small" role="status">Starting camera and microphone...</p>
+          <div class="audio-check-actions">
+            <button id="audio-check-join" class="start-button" type="button" disabled>Start interview</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="ending-overlay" class="overlay" hidden>
+        <div class="spinner"></div>
+        <p>Jim is writing up your evaluation...</p>
+        <p id="ending-detail">Scoring your code and communication - this usually takes a few seconds.</p>
+        <button id="leave-room" class="pill-button" type="button" hidden>Taking too long? Leave the room</button>
+        <button id="force-report" class="pill-button" type="button">Show offline report</button>
+      </section>
+
+      <!-- Floats over the editor's top-right rather than sitting in the
+           sidebar, which was already carrying the problem, the timer, the
+           status pill, the captions and the controls. Jim is here to be looked
+           at while the candidate works, so he goes where their eyes already
+           are, and the stage never takes pointer events off the editor. -->
+      <aside id="jim-stage" class="jim-stage">
+        <!-- data-avatar-state is the fallback contract: only "ready" shows
+             the canvas, every other value shows the neutral panel below it.
+             web/avatar/avatar.js owns the value; the CSS owns what it looks
+             like. -->
+        <div id="jim-avatar" class="jim-avatar" data-avatar-state="loading">
+          <p id="jim-avatar-fallback" class="jim-avatar-fallback">
+            <span class="jim-avatar-initial" aria-hidden="true">J</span>
+            <span id="jim-avatar-note" class="muted small">Jim is here by voice.</span>
+          </p>
+        </div>
+        <!-- Jim's subtitles belong under Jim's face, not across the room in the
+             sidebar: the candidate is already looking here when he speaks. -->
+        <div id="captions-bar" class="captions-bar" aria-live="polite" aria-label="Real-time closed captions">
+          <span class="captions-label">Live CC:</span>
+          <span id="captions-text">Listening...</span>
+        </div>
+      </aside>
+
+      <section id="report-modal" class="overlay" hidden></section>
+      <video id="camera-integrity-video" class="hidden-media" muted playsinline></video>
+    </main>
+  </body>
+</html>

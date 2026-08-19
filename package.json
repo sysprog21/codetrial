@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "type": "module",
+  "//": "Not an app. `type: module` marks the repo's .js files as ESM for Node, which browsers already infer from <script type=\"module\">; without it `node --test` only works on Node 22.7+.",
+  "//browser-checks": "CI deliberately runs no npm. The browser tier is local-only: `npm install && npx playwright install chromium`, then `./scripts/visual-parity-check.sh` and `cargo test --test web -- --ignored`. scripts/test.sh, which CI runs, needs node but never npm.",
+  "devDependencies": {
+    "playwright": "1.62.1"
+  },
+  "scripts": {
+    "test": "node --test tests/browser/*.test.js",
+    "browser-check": "scripts/browser-check.sh"
+  }
+}

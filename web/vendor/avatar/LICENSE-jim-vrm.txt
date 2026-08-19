@@ -1,0 +1,46 @@
+web/vendor/avatar/jim.vrm
+
+Seed-san, by VirtualCast, Inc.
+
+Source:    https://github.com/vrm-c/vrm-specification
+Path:      samples/Seed-san/vrm/Seed-san.vrm
+License:   VRM Public License 1.0, https://vrm.dev/licenses/1.0/
+Copyright: VirtualCast, Inc.
+SHA-256:   624d0d554bc205bbdc33e22a68a2c3c20edebb3e573011ead8878a65e5329b23
+Bytes:     10917800
+
+CodeTrial renders this model as its interviewer, "Jim". The character is
+VirtualCast's, not CodeTrial's, and is used under the grant below.
+
+The grant travels inside the file. VRM Public License 1.0 takes its terms from
+the VRMC_vrm.meta block of the model itself rather than from any web page, so
+what follows is that block, read verbatim out of the bytes committed here:
+
+  "name":              "Seed-san"
+  "authors":           ["VirtualCast, Inc."]
+  "copyrightInformation": "VirtualCast, Inc."
+  "licenseUrl":        "https://vrm.dev/licenses/1.0/"
+  "avatarPermission":  "everyone"
+  "commercialUsage":   "corporation"
+  "modification":      "allowModificationRedistribution"
+  "allowRedistribution": true
+  "creditNotation":    "required"
+
+CREDIT IS REQUIRED. "creditNotation": "required" obliges any use of this model
+to name its author. CodeTrial satisfies that by crediting VirtualCast, Inc. in
+the lobby footer of web/index.html, in README.md, in NOTICE, and here. It sat
+beneath the avatar during the interview and was moved out because it crowded
+the workspace. Moving it is fine; dropping it is not, and
+tests/browser/avatar.test.js asserts a visible credit still exists in the UI.
+
+Reproduce this file:
+
+  curl -L -o jim.vrm \
+    https://raw.githubusercontent.com/vrm-c/vrm-specification/master/samples/Seed-san/vrm/Seed-san.vrm
+  shasum -a 256 jim.vrm
+
+Re-read the embedded grant at any time:
+
+  node -e 'const b=require("fs").readFileSync("jim.vrm");
+    const j=JSON.parse(b.slice(20,20+b.readUInt32LE(12)).toString("utf8"));
+    console.log(JSON.stringify(j.extensions.VRMC_vrm.meta,null,2))'

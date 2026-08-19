@@ -1,0 +1,42 @@
+# deps
+node_modules/
+# playwright is pinned exactly in package.json; a committed lockfile only adds
+# platform-specific optional entries that differ per machine
+package-lock.json
+.venv/
+__pycache__/
+
+# builds
+.next/
+out/
+target/
+tests/artifacts/
+scripts/leetcode-cache/
+problem-bank/leetcode/
+*.tsbuildinfo
+next-env.d.ts
+
+# accounts — holds GitHub logins, live session tokens and report contents
+*.db
+# WAL journalling leaves these two beside the database on every run
+*.db-wal
+*.db-shm
+
+# env — secrets never get committed. Broad on purpose: `.env`, `.env.local` and
+# `.env*.local` left `.env.production` tracked, which is the one most likely to
+# hold a real key.
+.env*
+!.env.example
+# Every provider file holds a LiveKit secret and a Gemini key, and the name
+# after the dot is the operator's to choose, so the rule has to cover all of
+# them. Only the checked-in template is exempt.
+config/*.env.*
+!config/*.env.example
+
+# local reference material
+DONT-MERGE/
+
+# misc
+.DS_Store
+*.log
+.gstack/

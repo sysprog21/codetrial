@@ -1,0 +1,13 @@
+{
+  "mode": "python",
+  "flow": "voice",
+  "problemTitle": "Two Sum",
+  "agentState": "Speaking",
+  "testResultText": null,
+  "transcriptSegmentCount": 1,
+  "firstTranscriptSpeaker": "alex",
+  "candidateSegmentCount": null,
+  "alexAfterCandidate": false,
+  "rustAgentParticipants": [],
+  "report": null
+}
