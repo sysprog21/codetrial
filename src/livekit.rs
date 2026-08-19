@@ -66,6 +66,7 @@ const CANDIDATE_JOIN_LIMIT: Duration = Duration::from_secs(300);
 /// Without it a closed tab kept a metered Gemini session open until the
 /// interview's full deadline.
 const CANDIDATE_ABSENCE_LIMIT: Duration = Duration::from_secs(90);
+
 use crate::gemini::{
     GeminiEvent, GeminiFunctionCall, GeminiLiveSession, generate_report, open_live_session,
     redact_api_key,
@@ -95,6 +96,59 @@ const WRAP_UP_WAIT: Duration = Duration::from_secs(8);
 /// is watching a spinner, so this is the point where waiting stops being worth
 /// more than a fallback report.
 const REPORT_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// Whether the candidate is in the room, and since when they have not been.
+///
+/// The departure, the return and the grace check happen in three different
+/// arms of the `run_room` loop. They were three lines against one `Option`
+/// local, which is to say the rule connecting them was written nowhere and
+/// asserted by nothing: ending an interview because somebody's tab reloaded,
+/// or keeping a metered Gemini session open because a return never cleared the
+/// clock, both looked like ordinary code from any one of the three sites.
+///
+/// `now` is a parameter rather than an `Instant::now()` inside, so the grace
+/// can be tested without waiting ninety seconds for it.
+#[derive(Debug, Default)]
+struct CandidatePresence {
+    left_at: Option<Instant>,
+}
+
+impl CandidatePresence {
+    fn left(&mut self, now: Instant) {
+        self.left_at = Some(now);
+    }
+
+    fn returned(&mut self) {
+        self.left_at = None;
+    }
+
+    /// Present, or absent for less than the grace, both mean carry on.
+    fn gave_up(&self, now: Instant) -> bool {
+        self.left_at
+            .is_some_and(|left| now.duration_since(left) >= CANDIDATE_ABSENCE_LIMIT)
+    }
+}
+
+/// The three things a data packet has to be before it means anything: sent on a
+/// topic, sent by the interview participant, and parseable as JSON.
+///
+/// Each was a bare `continue` inside the loop, so a packet dropped because it
+/// came from a bystander was indistinguishable from one dropped because it was
+/// malformed, and nothing covered either. The topic is handed back borrowed
+/// because the caller already owns it and the only reason to return it at all
+/// is that unwrapping it here is what makes the three guards one decision.
+fn interview_packet<'a>(
+    topic: Option<&'a str>,
+    sender: Option<&str>,
+    candidate_identity: &str,
+    payload: &[u8],
+) -> Option<(&'a str, serde_json::Value)> {
+    let topic = topic?;
+    if !is_interview_participant(sender, candidate_identity) {
+        return None;
+    }
+    Some((topic, serde_json::from_slice(payload).ok()?))
+}
 
 pub async fn run_room(
     config: &AgentConfig,
@@ -174,10 +228,10 @@ pub async fn run_room(
 
     let mut watch = tokio::time::interval(Duration::from_secs_f64(WATCH_TICK_S));
 
-    // Set while the candidate is away. Checked on the watch tick rather than
-    // given its own timer arm: the tick already runs, and a resolution of one
-    // tick is plenty for a ninety-second grace.
-    let mut candidate_left_at: Option<Instant> = None;
+    // Checked on the watch tick rather than given its own timer arm: the tick
+    // already runs, and a resolution of one tick is plenty for a ninety-second
+    // grace.
+    let mut presence = CandidatePresence::default();
 
     // The interview's own deadline, held by the process that owns the room
     // rather than by the candidate's tab. The browser countdown is a display:
@@ -238,7 +292,7 @@ pub async fn run_room(
                 return Ok(());
             }
             _ = watch.tick(), if !state.ended => {
-                if candidate_left_at.is_some_and(|left| left.elapsed() >= CANDIDATE_ABSENCE_LIMIT) {
+                if presence.gave_up(Instant::now()) {
                     // No report: it would be graded from a session the
                     // candidate walked out of, and there is nobody in the room
                     // to receive it. The browser writes the report the
@@ -271,12 +325,13 @@ pub async fn run_room(
                 }
                 match event {
                     RoomEvent::DataReceived { payload, topic, participant, .. } => {
-                        let Some(topic) = topic else { continue };
                         let sender = participant.as_ref().map(|participant| participant.identity().0);
-                        if !is_interview_participant(sender.as_deref(), &candidate_identity) {
-                            continue;
-                        }
-                        let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&payload) else {
+                        let Some((topic, payload)) = interview_packet(
+                            topic.as_deref(),
+                            sender.as_deref(),
+                            &candidate_identity,
+                            &payload,
+                        ) else {
                             continue;
                         };
                         let mut context = event_context!();
@@ -284,7 +339,7 @@ pub async fn run_room(
                             &room,
                             &mut context,
                             interview,
-                            &topic,
+                            topic,
                             &payload,
                         )
                         .await?
@@ -302,12 +357,12 @@ pub async fn run_room(
                         if participant.identity().0 == candidate_identity =>
                     {
                         eprintln!("candidate left room={room_name}; waiting for a return");
-                        candidate_left_at = Some(Instant::now());
+                        presence.left(Instant::now());
                     }
                     RoomEvent::ParticipantConnected(participant)
                         if participant.identity().0 == candidate_identity =>
                     {
-                        candidate_left_at = None;
+                        presence.returned();
                     }
                     _ => {}
                 }
@@ -1739,6 +1794,86 @@ mod tests {
         assert!(
             !is_interview_participant(None, "candidate-abc"),
             "an unattributed event drives nothing: this agent never sends itself packets"
+        );
+    }
+
+    /// The three guards a data packet passes before it can drive anything, in
+    /// one place because they used to be three `continue`s that looked alike.
+    #[test]
+    fn only_the_candidates_parseable_packet_on_a_topic_drives_the_runtime() {
+        let good = br#"{"type":"end_interview"}"#;
+
+        let (topic, payload) = interview_packet(
+            Some(TOPIC_CONTROL),
+            Some("candidate-abc"),
+            "candidate-abc",
+            good,
+        )
+        .expect("the candidate's own JSON on a topic is the whole point");
+        assert_eq!(topic, TOPIC_CONTROL);
+        assert_eq!(payload["type"], "end_interview");
+
+        // LiveKit makes the topic optional, and every handler downstream keys
+        // off it, so a packet without one is addressed to nothing.
+        assert!(interview_packet(None, Some("candidate-abc"), "candidate-abc", good).is_none());
+
+        // The interesting half of the gate: a bystander in the room must not be
+        // able to end the interview or rewrite the editor.
+        assert!(
+            interview_packet(
+                Some(TOPIC_CONTROL),
+                Some("candidate-xyz"),
+                "candidate-abc",
+                good
+            )
+            .is_none()
+        );
+        assert!(interview_packet(Some(TOPIC_CONTROL), None, "candidate-abc", good).is_none());
+
+        // Dropped rather than propagated: the sender is the browser we ship, so
+        // a body that will not parse is a bug to fix rather than an interview
+        // to end under the candidate.
+        assert!(
+            interview_packet(
+                Some(TOPIC_CONTROL),
+                Some("candidate-abc"),
+                "candidate-abc",
+                b"not json",
+            )
+            .is_none()
+        );
+    }
+
+    /// Ending an interview because a tab reloaded, and keeping a metered Gemini
+    /// session open because a return never cleared the clock, are the two ways
+    /// this goes wrong. Both used to be spread across three `select!` arms with
+    /// nothing asserting they agreed.
+    #[test]
+    fn the_absence_grace_starts_on_departure_and_a_return_clears_it() {
+        let start = Instant::now();
+        let mut presence = CandidatePresence::default();
+
+        // Nobody has left, so no amount of elapsed time ends anything.
+        assert!(!presence.gave_up(start + CANDIDATE_ABSENCE_LIMIT * 10));
+
+        presence.left(start);
+        assert!(
+            !presence.gave_up(start),
+            "the grace starts, it does not expire"
+        );
+        assert!(
+            !presence.gave_up(start + CANDIDATE_ABSENCE_LIMIT - Duration::from_secs(1)),
+            "a page refresh is inside the grace and must not end the interview"
+        );
+
+        // The boundary is the tick the watch would fire on, so it has to be
+        // inclusive: an exclusive one waits an extra whole tick.
+        assert!(presence.gave_up(start + CANDIDATE_ABSENCE_LIMIT));
+
+        presence.returned();
+        assert!(
+            !presence.gave_up(start + CANDIDATE_ABSENCE_LIMIT * 10),
+            "coming back cancels the grace outright rather than pausing it"
         );
     }
 
