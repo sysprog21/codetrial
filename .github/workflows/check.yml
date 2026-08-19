@@ -1,0 +1,104 @@
+# The gate that scripts/test.sh already describes, run where nobody can forget
+# it. Everything here is one job on purpose: the gates share a cargo build and a
+# vendor tree, and splitting them into parallel jobs would download 24 MB of
+# wasm and rebuild the LiveKit SDK once per job to save a few minutes of
+# wall clock on a repo this size.
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A second push to a branch makes the first run's answer worthless, so stop
+# paying for it. Never on main: those runs are the record of what passed.
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  check:
+    # Pinned rather than `ubuntu-latest`: that label moves to a new image on
+    # GitHub's schedule, which turns an unrelated morning into a debugging
+    # session. Bumping this is a commit somebody chose to make.
+    runs-on: ubuntu-24.04
+    # The browser gate starts a server and polls it for twenty seconds before
+    # giving up, and cargo builds the LiveKit SDK from source. Both are minutes,
+    # neither is an hour: the default six-hour ceiling only ever gets reached by
+    # something wedged.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # The runner image ships a stable toolchain, but not necessarily one new
+      # enough for edition 2024, and clippy and rustfmt are gates rather than
+      # extras here.
+      #
+      # The version is hashed into the cargo cache key below. Without it a
+      # toolchain bump inherits a target/ full of objects the new rustc will
+      # rebuild anyway, and the cache carries the dead weight until it is
+      # evicted.
+      - name: Install Rust
+        id: rust
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup component add clippy rustfmt
+          echo "id=$(rustc -V | sha256sum | cut -c1-12)" >>"$GITHUB_OUTPUT"
+
+      # `registry/src` is deliberately absent: it is unpacked from
+      # `registry/cache` on demand, so caching both stores every dependency
+      # twice.
+      #
+      # Keyed on the lockfile, so a dependency bump rebuilds and a source edit
+      # does not. The restore-keys line lets that bump start from the previous
+      # tree instead of from nothing.
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ steps.rust.outputs.id }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ steps.rust.outputs.id }}-
+
+      # Keyed on the pins rather than on the manifests: SHA256SUMS is what
+      # decides whether the bytes on disk are the right ones, so a cache entry
+      # that survives a version bump would be discarded by fetch-vendor anyway.
+      # No restore-keys for the same reason: a stale entry here is 24 MB of
+      # bytes that fail their hash.
+      - name: Cache vendored bytes
+        uses: actions/cache@v6
+        with:
+          path: web/vendor
+          key: vendor-${{ hashFiles('web/vendor/**/SHA256SUMS') }}
+
+      # The browser binary, not the npm package. package-lock.json pins the
+      # playwright version, and the version is what decides which build of
+      # Chromium lands in this directory.
+      #
+      # `npm ci` itself is not cached: package.json has one devDependency, so a
+      # cache round trip would cost about what the install does.
+      - name: Cache Chromium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install node dependencies
+        run: npm ci
+
+      # tests/browser/face-detector.test.js skips itself when no browser is
+      # downloaded, so without this the gate would pass while testing nothing.
+      # Left as one command on a cache hit too: it then only installs the system
+      # libraries, which are not in the cached directory.
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run gates
+        run: ./scripts/test.sh
