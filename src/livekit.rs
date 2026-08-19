@@ -36,8 +36,7 @@ use ::livekit::webrtc::audio_stream::native::NativeAudioStream;
 use ::livekit::webrtc::video_frame::{BoxVideoFrame, VideoFormatType};
 use ::livekit::webrtc::video_stream::native::NativeVideoStream;
 use futures_util::StreamExt;
-use image::ColorType;
-use image::codecs::jpeg::JpegEncoder;
+use jpeg_encoder::{ColorType, Encoder};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -139,6 +138,7 @@ pub async fn run_room(
     activity.mark_speaking();
 
     let mut watch = tokio::time::interval(Duration::from_secs_f64(WATCH_TICK_S));
+
     // Set while the candidate is away. Checked on the watch tick rather than
     // given its own timer arm: the tick already runs, and a resolution of one
     // tick is plenty for a ninety-second grace.
@@ -184,10 +184,12 @@ pub async fn run_room(
                     "interview reached its server-side deadline: room={} duration={}min",
                     boot.room_name, boot.duration_min
                 );
+
                 // Fed through the same path the browser's own end takes, so the
                 // wrap-up, the report and the teardown are the ones that are
                 // already tested rather than a second copy that drifts.
                 let mut context = event_context!();
+
                 // The result is always Break for an end_interview packet, and
                 // the report has been published by the time it returns.
                 let _ = handle_data_packet(
@@ -767,8 +769,8 @@ async fn close_room(room: &Room) {
 }
 
 /// What the interview needs from whoever joined. Assembled in one place because
-/// the candidate can be found two ways, already in the room or arriving, and the
-/// pair must not be built differently depending on which.
+/// the candidate can be found two ways, already in the room or arriving, and
+/// the pair must not be built differently depending on which.
 fn candidate_pair(participant: &RemoteParticipant) -> (String, String) {
     (participant.identity().to_string(), participant.metadata())
 }
@@ -1344,29 +1346,31 @@ fn should_send_video_frame(elapsed: Duration) -> bool {
     elapsed >= GEMINI_VIDEO_FRAME_INTERVAL
 }
 
-/// RGBA byte count for a frame, or `None` when the dimensions are absurd. The
-/// cap is well past 8K and only exists so a bogus header cannot ask for a
-/// gigabyte.
-fn rgba_buffer_len(width: u32, height: u32) -> Option<usize> {
+/// JPEG sides and RGBA byte count for a frame, or `None` when the dimensions
+/// are absurd. Both bounds live here because they answer one question and a
+/// frame that clears the pixel cap can still overflow a 16-bit JPEG side: the
+/// pixel cap is well past 8K and only exists so a bogus header cannot ask for a
+/// gigabyte, while a 100000x1 frame sits under it and still has no valid SOF.
+fn jpeg_frame_geometry(width: u32, height: u32) -> Option<(u16, u16, usize)> {
     const MAX_PIXELS: u32 = 8192 * 8192;
     let pixels = width.checked_mul(height)?;
-    (1..=MAX_PIXELS)
-        .contains(&pixels)
-        .then_some(pixels as usize * 4)
+    (1..=MAX_PIXELS).contains(&pixels).then_some(())?;
+    Some((
+        u16::try_from(width).ok()?,
+        u16::try_from(height).ok()?,
+        pixels as usize * 4,
+    ))
 }
 
-fn encode_video_frame_jpeg(
-    frame: &BoxVideoFrame,
-    quality: u8,
-) -> Result<Vec<u8>, image::ImageError> {
+fn encode_video_frame_jpeg(frame: &BoxVideoFrame, quality: u8) -> Result<Vec<u8>, String> {
     let width = frame.buffer.as_ref().width();
     let height = frame.buffer.as_ref().height();
 
     // Remote-controlled dimensions: overflow here would panic in debug and
     // under-allocate the buffer `to_argb` writes into in release.
-    let Some(rgba_len) = rgba_buffer_len(width, height) else {
-        return Err(image::ImageError::Limits(
-            image::error::LimitError::from_kind(image::error::LimitErrorKind::DimensionError),
+    let Some((jpeg_width, jpeg_height, rgba_len)) = jpeg_frame_geometry(width, height) else {
+        return Err(format!(
+            "frame {width}x{height} is outside JPEG limits (each side at most 65535, at most 8192x8192 pixels)"
         ));
     };
     let mut rgba = vec![0; rgba_len];
@@ -1377,17 +1381,17 @@ fn encode_video_frame_jpeg(
         width as i32,
         height as i32,
     );
-    let rgb = rgba
-        .chunks_exact(4)
-        .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
-        .collect::<Vec<_>>();
+
+    // Chroma is subsampled 2x2 here, because that is what `Encoder::new` picks
+    // below quality 90 and nothing below overrides it. Deliberate: the source
+    // is I420, whose chroma is already 4:2:0, so encoding it at full resolution
+    // would spend about a fifth of the payload on interpolated values. The
+    // override, if a future frame source is not I420, is
+    // `set_sampling_factor(SamplingFactor::F_1_1)` before the call.
     let mut jpeg = Vec::new();
-    JpegEncoder::new_with_quality(&mut jpeg, quality).encode(
-        &rgb,
-        width,
-        height,
-        ColorType::Rgb8.into(),
-    )?;
+    Encoder::new(&mut jpeg, quality)
+        .encode(&rgba, jpeg_width, jpeg_height, ColorType::Rgba)
+        .map_err(|error| error.to_string())?;
     Ok(jpeg)
 }
 
@@ -1572,15 +1576,33 @@ mod tests {
     }
 
     #[test]
-    fn rgba_buffer_len_rejects_overflowing_and_empty_frames() {
-        assert_eq!(rgba_buffer_len(640, 480), Some(640 * 480 * 4));
-        assert_eq!(rgba_buffer_len(8192, 8192), Some(8192 * 8192 * 4));
+    fn jpeg_frame_geometry_rejects_overflowing_and_empty_frames() {
+        assert_eq!(
+            jpeg_frame_geometry(640, 480),
+            Some((640, 480, 640 * 480 * 4))
+        );
+        assert_eq!(
+            jpeg_frame_geometry(8192, 8192),
+            Some((8192, 8192, 8192 * 8192 * 4))
+        );
 
         // Would wrap a u32 multiply and under-allocate the buffer `to_argb`
         // writes into.
-        assert_eq!(rgba_buffer_len(u32::MAX, 4), None);
-        assert_eq!(rgba_buffer_len(8193, 8192), None);
-        assert_eq!(rgba_buffer_len(0, 480), None);
+        assert_eq!(jpeg_frame_geometry(u32::MAX, 4), None);
+        assert_eq!(jpeg_frame_geometry(8193, 8192), None);
+        assert_eq!(jpeg_frame_geometry(0, 480), None);
+
+        // Clears the pixel cap and still has no representable JPEG side.
+        assert_eq!(jpeg_frame_geometry(100_000, 1), None);
+
+        // The exact boundary, in both directions, because 65535 is the largest
+        // side a JPEG SOF can carry and off-by-one here is a silent truncation.
+        assert_eq!(
+            jpeg_frame_geometry(65_535, 1),
+            Some((65_535, 1, 65_535 * 4))
+        );
+        assert_eq!(jpeg_frame_geometry(65_536, 1), None);
+        assert_eq!(jpeg_frame_geometry(1, 65_536), None);
     }
 
     #[test]
