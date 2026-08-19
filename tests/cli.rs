@@ -165,8 +165,8 @@ impl ServerProcess {
     /// `spawn_server` decides whether to retry by reading it. A test that
     /// spawns without piping inherits stderr, so the bind failure lands on the
     /// terminal, `wait_for_http` reports `stderr=` empty, the retry sees no
-    /// "Address already in use" to match on, and a port race is reported as the
-    /// behavior under test failing. That is exactly what
+    /// "Address already in use" to match on, and a port race is reported as
+    /// the behavior under test failing. That is exactly what
     /// `binary_web_does_not_require_github_oauth_config` did: the one spawning
     /// test that did not pipe was the one whose retry never fired.
     fn spawn(command: &mut Command) -> Self {
