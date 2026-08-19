@@ -119,8 +119,12 @@ async function runCompilerExplorer(language, code, spec, reportStatus = null) {
   }
 }
 
-function runWorker(code, spec) {
-  const source = `
+// The JavaScript runner's worker, as source rather than a file: it becomes a
+// blob URL below, which `script-src 'self' blob:` allows and which keeps the
+// runner from being fetchable on its own. Hoisted to module scope because it
+// interpolates nothing and never has; leaving it inside runWorker made a
+// 23-line function read as a 278-line one.
+const JS_RUNNER_SOURCE = `
     self.onmessage = (event) => {
       const { code, spec } = event.data;
       const sanitize = (value) => {
@@ -375,8 +379,10 @@ function runWorker(code, spec) {
       self.postMessage({ results });
     };
   `;
+
+function runWorker(code, spec) {
   return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(new Blob([source], { type: "application/javascript" }));
+    const url = URL.createObjectURL(new Blob([JS_RUNNER_SOURCE], { type: "application/javascript" }));
     const worker = new Worker(url);
     const timer = setTimeout(() => {
       worker.terminate();

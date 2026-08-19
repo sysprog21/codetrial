@@ -7,6 +7,7 @@ import {
   createFacePresenceDetector,
   createFacePresenceTracker,
   faceAssetUrl,
+  facePresenceVerdict,
   normalizeFaceResults,
 } from "../../web/face-presence.js";
 
@@ -186,4 +187,32 @@ test("face normalization handles empty and multi-face results", () => {
     normalizeFaceResults({ detections: [{ score: [0.4] }, { score: [0.8] }] }),
     { count: 2, confidence: 0.8 },
   );
+});
+
+// The preflight camera gate. It is mandatory, it has no bypass, and the two
+// ways it can be wrong are opposite: pass someone who is not there, or trap
+// someone who is. The second already happened once.
+test("a gap in sampling is not an absence", () => {
+  // An unavailable sample carries count 0. Reading that as "no face" left the
+  // Start button disabled while the candidate sat in front of a working camera,
+  // reading "stay in front of the camera", with nothing they could do about it.
+  assert.deepEqual(facePresenceVerdict({ available: false, count: 0 }), { ready: true, error: null });
+  assert.deepEqual(facePresenceVerdict(undefined), { ready: true, error: null });
+});
+
+test("exactly one face passes the preflight", () => {
+  assert.deepEqual(facePresenceVerdict({ available: true, count: 1 }), { ready: true, error: null });
+});
+
+test("an empty frame is not ready, and says nothing the candidate cannot act on", () => {
+  // No error: "nobody is in frame yet" is the ordinary state before someone
+  // sits down, not a failure to report.
+  assert.deepEqual(facePresenceVerdict({ available: true, count: 0 }), { ready: false, error: null });
+});
+
+test("more than one face is an error the candidate can act on", () => {
+  const two = facePresenceVerdict({ available: true, count: 2 });
+  assert.equal(two.ready, false);
+  assert.match(two.error, /multiple faces/);
+  assert.equal(facePresenceVerdict({ available: true, count: 9 }).error, two.error);
 });

@@ -21,7 +21,15 @@ use crate::config::{DEFAULT_DURATION_MIN, MAX_DURATION_MIN, MIN_DURATION_MIN};
 use crate::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
 
 const MAX_INTEGRITY_EVENTS: usize = 25;
-const MAX_INTEGRITY_TEXT: usize = 80;
+/// The `detail` bound, and half of a wire contract: `INTEGRITY_DETAIL_MAX` in
+/// `web/lib.js` has to be the same number. The agent truncates to this before
+/// it recomputes the hash, so a producer emitting anything longer builds a hash
+/// the verifier cannot reproduce, the event is refused, sequence continuity
+/// stops the chain, and every later event is refused too, silently. Public so
+/// `tests/agent.rs` can hold the two numbers against each other: the fixture
+/// catches a browser that outgrows this bound, but not a server that outgrows
+/// the browser, and only one of those is caught by bytes already on disk.
+pub const MAX_INTEGRITY_TEXT: usize = 80;
 pub const WATCH_TICK_S: f64 = 2.0;
 pub const SILENCE_THRESHOLD_S: f64 = 15.0;
 pub const TEST_REACTION_COOLDOWN_S: f64 = 20.0;
@@ -386,6 +394,7 @@ fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> D
         state.code.clear();
         state.code.push_str(code);
     }
+
     // A language switch is silent from the interviewer's side: the click swaps
     // the editor buffer and publishes the same code topic as any keystroke. The
     // greeting asks the candidate to pick one, so leaving the pick
@@ -393,11 +402,10 @@ fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> D
     //
     // Only a real change speaks. The browser publishes its starting language on
     // connect, which matches the default and must not produce a confirmation
-    // for a choice nobody made.
-    // Only a language the tabs actually offer may change the state or reach a
-    // prompt. The id comes from the candidate's browser and is interpolated
-    // into Gemini's instructions, so an unvalidated one is a way to write into
-    // them.
+    // for a choice nobody made. Only a language the tabs actually offer may
+    // change the state or reach a prompt. The id comes from the candidate's
+    // browser and is interpolated into Gemini's instructions, so an unvalidated
+    // one is a way to write into them.
     let mut language_changed = None;
     if let Some(spoken) = payload
         .get("language")
@@ -411,6 +419,7 @@ fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> D
 
     DataEventResult {
         update_last_code_change,
+
         // Counts as an interjection: it is the interviewer speaking unprompted,
         // and without this a candidate trying two tabs in a row is talked over
         // twice while the cooldown thinks nothing has been said.
@@ -473,6 +482,7 @@ fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
             {
                 state.code = code.to_string();
             }
+
             // Read independently of the code. Nesting it meant a payload whose
             // code was absent or null also discarded the language, and the
             // report prompt was then written against whatever language the
@@ -519,6 +529,7 @@ fn apply_integrity(state: &mut RuntimeState, payload: &serde_json::Value) -> Dat
         .and_then(|event| event.get("hash"))
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
+
     // Named, because a rejection here is permanent. Sequence continuity is
     // required, so `expected_seq` never advances past a refused event and every
     // later one is refused for the same reason. Four different conditions used

@@ -56,9 +56,25 @@ analysis.
 Face presence uses MediaPipe Face Detection locally in the browser worker. The
 vendored package is `@mediapipe/face_detection` version `0.4.1646425229`, from
 <https://www.npmjs.com/package/@mediapipe/face_detection>, licensed
-Apache-2.0. The shipped bytes are pinned in
+Apache-2.0. Every shipped byte is pinned in
 `web/vendor/face-detection/SHA256SUMS` and checked by `make verify-vendor`: the
 detector is the integrity signal, so what it is built from is worth recording.
+
+The JS loaders are committed; the 11.7 MB of wasm, TFLite model, and graph
+binary beside them are downloaded by `scripts/fetch-vendor.sh`, which
+`make build`, `make serve`, `make web`, and `./scripts/test.sh` all run first.
+`web/vendor/face-detection/FETCH` names the version and the files; SHA256SUMS
+stays the contract, and a download is written into `web/vendor/` only after its
+bytes hash to the pin, so an interrupted transfer or a bad mirror cannot leave
+the browser a wasm nobody pinned. A checkout that already has the bytes skips
+the download, so this costs one 1.5-second fetch per clone and nothing after.
+A first build therefore needs network access; every later one does not.
+
+The room client is `livekit-client` version `2.20.0`, the `dist/livekit-client.umd.js`
+build from <https://www.npmjs.com/package/livekit-client>, licensed Apache-2.0
+and pinned in `web/vendor/SHA256SUMS`. `web/interview.html` loads it as a plain
+script, so the vendored bytes are the only copy there is; record the version
+with the hash, because a hash alone cannot tell you what to re-download.
 
 ### Where candidate code executes
 
@@ -319,6 +335,8 @@ make check       # the test gate, plus a live Gemini credential check
 make indent      # format and lint
 make serve       # run the web server and agent together
 make web         # run the web server only
+make fetch-vendor  # download the pinned MediaPipe binaries (build does this)
+make verify-vendor # hash every vendored file against its SHA256SUMS pin
 make clean       # remove Cargo build artifacts
 ```
 
@@ -326,16 +344,30 @@ make clean       # remove Cargo build artifacts
 it needs the configured LiveKit and Google credentials. CI runs the credential-free
 gate directly with `./scripts/test.sh`.
 
+`./scripts/test.sh` runs every gate even after one fails, and prints the ones
+that failed on the last line. It used to stop at the first, which meant a single
+missing vendored file reported nothing about the other three hundred tests.
+
 ## Tests
 
 ```bash
 ./scripts/test.sh
 ```
 
-This is the whole gate, and CI runs exactly this: `cargo fmt --check`, `cargo
-clippy -D warnings`, the Rust test suite, the browser suite under `node --test`,
-the problem-bank generators in `--check` mode, and syntax checks for the shell
-and Playwright scripts.
+This is the whole gate, and CI runs exactly this: the vendored-binary fetch and
+hash check, `cargo fmt --check`, `cargo clippy -D warnings`, the Rust test
+suite, the browser suite under `node --test`, the problem-bank generators and
+the wire fixtures in `--check` mode, the TODO dependency graph, and syntax
+checks for the shell and Playwright scripts.
+
+Two of those are worth naming. `scripts/gen-wire-fixtures.mjs --check` fails
+when a data-channel payload builder in `web/lib.js` changes without
+regenerating the fixture the Rust consumer is tested against; every topic has
+two implementations, and `tests/fixtures/README.md` records what happened the
+last time they were only tested against themselves.
+`scripts/check-todo-deps.py` fails when a task in `TODO.md` names a dependency
+that does not exist or when the dependency graph closes a cycle, and skips
+silently when `TODO.md` is absent, which it is in a fresh clone.
 
 Checks that need credentials, a browser download, or a running binary stay out
 of the default run:

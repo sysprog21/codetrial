@@ -1,0 +1,37 @@
+{
+  "topic": "control",
+  "cases": [
+    {
+      "name": "time warning five minutes",
+      "payload": {
+        "type": "time_warning",
+        "remainingSeconds": 300
+      }
+    },
+    {
+      "name": "time warning one minute",
+      "payload": {
+        "type": "time_warning",
+        "remainingSeconds": 60
+      }
+    },
+    {
+      "name": "end interview",
+      "payload": {
+        "type": "end_interview",
+        "reason": "candidate_ended",
+        "code": "def two_sum(nums, target):\n    seen = {}\n    return []\n",
+        "language": "cpp"
+      }
+    },
+    {
+      "name": "end interview out of time",
+      "payload": {
+        "type": "end_interview",
+        "reason": "time_expired",
+        "code": "def two_sum(nums, target):\n    seen = {}\n    return []\n",
+        "language": "python"
+      }
+    }
+  ]
+}

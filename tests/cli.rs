@@ -161,8 +161,21 @@ fn http_request(addr: &str, request: &str) -> String {
 struct ServerProcess(Child);
 
 impl ServerProcess {
+    /// stderr is piped here rather than left to each caller, because
+    /// `spawn_server` decides whether to retry by reading it. A test that
+    /// spawns without piping inherits stderr, so the bind failure lands on the
+    /// terminal, `wait_for_http` reports `stderr=` empty, the retry sees no
+    /// "Address already in use" to match on, and a port race is reported as the
+    /// behavior under test failing. That is exactly what
+    /// `binary_web_does_not_require_github_oauth_config` did: the one spawning
+    /// test that did not pipe was the one whose retry never fired.
     fn spawn(command: &mut Command) -> Self {
-        Self(command.spawn().expect("codetrial web should start"))
+        Self(
+            command
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("codetrial web should start"),
+        )
     }
 }
 
@@ -300,6 +313,23 @@ fn binary_serve_reads_deployment_keys_from_the_config_file() {
 
     assert!(serve.contains("trusted_proxy_hops(&values)"), "{serve}");
     assert!(!serve.contains("std::env::var"), "{serve}");
+}
+
+/// `spawn_server` decides whether a failed start was a lost port race by
+/// looking for "Address already in use" in the child's stderr. That only works
+/// while the child's stderr is piped, and one spawning test used to build its
+/// Command without piping, so its retry could never fire. Pinned here rather
+/// than left to whoever writes the next spawning test.
+#[test]
+fn a_spawned_server_pipes_stderr_so_a_bind_failure_can_be_read() {
+    // No arguments: it exits on a usage error immediately, which is all this
+    // needs. The assertion is about the pipe, not about the server.
+    let child = ServerProcess::spawn(&mut Command::new(env!("CARGO_BIN_EXE_codetrial")));
+    assert!(
+        child.stderr.is_some(),
+        "a child whose stderr is inherited reports an empty reason, and a lost \
+         port race is then indistinguishable from the behavior under test failing"
+    );
 }
 
 #[test]

@@ -27,36 +27,89 @@
     "seq": 3,
     "prevHash": "0749b15cc3173c5d25f2518b58e85d904e247ee6f480d2eb378b8f39ac487b89",
     "type": "INTEGRITY_HEARTBEAT",
-    "at": "2026-08-18T06:36:26.734Z",
+    "at": "2026-08-18T06:36:56.812Z",
     "severity": "info",
     "source": "media",
     "durationMs": 0,
     "detail": "analyzer=source=camera;analysis=face_detect,tracking;frames=3;transport=ImageBit",
     "sourceEventIds": [],
-    "hash": "5a12fdff6601c1a876eda79bf34e8159b4fae5f68781d349bd74d7915ed4a54a"
+    "hash": "bafbb003bed8ca372c16cae65760658d6462a5472716c096f49df1ab5485a2b8"
   },
   {
     "seq": 4,
-    "prevHash": "5a12fdff6601c1a876eda79bf34e8159b4fae5f68781d349bd74d7915ed4a54a",
+    "prevHash": "bafbb003bed8ca372c16cae65760658d6462a5472716c096f49df1ab5485a2b8",
     "type": "FACE_MISSING",
-    "at": "2026-08-18T06:36:26.734Z",
+    "at": "2026-08-18T06:37:14.005Z",
     "severity": "warning",
     "source": "camera",
     "durationMs": 2000,
     "detail": "faces=0",
     "sourceEventIds": [],
-    "hash": "3c24c6d36da457fe9fbd1ddfc106580a09c13767cb4ac20970640bd1aeccf546"
+    "hash": "1edf798e8bba688e85cbf02d1a3bb181279358e8d103b47cc4121925e9a5e17f"
   },
   {
     "seq": 5,
-    "prevHash": "3c24c6d36da457fe9fbd1ddfc106580a09c13767cb4ac20970640bd1aeccf546",
+    "prevHash": "1edf798e8bba688e85cbf02d1a3bb181279358e8d103b47cc4121925e9a5e17f",
+    "type": "CAMERA_RELEASED_TO_PRESENTER",
+    "at": "2026-08-18T06:37:41.330Z",
+    "severity": "info",
+    "source": "media",
+    "durationMs": 0,
+    "detail": "analyzer=camera_released",
+    "sourceEventIds": [],
+    "hash": "87190e39a6cae50e5c3fe5f303fbdb85cd9a3bfd8cf1871577f325511810186f"
+  },
+  {
+    "seq": 6,
+    "prevHash": "87190e39a6cae50e5c3fe5f303fbdb85cd9a3bfd8cf1871577f325511810186f",
     "type": "INTEGRITY_HEARTBEAT",
-    "at": "2026-08-18T06:36:26.735Z",
+    "at": "2026-08-18T06:38:26.901Z",
     "severity": "info",
     "source": "media",
     "durationMs": 0,
     "detail": "analyzer=source=camera;analysis=tracking;frames=1;transport=ImageBitmap",
     "sourceEventIds": [],
-    "hash": "d9677569c8a6d02da847762ef253dbcd44f8e01de563ca7e82387e0b32edba04"
+    "hash": "2d1f72c49822195b8798fe380076b8604845f22551df016087641820cd94149b"
+  },
+  {
+    "seq": 7,
+    "prevHash": "2d1f72c49822195b8798fe380076b8604845f22551df016087641820cd94149b",
+    "type": "FACE_DETECTOR_UNAVAILABLE",
+    "at": "2026-08-18T06:39:02.114Z",
+    "severity": "warning",
+    "source": "media",
+    "durationMs": 0,
+    "detail": "face detection unavailable: Cannot read properties of undefined reading a",
+    "sourceEventIds": [],
+    "hash": "9421728e0ad0d1e5cb95d4a50f2c448b7f37954110d47a3d09e3f052b5c6e4a9"
+  },
+  {
+    "seq": 8,
+    "prevHash": "9421728e0ad0d1e5cb95d4a50f2c448b7f37954110d47a3d09e3f052b5c6e4a9",
+    "type": "INTEGRITY_HEARTBEAT",
+    "at": "2026-08-18T06:39:44.702Z",
+    "severity": "info",
+    "source": "media",
+    "durationMs": 0,
+    "detail": "az AZ 09 _-=/;:,.",
+    "sourceEventIds": [],
+    "hash": "25c8d8c3a25ace7c0963d9fdab1fe688c3999a3c4cc7bc8a7f463da5b1e87d1c"
+  },
+  {
+    "seq": 9,
+    "prevHash": "25c8d8c3a25ace7c0963d9fdab1fe688c3999a3c4cc7bc8a7f463da5b1e87d1c",
+    "type": "MULTIPLE_FACES",
+    "at": "2026-08-18T06:40:11.006Z",
+    "severity": "critical",
+    "source": "camera",
+    "durationMs": 4000,
+    "detail": "faces=2",
+    "sourceEventIds": [
+      "111111111111",
+      "222222222222",
+      "333333333333",
+      "444444444444"
+    ],
+    "hash": "55d40f02aba778f0753ecf2bcd43f7f5c011c66a0f511cd0305f06d5b395d304"
   }
 ]

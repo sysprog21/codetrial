@@ -24,7 +24,7 @@ status=0
 # what the sums files record, matching the `cd && shasum -c` convention. README
 # and LICENSE are provenance, not bytes the browser runs, so they are the only
 # things allowed to be unpinned.
-find "$VENDOR" -type f ! -name SHA256SUMS ! -name 'README*' ! -name 'LICENSE*' | while read -r file; do
+find "$VENDOR" -type f ! -name SHA256SUMS ! -name FETCH ! -name 'README*' ! -name 'LICENSE*' | while read -r file; do
   sums=$(dirname "$file")/SHA256SUMS
   if [ ! -f "$sums" ] || ! grep -qF "  $(basename "$file")" "$sums"; then
     echo "unpinned vendored file: ${file#"$ROOT"/}" >&2

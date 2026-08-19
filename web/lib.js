@@ -241,6 +241,27 @@ export function canonicalJson(value) {
 /// this bound is unverifiable by construction, and the rejection is silent.
 export const INTEGRITY_DETAIL_MAX = 80;
 
+/// Must accept exactly what `sanitize_integrity_event` in `src/agent/integrity.rs`
+/// accepts. That filter is all-or-nothing: a `detail` carrying one character
+/// outside it becomes null there, so the agent hashes `"detail":null` while the
+/// browser hashed the text, the hashes differ, the event is refused, and because
+/// sequence continuity is required every later event is refused too.
+///
+/// This is the same failure as the 160-versus-80 length bound, with a character
+/// set instead of a length, and it was live: `FACE_DETECTOR_UNAVAILABLE` carries
+/// `error.message` from `web/face-worker.js`, and a JS error routinely reads
+/// `Cannot read properties of undefined (reading 'a')`. Parentheses and quotes
+/// are not in the agent's set, so the one event that fires when face detection
+/// breaks was also the one event that broke the evidence chain.
+///
+/// Stripped rather than refused, because losing the characters costs a little
+/// legibility and refusing costs every event after it.
+const INTEGRITY_DETAIL_DISALLOWED = /[^0-9A-Za-z _\-=/;:,.]/g;
+
+export function integrityDetail(value) {
+  return String(value).replace(INTEGRITY_DETAIL_DISALLOWED, "").slice(0, INTEGRITY_DETAIL_MAX);
+}
+
 export async function integrityEventPayload(input, previous = { seq: 0, hash: "" }) {
   const sourceEventIds = Array.isArray(input.sourceEventIds)
     ? input.sourceEventIds.map(String).filter((value) => /^\d+$/.test(value)).slice(0, 4).map((value) => value.slice(0, 12))
@@ -261,7 +282,7 @@ export async function integrityEventPayload(input, previous = { seq: 0, hash: ""
     // silently: a normal camera heartbeat detail is 83 characters, so every
     // camera interview shipped a report containing two integrity events and
     // rendered the rest as "(none captured)".
-    detail: input.detail === undefined ? null : String(input.detail).slice(0, INTEGRITY_DETAIL_MAX),
+    detail: input.detail === undefined ? null : integrityDetail(input.detail),
     sourceEventIds,
   };
   const body = {

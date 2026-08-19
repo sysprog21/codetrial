@@ -15,6 +15,14 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Anything that serves `web/` needs the fetched vendor binaries, and this script
+# launches its own server rather than going through the Makefile. Without this a
+# fresh clone serves a MediaPipe loader whose .wasm and model 404, and face
+# detection reports itself unavailable instead of failing: the exact shape of
+# the bug that started this, where the binaries were missing and everything
+# still looked like it worked.
+"$ROOT/scripts/fetch-vendor.sh"
+
 if [ "${CODETRIAL_WEB_URL:-}" ]; then
   BASE_URL=${CODETRIAL_WEB_URL%/}
 else

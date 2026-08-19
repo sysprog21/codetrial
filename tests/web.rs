@@ -9,7 +9,9 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 
 use codetrial::accounts::MAX_REPORTS_PER_USER;
-use codetrial::config::DEFAULT_WEB_DIR;
+use codetrial::config::{
+    DEFAULT_DURATION_MIN, DEFAULT_WEB_DIR, MAX_DURATION_MIN, MIN_DURATION_MIN,
+};
 use codetrial::runtime::{
     TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_REPORT, TOPIC_TEST_RESULTS,
     TOPIC_TRANSCRIPTION,
@@ -310,10 +312,10 @@ async fn responses_carry_baseline_security_headers() {
     );
 
     // A .vrm is a GLB, so its textures are always bufferView-backed: GLTFLoader
-    // mints a `blob:` URL per image and ImageBitmapLoader reads it with `fetch`,
-    // which `connect-src` governs. Without `blob:` every texture fails and the
-    // avatar falls back to its neutral panel with no stated reason. Nothing
-    // else can catch this until a model ships, so it is pinned here.
+    // mints a `blob:` URL per image and ImageBitmapLoader reads it with
+    // `fetch`, which `connect-src` governs. Without `blob:` every texture fails
+    // and the avatar falls back to its neutral panel with no stated reason.
+    // Nothing else can catch this until a model ships, so it is pinned here.
     assert!(policy.contains("connect-src blob:"), "{policy}");
 
     // The page reaches LiveKit and Compiler Explorer directly, so each has to
@@ -423,8 +425,8 @@ async fn vendored_assets_are_served_typed_and_cached() {
 
     // The avatar asks whether a model is published with a HEAD before it
     // imports 730 KB of renderer, so HEAD has to answer from metadata. Axum
-    // routes it to the same handler, which would otherwise read the whole
-    // 15 MB model into memory once per interview and discard the body.
+    // routes it to the same handler, which would otherwise read the whole 15 MB
+    // model into memory once per interview and discard the body.
     let head = client
         .head(format!("{base}/vendor/face-detection/face_detection.js"))
         .send()
@@ -444,6 +446,7 @@ async fn vendored_assets_are_served_typed_and_cached() {
         .unwrap();
     assert_eq!(model.status(), 200);
     assert_eq!(model.headers()["content-type"], "model/gltf-binary");
+
     // Compared against the file, not against a number copied out of it once.
     // The model is a swappable art asset, and a literal here turns "somebody
     // re-exported jim.vrm" into a failing HTTP header test that names neither.
@@ -480,9 +483,9 @@ async fn vendored_assets_are_served_typed_and_cached() {
     // The one asset the compression layer must leave alone. A .vrm is a GLB,
     // whose textures are already PNG or JPEG, so gzip spends seconds of CPU per
     // request for a few percent, and that is most of the delay before Jim has a
-    // face. The exclusion keys off the exact content type above, which is why it
-    // is asserted here and not in a comment: retyping the extension would put
-    // the stall back with nothing failing.
+    // face. The exclusion keys off the exact content type above, which is why
+    // it is asserted here and not in a comment: retyping the extension would
+    // put the stall back with nothing failing.
     let verbatim = client
         .get(format!("{base}/vendor/avatar/jim.vrm"))
         .header("accept-encoding", "gzip")
@@ -3023,4 +3026,155 @@ fn source_block<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
         .map(|index| start_index + index)
         .unwrap_or_else(|| panic!("missing {end}"));
     &source[start_index..end_index]
+}
+
+/// The top-level arguments of the first `name(` call in `source`, so a nested
+/// call's own commas do not split the list. `clamp(parseInt(x, 10) || 45, 10,
+/// 90)` has three arguments, not four.
+fn call_arguments<'a>(source: &'a str, name: &str) -> Vec<&'a str> {
+    let start = source
+        .find(name)
+        .unwrap_or_else(|| panic!("missing {name} in the browser source"))
+        + name.len();
+    let mut depth = 1usize;
+    let mut arguments = Vec::new();
+    let mut argument_start = start;
+
+    // A paren or comma inside a string literal is text, not structure. Today's
+    // call has `params.get("duration")` with neither, so this changes nothing;
+    // it is here so that adding one later mis-parses nothing rather than
+    // shifting the bounds this test is supposed to be pinning.
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (offset, character) in source[start..].char_indices() {
+        let at = start + offset;
+        if let Some(open) = quote {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == open {
+                quote = None;
+            }
+            continue;
+        }
+        match character {
+            '"' | '\'' | '`' => quote = Some(character),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    arguments.push(source[argument_start..at].trim());
+                    break;
+                }
+            }
+            ',' if depth == 1 => {
+                arguments.push(source[argument_start..at].trim());
+                argument_start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    arguments
+}
+
+fn browser_number(source: &str, after: &str, until: char) -> u32 {
+    let start = source
+        .find(after)
+        .unwrap_or_else(|| panic!("missing {after} in the browser source"))
+        + after.len();
+    let rest = &source[start..];
+    let end = rest
+        .find(until)
+        .unwrap_or_else(|| panic!("{after} is not terminated by {until}"));
+    rest[..end]
+        .trim()
+        .parse()
+        .unwrap_or_else(|error| panic!("{after} is not a number: {error}"))
+}
+
+/// `src/config.rs` owns the interview length and says the browser lobby mirrors
+/// the range, which nothing checked. The two are not interchangeable: the
+/// browser countdown and `run_room`'s server-side hard deadline are both built
+/// from this number, so a lobby offering a length the server clamps gives the
+/// candidate a timer that disagrees with the process that will actually end
+/// their interview.
+#[test]
+fn browser_interview_duration_matches_the_server_clamp() {
+    let interview = fs::read_to_string("web/interview.js").unwrap();
+    let lobby = fs::read_to_string("web/app.js").unwrap();
+    let page = fs::read_to_string("web/index.html").unwrap();
+
+    let clamp = call_arguments(
+        &interview[interview.find("const durationMin = ").unwrap()..],
+        "clamp(",
+    );
+    assert_eq!(
+        clamp.len(),
+        3,
+        "clamp takes a value and two bounds: {clamp:?}"
+    );
+
+    let parsed = |value: &str| -> u32 {
+        value
+            .parse()
+            .unwrap_or_else(|error| panic!("{value} is not a bound: {error}"))
+    };
+    assert_eq!(
+        parsed(clamp[1]),
+        MIN_DURATION_MIN,
+        "web/interview.js clamps below the server minimum"
+    );
+    assert_eq!(
+        parsed(clamp[2]),
+        MAX_DURATION_MIN,
+        "web/interview.js clamps above the server maximum"
+    );
+
+    // The fallback the query string gets when it carries no duration.
+    let fallback = clamp[0]
+        .rsplit("||")
+        .next()
+        .expect("the clamped value falls back to a literal")
+        .trim();
+    assert_eq!(
+        parsed(fallback),
+        DEFAULT_DURATION_MIN,
+        "web/interview.js falls back to a different default than the server"
+    );
+
+    assert_eq!(
+        browser_number(&lobby, "let duration = ", ';'),
+        DEFAULT_DURATION_MIN,
+        "the lobby starts on a different duration than the server default"
+    );
+
+    // Every button the lobby offers has to be a length the server will honour,
+    // or the candidate picks one number and is given another without being
+    // told.
+    let mut offered = Vec::new();
+    for chunk in page.split("data-duration=\"").skip(1) {
+        let value = chunk.split('"').next().expect("data-duration is quoted");
+        let minutes: u32 = value
+            .parse()
+            .unwrap_or_else(|error| panic!("data-duration={value} is not a number: {error}"));
+        assert!(
+            (MIN_DURATION_MIN..=MAX_DURATION_MIN).contains(&minutes),
+            "web/index.html offers {minutes} minutes, which the server clamps to \
+             {MIN_DURATION_MIN}..={MAX_DURATION_MIN}"
+        );
+        offered.push(minutes);
+    }
+    assert!(!offered.is_empty(), "the lobby offers no durations at all");
+
+    // The preselected button decides what a candidate who touches nothing gets.
+    let selected = page
+        .split("duration-button selected\"")
+        .nth(1)
+        .expect("one duration button is preselected");
+    assert_eq!(
+        browser_number(selected, "data-duration=\"", '"'),
+        DEFAULT_DURATION_MIN,
+        "the preselected lobby duration is not the server default"
+    );
 }

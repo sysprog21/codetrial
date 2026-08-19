@@ -1,37 +1,53 @@
 # Cross-implementation fixtures
 
-`integrity-chain.json` is real output from `web/lib.js`'s
-`integrityEventPayload`, consumed by the real Rust verifier in
-`tests/agent.rs::browser_generated_integrity_events_all_verify_in_the_agent`.
+Every data-channel topic has two implementations: a producer in `web/lib.js`
+and a consumer in `src/agent.rs`. Each was only ever tested against itself,
+which is how the integrity hash diverged. Both sides passed their own tests,
+the agent refused every event the browser sent, the gate stayed green, and
+every camera interview shipped a report whose evidence section read
+"(none captured)".
 
-It exists because the integrity hash has two implementations and each was only
-ever tested against itself, so a divergence between them passed a green gate
-and silently emptied the evidence section of every camera interview.
+These files are real producer output fed to the real consumer. They are the
+only thing in the repo that crosses that boundary.
 
-Do not hand-edit the hashes. Regenerate:
+| File | Producer | Consumer |
+|---|---|---|
+| `code-update.json` | `codeUpdatePayload` | `apply_code_update` |
+| `control.json` | `timeWarningPayload`, `endInterviewPayload` | `apply_control` |
+| `test-results.json` | `testPayload` | `apply_test_results` |
+| `integrity-chain.json` | `integrityEventPayload` | `apply_integrity` |
+
+## Regenerating
 
 ```sh
-node -e '
-import("./web/lib.js").then(async (lib) => {
-  const fs = await import("node:fs");
-  let prev = { seq: 0, hash: "" };
-  const inputs = [
-    { type: "SESSION_START", source: "media", severity: "info" },
-    { type: "MEDIA_PREFLIGHT_PASSED", source: "preflight", severity: "info" },
-    { type: "INTEGRITY_HEARTBEAT", source: "media", severity: "info",
-      detail: "analyzer=source=camera;analysis=face_detect,tracking;frames=3;transport=ImageBitmap" },
-    { type: "FACE_MISSING", source: "camera", severity: "warning", durationMs: 2000, detail: "faces=0" },
-    { type: "INTEGRITY_HEARTBEAT", source: "media", severity: "info",
-      detail: "analyzer=source=camera;analysis=tracking;frames=1;transport=ImageBitmap" },
-  ];
-  const events = [];
-  for (const input of inputs) {
-    const ev = await lib.integrityEventPayload(input, prev);
-    events.push(ev);
-    prev = { seq: ev.seq, hash: ev.hash };
-  }
-  fs.writeFileSync("tests/fixtures/integrity-chain.json", JSON.stringify(events, null, 2) + "\n");
-});'
+node scripts/gen-wire-fixtures.mjs
 ```
 
-Keep at least one `detail` at the length bound. That is the case that broke.
+Do not hand-edit them. A hand-edited fixture is a second implementation of the
+producer, which is the problem these exist to catch.
+
+The generator is deterministic: timestamps are fixed values rather than clock
+reads, so `--check` can tell a stale fixture from a fresh one.
+`scripts/test.sh` runs `--check`, so changing a producer without regenerating
+fails the gate instead of waiting for someone to notice.
+
+Regenerating on its own proves nothing. After a producer change, run
+`cargo test --test agent`, which is where a real divergence shows up as a
+failure naming what the two sides now disagree about.
+
+## What the fixtures have to keep covering
+
+- One integrity `detail` at the 80-character bound. That is the case that
+  broke: the browser truncated to 160 and the agent normalized to 80 before
+  recomputing the hash, so anything longer was unverifiable by construction.
+- One case per language tab in `web/interview.js`. A tab the agent's allowlist
+  does not know changes the editor and nothing else, and the interviewer never
+  acknowledges the click.
+- A test run that passed, one that failed, and one that could not start. The
+  agent picks its reaction from `passed`, `total`, and `setupError`; a renamed
+  field congratulates a candidate whose tests failed.
+
+## Other fixtures here
+
+`visual-shift.css` is not a wire fixture. It is a deliberate layout break used
+by `scripts/visual-parity-check.sh` to prove the visual check can fail.

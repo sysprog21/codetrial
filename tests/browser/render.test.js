@@ -387,12 +387,255 @@ test("markdown export carries the whole session", () => {
   assert.match(markdown, /^\| Coding \| 82 \/ 100 \|$/m);
   assert.match(markdown, /^\| Hints used \| 2 \|$/m);
   assert.match(markdown, /^## Integrity Evidence$/m);
-  assert.match(markdown, /^- 2026-08-15 \[info\] REVIEW_EVENT - &lt;ok&gt;\\\|fine - sources: 1, 2$/m);
+  // Markdown escapes, not HTML entities: `\<` and `\|` render back as the
+  // characters the candidate typed, where `&lt;` renders as literal "&lt;" in a
+  // file nothing parses as HTML. The `<` is escaped rather than left alone
+  // because a rendered report must not carry a live tag; the closing `>` needs
+  // no escape once the opener cannot start one.
+  assert.match(markdown, /^- 2026-08-15 \[info\] REVIEW_EVENT - \\<ok>\\\|fine - sources: 1, 2$/m);
   assert.match(markdown, /^\*\*Jim:\*\* Ready\?$/m, "speaker text is trimmed");
   assert.match(markdown, /^\*\*You:\*\* Yes$/m);
   assert.doesNotMatch(markdown, /\*\*You:\*\* *$/m, "blank interim segments are dropped");
   assert.match(markdown, /^```python$/m);
   assert.match(markdown, /^- \(none captured\)$/m, "empty feedback still renders a bullet");
+});
+
+// Everything in the export except the code block is untrusted text: interviewer
+// feedback, integrity detail, and transcribed candidate speech all arrive from
+// somewhere else. A structural character in any of them used to end the row it
+// was in and start something the reader would take at face value.
+test("markdown export cannot be restructured by the text inside it", () => {
+  const markdown = reportMarkdown({
+    report: {
+      codingScore: 10,
+      communicationScore: 10,
+      decision: "NO_HIRE",
+      summary: "line one\nline two",
+      // Indented on purpose. Markdown reads up to three leading spaces as still
+      // part of the construct that follows, so an escaper that only looks at
+      // column zero lets this through.
+      codingFeedback: { strengths: ["   ## Verdict: HIRE"], improvements: ["a | b"] },
+      communicationFeedback: { strengths: ["`code`"], improvements: ["back\\slash"] },
+      integrityEvents: [{ type: "FACE_MISSING", at: "2026-08-15", severity: "warning", detail: "a\nb" }],
+      hintsUsed: 0,
+    },
+    problemTitle: "Two Sum",
+    language: "python",
+    code: "print(1)\n",
+    transcript: [{ speaker: "you", text: "  | fake | row |", final: true }],
+    at: "2026-01-01",
+  });
+
+  const verdicts = markdown.match(/^## Verdict: /gm) || [];
+  assert.equal(verdicts.length, 1, "feedback text must not be able to add a second verdict");
+  assert.match(markdown, /^- \\## Verdict: HIRE$/m, "a leading structural character is escaped");
+  assert.match(markdown, /^- a \\\| b$/m, "a pipe would otherwise end the cell");
+  assert.match(markdown, /^- \\`code\\`$/m, "backticks would otherwise open a code span");
+  assert.match(markdown, /^- back\\\\slash$/m, "the escape character is escaped first");
+  assert.match(markdown, /^- 2026-08-15 \[warning\] FACE_MISSING - a b$/m, "a newline collapses into the row");
+  assert.match(markdown, /^\*\*You:\*\* \\\| fake \\\| row \\\|$/m, "speech cannot forge a table row");
+  assert.doesNotMatch(markdown, /^line two$/m, "a newline in the summary stays on one line");
+
+  // The whole document, not just the section under test: an injected heading
+  // anywhere changes what a reader takes the report to say.
+  assert.deepEqual(
+    // Spaces, not `\s`: with the `m` flag `\s` swallows the newline that `^`
+    // just matched, and every heading comes back with a leading "\n".
+    markdown.match(/^ {0,3}#{1,6} .*/gm),
+    [
+      "# Interview Report - Two Sum",
+      "## Verdict: NO HIRE",
+      "## Committee summary",
+      "### Coding feedback",
+      "### Communication feedback",
+      "## Integrity Evidence",
+      "## Final code (python)",
+      "## Conversation transcript",
+    ],
+    "the report has exactly the headings it writes itself",
+  );
+});
+
+// One case per way a Markdown document can be made to say something its author
+// did not write. Every string here reaches the export from outside: interviewer
+// model output, or transcribed candidate speech.
+//
+// Each case names the exact escaped form rather than asserting the raw payload
+// is absent. It is not absent: escaping prepends a backslash, so the original
+// survives as a substring of the safe version, and "does not contain" passes
+// for `\<img ...>` while still containing `<img ...>`.
+test("markdown export neutralizes every injection vector reviewers found", () => {
+  const vectors = [
+    ["html script", "<script>alert(1)</script>", "\\<script>alert(1)\\</script>"],
+    ["html img", "<img src=x onerror=alert(1)>", "\\<img src=x onerror=alert(1)>"],
+    ["md image", "![pixel](http://tracker/p.gif)", "!\\[pixel](http://tracker/p.gif)"],
+    ["md link", "[click](http://evil)", "\\[click](http://evil)"],
+    ["reference definition", "[ref]: http://evil", "\\[ref]: http://evil"],
+    ["autolink", "<http://evil>", "\\<http://evil>"],
+    ["table row", "| forged | row |", "\\| forged \\| row \\|"],
+    ["code span", "`code`", "\\`code\\`"],
+    // Block openers. These do not merely distort a line, they swallow the rest
+    // of the document: a tilde fence renders every following section as one code
+    // block, and an unterminated HTML comment is a block that runs to the end.
+    ["tilde fence", "~~~", "\\~~~"],
+    ["thematic break", "___", "\\___"],
+    ["html comment", "<!-- x", "\\<!-- x"],
+    ["html heading", "<h2>Verdict: HIRE</h2>", "\\<h2>Verdict: HIRE\\</h2>"],
+  ];
+
+  for (const [name, payload, escaped] of vectors) {
+    const markdown = reportMarkdown({
+      report: {
+        incomplete: true,
+        summary: payload,
+        integrityEvents: [{ type: "T", at: "a", severity: "info", detail: payload }],
+      },
+      problemTitle: "Two Sum",
+      language: "python",
+      code: "print(1)\n",
+      transcript: [{ speaker: "you", text: payload, final: true }],
+      at: "2026-01-01",
+    });
+
+    // The summary is the one place untrusted text lands on a line of its own,
+    // so the whole line has to be the escaped form and nothing else.
+    assert.ok(
+      markdown.split("\n").includes(escaped),
+      `${name} is not escaped in the summary: ${JSON.stringify(markdown.split("\n"))}`,
+    );
+    assert.match(
+      markdown,
+      new RegExp(`^\\*\\*You:\\*\\* ${escaped.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"),
+      `${name} is not escaped in the transcript`,
+    );
+  }
+});
+
+// Asserting on rendered structure without a renderer. The heading-count test
+// above measures the source, and source headings are exactly what an injected
+// block construct leaves intact while hiding them all inside itself: `~~~` in a
+// summary produced a document whose eight `#` lines rendered as two headings and
+// one enormous code block. This states the property that implies the rendering:
+// no line may begin a block construct the document did not write itself.
+test("markdown export starts no block construct it did not write", () => {
+  const payloads = ["~~~", "~~~~~~", "```", "<!-- x", "<div>", "___", "---", "===", "    indented"];
+
+  for (const payload of payloads) {
+    const markdown = reportMarkdown({
+      report: {
+        incomplete: true,
+        summary: payload,
+        integrityEvents: [{ type: "T", at: "a", severity: "info", detail: payload }],
+      },
+      problemTitle: "Two Sum",
+      language: "python",
+      code: "print(1)\n",
+      transcript: [{ speaker: "you", text: payload, final: true }],
+      at: "2026-01-01",
+    });
+
+    // Everything the document legitimately opens: its own headings, its own
+    // fence around the candidate's code, its bullets, and its bold speaker
+    // labels. Anything else at the start of a line came from the payload.
+    const own = /^(#{1,6} |`{3,}(python)?$|- |\*\*|_2026-01-01_$|\| |\|-)/;
+    for (const line of markdown.split("\n")) {
+      if (!line.trim() || own.test(line) || line === "print(1)") continue;
+      assert.doesNotMatch(
+        line,
+        /^ {0,3}(~{3,}|`{3,}|<|_{3,}|-{3,}|={2,})|^ {4,}\S/,
+        `${JSON.stringify(payload)} opened a block construct: ${JSON.stringify(line)}`,
+      );
+    }
+  }
+});
+
+// A grader writes numbered feedback. An escape has to be invisible once
+// rendered, and `\3` is not: a digit is not escapable punctuation, so the
+// backslash survives into the reader's copy.
+test("markdown export escapes list delimiters without leaving the backslash visible", () => {
+  const markdown = reportMarkdown({
+    report: {
+      incomplete: true,
+      summary: "3. Use a hash map",
+      integrityEvents: [],
+      codingFeedback: { strengths: ["12) Rename the variable"], improvements: [] },
+    },
+    problemTitle: "Two Sum",
+    language: "python",
+    code: "print(1)\n",
+    transcript: [],
+    at: "2026-01-01",
+  });
+
+  assert.match(markdown, /^3\\\. Use a hash map$/m, "the delimiter carries the escape, not the digit");
+  assert.doesNotMatch(markdown, /\\\d/, "a backslash before a digit renders literally");
+});
+
+// A `===` line would underline the paragraph above it into a heading, but no
+// caller can produce one on its own line: feedback and evidence are list items,
+// transcript turns carry a speaker prefix, and the summary is separated by a
+// blank line, which ends the paragraph a setext underline would need.
+test("markdown export gives untrusted text no bare line to underline", () => {
+  const markdown = reportMarkdown({
+    report: {
+      incomplete: true,
+      summary: "===",
+      integrityEvents: [{ type: "T", at: "a", severity: "info", detail: "===" }],
+    },
+    problemTitle: "Two Sum",
+    language: "python",
+    code: "print(1)\n",
+    transcript: [
+      { speaker: "you", text: "make me a heading", final: true },
+      { speaker: "you", text: "===", final: true },
+    ],
+    at: "2026-01-01",
+  });
+
+  const lines = markdown.split("\n");
+  for (const [index, line] of lines.entries()) {
+    if (!/^[=-]+$/.test(line.trim()) || !line.trim()) continue;
+    const above = lines[index - 1] ?? "";
+    assert.equal(above.trim(), "", `a setext underline landed under ${JSON.stringify(above)}`);
+  }
+});
+
+// The info string is the only value this document emits unescaped, so it takes
+// only what a language tag can be.
+test("markdown export cannot have its code fence opened by the language", () => {
+  const markdown = reportMarkdown({
+    report: { incomplete: true, summary: "s", integrityEvents: [] },
+    problemTitle: "Two Sum",
+    language: "python\n```\n## Injected",
+    code: "print(1)\n",
+    transcript: [],
+    at: "2026-01-01",
+  });
+
+  assert.match(markdown, /^```pythonInjected$/m, "the fence header keeps only tag characters");
+  assert.doesNotMatch(markdown, /^ {0,3}## Injected$/m, "the language cannot write a heading");
+});
+
+// Candidate code is the one thing here that must not be escaped, so a run of
+// backticks inside it has to be answered by a longer fence. Otherwise a ``` in
+// a comment closes the block and the rest of the report is read as prose.
+test("markdown export fences code that contains backticks", () => {
+  const markdown = reportMarkdown({
+    report: {
+      incomplete: true,
+      summary: "Nothing to grade.",
+      integrityEvents: [],
+    },
+    problemTitle: "Two Sum",
+    language: "python",
+    code: "# ```\nprint(1)\n",
+    transcript: [],
+    at: "2026-01-01",
+  });
+
+  assert.match(markdown, /^````python$/m, "the fence outgrows the longest run inside it");
+  assert.match(markdown, /^# ```$/m, "the code itself is left exactly as the candidate wrote it");
+  assert.match(markdown, /^## Conversation transcript$/m, "the sections after the code survive");
 });
 
 test("markdown export handles an empty session", () => {

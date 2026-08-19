@@ -104,17 +104,74 @@ export function reportMarkup({ report, problemTitle, language, code }) {
 /// The downloadable report. Pure so the export can be tested without a DOM;
 /// `at` is injected because a timestamp would otherwise make it unassertable.
 export function reportMarkdown({ report, problemTitle, language, code, transcript, at }) {
-  const bullets = (items) => orPlaceholder(items).map((item) => `- ${item}`).join("\n");
+  // One rule for every untrusted string in this document, where there used to
+  // be three. Evidence rows ran through escapeHtml, feedback bullets and
+  // transcript turns ran through nothing. escapeHtml was the wrong escaper for
+  // a file nobody renders as HTML: it turned a candidate's `<` into `&lt;` and
+  // left the characters that actually break Markdown structure alone.
+  //
+  // The escaped set is structure and safety, not cosmetics. `|` ends a table
+  // cell and a backtick opens a code span. `<` is the one this file used to get
+  // right by accident: the old evidence rows ran through escapeHtml, so an
+  // interviewer model emitting `<img src=x onerror=...>` came out inert, and
+  // collapsing three escapers into one briefly handed that back. It also closes
+  // autolinks. `[` closes inline links, images, and reference definitions, so
+  // `![pixel](http://tracker)` in feedback cannot phone home from a rendered
+  // report. Emphasis characters are deliberately left alone mid-line: `*` and
+  // `_` can only make text italic there, and escaping every cosmetic character
+  // makes the raw .md unreadable, which is the form a human actually opens.
+  //
+  // At line start they are structure, not decoration, so the leading rule below
+  // takes a wider set: `~~~` opens a fence the backtick rule never sees, `___`
+  // is a thematic break, and `=` would underline the line above into a heading.
+  // A `~~~` in one summary rendered every section after it as one code block.
+  //
+  // Backslash first, or the escapes get escaped. All whitespace collapses to
+  // single spaces because every use below is one line of a table row, a list
+  // item, or an attributed transcript turn, and a newline in any of them ends
+  // the row and starts something else. Then trim, because Markdown reads up to
+  // three leading spaces as still being part of the construct that follows: an
+  // earlier version collapsed only newlines, so `   ## Verdict: HIRE` kept its
+  // indent, the leading-character rule below never saw the `#`, and feedback
+  // text could still write a heading. The leading-character rule runs last,
+  // once trimming has decided what the line actually starts with.
+  const mdText = (value) => String(value ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/([|`<\[])/g, "\\$1")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^([#>*+=~_-])/, "\\$1")
+    // The delimiter, not the digits: a digit is not escapable punctuation, so
+    // `\3.` rendered a literal backslash and corrupted numbered feedback, which
+    // is the shape a grader writes in. `)` is an ordered-list delimiter too.
+    .replace(/^(\d+)([.)])/, "$1\\$2");
+  const bullets = (items) => orPlaceholder(items).map((item) => `- ${mdText(item)}`).join("\n");
   const section = (title, feedbackSection) => `### ${title}\n\n**Strengths**\n${bullets(feedbackSection.strengths)}\n\n**Improvements**\n${bullets(feedbackSection.improvements)}\n`;
-  const clean = (value) => escapeHtml(value).replace(/\|/g, "\\|");
   const evidence = (report.integrityEvents || []).map((event) => {
-    const sources = event.sourceEventIds?.length ? ` - sources: ${event.sourceEventIds.map(clean).join(", ")}` : "";
-    return `- ${clean(event.at)} [${clean(event.severity)}] ${clean(event.type)}${event.detail ? ` - ${clean(event.detail)}` : ""}${sources}`;
+    const sources = event.sourceEventIds?.length ? ` - sources: ${event.sourceEventIds.map(mdText).join(", ")}` : "";
+    return `- ${mdText(event.at)} [${mdText(event.severity)}] ${mdText(event.type)}${event.detail ? ` - ${mdText(event.detail)}` : ""}${sources}`;
   }).join("\n") || "(none captured)";
   const conversation = transcript
     .filter((segment) => segment.final || segment.text.trim())
-    .map((segment) => `**${segment.speaker === "interviewer" ? "Jim" : "You"}:** ${segment.text.trim()}`)
+    .map((segment) => `**${segment.speaker === "interviewer" ? "Jim" : "You"}:** ${mdText(segment.text.trim())}`)
     .join("\n\n");
+  // Candidate code is the one field here that must not be escaped, so when it
+  // contains a run of backticks the fence is what has to give. Without this, a
+  // ``` in a comment closes the block early and the rest of the report is read
+  // as prose.
+  //
+  // Folded rather than spread into `Math.max`: one argument per backtick run is
+  // one argument per two characters of pasted code, and past roughly a hundred
+  // thousand runs the call blows the argument limit and throws a RangeError, so
+  // the candidate's own download button would do nothing.
+  const body = code.trimEnd() || "(editor was empty)";
+  const longestRun = (body.match(/`+/g) || []).reduce((longest, run) => Math.max(longest, run.length), 0);
+  const fence = "`".repeat(Math.max(2, longestRun) + 1);
+  // The info string is the one place this document emits a value unescaped, so
+  // it takes the only characters a language tag can be. Today `language` comes
+  // from the tabs and is allowlisted on both sides, but a newline here would
+  // end the fence line and start emitting the candidate's code as prose.
+  const info = String(language).replace(/[^a-zA-Z0-9_+-]/g, "");
   // The exported copy is the one that outlives the tab and can be forwarded, so
   // it must not carry a verdict the session never earned either. Only the head
   // differs: the tail used to be duplicated per branch and had already drifted
@@ -124,26 +181,26 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
     ? [
       "## No evaluation",
       "",
-      report.summary || "(none)",
+      mdText(report.summary) || "(none)",
     ]
     : [
       `## Verdict: ${report.decision === "HIRE" ? "HIRE" : "NO HIRE"}`,
       "",
       "| Metric | Score |",
       "|---|---|",
-      `| Coding | ${report.codingScore} / 100 |`,
-      `| Communication | ${report.communicationScore} / 100 |`,
-      `| Hints used | ${report.hintsUsed} |`,
+      `| Coding | ${mdText(report.codingScore)} / 100 |`,
+      `| Communication | ${mdText(report.communicationScore)} / 100 |`,
+      `| Hints used | ${mdText(report.hintsUsed)} |`,
       "",
       "## Committee summary",
-      report.summary || "(none)",
+      mdText(report.summary) || "(none)",
       "",
       section("Coding feedback", report.codingFeedback),
       section("Communication feedback", report.communicationFeedback).trimEnd(),
     ];
 
   return [
-    `# Interview Report - ${problemTitle}`,
+    `# Interview Report - ${mdText(problemTitle)}`,
     `_${at}_`,
     "",
     ...head,
@@ -154,10 +211,10 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
     "## Integrity Evidence",
     evidence,
     "",
-    `## Final code (${language})`,
-    "```" + language,
-    code.trimEnd() || "(editor was empty)",
-    "```",
+    `## Final code (${mdText(language)})`,
+    fence + info,
+    body,
+    fence,
     "",
     "## Conversation transcript",
     conversation || "(no speech captured)",

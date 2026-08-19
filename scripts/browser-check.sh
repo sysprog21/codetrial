@@ -4,6 +4,7 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$ROOT/scripts/session-cookie.sh"
 BROWSER_CHECK_AGENT=${BROWSER_CHECK_AGENT:-home}
+
 # Flows: voice (default), report, barge, avatar. `avatar` is dispatched before
 # the agent mode, so it needs no credentials and ignores BROWSER_CHECK_AGENT.
 BROWSER_CHECK_FLOW=${BROWSER_CHECK_FLOW:-voice}
@@ -53,6 +54,14 @@ if [ "${BROWSER_CHECK_VALIDATE_ENV_ONLY:-}" ]; then
   exit 0
 fi
 
+# Anything that serves `web/` needs the fetched vendor binaries, and this script
+# launches its own server rather than going through the Makefile. Without this a
+# fresh clone serves a MediaPipe loader whose .wasm and model 404, and face
+# detection reports itself unavailable instead of failing: the exact shape of
+# the bug that started this, where the binaries were missing and everything
+# still looked like it worked.
+"$ROOT/scripts/fetch-vendor.sh"
+
 # Resolved after the env-only exit above, which never needs Playwright. Comes
 # from the repo's own devDependencies so the usual path is `npm install` with no
 # environment variable. PLAYWRIGHT_PATH stays an override for a Playwright
@@ -91,6 +100,7 @@ else
         >"$SERVER_LOG" 2>&1 &
       ;;
     dispatch)
+
       # The production shape: no fixed room, so the server invents one per
       # request and has to put an interviewer in it by itself. This is the mode
       # that a missing dispatch breaks, and nothing else covers it.

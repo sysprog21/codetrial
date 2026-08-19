@@ -1,0 +1,13 @@
+# Fetched at build time by scripts/fetch-vendor.sh, not committed: these four
+# are 11.7 MB of wasm and model data that never change without a version bump,
+# and a git history carrying them costs every clone forever.
+#
+# First non-comment line is the base URL. Every line after it is a filename,
+# which must also appear in SHA256SUMS: the pin is the contract, this file only
+# says where to get the bytes. Bump the version here and the hashes there
+# together, and say in the commit message where the bytes came from.
+https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.4.1646425229/
+face_detection_short.binarypb
+face_detection_short_range.tflite
+face_detection_solution_wasm_bin.wasm
+face_detection_solution_simd_wasm_bin.wasm

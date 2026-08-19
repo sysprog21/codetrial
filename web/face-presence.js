@@ -29,6 +29,28 @@ export function normalizeFaceResults(results = {}) {
   return { count: detections.length, confidence };
 }
 
+/// Whether the preflight camera step may pass, given one detector sample.
+///
+/// Two rules, and neither is obvious enough to leave inline in the preflight.
+///
+/// A gap in sampling is not an observation: an unavailable sample carries
+/// count 0, and reading that as "no face" once left the Start button disabled
+/// while the candidate sat in front of a working camera, reading "stay in
+/// frame" with no way past. `createFacePresenceTracker` already says this about
+/// the interview; the preflight has the same rule for the same reason.
+///
+/// And exactly one face passes, while zero is "not yet" and two or more is an
+/// error the candidate can act on. The preflight used to gate the error on a
+/// `faceDetectorLoaded` flag that was set immediately before the sampling loop
+/// started and never cleared, so it was always true by the time it was read.
+export function facePresenceVerdict(sample) {
+  if (!sample?.available) return { ready: true, error: null };
+  return {
+    ready: sample.count === 1,
+    error: sample.count > 1 ? "multiple faces detected" : null,
+  };
+}
+
 export function faceEventType(count) {
   if (count === 0) return "FACE_MISSING";
   if (count > 1) return "MULTIPLE_FACES";

@@ -1,0 +1,87 @@
+{
+  "topic": "test_results",
+  "cases": [
+    {
+      "name": "all passed",
+      "payload": {
+        "passed": 5,
+        "total": 5,
+        "language": "python",
+        "setupError": null,
+        "failures": [],
+        "at": 1770000000000
+      }
+    },
+    {
+      "name": "some failed",
+      "payload": {
+        "passed": 3,
+        "total": 5,
+        "language": "python",
+        "setupError": null,
+        "failures": [
+          {
+            "label": "example 2",
+            "expected": "[1,2]",
+            "got": "[]",
+            "error": null
+          },
+          {
+            "label": "example 3",
+            "expected": "[2,3]",
+            "got": "",
+            "error": "TypeError: nums is not iterable"
+          }
+        ],
+        "at": 1770000000000
+      }
+    },
+    {
+      "name": "more failures than the payload carries",
+      "payload": {
+        "passed": 0,
+        "total": 5,
+        "language": "python",
+        "setupError": null,
+        "failures": [
+          {
+            "label": "example 1",
+            "expected": "[1]",
+            "got": "[]",
+            "error": null
+          },
+          {
+            "label": "example 2",
+            "expected": "[2]",
+            "got": "[]",
+            "error": null
+          },
+          {
+            "label": "example 3",
+            "expected": "[3]",
+            "got": "[]",
+            "error": null
+          },
+          {
+            "label": "example 4",
+            "expected": "[4]",
+            "got": "[]",
+            "error": null
+          }
+        ],
+        "at": 1770000000000
+      }
+    },
+    {
+      "name": "setup error",
+      "payload": {
+        "passed": 0,
+        "total": 0,
+        "language": "cpp",
+        "setupError": "Compiler Explorer returned 503",
+        "failures": [],
+        "at": 1770000000000
+      }
+    }
+  ]
+}

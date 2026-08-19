@@ -40,7 +40,7 @@ import {
 } from "./avatar/avatar.js";
 import { saveReportHistory } from "./history.js";
 import { TRACKING_INTERVAL_MS } from "./integrity-worker.js";
-import { createFacePresenceDetector } from "./face-presence.js";
+import { createFacePresenceDetector, facePresenceVerdict } from "./face-presence.js";
 import { runBrowserTests } from "./runners.js";
 
 const languages = ["python", "javascript", "c", "cpp", "java"];
@@ -293,7 +293,6 @@ function runAudioCheck() {
     let faceReady = true;
     let faceError = null;
     let faceDetector = null;
-    let faceDetectorLoaded = false;
     let faceCheckStarted = false;
     let userStream = null;
     let context = null;
@@ -374,27 +373,13 @@ function runAudioCheck() {
         refresh();
         return;
       }
-      faceDetectorLoaded = true;
       faceReady = false;
       refresh();
       const check = async () => {
         if (finished || !faceDetector?.available) return;
-        const sample = await faceDetector.detect(nodes.cameraIntegrityVideo);
-        // A detector that goes dark after loading reports an unavailable
-        // sample, which carries count 0. Reading that as "no face" left
-        // `faceReady` false with no error set, so the Start button never
-        // enabled and the candidate read "stay in front of the camera" while
-        // sitting in front of it, with no way past. A gap in sampling is not an
-        // observation, which web/integrity-worker.js already gets right.
-        if (!sample.available) {
-          faceReady = true;
-          faceError = null;
-          refresh();
-          setTimeout(check, 1000);
-          return;
-        }
-        faceReady = sample.count === 1;
-        faceError = !faceDetectorLoaded || sample.count < 2 ? null : "multiple faces detected";
+        ({ ready: faceReady, error: faceError } = facePresenceVerdict(
+          await faceDetector.detect(nodes.cameraIntegrityVideo),
+        ));
         refresh();
         setTimeout(check, 1000);
       };
