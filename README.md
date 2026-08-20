@@ -129,6 +129,16 @@ Fill in the LiveKit and Google values. The binary loads this file automatically
 when it exists; `--config PATH` points at a different one, and
 `CODETRIAL_SKIP_CONFIG=1` disables the automatic load.
 
+### Recording provisioning
+
+Production recording is not enabled in this checkout. Its isolated LiveKit
+project, private GCS staging bucket, platform-owned Shared Drive, and
+service-account roles must be provisioned first. The required environment
+variables and credential-safe verification command are in
+[`docs/recording-contract.md`](docs/recording-contract.md); never put the key,
+resource IDs, or the public template origin in an env file committed to this
+repository.
+
 To spread rooms over more than one LiveKit project, add
 `config/codetrial.env.<id>` per extra project, each with its own `LIVEKIT_URL`,
 `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` and optionally `GOOGLE_API_KEY`. The id
