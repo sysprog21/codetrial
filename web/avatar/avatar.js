@@ -333,8 +333,6 @@ function withTimeout(promise, timeoutMs) {
   let timer = null;
   const expiry = new Promise((_resolve, reject) => {
     timer = setTimeout(() => reject(new Error("avatar model load timed out")), timeoutMs);
-    // Node keeps the loop alive for a pending timer; a browser does not care.
-    timer?.unref?.();
   });
   return Promise.race([Promise.resolve(promise), expiry]).finally(() => clearTimeout(timer));
 }

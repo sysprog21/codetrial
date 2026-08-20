@@ -33,6 +33,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install native build dependency
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev
+
       # The runner image ships a stable toolchain, but not necessarily one new
       # enough for edition 2024, and clippy and rustfmt are gates rather than
       # extras here.
