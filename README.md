@@ -438,6 +438,23 @@ still being built, so turning the switch on validates a configuration and
 records nothing. The keys are documented here because they have one owner and
 one meaning, not because the feature is finished.
 
+Recording requires the GitHub OAuth app. A recording is delivered to the
+primary verified address GitHub returns for the signed-in account, so
+`CODETRIAL_RECORDING_ENABLED=true` without both `GITHUB_CLIENT_ID` and
+`GITHUB_CLIENT_SECRET` is refused at startup rather than one candidate at a time, and `/api/token` answers `403
+recording_requires_verified_identity` to a self-declared username. Only that
+one address is stored: `/user/emails` lists every address a person has
+registered, and this pipeline needs one. A self-declared login never acquires
+one, and typing the same handle twice mints two accounts rather than upgrading
+the first. A failed `/user/emails` lookup fails the sign-in rather than
+recording the account as unverified: the alternative takes a delivery address
+away permanently over a transient failure on somebody else's server.
+
+Where recording is off, the OAuth consent screen asks only for `read:user` and
+no address is fetched or kept, because a deployment that records nothing has no
+use for a candidate's private address. Turning recording on therefore asks
+everyone to sign in once more.
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `CODETRIAL_RECORDING_ENABLED` | `false` | master switch; everything below is ignored while it is off |

@@ -37,6 +37,24 @@ const SESSION_COOKIE: &str = "codetrial_session";
 const OAUTH_STATE_COOKIE: &str = "codetrial_oauth_state";
 const OAUTH_STATE_TTL_SECONDS: i64 = 60 * 10;
 
+/// `read:user` alone returns whatever address the person made public, which is
+/// usually none. Delivery needs the primary verified one, and that is a
+/// separate scope and a separate endpoint.
+///
+/// Asked for only where recording is on. A deployment that records nothing has
+/// no use for a candidate's private address, and requesting it anyway would be
+/// a consent screen listing an access this server never exercises.
+const GITHUB_OAUTH_SCOPE: &str = "read:user";
+const GITHUB_OAUTH_SCOPE_WITH_EMAIL: &str = "read:user user:email";
+
+fn github_oauth_scope(recording: bool) -> &'static str {
+    if recording {
+        GITHUB_OAUTH_SCOPE_WITH_EMAIL
+    } else {
+        GITHUB_OAUTH_SCOPE
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenConfig<'a> {
     pub api_key: &'a str,
@@ -275,6 +293,33 @@ fn open_accounts(login: GitHubLoginConfig) -> Option<Arc<Accounts>> {
 fn web_router(config: WebServerConfig, dispatcher: Option<Arc<dyn RoomDispatcher>>) -> Router {
     let login = login_config(&config);
     let accounts_required = login.is_some();
+
+    // The binaries refuse to start in this state, because an operator can fix
+    // it. This constructor is also public, and an embedder reaching it with the
+    // same configuration gets a server that answers 403 to every token request
+    // for a reason nothing on the wire explains. Said out loud rather than made
+    // fatal: the gate itself is what the recording tests exercise, and a router
+    // that panicked here could not be tested at all.
+    //
+    // Keyed on the OAuth pair itself rather than on `login_config`, which also
+    // returns `None` for a missing session secret or database path. That is a
+    // different deployment problem with a different answer on the wire, and one
+    // warning describing both would be wrong about whichever it did not mean.
+    let oauth_credential = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+    };
+    if config.recording.is_some()
+        && !(oauth_credential(&config.github_client_id)
+            && oauth_credential(&config.github_client_secret))
+    {
+        eprintln!(
+            "recording is configured without a GitHub OAuth app, so every account is \
+             self-declared and /api/token will refuse every interview"
+        );
+    }
     let accounts = login.and_then(open_accounts);
     Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
@@ -625,11 +670,16 @@ async fn login_handler(State(state): State<AppState>) -> Response {
         OAUTH_STATE_TTL_SECONDS,
         state.config.production,
     );
+
+    // `user:email` on top of `read:user`, because `/user` returns only a public
+    // address and a recording is delivered to a verified one. Escaped rather
+    // than written literally: the value now contains a space.
     let location = format!(
-        "{}/login/oauth/authorize?client_id={}&state={}&scope=read:user",
+        "{}/login/oauth/authorize?client_id={}&state={}&scope={}",
         accounts.config().oauth_base_url.trim_end_matches('/'),
         query_escape(&oauth.client_id),
-        query_escape(&state_token)
+        query_escape(&state_token),
+        query_escape(github_oauth_scope(state.config.recording.is_some()))
     );
 
     (
@@ -682,6 +732,11 @@ async fn record_login_handler(
         github_id,
         login,
         avatar_url: None,
+
+        // A typed handle proves nothing, so it can never carry a delivery
+        // address. `create_session` refuses to write one for a negative id too;
+        // this is the same rule stated where the value would have come from.
+        verified_email: None,
     };
     let session_id = match blocking(move || create_session(&accounts, &profile)).await {
         Ok(session_id) => session_id,
@@ -746,7 +801,13 @@ async fn callback_handler(State(state): State<AppState>, request: Request<Body>)
             json!({ "error": "GitHub token exchange failed." }),
         );
     };
-    let Ok(profile) = github_profile(accounts.config(), &access_token).await else {
+    let Ok(profile) = github_profile(
+        accounts.config(),
+        &access_token,
+        state.config.recording.is_some(),
+    )
+    .await
+    else {
         return json_response(
             StatusCode::BAD_GATEWAY,
             json!({ "error": "GitHub profile request failed." }),
@@ -998,6 +1059,7 @@ async fn github_access_token(
 async fn github_profile(
     config: &GitHubLoginConfig,
     access_token: &str,
+    recording: bool,
 ) -> Result<GitHubProfile, Box<dyn std::error::Error + Send + Sync>> {
     let body = crate::http_client()
         .get(format!(
@@ -1026,7 +1088,69 @@ async fn github_profile(
             .get("avatar_url")
             .and_then(Value::as_str)
             .map(str::to_string),
+
+        // Not fetched at all where recording is off, so a deployment that
+        // records nothing never holds a candidate's private address and never
+        // fails a sign-in because GitHub rate limited an endpoint it had no
+        // reason to call.
+        //
+        // `None` here also clears an address stored while recording was on,
+        // because `create_session` writes what it is given. That is deliberate:
+        // a deployment with recording off has no basis to keep a private
+        // address, and the cost of turning recording back on is one extra
+        // sign-in for anyone who signed in during the gap.
+        verified_email: match recording {
+            true => primary_verified_email(config, access_token).await?,
+            false => None,
+        },
     })
+}
+
+/// The one address GitHub says is both primary and verified.
+///
+/// `Ok(None)` means GitHub answered and this account has no such address.
+/// `Err` means GitHub did not answer, and the two must not be confused: the
+/// caller writes this value into `users.email`, so folding a rate limit or a
+/// 502 into "no verified address" would take the delivery address away from
+/// somebody who already had one, permanently, on a transient failure of
+/// somebody else's server.
+///
+/// Only the selected address is returned. The response lists every address
+/// someone has registered, which is more about them than this pipeline has any
+/// business holding.
+async fn primary_verified_email(
+    config: &GitHubLoginConfig,
+    access_token: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+    let body = crate::http_client()
+        .get(format!(
+            "{}/user/emails",
+            config.api_base_url.trim_end_matches('/')
+        ))
+        .bearer_auth(access_token)
+        .header(header::USER_AGENT, "codetrial")
+        .send()
+        .await?
+        // A 403 from a rate limit still carries a JSON body, and that body
+        // parses as a `Value` and is not an array. Without this the failure
+        // reaches the `as_array` below and comes back as "no address".
+        .error_for_status()?
+        .json::<Value>()
+        .await?;
+    let addresses = body
+        .as_array()
+        .ok_or("GitHub /user/emails was not a list")?;
+    Ok(addresses
+        .iter()
+        .find(|entry| {
+            entry.get("primary").and_then(Value::as_bool) == Some(true)
+                && entry.get("verified").and_then(Value::as_bool) == Some(true)
+        })
+        .and_then(|entry| entry.get("email"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|email| !email.is_empty())
+        .map(str::to_string))
 }
 
 async fn current_user(
@@ -1274,6 +1398,21 @@ async fn token_handler(
             );
         }
     };
+
+    // Where recording is on, the interview produces a file that has to be
+    // delivered to a person, and a self-declared handle is not one. Refusing
+    // here rather than at delivery time is the difference between a candidate
+    // who cannot start and a candidate whose finished interview cannot be sent
+    // anywhere.
+    if state.config.recording.is_some() && user.verified_email.is_none() {
+        return json_response(
+            StatusCode::FORBIDDEN,
+            json!({
+                "code": "recording_requires_verified_identity",
+                "error": "This interview is recorded, so it needs a GitHub sign-in. A typed username cannot receive the recording."
+            }),
+        );
+    }
 
     let client = client_ip(request.headers(), peer, state.config.trusted_proxy_hops);
     if !state.token_limit.allow(client, Instant::now()) {

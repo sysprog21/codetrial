@@ -198,6 +198,11 @@ fn run_web(options: CliOptions) -> Result<(), String> {
         production,
     )
     .map_err(|error| error.to_string())?;
+    recording_needs_verified_identity(
+        recording.is_some(),
+        nonempty(&values, "GITHUB_CLIENT_ID").is_some()
+            && nonempty(&values, "GITHUB_CLIENT_SECRET").is_some(),
+    )?;
 
     let config = WebServerConfig {
         web_dir: PathBuf::from(value_or(&values, "CODETRIAL_WEB_DIR", DEFAULT_WEB_DIR)),
@@ -398,6 +403,10 @@ fn run_serve(options: CliOptions) -> Result<(), String> {
         false,
     )
     .map_err(|error| error.to_string())?;
+    recording_needs_verified_identity(
+        recording.is_some(),
+        github_client_id.is_some() && github_client_secret.is_some(),
+    )?;
     let web_config = WebServerConfig {
         web_dir: PathBuf::from(config.web_dir.clone()),
         github_client_id,
@@ -742,6 +751,30 @@ fn is_production(values: &BTreeMap<String, String>) -> bool {
 
 /// Zero unless the operator states how many proxies front this server, so the
 /// default never trusts a forwarded client address.
+/// Recording without an OAuth app is a server that refuses every interview.
+///
+/// The delivery target is the primary verified address GitHub returns, and
+/// without the OAuth flow every account is self-declared, so `/api/token`
+/// answers 403 to all of them. Said at startup, where an operator can act on
+/// it, rather than one candidate at a time.
+///
+/// `oauth` is both credentials, not just the id. `login_config` enables OAuth
+/// only when it has the pair, so an id with no secret is exactly as unable to
+/// verify anyone as no id at all, and would have started a server that refused
+/// every interview while looking configured.
+fn recording_needs_verified_identity(recording: bool, oauth: bool) -> Result<(), String> {
+    if recording && !oauth {
+        return Err(
+            "CODETRIAL_RECORDING_ENABLED=true needs GITHUB_CLIENT_ID and \
+                    GITHUB_CLIENT_SECRET: a recording is delivered to the verified address \
+                    GitHub returns, and without the OAuth app every account is self-declared \
+                    and every interview would be refused"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// The configured interview length, which is what a recording's maximum
 /// duration has to clear. Read here rather than through `load_from_pairs`
 /// because `codetrial web` deliberately runs without a full agent config.
@@ -1019,5 +1052,19 @@ mod tests {
             ..Default::default()
         };
         assert!(super::should_discover_providers(&options));
+    }
+
+    /// The pair, not the id. `login_config` enables OAuth only when it has
+    /// both, so an id with no secret verifies exactly as many people as no id
+    /// at all, and would have started a server that refused every interview
+    /// while looking configured.
+    #[test]
+    fn recording_needs_both_oauth_credentials_or_it_refuses_to_start() {
+        assert!(super::recording_needs_verified_identity(false, false).is_ok());
+        assert!(super::recording_needs_verified_identity(true, true).is_ok());
+
+        let error = super::recording_needs_verified_identity(true, false).unwrap_err();
+        assert!(error.contains("GITHUB_CLIENT_ID"));
+        assert!(error.contains("GITHUB_CLIENT_SECRET"));
     }
 }

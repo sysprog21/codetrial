@@ -39,6 +39,10 @@ pub struct SignedInUser {
     pub id: i64,
     pub login: String,
     pub avatar_url: Option<String>,
+    /// The primary verified address GitHub gave us at sign-in, and only that.
+    /// `None` for every self-declared login, which is the whole point: a typed
+    /// handle is a label, and a recording is delivered to a person.
+    pub verified_email: Option<String>,
 }
 
 /// What GitHub told us. Its `github_id` is not the local `users.id`, which is
@@ -48,6 +52,10 @@ pub struct GitHubProfile {
     pub github_id: i64,
     pub login: String,
     pub avatar_url: Option<String>,
+    /// Present only for a real OAuth sign-in that returned a primary verified
+    /// address. Nothing else in `/user/emails` is kept: the response lists
+    /// every address a person has registered, and this pipeline needs one.
+    pub verified_email: Option<String>,
 }
 
 /// The account database and the settings that reach it, resolved once at
@@ -111,7 +119,7 @@ impl Accounts {
 /// Bumped whenever a migration is added below. SQLite carries it in the file
 /// header, so an existing database announces which migrations it has already
 /// run instead of quietly keeping an old shape behind `IF NOT EXISTS`.
-pub const ACCOUNT_SCHEMA_VERSION: i64 = 3;
+pub const ACCOUNT_SCHEMA_VERSION: i64 = 4;
 
 /// Migrations in order, each one taking the database from index `n` to `n + 1`.
 /// Append, never edit: an entry that has already run somewhere will not run
@@ -120,6 +128,7 @@ const ACCOUNT_MIGRATIONS: &[&str] = &[
     CREATE_ACCOUNT_TABLES,
     INDEX_REPORTS_BY_USER,
     DISCARD_CLEARTEXT_SESSIONS,
+    ADD_VERIFIED_EMAIL,
 ];
 
 pub fn initialize_account_database(path: &Path) -> rusqlite::Result<()> {
@@ -246,6 +255,19 @@ const CREATE_ACCOUNT_TABLES: &str = "
         );
 ";
 
+/// Where a recording can be delivered, and whether anyone checked.
+///
+/// Two columns rather than one, because "no address" and "an address nobody
+/// verified" have to be told apart: the second is what a self-declared sign-in
+/// would produce if it were ever allowed to write one, and delivering a
+/// recording to it would mean mailing an interview to whoever typed the
+/// handle. `email_verified` defaults to 0, so every row that predates this
+/// migration is unverified, which is what it was.
+const ADD_VERIFIED_EMAIL: &str = "
+        ALTER TABLE users ADD COLUMN email TEXT;
+        ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0;
+";
+
 /// Every report read and the per-account quota below both filter on `user_id`,
 /// which was a full scan of the table for want of one index.
 const INDEX_REPORTS_BY_USER: &str = "
@@ -268,7 +290,23 @@ pub enum ReportSave {
     AtCapacity,
 }
 
-pub fn create_session(accounts: &Accounts, profile: &GitHubProfile) -> rusqlite::Result<String> {
+/// Signs someone in, minting the session token the cookie carries.
+///
+/// `pub(crate)` deliberately. It was raised in review that a public
+/// `create_session` plus a public `GitHubProfile` lets any in-process caller
+/// mint an account marked verified, since `github_id > 0` proves only a
+/// number's sign and not that GitHub said anything. Visibility is not a defence
+/// against code in the same process, which can write the row directly, but this
+/// function has exactly two callers and neither is outside this crate, so the
+/// narrower spelling costs nothing and stops the shape from spreading.
+///
+/// The real invariant lives at those two callers: the OAuth callback is the
+/// only one that supplies a positive id, and `record_login_handler` always
+/// takes its id from `recorded_account_id`, which is negative by construction.
+pub(crate) fn create_session(
+    accounts: &Accounts,
+    profile: &GitHubProfile,
+) -> rusqlite::Result<String> {
     accounts.with(|connection| {
         let now = current_epoch_seconds() as i64;
 
@@ -278,13 +316,15 @@ pub fn create_session(accounts: &Accounts, profile: &GitHubProfile) -> rusqlite:
         // row: if the random id ever repeats, the insert has to fail rather
         // than hand the new arrival somebody else's reports.
         const INSERT_USER: &str = "
-        INSERT INTO users (github_id, login, avatar_url, created_at, updated_at)
-        VALUES (?1, ?2, ?3, ?4, ?4)
+        INSERT INTO users (github_id, login, avatar_url, email, email_verified, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?5, ?6, ?4, ?4)
     ";
         const ADOPT_EXISTING: &str = "
         ON CONFLICT(github_id) DO UPDATE SET
             login = excluded.login,
             avatar_url = excluded.avatar_url,
+            email = excluded.email,
+            email_verified = excluded.email_verified,
             updated_at = excluded.updated_at
     ";
         let statement = if profile.github_id < 0 {
@@ -292,6 +332,22 @@ pub fn create_session(accounts: &Accounts, profile: &GitHubProfile) -> rusqlite:
         } else {
             format!("{INSERT_USER}{ADOPT_EXISTING}")
         };
+
+        // A verified address is only ever written for a positive id, which is
+        // an account GitHub vouched for. A self-declared login carries a
+        // negative id and gets a NULL address and a zero flag, so there is no
+        // path by which typing a handle produces a delivery target. Trimmed and
+        // non-empty here, not only at the caller. This function is the
+        // persistence boundary and it is public: `email_verified` is derived
+        // from whether this is `Some`, so a positive account whose address is
+        // nothing but spaces would be recorded as verified with nothing to
+        // deliver to.
+        let verified_email = profile
+            .verified_email
+            .as_deref()
+            .map(str::trim)
+            .filter(|email| !email.is_empty())
+            .filter(|_| profile.github_id > 0);
         connection.execute(
             &statement,
             (
@@ -299,6 +355,8 @@ pub fn create_session(accounts: &Accounts, profile: &GitHubProfile) -> rusqlite:
                 profile.login.as_str(),
                 profile.avatar_url.as_deref(),
                 now,
+                verified_email,
+                i64::from(verified_email.is_some()),
             ),
         )?;
         let user_id = connection.query_row(
@@ -379,7 +437,7 @@ pub fn session_user(
         let now = current_epoch_seconds() as i64;
         let mut statement = connection.prepare(
             "
-        SELECT users.id, users.login, users.avatar_url
+        SELECT users.id, users.login, users.avatar_url, users.email, users.email_verified
         FROM sessions
         JOIN users ON users.id = sessions.user_id
         WHERE sessions.id = ?1 AND sessions.expires_at > ?2
@@ -389,10 +447,16 @@ pub fn session_user(
         let Some(row) = rows.next()? else {
             return Ok(None);
         };
+
+        // The flag gates the column. A row with an address and a zero flag is
+        // one nobody checked, and reading the address anyway is how an
+        // unverified value becomes a delivery target one refactor later.
+        let verified: i64 = row.get(4)?;
         Ok(Some(SignedInUser {
             id: row.get(0)?,
             login: row.get(1)?,
             avatar_url: row.get(2)?,
+            verified_email: row.get::<_, Option<String>>(3)?.filter(|_| verified != 0),
         }))
     })
 }
@@ -674,6 +738,40 @@ mod migration_tests {
             .unwrap();
     }
 
+    /// Puts a database back into the shape it had at `version`, rather than
+    /// only rewinding the counter.
+    ///
+    /// Rewinding alone was enough while every migration was idempotent, and
+    /// stopped being enough the moment one added a column: replaying
+    /// `ALTER TABLE ... ADD COLUMN` against a table that already has it fails
+    /// with `duplicate column name`. That failure is the fixture's, not the
+    /// migration's, so the fixture is what has to build an honest old database.
+    ///
+    /// It was raised as a production idempotency flaw and is not one. `migrate`
+    /// runs only the entries after `PRAGMA user_version` and stamps the new
+    /// version inside the same `IMMEDIATE` transaction, so a migration runs
+    /// once or not at all; a database at version 3 holding version 4's columns
+    /// is a state only this helper can produce. Guarding the `ALTER` with a
+    /// `pragma_table_info` check would be defending against it.
+    ///
+    /// `DROP COLUMN` needs SQLite 3.35, which the bundled build has and which
+    /// production never needs. That asymmetry is the price of the fixture and
+    /// is worth naming.
+    fn rewind_to(path: &Path, version: i64) {
+        let connection = rusqlite::Connection::open(path).unwrap();
+        if version < 4 {
+            connection
+                .execute_batch(
+                    "ALTER TABLE users DROP COLUMN email;
+                     ALTER TABLE users DROP COLUMN email_verified;",
+                )
+                .unwrap();
+        }
+        connection
+            .execute_batch(&format!("PRAGMA user_version = {version}"))
+            .unwrap();
+    }
+
     fn tables(path: &Path) -> Vec<String> {
         let connection = rusqlite::Connection::open(path).unwrap();
         let mut statement = connection
@@ -713,6 +811,7 @@ mod migration_tests {
                 github_id,
                 login: login.to_string(),
                 avatar_url: None,
+                verified_email: None,
             },
         )
         .unwrap()
@@ -741,7 +840,7 @@ mod migration_tests {
         )
         .unwrap();
         // Rewind to a database the hashing migration has not reached.
-        set_user_version(&path, 2);
+        rewind_to(&path, 2);
         drop(accounts);
 
         initialize_account_database(&path).unwrap();
@@ -780,6 +879,85 @@ mod migration_tests {
                 row.get(0)
             })
             .unwrap()
+    }
+
+    /// The column pair is what makes "verified" a thing the server can check
+    /// rather than a thing it assumes, and an existing deployment has to gain
+    /// it without losing anyone's account.
+    #[test]
+    fn an_existing_database_gains_the_verified_email_columns() {
+        let path = scratch("verified-email");
+        initialize_account_database(&path).unwrap();
+        sign_in_as(&path, "early-candidate", 4242);
+        rewind_to(&path, 3);
+        assert!(!columns(&path, "users").contains(&"email".to_string()));
+
+        initialize_account_database(&path).unwrap();
+
+        assert_eq!(user_version(&path), ACCOUNT_SCHEMA_VERSION);
+        let columns = columns(&path, "users");
+        assert!(columns.contains(&"email".to_string()));
+        assert!(columns.contains(&"email_verified".to_string()));
+        assert_eq!(logins(&path), vec!["early-candidate".to_string()]);
+
+        // Everyone who predates the migration is unverified, which is what they
+        // were. Defaulting the flag the other way would hand a delivery target
+        // to every account that already existed.
+        let (email, verified): (Option<String>, i64) = rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT email, email_verified FROM users WHERE github_id = 4242",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(email, None);
+        assert_eq!(verified, 0);
+    }
+
+    fn columns(path: &Path, table: &str) -> Vec<String> {
+        let connection = rusqlite::Connection::open(path).unwrap();
+        let mut statement = connection
+            .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+            .unwrap();
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    /// The persistence boundary, exercised directly. `primary_verified_email`
+    /// trims its own output, but `create_session` is public and is the thing
+    /// that derives the flag, so the guard has to hold when it is called with
+    /// something the OAuth path would never produce.
+    #[test]
+    fn a_blank_address_is_not_a_verified_one() {
+        let path = scratch("blank-address");
+        initialize_account_database(&path).unwrap();
+        let accounts = accounts_at(&path);
+        create_session(
+            &accounts,
+            &GitHubProfile {
+                github_id: 4242,
+                login: "real-candidate".to_string(),
+                avatar_url: None,
+                verified_email: Some("   ".to_string()),
+            },
+        )
+        .unwrap();
+
+        let (email, verified): (Option<String>, i64) = accounts
+            .with(|connection| {
+                connection.query_row(
+                    "SELECT email, email_verified FROM users WHERE github_id = 4242",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!(email, None);
+        assert_eq!(verified, 0, "whitespace is not a delivery address");
     }
 
     #[test]
@@ -954,7 +1132,7 @@ mod migration_tests {
             .execute_batch("DROP INDEX IF EXISTS reports_by_user")
             .unwrap();
         drop(connection);
-        set_user_version(&path, 1);
+        rewind_to(&path, 1);
         assert!(!index_names(&path).contains(&"reports_by_user".to_string()));
 
         initialize_account_database(&path).unwrap();

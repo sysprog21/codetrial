@@ -3165,6 +3165,24 @@ async fn spawn_mock_github() -> (String, tokio::task::JoinHandle<Result<(), std:
                     json!({"id":303,"login":"octocat","avatar_url":"https://example.test/avatar.png"}).to_string(),
                 )
             }),
+        )
+
+        // What `read:user` alone cannot answer. The unverified and secondary
+        // entries are here because selecting the wrong one is the failure this
+        // endpoint exists to make possible.
+        .route(
+            "/user/emails",
+            axum::routing::get(|| async {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    json!([
+                        {"email":"unverified@example.test","primary":false,"verified":false},
+                        {"email":"secondary@example.test","primary":false,"verified":true},
+                        {"email":"octocat@example.test","primary":true,"verified":true}
+                    ])
+                    .to_string(),
+                )
+            }),
         );
     let server = tokio::spawn(async move { axum::serve(listener, router).await });
     (format!("http://{addr}"), server)
@@ -3365,4 +3383,411 @@ fn browser_interview_duration_matches_the_server_clamp() {
         DEFAULT_DURATION_MIN,
         "the preselected lobby duration is not the server default"
     );
+}
+
+/// A recording is delivered to a person, and a typed handle is not one.
+///
+/// The refusal lives on `/api/token` rather than on the delivery step because
+/// the alternative is a candidate who completes an interview that can never be
+/// sent anywhere, which is the worst moment to find out.
+#[tokio::test]
+async fn token_requires_verified_recording_identity() {
+    let (mut config, cookie, path) = signed_in_web_config("recording-identity");
+    config.recording = Some(recording_config());
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+
+    let refused = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", cookie.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 403);
+    let body = refused.json::<Value>().await.unwrap();
+    assert_eq!(body["code"], "recording_requires_verified_identity");
+    assert!(
+        body["error"]
+            .as_str()
+            .is_some_and(|error| !error.is_empty()),
+        "the candidate needs a sentence, not only a code"
+    );
+
+    // The same account, once the row carries a verified address, starts an
+    // interview. Written directly because this test is about the gate, not
+    // about how the column is filled; the callback test covers that path.
+    // Without this half the test would pass against a server that refused
+    // everyone.
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "UPDATE users SET email = 'one@example.test', email_verified = 1 WHERE id = 1",
+                [],
+            )
+            .unwrap();
+    }
+    let allowed = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(allowed.status(), 200);
+
+    server.abort();
+    remove_database(path);
+}
+
+/// An address nobody checked is not a delivery target, and a typed handle can
+/// never acquire one.
+#[tokio::test]
+async fn self_declared_handle_cannot_authorize_delivery() {
+    let db_path = account_db_path("self-declared-delivery");
+    initialize_account_database(&db_path).unwrap();
+    let mut config = web_config();
+    config.session_secret = Some("session-secret".to_string());
+    config.db_path = Some(db_path.clone());
+    config.recording = Some(recording_config());
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+
+    let cookie = record_login(&client, &base, "octocat").await;
+    let refused = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 403);
+    assert_eq!(
+        refused.json::<Value>().await.unwrap()["code"],
+        "recording_requires_verified_identity"
+    );
+
+    // Typing the same handle again mints another account rather than adopting
+    // the first, so nobody can accumulate their way into a verified one. The
+    // row count below is the assertion; `record_login` already fails if the
+    // login itself did not succeed.
+    record_login(&client, &base, "octocat").await;
+
+    let connection = rusqlite::Connection::open(&db_path).unwrap();
+    let mut statement = connection
+        .prepare("SELECT github_id, email, email_verified FROM users ORDER BY github_id")
+        .unwrap();
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 2, "two logins, two accounts, never an upgrade");
+    for (github_id, email, verified) in rows {
+        assert!(github_id < 0, "a self-declared account keeps a negative id");
+        assert_eq!(email, None, "and no address");
+        assert_eq!(verified, 0, "and nothing claiming one was checked");
+    }
+
+    drop(statement);
+    drop(connection);
+    server.abort();
+    remove_database(db_path);
+}
+
+/// An OAuth sign-in stores the primary verified address, and only that one.
+#[tokio::test]
+async fn github_callback_stores_only_the_primary_verified_email() {
+    let (github_base, github_server) = spawn_mock_github().await;
+    let path = account_db_path("verified-email");
+    initialize_account_database(&path).unwrap();
+    let mut config = web_config();
+    config.github_client_id = Some("client".to_string());
+    config.github_client_secret = Some("secret".to_string());
+    config.session_secret = Some("session-secret".to_string());
+    config.db_path = Some(path.clone());
+    config.github_oauth_base_url = Some(github_base.clone());
+    config.github_api_base_url = Some(github_base);
+    config.recording = Some(recording_config());
+    let (base, server) = spawn_web_server(config).await;
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let response = client
+        .get(format!("{base}/api/callback?code=ok&state=state-token"))
+        .header(
+            "cookie",
+            format!(
+                "codetrial_oauth_state={}",
+                signed_cookie("state-token", "session-secret")
+            ),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 302);
+    let session_cookie = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().unwrap())
+        .find(|cookie| cookie.starts_with("codetrial_session="))
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+
+    let (email, verified): (Option<String>, i64) = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT email, email_verified FROM users WHERE github_id = 303",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        email.as_deref(),
+        Some("octocat@example.test"),
+        "the primary verified address, not the first entry and not the secondary one"
+    );
+    assert_eq!(verified, 1);
+
+    // And that account can now start a recorded interview.
+    let allowed = reqwest::Client::new()
+        .post(format!("{base}/api/token"))
+        .header("cookie", session_cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(allowed.status(), 200);
+
+    server.abort();
+    github_server.abort();
+    remove_database(path);
+}
+
+/// The scope has to name what the callback then asks for. A widened fetch
+/// against an unwidened authorize URL fails at GitHub, not here, and the
+/// symptom is an address that is simply absent.
+#[tokio::test]
+async fn login_requests_the_email_scope_it_later_reads() {
+    let db_path = account_db_path("email-scope");
+    initialize_account_database(&db_path).unwrap();
+    let mut config = web_config();
+    config.github_client_id = Some("client".to_string());
+    config.github_client_secret = Some("secret".to_string());
+    config.session_secret = Some("session-secret".to_string());
+    config.db_path = Some(db_path.clone());
+    let without_recording = config.clone();
+    config.recording = Some(recording_config());
+    let (base, server) = spawn_web_server(config).await;
+
+    let authorize_url = |base: String| async move {
+        let response = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+            .get(format!("{base}/api/login"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 302);
+        response
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string()
+    };
+    let location = authorize_url(base).await;
+
+    // Decoded, not matched as an escaped literal. Percent-encoding has more
+    // than one legal answer for a colon, and the thing that matters is the
+    // scope GitHub will read.
+    assert_eq!(
+        query_parameter(&location, "scope").as_deref(),
+        Some("read:user user:email"),
+        "the authorize URL has to request the scope the callback then reads: {location}"
+    );
+    server.abort();
+
+    // And a deployment that records nothing does not put a candidate's private
+    // address on the consent screen, because it would never read it.
+    let (base, server) = spawn_web_server(without_recording).await;
+    assert_eq!(
+        query_parameter(&authorize_url(base).await, "scope").as_deref(),
+        Some("read:user")
+    );
+
+    server.abort();
+    remove_database(db_path);
+}
+
+/// A recording block for tests that only care that recording is on.
+fn recording_config() -> codetrial::config::RecordingConfig {
+    codetrial::config::RecordingConfig {
+        livekit: None,
+        gcs_bucket: "codetrial-staging".to_string(),
+        gcs_prefix: "codetrial".to_string(),
+        drive_id: "0AKfixtureDriveId".to_string(),
+        service_account_json: "{}".to_string(),
+        max_minutes: 45,
+        bitrate: 2000,
+        kill_switch: false,
+        template_base_url: "https://recording.codetrial.example".to_string(),
+        timeout_seconds: 900,
+        integration: false,
+    }
+}
+
+/// A verified address is not given up because somebody else's server had a bad
+/// minute.
+///
+/// The callback upserts whatever it was handed, so folding a rate limit into
+/// "this account has no verified address" would take a candidate's delivery
+/// target away permanently, on a transient failure they cannot see or retry.
+#[tokio::test]
+async fn a_failed_email_lookup_does_not_unverify_an_account() {
+    let path = account_db_path("email-lookup-failure");
+    initialize_account_database(&path).unwrap();
+
+    // One good sign-in first, so there is something to lose.
+    let (good_github, good_server) = spawn_mock_github().await;
+    let mut config = web_config();
+    config.github_client_id = Some("client".to_string());
+    config.github_client_secret = Some("secret".to_string());
+    config.session_secret = Some("session-secret".to_string());
+    config.db_path = Some(path.clone());
+    config.github_oauth_base_url = Some(good_github.clone());
+    config.github_api_base_url = Some(good_github);
+    config.recording = Some(recording_config());
+    let (base, server) = spawn_web_server(config.clone()).await;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let callback = |base: String| {
+        let client = client.clone();
+        async move {
+            client
+                .get(format!("{base}/api/callback?code=ok&state=state-token"))
+                .header(
+                    "cookie",
+                    format!(
+                        "codetrial_oauth_state={}",
+                        signed_cookie("state-token", "session-secret")
+                    ),
+                )
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(callback(base.clone()).await.status(), 302);
+    server.abort();
+    good_server.abort();
+
+    // Now the same account signs in again while /user/emails is rate limited.
+    let (rate_limited, rate_limited_server) = spawn_rate_limited_github().await;
+    let mut second = config;
+    second.github_oauth_base_url = Some(rate_limited.clone());
+    second.github_api_base_url = Some(rate_limited);
+    let (base, server) = spawn_web_server(second).await;
+    assert_eq!(
+        callback(base).await.status(),
+        502,
+        "a failed lookup fails the sign-in rather than downgrading the account"
+    );
+
+    let (email, verified): (Option<String>, i64) = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT email, email_verified FROM users WHERE github_id = 303",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(email.as_deref(), Some("octocat@example.test"));
+    assert_eq!(verified, 1, "the address survives the outage");
+
+    server.abort();
+    rate_limited_server.abort();
+    remove_database(path);
+}
+
+/// GitHub with a working `/user` and a rate-limited `/user/emails`. The 403
+/// body is JSON and parses, which is what makes this failure look like an
+/// answer rather than an error to anything that does not check the status.
+async fn spawn_rate_limited_github() -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>)
+{
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = axum::Router::new()
+        .route(
+            "/login/oauth/access_token",
+            axum::routing::post(|| async {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    json!({"access_token":"mock-token"}).to_string(),
+                )
+            }),
+        )
+        .route(
+            "/user",
+            axum::routing::get(|| async {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    json!({"id":303,"login":"octocat","avatar_url":"https://example.test/avatar.png"}).to_string(),
+                )
+            }),
+        )
+        .route(
+            "/user/emails",
+            axum::routing::get(|| async {
+                (
+                    axum::http::StatusCode::FORBIDDEN,
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    json!({"message":"API rate limit exceeded"}).to_string(),
+                )
+            }),
+        );
+    let server = tokio::spawn(async move { axum::serve(listener, router).await });
+    (format!("http://{addr}"), server)
+}
+
+/// The `scope` parameter of a redirect location, percent-decoded.
+fn query_parameter(location: &str, name: &str) -> Option<String> {
+    let query = location.split_once('?')?.1;
+    let value = query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix(&format!("{name}=")))?;
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok()?;
+                decoded.push(u8::from_str_radix(hex, 16).ok()?);
+                index += 3;
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).ok()
 }
