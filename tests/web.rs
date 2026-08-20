@@ -3965,8 +3965,34 @@ async fn interviews_persist_consent_before_egress() {
 /// second recorded interview.
 #[tokio::test]
 async fn consent_withdrawal_stops_egress() {
-    let (base, server, path, client, cookie) = recorded_server("consent-withdrawal").await;
+    let provider = std::sync::Arc::new(FakeRecordingProvider::default());
+    let (base, server, path, client, cookie) =
+        recorded_server_with_provider("consent-withdrawal", provider.clone()).await;
     let interview = start_interview(&client, &base, &cookie).await;
+
+    // A real recording, started through the route a candidate reaches, so the
+    // withdrawal below has something to stop rather than an empty interview.
+    let token = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "interviewId": interview }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(token.status(), 200);
+    let started = client
+        .post(format!("{base}/api/interviews/{interview}/recording"))
+        .header("cookie", cookie.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(started.status(), 202, "the provider has been asked");
+    assert_eq!(
+        started.json::<Value>().await.unwrap()["state"],
+        "recording",
+        "the row moved when the egress id landed, and the answer says so"
+    );
+    assert_eq!(provider.starts(), 1);
 
     let withdrawn = client
         .delete(format!("{base}/api/interviews/{interview}/consent"))
@@ -3975,6 +4001,20 @@ async fn consent_withdrawal_stops_egress() {
         .await
         .unwrap();
     assert_eq!(withdrawn.status(), 204);
+
+    // The recording is abandoned, not finished: `failed` with the reason a
+    // later deletion is justified by, and the provider told to stop.
+    assert_eq!(provider.stops().len(), 1, "the Egress job is stopped");
+    let (state, error): (String, Option<String>) = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT state, error FROM recordings WHERE interview_id = ?1",
+            [&interview],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(state, "failed");
+    assert_eq!(error.as_deref(), Some("consent_withdrawn"));
 
     let rows = interview_rows(&path);
     assert_eq!(rows.len(), 1, "withdrawal records, it does not delete");
@@ -4021,6 +4061,206 @@ async fn consent_withdrawal_stops_egress() {
             .3,
         None,
         "a stranger's request changes nothing"
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
+/// The router's whole route list, against a fixed allowlist.
+///
+/// Equality, not containment. The property worth defending is that no route
+/// takes media: LiveKit writes the file straight to the staging bucket and
+/// CodeTrial never touches the bytes, and "there is no upload route" is a
+/// negative that only an exhaustive list can observe. A containment check would
+/// pass while an ingest route sat beside the ones it named.
+///
+/// Read as text out of `src/web.rs` because axum does not hand back the routes
+/// it was given. That makes this a tripwire on the source rather than on the
+/// running router, which is the trade the whole file already makes for the
+/// browser side.
+///
+/// The ceiling, stated because the name overpromises otherwise: this compares
+/// paths. It does not read methods, and it cannot see what a handler does with
+/// a body. What it establishes is that the set of paths is the set somebody
+/// wrote down, which is what makes "there is no upload route" checkable at
+/// all.
+#[test]
+fn router_routes_match_a_fixed_allowlist() {
+    let source = fs::read_to_string("src/web.rs").unwrap();
+    let router = source
+        .split_once("    Router::new()")
+        .expect("web_router builds a Router")
+        .1
+        .split_once("        .fallback(")
+        .expect("the static handler is the fallback")
+        .0;
+
+    // The list below is only exhaustive while every route arrives through
+    // `.route(`. A nested or merged router would add paths this scan cannot
+    // see, so adding one has to fail here rather than pass quietly.
+    for composed in [".nest(", ".nest_service(", ".merge(", ".route_service("] {
+        assert!(
+            !router.contains(composed),
+            "{composed} adds routes this test cannot enumerate; extend it before using one"
+        );
+    }
+
+    // The first argument of every `.route(` call. One of them is a constant
+    // rather than a literal, because the contract fixes that path and
+    // `src/recording.rs` owns it, so it is resolved rather than matched.
+    let mut routes = router
+        .split(".route(")
+        .skip(1)
+        .map(|rest| {
+            let rest = rest.trim_start();
+            if rest.starts_with("crate::recording::WEBHOOK_ROUTE") {
+                return codetrial::recording::WEBHOOK_ROUTE.to_string();
+            }
+            rest.trim_start_matches('"')
+                .split('"')
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    routes.sort();
+
+    let mut allowed = vec![
+        "/healthz",
+        "/runtime-config.js",
+        "/api/token",
+        "/api/observer-token",
+        "/api/login",
+        "/api/callback",
+        "/api/session",
+        "/api/logout",
+        "/api/reports",
+        "/api/interviews",
+        "/api/interviews/{id}/consent",
+        "/api/interviews/{id}/recording",
+        "/api/interviews/{id}/end",
+        "/api/recording/webhook",
+    ];
+    allowed.sort_unstable();
+
+    assert_eq!(
+        routes, allowed,
+        "the route list changed; a new one has to be added here deliberately, and none of them \
+         may accept media"
+    );
+}
+
+/// A second start does not make a second Egress job, and is not told the
+/// recording has not begun.
+///
+/// The row moves underneath the handler: `starting` becomes `recording` when
+/// the first caller's egress id lands. A second caller that answered from the
+/// snapshot it read would tell the browser to keep waiting for a recording that
+/// was already running.
+#[tokio::test]
+async fn a_second_start_reports_the_state_the_row_holds() {
+    let provider = std::sync::Arc::new(FakeRecordingProvider::default());
+    let (base, server, path, client, cookie) =
+        recorded_server_with_provider("second-start", provider.clone()).await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    assert_eq!(
+        client
+            .post(format!("{base}/api/token"))
+            .header("cookie", cookie.clone())
+            .json(&json!({ "interviewId": interview }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+
+    let start = || {
+        let client = client.clone();
+        let base = base.clone();
+        let cookie = cookie.clone();
+        let interview = interview.clone();
+        async move {
+            client
+                .post(format!("{base}/api/interviews/{interview}/recording"))
+                .header("cookie", cookie)
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+
+    let first = start().await;
+    assert_eq!(first.status(), 202);
+    assert_eq!(first.json::<Value>().await.unwrap()["state"], "recording");
+
+    let second = start().await;
+    assert_eq!(second.status(), 202);
+    assert_eq!(
+        second.json::<Value>().await.unwrap()["state"],
+        "recording",
+        "the second caller reads the row, not the snapshot it started from"
+    );
+    assert_eq!(provider.starts(), 1, "one interview, one Egress job");
+
+    server.abort();
+    remove_database(path);
+}
+
+/// The row moves while the provider is answering, and the answer says so.
+///
+/// This is the interleaving the snapshot hid: the handler reads a `starting`
+/// row, a sweeper retry stores its own egress id, and the handler comes back
+/// with an id the row will not take. It has to stop the job it made and report
+/// the state that is actually there.
+#[tokio::test]
+async fn a_start_overtaken_mid_flight_stops_its_own_job() {
+    let provider = std::sync::Arc::new(FakeRecordingProvider::default());
+    let (base, server, path, client, cookie) =
+        recorded_server_with_provider("overtaken", provider.clone()).await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    assert_eq!(
+        client
+            .post(format!("{base}/api/token"))
+            .header("cookie", cookie.clone())
+            .json(&json!({ "interviewId": interview }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    *provider.preempt.lock().unwrap() = Some(path.clone());
+
+    let response = client
+        .post(format!("{base}/api/interviews/{interview}/recording"))
+        .header("cookie", cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 202);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["state"],
+        "recording",
+        "the state comes from the row, which somebody else moved"
+    );
+
+    // The job this call made is not the job the row names, so it stops its own
+    // rather than leaving two running.
+    assert_eq!(provider.stops(), vec!["EG_web_fake".to_string()]);
+    let egress: Option<String> = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT egress_id FROM recordings WHERE interview_id = ?1",
+            [&interview],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        egress.as_deref(),
+        Some("EG_swept"),
+        "the id that got there first is the one that stays"
     );
 
     server.abort();
@@ -4141,6 +4381,121 @@ async fn recorded_server(
     }
     let (base, server) = spawn_web_server(config).await;
     (base, server, path, reqwest::Client::new(), cookie)
+}
+
+/// The same, with a provider a test can watch. Every failure the pipeline has
+/// to survive is the provider's, and none can be produced against LiveKit on
+/// demand.
+async fn recorded_server_with_provider(
+    label: &str,
+    provider: std::sync::Arc<FakeRecordingProvider>,
+) -> (
+    String,
+    tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    std::path::PathBuf,
+    reqwest::Client,
+    String,
+) {
+    let (mut config, cookie, path) = signed_in_web_config(label);
+    config.recording = Some(recording_config());
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "UPDATE users SET email = 'one@example.test', email_verified = 1 WHERE id = 1",
+                [],
+            )
+            .unwrap();
+    }
+    let recorder = codetrial::recording::Recorder {
+        provider,
+        clock: std::sync::Arc::new(codetrial::recording::SystemClock),
+        config: recording_config(),
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            codetrial::web::web_service_with_recorder(config, None, recorder),
+        )
+        .await
+    });
+    (
+        format!("http://{addr}"),
+        server,
+        path,
+        reqwest::Client::new(),
+        cookie,
+    )
+}
+
+/// A provider that records what it was asked and always agrees.
+#[derive(Default)]
+struct FakeRecordingProvider {
+    started: std::sync::Mutex<Vec<String>>,
+    stopped: std::sync::Mutex<Vec<String>>,
+    /// A database to move the row in while `start` is in flight, standing in
+    /// for a sweeper retry that won the race. This is the only way to reach the
+    /// interleaving from a test: the handler reads its snapshot, the row
+    /// changes, and then the handler answers.
+    preempt: std::sync::Mutex<Option<std::path::PathBuf>>,
+}
+
+impl FakeRecordingProvider {
+    fn starts(&self) -> usize {
+        self.started.lock().unwrap().len()
+    }
+
+    fn stops(&self) -> Vec<String> {
+        self.stopped.lock().unwrap().clone()
+    }
+}
+
+impl codetrial::recording::RecordingProvider for FakeRecordingProvider {
+    fn start<'a>(
+        &'a self,
+        request: &'a codetrial::recording::StartEgress,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.started.lock().unwrap().push(request.room_name.clone());
+            if let Some(path) = self.preempt.lock().unwrap().as_ref() {
+                rusqlite::Connection::open(path)
+                    .unwrap()
+                    .execute(
+                        "
+                        UPDATE recordings
+                        SET egress_id = 'EG_swept', state = 'recording'
+                        WHERE room_name = ?1
+                        ",
+                        [&request.room_name],
+                    )
+                    .unwrap();
+            }
+            Ok("EG_web_fake".to_string())
+        })
+    }
+
+    fn stop<'a>(
+        &'a self,
+        egress_id: &'a str,
+        _room_name: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async move {
+            self.stopped.lock().unwrap().push(egress_id.to_string());
+            Ok(())
+        })
+    }
+
+    fn active_for_room<'a>(
+        &'a self,
+        _room_name: &'a str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Option<String>, String>> + Send + 'a>,
+    > {
+        Box::pin(async move { Ok(None) })
+    }
 }
 
 /// A second verified account, so cross-account refusals have somebody to be

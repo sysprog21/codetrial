@@ -43,10 +43,12 @@ impl Scratch {
     fn open(&self) -> rusqlite::Connection {
         let connection = rusqlite::Connection::open(&self.0).unwrap();
 
-        // Off by default on every new handle, and the cascade and restrict
-        // behaviour below is invisible without it.
+        // Foreign keys are off by default on every new handle, and the cascade
+        // and restrict behaviour below is invisible without it. The timeout is
+        // for the lifecycle tests, where this connection and the one inside
+        // `Accounts` are both writing to the same file.
         connection
-            .execute_batch("PRAGMA foreign_keys = ON;")
+            .execute_batch("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
             .unwrap();
         connection
     }
@@ -180,6 +182,7 @@ fn recording_schema_columns() {
         "deleted_at",
         "delete_error",
         "deleted_by",
+        "stopped_at",
     ] {
         assert!(
             !by_name(name).2,
@@ -261,6 +264,33 @@ fn recording_schema_constraints() {
         "account 1 must not record account 2's interview"
     );
 
+    // One account records one interview at a time, and it is a partial unique
+    // index rather than a counted check: counting first and inserting second is
+    // serialized inside one process and by nothing across two.
+    assert!(
+        insert_recording(&connection, "rec-second-active", "int-2", "key-second").is_err(),
+        "a second active recording for one account must be refused"
+    );
+    connection
+        .execute(
+            "UPDATE recordings SET state = 'ready' WHERE id = 'rec-1'",
+            [],
+        )
+        .unwrap();
+    assert!(
+        insert_recording(&connection, "rec-second-active", "int-2", "key-second").is_ok(),
+        "and allowed once the first one is finished"
+    );
+    connection
+        .execute("DELETE FROM recordings WHERE id = 'rec-second-active'", [])
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE recordings SET state = 'starting' WHERE id = 'rec-1'",
+            [],
+        )
+        .unwrap();
+
     // The rule `NOT NULL` could not express: both are required while the
     // recording exists, and both are cleared when it is deleted, because after
     // deletion they describe nothing.
@@ -314,7 +344,7 @@ fn recording_schema_constraints() {
     assert!(
         connection
             .execute(
-                "UPDATE recordings SET deleted_at = 99, room_name = NULL, recipient_email = NULL, gcs_object = NULL, drive_file_id = NULL, drive_permission_id = NULL WHERE id = 'rec-1'",
+                "UPDATE recordings SET state = 'deleted', deleted_at = 99, room_name = NULL, recipient_email = NULL, gcs_object = NULL, drive_file_id = NULL, drive_permission_id = NULL WHERE id = 'rec-1'",
                 [],
             )
             .is_ok(),
@@ -371,6 +401,7 @@ fn recording_schema_constraints() {
             [],
         )
         .unwrap();
+    // rec-1 is `deleted` by now, so the one-active slot is free.
     insert_recording(&connection, "rec-5", "int-2", "key-5").unwrap();
     assert!(
         connection
@@ -387,6 +418,15 @@ fn recording_schema_constraints() {
     connection
         .execute(
             "INSERT INTO interviews (id, account_id, consent_version, consent_at, room_name) VALUES ('int-3', 1, '2026-08-21', 12, 'interview-ghi01234')",
+            [],
+        )
+        .unwrap();
+
+    // Out of an active state first: one account records one interview at a
+    // time, and rec-5 is holding that slot.
+    connection
+        .execute(
+            "UPDATE recordings SET state = 'ready' WHERE id = 'rec-5'",
             [],
         )
         .unwrap();
@@ -452,4 +492,790 @@ fn recording_schema_reopen() {
     // symptom until it has a bad one. That refusal is already pinned by
     // `a_database_from_a_future_version_is_refused` in `src/accounts.rs`, so it
     // is not restated here; `TODO.md` records the correction.
+}
+
+mod lifecycle {
+    use std::sync::{Arc, Mutex};
+
+    use codetrial::accounts::{Accounts, GitHubLoginConfig};
+    use codetrial::config::RecordingConfig;
+    use codetrial::recording::{
+        Clock, Recorder, Recording, RecordingProvider, RecordingState, StartEgress, StartRefusal,
+        begin_recording, claim_webhook_event, recording_by_id, sweep_recordings, transition,
+    };
+
+    use super::{Scratch, seed};
+
+    /// A clock a test can move. The retry schedule is minutes long and the
+    /// stale sweep is a quarter of an hour, so a test that waited for either
+    /// would be a test nobody runs.
+    struct TestClock(Mutex<i64>);
+
+    impl TestClock {
+        fn new(now: i64) -> Arc<Self> {
+            Arc::new(Self(Mutex::new(now)))
+        }
+
+        fn advance(&self, seconds: i64) {
+            *self.0.lock().unwrap() += seconds;
+        }
+    }
+
+    impl Clock for TestClock {
+        fn now(&self) -> i64 {
+            *self.0.lock().unwrap()
+        }
+    }
+
+    /// A provider that records what it was asked and answers however the test
+    /// needs. Every failure this pipeline has to survive is the provider's, and
+    /// none can be produced against LiveKit on demand.
+    #[derive(Default)]
+    struct FakeProvider {
+        started: Mutex<Vec<StartEgress>>,
+        stopped: Mutex<Vec<String>>,
+        refuse_start: Mutex<bool>,
+        refuse_stop: Mutex<bool>,
+        next_egress: Mutex<usize>,
+        /// An Egress job the provider already has for the room, which is what a
+        /// start whose id was never written down leaves behind.
+        adopt: Mutex<Option<String>>,
+    }
+
+    impl FakeProvider {
+        fn arc() -> Arc<Self> {
+            Arc::new(Self::default())
+        }
+
+        fn starts(&self) -> usize {
+            self.started.lock().unwrap().len()
+        }
+
+        fn stops(&self) -> Vec<String> {
+            self.stopped.lock().unwrap().clone()
+        }
+    }
+
+    impl RecordingProvider for FakeProvider {
+        fn start<'a>(
+            &'a self,
+            request: &'a StartEgress,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.started.lock().unwrap().push(request.clone());
+                if *self.refuse_start.lock().unwrap() {
+                    return Err("the provider is busy".to_string());
+                }
+                let mut next = self.next_egress.lock().unwrap();
+                *next += 1;
+                Ok(format!("EG_fake{next}"))
+            })
+        }
+
+        fn stop<'a>(
+            &'a self,
+            egress_id: &'a str,
+            room_name: &'a str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.stopped
+                    .lock()
+                    .unwrap()
+                    .push(format!("{egress_id}@{room_name}"));
+                if *self.refuse_stop.lock().unwrap() {
+                    return Err("the provider would not stop".to_string());
+                }
+                Ok(())
+            })
+        }
+
+        fn active_for_room<'a>(
+            &'a self,
+            _room_name: &'a str,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Option<String>, String>> + Send + 'a>,
+        > {
+            Box::pin(async move { Ok(self.adopt.lock().unwrap().clone()) })
+        }
+    }
+
+    fn recording_config() -> RecordingConfig {
+        RecordingConfig {
+            livekit: None,
+            gcs_bucket: "codetrial-staging".to_string(),
+            gcs_prefix: "codetrial".to_string(),
+            drive_id: "0AKfixtureDriveId".to_string(),
+            service_account_json: "{}".to_string(),
+            max_minutes: 45,
+            bitrate: 2000,
+            kill_switch: false,
+            template_base_url: "https://recording.codetrial.example".to_string(),
+            timeout_seconds: 900,
+            integration: false,
+        }
+    }
+
+    /// A database with an account and two interviews that have claimed rooms,
+    /// plus the pieces a recording runs against.
+    fn harness(
+        label: &str,
+    ) -> (
+        Scratch,
+        Arc<Accounts>,
+        Arc<FakeProvider>,
+        Arc<TestClock>,
+        Recorder,
+    ) {
+        let scratch = Scratch::new(label);
+        codetrial::accounts::initialize_account_database(scratch.path()).unwrap();
+
+        // Seeded on its own connection, not through `Accounts`, which keeps its
+        // guarded connection to itself. WAL makes the two coexist.
+        {
+            let connection = scratch.open();
+            seed(&connection);
+            connection
+                .execute_batch(
+                    "INSERT INTO interviews (id, account_id, consent_version, consent_at, room_name)
+                       VALUES ('int-2', 1, '2026-08-21', 11, 'interview-def67890');",
+                )
+                .unwrap();
+        }
+        let accounts = Arc::new(
+            Accounts::open(GitHubLoginConfig {
+                oauth: None,
+                session_secret: "lifecycle".to_string(),
+                db_path: scratch.path().to_path_buf(),
+                oauth_base_url: String::new(),
+                api_base_url: String::new(),
+            })
+            .unwrap(),
+        );
+        let provider = FakeProvider::arc();
+        let clock = TestClock::new(1_000);
+        let recorder = Recorder {
+            provider: provider.clone(),
+            clock: clock.clone(),
+            config: recording_config(),
+        };
+        (scratch, accounts, provider, clock, recorder)
+    }
+
+    fn start(
+        accounts: &Accounts,
+        recorder: &Recorder,
+        interview: &str,
+        recording_id: &str,
+    ) -> Result<Recording, StartRefusal> {
+        started(accounts, recorder, interview, recording_id).map(|(recording, _)| recording)
+    }
+
+    /// The same start, keeping the answer to "did this call insert the row",
+    /// which is the whole answer to "may this caller talk to the provider".
+    fn started(
+        accounts: &Accounts,
+        recorder: &Recorder,
+        interview: &str,
+        recording_id: &str,
+    ) -> Result<(Recording, bool), StartRefusal> {
+        begin_recording(
+            accounts,
+            recorder.clock.as_ref(),
+            interview,
+            1,
+            recording_id,
+            "one@example.test",
+            recorder.config.kill_switch,
+        )
+    }
+
+    fn state_of(accounts: &Accounts, id: &str) -> RecordingState {
+        recording_by_id(accounts, id).unwrap().unwrap().state
+    }
+
+    #[test]
+    fn lifecycle_transitions_refuse_what_the_table_does_not_have() {
+        use RecordingState::*;
+
+        // Every state may become itself, because a duplicate webhook and a
+        // second stop both ask for a transition that already happened.
+        for state in [
+            Starting,
+            Recording,
+            Finalizing,
+            Transferring,
+            Ready,
+            Failed,
+            CleanupFailed,
+            Deleted,
+        ] {
+            assert!(
+                state.may_become(state),
+                "{} must be idempotent",
+                state.as_str()
+            );
+        }
+
+        assert!(Starting.may_become(Recording));
+        assert!(Starting.may_become(Finalizing), "a stop can beat the start");
+        assert!(
+            Finalizing.may_become(Failed),
+            "an end with no file is finished"
+        );
+        assert!(
+            Failed.may_become(Deleted),
+            "a failure can still have left bytes"
+        );
+        assert!(CleanupFailed.may_become(Deleted));
+
+        assert!(!Ready.may_become(Recording), "nothing goes backwards");
+        assert!(!Deleted.may_become(Ready), "deletion is terminal");
+        assert!(!Transferring.may_become(Recording));
+        assert!(!Starting.may_become(Ready), "no state may be skipped");
+    }
+
+    #[tokio::test]
+    async fn lifecycle_one_active_per_account() {
+        let (_scratch, accounts, _provider, _clock, recorder) = harness("one-active");
+
+        start(&accounts, &recorder, "int-1", "rec-1").unwrap();
+        assert_eq!(
+            start(&accounts, &recorder, "int-2", "rec-2"),
+            Err(StartRefusal::AlreadyActive),
+            "an account records one interview at a time"
+        );
+
+        // Once the first is finished the second is allowed, or a candidate
+        // could never be interviewed twice.
+        transition(
+            &accounts,
+            recorder.clock.as_ref(),
+            "rec-1",
+            RecordingState::Finalizing,
+            None,
+        )
+        .unwrap();
+        transition(
+            &accounts,
+            recorder.clock.as_ref(),
+            "rec-1",
+            RecordingState::Failed,
+            Some("abandoned"),
+        )
+        .unwrap();
+        assert!(start(&accounts, &recorder, "int-2", "rec-2").is_ok());
+    }
+
+    #[tokio::test]
+    async fn lifecycle_consent_withdrawn() {
+        let (scratch, accounts, provider, _clock, recorder) = harness("withdrawn");
+        let recording = start(&accounts, &recorder, "int-1", "rec-1").unwrap();
+        codetrial::recording::record_egress_id(
+            &accounts,
+            recorder.clock.as_ref(),
+            &recording.id,
+            "EG_live",
+        )
+        .unwrap();
+
+        scratch
+            .open()
+            .execute(
+                "UPDATE interviews SET consent_withdrawn_at = 50 WHERE id = 'int-1'",
+                [],
+            )
+            .unwrap();
+
+        // A withdrawn interview cannot start another recording, or the
+        // candidate who just said no could reload into a second one.
+        assert_eq!(
+            start(&accounts, &recorder, "int-1", "rec-other"),
+            Ok(recording_by_id(&accounts, &recording.id).unwrap().unwrap()),
+            "the existing recording is returned rather than a second one created"
+        );
+        scratch
+            .open()
+            .execute("DELETE FROM recordings WHERE id = 'rec-1'", [])
+            .unwrap();
+        assert_eq!(
+            start(&accounts, &recorder, "int-1", "rec-again"),
+            Err(StartRefusal::NoConsent),
+            "and with no recording in the way, consent is what refuses"
+        );
+
+        // The stop itself: `failed`, not `finalizing`. The recording is not
+        // finished, it is abandoned, and the file it produced is scheduled for
+        // deletion rather than delivered. Driven through `stop_recording` here
+        // because this file has no router; `consent_withdrawal_stops_egress` in
+        // `tests/web.rs` drives the same thing through the route that a
+        // candidate actually reaches.
+        let connection = scratch.open();
+        connection
+            .execute(
+                "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, egress_id, created_at, updated_at
+        ) VALUES ('rec-live', 1, 'int-1', 'interview-abc12345', 'int-1',
+            'one@example.test', 'recording', 'EG_live', 20, 20)
+        ",
+                [],
+            )
+            .unwrap();
+        let live = recording_by_id(&accounts, "rec-live").unwrap().unwrap();
+        let stopped = codetrial::recording::stop_recording(
+            &accounts,
+            &recorder,
+            &live,
+            RecordingState::Failed,
+            Some("consent_withdrawn"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(stopped, RecordingState::Failed);
+        assert_eq!(
+            provider.stops(),
+            vec!["EG_live@interview-abc12345".to_string()]
+        );
+        assert_eq!(
+            recording_by_id(&accounts, "rec-live")
+                .unwrap()
+                .unwrap()
+                .error
+                .as_deref(),
+            Some("consent_withdrawn"),
+            "the reason is what a later deletion is justified by"
+        );
+    }
+
+    #[tokio::test]
+    async fn lifecycle_normal_end_stops() {
+        let (_scratch, accounts, provider, _clock, recorder) = harness("normal-end");
+        let recording = start(&accounts, &recorder, "int-1", "rec-1").unwrap();
+        codetrial::recording::record_egress_id(
+            &accounts,
+            recorder.clock.as_ref(),
+            &recording.id,
+            "EG_live",
+        )
+        .unwrap();
+        let recording = recording_by_id(&accounts, "rec-1").unwrap().unwrap();
+
+        let stopped = codetrial::recording::stop_recording(
+            &accounts,
+            &recorder,
+            &recording,
+            RecordingState::Finalizing,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(stopped, RecordingState::Finalizing);
+        assert_eq!(
+            provider.stops(),
+            vec!["EG_live@interview-abc12345".to_string()]
+        );
+
+        // The other normal-end path arriving second changes nothing, which is
+        // what lets a browser close and a webhook be lost independently. The
+        // provider is not asked again either: only the caller that moved the
+        // row talks to it, so `/end` racing a `room_finished` webhook sends one
+        // stop rather than two.
+        let recording = recording_by_id(&accounts, "rec-1").unwrap().unwrap();
+        let again = codetrial::recording::stop_recording(
+            &accounts,
+            &recorder,
+            &recording,
+            RecordingState::Finalizing,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(again, RecordingState::Finalizing);
+        assert_eq!(
+            provider.stops(),
+            vec!["EG_live@interview-abc12345".to_string()],
+            "one stop, not two"
+        );
+    }
+
+    /// A stop that lands while the provider is still answering the start.
+    ///
+    /// The id used to be written only from `starting`, so the row kept the
+    /// stop and threw away the handle: the Egress job it named could then not
+    /// be stopped by anything, and it ran until LiveKit's own limit.
+    #[tokio::test]
+    async fn lifecycle_a_stop_before_the_start_response_keeps_the_handle() {
+        let (_scratch, accounts, _provider, _clock, recorder) = harness("stop-before-start");
+        start(&accounts, &recorder, "int-1", "rec-1").unwrap();
+
+        // The stop arrives first, with no egress id to stop yet.
+        transition(
+            &accounts,
+            recorder.clock.as_ref(),
+            "rec-1",
+            RecordingState::Finalizing,
+            None,
+        )
+        .unwrap();
+
+        // Then the provider answers.
+        codetrial::recording::record_egress_id(
+            &accounts,
+            recorder.clock.as_ref(),
+            "rec-1",
+            "EG_late",
+        )
+        .unwrap();
+
+        let recording = recording_by_id(&accounts, "rec-1").unwrap().unwrap();
+        assert_eq!(
+            recording.egress_id.as_deref(),
+            Some("EG_late"),
+            "the handle is kept whatever the state, or nothing can stop the job"
+        );
+        assert_eq!(
+            recording.state,
+            RecordingState::Finalizing,
+            "and the late answer does not undo the stop"
+        );
+    }
+
+    /// A recording that ends while the provider is still answering its start.
+    ///
+    /// Both the route and the sweeper's retry have this window: consent can be
+    /// withdrawn, a room can finish, a tab can close, all while
+    /// `StartRoomCompositeEgress` is in flight. The row that comes back is
+    /// terminal with a live job attached, and something has to stop it.
+    #[tokio::test]
+    async fn lifecycle_a_job_that_outlived_its_recording_is_stopped() {
+        let (_scratch, accounts, provider, clock, recorder) = harness("outlived");
+        start(&accounts, &recorder, "int-1", "rec-1").unwrap();
+
+        // A normal end, not an abandonment. `finalizing` is the case that hid:
+        // the pipeline still owes this recording work, and the provider has
+        // already been asked to stop, so a job attached afterwards is one whose
+        // stop request arrived before it had an id to name.
+        transition(
+            &accounts,
+            recorder.clock.as_ref(),
+            "rec-1",
+            RecordingState::Finalizing,
+            None,
+        )
+        .unwrap();
+
+        // Then the answer lands. `settle_new_egress` is what both the route and
+        // the sweeper's retry call at exactly this point.
+        codetrial::recording::record_egress_id(
+            &accounts,
+            recorder.clock.as_ref(),
+            "rec-1",
+            "EG_late",
+        )
+        .unwrap();
+        codetrial::recording::settle_new_egress(&accounts, &recorder, "rec-1", "EG_late").await;
+
+        assert_eq!(
+            provider.stops(),
+            vec!["EG_late@interview-abc12345".to_string()],
+            "a job handed to a recording that already ended has to be stopped"
+        );
+
+        // And written down, or every sweep from here on asks the provider to
+        // stop a job it already stopped.
+        clock.advance(60);
+        sweep_recordings(&accounts, &recorder).await;
+        assert_eq!(provider.stops().len(), 1, "asked once, not once a minute");
+    }
+
+    /// A stop that failed after the row moved leaves a job nobody is watching.
+    ///
+    /// `failed` is terminal, so no state will ever say the provider is still
+    /// running. The missing `stopped_at` is what says it, and the sweep is what
+    /// asks again.
+    #[tokio::test]
+    async fn lifecycle_a_failed_stop_is_asked_again() {
+        let (_scratch, accounts, provider, _clock, recorder) = harness("failed-stop");
+        let recording = start(&accounts, &recorder, "int-1", "rec-1").unwrap();
+        codetrial::recording::record_egress_id(
+            &accounts,
+            recorder.clock.as_ref(),
+            &recording.id,
+            "EG_live",
+        )
+        .unwrap();
+        let recording = recording_by_id(&accounts, "rec-1").unwrap().unwrap();
+
+        *provider.refuse_stop.lock().unwrap() = true;
+        assert!(
+            codetrial::recording::stop_recording(
+                &accounts,
+                &recorder,
+                &recording,
+                RecordingState::Failed,
+                Some("consent_withdrawn"),
+            )
+            .await
+            .is_err(),
+            "the provider refused"
+        );
+        assert_eq!(state_of(&accounts, "rec-1"), RecordingState::Failed);
+        assert_eq!(provider.stops().len(), 1);
+
+        // The row is terminal and the job is not. The sweep asks again, and
+        // keeps asking until the provider agrees.
+        sweep_recordings(&accounts, &recorder).await;
+        assert_eq!(provider.stops().len(), 2, "a failed stop is asked again");
+
+        *provider.refuse_stop.lock().unwrap() = false;
+        sweep_recordings(&accounts, &recorder).await;
+        assert_eq!(provider.stops().len(), 3);
+
+        sweep_recordings(&accounts, &recorder).await;
+        assert_eq!(
+            provider.stops().len(),
+            3,
+            "and stops asking once it has agreed"
+        );
+    }
+
+    /// A start whose id was never written down must not become two Egress jobs.
+    ///
+    /// The provider already has a job for the room, and starting again would
+    /// make a second: two bills, two files, and neither stoppable by a
+    /// candidate withdrawing consent.
+    #[tokio::test]
+    async fn lifecycle_a_lost_egress_id_is_adopted_rather_than_restarted() {
+        let (_scratch, accounts, provider, clock, recorder) = harness("adopt");
+        start(&accounts, &recorder, "int-1", "rec-1").unwrap();
+        *provider.adopt.lock().unwrap() = Some("EG_orphan".to_string());
+
+        clock.advance(60);
+        assert_eq!(sweep_recordings(&accounts, &recorder).await.retried, 1);
+        assert_eq!(provider.starts(), 0, "no second job");
+        assert_eq!(
+            recording_by_id(&accounts, "rec-1")
+                .unwrap()
+                .unwrap()
+                .egress_id
+                .as_deref(),
+            Some("EG_orphan"),
+            "the job that was already running is the one this recording owns"
+        );
+        assert_eq!(state_of(&accounts, "rec-1"), RecordingState::Recording);
+    }
+
+    /// A provider that refuses the first attempt.
+    ///
+    /// The contract promises one minute, then five, then fifteen. A row moved
+    /// straight to `failed` is a row that schedule never sees, so a refused
+    /// start stays `starting` with a retry spent.
+    #[tokio::test]
+    async fn lifecycle_a_refused_start_keeps_its_retries() {
+        let (_scratch, accounts, provider, clock, recorder) = harness("refused-start");
+        start(&accounts, &recorder, "int-1", "rec-1").unwrap();
+        *provider.refuse_start.lock().unwrap() = true;
+
+        for expected in 1..=3 {
+            clock.advance(codetrial::recording::RETRY_BACKOFF_SECONDS[expected - 1]);
+            assert_eq!(sweep_recordings(&accounts, &recorder).await.retried, 0);
+            assert_eq!(provider.starts(), expected);
+            let recording = recording_by_id(&accounts, "rec-1").unwrap().unwrap();
+            assert_eq!(recording.state, RecordingState::Starting);
+            assert_eq!(recording.retries, expected as i64);
+        }
+
+        // Out of attempts, and now only the stale rule is left. A provider that
+        // has refused three times over sixteen minutes is not going to answer
+        // for an interview that will be over by then.
+        clock.advance(codetrial::recording::STALE_SECONDS);
+        assert_eq!(sweep_recordings(&accounts, &recorder).await.failed, 1);
+        assert_eq!(provider.starts(), 3, "no fourth attempt");
+        assert_eq!(state_of(&accounts, "rec-1"), RecordingState::Failed);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_restart_resumes() {
+        let (_scratch, accounts, provider, clock, recorder) = harness("restart");
+        start(&accounts, &recorder, "int-1", "rec-1").unwrap();
+        assert_eq!(state_of(&accounts, "rec-1"), RecordingState::Starting);
+
+        // Nothing to do yet: the row was touched a moment ago and the first
+        // retry is a minute out.
+        assert_eq!(sweep_recordings(&accounts, &recorder).await.retried, 0);
+        assert_eq!(provider.starts(), 0);
+
+        // A minute on, the start is attempted. This is the process that died
+        // between writing `starting` and calling the provider.
+        clock.advance(60);
+        assert_eq!(sweep_recordings(&accounts, &recorder).await.retried, 1);
+        assert_eq!(provider.starts(), 1);
+        assert_eq!(state_of(&accounts, "rec-1"), RecordingState::Recording);
+        assert_eq!(
+            recording_by_id(&accounts, "rec-1")
+                .unwrap()
+                .unwrap()
+                .egress_id
+                .as_deref(),
+            Some("EG_fake1")
+        );
+
+        // Fifteen minutes is not enough for a `recording` row. LiveKit sends
+        // `egress_updated` on a status change and not as a heartbeat, so a
+        // healthy forty-minute interview touches its row once and not again;
+        // the fifteen-minute rule applied here failed every recording that
+        // outlived its own first quarter of an hour.
+        clock.advance(codetrial::recording::STALE_SECONDS);
+        assert_eq!(sweep_recordings(&accounts, &recorder).await.failed, 0);
+        assert_eq!(state_of(&accounts, "rec-1"), RecordingState::Recording);
+
+        // What a recording cannot legitimately do is outlive the maximum this
+        // server configured, plus enough for the provider to finish writing.
+        clock.advance(
+            codetrial::recording::stale_after(
+                RecordingState::Recording,
+                recorder.config.max_minutes,
+            ) - codetrial::recording::STALE_SECONDS,
+        );
+        let outcome = sweep_recordings(&accounts, &recorder).await;
+        assert_eq!(outcome.failed, 1);
+        assert_eq!(state_of(&accounts, "rec-1"), RecordingState::Failed);
+        assert_eq!(
+            recording_by_id(&accounts, "rec-1")
+                .unwrap()
+                .unwrap()
+                .error
+                .as_deref(),
+            Some("abandoned")
+        );
+        assert_eq!(
+            provider.stops(),
+            vec!["EG_fake1@interview-abc12345".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn lifecycle_kill_switch_stops_what_is_already_running() {
+        let (_scratch, accounts, provider, _clock, mut recorder) = harness("kill-switch");
+        let recording = start(&accounts, &recorder, "int-1", "rec-1").unwrap();
+        codetrial::recording::record_egress_id(
+            &accounts,
+            recorder.clock.as_ref(),
+            &recording.id,
+            "EG_live",
+        )
+        .unwrap();
+
+        recorder.config.kill_switch = true;
+        assert_eq!(
+            start(&accounts, &recorder, "int-2", "rec-2"),
+            Err(StartRefusal::KillSwitch),
+            "the switch outranks the per-account limit: recording is off, not busy"
+        );
+
+        // A switch that only refuses new starts is not a kill switch: an
+        // operator who throws it while interviews are running means them too,
+        // and the sweep does not wait for a row to go stale first.
+        let outcome = sweep_recordings(&accounts, &recorder).await;
+        assert_eq!(outcome.failed, 1);
+        assert_eq!(state_of(&accounts, "rec-1"), RecordingState::Failed);
+        assert_eq!(
+            recording_by_id(&accounts, "rec-1")
+                .unwrap()
+                .unwrap()
+                .error
+                .as_deref(),
+            Some("kill_switch")
+        );
+        assert_eq!(
+            provider.stops(),
+            vec!["EG_live@interview-abc12345".to_string()]
+        );
+
+        assert_eq!(
+            start(&accounts, &recorder, "int-2", "rec-2"),
+            Err(StartRefusal::KillSwitch),
+            "and it keeps refusing once nothing is running"
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_start() {
+        let (scratch, accounts, _provider, _clock, recorder) = harness("duplicate-start");
+        let (first, mine) = started(&accounts, &recorder, "int-1", "rec-1").unwrap();
+        assert!(
+            mine,
+            "the caller that inserted the row is the one that starts"
+        );
+
+        // A second start finds the first caller's row rather than creating a
+        // second Egress job. `interview_id` is UNIQUE, so this is the schema
+        // answering rather than a check somebody remembered to write.
+        let (second, mine) = started(&accounts, &recorder, "int-1", "rec-2").unwrap();
+        assert_eq!(second, first);
+        assert!(
+            !mine,
+            "and the second caller must not also call the provider, or one \
+             interview gets two Egress jobs"
+        );
+        assert_eq!(
+            scratch
+                .open()
+                .query_row("SELECT COUNT(*) FROM recordings", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+
+        // And somebody else's interview is refused rather than adopted.
+        assert_eq!(
+            begin_recording(
+                &accounts,
+                recorder.clock.as_ref(),
+                "int-1",
+                2,
+                "rec-3",
+                "two@example.test",
+                false,
+            )
+            .map(|(recording, _)| recording),
+            Err(StartRefusal::NoConsent)
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_webhook() {
+        let (_scratch, accounts, _provider, clock, _recorder) = harness("duplicate-webhook");
+
+        assert!(claim_webhook_event(&accounts, "EV_one", clock.now()).unwrap());
+
+        // Claimed and not yet applied. A retry gets another go, because the
+        // first attempt did not finish and deleting the claim on failure was a
+        // write that could itself fail.
+        assert!(
+            claim_webhook_event(&accounts, "EV_one", clock.now() + 65).unwrap(),
+            "an event nobody finished applying is not a duplicate"
+        );
+
+        codetrial::recording::mark_webhook_applied(&accounts, "EV_one", clock.now()).unwrap();
+        assert!(
+            !claim_webhook_event(&accounts, "EV_one", clock.now() + 130).unwrap(),
+            "a retry carries a new createdAt and the same id, so the id is the key"
+        );
+        assert!(claim_webhook_event(&accounts, "EV_two", clock.now()).unwrap());
+
+        // The ledger is bounded. LiveKit gives up retrying long before this.
+        codetrial::recording::prune_webhook_events(
+            &accounts,
+            clock.now() + codetrial::recording::EVENT_RETENTION_SECONDS,
+        )
+        .unwrap();
+        assert!(
+            claim_webhook_event(&accounts, "EV_one", clock.now()).unwrap(),
+            "a pruned event is forgotten, which is what bounded means"
+        );
+    }
 }

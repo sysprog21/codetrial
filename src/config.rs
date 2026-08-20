@@ -997,6 +997,10 @@ fn is_unreachable_host(host: &str) -> bool {
 /// but the port is not: two projects on one host would be two ports. The
 /// default port is normalized away, so `wss://host` and `https://host:443` are
 /// recognized as the same place rather than reported as a misconfiguration.
+pub fn same_livekit_project(left: &str, right: &str) -> bool {
+    same_livekit_host(left, right)
+}
+
 fn same_livekit_host(left: &str, right: &str) -> bool {
     fn authority(url: &str) -> Option<String> {
         let (scheme, rest) = url.split_once("://")?;

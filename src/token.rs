@@ -186,6 +186,26 @@ impl std::fmt::Display for WebhookRejection {
     }
 }
 
+/// The API key a webhook says signed it, without checking whether it did.
+///
+/// `iss` selects the secret, so it has to be read before there is anything to
+/// verify with. Split out from the verification so a multi-project deployment
+/// can look the secret up: a room belongs to one LiveKit project, and the
+/// primary project's secret verifies nothing that another one signed.
+///
+/// Nothing here is trusted. The value chooses which secret to try, and the
+/// signature check is what decides.
+pub fn livekit_webhook_key(authorization: &str) -> Option<String> {
+    let (signing_input, _) = authorization.rsplit_once('.')?;
+    let (_, payload) = signing_input.split_once('.')?;
+    let claims: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).ok()?).ok()?;
+    claims
+        .get("iss")
+        .and_then(Value::as_str)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string)
+}
+
 /// Whether `authorization` is LiveKit's signature over exactly `body`.
 ///
 /// The header is the bare JWT, with no `Bearer` prefix: that is what
@@ -254,4 +274,34 @@ pub fn verify_livekit_webhook(
         return Err(WebhookRejection::BodyMismatch);
     }
     Ok(())
+}
+
+/// A credential for starting and stopping one room's Egress.
+///
+/// Separate from [`livekit_room_admin_token`] because the grants are different
+/// and neither should be able to do the other's job: `roomAdmin` can remove
+/// participants and mutate the room, and `roomRecord` cannot, which is exactly
+/// the point of handing this one to the recording path.
+///
+/// Room-scoped. A token that can record every room in the project is not a
+/// credential a per-interview request needs.
+pub fn livekit_egress_token(
+    api_key: &str,
+    api_secret: &str,
+    room: &str,
+    now_seconds: u64,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    sign_jwt(
+        api_secret,
+        &json!({
+            "iss": api_key,
+            "sub": "recording",
+            "nbf": now_seconds,
+            "exp": now_seconds + TOKEN_TTL_SECONDS,
+            "video": {
+                "room": room,
+                "roomRecord": true
+            }
+        }),
+    )
 }

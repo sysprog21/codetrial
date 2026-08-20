@@ -171,6 +171,128 @@ on the event `id`. Not on the signature, not on a hash of the body, and not on
 Events this pipeline reacts to: `egress_started`, `egress_updated`,
 `egress_ended`, `room_finished`. Everything else is acknowledged and dropped.
 
+## The lifecycle
+
+Eight states. `RecordingState::may_become` in `src/recording.rs` is the only
+implementation of this table, and any transition absent from both is a bug.
+
+| From | May become | Because |
+|---|---|---|
+| `starting` | `recording`, `finalizing`, `failed` | the row is written before the provider is called, so a process that dies during that call leaves evidence rather than nothing; a stop can arrive before the start is confirmed |
+| `recording` | `finalizing`, `transferring`, `failed` | the provider can finish without being asked, at a duration limit or when the room ends, and refusing that transition threw the file away |
+| `finalizing` | `transferring`, `failed` | a recording that ended with no file is finished and has nothing to move |
+| `transferring` | `ready`, `failed` | |
+| `ready` | `deleted`, `cleanup_failed` | |
+| `failed` | `deleted`, `cleanup_failed` | a failed recording can still have left bytes in the staging bucket |
+| `cleanup_failed` | `deleted` | terminal for the pipeline and an alert for a person |
+| `deleted` | nothing | |
+
+Every state may become itself. A duplicate webhook and a stop asked for twice
+both request a transition that has already happened, and the answer to that is a
+no-op rather than a refusal.
+
+`starting` is written **before** the provider request and the egress id is
+written after it. That order is the whole point: the other one loses a recording
+that exists whenever the process dies between the call and the write.
+
+Consent is re-read inside the same statement that decides whether to start. A
+candidate who withdrew between the token and this moment has a room they may
+join and a recording that must not begin, and this is the only place that window
+closes.
+
+### Duplicate delivery
+
+`recording_events` is the ledger, keyed on the LiveKit event id, with an
+`applied_at` that separates "seen" from "dealt with". An event that was claimed
+and not applied comes back on redelivery: deleting the claim on failure was the
+first answer and it had a hole, because the delete could itself fail. The ledger
+is pruned after seven days, long after LiveKit has given up retrying.
+
+An event naming an egress id this server has not written down yet is answered
+`503` rather than acknowledged, because it is the only notice that job will ever
+get.
+
+### Stops that did not take
+
+`failed` is terminal, so once a recording is there no state will ever say that
+its Egress job is still running. `stopped_at` is what says it: a row with an
+egress id, no `stopped_at`, and a state the provider should not be running under
+is a job that has not agreed to end, and every sweep asks again until it does.
+It is written when a stop succeeds and when an `egress_ended` webhook arrives,
+because the job is over either way. An `egress_updated` carrying
+`EGRESS_ACTIVE` writes nothing: marking a running job stopped would tell the
+sweep to stop watching it.
+
+"Should the provider be running" is not the same question as "does the pipeline
+still owe this recording work", and `finalizing` is where they differ. Two cases
+made the distinction necessary:
+
+- A candidate withdraws consent, the row moves to `failed`, and the stop request
+  fails. Without `stopped_at` the recording keeps running with nothing left to
+  notice.
+- A stop arrives before the start response does, so the row reaches `finalizing`
+  with no egress id to name. When the id lands, the job attached to it has
+  already been asked to stop, and the pipeline being "active" is not a reason to
+  leave it running.
+
+### Ending
+
+Normal end is `POST /api/interviews/{id}/end` or the LiveKit `room_finished`
+webhook, whichever arrives first. Neither is optional: a browser can be closed
+and a webhook can be lost. Both move the recording to `finalizing`, and
+`finalizing` may become itself, so the second one to arrive changes nothing.
+
+Consent withdrawal is not a normal end. The recording is not finished, it is
+abandoned: it goes to `failed` with reason `consent_withdrawn` and the file it
+produced is scheduled for deletion. The withdrawal is written down before the
+provider is told, because the other order loses the withdrawal when the stop
+fails.
+
+### Retries and the sweeper
+
+Three retries after the first attempt: one minute, then five, then fifteen. The
+first attempt is not a retry, and the route that makes it does not count one
+when the provider refuses; counting it made the first retry five minutes out.
+
+Every retry asks the provider what it already has for the room before starting
+anything. A start that succeeded and whose id this side never wrote down leaves
+a job nothing knows about, and starting again would make a second: two bills,
+two files, and neither stoppable by a candidate withdrawing consent. Not knowing
+is not permission to start a second one, so a failed reconciliation spends a
+retry rather than starting.
+
+The sweeper runs at startup and every minute after. At startup because a process
+that died mid-interview left rows no request will ever touch again; repeatedly
+because a schedule checked less often than its own first step is a different
+schedule. A row in an active state whose `updated_at` has not moved for its own
+bound is stopped and failed with reason `abandoned`.
+
+The bound is fifteen minutes for every state except `recording`, which gets
+`CODETRIAL_RECORDING_MAX_MINUTES` plus five. `recording` is the one state with
+no periodic signal: LiveKit sends `egress_updated` on a status change and not as
+a heartbeat, so a healthy forty-minute interview touches its row once at the
+start and not again. Untouched is not unfinished, and a recording that has been
+running for forty minutes is a recording. What it cannot legitimately do is
+outlive the maximum this server configured.
+
+A webhook proves which project sent it and not which project owns the room it
+names, so an event is applied only when the key that signed it is the key
+`ProviderPool::for_room` routes that room to. Without that check any configured
+project could end another project's recording by naming its room.
+
+`CODETRIAL_RECORDING_KILL_SWITCH` refuses new starts inside the same statement
+that would have created them, and the next sweep stops everything already
+running with reason `kill_switch` and a structured line on stderr. A switch that
+can be raced is not a kill switch.
+
+### Where the pipeline currently stops
+
+`transferring` has no worker yet. A recording whose `egress_ended` said
+`EGRESS_COMPLETE` reaches that state and stays there, holding the account's one
+active slot, until the sweeper fails it as `abandoned` fifteen minutes later.
+The transfer step is the next task; until it lands, recording produces a staged
+GCS object and no delivery. That is why the switch stays off.
+
 ## Google Drive delivery
 
 All calls carry `supportsAllDrives=true`. Without it the API pretends a Shared
@@ -257,6 +379,7 @@ failure that has no symptom until it has a bad one.
 | `created_at`, `updated_at` | INTEGER | no | epoch seconds |
 | `started_at`, `ended_at`, `ready_at` | INTEGER | yes | each null until it happens |
 | `expires_at` | INTEGER | yes | the retention deadline |
+| `stopped_at` | INTEGER | yes | when the provider agreed to stop; an egress id with no `stopped_at` is a job still running |
 | `deleted_at` | INTEGER | yes | when the media was deleted |
 | `delete_error` | TEXT | yes | a short machine code for a partial failure |
 | `deleted_by` | TEXT | yes | `expiry`, `consent_withdrawn`, or `operator` |

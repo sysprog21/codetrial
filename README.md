@@ -433,10 +433,12 @@ startup failure rather than a surprise when a candidate's interview ends. See
 [`docs/recording-contract.md`](docs/recording-contract.md) for what has to be
 provisioned first.
 
-These values are validated at startup today; the pipeline that consumes them is
-still being built, so turning the switch on validates a configuration and
-records nothing. The keys are documented here because they have one owner and
-one meaning, not because the feature is finished.
+The pipeline is still being built. Turning the switch on today records to the
+staging bucket and stops at `transferring`: nothing yet moves the file to the
+Shared Drive or shares it, so a completed recording holds the account's one
+active slot until the sweeper fails it fifteen minutes later. Leave the switch
+off until the transfer step lands. The keys are documented here because they
+have one owner and one meaning, not because the feature is finished.
 
 Recording requires the GitHub OAuth app. A recording is delivered to the
 primary verified address GitHub returns for the signed-in account, so
@@ -462,10 +464,32 @@ there is no ordering in which an Egress call precedes a candidate agreeing to
 one. The wording is versioned: a page left open across a deploy that changed it
 is refused with `consent_version_mismatch` rather than recorded as having agreed
 to text it never displayed. `DELETE /api/interviews/{id}/consent` takes consent
-back, records when, and stops that interview being started again; what happens
-to an active recording belongs to the recording lifecycle. Copies already
+back, records when, stops that interview being started again, and moves an
+active recording to `failed` with reason `consent_withdrawn`. Copies already
 downloaded by someone who held the link are outside CodeTrial's control, and the
 notice says so.
+
+`POST /api/interviews/{id}/recording` starts the recording once the candidate is
+in the room, answering `202` because the provider has been asked and whether an
+Egress job exists is something a webhook will say. One account records one
+interview at a time, and one interview records once: a repeated start finds the
+first caller's row rather than creating a second Egress job.
+
+An interview ends at `POST /api/interviews/{id}/end` or at LiveKit's
+`room_finished` webhook, whichever arrives first. Neither is optional, because a
+browser can be closed and a webhook can be lost, and the second to arrive changes
+nothing. LiveKit delivers webhooks to `POST /api/recording/webhook`, which
+verifies the signature over the body before parsing it and refuses without
+saying which step failed.
+
+A sweeper runs at startup and every minute. It retries a start that never
+reached the provider after one minute, then five, then fifteen, asking the
+provider what it already has for the room first so a lost egress id becomes an
+adopted job rather than a second one; it stops and fails anything in an active
+state whose row has not moved for fifteen minutes; and it stops everything
+running when `CODETRIAL_RECORDING_KILL_SWITCH` is set, because a switch that
+only refuses new starts is not a kill switch. The full transition table is in
+[`docs/recording-contract.md`](docs/recording-contract.md).
 
 | Variable | Default | Meaning |
 |---|---|---|

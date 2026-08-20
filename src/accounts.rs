@@ -104,7 +104,7 @@ impl Accounts {
     /// microseconds, and it stops being enough when concurrent interviews
     /// times queries per interview approaches that rate. A connection pool is
     /// the answer at that point, not a second mutex.
-    fn with<T>(
+    pub(crate) fn with<T>(
         &self,
         task: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>,
     ) -> rusqlite::Result<T> {
@@ -119,7 +119,7 @@ impl Accounts {
 /// Bumped whenever a migration is added below. SQLite carries it in the file
 /// header, so an existing database announces which migrations it has already
 /// run instead of quietly keeping an old shape behind `IF NOT EXISTS`.
-pub const ACCOUNT_SCHEMA_VERSION: i64 = 6;
+pub const ACCOUNT_SCHEMA_VERSION: i64 = 7;
 
 /// Migrations in order, each one taking the database from index `n` to `n + 1`.
 /// Append, never edit: an entry that has already run somewhere will not run
@@ -131,6 +131,7 @@ const ACCOUNT_MIGRATIONS: &[&str] = &[
     ADD_VERIFIED_EMAIL,
     CREATE_INTERVIEWS,
     CREATE_RECORDINGS,
+    CREATE_RECORDING_EVENTS,
 ];
 
 pub fn initialize_account_database(path: &Path) -> rusqlite::Result<()> {
@@ -422,6 +423,78 @@ const CREATE_RECORDINGS: &str = "
 
         CREATE INDEX IF NOT EXISTS recordings_by_expiry
             ON recordings(expires_at) WHERE expires_at IS NOT NULL AND deleted_at IS NULL;
+";
+
+/// Every webhook LiveKit has delivered, by its own event id.
+///
+/// Delivery is at-least-once: a retry is a fresh, validly signed message with a
+/// new `createdAt` and a new signature, so nothing about the message tells it
+/// apart from the first attempt except the `id`. `recordings.egress_id` cannot
+/// serve, because `egress_started`, `egress_updated` and `egress_ended` all
+/// carry the same one.
+///
+/// No foreign key. An event can arrive for a recording this server has never
+/// heard of, and refusing to write it down is how the same unknown event gets
+/// processed forever.
+///
+/// `recordings.stopped_at` arrives with them, because a recording can be
+/// finished on this side and still running on the provider's: a stop that
+/// failed after the row moved leaves a job nobody is watching, and `failed` is
+/// terminal so the state alone can never say so again. A row with an egress id
+/// and no `stopped_at` is a job that still needs stopping, whatever its state.
+///
+/// The migration orders by `created_at` before `rowid`. Insertion order is not
+/// lifecycle order once a restore or an import is in the picture, and the
+/// promise being made is that the newest active recording is the one kept.
+///
+/// `applied_at` is the difference between "seen" and "dealt with". Claiming an
+/// event and then failing to apply it would lose it: LiveKit's retry finds the
+/// id already there and does nothing. A row with a null `applied_at` is an
+/// attempt that did not finish, and redelivery is allowed to try again.
+///
+/// The partial unique index alongside it is the one-active-per-account rule,
+/// moved out of a `SELECT COUNT(*)` and into the database. Counting first and
+/// inserting second is serialized by the mutex around this process's one
+/// connection and by nothing at all across two, and a second `codetrial web` on
+/// the same database is a supported shape. A second concurrent Egress job is a
+/// second bill and a second file nobody consented to.
+///
+/// The `UPDATE` before it exists because the previous schema allowed what the
+/// index forbids. An upgrade that met two active recordings for one account
+/// would fail to create the index and take startup with it, so the older ones
+/// are failed as `superseded` first. Nothing in production has reached that
+/// state; a migration that only works on databases nobody has is not a
+/// migration.
+const CREATE_RECORDING_EVENTS: &str = "
+        CREATE TABLE IF NOT EXISTS recording_events (
+            event_id TEXT PRIMARY KEY NOT NULL,
+            received_at INTEGER NOT NULL,
+            applied_at INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS recording_events_by_receipt
+            ON recording_events(received_at);
+
+        ALTER TABLE recordings ADD COLUMN stopped_at INTEGER;
+
+        UPDATE recordings
+        SET state = 'failed', error = COALESCE(error, 'superseded')
+        WHERE state IN ('starting', 'recording', 'finalizing', 'transferring')
+          AND rowid <> (
+            SELECT other.rowid FROM recordings other
+            WHERE other.account_id = recordings.account_id
+              AND other.state IN ('starting', 'recording', 'finalizing', 'transferring')
+            ORDER BY other.created_at DESC, other.rowid DESC
+            LIMIT 1
+          );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS recordings_one_active_per_account
+            ON recordings(account_id)
+            WHERE state IN ('starting', 'recording', 'finalizing', 'transferring');
+
+        CREATE INDEX IF NOT EXISTS recordings_active_by_update
+            ON recordings(updated_at)
+            WHERE state IN ('starting', 'recording', 'finalizing', 'transferring');
 ";
 
 /// Every report read and the per-account quota below both filter on `user_id`,
@@ -1208,6 +1281,14 @@ mod migration_tests {
         // Newest first: `recordings` has foreign keys into `interviews`, so
         // dropping them the other way round would leave a table pointing at one
         // that is gone.
+        if version < 7 {
+            connection
+                .execute_batch(
+                    "DROP TABLE IF EXISTS recording_events;
+                     ALTER TABLE recordings DROP COLUMN stopped_at;",
+                )
+                .unwrap();
+        }
         if version < 6 {
             connection
                 .execute_batch(
@@ -1481,7 +1562,14 @@ mod migration_tests {
         assert_eq!(user_version(&path), ACCOUNT_SCHEMA_VERSION);
         assert_eq!(
             tables(&path),
-            vec!["interviews", "recordings", "reports", "sessions", "users"]
+            vec![
+                "interviews",
+                "recording_events",
+                "recordings",
+                "reports",
+                "sessions",
+                "users"
+            ]
         );
     }
 
