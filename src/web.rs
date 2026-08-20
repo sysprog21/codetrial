@@ -8,18 +8,19 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::connect_info::IntoMakeServiceWithConnectInfo;
-use axum::extract::{ConnectInfo, OriginalUri, State};
+use axum::extract::{ConnectInfo, OriginalUri, Path as UriPath, State};
 use axum::http::{HeaderValue, Method, Request, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{AppendHeaders, IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use serde_json::{Value, json};
 
 use crate::accounts::{
-    Accounts, GitHubLoginConfig, GitHubOauth, GitHubProfile, MAX_REPORTS_PER_USER, ReportSave,
-    SESSION_TTL_SECONDS, SignedInUser, blocking, create_session, delete_session, list_reports,
-    normalized_github_login, random_token, recorded_account_id, save_report, session_user,
-    valid_github_login,
+    Accounts, GitHubLoginConfig, GitHubOauth, GitHubProfile, MAX_INTERVIEWS_PER_USER,
+    MAX_REPORTS_PER_USER, ReportSave, SESSION_TTL_SECONDS, SignedInUser, blocking,
+    claim_interview_room, create_interview, create_session, delete_session, interview_for_account,
+    list_reports, normalized_github_login, random_token, recorded_account_id,
+    release_interview_room, save_report, session_user, valid_github_login, withdraw_consent,
 };
 use crate::config::{DEFAULT_DURATION_MIN, MAX_DURATION_MIN, MIN_DURATION_MIN};
 use crate::token::{LivekitTokenInput, TOKEN_TTL_SECONDS, livekit_observer_token, livekit_token};
@@ -329,6 +330,11 @@ fn web_router(config: WebServerConfig, dispatcher: Option<Arc<dyn RoomDispatcher
         .route("/api/callback", get(callback_handler))
         .route("/api/session", get(session_handler))
         .route("/api/logout", post(logout_handler))
+        .route("/api/interviews", post(create_interview_handler))
+        .route(
+            "/api/interviews/{id}/consent",
+            delete(withdraw_consent_handler),
+        )
         .route("/runtime-config.js", get(runtime_config_handler))
         .route(
             "/api/reports",
@@ -1380,9 +1386,9 @@ async fn token_handler(
     // Where accounts exist, an interview belongs to one. Hiding the start
     // button would not stop anyone opening /interview directly, so the gate
     // lives on the credential.
-    if state.accounts.is_none() {
+    let Some(accounts) = state.accounts.clone() else {
         return state.accounts_error();
-    }
+    };
     let user = match current_user(state.accounts.as_ref(), request.headers()).await {
         Ok(Some(user)) => user,
         Ok(None) => {
@@ -1435,6 +1441,24 @@ async fn token_handler(
     let Ok(body) = to_bytes(request.into_body(), MAX_BODY_BYTES).await else {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     };
+
+    // Before the token is minted, and therefore before any Egress call can be
+    // made for this room. A recorded interview with no persisted consent is the
+    // one state this whole feature exists to make impossible. Ahead of the
+    // consent check, because that check reads the body too and answers 403 to
+    // anything it cannot parse. A malformed body is a client error whether or
+    // not this server records, and turning it into "you did not consent" sends
+    // the candidate looking for a checkbox they already ticked.
+    if !body.is_empty() && serde_json::from_slice::<Value>(body.as_ref()).is_err() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "Session request must be JSON." }),
+        );
+    }
+    let interview = match checked_consent(&state, &accounts, &user, body.as_ref()).await {
+        Ok(interview) => interview,
+        Err(response) => return response,
+    };
     let identity = generated_candidate_identity();
     let response = match token_response(
         &TokenConfig {
@@ -1466,12 +1490,39 @@ async fn token_handler(
         }
     };
 
+    // Before the dispatcher, so two requests racing on one interview cannot
+    // both start an interviewer, and after the token, so a signing failure
+    // costs nothing. The loser of that race is refused here without dispatching
+    // anything.
+    if let Some(interview) = &interview
+        && let Err(response) =
+            claim_consent(&accounts, user.id, interview.clone(), &room_name).await
+    {
+        return response;
+    }
+
     // Validate the request before starting anything external. Otherwise a
     // malformed body can leave an interviewer running for a request that got a
     // 400 response.
     if let Some(dispatcher) = &state.dispatcher
         && !dispatcher.ensure_agent(&room_name, provider)
     {
+        // The claim above is given back first. A busy server tells the
+        // candidate to retry, and a retry refused because the first attempt
+        // spent their consent is worse than the refusal it followed.
+        if let Some(interview) = &interview {
+            let accounts = accounts.clone();
+            let interview = interview.clone();
+            let room_name = room_name.clone();
+            let owner = user.id;
+            if let Err(error) =
+                blocking(move || release_interview_room(&accounts, &interview, owner, &room_name))
+                    .await
+            {
+                eprintln!("could not release interview consent after a refused dispatch: {error}");
+            }
+        }
+
         // Refusing is the honest failure. Handing out the token anyway would
         // put the candidate in an empty room reading "Waiting" with nothing, on
         // screen or in any log they can see, saying why.
@@ -1594,13 +1645,23 @@ async fn runtime_config_handler(State(state): State<AppState>) -> Response {
     // exactly what the Content-Security-Policy permits. A literal in the
     // browser could drift from the policy, and the failure would be a blocked
     // request rather than anything that names the cause.
-    let body = if state.config.compiler_explorer_enabled {
+    let mut body = if state.config.compiler_explorer_enabled {
         format!(
             "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = true;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"{COMPILER_EXPLORER_ORIGIN}\";\n"
         )
     } else {
         "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = false;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"\";\n".to_string()
     };
+
+    // Whether to show the consent step at all, and which wording it agreed to.
+    // The version travels this way rather than being written into the page,
+    // because the server is the side that validates it and two spellings of a
+    // version are one deploy away from disagreeing.
+    body.push_str(&format!(
+        "globalThis.CODETRIAL_RECORDING_ENABLED = {};\nglobalThis.CODETRIAL_CONSENT_VERSION = \"{}\";\n",
+        state.config.recording.is_some(),
+        crate::recording::CONSENT_VERSION
+    ));
     (
         StatusCode::OK,
         [
@@ -1834,6 +1895,236 @@ fn number_json(value: f64) -> Value {
         json!(value as u64)
     } else {
         json!(value)
+    }
+}
+
+/// Records consent, before anything can be recorded.
+///
+/// This is the ordering the whole feature rests on: the row exists first, and
+/// `/api/token` refuses without it, so there is no path where an Egress call
+/// precedes a candidate agreeing to one. The refusal is the enforcement; a
+/// comment saying "call this first" is not.
+async fn create_interview_handler(
+    State(state): State<AppState>,
+    request: Request<Body>,
+) -> Response {
+    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+
+    // A server that records nothing has no consent to take. Refusing keeps a
+    // stale page from writing rows that mean nothing.
+    if state.config.recording.is_none() {
+        return json_response(
+            StatusCode::NOT_FOUND,
+            json!({ "code": "recording_not_enabled", "error": "This server does not record interviews." }),
+        );
+    }
+    let Ok(body) = to_bytes(request.into_body(), MAX_BODY_BYTES).await else {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    };
+    let version = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .and_then(|body| body.get("consentVersion")?.as_str().map(str::to_string));
+
+    // The version has to match, not merely be present. It names the wording the
+    // candidate was actually shown, and a page left open across a deploy that
+    // changed that wording would otherwise be recorded as having agreed to text
+    // it never displayed.
+    if version.as_deref() != Some(crate::recording::CONSENT_VERSION) {
+        return json_response(
+            StatusCode::CONFLICT,
+            json!({
+                "code": "consent_version_mismatch",
+                "error": "The recording disclosure changed. Reload the page and read it again."
+            }),
+        );
+    }
+
+    let Ok(interview_id) = random_token(16) else {
+        return json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": "Could not start an interview." }),
+        );
+    };
+    let now = current_epoch_seconds() as i64;
+    let recorded = {
+        let interview_id = interview_id.clone();
+        blocking(move || {
+            create_interview(
+                &accounts,
+                &interview_id,
+                user.id,
+                crate::recording::CONSENT_VERSION,
+                now,
+            )
+        })
+        .await
+    };
+    match recorded {
+        Ok(Some(interview)) => json_response(
+            StatusCode::CREATED,
+            json!({
+                "interviewId": interview.id,
+                "consentVersion": interview.consent_version,
+                "consentAt": interview.consent_at
+            }),
+        ),
+
+        // Not 429, for the same reason `/api/reports` is not: waiting does not
+        // help, and telling a client to retry a request that can never succeed
+        // is worse than saying it is full.
+        Ok(None) => json_response(
+            StatusCode::INSUFFICIENT_STORAGE,
+            json!({
+                "code": "interview_limit_reached",
+                "error": format!("This account is at its limit of {MAX_INTERVIEWS_PER_USER} interviews.")
+            }),
+        ),
+        Err(error) => {
+            eprintln!("could not record interview consent: {error}");
+            json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "Could not record consent." }),
+            )
+        }
+    }
+}
+
+/// Takes consent back.
+///
+/// 204 and no body, because there is nothing to say: the interview is the
+/// candidate's, the withdrawal is recorded, and what happens to an active
+/// recording is the recording lifecycle's problem. This route owns the state it
+/// requests, not the transition.
+async fn withdraw_consent_handler(
+    State(state): State<AppState>,
+    UriPath(interview_id): UriPath<String>,
+    request: Request<Body>,
+) -> Response {
+    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+    let now = current_epoch_seconds() as i64;
+    match blocking(move || withdraw_consent(&accounts, &interview_id, user.id, now)).await {
+        // Not found and somebody else's are one answer. Telling them apart is a
+        // way to enumerate other people's interview ids.
+        Ok(false) => json_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "No such interview." }),
+        ),
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            eprintln!("could not withdraw interview consent: {error}");
+            json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "Could not withdraw consent." }),
+            )
+        }
+    }
+}
+
+fn recording_requires_consent() -> Response {
+    json_response(
+        StatusCode::FORBIDDEN,
+        json!({
+            "code": "recording_requires_consent",
+            "error": "This interview is recorded. Agree to the recording notice before starting."
+        }),
+    )
+}
+
+/// The consent a recorded room may start under, or the response refusing it.
+///
+/// Returns `Ok(None)` where recording is off, which is the state every
+/// deployment is in until an operator provisions it: there is no consent to
+/// check because there is nothing to consent to.
+/// The interview id a recorded room may start under, checked but not yet spent.
+///
+/// Split from the claim below on purpose. This runs before the token is signed
+/// and before an interviewer is dispatched, so a request that is going to be
+/// refused is refused cheaply; the claim runs after both, so a failure between
+/// them does not burn a candidate's only consent and leave them unable to
+/// retry.
+///
+/// `Ok(None)` where recording is off, which is the state every deployment is in
+/// until an operator provisions it: there is no consent to check because there
+/// is nothing to consent to.
+async fn checked_consent(
+    state: &AppState,
+    accounts: &Arc<Accounts>,
+    user: &SignedInUser,
+    body: &[u8],
+) -> Result<Option<String>, Response> {
+    if state.config.recording.is_none() {
+        return Ok(None);
+    }
+    let Some(interview_id) = serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|body| body.get("interviewId")?.as_str().map(str::to_string))
+        .filter(|id| !id.is_empty())
+    else {
+        return Err(recording_requires_consent());
+    };
+    let owner = user.id;
+    let lookup = {
+        let accounts = accounts.clone();
+        let interview_id = interview_id.clone();
+        blocking(move || interview_for_account(&accounts, &interview_id, owner)).await
+    };
+    match lookup {
+        Ok(Some(interview))
+            if interview.consent_withdrawn_at.is_none() && interview.room_name.is_none() =>
+        {
+            Ok(Some(interview.id))
+        }
+        Ok(_) => Err(recording_requires_consent()),
+        Err(error) => {
+            eprintln!("could not read interview consent: {error}");
+            Err(json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "Could not read interview consent." }),
+            ))
+        }
+    }
+}
+
+/// Spends the consent on one room, or refuses.
+///
+/// One statement, and it answers every refusal that matters here: gone,
+/// somebody else's, withdrawn, or already used. The read above is a
+/// convenience; this is the decision, because two token requests racing on one
+/// interview must not both win and a read followed by a write is exactly the
+/// gap where they would.
+///
+/// The ceiling, because it is not obvious: this closes the window between
+/// checking consent and minting a token, and it does not close the one between
+/// minting a token and starting Egress. A candidate who withdraws in that
+/// second window has a room they may join and a recording that must not begin,
+/// which is the recording lifecycle's problem: the authoritative check runs
+/// immediately before the provider call.
+async fn claim_consent(
+    accounts: &Arc<Accounts>,
+    user_id: i64,
+    interview_id: String,
+    room_name: &str,
+) -> Result<(), Response> {
+    let accounts = accounts.clone();
+    let room_name = room_name.to_string();
+    match blocking(move || claim_interview_room(&accounts, &interview_id, user_id, &room_name))
+        .await
+    {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(recording_requires_consent()),
+        Err(error) => {
+            eprintln!("could not claim interview consent: {error}");
+            Err(json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "Could not read interview consent." }),
+            ))
+        }
     }
 }
 

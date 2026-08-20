@@ -43,3 +43,12 @@ pub const OUTPUT_FILE_TYPE: &str = "MP4";
 pub const OUTPUT_VIDEO_CODEC: &str = "H264_MAIN";
 /// Not the `OPUS` default: an MP4 `EncodedFileOutput` needs AAC.
 pub const OUTPUT_AUDIO_CODEC: &str = "AAC";
+
+/// The version of the recording disclosure a candidate agreed to.
+///
+/// A date rather than a counter, because what is being versioned is a piece of
+/// prose: `web/interview.html` shows this text, `POST /api/interviews` records
+/// which text was shown, and the two are checked against each other. A page
+/// left open across a deploy that changed the wording is refused rather than
+/// recorded as having consented to words it never displayed.
+pub const CONSENT_VERSION: &str = "2026-08-21";

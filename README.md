@@ -455,6 +455,18 @@ no address is fetched or kept, because a deployment that records nothing has no
 use for a candidate's private address. Turning recording on therefore asks
 everyone to sign in once more.
 
+Consent is a row, written before anything can be recorded. The media preflight
+shows the recording notice, `POST /api/interviews` records which wording was
+agreed to and when, and `/api/token` refuses a recorded room without it, so
+there is no ordering in which an Egress call precedes a candidate agreeing to
+one. The wording is versioned: a page left open across a deploy that changed it
+is refused with `consent_version_mismatch` rather than recorded as having agreed
+to text it never displayed. `DELETE /api/interviews/{id}/consent` takes consent
+back, records when, and stops that interview being started again; what happens
+to an active recording belongs to the recording lifecycle. Copies already
+downloaded by someone who held the link are outside CodeTrial's control, and the
+notice says so.
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `CODETRIAL_RECORDING_ENABLED` | `false` | master switch; everything below is ignored while it is off |

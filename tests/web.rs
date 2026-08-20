@@ -683,7 +683,7 @@ async fn runtime_config_can_disable_compiled_language_runs() {
     assert_eq!(enabled.headers().get("cache-control").unwrap(), "no-store");
     assert_eq!(
         enabled.text().await.unwrap(),
-        "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = true;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"https://godbolt.org\";\n"
+        "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = true;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"https://godbolt.org\";\nglobalThis.CODETRIAL_RECORDING_ENABLED = false;\nglobalThis.CODETRIAL_CONSENT_VERSION = \"2026-08-21\";\n"
     );
     enabled_server.abort();
 
@@ -698,9 +698,30 @@ async fn runtime_config_can_disable_compiled_language_runs() {
     assert_eq!(disabled.status(), 200);
     assert_eq!(
         disabled.text().await.unwrap(),
-        "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = false;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"\";\n"
+        "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = false;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"\";\nglobalThis.CODETRIAL_RECORDING_ENABLED = false;\nglobalThis.CODETRIAL_CONSENT_VERSION = \"2026-08-21\";\n"
     );
     disabled_server.abort();
+
+    // The page cannot know whether to show the consent step without being told,
+    // and it must not guess: a candidate shown no notice on a recording server
+    // is the failure the whole feature exists to prevent.
+    let mut recording_config_values = web_config();
+    recording_config_values.recording = Some(recording_config());
+    let (recording_base, recording_server) = spawn_web_server(recording_config_values).await;
+    let recording = client
+        .get(format!("{recording_base}/runtime-config.js"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(recording.contains("globalThis.CODETRIAL_RECORDING_ENABLED = true;"));
+    assert!(recording.contains(&format!(
+        "globalThis.CODETRIAL_CONSENT_VERSION = \"{}\";",
+        codetrial::recording::CONSENT_VERSION
+    )));
+    recording_server.abort();
 }
 
 #[tokio::test]
@@ -892,7 +913,7 @@ fn static_interview_script_keeps_transcript_and_report_contract() {
 fn static_interview_script_leaves_candidate_identity_to_the_server() {
     let source = fs::read_to_string("web/interview.js").unwrap();
 
-    assert!(source.contains("JSON.stringify({ problemId: problem.id, durationMin })"));
+    assert!(source.contains("JSON.stringify({ problemId: problem.id, durationMin, interviewId })"));
     assert!(!source.contains("candidateIdentity"));
 }
 
@@ -3427,9 +3448,11 @@ async fn token_requires_verified_recording_identity() {
             )
             .unwrap();
     }
+    let interview = start_interview(&client, &base, &cookie).await;
     let allowed = client
         .post(format!("{base}/api/token"))
         .header("cookie", cookie)
+        .json(&json!({ "interviewId": interview }))
         .send()
         .await
         .unwrap();
@@ -3560,9 +3583,12 @@ async fn github_callback_stores_only_the_primary_verified_email() {
     assert_eq!(verified, 1);
 
     // And that account can now start a recorded interview.
-    let allowed = reqwest::Client::new()
+    let client = reqwest::Client::new();
+    let interview = start_interview(&client, &base, &session_cookie).await;
+    let allowed = client
         .post(format!("{base}/api/token"))
         .header("cookie", session_cookie)
+        .json(&json!({ "interviewId": interview }))
         .send()
         .await
         .unwrap();
@@ -3629,6 +3655,23 @@ async fn login_requests_the_email_scope_it_later_reads() {
 
     server.abort();
     remove_database(db_path);
+}
+
+/// Agrees to the recording notice the way the browser does, and hands back the
+/// interview id `/api/token` then has to be given.
+async fn start_interview(client: &reqwest::Client, base: &str, cookie: &str) -> String {
+    let response = client
+        .post(format!("{base}/api/interviews"))
+        .header("cookie", cookie)
+        .json(&json!({ "consentVersion": codetrial::recording::CONSENT_VERSION }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 201, "consent should be recorded");
+    response.json::<Value>().await.unwrap()["interviewId"]
+        .as_str()
+        .expect("the response carries the interview id")
+        .to_string()
 }
 
 /// A recording block for tests that only care that recording is on.
@@ -3790,4 +3833,349 @@ fn query_parameter(location: &str, name: &str) -> Option<String> {
         }
     }
     String::from_utf8(decoded).ok()
+}
+
+/// Consent exists before anything could be recorded, and `/api/token` is where
+/// that is enforced.
+///
+/// The token is what precedes an Egress call, so a token minted without a
+/// persisted consent row is the one ordering this feature cannot survive. The
+/// enforcement is the refusal; a comment saying "call this first" is not.
+#[tokio::test]
+async fn interviews_persist_consent_before_egress() {
+    let (base, server, path, client, cookie) = recorded_server("consent-before-egress").await;
+
+    // No interview id: refused, and nothing is written.
+    let refused = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", cookie.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 403);
+    assert_eq!(
+        refused.json::<Value>().await.unwrap()["code"],
+        "recording_requires_consent"
+    );
+    assert_eq!(interview_rows(&path).len(), 0);
+
+    // A stale page that shows older wording is refused rather than recorded as
+    // having agreed to text it never displayed.
+    let stale = client
+        .post(format!("{base}/api/interviews"))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "consentVersion": "1970-01-01" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), 409);
+    assert_eq!(
+        stale.json::<Value>().await.unwrap()["code"],
+        "consent_version_mismatch"
+    );
+    assert_eq!(interview_rows(&path).len(), 0);
+
+    let interview = start_interview(&client, &base, &cookie).await;
+    let rows = interview_rows(&path);
+    assert_eq!(
+        rows.len(),
+        1,
+        "consent is one row, written before the token"
+    );
+    let (id, version, consent_at, withdrawn) = rows[0].clone();
+    assert_eq!(id, interview);
+    assert_eq!(version, codetrial::recording::CONSENT_VERSION);
+    assert!(consent_at > 0, "consent is a fact with a time");
+    assert_eq!(withdrawn, None);
+
+    // A reload is not a second consent. Same person, same wording, same
+    // interview that has not started, so the pending row is handed back rather
+    // than spending another of the account's rows for nothing.
+    assert_eq!(
+        start_interview(&client, &base, &cookie).await,
+        interview,
+        "agreeing again before starting returns the pending interview"
+    );
+    assert_eq!(interview_rows(&path).len(), 1);
+
+    let allowed = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "interviewId": interview }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(allowed.status(), 200);
+
+    // One consent is one interview. Without the claim, the same id mints
+    // recorded rooms without limit, and a candidate who agreed to be recorded
+    // once would have agreed to all of them.
+    let reused = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "interviewId": interview }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reused.status(), 403);
+    assert_eq!(
+        reused.json::<Value>().await.unwrap()["code"],
+        "recording_requires_consent"
+    );
+
+    // The room the consent authorized is written down, so a later step can find
+    // the consent a room was started under.
+    let room: Option<String> = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT room_name FROM interviews WHERE id = ?1",
+            [&interview],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        room.is_some_and(|room| room.starts_with("interview-")),
+        "the claim records which room it was spent on"
+    );
+
+    // Somebody else's interview id is not consent. It answers the same way a
+    // missing one does, because telling them apart enumerates other people's
+    // interviews.
+    let (other_cookie, _) = second_account(&client, &base, &path).await;
+    let other = start_interview(&client, &base, &other_cookie).await;
+    let borrowed = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", cookie)
+        .json(&json!({ "interviewId": other }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(borrowed.status(), 403);
+
+    server.abort();
+    remove_database(path);
+}
+
+/// Withdrawal is recorded, and a withdrawn interview cannot start another
+/// recorded room.
+///
+/// The transition of an active recording to `failed` belongs to the recording
+/// lifecycle. What this route owns is the state that transition reads, and the
+/// refusal that stops the candidate who just said no from reloading into a
+/// second recorded interview.
+#[tokio::test]
+async fn consent_withdrawal_stops_egress() {
+    let (base, server, path, client, cookie) = recorded_server("consent-withdrawal").await;
+    let interview = start_interview(&client, &base, &cookie).await;
+
+    let withdrawn = client
+        .delete(format!("{base}/api/interviews/{interview}/consent"))
+        .header("cookie", cookie.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(withdrawn.status(), 204);
+
+    let rows = interview_rows(&path);
+    assert_eq!(rows.len(), 1, "withdrawal records, it does not delete");
+    let first_withdrawal = rows[0].3.expect("the withdrawal has a time");
+
+    // Idempotent, and the first time is the one that counts.
+    let again = client
+        .delete(format!("{base}/api/interviews/{interview}/consent"))
+        .header("cookie", cookie.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(again.status(), 204);
+    assert_eq!(interview_rows(&path)[0].3, Some(first_withdrawal));
+
+    let refused = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "interviewId": interview }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 403);
+    assert_eq!(
+        refused.json::<Value>().await.unwrap()["code"],
+        "recording_requires_consent"
+    );
+
+    // Nobody else can withdraw it, and the refusal does not confirm it exists.
+    let (other_cookie, _) = second_account(&client, &base, &path).await;
+    let mine = start_interview(&client, &base, &cookie).await;
+    let stranger = client
+        .delete(format!("{base}/api/interviews/{mine}/consent"))
+        .header("cookie", other_cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stranger.status(), 404);
+    assert_eq!(
+        interview_rows(&path)
+            .iter()
+            .find(|(id, ..)| *id == mine)
+            .expect("the interview is still there")
+            .3,
+        None,
+        "a stranger's request changes nothing"
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
+/// A malformed body is a client error, whether or not this server records.
+///
+/// The consent check reads the body too, and it answers 403 to anything it
+/// cannot parse. Letting that answer win sends a candidate looking for a
+/// checkbox they already ticked.
+#[tokio::test]
+async fn a_malformed_body_is_a_bad_request_even_on_a_recording_server() {
+    let (base, server, path, client, cookie) = recorded_server("malformed-recorded").await;
+    start_interview(&client, &base, &cookie).await;
+
+    let response = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", cookie)
+        .header("content-type", "application/json")
+        .body("{not json")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["error"],
+        "Session request must be JSON."
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
+/// A request that fails after the consent check must not spend the consent.
+///
+/// The claim used to run before the token was signed and before an interviewer
+/// was dispatched, so a busy server burned the candidate's only consent and
+/// then told them to retry, and the retry was refused.
+#[tokio::test]
+async fn a_refused_interview_leaves_its_consent_unspent() {
+    let (mut config, cookie, path) = signed_in_web_config("consent-unspent");
+    config.recording = Some(recording_config());
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "UPDATE users SET email = 'one@example.test', email_verified = 1 WHERE id = 1",
+                [],
+            )
+            .unwrap();
+    }
+    let dispatcher = std::sync::Arc::new(RecordingDispatcher::default());
+    dispatcher
+        .at_capacity
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let (base, server) = spawn_web_server_with_dispatcher(config, dispatcher.clone()).await;
+    let client = reqwest::Client::new();
+
+    let interview = start_interview(&client, &base, &cookie).await;
+    let busy = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "interviewId": interview }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(busy.status(), 503, "the server is full, not the candidate");
+
+    let room: Option<String> = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT room_name FROM interviews WHERE id = ?1",
+            [&interview],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(room, None, "a refused request spends nothing");
+
+    // And the retry the candidate was told to make works.
+    dispatcher
+        .at_capacity
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    let retried = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", cookie)
+        .json(&json!({ "interviewId": interview }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(retried.status(), 200);
+
+    server.abort();
+    remove_database(path);
+}
+
+/// A signed-in account on a server that records, which is where every consent
+/// test starts.
+async fn recorded_server(
+    label: &str,
+) -> (
+    String,
+    tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    std::path::PathBuf,
+    reqwest::Client,
+    String,
+) {
+    let (mut config, cookie, path) = signed_in_web_config(label);
+    config.recording = Some(recording_config());
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "UPDATE users SET email = 'one@example.test', email_verified = 1 WHERE id = 1",
+                [],
+            )
+            .unwrap();
+    }
+    let (base, server) = spawn_web_server(config).await;
+    (base, server, path, reqwest::Client::new(), cookie)
+}
+
+/// A second verified account, so cross-account refusals have somebody to be
+/// refused for.
+async fn second_account(
+    client: &reqwest::Client,
+    base: &str,
+    path: &std::path::Path,
+) -> (String, i64) {
+    let cookie = record_login(client, base, "two").await;
+    let connection = rusqlite::Connection::open(path).unwrap();
+    let id: i64 = connection
+        .query_row("SELECT id FROM users WHERE login = 'two'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE users SET email = 'two@example.test', email_verified = 1 WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+    (cookie, id)
+}
+
+fn interview_rows(path: &std::path::Path) -> Vec<(String, String, i64, Option<i64>)> {
+    let connection = rusqlite::Connection::open(path).unwrap();
+    let mut statement = connection
+        .prepare("SELECT id, consent_version, consent_at, consent_withdrawn_at FROM interviews")
+        .unwrap();
+    statement
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
 }

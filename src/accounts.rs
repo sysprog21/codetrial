@@ -119,7 +119,7 @@ impl Accounts {
 /// Bumped whenever a migration is added below. SQLite carries it in the file
 /// header, so an existing database announces which migrations it has already
 /// run instead of quietly keeping an old shape behind `IF NOT EXISTS`.
-pub const ACCOUNT_SCHEMA_VERSION: i64 = 4;
+pub const ACCOUNT_SCHEMA_VERSION: i64 = 5;
 
 /// Migrations in order, each one taking the database from index `n` to `n + 1`.
 /// Append, never edit: an entry that has already run somewhere will not run
@@ -129,6 +129,7 @@ const ACCOUNT_MIGRATIONS: &[&str] = &[
     INDEX_REPORTS_BY_USER,
     DISCARD_CLEARTEXT_SESSIONS,
     ADD_VERIFIED_EMAIL,
+    CREATE_INTERVIEWS,
 ];
 
 pub fn initialize_account_database(path: &Path) -> rusqlite::Result<()> {
@@ -268,6 +269,48 @@ const ADD_VERIFIED_EMAIL: &str = "
         ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0;
 ";
 
+/// One row per interview a candidate agreed to have recorded.
+///
+/// Consent is a fact with a time and a version, not a boolean: the disclosure
+/// text changes, and "they agreed" is worthless without "to what, and when".
+/// The row is written before anything is recorded, so an interview with no row
+/// here is an interview no Egress call may be made for.
+///
+/// `consent_withdrawn_at` is nullable and set once. Withdrawal does not delete
+/// the row, because the record that consent existed and was taken back is
+/// exactly what a later deletion has to be justified by.
+///
+/// `room_name` is claimed once, by the token request. One consent is one
+/// interview: without the claim the same id mints recorded rooms without limit,
+/// and a candidate who agreed to be recorded once would have agreed to all of
+/// them.
+///
+/// The partial unique index is what makes "one pending interview per account
+/// and wording" true across processes rather than only inside one. The
+/// in-process mutex serializes this server's own queries and says nothing about
+/// a second `codetrial web` on the same database, which is a supported shape.
+/// It is keyed on the wording too, so a version bump takes fresh consent
+/// instead of being blocked by the row it replaces.
+///
+/// `ON DELETE CASCADE` follows `reports`: an account that goes takes its
+/// interviews with it.
+const CREATE_INTERVIEWS: &str = "
+        CREATE TABLE IF NOT EXISTS interviews (
+            id TEXT PRIMARY KEY,
+            account_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            consent_version TEXT NOT NULL,
+            consent_at INTEGER NOT NULL,
+            consent_withdrawn_at INTEGER,
+            room_name TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS interviews_by_account ON interviews(account_id);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS interviews_pending_per_account
+            ON interviews(account_id, consent_version)
+            WHERE room_name IS NULL AND consent_withdrawn_at IS NULL;
+";
+
 /// Every report read and the per-account quota below both filter on `user_id`,
 /// which was a full scan of the table for want of one index.
 const INDEX_REPORTS_BY_USER: &str = "
@@ -378,6 +421,260 @@ pub(crate) fn create_session(
             ),
         )?;
         Ok(session_id)
+    })
+}
+
+/// A career of interviews, bounded. `POST /api/interviews` is an authenticated
+/// write with no other ceiling, and a client that calls it in a loop grows the
+/// database until the disk does not.
+pub const MAX_INTERVIEWS_PER_USER: i64 = 500;
+
+/// One interview, and the consent that allows it to be recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Interview {
+    pub id: String,
+    pub account_id: i64,
+    pub consent_version: String,
+    pub consent_at: i64,
+    pub consent_withdrawn_at: Option<i64>,
+    pub room_name: Option<String>,
+}
+
+/// Records consent and returns the interview it belongs to.
+///
+/// The caller supplies the id so that the value it hands the browser and the
+/// value in the row cannot differ.
+/// Records consent, or hands back the pending interview that already has it.
+///
+/// Reuse rather than a second row, because a reload is not a second consent: it
+/// is the same person, the same wording, and an interview that has not started.
+/// Always inserting meant every refresh and every refused token request spent
+/// one of the account's rows for nothing.
+///
+/// The guarantee stops at the claim, and deliberately: once a token is minted
+/// the interview is bound to a room, so a candidate whose LiveKit connection
+/// then fails does start a fresh interview on reload. That is the right answer,
+/// because the room they were given is not one they can rejoin.
+///
+/// Only a pending interview qualifies: not withdrawn, not already bound to a
+/// room, and agreed to the wording currently being shown. A version bump
+/// therefore takes fresh consent, which is the point of versioning it.
+pub fn create_interview(
+    accounts: &Accounts,
+    id: &str,
+    account_id: i64,
+    consent_version: &str,
+    now: i64,
+) -> rusqlite::Result<Option<Interview>> {
+    accounts.with(|connection| {
+        const PENDING: &str = "
+        SELECT id, consent_at FROM interviews
+        WHERE account_id = ?1
+          AND consent_version = ?2
+          AND consent_withdrawn_at IS NULL
+          AND room_name IS NULL
+        ";
+        let pending = |connection: &rusqlite::Connection| {
+            connection
+                .query_row(PENDING, (account_id, consent_version), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })
+                .map(Some)
+                .or_else(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                    error => Err(error),
+                })
+        };
+
+        // Three, because each retry needs another process to both win the
+        // insert and spend the row before this one can read it. Losing that
+        // race three times running is not a state worth writing more code for.
+        for _ in 0..3 {
+            if let Some((id, consent_at)) = pending(connection)? {
+                return Ok(Some(Interview {
+                    id,
+                    account_id,
+                    consent_version: consent_version.to_string(),
+
+                    // The original time. They consented then, not on the
+                    // reload.
+                    consent_at,
+                    consent_withdrawn_at: None,
+                    room_name: None,
+                }));
+            }
+
+            // The cap bounds the table, not a race: two processes inserting at
+            // once can overshoot it by one, which is a row, and the alternative
+            // is a write lock on every consent.
+            let total: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM interviews WHERE account_id = ?1",
+                [account_id],
+                |row| row.get(0),
+            )?;
+            if total >= MAX_INTERVIEWS_PER_USER {
+                return Ok(None);
+            }
+
+            // `DO NOTHING` rather than an error: another process may have
+            // inserted its own pending row since the read above, and the
+            // candidate should get that interview rather than a constraint
+            // failure. Whether this insert landed is what decides which.
+            let inserted = connection.execute(
+                "
+        INSERT INTO interviews (id, account_id, consent_version, consent_at)
+        VALUES (?1, ?2, ?3, ?4)
+        ON CONFLICT(account_id, consent_version)
+            WHERE room_name IS NULL AND consent_withdrawn_at IS NULL
+            DO NOTHING
+        ",
+                (id, account_id, consent_version, now),
+            )?;
+            if inserted > 0 {
+                return Ok(Some(Interview {
+                    id: id.to_string(),
+                    account_id,
+                    consent_version: consent_version.to_string(),
+                    consent_at: now,
+                    consent_withdrawn_at: None,
+                    room_name: None,
+                }));
+            }
+        }
+
+        // Reported as a failure rather than as `None`, which the caller answers
+        // with "this account is full". Losing the race is not being full, and a
+        // candidate told the wrong thing looks for the wrong fix.
+        Err(rusqlite::Error::QueryReturnedNoRows)
+    })
+}
+
+/// Binds an interview to the one room it authorizes, or refuses.
+///
+/// `false` means the interview is gone, is somebody else's, has had its consent
+/// withdrawn, or has already started a room. One consent is one interview: the
+/// `room_name IS NULL` guard is what makes that true rather than aspirational,
+/// and it is a single statement so two token requests racing on one id cannot
+/// both win.
+///
+/// The consent check is repeated here rather than trusted from the caller's
+/// earlier read. It costs nothing inside a statement that has to run anyway,
+/// and it closes the window between the two.
+pub fn claim_interview_room(
+    accounts: &Accounts,
+    id: &str,
+    account_id: i64,
+    room_name: &str,
+) -> rusqlite::Result<bool> {
+    accounts.with(|connection| {
+        let changed = connection.execute(
+            "
+        UPDATE interviews SET room_name = ?3
+        WHERE id = ?1
+          AND account_id = ?2
+          AND room_name IS NULL
+          AND consent_withdrawn_at IS NULL
+        ",
+            (id, account_id, room_name),
+        )?;
+        Ok(changed > 0)
+    })
+}
+
+/// The interview, only if this account owns it.
+///
+/// Ownership is part of the lookup rather than a check the caller remembers to
+/// make. A missing interview and somebody else's come back the same way on
+/// purpose: the difference is not the caller's business, and answering it
+/// differently is a way to enumerate other people's ids.
+pub fn interview_for_account(
+    accounts: &Accounts,
+    id: &str,
+    account_id: i64,
+) -> rusqlite::Result<Option<Interview>> {
+    accounts.with(|connection| {
+        let mut statement = connection.prepare(
+            "
+        SELECT id, account_id, consent_version, consent_at, consent_withdrawn_at, room_name
+        FROM interviews
+        WHERE id = ?1 AND account_id = ?2
+        ",
+        )?;
+        let mut rows = statement.query((id, account_id))?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(Interview {
+            id: row.get(0)?,
+            account_id: row.get(1)?,
+            consent_version: row.get(2)?,
+            consent_at: row.get(3)?,
+            consent_withdrawn_at: row.get(4)?,
+            room_name: row.get(5)?,
+        }))
+    })
+}
+
+/// Gives a claimed room back.
+///
+/// The claim is spent before the interviewer is dispatched, so that two
+/// requests racing on one interview cannot both start a room. A dispatcher that
+/// refuses then leaves a consent bound to a room nobody will join, and the
+/// candidate is told to retry a request that would be refused. This is that
+/// retry working.
+///
+/// Guarded on the room it is giving back, so a release arriving late cannot
+/// unbind a room some other request has since claimed.
+///
+/// The ceiling: a process that dies between the claim and the release leaves
+/// the interview bound to a room that never ran, and the candidate has to
+/// reload. That is one page reload against a lock nobody can take back, which
+/// is the trade a crash-safe reservation would be bought with.
+pub fn release_interview_room(
+    accounts: &Accounts,
+    id: &str,
+    account_id: i64,
+    room_name: &str,
+) -> rusqlite::Result<()> {
+    accounts.with(|connection| {
+        connection.execute(
+            "
+        UPDATE interviews SET room_name = NULL
+        WHERE id = ?1 AND account_id = ?2 AND room_name = ?3
+        ",
+            (id, account_id, room_name),
+        )?;
+        Ok(())
+    })
+}
+
+/// Marks consent withdrawn, once.
+///
+/// Idempotent by construction: `COALESCE` keeps the first timestamp, which is
+/// the one that matters, and `RETURNING` answers whether the interview exists
+/// and belongs to this account rather than whether a row changed. One statement
+/// rather than an update and a count, so there is no interleaving to reason
+/// about at all.
+pub fn withdraw_consent(
+    accounts: &Accounts,
+    id: &str,
+    account_id: i64,
+    now: i64,
+) -> rusqlite::Result<bool> {
+    accounts.with(|connection| {
+        match connection.query_row(
+            "
+        UPDATE interviews SET consent_withdrawn_at = COALESCE(consent_withdrawn_at, ?3)
+        WHERE id = ?1 AND account_id = ?2
+        RETURNING consent_withdrawn_at
+        ",
+            (id, account_id, now),
+            |row| row.get::<_, i64>(0),
+        ) {
+            Ok(_) => Ok(true),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+            Err(error) => Err(error),
+        }
     })
 }
 
@@ -759,6 +1056,11 @@ mod migration_tests {
     /// is worth naming.
     fn rewind_to(path: &Path, version: i64) {
         let connection = rusqlite::Connection::open(path).unwrap();
+        if version < 5 {
+            connection
+                .execute_batch("DROP TABLE IF EXISTS interviews;")
+                .unwrap();
+        }
         if version < 4 {
             connection
                 .execute_batch(
@@ -967,7 +1269,10 @@ mod migration_tests {
         initialize_account_database(&path).unwrap();
 
         assert_eq!(user_version(&path), ACCOUNT_SCHEMA_VERSION);
-        assert_eq!(tables(&path), vec!["reports", "sessions", "users"]);
+        assert_eq!(
+            tables(&path),
+            vec!["interviews", "reports", "sessions", "users"]
+        );
     }
 
     /// The case that matters when a second migration is appended: startup runs

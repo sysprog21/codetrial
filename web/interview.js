@@ -54,6 +54,17 @@ let codePublishTimer = null;
 const CODE_PUBLISH_DEBOUNCE_MS = 300;
 const AUDIO_OUTPUT_KEY = "codetrial:audioOutputId";
 const MEET_PRESENTATION_KEY = "codetrial:meetPresentation";
+
+// From /runtime-config.js, which is the only thing allowed to name what the
+// server does. A literal here would be a second answer to "does this server
+// record", and the wrong one would show a candidate no notice.
+const recordingEnabled = globalThis.CODETRIAL_RECORDING_ENABLED === true;
+const consentVersion = globalThis.CODETRIAL_CONSENT_VERSION || "";
+
+/// Whether the recording notice has been agreed to, or does not apply.
+function consentGiven() {
+  return !recordingEnabled || nodes.recordingConsent.checked;
+}
 const INTEGRITY_HEARTBEAT_MS = 5000;
 const params = new URLSearchParams(window.location.search);
 // Start this independent request while the problem data is loading. It has to
@@ -92,6 +103,10 @@ const state = {
   report: null,
   room: null,
   connected: false,
+  /// The consent this interview is running under, `null` where the server
+  /// records nothing. The withdrawal button needs it and has nowhere else to
+  /// read it from.
+  interviewId: null,
   micEnabled: true,
   localUserStream: null,
   integrityChain: { seq: 0, hash: "" },
@@ -126,6 +141,7 @@ const nodes = {
 
   mic: document.querySelector("#mic"),
   end: document.querySelector("#end"),
+  withdrawConsent: document.querySelector("#withdraw-consent"),
   editor: document.querySelector("#editor"),
   editorHighlight: document.querySelector("#editor-highlight"),
   compileDisclosure: document.querySelector(".compile-disclosure"),
@@ -152,6 +168,8 @@ const nodes = {
   cameraIntegrityVideo: document.querySelector("#camera-integrity-video"),
   audioJoin: document.querySelector("#audio-check-join"),
   meetPresentation: document.querySelector("#meet-presentation"),
+  recordingConsentStep: document.querySelector("#recording-consent-step"),
+  recordingConsent: document.querySelector("#recording-consent"),
   meetMode: document.querySelector("#meet-mode"),
   meetOutputRow: document.querySelector("#meet-output-row"),
   meetOutputSelect: document.querySelector("#meet-output-select"),
@@ -235,6 +253,7 @@ function bindEvents() {
   nodes.transcriptTab.addEventListener("click", () => selectTab("transcript"));
   nodes.mic.addEventListener("click", toggleMicrophone);
   nodes.end.addEventListener("click", () => endInterview("candidate_ended"));
+  nodes.withdrawConsent.addEventListener("click", withdrawRecordingConsent);
   nodes.forceReport.addEventListener("click", showReport);
   nodes.leaveRoom.addEventListener("click", leaveRoom);
   nodes.run.addEventListener("click", runTests);
@@ -359,17 +378,22 @@ function runAudioCheck() {
       nodes.audioStepCamera.classList.toggle("done", state.steps.camera);
       nodes.audioHeard.disabled = state.steps.output;
       nodes.audioHeard.textContent = state.steps.output ? "Confirmed" : "I heard it";
-      nodes.audioJoin.disabled = !state.ready;
+      // Consent is a separate gate from media readiness on purpose. It is not
+      // a device that can be proven, it is an answer, and folding it into
+      // `mediaReadiness` would put a legal question inside the function that
+      // decides whether a microphone works.
+      const ready = state.ready && consentGiven();
+      nodes.audioJoin.disabled = !ready;
 
       // refresh() runs on every animation frame from the meter, so hand over
       // once on the transition rather than stealing focus continuously. The
       // button the candidate just used is now disabled, so focus would
       // otherwise fall back to the document body.
-      if (state.ready && !advanced) {
+      if (ready && !advanced) {
         advanced = true;
         nodes.audioJoin.classList.add("ready");
         nodes.audioJoin.focus();
-      } else if (!state.ready && advanced) {
+      } else if (!ready && advanced) {
         advanced = false;
         nodes.audioJoin.classList.remove("ready");
       }
@@ -460,6 +484,12 @@ function runAudioCheck() {
 
     nodes.audioJoin.addEventListener("click", finish);
 
+    // Shown only where the server records. A consent step on a server that
+    // records nothing asks for permission nobody needs and teaches candidates
+    // to click past it.
+    nodes.recordingConsentStep.hidden = !recordingEnabled;
+    nodes.recordingConsent.addEventListener("change", refresh);
+
     const watchMic = () =>
       startMediaMeter(
         userStream,
@@ -540,10 +570,21 @@ async function startMediaMeter(stream, onPeak, onError, shouldStop) {
 async function connect(preflight, presenting = false) {
   setAgentStateLabel("Connecting...");
   try {
+    // Before the token, because the token is what precedes an Egress call. The
+    // server refuses a recorded room without this row, so the ordering is
+    // enforced there rather than resting on this line staying above the next
+    // one.
+    // The gate the Start button enforces, restated where it is load bearing.
+    // The button is UI; this is the function that actually asks the server to
+    // write consent down, and it must not be reachable without one.
+    if (!consentGiven()) throw new Error("Agree to the recording notice before starting.");
+    const interviewId = await recordConsent();
+    state.interviewId = interviewId;
+    if (interviewId) nodes.withdrawConsent.hidden = false;
     const response = await fetch("/api/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ problemId: problem.id, durationMin }),
+      body: JSON.stringify({ problemId: problem.id, durationMin, interviewId }),
     });
     if (!response.ok) throw new Error((await response.json()).error || "Failed to create a session.");
     const connection = await response.json();
@@ -575,6 +616,58 @@ async function connect(preflight, presenting = false) {
   }
 }
 
+
+/// Takes consent back, mid-interview.
+///
+/// No confirmation step. Stopping a recording is the safe direction of a
+/// misclick, because the other one cannot be undone, and a candidate reaching
+/// for this button is not in a mood to be asked twice.
+///
+/// The button does not come back. Consent that was withdrawn stays withdrawn:
+/// re-agreeing would be a new interview, and this page is already in one.
+async function withdrawRecordingConsent() {
+  if (!state.interviewId) return;
+  nodes.withdrawConsent.disabled = true;
+  try {
+    const response = await fetch(`/api/interviews/${encodeURIComponent(state.interviewId)}/consent`, {
+      method: "DELETE",
+    });
+    if (!response.ok) throw new Error("The server did not accept the request.");
+    // "Requested", not "stopped". This route records the withdrawal; stopping
+    // the provider and scheduling the deletion is the recording lifecycle's
+    // work, and a button that reports a completed action it did not perform is
+    // the worst possible place to be optimistic.
+    nodes.withdrawConsent.textContent = "Recording stop requested";
+    addTranscript("interviewer", "Your withdrawal is recorded. Recording will stop and the file is scheduled for deletion. Copies anyone already downloaded cannot be recalled.", true);
+  } catch (error) {
+    console.warn("codetrial withdraw_consent_failed", error);
+    nodes.withdrawConsent.disabled = false;
+    setBanner("connection", "Could not stop the recording. Try again, or end the interview.");
+  }
+}
+
+/// Writes down what the candidate agreed to, and returns the interview id the
+/// token request then has to carry.
+///
+/// `null` where the server records nothing: there is no consent to take, and
+/// the token endpoint ignores the field.
+///
+/// A failure throws into `connect`'s catch, which is the right place: an
+/// interview that cannot record consent must not start, and the candidate gets
+/// the server's own sentence plus the offline practice editor rather than a
+/// recording nobody agreed to.
+async function recordConsent() {
+  if (!recordingEnabled) return null;
+  const response = await fetch("/api/interviews", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ consentVersion }),
+  });
+  if (!response.ok) {
+    throw new Error((await response.json())?.error || "Could not record your recording consent.");
+  }
+  return (await response.json()).interviewId;
+}
 
 /// `presenting` is threaded through explicitly. It was read here while only
 /// `connect` had it in scope, so every single interview threw

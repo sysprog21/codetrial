@@ -29,6 +29,10 @@
           <div class="control-row">
             <button id="mic" class="pill-button" type="button">Mic on</button>
             <button id="end" class="pill-button danger" type="button">End interview</button>
+            <!-- The notice promises a candidate can withdraw during the
+                 interview, so there has to be something to withdraw with.
+                 Hidden unless this server records. -->
+            <button id="withdraw-consent" class="pill-button danger" type="button" hidden>Stop recording</button>
           </div>
 
           <!-- Meet is a presentation channel, not CodeTrial's audio transport:
@@ -152,6 +156,27 @@
               CodeTrial hands the camera to Meet after this check and stops watching it, so
               camera integrity is off for this interview and the report says so. Your microphone
               stays with CodeTrial.
+            </p>
+          </div>
+
+          <!-- Hidden unless the server says it records. Shown here rather than
+               in the sidebar for the same reason the Meet checkbox is: it has
+               to be settled before the room starts, because consent is written
+               down before any recording can begin. -->
+          <div class="audio-check-step" id="recording-consent-step" hidden>
+            <p>
+              <label for="recording-consent">
+                <input type="checkbox" id="recording-consent">
+                I agree to this interview being recorded
+              </label>
+            </p>
+            <p id="recording-consent-disclosure" class="muted small">
+              Your camera, microphone, and this page are recorded to one video file. It is
+              shared with the verified email address on your GitHub account, as a read-only
+              link, and both the link and the file are deleted 24 hours later. You can withdraw
+              consent during the interview: recording stops and the file is scheduled for
+              deletion. Anything already downloaded by someone who had the link is outside
+              CodeTrial's control and cannot be recalled.
             </p>
           </div>
 
