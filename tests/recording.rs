@@ -2089,7 +2089,8 @@ mod replay {
         use codetrial::accounts::{Accounts, GitHubLoginConfig};
         use codetrial::recording::{
             Ingest, MAX_REPLAY_EVENT_BYTES, MAX_REPLAY_EVENTS, MAX_REPLAY_STRING, ReplayKind,
-            ReplayRejection, append_replay_events, parse_replay_event, replay_events,
+            ReplayRejection, SnapshotView, append_replay_events, parse_replay_event, replay_events,
+            replay_snapshot,
         };
         use serde_json::json;
 
@@ -2201,6 +2202,153 @@ mod replay {
             assert_eq!(
                 replay_events(&accounts, "int-other", 2, -1).unwrap().len(),
                 1
+            );
+        }
+
+        #[tokio::test]
+        async fn replay_snapshot_reconstructs() {
+            let (_scratch, accounts) = harness("snapshot-reconstructs");
+
+            // Two editor snapshots and two transcript lines. The first editor
+            // snapshot is superseded; neither transcript line is, because a
+            // transcript accumulates.
+            append_replay_events(
+                &accounts,
+                "int-1",
+                1,
+                &[
+                    event(ReplayKind::Editor, "first draft"),
+                    event(ReplayKind::Transcript, "hello"),
+                    event(ReplayKind::Editor, "second draft"),
+                    event(ReplayKind::Transcript, "how are you"),
+                ],
+                10,
+            )
+            .unwrap();
+
+            let SnapshotView::Ready(snapshot) =
+                replay_snapshot(&accounts, "int-1", 1, 100).unwrap()
+            else {
+                panic!("the owner reads their own replay");
+            };
+            assert_eq!(snapshot.seq, 3);
+            assert!(!snapshot.quota_exceeded);
+            assert_eq!(
+                snapshot
+                    .events
+                    .iter()
+                    .map(|(seq, event)| (*seq, event.kind, event.payload["text"].as_str().unwrap()))
+                    .collect::<Vec<_>>(),
+                vec![
+                    (1, ReplayKind::Transcript, "hello"),
+                    (2, ReplayKind::Editor, "second draft"),
+                    (3, ReplayKind::Transcript, "how are you"),
+                ],
+                "the superseded editor snapshot is dropped and nothing else is"
+            );
+
+            // A late join carries on from `seq`, and what happens next is only
+            // in the events.
+            append_replay_events(
+                &accounts,
+                "int-1",
+                1,
+                &[event(ReplayKind::Transcript, "fine thanks")],
+                11,
+            )
+            .unwrap();
+            let after = replay_events(&accounts, "int-1", 1, snapshot.seq).unwrap();
+            assert_eq!(
+                after
+                    .iter()
+                    .map(|(seq, event)| (*seq, event.payload["text"].as_str().unwrap()))
+                    .collect::<Vec<_>>(),
+                vec![(4, "fine thanks")],
+                "no overlap with the snapshot and no gap after it"
+            );
+        }
+
+        #[tokio::test]
+        async fn replay_snapshot_cross_account_denied() {
+            let (_scratch, accounts) = harness("snapshot-cross-account");
+            append_replay_events(
+                &accounts,
+                "int-other",
+                2,
+                &[event(ReplayKind::Transcript, "theirs")],
+                10,
+            )
+            .unwrap();
+
+            assert_eq!(
+                replay_snapshot(&accounts, "int-other", 1, 100).unwrap(),
+                SnapshotView::NoInterview,
+                "an account that does not own an interview does not learn it exists"
+            );
+            assert!(matches!(
+                replay_snapshot(&accounts, "int-other", 2, 100).unwrap(),
+                SnapshotView::Ready(_)
+            ));
+
+            // Withdrawal closes the replay in both directions. A replay nobody
+            // may add to is not one to keep handing out either.
+            codetrial::accounts::withdraw_consent(&accounts, "int-other", 2, 50).unwrap();
+            assert_eq!(
+                replay_snapshot(&accounts, "int-other", 2, 100).unwrap(),
+                SnapshotView::NoInterview
+            );
+        }
+
+        #[tokio::test]
+        async fn replay_snapshot_expired() {
+            let (scratch, accounts) = harness("snapshot-expired");
+            append_replay_events(
+                &accounts,
+                "int-1",
+                1,
+                &[event(ReplayKind::Transcript, "mine")],
+                10,
+            )
+            .unwrap();
+            scratch
+                .open()
+                .execute(
+                    "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, expires_at, created_at, updated_at
+        ) VALUES ('rec-1', 1, 'int-1', 'interview-abc12345', 'int-1',
+            'one@example.test', 'ready', 100, 1, 1)
+        ",
+                    [],
+                )
+                .unwrap();
+
+            assert!(matches!(
+                replay_snapshot(&accounts, "int-1", 1, 99).unwrap(),
+                SnapshotView::Ready(_)
+            ));
+            assert_eq!(
+                replay_snapshot(&accounts, "int-1", 1, 100).unwrap(),
+                SnapshotView::Expired,
+                "the deadline is the deadline, whether or not the sweeper has run"
+            );
+
+            // Deleted is its own answer, because the media is gone rather than
+            // out of reach.
+            scratch
+                .open()
+                .execute(
+                    "
+        UPDATE recordings SET state = 'deleted', deleted_at = 90, expires_at = NULL,
+            room_name = NULL, recipient_email = NULL WHERE id = 'rec-1'
+        ",
+                    [],
+                )
+                .unwrap();
+            assert_eq!(
+                replay_snapshot(&accounts, "int-1", 1, 50).unwrap(),
+                SnapshotView::Deleted
             );
         }
 

@@ -4141,6 +4141,7 @@ fn router_routes_match_a_fixed_allowlist() {
         "/api/interviews/{id}/recording",
         "/api/interviews/{id}/end",
         "/api/interviews/{id}/events",
+        "/api/interviews/{id}/snapshot",
         "/api/recording/webhook",
     ];
     allowed.sort_unstable();
@@ -4655,6 +4656,113 @@ async fn replay_events_are_owner_scoped() {
         stored_after, 3,
         "the two stored above plus the synthetic quota row, and nothing after the withdrawal"
     );
+
+    server.abort();
+    remove_database(path);
+}
+
+/// A late join reads the snapshot, and only its own.
+#[tokio::test]
+async fn replay_snapshot_is_owner_scoped() {
+    let (base, server, path, client, cookie) = recorded_server("replay-snapshot").await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    let event = |kind: &str, text: &str| {
+        json!({
+            "v": codetrial::recording::REPLAY_VERSION,
+            "kind": kind,
+            "at": 1_770_000_000_000i64,
+            "payload": { "text": text }
+        })
+    };
+    let posted = client
+        .post(format!("{base}/api/interviews/{interview}/events"))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "events": [
+            event("editor", "first draft"),
+            event("transcript", "hello"),
+            event("editor", "second draft"),
+        ] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(posted.status(), 200);
+
+    let snapshot = client
+        .get(format!("{base}/api/interviews/{interview}/snapshot"))
+        .header("cookie", cookie.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(snapshot.status(), 200);
+    let body = snapshot.json::<Value>().await.unwrap();
+    assert_eq!(body["seq"], 2, "the last event the snapshot accounts for");
+    assert_eq!(body["quotaExceeded"], false);
+    assert_eq!(
+        body["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| (
+                event["seq"].as_i64().unwrap(),
+                event["kind"].as_str().unwrap()
+            ))
+            .collect::<Vec<_>>(),
+        vec![(1, "transcript"), (2, "editor")],
+        "the superseded editor snapshot is dropped and the transcript line is not"
+    );
+
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO users (id, github_id, login, email, email_verified, created_at, updated_at)
+                   VALUES (2, 202, 'two', 'two@example.test', 1, 1, 1);
+                 INSERT INTO interviews (id, account_id, consent_version, consent_at)
+                   VALUES ('int-theirs', 2, '2026-08-21', 1);",
+            )
+            .unwrap();
+    }
+    let theirs = client
+        .get(format!("{base}/api/interviews/int-theirs/snapshot"))
+        .header("cookie", cookie.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(theirs.status(), 404);
+
+    // Past the retention deadline the replay is gone rather than missing: this
+    // account owns the interview and is owed the difference.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, expires_at, created_at, updated_at
+        ) VALUES ('rec-snap', 1, ?1, 'interview-abc12345', ?1,
+            'one@example.test', 'ready', 1, 1, 1)
+        ",
+            [&interview],
+        )
+        .unwrap();
+    let expired = client
+        .get(format!("{base}/api/interviews/{interview}/snapshot"))
+        .header("cookie", cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(expired.status(), 410);
+    assert_eq!(
+        expired.json::<Value>().await.unwrap()["code"],
+        "replay_expired"
+    );
+
+    let signed_out = client
+        .get(format!("{base}/api/interviews/{interview}/snapshot"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(signed_out.status(), 401);
 
     server.abort();
     remove_database(path);

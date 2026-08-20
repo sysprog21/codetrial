@@ -358,6 +358,10 @@ fn web_router(
         .route("/api/interviews/{id}/end", post(end_interview_handler))
         .route("/api/interviews/{id}/events", post(replay_events_handler))
         .route(
+            "/api/interviews/{id}/snapshot",
+            get(replay_snapshot_handler),
+        )
+        .route(
             crate::recording::WEBHOOK_ROUTE,
             post(recording_webhook_handler),
         )
@@ -2731,6 +2735,75 @@ async fn replay_events_handler(
             json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({ "error": "Could not store the replay." }),
+            )
+        }
+    }
+}
+
+/// Where a late join starts.
+///
+/// The snapshot is the replay with the superseded frames dropped, and `seq` is
+/// where the caller carries on from. Nothing is stored to produce it and there
+/// is no cadence to configure.
+async fn replay_snapshot_handler(
+    State(state): State<AppState>,
+    UriPath(interview_id): UriPath<String>,
+    request: Request<Body>,
+) -> Response {
+    use crate::recording::SnapshotView;
+
+    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+    let missing = || {
+        json_response(
+            StatusCode::NOT_FOUND,
+            json!({ "code": "recording_not_found", "error": "No replay for that interview." }),
+        )
+    };
+    if state.recorder.is_none() {
+        return missing();
+    }
+    let now = current_epoch_seconds() as i64;
+    let view =
+        blocking(move || crate::recording::replay_snapshot(&accounts, &interview_id, user.id, now))
+            .await;
+    match view {
+        Ok(SnapshotView::Ready(snapshot)) => json_response(
+            StatusCode::OK,
+            json!({
+                "seq": snapshot.seq,
+                "quotaExceeded": snapshot.quota_exceeded,
+                "events": snapshot
+                    .events
+                    .iter()
+                    .map(|(seq, event)| json!({
+                        "seq": seq,
+                        "kind": event.kind.as_str(),
+                        "at": event.at,
+                        "payload": event.payload,
+                    }))
+                    .collect::<Vec<_>>(),
+            }),
+        ),
+
+        // Gone rather than not-found: this account owns the interview and is
+        // owed the difference between "never yours" and "not any more".
+        Ok(SnapshotView::Expired) => json_response(
+            StatusCode::GONE,
+            json!({ "code": "replay_expired", "error": "This replay is past its retention deadline." }),
+        ),
+        Ok(SnapshotView::Deleted) => json_response(
+            StatusCode::GONE,
+            json!({ "code": "recording_deleted", "error": "This recording has been deleted." }),
+        ),
+        Ok(SnapshotView::NoInterview) => missing(),
+        Err(error) => {
+            eprintln!("could not read a replay snapshot: {error}");
+            json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "Could not read the replay." }),
             )
         }
     }

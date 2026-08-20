@@ -2658,12 +2658,15 @@ pub enum Ingest {
 /// The quota is checked once, before the batch. Checking per event would let a
 /// batch straddle the limit and store half of itself, and half a batch is a
 /// replay with a hole in it.
-/// Whether this account may still write to this interview.
+/// Whether this account's replay of this interview is still open, in either
+/// direction.
 ///
 /// Withdrawn consent closes it. A browser that buffered events before the
 /// withdrawal will try to flush them afterwards, and consent that stops the
-/// video while the replay keeps growing is not withdrawal.
-fn ingestible(
+/// video while the replay keeps growing is not withdrawal. One predicate for
+/// reads and writes both, because a replay nobody may add to is not one to keep
+/// handing out either.
+fn replay_open(
     connection: &rusqlite::Connection,
     interview_id: &str,
     account_id: i64,
@@ -2696,7 +2699,7 @@ pub fn append_replay_events(
         // by posting batches for interview ids they guessed. The check inside
         // the transaction below is still the authority; this one only keeps a
         // stranger out of the lock queue.
-        if !ingestible(connection, interview_id, account_id)? {
+        if !replay_open(connection, interview_id, account_id)? {
             return Ok(Ingest::NoInterview);
         }
 
@@ -2711,7 +2714,7 @@ pub fn append_replay_events(
             connection,
             rusqlite::TransactionBehavior::Immediate,
         )?;
-        if !ingestible(&transaction, interview_id, account_id)? {
+        if !replay_open(&transaction, interview_id, account_id)? {
             return Ok(Ingest::NoInterview);
         }
 
@@ -2785,6 +2788,138 @@ pub fn append_replay_events(
     })
 }
 
+fn row_to_replay_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, ReplayEvent)> {
+    let kind: String = row.get(1)?;
+    let payload: String = row.get(3)?;
+    Ok((
+        row.get::<_, i64>(0)?,
+        ReplayEvent {
+            // A row the table's own `CHECK` allows and this binary does not is
+            // a producer from a later deploy. It comes back as `Lifecycle`
+            // rather than taking the read down.
+            kind: ReplayKind::parse(&kind).unwrap_or(ReplayKind::Lifecycle),
+            at: row.get(2)?,
+            payload: serde_json::from_str(&payload).unwrap_or(Value::Null),
+        },
+    ))
+}
+
+/// What a late join needs before it starts reading events.
+///
+/// Not a stored thing and not a cadence. The four replaceable kinds already are
+/// the snapshot: the newest of each is the whole state of that kind, so a
+/// snapshot is the replay with the superseded frames dropped, computed at the
+/// read. A periodic snapshot written to a second table would be a copy that can
+/// disagree with the events it was made from, and nothing needs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Snapshot {
+    /// The last event this snapshot accounts for. Read events after it and
+    /// concatenate: that is the whole reconstruction rule.
+    pub seq: i64,
+    pub events: Vec<(i64, ReplayEvent)>,
+    /// The replay stopped growing at a ceiling, so its tail is missing. The
+    /// person reading it should be told, not left to wonder.
+    pub quota_exceeded: bool,
+}
+
+/// A snapshot, or the reason there is not one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnapshotView {
+    Ready(Snapshot),
+    /// Past the retention deadline. The media is going or gone, and the replay
+    /// is not served past the life of the thing it describes.
+    Expired,
+    /// The recording has been deleted.
+    Deleted,
+    /// No such interview, not this account's, or consent withdrawn.
+    NoInterview,
+}
+
+/// The replay of one interview, minus what has been superseded.
+///
+/// Read inside one transaction, so the ceiling and the rows under it are the
+/// same moment: a writer landing between two statements would otherwise put an
+/// event in the snapshot that the caller is about to ask for again.
+pub fn replay_snapshot(
+    accounts: &Accounts,
+    interview_id: &str,
+    account_id: i64,
+    now: i64,
+) -> rusqlite::Result<SnapshotView> {
+    accounts.with(|connection| {
+        let transaction = connection.unchecked_transaction()?;
+        if !replay_open(&transaction, interview_id, account_id)? {
+            return Ok(SnapshotView::NoInterview);
+        }
+
+        // No recording row is not a refusal: an interview whose recording never
+        // started still has a replay, and it is this account's to read.
+        let recording: Option<(String, Option<i64>, i64)> = transaction
+            .query_row(
+                "
+        SELECT state, expires_at, quota_exceeded FROM recordings
+        WHERE interview_id = ?1 AND account_id = ?2
+        ",
+                (interview_id, account_id),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map(Some)
+            .or_else(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                error => Err(error),
+            })?;
+        let mut quota_exceeded = false;
+        if let Some((state, expires_at, quota)) = recording {
+            quota_exceeded = quota != 0;
+            if RecordingState::parse(&state) == Some(RecordingState::Deleted) {
+                return Ok(SnapshotView::Deleted);
+            }
+
+            // Expiry is read here and written by the retention sweeper. A
+            // deadline that has passed is a refusal whether or not the sweeper
+            // has run yet, because the link outliving the file is the failure
+            // this check exists for.
+            if expires_at.is_some_and(|expires_at| expires_at <= now) {
+                return Ok(SnapshotView::Expired);
+            }
+        }
+
+        let seq: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(seq), -1) FROM replay_events WHERE interview_id = ?1",
+            [interview_id],
+            |row| row.get(0),
+        )?;
+        let superseded = ReplayKind::ALL
+            .iter()
+            .filter(|kind| kind.is_snapshot())
+            .map(|kind| format!("'{}'", kind.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut statement = transaction.prepare(&format!(
+            "
+        SELECT seq, kind, at, payload FROM replay_events
+        WHERE interview_id = ?1 AND seq <= ?2
+          AND (kind NOT IN ({superseded})
+               OR seq = (SELECT MAX(seq) FROM replay_events newer
+                         WHERE newer.interview_id = ?1
+                           AND newer.kind = replay_events.kind
+                           AND newer.seq <= ?2))
+        ORDER BY seq
+        "
+        ))?;
+        let events = statement
+            .query_map((interview_id, seq), row_to_replay_event)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        transaction.commit()?;
+        Ok(SnapshotView::Ready(Snapshot {
+            seq,
+            events,
+            quota_exceeded,
+        }))
+    })
+}
+
 /// Every event of an interview, in the order they were allocated.
 pub fn replay_events(
     accounts: &Accounts,
@@ -2804,21 +2939,7 @@ pub fn replay_events(
         ",
         )?;
         let rows = statement
-            .query_map((interview_id, after, account_id), |row| {
-                let kind: String = row.get(1)?;
-                let payload: String = row.get(3)?;
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    ReplayEvent {
-                        // A row the table's own `CHECK` allows and this binary
-                        // does not is a producer from a later deploy. It comes
-                        // back as `Lifecycle` rather than taking the read down.
-                        kind: ReplayKind::parse(&kind).unwrap_or(ReplayKind::Lifecycle),
-                        at: row.get(2)?,
-                        payload: serde_json::from_str(&payload).unwrap_or(Value::Null),
-                    },
-                ))
-            })?
+            .query_map((interview_id, after, account_id), row_to_replay_event)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     })
