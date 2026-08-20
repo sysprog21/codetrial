@@ -82,8 +82,15 @@ jobs:
       # playwright version, and the version is what decides which build of
       # Chromium lands in this directory.
       #
-      # `npm ci` itself is not cached: package.json has one devDependency, so a
-      # cache round trip would cost about what the install does.
+      # The install itself is not cached. It is 90 packages now that eslint is
+      # here, but they are small and pure JavaScript, and the step runs in
+      # seconds against a cargo build that runs in minutes. A cache round trip
+      # would not show up next to that.
+      #
+      # `npm ci`, not `npm install`: eslint's transitive dependencies are caret
+      # ranges, so an install resolves them fresh on every run and the gate that
+      # passed yesterday is not the gate running today. The exact pins in
+      # package.json only cover the three direct dependencies.
       - name: Cache Chromium
         uses: actions/cache@v6
         with:
@@ -102,3 +109,17 @@ jobs:
 
       - name: Run gates
         run: ./scripts/test.sh
+
+      # Its own step, not part of `cargo test`. It drives a real browser through
+      # the offline interview and is hermetic now, with the Compiler Explorer
+      # calls intercepted, but it still fails on a two minute navigation timeout
+      # when the machine is busy: `cargo test` is what people run while doing
+      # something else, and a gate that goes red for being run at a bad moment
+      # teaches everyone to ignore red. A dedicated runner has no such
+      # contention, so this is where it can be trusted.
+      #
+      # browser-check.sh exits 3 when Playwright is missing and the test skips
+      # on that. Chromium is installed above, so a skip here means the install
+      # step silently did nothing and is worth chasing.
+      - name: Run the browser interview check
+        run: cargo test --locked --test web -- --ignored browser_check_accepts_running_rust_server_offline_interview

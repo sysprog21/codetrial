@@ -6,6 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  captionWindow,
   TIME_WARNING_S,
   acceptsReport,
   checkAnswer,
@@ -501,4 +502,63 @@ test("the offline decision follows the test cases and speaking follows the turns
   // No tests run at all is not a zero, which would read as a failed attempt.
   assert.equal(at(0, 0, 2).codingScore, 40);
   assert.match(at(0, 0, 2).summary, /ended before tests were run/);
+});
+
+test("the caption window opens at a sentence boundary, never mid-word", () => {
+  const budget = 40;
+  const said = "I am Jim. We will do Two Sum today. Which language would you like?";
+
+  assert.equal(captionWindow("I am Jim.", budget), "I am Jim.");
+  assert.equal(captionWindow(said, budget), "Which language would you like?");
+
+  // The invariant a character tail breaks. Replay the turn one fragment at a
+  // time, the way transcript updates actually arrive, and every window has to
+  // be a suffix that starts where a word starts. `...${text.slice(-n)}` fails
+  // this on almost every fragment, which is what made the bar unreadable: the
+  // opening of the line kept shifting by a character while it was being read.
+  for (let end = 1; end <= said.length; end += 1) {
+    // trimEnd because the window is trimmed: a fragment that arrives with a
+    // trailing space must not read as the window having invented one.
+    const grown = said.slice(0, end).trimEnd();
+    const window = captionWindow(grown, budget);
+    assert.ok(window.length <= budget, `${window.length} > ${budget}: ${window}`);
+    assert.ok(!window.startsWith("..."), `slid by character at ${end}: ${window}`);
+    assert.ok(grown.endsWith(window), `not a suffix at ${end}: ${window}`);
+    const before = grown[grown.length - window.length - 1];
+    assert.ok(
+      before === undefined || /\s/.test(before),
+      `opened mid-word at ${end}: ...${before}|${window}`,
+    );
+  }
+
+  // Budgets too small for the ellipsis drop it rather than overrun. Nothing
+  // calls it this way today, but a function that silently exceeds the one
+  // number it is given is a bad neighbour, and `slice(-0)` returning the whole
+  // string makes zero its own case.
+  for (const tiny of [0, 1, 2, 3, 4]) {
+    const out = captionWindow("a".repeat(50), tiny);
+    assert.ok(out.length <= tiny, `maxChars=${tiny} produced ${out.length}`);
+  }
+
+  // No boundary anywhere to fall back on: still shows the tail, because an
+  // empty caption bar is worse than one that starts mid-word. The ellipsis is
+  // rendered, so it counts against the budget rather than being bolted on
+  // outside it: this used to return three characters more than it was given.
+  const fallback = captionWindow("a".repeat(200), budget);
+  assert.ok(fallback.startsWith("..."), fallback);
+  assert.ok(fallback.length <= budget, `${fallback.length} > ${budget}`);
+
+  // A decimal is not a sentence boundary, or the window opens mid-number.
+  const decimal = `${"x".repeat(50)}. It runs in 3.14 seconds flat.`;
+  assert.equal(captionWindow(decimal, budget), "It runs in 3.14 seconds flat.");
+
+  // The boundary at the very end of the text opens a sentence with nothing in
+  // it. Taking it blanked the bar the moment a long line was finished, which is
+  // when there is most to read, and the trailing space is why the loop above
+  // never sees this.
+  for (const finished of [`${"x".repeat(50)}. `, `${"x".repeat(50)}...`]) {
+    const window = captionWindow(finished, budget);
+    assert.ok(window.trim().length > 0, `blanked the bar on ${JSON.stringify(finished)}`);
+    assert.ok(window.length <= budget, `${window.length} > ${budget}`);
+  }
 });

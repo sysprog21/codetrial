@@ -448,3 +448,52 @@ function offlineReport({ passed, total, candidateTurns }) {
     hintsUsed: 0,
   };
 }
+
+/// Where each sentence begins. A terminator only ends a sentence when
+/// whitespace follows it, so "3.14" and "e.g." stay in one piece. Written as a
+/// scan rather than a regex because the regex that expresses this needs
+/// lookbehind, which is exactly the kind of thing Safari has been late to.
+function sentenceStarts(text) {
+  const starts = [0];
+  for (let i = 0; i < text.length - 1; i += 1) {
+    if (!".!?".includes(text[i])) continue;
+    // "?!" and "..." are one boundary, not two or three.
+    let end = i;
+    while (end + 1 < text.length && ".!?".includes(text[end + 1])) end += 1;
+    if (/\s/.test(text[end + 1] ?? " ")) starts.push(end + 1);
+    i = end;
+  }
+  return starts;
+}
+
+/// The caption bar holds one line, so a long turn has to be trimmed. Trimming
+/// to the last N characters is what made it unreadable: the window slid by a
+/// character on every transcript fragment, so the start of the sentence being
+/// read walked off the left edge while it was being read. Measured against the
+/// audio the caption was within 50ms, so the complaint was never about sync.
+///
+/// Sentences instead. The window holds the most recent whole sentences that
+/// fit, so it stays still while a sentence is being spoken and jumps once when
+/// the next one starts. A single sentence longer than the budget falls back to
+/// a character tail, because an empty caption bar is worse than one that opens
+/// mid-word. The ellipsis comes out of the budget rather than being added on
+/// top of it: this is the one line the bar has.
+export function captionWindow(text, maxChars) {
+  if (text.length <= maxChars) return text;
+  // Ascending, so the first start that fits is also the one keeping the most
+  // sentences.
+  for (const start of sentenceStarts(text)) {
+    const rest = text.slice(start).trim();
+    // A terminator at the very end of the text opens a sentence that has no
+    // words in it yet, and every later start is emptier still. Returning that
+    // one blanked the bar the moment a long sentence finished, which is exactly
+    // when there is most to read.
+    if (!rest) break;
+    if (rest.length <= maxChars) return rest;
+  }
+  // Below four characters the ellipsis cannot fit beside anything, so it is
+  // dropped rather than pushing the line over the budget it was given. Zero is
+  // its own case because `slice(-0)` is `slice(0)`, which returns everything.
+  if (maxChars < 4) return maxChars > 0 ? text.slice(-maxChars) : "";
+  return `...${text.slice(-(maxChars - 3))}`;
+}

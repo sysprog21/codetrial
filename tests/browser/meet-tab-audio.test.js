@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { firstPartyScripts as webScripts, root } from "./source.js";
-import { OUTPUT_NOTES, outputAfterRouting, outputOptions } from "../../web/meet-audio.js";
+import { outputAfterRouting, outputOptions } from "../../web/meet-audio.js";
 
 const web = join(root, "web");
 const read = (name) => readFileSync(join(web, name), "utf8");

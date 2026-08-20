@@ -395,6 +395,7 @@ scripts/gemini-check.sh          # live Gemini credential check
 | `GEMINI_LIVE_MODEL` | `gemini-3.1-flash-live-preview` | realtime voice model |
 | `GEMINI_REPORT_MODEL` | `gemini-3.1-flash-lite` | grader that writes the report |
 | `GEMINI_VOICE` | `Puck` | interviewer voice |
+| `GEMINI_SILENCE_MS` | `700` | silence before Gemini decides the candidate has finished speaking; lower replies sooner, higher lets people pause mid-sentence |
 | `CODETRIAL_WEB_ADDR` | `127.0.0.1:3000` | listen address |
 | `CODETRIAL_WEB_DIR` | `web` | static asset root |
 | `CODETRIAL_ROOM_PREFIX` | `interview` | prefix for generated room names |

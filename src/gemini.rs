@@ -207,7 +207,30 @@ async fn open_live_session_at(
     let (sender, events) = channel(GEMINI_EVENT_QUEUE);
     let reader = tokio::spawn(async move {
         while let Some(message) = reader.next().await {
-            let Ok(message) = message else { break };
+            // Both arms below used to end the session without saying anything.
+            // The whole chain from here to the candidate is silent: the channel
+            // drops, `next_event` returns None, and `run_room` returns Ok, so
+            // an interview that dies mid-sentence produced no line to read
+            // afterwards. Gemini puts the reason in the close frame, which is
+            // exactly the thing that was being discarded.
+            let message = match message {
+                Ok(message) => message,
+                Err(error) => {
+                    eprintln!("Gemini socket failed, ending the session: {error}");
+                    break;
+                }
+            };
+            if let Message::Close(frame) = &message {
+                match frame {
+                    Some(frame) => eprintln!(
+                        "Gemini closed the session: code={} reason={}",
+                        u16::from(frame.code),
+                        frame.reason
+                    ),
+                    None => eprintln!("Gemini closed the session without a reason"),
+                }
+                break;
+            }
             let Some(text) = websocket_message_text(message) else {
                 continue;
             };
@@ -318,7 +341,15 @@ fn live_setup_message(boot: &RuntimeBootstrap<'_>) -> Value {
             "inputAudioTranscription": {},
             "outputAudioTranscription": {},
             "realtimeInputConfig": {
-                "activityHandling": "START_OF_ACTIVITY_INTERRUPTS"
+                "activityHandling": "START_OF_ACTIVITY_INTERRUPTS",
+
+                // Was absent, which left the API's own endpointing window in
+                // force and unmeasurable. Naming it is what makes the wait
+                // between a candidate stopping and the reply starting into
+                // something that can be tuned rather than just observed.
+                "automaticActivityDetection": {
+                    "silenceDurationMs": boot.silence_ms
+                }
             },
             "contextWindowCompression": {
                 "slidingWindow": {}
@@ -591,6 +622,15 @@ mod tests {
         assert_eq!(
             setup["realtimeInputConfig"]["activityHandling"],
             "START_OF_ACTIVITY_INTERRUPTS"
+        );
+
+        // The endpointing window has to reach the wire as a number. Absent, the
+        // API substitutes its own and the wait before a reply stops being
+        // something anyone can tune.
+        assert_eq!(
+            setup["realtimeInputConfig"]["automaticActivityDetection"]["silenceDurationMs"],
+            json!(boot.silence_ms),
+            "the configured silence window must be sent, not defaulted"
         );
         assert_eq!(
             setup["contextWindowCompression"]["slidingWindow"],

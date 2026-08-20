@@ -203,10 +203,13 @@ pub async fn run_room(
         started_at,
     };
 
-    let mut state = RuntimeState::default();
+    let mut turn = TurnState {
+        state: RuntimeState::default(),
+        agent_state: std::mem::take(&mut agent_state),
+        activity: RuntimeActivity::new(started_at),
+        turns: SpeakerTurns::default(),
+    };
     let mut media = CandidateMedia::new();
-    let mut activity = RuntimeActivity::new(started_at);
-    let mut turns = SpeakerTurns::default();
 
     // Before the greeting, not after: these arrived while we were waiting for
     // the candidate, and one of them is what attaches the microphone. Greeting
@@ -224,7 +227,7 @@ pub async fn run_room(
     }
 
     gemini.send_text(&boot.greeting).await?;
-    activity.mark_speaking();
+    turn.activity.mark_speaking();
 
     let mut watch = tokio::time::interval(Duration::from_secs_f64(WATCH_TICK_S));
 
@@ -247,28 +250,9 @@ pub async fn run_room(
     );
     tokio::pin!(hard_deadline);
 
-    // Three arms of the select below need this, and none of them can share one
-    // value: it borrows six locals mutably, so it lives exactly as long as the
-    // call it is handed to. Grouping those six into a struct would let this be
-    // an ordinary method; until then a macro is what stops the field list from
-    // being written out three times.
-    macro_rules! event_context {
-        () => {
-            GeminiEventContext {
-                output_audio: &mut output_audio,
-                gemini: &mut gemini,
-                state: &mut state,
-                agent_state: &mut agent_state,
-                activity: &mut activity,
-                turns: &mut turns,
-                candidate_identity: media.identity.as_deref(),
-            }
-        };
-    }
-
     loop {
         tokio::select! {
-            () = &mut hard_deadline, if !state.ended => {
+            () = &mut hard_deadline, if !turn.state.ended => {
                 eprintln!(
                     "interview reached its server-side deadline: room={} duration={}min",
                     boot.room_name, boot.duration_min
@@ -277,7 +261,7 @@ pub async fn run_room(
                 // Fed through the same path the browser's own end takes, so the
                 // wrap-up, the report and the teardown are the ones that are
                 // already tested rather than a second copy that drifts.
-                let mut context = event_context!();
+                let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
 
                 // The result is always Break for an end_interview packet, and
                 // the report has been published by the time it returns.
@@ -291,7 +275,7 @@ pub async fn run_room(
                 .await?;
                 return Ok(());
             }
-            _ = watch.tick(), if !state.ended => {
+            _ = watch.tick(), if !turn.state.ended => {
                 if presence.gave_up(Instant::now()) {
                     // No report: it would be graded from a session the
                     // candidate walked out of, and there is nobody in the room
@@ -302,13 +286,14 @@ pub async fn run_room(
                     close_room(&room).await;
                     return Ok(());
                 }
-                if let Some(prompt) = activity.watch_prompt(&state) {
+                if let Some(prompt) = turn.activity.watch_prompt(&turn.state) {
                     gemini.send_text(&prompt).await?;
-                    activity.mark_speaking();
+                    turn.activity.mark_speaking();
                 }
             }
             event = events.recv() => {
                 let Some(event) = event else {
+                    eprintln!("LiveKit event stream ended for room={room_name}; ending");
                     gemini.close().await?;
                     return Ok(());
                 };
@@ -334,7 +319,7 @@ pub async fn run_room(
                         ) else {
                             continue;
                         };
-                        let mut context = event_context!();
+                        let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
                         if handle_data_packet(
                             &room,
                             &mut context,
@@ -345,6 +330,13 @@ pub async fn run_room(
                         .await?
                         .is_break()
                         {
+                            // The browser asking to end is the ordinary way an
+                            // interview finishes, and it was the one exit that
+                            // said nothing. Indistinguishable in the log from
+                            // the agent dying and being restarted under it.
+                            eprintln!(
+                                "interview ended by the browser: room={room_name} topic={topic}"
+                            );
                             return Ok(());
                         }
                     }
@@ -369,18 +361,26 @@ pub async fn run_room(
             }
             event = gemini.next_event() => {
                 let Some(event) = event else {
+                    // The interview ends here whenever Gemini hangs up, which
+                    // from the candidate's side is the interviewer stopping
+                    // mid-sentence with the transcript cut at the same word.
+                    // The reason came over the socket and is logged by the
+                    // reader task; this line is what ties that to the room.
+                    eprintln!(
+                        "Gemini session ended; ending interview room={room_name} and letting the supervisor restart"
+                    );
                     close_room(&room).await;
                     return Ok(());
                 };
-                let mut context = event_context!();
+                let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
                 handle_gemini_event(&room, &mut context, event, Interruptible::Yes).await?;
             }
-            _ = tokio::time::sleep_until(output_audio.playout_deadline.into()), if activity.floor == Floor::AwaitingPlayout && output_audio.is_playing() => {
+            _ = tokio::time::sleep_until(output_audio.playout_deadline.into()), if turn.activity.floor == Floor::AwaitingPlayout && output_audio.is_playing() => {
                 if output_audio.is_playing() {
                     continue;
                 }
-                activity.mark_listening();
-                set_agent_state(&room, &mut agent_state, AGENT_STATE_LISTENING).await?;
+                turn.activity.mark_listening();
+                set_agent_state(&room, &mut turn.agent_state, AGENT_STATE_LISTENING).await?;
             }
             frame = next_audio_frame(&mut media.audio), if media.audio.is_some() => {
                 let Some(frame) = frame else {
@@ -494,6 +494,16 @@ impl CandidateMedia {
 struct RuntimeActivity {
     last_code_change: Instant,
     last_user_speech: Instant,
+    /// When the candidate stopped talking and started waiting, if they have and
+    /// the reply has not begun. Separate from `last_user_speech`, which the
+    /// nudge logic needs seeded at the interview start and never absent.
+    ///
+    /// Sharing one field is what made the reply-latency line lie. `Interrupted`
+    /// hands the floor back without ever saying when the candidate finished, so
+    /// a reply that followed one measured from whatever the seed was: on the
+    /// first turn that is the start of the interview, which is how a candidate
+    /// who waited under a second was reported as having waited fifteen.
+    awaiting_reply_since: Option<Instant>,
     last_agent_speech: Instant,
     last_nudge: Instant,
     last_review: Instant,
@@ -520,6 +530,7 @@ impl RuntimeActivity {
         Self {
             last_code_change: now,
             last_user_speech: now,
+            awaiting_reply_since: None,
             last_agent_speech: now,
             last_nudge: now,
             last_review: now,
@@ -545,6 +556,26 @@ impl RuntimeActivity {
     fn mark_listening(&mut self) {
         self.floor = Floor::Listening;
         self.last_agent_speech = Instant::now();
+    }
+
+    /// Gemini has transcribed something the candidate said, so they have
+    /// stopped talking and started waiting.
+    ///
+    /// The two stamps are not the same fact, which is why they are separate
+    /// fields. `last_user_speech` feeds the idle timers and has to move on
+    /// every fragment. `awaiting_reply_since` is the start of a measurable
+    /// wait, and it exists only while there is a wait to measure.
+    ///
+    /// Not armed while the agent holds the floor. Input transcription lags the
+    /// audio it describes, so a fragment covering the tail of what the
+    /// candidate said can land after the reply has already begun. Arming on
+    /// that one made the next chunk of a turn already in progress announce
+    /// itself as the reply starting, measured from a moment nobody waited from.
+    fn note_candidate_finished(&mut self, now: Instant) {
+        self.last_user_speech = now;
+        if self.floor != Floor::Speaking {
+            self.awaiting_reply_since = Some(now);
+        }
     }
 
     fn watch_prompt(&mut self, state: &RuntimeState) -> Option<String> {
@@ -1005,6 +1036,46 @@ async fn handle_data_packet(
     Ok(ControlFlow::Break(()))
 }
 
+/// What one interview accumulates, minus the two things the select loop borrows
+/// as futures. `gemini` and `media` have to stay outside: their arms hold a
+/// mutable borrow for as long as the select is polled, so bundling them here
+/// would make every other arm's condition fight the borrow checker.
+///
+/// The four that are left exist to make [`TurnState::context`] possible. Three
+/// arms of the select need a `GeminiEventContext`, and it borrows seven things
+/// mutably, so it lives exactly as long as the call it is handed to. That used
+/// to be a macro, purely to stop the field list being written out three times.
+///
+/// Worth knowing before anyone tries to go further: bundling these four and
+/// stopping there makes the function *longer*, because every use site grows a
+/// prefix and the macro stays. It only pays once the method exists to replace
+/// the macro outright.
+struct TurnState {
+    state: RuntimeState,
+    agent_state: String,
+    activity: RuntimeActivity,
+    turns: SpeakerTurns,
+}
+
+impl TurnState {
+    fn context<'a>(
+        &'a mut self,
+        output_audio: &'a mut OutputAudio,
+        gemini: &'a mut GeminiLiveSession,
+        candidate_identity: Option<&'a str>,
+    ) -> GeminiEventContext<'a> {
+        GeminiEventContext {
+            output_audio,
+            gemini,
+            state: &mut self.state,
+            agent_state: &mut self.agent_state,
+            activity: &mut self.activity,
+            turns: &mut self.turns,
+            candidate_identity,
+        }
+    }
+}
+
 struct GeminiEventContext<'a> {
     output_audio: &'a mut OutputAudio,
     gemini: &'a mut GeminiLiveSession,
@@ -1123,6 +1194,13 @@ fn cut_off_turn(activity: &mut RuntimeActivity, output_audio: &mut OutputAudio) 
         .saturating_duration_since(Instant::now());
     output_audio.interrupt();
     activity.mark_listening();
+
+    // The pending measurement dies with the turn. A candidate who finished,
+    // waited, and then started talking again is no longer waiting for anything,
+    // and leaving the stamp behind meant the next reply that produced audio
+    // without its own transcript measured from it: the same lie this field was
+    // split out of `last_user_speech` to stop telling, one turn later.
+    activity.awaiting_reply_since = None;
     unplayed
 }
 
@@ -1176,7 +1254,7 @@ async fn handle_gemini_event(
                 // draining. Cut it here or the reply lands behind the rest of
                 // the old turn.
                 drop_stale_playout(room, context, interruptible).await?;
-                context.activity.last_user_speech = Instant::now();
+                context.activity.note_candidate_finished(Instant::now());
                 let turn = &mut context.turns.candidate;
                 let whole = turn
                     .record(&mut context.state.transcript, "Candidate", &text)
@@ -1192,12 +1270,16 @@ async fn handle_gemini_event(
             }
         }
         GeminiEvent::Audio { bytes, mime_type } => {
-            // Measured before the interrupt below, because that is the point
-            // the candidate stops waiting. `last_user_speech` is stamped on the
-            // last transcript fragment, so this covers endpointing plus model
-            // latency plus anything still queued ahead of the reply: the
-            // silence the candidate actually sits through.
-            let waited = context.activity.floor == Floor::Listening;
+            // Read before the interrupt below, because that is the point the
+            // candidate stops waiting. Stamped on the last input transcript
+            // fragment, so it covers endpointing plus model latency plus
+            // anything still queued ahead of the reply: the silence the
+            // candidate actually sits through.
+            //
+            // `None` means Gemini is answering something it never transcribed,
+            // and there is no moment the candidate finished to measure from.
+            // Printing anything then is worse than printing nothing.
+            let waited = context.activity.awaiting_reply_since;
 
             // A new turn's first chunk while the previous one is still
             // draining. `InputTranscript` normally clears the queue before this
@@ -1212,10 +1294,14 @@ async fn handle_gemini_event(
                 drop_stale_playout(room, context, interruptible).await?;
             }
             if context.output_audio.capture(&bytes, &mime_type).await? {
-                if waited {
+                // Cleared here rather than where it is read: a chunk `capture`
+                // rejects is not the reply starting, and consuming the stamp on
+                // one would lose the measurement for the chunk that is.
+                if let Some(since) = waited {
+                    context.activity.awaiting_reply_since = None;
                     eprintln!(
                         "timing: {:.2}s from the candidate finishing to the reply starting",
-                        context.activity.last_user_speech.elapsed().as_secs_f64()
+                        since.elapsed().as_secs_f64()
                     );
                 }
                 context.activity.mark_speaking();
@@ -2422,6 +2508,84 @@ mod tests {
         assert!(
             !output_audio.accepts(&[1, 0], "audio/webm"),
             "an unreadable mime type queues nothing"
+        );
+    }
+
+    /// The reply-latency line used to measure from `last_user_speech`, which is
+    /// seeded at the interview start and only ever moved by an input
+    /// transcript. A reply that followed an `Interrupted` therefore reported
+    /// the age of the interview: one run logged 15.30s for a candidate who had
+    /// waited under a second. The stamp is now absent until Gemini says what
+    /// the candidate said, and absent means print nothing.
+    /// The three rules that decide whether a reply-latency line is a
+    /// measurement or a fabrication, exercised where they live rather than
+    /// through a Room. Every one of them survived mutation before this test
+    /// existed, which is how the log came to report 15.30s for a candidate who
+    /// had waited under a second.
+    #[test]
+    fn the_reply_latency_stamp_is_armed_and_cleared_by_the_floor() {
+        let start = Instant::now() - Duration::from_secs(15);
+        let mut activity = RuntimeActivity::new(start);
+        assert_eq!(
+            activity.awaiting_reply_since, None,
+            "nothing waited for yet"
+        );
+
+        // Armed when the candidate finishes and the agent is not talking.
+        activity.floor = Floor::Listening;
+        activity.note_candidate_finished(Instant::now());
+        let armed = activity.awaiting_reply_since.expect("a wait to measure");
+        assert!(
+            armed.elapsed() < Duration::from_secs(1),
+            "measured from now, not from the seed"
+        );
+
+        // Not re-armed by a late fragment that lands mid-reply: that would
+        // restart the clock on a turn the candidate is already hearing.
+        activity.floor = Floor::Speaking;
+        activity.note_candidate_finished(Instant::now() + Duration::from_secs(5));
+        assert_eq!(
+            activity.awaiting_reply_since,
+            Some(armed),
+            "a mid-turn fragment must not re-arm"
+        );
+
+        // The idle timers still move, because that is a different question.
+        assert!(
+            activity.last_user_speech > armed,
+            "last_user_speech tracks every fragment"
+        );
+
+        // A turn that gets cut takes the pending measurement with it: the
+        // candidate is talking again, so nobody is waiting.
+        let (mut output_audio, _frames) = test_output_audio(Vec::new());
+        output_audio.playout_deadline = Instant::now() + Duration::from_secs(3);
+        cut_off_turn(&mut activity, &mut output_audio);
+        assert_eq!(
+            activity.awaiting_reply_since, None,
+            "a cut turn leaves nothing to measure"
+        );
+    }
+
+    #[test]
+    fn a_reply_nobody_was_measured_waiting_for_reports_no_latency() {
+        let start = Instant::now() - Duration::from_secs(15);
+        let mut activity = RuntimeActivity::new(start);
+
+        // Nothing heard from the candidate yet, which is the state an
+        // interruption leaves behind.
+        assert_eq!(activity.awaiting_reply_since, None);
+        assert!(
+            activity.last_user_speech <= start,
+            "the seed is still the interview start, and is still what the nudge reads"
+        );
+
+        // An input transcript is the only thing that starts the clock.
+        activity.awaiting_reply_since = Some(Instant::now());
+        let waited = activity.awaiting_reply_since.expect("stamped");
+        assert!(
+            waited.elapsed() < Duration::from_secs(1),
+            "measured from the candidate finishing, not from the interview starting"
         );
     }
 

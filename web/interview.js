@@ -18,6 +18,7 @@ import {
 } from "./render.js";
 import {
   acceptsReport,
+  captionWindow,
   clamp,
   codeUpdatePayload,
   countdown,
@@ -56,6 +57,14 @@ const AUDIO_OUTPUT_KEY = "codetrial:audioOutputId";
 const MEET_PRESENTATION_KEY = "codetrial:meetPresentation";
 const INTEGRITY_HEARTBEAT_MS = 5000;
 const params = new URLSearchParams(window.location.search);
+// Start this independent request while the problem data is loading. It has to
+// settle rather than reject: nothing awaits it until init() reaches the sign-in
+// gate, and a problem that fails to load throws out of the top-level await
+// below so nothing ever will, leaving a rejected promise no handler ever
+// claims. Null means "no answer", which is not a reason to bounce anyone.
+const sessionPromise = fetch("/api/session")
+  .then((response) => (response.ok ? response.json() : null))
+  .catch(() => null);
 // Top-level await: the whole module is written against a known problem, and
 // interview.html loads it as a module, so waiting here beats threading a
 // promise through every consumer below.
@@ -272,15 +281,9 @@ function bindEvents() {
 /// True when nobody is signed in, in which case the candidate is sent back to
 /// the home page to sign in before a LiveKit token can be minted.
 async function signInRequired() {
-  try {
-    const response = await fetch("/api/session");
-    if (!response.ok) return false;
-    const session = await response.json();
-    if (session.signedIn || !session.loginRequired) return false;
-  } catch {
-    // Offline practice still works; the token request is the real gate.
-    return false;
-  }
+  const session = await sessionPromise;
+  // Offline practice still works; the token request is the real gate.
+  if (!session || session.signedIn || !session.loginRequired) return false;
   nodes.audioCheck.hidden = true;
   nodes.agentState.textContent = "Sign in required";
   addTranscript("interviewer", "Enter your GitHub username on the home page to start an interview.", true);
@@ -905,6 +908,7 @@ function attachAvatarAnalyser(track, participant) {
     // Not connected to the destination: the audio element is already playing
     // this track, and a second path would play Jim twice.
     jimAnalyserSource.connect(jimAnalyser);
+    resumeAnalyserOnGesture();
   } catch {
     // No analyser means no lip-sync. Everything else about the avatar, and all
     // of the audio, still works.
@@ -922,6 +926,41 @@ function releaseAvatarAnalyser() {
   jimAnalyserSamples = null;
   jimAnalyserTrack = null;
   jimAnalyserPeaks.length = 0;
+}
+
+/// Safari refuses `resume()` unless the call is inside a user gesture, and
+/// `TrackSubscribed` is not one, so a context first built there stays suspended
+/// for the rest of the interview. The analyser then reads silence forever: the
+/// avatar's mouth never opens, and the code above already predicted exactly
+/// that without being able to do anything about it. Chrome resumes from
+/// anywhere, which is why this survived.
+///
+/// The listeners are capturing and one-shot. A candidate who never touches the
+/// page again keeps a suspended context, which is the state it was already in.
+let gestureResumePending = false;
+
+function resumeAnalyserOnGesture() {
+  if (!jimAnalyserContext || jimAnalyserContext.state !== "suspended") return;
+  // LiveKit re-subscribes Jim on every reconnect, so this runs more than once.
+  // Without the guard a context that stays suspended across two subscribes
+  // collects two pairs of listeners; they do unregister themselves on the first
+  // gesture, but registering them at all was pointless.
+  if (gestureResumePending) return;
+  gestureResumePending = true;
+  function stop() {
+    gestureResumePending = false;
+    document.removeEventListener("pointerdown", resume, true);
+    document.removeEventListener("keydown", resume, true);
+  }
+  function resume() {
+    if (!jimAnalyserContext || jimAnalyserContext.state !== "suspended") {
+      stop();
+      return;
+    }
+    void jimAnalyserContext.resume().then(stop).catch(() => {});
+  }
+  document.addEventListener("pointerdown", resume, true);
+  document.addEventListener("keydown", resume, true);
 }
 
 function jimAmplitude() {
@@ -1055,7 +1094,7 @@ let captionIdleTimer = null;
 
 function updateCaptions(speaker, text) {
   if (!nodes.captionsText) return;
-  const clipped = text.length > CAPTION_MAX_CHARS ? `...${text.slice(-CAPTION_MAX_CHARS)}` : text;
+  const clipped = captionWindow(text, CAPTION_MAX_CHARS);
   nodes.captionsText.textContent = `[${speaker === "you" ? "You" : "Jim"}]: ${clipped}`;
   showCaptions();
 }

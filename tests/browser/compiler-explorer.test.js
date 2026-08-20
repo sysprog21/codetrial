@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,7 +13,6 @@ import {
   parseCompilerResults,
   stripAnsi,
 } from "../../web/compiler-explorer.js";
-import { readFileSync } from "node:fs";
 
 // The browser fetches one judge at a time now, so a test that wants the whole
 // bank reads the source the per-problem files are generated from.

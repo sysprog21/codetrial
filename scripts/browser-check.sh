@@ -73,7 +73,12 @@ if [ -z "$PLAYWRIGHT_PATH" ]; then
   echo "Playwright is not installed. From the repo root:" >&2
   echo "  npm install && npx playwright install chromium" >&2
   echo "Or set PLAYWRIGHT_PATH to an existing Playwright module." >&2
-  exit 1
+
+  # Its own code, so a caller can tell "no browser here" from "the check
+  # failed". tests/web.rs skips on this one and fails on everything else;
+  # without the distinction that test had to stay #[ignore] forever, which is
+  # how it went unrun long enough for one of its branches to rot.
+  exit 3
 fi
 
 if [ "${CODETRIAL_WEB_URL:-}" ]; then

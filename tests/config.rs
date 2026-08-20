@@ -1,7 +1,8 @@
 use codetrial::config::{
     DEFAULT_COMPILER_EXPLORER_ENABLED, DEFAULT_DURATION_MIN,
     DEFAULT_GEMINI_CANDIDATE_VIDEO_ENABLED, DEFAULT_GEMINI_LIVE_MODEL, DEFAULT_GEMINI_REPORT_MODEL,
-    DEFAULT_GEMINI_VOICE, DEFAULT_ROOM_PREFIX, DEFAULT_WEB_ADDR, DEFAULT_WEB_DIR, load_from_pairs,
+    DEFAULT_GEMINI_SILENCE_MS, DEFAULT_GEMINI_VOICE, DEFAULT_ROOM_PREFIX, DEFAULT_WEB_ADDR,
+    DEFAULT_WEB_DIR, MAX_GEMINI_SILENCE_MS, load_from_pairs,
 };
 use serde_json::Value;
 
@@ -31,12 +32,30 @@ fn config_accepts_current_env_names() {
     assert_eq!(config.gemini_live_model, "live-model");
     assert_eq!(config.gemini_report_model, "report-model");
     assert_eq!(config.gemini_voice, "Voice");
+    assert_eq!(config.gemini_silence_ms, DEFAULT_GEMINI_SILENCE_MS);
     assert_eq!(config.room_prefix, "room");
     assert_eq!(config.default_duration_min, 30);
     assert_eq!(config.web_dir, "public");
     assert_eq!(config.web_addr, "0.0.0.0:8080");
     assert!(!config.compiler_explorer_enabled);
     assert!(config.gemini_candidate_video_enabled);
+}
+
+#[test]
+fn config_caps_gemini_silence_at_the_point_it_stops_being_a_preference() {
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "key"),
+        ("LIVEKIT_API_SECRET", "secret"),
+        ("GOOGLE_API_KEY", "google"),
+        ("GEMINI_SILENCE_MS", "99999"),
+    ])
+    .expect("complete config should load");
+
+    // Against the constant, not a literal. The two used to disagree about what
+    // the cap even was, and the test name asserted a Gemini API limit that does
+    // not exist: setup accepts 2001, 5000 and 30000 against the live endpoint.
+    assert_eq!(config.gemini_silence_ms, MAX_GEMINI_SILENCE_MS);
 }
 
 #[test]
@@ -178,14 +197,48 @@ fn config_rejects_missing_required_keys() {
 /// can state exactly what is on disk. That is also the point of the argument:
 /// two processes started from two directories used to build two different
 /// pools.
-fn provider_fixture(label: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("codetrial-providers-{label}"));
-    let _ = std::fs::remove_dir_all(&dir);
+/// A provider directory that removes itself when the test ends, panic included.
+///
+/// Both halves are load bearing. The path carries a pid and a timestamp because
+/// the label alone collides between two concurrent `cargo test` runs, and the
+/// loser fails with AlreadyExists on a fixture unrelated to what it tests. The
+/// Drop is because making the path unique without it just moves the problem:
+/// the old `remove_dir_all` at the top only ever matched a path that repeated.
+struct ProviderFixture(std::path::PathBuf);
+
+impl Drop for ProviderFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl std::ops::Deref for ProviderFixture {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl AsRef<std::path::Path> for ProviderFixture {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+fn provider_fixture(label: &str, files: &[(&str, &str)]) -> ProviderFixture {
+    let dir = std::env::temp_dir().join(format!(
+        "codetrial-providers-{label}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     for (name, contents) in files {
         std::fs::write(dir.join(name), contents).unwrap();
     }
-    dir
+    ProviderFixture(dir)
 }
 
 fn provider_file(url: &str, key: &str, secret: &str) -> String {

@@ -3,6 +3,30 @@ use std::fmt;
 use std::path::Path;
 
 pub const DEFAULT_GEMINI_LIVE_MODEL: &str = "gemini-3.1-flash-live-preview";
+
+/// How long Gemini waits for silence before deciding the candidate has finished
+/// speaking. Left unset the API picks its own value, and the interview measured
+/// nearly five seconds between a candidate stopping and the reply starting,
+/// with
+/// an empty playout queue: that wait is endpointing plus inference, and this is
+/// the half we can move.
+///
+/// A knob rather than a constant because the right value is a property of the
+/// room and the speaker, not of the code. Someone who pauses mid-sentence to
+/// think needs a longer window than someone who does not, and cutting it too
+/// short interrupts people while they are still talking.
+pub const DEFAULT_GEMINI_SILENCE_MS: u32 = 700;
+
+/// The clamp exists for a typo, not for an API limit. A previous version of
+/// this said "Gemini accepts at most two seconds" and capped at 2000, which is
+/// wrong: setup was measured accepting 2001, 5000 and 30000 against the live
+/// endpoint. Capping there silently discarded the middle of the range this knob
+/// exists to explore, which is the failure mode a tuning knob can least afford.
+///
+/// Thirty seconds is not a limit Gemini imposes either. It is the point past
+/// which the value is a mistake: an interviewer that waits half a minute before
+/// answering is broken whatever the API thinks.
+pub const MAX_GEMINI_SILENCE_MS: u32 = 30_000;
 pub const DEFAULT_GEMINI_REPORT_MODEL: &str = "gemini-3.1-flash-lite";
 pub const DEFAULT_GEMINI_VOICE: &str = "Puck";
 pub const DEFAULT_ROOM_PREFIX: &str = "interview";
@@ -272,6 +296,7 @@ pub struct AgentConfig {
     pub gemini_live_model: String,
     pub gemini_report_model: String,
     pub gemini_voice: String,
+    pub gemini_silence_ms: u32,
     pub room_prefix: String,
     pub default_duration_min: u32,
     pub web_dir: String,
@@ -413,6 +438,8 @@ pub fn load_from_pairs(
         gemini_live_model: optional(&values, "GEMINI_LIVE_MODEL", DEFAULT_GEMINI_LIVE_MODEL),
         gemini_report_model: report_model_or_default(&values),
         gemini_voice: optional(&values, "GEMINI_VOICE", DEFAULT_GEMINI_VOICE),
+        gemini_silence_ms: optional_u32(&values, "GEMINI_SILENCE_MS", DEFAULT_GEMINI_SILENCE_MS)
+            .min(MAX_GEMINI_SILENCE_MS),
         room_prefix: optional(&values, "CODETRIAL_ROOM_PREFIX", DEFAULT_ROOM_PREFIX),
         default_duration_min: optional_u32(&values, "CODETRIAL_DURATION_MIN", DEFAULT_DURATION_MIN),
         web_dir: optional(&values, "CODETRIAL_WEB_DIR", DEFAULT_WEB_DIR),

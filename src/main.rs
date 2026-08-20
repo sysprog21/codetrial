@@ -400,9 +400,12 @@ async fn run_combined(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     initialize_accounts(&web_config)?;
     let listener = tokio::net::TcpListener::from_std(listener)?;
-    let mut web_task = tokio::spawn(async move {
-        axum::serve(listener, codetrial::web::web_service(web_config)).await
-    });
+
+    // Built here, not inside the spawn: constructing the service opens the
+    // database, migrates it, and sweeps it, all blocking. Inside the task that
+    // work parks a runtime worker while the already-bound listener backs up.
+    let service = codetrial::web::web_service(web_config);
+    let mut web_task = tokio::spawn(async move { axum::serve(listener, service).await });
     let mut agent_task = tokio::spawn(async move {
         run_agent_until_error(
             || {
@@ -686,35 +689,21 @@ fn extend_pool(
     pool.providers.extend(providers);
 }
 
-/// Creates the account schema once, at startup, so no request pays for it.
+/// Refuses to start on a database that will not migrate, before anything is
+/// served. The listener is already bound by this point, so the socket exists
+/// and its backlog fills, but nothing accepts from it and the process exits
+/// non-zero instead. The router runs the same migration again on the connection
+/// it keeps, where the only thing it can do about a failure is answer 503.
 fn initialize_accounts(config: &WebServerConfig) -> Result<(), String> {
     let Some(login) = codetrial::web::login_config(config) else {
         return Ok(());
     };
+
+    // The router opens the long-lived connection and performs the startup sweep
+    // on it; this first pass makes migration failure fatal before the server
+    // starts accepting.
     codetrial::web::initialize_account_database(&login.db_path)
         .map_err(|error| format!("account database {}: {error}", login.db_path.display()))?;
-
-    // Swept at startup rather than never. Every unverified sign-in inserted a
-    // throwaway account row and a session row, and nothing removed either, so
-    // the database grew for the lifetime of the deployment. A long-running
-    // server still wants a periodic sweep; this at least bounds it to one
-    // uptime, and it is the cheapest correct place to put it.
-    match codetrial::accounts::Accounts::open(login).and_then(|accounts| {
-        codetrial::accounts::sweep_expired_sessions(
-            &accounts,
-            codetrial::web::current_epoch_seconds() as i64,
-        )
-    }) {
-        Ok((0, 0)) => {}
-        Ok((sessions, users)) => {
-            eprintln!("swept {sessions} expired session(s) and {users} throwaway account(s)");
-        }
-
-        // Not fatal: a sweep that fails is a database that keeps growing, which
-        // is worse than a server that will not boot only if you value tidiness
-        // over availability.
-        Err(error) => eprintln!("WARNING: session sweep failed: {error}"),
-    }
     Ok(())
 }
 

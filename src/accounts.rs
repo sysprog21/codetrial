@@ -75,6 +75,17 @@ impl Accounts {
         &self.config
     }
 
+    /// Runs the migrations on the connection the server will keep using, so a
+    /// router that was handed a database nobody initialized still works and no
+    /// request pays for the schema check.
+    pub fn initialize_schema(&self) -> rusqlite::Result<()> {
+        let mut connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        initialize_connection(&mut connection)
+    }
+
     /// Writes are rare and single-writer here, so one guarded connection beats
     /// a pool. Callers already run on the blocking pool, so holding the lock
     /// across the query parks no async worker.
@@ -100,20 +111,94 @@ impl Accounts {
 /// Bumped whenever a migration is added below. SQLite carries it in the file
 /// header, so an existing database announces which migrations it has already
 /// run instead of quietly keeping an old shape behind `IF NOT EXISTS`.
-pub const ACCOUNT_SCHEMA_VERSION: i64 = 2;
+pub const ACCOUNT_SCHEMA_VERSION: i64 = 3;
 
 /// Migrations in order, each one taking the database from index `n` to `n + 1`.
 /// Append, never edit: an entry that has already run somewhere will not run
 /// again.
-const ACCOUNT_MIGRATIONS: &[&str] = &[CREATE_ACCOUNT_TABLES, INDEX_REPORTS_BY_USER];
+const ACCOUNT_MIGRATIONS: &[&str] = &[
+    CREATE_ACCOUNT_TABLES,
+    INDEX_REPORTS_BY_USER,
+    DISCARD_CLEARTEXT_SESSIONS,
+];
 
 pub fn initialize_account_database(path: &Path) -> rusqlite::Result<()> {
-    let connection = rusqlite::Connection::open(path)?;
+    let mut connection = rusqlite::Connection::open(path)?;
+    initialize_connection(&mut connection)
+}
 
-    // WAL and a busy timeout, because every login is a write and the default
-    // rollback journal fsyncs per statement while blocking readers.
-    connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;")?;
+fn initialize_connection(connection: &mut rusqlite::Connection) -> rusqlite::Result<()> {
+    // WAL, because every login is a write and the default rollback journal
+    // fsyncs per statement while blocking readers. The timeout goes first:
+    // converting a fresh database to WAL needs an exclusive lock, and without a
+    // timeout already in force that conversion fails instantly the one time
+    // another process is attached. Foreign keys belong here rather than inside
+    // a migration, because SQLite ignores that pragma once a transaction is
+    // open and a migration needing a cascade would find enforcement quietly
+    // off.
+    //
+    // rusqlite already sets this exact timeout on every connection it opens, so
+    // this line changes nothing today. It stays because the value is load
+    // bearing for everything below and a library default is a thin place to
+    // rest that on: the day rusqlite picks a different number, the failure
+    // would be a startup race nobody could reproduce.
+    connection.execute_batch("PRAGMA busy_timeout = 5000;")?;
+
+    // Converting a fresh database to WAL takes an exclusive lock. Measured
+    // against a held lock it waits out the full timeout and then fails anyway,
+    // so it shares the retry boundary with the migration rather than getting
+    // one shot at it. Both are idempotent and both fail the same way.
+    //
+    // No sleep between attempts: each one already spent up to five seconds
+    // inside SQLite's busy handler, and a pause on top of that is rounding
+    // error on a wait that long.
+    //
+    // The ceiling, stated because no test reaches it: this only matters when a
+    // lock outlives a five second timeout, which needs a migration slower than
+    // anything in ACCOUNT_MIGRATIONS today. Reaching it would mean sleeping
+    // past that timeout in a unit test, so it is argued rather than proven. The
+    // reason it is here at all is the asymmetry, since losing the race costs a
+    // process-lifetime 503 while the guard costs eight lines.
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        match connection
+            .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
+            .and_then(|()| migrate(connection))
+        {
+            Err(error) if attempts < MIGRATION_ATTEMPTS && is_locked(&error) => {}
+            result => return result,
+        }
+    }
+}
+
+/// Three tries at five seconds each, which outlasts any migration this schema
+/// is likely to grow and still fails inside a deployment's patience.
+const MIGRATION_ATTEMPTS: u32 = 3;
+
+fn is_locked(error: &rusqlite::Error) -> bool {
+    matches!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
+}
+
+fn migrate(connection: &mut rusqlite::Connection) -> rusqlite::Result<()> {
+    // Steady state is "already migrated", and every startup takes this path.
+    // Reading first keeps it a plain read instead of a write transaction that
+    // dirties the header page and fsyncs to store the version it already holds.
+    // Out-of-range values fall through to be rejected below.
     let applied: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if applied == ACCOUNT_SCHEMA_VERSION {
+        return Ok(());
+    }
+
+    // Take the write lock before re-reading user_version. Two processes
+    // starting together must not both run the same migration batch, and the
+    // read above is not part of this transaction, so it cannot be trusted.
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let applied: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if !(0..=ACCOUNT_SCHEMA_VERSION).contains(&applied) {
         // Above the range means running today's queries against tomorrow's
         // tables; below it means the counter is corrupt, and casting it to an
@@ -121,15 +206,20 @@ pub fn initialize_account_database(path: &Path) -> rusqlite::Result<()> {
         return Err(rusqlite::Error::InvalidQuery);
     }
     for migration in &ACCOUNT_MIGRATIONS[applied as usize..] {
-        connection.execute_batch(migration)?;
+        transaction.execute_batch(migration)?;
     }
-    connection.execute_batch(&format!("PRAGMA user_version = {ACCOUNT_SCHEMA_VERSION}"))?;
-    Ok(())
+    transaction.execute_batch(&format!("PRAGMA user_version = {ACCOUNT_SCHEMA_VERSION}"))?;
+    transaction.commit()
 }
 
-const CREATE_ACCOUNT_TABLES: &str = "
-        PRAGMA foreign_keys = ON;
+/// Rows written before [`session_key`] existed hold the bearer token itself, so
+/// there is nothing to migrate: the value that would have to be hashed is the
+/// secret being hidden, and anyone who already copied the file has it. Everyone
+/// signs in again once, which is also the correct response to tokens that were
+/// stored in the clear.
+const DISCARD_CLEARTEXT_SESSIONS: &str = "DELETE FROM sessions;";
 
+const CREATE_ACCOUNT_TABLES: &str = "
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY,
             github_id INTEGER NOT NULL UNIQUE,
@@ -222,7 +312,12 @@ pub fn create_session(accounts: &Accounts, profile: &GitHubProfile) -> rusqlite:
         INSERT INTO sessions (id, user_id, expires_at, created_at)
         VALUES (?1, ?2, ?3, ?4)
         ",
-            (session_id.as_str(), user_id, now + SESSION_TTL_SECONDS, now),
+            (
+                session_key(&session_id),
+                user_id,
+                now + SESSION_TTL_SECONDS,
+                now,
+            ),
         )?;
         Ok(session_id)
     })
@@ -290,7 +385,7 @@ pub fn session_user(
         WHERE sessions.id = ?1 AND sessions.expires_at > ?2
         ",
         )?;
-        let mut rows = statement.query((session_id, now))?;
+        let mut rows = statement.query((session_key(session_id), now))?;
         let Some(row) = rows.next()? else {
             return Ok(None);
         };
@@ -304,7 +399,10 @@ pub fn session_user(
 
 pub fn delete_session(accounts: &Accounts, session_id: &str) -> rusqlite::Result<()> {
     accounts.with(|connection| {
-        connection.execute("DELETE FROM sessions WHERE id = ?1", [session_id])?;
+        connection.execute(
+            "DELETE FROM sessions WHERE id = ?1",
+            [session_key(session_id)],
+        )?;
         Ok(())
     })
 }
@@ -416,6 +514,22 @@ pub fn save_report(
     })
 }
 
+/// What the `sessions` table stores. The cookie carries the token itself and
+/// only its digest is written down, so a copy of the database is a list of
+/// useless strings rather than thirty days of live logins.
+///
+/// Unsalted on purpose: the input is 32 bytes from the OS, so there is no
+/// dictionary to precompute, and a per-row salt would cost the lookup the
+/// primary-key index it currently rides on.
+///
+/// Public so integration fixtures that pin explicit user ids can still write
+/// the row `create_session` would have written, rather than keeping a second
+/// copy of this rule that drifts.
+pub fn session_key(token: &str) -> String {
+    use sha2::Digest;
+    URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(token.as_bytes()))
+}
+
 pub fn random_token(bytes: usize) -> Result<String, getrandom::Error> {
     let mut token = vec![0; bytes];
     getrandom::fill(&mut token)?;
@@ -430,10 +544,18 @@ mod migration_tests {
     /// row each, forever. Rate limiting bounds the rate, not the total.
     #[test]
     fn sweeping_removes_expired_throwaways_and_keeps_everything_earned() {
-        let dir = std::env::temp_dir().join(format!("codetrial-sweep-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        // Its own directory because the sweep asserts on what is left on disk,
+        // and a `Scratch` guard so the directory goes when the test does.
+        let dir = Scratch(std::env::temp_dir().join(format!(
+            "codetrial-sweep-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        std::fs::create_dir_all(&*dir).unwrap();
         let path = dir.join("accounts.db");
-        let _ = std::fs::remove_file(&path);
         initialize_account_database(&path).unwrap();
         let accounts = Accounts::open(GitHubLoginConfig {
             oauth: None,
@@ -491,16 +613,51 @@ mod migration_tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// Kept here rather than in `tests/`, because an integration test cannot
-    /// reach `rusqlite` to read back `user_version` or the table list, and this
-    /// is the one code path whose failure mode is a candidate's report history
-    /// rather than a request.
-    fn scratch(label: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("codetrial-migration-{label}.db"));
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+    /// A scratch database that removes itself, WAL sidecars included, when the
+    /// test ends. Drop rather than a call at the end of each test, because a
+    /// test that ends by panicking is exactly the one whose leftovers you want
+    /// gone.
+    ///
+    /// The path used to be the label alone. That bounded the mess, since each
+    /// run overwrote the last, but it also let two concurrent `cargo test` runs
+    /// migrate each other's database. Making it unique without also cleaning up
+    /// traded a rare race for an unbounded pile in the system temp directory.
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            // Both shapes, because one test wants a directory to assert about
+            // what the sweep left on disk and the rest want a single database.
+            // A scratch path is whatever the test made of it.
+            for suffix in ["", "-wal", "-shm"] {
+                let _ = std::fs::remove_file(format!("{}{suffix}", self.0.display()));
+            }
+            let _ = std::fs::remove_dir_all(&self.0);
         }
-        path
+    }
+
+    impl AsRef<Path> for Scratch {
+        fn as_ref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl std::ops::Deref for Scratch {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    fn scratch(label: &str) -> Scratch {
+        Scratch(std::env::temp_dir().join(format!(
+            "codetrial-migration-{label}-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )))
     }
 
     fn user_version(path: &Path) -> i64 {
@@ -561,6 +718,70 @@ mod migration_tests {
         .unwrap()
     }
 
+    /// Migration 3 empties `sessions`, and `open_accounts` runs the sweep
+    /// immediately behind it, so the two delete more together than either does
+    /// alone. What survives is the part worth pinning: a real GitHub account
+    /// keeps its row, and anything holding a report keeps its row whatever its
+    /// id, while the throwaway accounts whose only reason to exist was the
+    /// session that just went away are reclaimed.
+    #[test]
+    fn the_upgrade_and_the_sweep_together_spare_real_accounts_and_reports() {
+        let path = scratch("upgrade-sweep");
+        initialize_account_database(&path).unwrap();
+        let real = sign_in_as(&path, "real-candidate", 4242);
+        let throwaway = sign_in_as(&path, "unverified", -7);
+        let author = sign_in_as(&path, "wrote-something", -8);
+        let accounts = accounts_at(&path);
+        save_report(
+            &accounts,
+            user_id_for(&accounts, &author),
+            "kept-report",
+            "two-sum",
+            &json!({}),
+        )
+        .unwrap();
+        // Rewind to a database the hashing migration has not reached.
+        set_user_version(&path, 2);
+        drop(accounts);
+
+        initialize_account_database(&path).unwrap();
+        let accounts = accounts_at(&path);
+        let (swept_sessions, swept_users) =
+            sweep_expired_sessions(&accounts, current_epoch_seconds() as i64).unwrap();
+
+        // Migration 3 already emptied the table, so the sweep finds no expired
+        // session of its own to remove.
+        assert_eq!(swept_sessions, 0);
+        assert_eq!(swept_users, 1, "only the throwaway with nothing to keep");
+        assert_eq!(
+            logins(&path),
+            vec!["real-candidate".to_string(), "wrote-something".to_string()]
+        );
+        assert!(session_ids(&path).is_empty());
+        for session in [&real, &throwaway, &author] {
+            assert!(
+                session_user(&accounts, session).unwrap().is_none(),
+                "every pre-upgrade cookie stops working"
+            );
+        }
+        assert_eq!(
+            list_reports(&accounts, user_id_for_login(&path, "wrote-something"))
+                .unwrap()
+                .len(),
+            1,
+            "the report outlives the session that produced it"
+        );
+    }
+
+    fn user_id_for_login(path: &Path, login: &str) -> i64 {
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .query_row("SELECT id FROM users WHERE login = ?1", [login], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
+
     #[test]
     fn a_fresh_database_runs_every_migration_and_records_the_version() {
         let path = scratch("fresh");
@@ -613,6 +834,29 @@ mod migration_tests {
         );
     }
 
+    /// The retry loop only helps if it can tell a busy database from a broken
+    /// one. Classify a lock as permanent and a contended startup answers 503
+    /// for its whole uptime; classify a refusal as transient and a rolled-back
+    /// binary spends three timeouts discovering it.
+    #[test]
+    fn only_lock_contention_is_treated_as_worth_retrying() {
+        let path = scratch("locked");
+        initialize_account_database(&path).unwrap();
+
+        let holder = rusqlite::Connection::open(&path).unwrap();
+        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let blocked = rusqlite::Connection::open(&path).unwrap();
+        blocked.execute_batch("PRAGMA busy_timeout = 0").unwrap();
+        let error = blocked.execute_batch("BEGIN IMMEDIATE").unwrap_err();
+        assert!(is_locked(&error), "{error} should be worth retrying");
+        holder.execute_batch("ROLLBACK").unwrap();
+
+        set_user_version(&path, ACCOUNT_SCHEMA_VERSION + 1);
+        let mut refused = rusqlite::Connection::open(&path).unwrap();
+        let error = migrate(&mut refused).unwrap_err();
+        assert!(!is_locked(&error), "{error} should be fatal");
+    }
+
     /// `applied as usize` on a negative counter would wrap to an enormous index
     /// and panic inside the slice. Refusing names the problem instead.
     #[test]
@@ -640,14 +884,70 @@ mod migration_tests {
             .collect()
     }
 
+    fn session_ids(path: &Path) -> Vec<String> {
+        let connection = rusqlite::Connection::open(path).unwrap();
+        let mut statement = connection.prepare("SELECT id FROM sessions").unwrap();
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    /// The point of the whole exercise: a copy of the file must not be a list
+    /// of live cookies. Checked against the token that was handed out rather
+    /// than against a digest this test computes itself, so a `session_key` that
+    /// quietly became the identity function fails here instead of passing by
+    /// agreeing with itself.
+    #[test]
+    fn the_database_never_holds_the_cookie_it_handed_out() {
+        let path = scratch("hashed");
+        initialize_account_database(&path).unwrap();
+        let session = sign_in(&path, "candidate");
+        let stored = session_ids(&path);
+
+        assert_eq!(stored.len(), 1);
+        assert_ne!(stored[0], session, "the cookie value was written down");
+        assert!(
+            session_user(&accounts_at(&path), &session)
+                .unwrap()
+                .is_some(),
+            "the cookie itself still authenticates"
+        );
+        assert!(
+            session_user(&accounts_at(&path), &stored[0])
+                .unwrap()
+                .is_none(),
+            "what is stored must not work as a cookie on its own"
+        );
+    }
+
+    fn logins(path: &Path) -> Vec<String> {
+        let connection = rusqlite::Connection::open(path).unwrap();
+        let mut statement = connection
+            .prepare("SELECT login FROM users ORDER BY login")
+            .unwrap();
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
     /// The upgrade path, not just the fresh one: a database created before the
     /// index migration existed has to gain it on the next boot and keep its
     /// rows. `IF NOT EXISTS` alone would hide a migration that never ran.
+    ///
+    /// The session is the one thing that must not survive. It was written
+    /// before session ids were hashed, so v3 discards it, and the account it
+    /// belonged to has to outlive it or the migration is throwing away more
+    /// than the tokens.
     #[test]
     fn an_existing_database_gains_the_report_index_on_upgrade() {
         let path = scratch("upgrade");
         initialize_account_database(&path).unwrap();
         let session = sign_in(&path, "early-candidate");
+        assert!(user_id_for(&accounts_at(&path), &session) > 0);
         // Rewind to the shape a v1 binary left behind.
         let connection = rusqlite::Connection::open(&path).unwrap();
         connection
@@ -661,10 +961,12 @@ mod migration_tests {
 
         assert_eq!(user_version(&path), ACCOUNT_SCHEMA_VERSION);
         assert!(index_names(&path).contains(&"reports_by_user".to_string()));
+        assert_eq!(logins(&path), vec!["early-candidate".to_string()]);
         assert!(
             session_user(&accounts_at(&path), &session)
                 .unwrap()
-                .is_some()
+                .is_none(),
+            "a session id stored in the clear does not survive the upgrade"
         );
     }
 

@@ -262,7 +262,7 @@ async fn token_endpoint_rate_limits_a_noisy_client() {
     assert_eq!(blocked.headers().get("retry-after").unwrap(), "60");
 
     server.abort();
-    fs::remove_file(db_path).unwrap();
+    remove_database(db_path);
 }
 
 #[tokio::test]
@@ -1335,7 +1335,7 @@ async fn server_check_accepts_running_rust_server() {
     );
 
     server.abort();
-    fs::remove_file(db_path).unwrap();
+    remove_database(db_path);
 }
 
 /// The check signs itself in through `/api/login` rather than being handed a
@@ -1364,11 +1364,15 @@ async fn server_check_signs_itself_in_against_an_external_server() {
     );
 
     server.abort();
-    fs::remove_file(db_path).unwrap();
+    remove_database(db_path);
 }
 
 #[tokio::test]
-#[ignore = "browser-dependent; run with `cargo test --test web -- --ignored` when validating static interview flow"]
+#[ignore = "browser-dependent: hermetic and about 30s idle, but a real browser \
+            under a loaded machine has been measured failing on page.goto past \
+            a two minute navigation timeout. CI runs it as its own step; \
+            locally, `cargo test --test web -- --ignored` when the machine is \
+            not busy"]
 async fn browser_check_accepts_running_rust_server_offline_interview() {
     let (mut config, cookie, db_path) = signed_in_web_config("browser-offline");
     config.web_dir = Path::new("web").to_path_buf();
@@ -1379,11 +1383,32 @@ async fn browser_check_accepts_running_rust_server_offline_interview() {
             .env("CODETRIAL_WEB_URL", base)
             .env("BROWSER_CHECK_AGENT", "offline")
             .env("BROWSER_CHECK_SESSION_COOKIE", cookie)
+            // The mock, not godbolt.org. The live service is what the default
+            // reaches for, and it turned this into a four minute test that a
+            // network hiccup could fail: the mock runs the same editor and
+            // results pipeline against fixed responses in a fraction of it.
+            // Whether godbolt's API still looks the way this code expects is a
+            // real question, but it is not one a commit should be blocked on.
+            .env("BROWSER_CHECK_COMPILER_EXPLORER_BASE_URL", "mock")
             .output()
     })
     .await
     .unwrap()
     .expect("browser check should run");
+
+    // Exit 3 is browser-check.sh saying Playwright is not installed. Skipped
+    // rather than failed, matching tests/browser/face-detector.test.js: the
+    // suite has to stay runnable without an 800 MB download. CI installs
+    // Chromium, so CI never takes this arm.
+    if output.status.code() == Some(3) {
+        eprintln!(
+            "skipping offline browser check: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        server.abort();
+        remove_database(db_path);
+        return;
+    }
 
     assert!(
         output.status.success(),
@@ -1392,7 +1417,7 @@ async fn browser_check_accepts_running_rust_server_offline_interview() {
     );
 
     server.abort();
-    fs::remove_file(db_path).unwrap();
+    remove_database(db_path);
 }
 
 #[tokio::test]
@@ -1424,7 +1449,7 @@ async fn browser_check_accepts_running_rust_server_with_rust_agent() {
     );
 
     server.abort();
-    fs::remove_file(db_path).unwrap();
+    remove_database(db_path);
 }
 
 #[test]
@@ -1569,7 +1594,7 @@ async fn token_api_matches_frontend_contract_over_http() {
     );
 
     server.abort();
-    fs::remove_file(db_path).unwrap();
+    remove_database(db_path);
 }
 
 #[tokio::test]
@@ -1619,7 +1644,7 @@ async fn token_api_rejects_malformed_body_and_defaults_an_empty_one() {
     assert_eq!(dispatcher.rooms(), vec!["interview-local"]);
 
     server.abort();
-    fs::remove_file(db_path).unwrap();
+    remove_database(db_path);
 }
 
 #[tokio::test]
@@ -1644,7 +1669,7 @@ async fn token_api_ignores_empty_and_production_fixed_room() {
             .starts_with("interview-")
     );
     empty_server.abort();
-    fs::remove_file(empty_db_path).unwrap();
+    remove_database(empty_db_path);
 
     let (mut production_config, production_cookie, production_db_path) =
         signed_in_web_config("production-room");
@@ -1668,7 +1693,7 @@ async fn token_api_ignores_empty_and_production_fixed_room() {
             .starts_with("interview-")
     );
     production_server.abort();
-    fs::remove_file(production_db_path).unwrap();
+    remove_database(production_db_path);
 }
 
 /// The production hole this closes: `/api/token` invented a room name per
@@ -1708,7 +1733,7 @@ async fn token_api_staffs_every_room_it_hands_out() {
     );
 
     server.abort();
-    fs::remove_file(db_path).unwrap();
+    remove_database(db_path);
 }
 
 /// The interviewer must be sent to the same LiveKit project whose secret signed
@@ -1749,7 +1774,7 @@ async fn a_staffed_room_names_the_project_that_signed_the_token() {
     );
 
     server.abort();
-    fs::remove_file(db_path).unwrap();
+    remove_database(db_path);
 }
 
 /// At capacity the honest answer is no. Handing out the token anyway puts the
@@ -1784,7 +1809,7 @@ async fn a_room_that_cannot_be_staffed_is_refused_rather_than_sold() {
     assert!(body.get("token").is_none(), "a refused room has no token");
 
     server.abort();
-    fs::remove_file(db_path).unwrap();
+    remove_database(db_path);
 }
 
 /// A web-only deployment, the other half of a split install, must keep working
@@ -1804,7 +1829,7 @@ async fn token_api_still_works_without_a_dispatcher() {
     assert_eq!(response.status(), 200);
 
     server.abort();
-    fs::remove_file(db_path).unwrap();
+    remove_database(db_path);
 }
 
 #[tokio::test]
@@ -1832,7 +1857,7 @@ async fn token_api_rejects_oversize_body() {
     );
 
     server.abort();
-    fs::remove_file(db_path).unwrap();
+    remove_database(db_path);
 }
 
 #[tokio::test]
@@ -1856,7 +1881,7 @@ async fn token_api_fails_closed_with_frontend_error_shape_without_livekit_creden
     );
 
     server.abort();
-    fs::remove_file(db_path).unwrap();
+    remove_database(db_path);
 }
 
 #[test]
@@ -1952,7 +1977,7 @@ fn account_database_schema_creates_login_tables() {
         }
     }
 
-    fs::remove_file(path).unwrap();
+    remove_database(path);
 }
 
 #[tokio::test]
@@ -2028,7 +2053,7 @@ async fn account_routes_record_interviewee_github_login() {
     assert_eq!(save_report.status(), 401);
 
     server.abort();
-    fs::remove_file(path).unwrap();
+    remove_database(path);
 }
 
 /// A typed handle is not proof of anything, so it must not be the key an
@@ -2078,12 +2103,57 @@ async fn a_claimed_handle_does_not_reach_an_earlier_candidates_reports() {
     assert_eq!(mine["reports"][0]["id"], "report-one");
 
     server.abort();
-    fs::remove_file(path).unwrap();
+    remove_database(path);
 }
 
-/// `/api/token` needs a session, and this is where sessions come from, so an
-/// unlimited login endpoint just moves the flood one door back and grows the
-/// account database while it is at it.
+/// The other half of the fail-closed rule, and the one an operator actually
+/// reaches: the file opens fine, but a rolled-back binary finds a schema
+/// version from the future and refuses to migrate it. That arm has to answer
+/// the same way as an unopenable path, because "I cannot read this database" is
+/// not the same statement as "this server has no accounts".
+#[tokio::test]
+async fn an_unmigratable_account_database_refuses_rather_than_disabling_login() {
+    let path = account_db_path("unmigratable");
+    initialize_account_database(&path).unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(&format!(
+            "PRAGMA user_version = {}",
+            codetrial::web::ACCOUNT_SCHEMA_VERSION + 1
+        ))
+        .unwrap();
+    let mut config = web_config();
+    config.session_secret = Some("session-secret".to_string());
+    config.db_path = Some(path.clone());
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+
+    let session = client
+        .get(format!("{base}/api/session"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        session,
+        json!({"signedIn": false, "loginRequired": true}),
+        "a database this binary cannot migrate still requires a login"
+    );
+
+    let token = client
+        .post(format!("{base}/api/token"))
+        .json(&json!({"problemId":"two-sum","durationMin":45}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(token.status(), 503);
+
+    server.abort();
+    remove_database(path);
+}
+
 /// A database that will not open must not read as "this server has no
 /// accounts". That would drop the sign-in gate over a bad path: the browser
 /// would be told login is optional and let anyone start an interview.
@@ -2136,6 +2206,9 @@ async fn an_unopenable_account_database_refuses_rather_than_disabling_login() {
     fs::remove_dir_all(path).unwrap();
 }
 
+/// `/api/token` needs a session, and this is where sessions come from, so an
+/// unlimited login endpoint just moves the flood one door back and grows the
+/// account database while it is at it.
 #[tokio::test]
 async fn login_endpoint_rate_limits_a_noisy_client() {
     let (base, server, path, client) = account_server("login-rate-limit").await;
@@ -2161,7 +2234,7 @@ async fn login_endpoint_rate_limits_a_noisy_client() {
     assert_eq!(blocked.headers().get("retry-after").unwrap(), "60");
 
     server.abort();
-    fs::remove_file(path).unwrap();
+    remove_database(path);
 }
 
 #[tokio::test]
@@ -2196,7 +2269,7 @@ async fn login_rejects_a_body_that_is_not_json() {
     }
 
     server.abort();
-    fs::remove_file(path).unwrap();
+    remove_database(path);
 }
 
 #[tokio::test]
@@ -2277,7 +2350,7 @@ async fn github_callback_sets_session_and_clears_oauth_state() {
 
     server.abort();
     github_server.abort();
-    fs::remove_file(path).unwrap();
+    remove_database(path);
 }
 
 /// Hiding the start button proves nothing: /interview is a URL anyone can open,
@@ -2302,12 +2375,7 @@ async fn token_requires_a_session_once_accounts_exist() {
                 [],
             )
             .unwrap();
-        connection
-            .execute(
-                "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES ('session-one', 1, 9999999999, 1)",
-                [],
-            )
-            .unwrap();
+        insert_session(&connection, "session-one", 1);
     }
 
     let mut config = web_config();
@@ -2351,7 +2419,7 @@ async fn token_requires_a_session_once_accounts_exist() {
     assert!(signed_in.json::<Value>().await.unwrap()["token"].is_string());
 
     server.abort();
-    fs::remove_file(path).unwrap();
+    remove_database(path);
 }
 
 /// The rate limit is keyed by address. If anonymous callers could spend it, a
@@ -2376,12 +2444,7 @@ async fn anonymous_requests_cannot_spend_the_signed_in_budget() {
                 [],
             )
             .unwrap();
-        connection
-            .execute(
-                "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES ('session-one', 1, 9999999999, 1)",
-                [],
-            )
-            .unwrap();
+        insert_session(&connection, "session-one", 1);
     }
 
     let mut config = web_config();
@@ -2420,7 +2483,7 @@ async fn anonymous_requests_cannot_spend_the_signed_in_budget() {
     );
 
     server.abort();
-    fs::remove_file(path).unwrap();
+    remove_database(path);
 }
 
 #[test]
@@ -2480,7 +2543,7 @@ async fn token_requires_recorded_github_login() {
 
     assert_eq!(signed_in.status(), 200);
     server.abort();
-    fs::remove_file(path).unwrap();
+    remove_database(path);
 }
 
 #[tokio::test]
@@ -2504,18 +2567,8 @@ async fn account_reports_are_scoped_to_the_signed_in_user() {
             "INSERT INTO users (id, github_id, login, created_at, updated_at) VALUES (2, 202, 'two', 1, 1)",
             [],
         ).unwrap();
-        connection
-            .execute(
-                "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES ('session-one', 1, 9999999999, 1)",
-                [],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES ('session-two', 2, 9999999999, 1)",
-                [],
-            )
-            .unwrap();
+        insert_session(&connection, "session-one", 1);
+        insert_session(&connection, "session-two", 2);
         connection.execute(
             "INSERT INTO reports (id, user_id, problem_id, payload, created_at, updated_at) VALUES ('report-one', 1, 'two-sum', '{\"problemId\":\"two-sum\",\"score\":8}', 1, 1)",
             [],
@@ -2625,7 +2678,7 @@ async fn account_reports_are_scoped_to_the_signed_in_user() {
     );
 
     server.abort();
-    fs::remove_file(path).unwrap();
+    remove_database(path);
 }
 
 /// `/api/reports` is an authenticated write with no rate limit, and the client
@@ -2683,7 +2736,7 @@ async fn a_full_account_cannot_grow_the_report_database() {
     );
 
     server.abort();
-    fs::remove_file(path).unwrap();
+    remove_database(path);
 }
 
 #[test]
@@ -2778,7 +2831,7 @@ async fn a_minted_room_name_routes_the_agent_to_the_provider_that_signed_it() {
     assert_eq!(served, vec!["eu", "primary", "us"]);
 
     server.abort();
-    fs::remove_file(db_path).unwrap();
+    remove_database(db_path);
 }
 
 /// A fixed room name is handed to the agent verbatim, so the handler has to
@@ -2815,7 +2868,7 @@ async fn a_fixed_room_name_pins_the_provider_it_names() {
     }
 
     server.abort();
-    fs::remove_file(db_path).unwrap();
+    remove_database(db_path);
 }
 
 fn web_config() -> WebServerConfig {
@@ -2836,6 +2889,18 @@ fn web_config() -> WebServerConfig {
     }
 }
 
+/// Writes the row `create_session` would have written for `token`. These
+/// fixtures pin explicit user ids, so they insert directly instead of signing
+/// in, but the id column still holds the digest rather than the cookie value.
+fn insert_session(connection: &rusqlite::Connection, token: &str, user_id: i64) {
+    connection
+        .execute(
+            "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?1, ?2, 9999999999, 1)",
+            (codetrial::accounts::session_key(token), user_id),
+        )
+        .unwrap();
+}
+
 fn signed_in_web_config(label: &str) -> (WebServerConfig, String, std::path::PathBuf) {
     let db_path = account_db_path(label);
     initialize_account_database(&db_path).unwrap();
@@ -2847,12 +2912,7 @@ fn signed_in_web_config(label: &str) -> (WebServerConfig, String, std::path::Pat
                 [],
             )
             .unwrap();
-        connection
-            .execute(
-                "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES ('session-one', 1, 9999999999, 1)",
-                [],
-            )
-            .unwrap();
+        insert_session(&connection, "session-one", 1);
     }
 
     let mut config = web_config();
@@ -2866,6 +2926,22 @@ fn signed_in_web_config(label: &str) -> (WebServerConfig, String, std::path::Pat
         ),
         db_path,
     )
+}
+
+/// A SQLite database in WAL mode is three files, and removing only the first
+/// left the other two behind on every run: the system temp directory had
+/// collected 2657 of them. `src/accounts.rs` has always cleaned all three for
+/// its own scratch databases; this side never learned to.
+///
+/// The main file keeps its `unwrap`, so a test that was asserting the database
+/// existed still does. The sidecars do not: WAL leaves them behind only if the
+/// database was actually opened, and a test that never opened it is not broken.
+fn remove_database(path: impl AsRef<std::path::Path>) {
+    let path = path.as_ref();
+    fs::remove_file(path).unwrap();
+    for suffix in ["-wal", "-shm"] {
+        let _ = fs::remove_file(format!("{}{suffix}", path.display()));
+    }
 }
 
 fn account_db_path(label: &str) -> std::path::PathBuf {

@@ -1,8 +1,10 @@
 # deps
 node_modules/
-# playwright is pinned exactly in package.json; a committed lockfile only adds
-# platform-specific optional entries that differ per machine
-package-lock.json
+# package-lock.json is committed. It was excluded while the only devDependency
+# was playwright, which pins playwright-core exactly, so the lockfile really did
+# add nothing but a darwin-only fsevents entry. eslint changed that: 90 packages
+# with 102 range-typed transitive dependencies, re-resolved on every install, so
+# without the lockfile CI runs a gate nobody can reproduce.
 .venv/
 __pycache__/
 

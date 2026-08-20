@@ -1,3 +1,12 @@
+// `domcontentloaded`, not `networkidle`, on every navigation below.
+//
+// The interview page fetches Pyodide, a VRM avatar and the MediaPipe face
+// models, tens of megabytes that most of these flows never touch, and
+// `networkidle` waits for all of it before the first assertion runs. Every
+// `goto` here is already followed by `clearMediaGate`, which blocks on the gate
+// becoming visible and then hidden, or by a `waitFor` on the heading the flow
+// cares about. Those wait for the thing being tested; `networkidle` waited for
+// the whole page and cost the offline flow about fifty seconds of it.
 const { chromium } = require(process.env.PLAYWRIGHT_PATH);
 const fs = require("fs");
 const http = require("http");
@@ -134,6 +143,20 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
 
   try {
     const page = await browser.newPage();
+    // Playwright defaults both of these to 30s, which is generous until the
+    // machine is busy and then is not. `interview.js` is a module with a
+    // top-level await, so DOMContentLoaded does not fire until the problem
+    // fetch and the whole module graph have resolved; on a loaded runner that
+    // navigation alone has been measured past thirty seconds, and the check
+    // failed on the clock rather than on anything it was asserting.
+    //
+    // One number in one place rather than a timeout argument sprinkled down the
+    // flows. It costs nothing when things are fast, because every wait returns
+    // as soon as its condition holds. It costs two minutes only when something
+    // is genuinely broken, which is a bill worth paying to stop a green gate
+    // going red for being run at a busy moment.
+    page.setDefaultTimeout(120000);
+    page.setDefaultNavigationTimeout(120000);
     // One boolean, not every URL of the run. The avatar flow only asks whether
     // the renderer was fetched, and accumulating thousands of request strings
     // to answer that grew unboundedly for no gain.
@@ -179,10 +202,44 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
       compilerExplorerMock = await startCompilerExplorerMock();
       compilerExplorerBaseUrl = compilerExplorerMock.url;
     }
-    if (compilerExplorerBaseUrl !== "__default__") {
+    // Not in mock mode. `web/runners.js` reads this global once, when the
+    // module evaluates, and `/runtime-config.js` assigns it too; which of the
+    // two lands first is not fixed, so injecting a third writer made the run
+    // pass or fail depending on load order. Under interception the page needs
+    // no injection at all: it computes the real origin, exactly as in
+    // production, and the request is answered before it leaves.
+    if (compilerExplorerBaseUrl !== "__default__" && !compilerExplorerMock) {
       await page.addInitScript((baseUrl) => {
         globalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = baseUrl;
       }, compilerExplorerBaseUrl);
+    }
+    if (compilerExplorerMock) {
+      // Route interception, not the init script above.
+      //
+      // `/runtime-config.js` assigns the same global, and it loads after any
+      // init script, so the page always ended up with the server's origin and
+      // the mock server sat there receiving nothing. Counting its requests said
+      // zero while the check passed, because the real service returns the same
+      // answers the mock was built to fake: the flow was hitting godbolt.org
+      // and calling itself hermetic.
+      //
+      // Intercepting by URL pattern does not care what the page computed. The
+      // browser still believes it is talking to the real origin, so the CSP,
+      // which is built from that same origin, is exercised rather than
+      // sidestepped.
+      await page.route("**/api/compiler/**", async (route) => {
+        const request = route.request();
+        const response = await fetch(`${compilerExplorerMock.url}${new URL(request.url()).pathname}`, {
+          method: request.method(),
+          headers: { "Content-Type": "application/json" },
+          body: request.postData() ?? undefined,
+        });
+        await route.fulfill({
+          status: response.status,
+          contentType: "application/json",
+          body: await response.text(),
+        });
+      });
     }
     const mode = process.env.BROWSER_CHECK_AGENT;
     const flow = process.env.BROWSER_CHECK_FLOW;
@@ -255,7 +312,7 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
       // The browser launches with --use-fake-ui-for-media-stream, which is why
       // no other flow in this file grants permissions.
       await page.setViewportSize({ width: 1440, height: 900 });
-      await page.goto(`${process.env.BASE_URL}/interview?problem=two-sum&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=two-sum&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.locator("#jim-avatar").waitFor({ timeout: 30000 });
       // Leaving "loading" is the contract. Which terminal state it lands on is
@@ -304,7 +361,7 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
     }
 
     if (mode === "home") {
-      await page.goto(process.env.BASE_URL, { waitUntil: "networkidle" });
+      await page.goto(process.env.BASE_URL, { waitUntil: "domcontentloaded" });
       await page.getByRole("heading", { name: "Practice a live technical interview" }).waitFor();
       await page.getByRole("button", { name: "Start interview" }).waitFor();
       await page.getByText("Valid Parentheses").waitFor();
@@ -312,21 +369,21 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
     }
 
     if (mode === "offline") {
-      await page.goto(`${process.env.BASE_URL}/interview?problem=two-sum&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=two-sum&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Two Sum", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      if (compilerExplorerBaseUrl === "") {
-        await page.getByRole("button", { name: "C", exact: true }).click();
-        await page.getByRole("button", { name: /Run tests/ }).click();
-        await page.getByRole("button", { name: "Run tests" }).waitFor();
-        await page.getByText("C tests are not wired up yet").waitFor();
-        await page.getByRole("button", { name: "C++" }).click();
-        await page.getByRole("button", { name: /Run tests/ }).click();
-        await page.getByRole("button", { name: "Run tests" }).waitFor();
-        await page.getByText("C++ tests are not wired up yet").waitFor();
-        return;
-      }
+      // The `""` branch that used to be here is gone. It set the global from an
+      // init script and expected "not wired up yet", which cannot work: the
+      // page also loads /runtime-config.js, which assigns the same global, so
+      // the injected value never survived and the assertion timed out. Nothing
+      // ran it, so nobody found out.
+      //
+      // Both halves of that path are covered where they are cheap and correct.
+      // tests/web.rs asserts the server emits the disabled runtime-config, and
+      // tests/browser/dom-contract.test.js re-imports web/runners.js with the
+      // global set to "" and asserts every compiled language reports itself not
+      // wired up. Neither has a load order to lose.
       if (compilerExplorerMock) {
         await page.getByRole("button", { name: "C", exact: true }).click();
         await page.getByLabel("Code editor").fill(`#include <stdlib.h>
@@ -347,7 +404,7 @@ int* twoSum(int* nums, int numsSize, int target, int* returnSize) {
 }
 `);
         await runAndExpectPassing(4, 120000);
-        await page.goto(`${process.env.BASE_URL}/interview?problem=min-stack&duration=20`, { waitUntil: "networkidle" });
+        await page.goto(`${process.env.BASE_URL}/interview?problem=min-stack&duration=20`, { waitUntil: "domcontentloaded" });
         await clearMediaGate(page);
         await page.getByRole("heading", { name: "Min Stack", level: 1 }).waitFor();
         await page.getByText("Offline", { exact: true }).waitFor();
@@ -372,7 +429,7 @@ public:
 };
 `);
         await runAndExpectPassing(4, 120000);
-        await page.goto(`${process.env.BASE_URL}/interview?problem=binary-search-tree-iterator&duration=20`, { waitUntil: "networkidle" });
+        await page.goto(`${process.env.BASE_URL}/interview?problem=binary-search-tree-iterator&duration=20`, { waitUntil: "domcontentloaded" });
         await clearMediaGate(page);
         await page.getByRole("heading", { name: "Binary Search Tree Iterator", level: 1 }).waitFor();
         await page.getByText("Offline", { exact: true }).waitFor();
@@ -493,7 +550,7 @@ int* twoSum(int* nums, int numsSize, int target, int* returnSize) {
       await page.locator("p").filter({ hasText: /^Jim$/ }).first().waitFor();
       await page.locator("p").filter({ hasText: /^You$/ }).first().waitFor();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=merge-sorted-array&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=merge-sorted-array&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Merge Sorted Array", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -513,7 +570,7 @@ int* twoSum(int* nums, int numsSize, int target, int* returnSize) {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=remove-duplicates-from-sorted-array-ii&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=remove-duplicates-from-sorted-array-ii&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Remove Duplicates from Sorted Array II", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -543,7 +600,7 @@ int* twoSum(int* nums, int numsSize, int target, int* returnSize) {
 `);
       await runAndExpectPassing(3);
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=merge-two-sorted-lists&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=merge-two-sorted-lists&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Merge Two Sorted Lists", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -567,7 +624,7 @@ int* twoSum(int* nums, int numsSize, int target, int* returnSize) {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=copy-list-with-random-pointer&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=copy-list-with-random-pointer&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Copy List with Random Pointer", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -585,7 +642,7 @@ int* twoSum(int* nums, int numsSize, int target, int* returnSize) {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=rotate-list&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=rotate-list&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Rotate List", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -610,7 +667,7 @@ int* twoSum(int* nums, int numsSize, int target, int* returnSize) {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=invert-binary-tree&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=invert-binary-tree&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Invert Binary Tree", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -625,7 +682,7 @@ int* twoSum(int* nums, int numsSize, int target, int* returnSize) {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=construct-binary-tree-from-preorder-and-inorder-traversal&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=construct-binary-tree-from-preorder-and-inorder-traversal&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Construct Binary Tree from Preorder and Inorder Traversal", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -647,7 +704,7 @@ int* twoSum(int* nums, int numsSize, int target, int* returnSize) {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=populating-next-right-pointers-in-each-node-ii&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=populating-next-right-pointers-in-each-node-ii&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Populating Next Right Pointers in Each Node II", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -668,7 +725,7 @@ int* twoSum(int* nums, int numsSize, int target, int* returnSize) {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=binary-search-tree-iterator&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=binary-search-tree-iterator&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Binary Search Tree Iterator", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -697,7 +754,7 @@ BSTIterator.prototype.hasNext = function() {
 `);
       await runAndExpectPassing(3);
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=lowest-common-ancestor-of-a-binary-tree&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=lowest-common-ancestor-of-a-binary-tree&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Lowest Common Ancestor of a Binary Tree", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -712,7 +769,7 @@ BSTIterator.prototype.hasNext = function() {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=binary-tree-zigzag-level-order-traversal&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=binary-tree-zigzag-level-order-traversal&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Binary Tree Zigzag Level Order Traversal", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -740,7 +797,7 @@ BSTIterator.prototype.hasNext = function() {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=validate-binary-search-tree&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=validate-binary-search-tree&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Validate Binary Search Tree", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -756,7 +813,7 @@ BSTIterator.prototype.hasNext = function() {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=clone-graph&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=clone-graph&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Clone Graph", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -776,7 +833,7 @@ BSTIterator.prototype.hasNext = function() {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=course-schedule-ii&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=course-schedule-ii&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Course Schedule II", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -805,7 +862,7 @@ BSTIterator.prototype.hasNext = function() {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=implement-trie-prefix-tree&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=implement-trie-prefix-tree&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Implement Trie (Prefix Tree)", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -844,7 +901,7 @@ Trie.prototype.find = function(text) {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=design-add-and-search-words-data-structure&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=design-add-and-search-words-data-structure&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Design Add and Search Words Data Structure", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -881,7 +938,7 @@ WordDictionary.prototype.search = function(word) {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=combination-sum&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=combination-sum&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Combination Sum", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -906,7 +963,7 @@ WordDictionary.prototype.search = function(word) {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=permutations&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=permutations&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Permutations", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -933,7 +990,7 @@ WordDictionary.prototype.search = function(word) {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=generate-parentheses&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=generate-parentheses&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Generate Parentheses", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -954,7 +1011,7 @@ WordDictionary.prototype.search = function(word) {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=n-queens-ii&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=n-queens-ii&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "N-Queens II", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -986,7 +1043,7 @@ WordDictionary.prototype.search = function(word) {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=word-search&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=word-search&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Word Search", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
@@ -1015,7 +1072,7 @@ WordDictionary.prototype.search = function(word) {
 `);
       await runAndExpectPassing();
 
-      await page.goto(`${process.env.BASE_URL}/interview?problem=convert-sorted-array-to-binary-search-tree&duration=20`, { waitUntil: "networkidle" });
+      await page.goto(`${process.env.BASE_URL}/interview?problem=convert-sorted-array-to-binary-search-tree&duration=20`, { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
       await page.getByRole("heading", { name: "Convert Sorted Array to Binary Search Tree", level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();

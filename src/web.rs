@@ -80,6 +80,19 @@ pub struct WebServerConfig {
 /// `/api/token` mints a real LiveKit credential and is necessarily
 /// unauthenticated: the browser has nowhere to keep a secret. Cap it per client
 /// so a stray script cannot drain the account's room minutes.
+///
+/// The ceiling, so nobody has to rediscover it from a bill: the counter lives
+/// in this process, so the number an attacker actually gets is this times the
+/// number of web processes behind the load balancer. `codetrial web` is built
+/// to run as the web half of a split deployment, so more than one is a
+/// supported shape rather than a hypothetical.
+///
+/// Left per process on purpose. A shared counter means every token request
+/// takes a write lock on the account database, which is the one thing the
+/// single guarded connection in `crate::accounts` is not built to absorb, and
+/// the failure this bounds is a stray script rather than a determined
+/// attacker: the factor is N, not unbounded. Move it into SQLite when N stops
+/// being small enough to multiply in your head.
 pub const TOKEN_RATE_LIMIT: u32 = 30;
 const TOKEN_RATE_WINDOW: Duration = Duration::from_secs(60);
 
@@ -203,26 +216,55 @@ struct AppState {
     provider_counter: Arc<AtomicUsize>,
 }
 
+/// Opens the connection the server keeps, brings its schema up to date, and
+/// reclaims what the last run leaked.
+///
+/// Fails closed on either database step: `None` means no accounts, which every
+/// handler already answers with a 503. It is never downgraded to "no accounts
+/// configured here", because that would drop the sign-in gate over a bad path.
+/// `initialize_accounts` runs first in both binaries and the migration retries
+/// through lock contention, so reaching a failure arm means something is wrong
+/// with the database itself, and saying so once at startup beats one log line
+/// per request.
+fn open_accounts(login: GitHubLoginConfig) -> Option<Arc<Accounts>> {
+    let accounts = Accounts::open(login)
+        .inspect_err(|error| {
+            eprintln!("account database will not open, refusing account requests: {error}")
+        })
+        .ok()?;
+    accounts
+        .initialize_schema()
+        .inspect_err(|error| {
+            eprintln!("account database will not initialize, refusing account requests: {error}")
+        })
+        .ok()?;
+
+    // Bounded to one uptime rather than never: every unverified sign-in left a
+    // throwaway account row and a session row behind, and nothing reclaimed
+    // either, so the database grew for the lifetime of the deployment. A
+    // long-running server still wants a periodic sweep; this is the cheapest
+    // correct place to put one, not the finished answer.
+    //
+    // Best effort, because a transient lock must not disable otherwise healthy
+    // account requests. Said out loud either way, because a sweep nobody can
+    // see is a database nobody notices growing.
+    match crate::accounts::sweep_expired_sessions(&accounts, current_epoch_seconds() as i64) {
+        Ok((0, 0)) => {}
+        Ok((sessions, users)) => {
+            eprintln!("swept {sessions} expired session(s) and {users} throwaway account(s)")
+        }
+        Err(error) => eprintln!("WARNING: session sweep failed: {error}"),
+    }
+    Some(Arc::new(accounts))
+}
+
 /// Not public: `/api/token` extracts `ConnectInfo`, so a bare `Router` served
 /// without connect info answers every token request with a 500. Callers go
 /// through [`web_service`].
 fn web_router(config: WebServerConfig, dispatcher: Option<Arc<dyn RoomDispatcher>>) -> Router {
-    // Fails closed: a database that cannot be opened means no accounts, which
-    // every handler already knows how to answer. `initialize_accounts` runs
-    // first in both binaries, so reaching this arm means something is wrong
-    // with the path and saying so once beats one log line per request.
     let login = login_config(&config);
     let accounts_required = login.is_some();
-    let accounts = login.and_then(|login| match Accounts::open(login) {
-        Ok(accounts) => Some(Arc::new(accounts)),
-        Err(error) => {
-            // Never downgraded to "no accounts here": that would drop the
-            // sign-in gate over a bad path. Requests get a 503 instead, and
-            // `initialize_accounts` has usually already refused to start.
-            eprintln!("account database will not open, refusing account requests: {error}");
-            None
-        }
-    });
+    let accounts = login.and_then(open_accounts);
     Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/api/token", post(token_handler))

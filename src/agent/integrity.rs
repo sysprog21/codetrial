@@ -62,6 +62,7 @@ pub fn sanitize_integrity_event(payload: &serde_json::Value) -> Option<serde_jso
         "MICROPHONE_UNMUTED" => "MICROPHONE_UNMUTED",
         "SCREEN_STATE_CHANGED" => "SCREEN_STATE_CHANGED",
         "CAMERA_STATE_CHANGED" => "CAMERA_STATE_CHANGED",
+
         // Meet presentation mode hands the camera to Google Meet, so no camera
         // evidence exists for the rest of the session. Recorded as an event
         // rather than silence: a report with no face events must not be
@@ -178,6 +179,7 @@ fn canonical_json(value: &serde_json::Value) -> String {
                 .collect::<Vec<_>>()
                 .join(",")
         ),
+
         // Infallible for a `Value`: keys are always strings and a `Number`
         // cannot hold NaN. Written as a fallback anyway, because this runs on
         // candidate-supplied event data and a reviewer should not have to
