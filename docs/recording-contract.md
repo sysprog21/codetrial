@@ -429,6 +429,123 @@ active slot, until the sweeper fails it as `abandoned` fifteen minutes later.
 The transfer step is the next task; until it lands, recording produces a staged
 GCS object and no delivery. That is why the switch stays off.
 
+## The replay
+
+A recording is an MP4 and a transcript; a replay is what the candidate was
+looking at while it happened. The two are delivered together and stored apart,
+because one is media a provider owns and the other is small enough to keep and
+cheap enough to serve.
+
+One envelope, version 1:
+
+```json
+{ "v": 1, "kind": "transcript", "at": 1770000000000, "payload": { } }
+```
+
+`at` is the browser's clock in milliseconds. It is what the replay is played
+back against, and it is never what orders anything: `seq`, allocated by the
+server, is the ordering.
+
+| `kind` | Producer | Replaces the last one |
+|---|---|---|
+| `transcript` | what was said | no |
+| `editor` | the code and its language | yes |
+| `tests` | a run's results | no |
+| `stage` | the clock and the interview phase | yes |
+| `avatar` | what Jim is doing | yes |
+| `lifecycle` | what the recording is doing | yes |
+
+"Replaces the last one" is what makes a late join one snapshot plus the events
+after it, rather than every keystroke since the interview began.
+
+### Limits
+
+| Limit | Value | Why |
+|---|---|---|
+| One payload | 64 KiB | a full screen of code is a few KiB; this is room for a pathological one and a refusal for anything that is not an event |
+| One string inside a payload | 16 KiB | a shape limit, not a size one: anything arriving as one enormous string is not what the producer is for |
+| Events per interview | 5000 | one every half second for forty minutes |
+| Bytes per interview | 8 MiB | more replay than an interview produces |
+
+Every byte limit above is UTF-8 bytes. The payload limit measures the serialized
+payload; the string limit measures the value itself, before JSON escaping.
+Sixteen thousand four-byte characters are the entire event budget spent on one
+field, so counting characters was counting the wrong thing, and escaping can
+still double a string of quotes on the way into JSON, which is what the payload
+limit is for.
+
+An event is processed in three steps, and the order is the rule:
+
+1. Overlong strings are cut, on a character boundary, and media values are
+   replaced. Both are transformations of a value the producer is allowed to
+   send, so a code snapshot at the limit becomes a prefix and the event is kept.
+   That alters the value, which is worth saying plainly.
+2. The payload is measured. This is the size of what a producer may send.
+3. Secret keys are stripped and the payload is measured again. Removal is last
+   and does not buy room: a megabyte arriving under a key that happens to be
+   redacted is a megabyte, and nothing unredacted is ever retained.
+
+The two per-interview limits are whichever comes first, and both exist so that a
+stuck producer costs a bounded amount rather than the disk. Over either,
+`POST /api/interviews/{id}/events` answers `413 replay_quota_exceeded` and sets
+`recordings.quota_exceeded`; the recording itself is not failed, because a
+replay that stopped growing is still a recording worth keeping. That route and
+its sequence allocation are the ingest task's; what is here is the shape it
+enforces.
+
+### Redaction
+
+Removed, not refused. A producer that accidentally carried a token should still
+deliver the transcript line beside it, and refusing the whole event would lose
+the interview in order to protect it.
+
+- Any key containing `token`, `secret`, `password`, `credential`,
+  `authorization`, `apikey`, `privatekey`, `bearer`, `jwt` or `cookie`, at any
+  depth. Matched on a lowercased key with `-` and `_` removed, because the
+  browser writes `apiKey`, `x-api-key` and `private_key` and a list of exact
+  names would let every one of them through.
+
+  `session` is deliberately not on that list: it would take `sessionId` and
+  `sessionName` with it, and the session cookie is `HttpOnly` and unreachable
+  from any producer.
+- Any string starting with `data:` or `blob:`, replaced with `[media removed]`.
+  This is the one thing a replay must never carry: the video is the provider's,
+  delivered under a permission that expires, and a frame smuggled into an event
+  outlives it.
+
+This is a key check and a media check, and it does not read values. A bearer
+token in the middle of a transcript line, or a signed URL inside a test result,
+survives it. The producers are first-party and none of them handle credentials,
+and a value-scanning rule would cost false positives on ordinary code and prose
+for a case none of them can reach.
+
+Redaction runs where the value stops being the candidate's and starts being this
+server's, before anything is stored. A payload that reaches storage unredacted
+is one nothing later can un-store.
+
+### `replay_events`
+
+| Column | Type | Null | Meaning |
+|---|---|---|---|
+| `interview_id` | TEXT | no | `interviews(id)`, `ON DELETE CASCADE` |
+| `seq` | INTEGER | no | server-allocated, monotonic per interview |
+| `kind` | TEXT | no | one of the six above |
+| `at` | INTEGER | no | the browser's clock |
+| `payload` | TEXT | no | redacted JSON |
+| `bytes` | INTEGER | no | the payload's size, so the quota is a sum rather than a scan |
+| `received_at` | INTEGER | no | this server's clock |
+
+`(interview_id, seq)` is the primary key, so no two events can claim one
+position. It does not rule out a gap: only the server allocating the number does
+that, and the key is what makes the allocation's answer durable.
+
+`CHECK`s carry the rest of the shape: `seq`, `at` and `bytes` are non-negative
+and `kind` is one of the six. A row that fails one has no meaning for this
+table, whoever wrote it.
+
+`ON DELETE CASCADE`, unlike `recordings`. Nothing here is a handle to media
+somewhere else, so losing these rows loses only what they say.
+
 ## Google Drive delivery
 
 All calls carry `supportsAllDrives=true`. Without it the API pretends a Shared

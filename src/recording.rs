@@ -2352,3 +2352,273 @@ fn tombstone(
         Ok(changed > 0)
     })
 }
+
+/// The replay, which is the interview without the video.
+///
+/// Six producers, one envelope, one version. A replay is what the candidate was
+/// looking at while the recording ran: what was said, what was typed, what the
+/// tests said, where the clock was, what Jim was doing, and what the recording
+/// itself was doing. None of it is media.
+pub const REPLAY_VERSION: u64 = 1;
+
+/// One event, at its largest. An editor snapshot of a full screen of code is a
+/// few kilobytes; sixty-four is room for a pathological one and a refusal for
+/// anything that is not an event at all.
+pub const MAX_REPLAY_EVENT_BYTES: usize = 64 * 1024;
+
+/// Per interview, whichever comes first. Five thousand events is one every half
+/// second for forty minutes, and eight megabytes is more replay than any
+/// interview produces; both exist so that a stuck producer costs a bounded
+/// amount rather than the disk.
+pub const MAX_REPLAY_EVENTS: i64 = 5_000;
+pub const MAX_REPLAY_BYTES: i64 = 8 * 1024 * 1024;
+
+/// The longest a single string inside a payload may be, in UTF-8 bytes of the
+/// value itself, before JSON escaping.
+///
+/// Bytes, not characters: sixteen thousand four-byte characters are sixty-four
+/// kilobytes, which is the whole event budget spent on one field. Escaping can
+/// still double a string of quotes on the way into JSON, and the payload limit
+/// is what bounds that, because it measures the serialized form.
+///
+/// Not a size limit so much as a shape limit: a transcript line is a sentence
+/// and an editor snapshot is code, and anything arriving as one enormous string
+/// is something other than what the producer is for. Over it, the string is cut
+/// and the event kept, because the interview is worth more than the tail of one
+/// oversized value. That is a visible alteration and the contract says so.
+pub const MAX_REPLAY_STRING: usize = 16 * 1024;
+
+/// What a replay event can be about.
+///
+/// A closed list, because the replay page renders each one differently and an
+/// unknown kind is a producer nobody wrote a renderer for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplayKind {
+    Transcript,
+    Editor,
+    Tests,
+    Stage,
+    Avatar,
+    Lifecycle,
+}
+
+impl ReplayKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Transcript => "transcript",
+            Self::Editor => "editor",
+            Self::Tests => "tests",
+            Self::Stage => "stage",
+            Self::Avatar => "avatar",
+            Self::Lifecycle => "lifecycle",
+        }
+    }
+
+    pub const ALL: [Self; 6] = [
+        Self::Transcript,
+        Self::Editor,
+        Self::Tests,
+        Self::Stage,
+        Self::Avatar,
+        Self::Lifecycle,
+    ];
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == value)
+    }
+
+    /// Whether the newest event of this kind is the whole story.
+    ///
+    /// An editor snapshot replaces the last one and a transcript line does not,
+    /// which is what lets a late join be one snapshot plus the events after it
+    /// rather than every keystroke since the interview began.
+    pub fn is_snapshot(self) -> bool {
+        matches!(
+            self,
+            Self::Editor | Self::Stage | Self::Avatar | Self::Lifecycle
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayEvent {
+    pub kind: ReplayKind,
+    /// The browser's clock, in milliseconds. Kept because the replay is played
+    /// back against it, and never trusted for ordering: `seq` is what orders.
+    pub at: i64,
+    pub payload: Value,
+}
+
+/// Why an event was refused. Each one is a different thing for the producer to
+/// have done wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplayRejection {
+    /// Not this envelope, or not this version of it.
+    Envelope,
+    /// A kind nothing renders.
+    Kind,
+    /// Larger than one event may be.
+    Oversize,
+}
+
+impl ReplayRejection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Envelope => "replay_envelope_invalid",
+            Self::Kind => "replay_kind_unknown",
+            Self::Oversize => "replay_event_too_large",
+        }
+    }
+}
+
+/// Reads one event off the wire, redacting as it goes.
+///
+/// Redaction happens here rather than at the database, because this is the last
+/// place the value is still a candidate's and the first place it is this
+/// server's. A payload that reaches storage unredacted is one nothing later can
+/// un-store.
+pub fn parse_replay_event(value: &Value) -> Result<ReplayEvent, ReplayRejection> {
+    if value.get("v").and_then(Value::as_u64) != Some(REPLAY_VERSION) {
+        return Err(ReplayRejection::Envelope);
+    }
+    let kind = value
+        .get("kind")
+        .and_then(Value::as_str)
+        .ok_or(ReplayRejection::Envelope)?;
+    let kind = ReplayKind::parse(kind).ok_or(ReplayRejection::Kind)?;
+    let at = value
+        .get("at")
+        .and_then(Value::as_i64)
+        .filter(|at| *at >= 0)
+        .ok_or(ReplayRejection::Envelope)?;
+    let payload = value
+        .get("payload")
+        .filter(|payload| payload.is_object())
+        .ok_or(ReplayRejection::Envelope)?;
+
+    // Three steps, in this order, and the order is the whole rule.
+    //
+    // Trimming first, because cutting an overlong string is a transformation
+    // the contract promises: a code snapshot at the limit is a prefix, and the
+    // event is kept. Measuring next, because that is the size of what a
+    // producer is allowed to send. Stripping secret keys last and measuring
+    // again, because removal is not something a producer may rely on to get
+    // under the limit: a megabyte arriving under a key that happens to be
+    // redacted is a megabyte.
+    let payload = trim_replay_payload(payload);
+    if payload_bytes(&payload) > MAX_REPLAY_EVENT_BYTES {
+        return Err(ReplayRejection::Oversize);
+    }
+    let payload = strip_secret_keys(&payload);
+    if payload_bytes(&payload) > MAX_REPLAY_EVENT_BYTES {
+        return Err(ReplayRejection::Oversize);
+    }
+    Ok(ReplayEvent { kind, at, payload })
+}
+
+/// Keys whose value is never worth keeping, whatever a producer thinks.
+///
+/// Matched on a lowercased key with `-` and `_` removed, containing one of
+/// these rather than equal to it: the browser writes `apiKey`, `accessToken`,
+/// `x-api-key` and `Authorization`, and a list of exact names would let every
+/// one of them through.
+///
+/// The ceiling, because it is a real one: this is a key check plus a media
+/// check, and it does not read values. A bearer token in the middle of a
+/// transcript line, or a signed URL in a test result, survives it. The
+/// producers are first-party and none of them handle credentials; a
+/// value-scanning rule would cost false positives on ordinary code and prose
+/// for a case none of them can reach.
+///
+/// `session` is deliberately absent: it would take `sessionId` and
+/// `sessionName` with it, and the session cookie is `HttpOnly` and unreachable
+/// from any producer.
+const REDACTED_KEYS: [&str; 10] = [
+    "token",
+    "secret",
+    "password",
+    "credential",
+    "authorization",
+    "apikey",
+    "privatekey",
+    "bearer",
+    "jwt",
+    "cookie",
+];
+
+/// Everything a replay event must not carry, removed rather than refused.
+///
+/// Removed, because a producer that accidentally included a token should still
+/// deliver the transcript line it was carrying; refusing the whole event would
+/// lose the interview to protect it.
+pub fn redact_replay_payload(payload: &Value) -> Value {
+    strip_secret_keys(&trim_replay_payload(payload))
+}
+
+/// Media out, overlong strings cut. Everything here is a transformation of a
+/// value the producer is allowed to send.
+fn trim_replay_payload(payload: &Value) -> Value {
+    match payload {
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, value)| (key.clone(), trim_replay_payload(value)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(trim_replay_payload).collect()),
+        Value::String(text) => Value::String(redact_replay_string(text)),
+        other => other.clone(),
+    }
+}
+
+/// Keys whose value is never kept, at any depth.
+fn strip_secret_keys(payload: &Value) -> Value {
+    match payload {
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .filter(|(key, _)| {
+                    let key: String = key
+                        .to_ascii_lowercase()
+                        .chars()
+                        .filter(|character| *character != '-' && *character != '_')
+                        .collect();
+                    !REDACTED_KEYS.iter().any(|marker| key.contains(marker))
+                })
+                .map(|(key, value)| (key.clone(), strip_secret_keys(value)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(strip_secret_keys).collect()),
+        other => other.clone(),
+    }
+}
+
+/// The serialized size of a payload, which is what both limits are in terms of.
+///
+/// `usize::MAX` when it will not serialize, so a value that cannot be stored is
+/// refused as oversize rather than accepted and then found unstorable.
+pub fn payload_bytes(payload: &Value) -> usize {
+    serde_json::to_vec(payload).map_or(usize::MAX, |bytes| bytes.len())
+}
+
+fn redact_replay_string(text: &str) -> String {
+    // A `data:` URL is how an image reaches JSON, and the one thing a replay
+    // must never carry is media: the video is the provider's, delivered under a
+    // permission that expires, and a frame smuggled into an event outlives it.
+    let lowered = text.trim_start().to_ascii_lowercase();
+    if lowered.starts_with("data:") || lowered.starts_with("blob:") {
+        return "[media removed]".to_string();
+    }
+    if text.len() <= MAX_REPLAY_STRING {
+        return text.to_string();
+    }
+
+    // Cut on a character boundary, not a byte one. The limit is in bytes
+    // because that is what storage costs, and slicing a UTF-8 string at an
+    // arbitrary byte panics.
+    let mut end = MAX_REPLAY_STRING;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
+}

@@ -2065,3 +2065,203 @@ mod failure {
 
     fn _unused(_: &Scratch) {}
 }
+
+/// The replay schema: one envelope, six kinds, and everything a replay must not
+/// carry.
+mod replay {
+    use codetrial::recording::{
+        MAX_REPLAY_BYTES, MAX_REPLAY_EVENT_BYTES, MAX_REPLAY_EVENTS, MAX_REPLAY_STRING,
+        REPLAY_VERSION, ReplayKind, ReplayRejection, parse_replay_event, redact_replay_payload,
+    };
+    use serde_json::{Value, json};
+
+    fn envelope(kind: &str, payload: Value) -> Value {
+        json!({ "v": REPLAY_VERSION, "kind": kind, "at": 1_770_000_000_000i64, "payload": payload })
+    }
+
+    #[test]
+    fn replay_schema_envelope() {
+        // One shape for six producers. A renderer reads `kind` to decide what
+        // to draw, and an envelope it cannot read is an event it cannot place.
+        // Written out, not iterated from `ALL`: `parse` reads `ALL` too, so a
+        // loop over it would agree with itself whatever the list said.
+        assert_eq!(
+            ReplayKind::ALL.map(ReplayKind::as_str),
+            [
+                "transcript",
+                "editor",
+                "tests",
+                "stage",
+                "avatar",
+                "lifecycle"
+            ]
+        );
+
+        for kind in ReplayKind::ALL {
+            let parsed = parse_replay_event(&envelope(kind.as_str(), json!({ "a": 1 })))
+                .unwrap_or_else(|_| panic!("{} should parse", kind.as_str()));
+            assert_eq!(parsed.kind, kind);
+            assert_eq!(parsed.at, 1_770_000_000_000);
+        }
+
+        // The version is checked, not assumed. A producer from a later deploy
+        // sending a shape this server does not know is refused rather than
+        // stored and rendered as something else.
+        let future =
+            json!({ "v": REPLAY_VERSION + 1, "kind": "transcript", "at": 1, "payload": {} });
+        assert_eq!(parse_replay_event(&future), Err(ReplayRejection::Envelope));
+
+        assert_eq!(
+            parse_replay_event(&envelope("screenshot", json!({}))),
+            Err(ReplayRejection::Kind),
+            "a kind nothing renders is a producer nobody wrote a renderer for"
+        );
+        for broken in [
+            json!({ "kind": "transcript", "at": 1, "payload": {} }),
+            json!({ "v": REPLAY_VERSION, "at": 1, "payload": {} }),
+            json!({ "v": REPLAY_VERSION, "kind": "transcript", "payload": {} }),
+            json!({ "v": REPLAY_VERSION, "kind": "transcript", "at": -1, "payload": {} }),
+            json!({ "v": REPLAY_VERSION, "kind": "transcript", "at": 1, "payload": "text" }),
+        ] {
+            assert_eq!(parse_replay_event(&broken), Err(ReplayRejection::Envelope));
+        }
+
+        // Which kinds replace their predecessor is what makes a late join one
+        // snapshot plus the events after it, rather than every keystroke.
+        for replaces in [
+            ReplayKind::Editor,
+            ReplayKind::Stage,
+            ReplayKind::Avatar,
+            ReplayKind::Lifecycle,
+        ] {
+            assert!(replaces.is_snapshot(), "{}", replaces.as_str());
+        }
+        for accumulates in [ReplayKind::Transcript, ReplayKind::Tests] {
+            assert!(!accumulates.is_snapshot(), "{}", accumulates.as_str());
+        }
+    }
+
+    #[test]
+    fn replay_schema_limits() {
+        assert_eq!(MAX_REPLAY_EVENT_BYTES, 64 * 1024);
+        assert_eq!(MAX_REPLAY_EVENTS, 5_000);
+        assert_eq!(MAX_REPLAY_BYTES, 8 * 1024 * 1024);
+
+        // A code snapshot the size of a screen goes through.
+        let code = "x".repeat(4_000);
+        assert!(parse_replay_event(&envelope("editor", json!({ "code": code }))).is_ok());
+
+        // Bytes, not characters. Sixteen thousand four-byte characters are the
+        // whole event budget spent on one field, and the cut lands on a
+        // character boundary rather than splitting one.
+        let wide = "\u{1F600}".repeat(MAX_REPLAY_STRING / 4 + 10);
+        let cut = parse_replay_event(&envelope("editor", json!({ "code": wide })))
+            .unwrap()
+            .payload["code"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(cut.len() <= MAX_REPLAY_STRING);
+        assert!(cut.chars().all(|character| character == '\u{1F600}'));
+
+        // One string longer than a producer has any reason to send is cut, and
+        // the event survives: the interview is worth more than the tail of one
+        // oversized value.
+        let long = "y".repeat(MAX_REPLAY_STRING + 500);
+        let parsed = parse_replay_event(&envelope("editor", json!({ "code": long }))).unwrap();
+        assert_eq!(
+            parsed.payload["code"].as_str().unwrap().chars().count(),
+            MAX_REPLAY_STRING
+        );
+
+        // Many of them together is not an event at all.
+        let fields: serde_json::Map<String, Value> = (0..8)
+            .map(|index| (format!("f{index}"), json!("z".repeat(MAX_REPLAY_STRING))))
+            .collect();
+        assert_eq!(
+            parse_replay_event(&envelope("editor", Value::Object(fields))),
+            Err(ReplayRejection::Oversize)
+        );
+
+        // One overlong string is cut and the event kept, which is the promise
+        // the contract makes about a code snapshot at the limit.
+        let huge = "q".repeat(MAX_REPLAY_EVENT_BYTES + 10_000);
+        let kept = parse_replay_event(&envelope("editor", json!({ "code": huge }))).unwrap();
+        assert_eq!(
+            kept.payload["code"].as_str().unwrap().len(),
+            MAX_REPLAY_STRING
+        );
+
+        // Bulk hidden under keys redaction removes is still bulk. Stripping
+        // runs after the measurement for exactly this: removal is not something
+        // a producer may rely on to get under the limit.
+        let hidden: serde_json::Map<String, Value> = (0..8)
+            .map(|index| {
+                (
+                    format!("accessToken{index}"),
+                    json!("q".repeat(MAX_REPLAY_STRING)),
+                )
+            })
+            .collect();
+        assert_eq!(
+            parse_replay_event(&envelope("editor", Value::Object(hidden))),
+            Err(ReplayRejection::Oversize),
+            "an oversized event is oversized whether or not its bulk survives redaction"
+        );
+    }
+
+    #[test]
+    fn replay_schema_redaction() {
+        // Removed, not refused. A producer that accidentally carried a token
+        // should still deliver the transcript line beside it.
+        let parsed = parse_replay_event(&envelope(
+            "transcript",
+            json!({
+                "text": "hello",
+                "accessToken": "ya29.secret",
+                "Authorization": "Bearer nope",
+                "x-api-key": "k1",
+                "private_key": "k2",
+                "sessionId": "abc",
+                "nested": { "apiKey": "k", "kept": true }
+            }),
+        ))
+        .unwrap();
+        assert_eq!(parsed.payload["text"], "hello");
+        assert_eq!(parsed.payload["nested"]["kept"], true);
+
+        // Separators removed before matching, because the browser writes all of
+        // these and a list of exact names would let every one through.
+        for gone in ["accessToken", "Authorization", "x-api-key", "private_key"] {
+            assert!(parsed.payload.get(gone).is_none(), "{gone} should be gone");
+        }
+        assert!(parsed.payload["nested"].get("apiKey").is_none());
+
+        // And `sessionId` stays. `session` as a marker would take it and
+        // `sessionName` with it, and the session cookie is HttpOnly and
+        // unreachable from any producer.
+        assert_eq!(parsed.payload["sessionId"], "abc");
+
+        // The one thing a replay must never carry. The video is the provider's,
+        // delivered under a permission that expires, and a frame smuggled into
+        // an event outlives it.
+        let media = parse_replay_event(&envelope(
+            "avatar",
+            json!({
+                "frame": "data:image/png;base64,iVBORw0KGgo=",
+                "other": "  BLOB:https://example.test/abc",
+                "items": ["data:video/mp4;base64,AAAA"]
+            }),
+        ))
+        .unwrap();
+        assert_eq!(media.payload["frame"], "[media removed]");
+        assert_eq!(media.payload["other"], "[media removed]");
+        assert_eq!(media.payload["items"][0], "[media removed]");
+
+        // And the redaction is the same function the ingest path uses, applied
+        // to a value that never went through an envelope.
+        let direct = redact_replay_payload(&json!({ "refreshToken": "r", "keep": 1 }));
+        assert!(direct.get("refreshToken").is_none());
+        assert_eq!(direct["keep"], 1);
+    }
+}

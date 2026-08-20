@@ -119,7 +119,7 @@ impl Accounts {
 /// Bumped whenever a migration is added below. SQLite carries it in the file
 /// header, so an existing database announces which migrations it has already
 /// run instead of quietly keeping an old shape behind `IF NOT EXISTS`.
-pub const ACCOUNT_SCHEMA_VERSION: i64 = 7;
+pub const ACCOUNT_SCHEMA_VERSION: i64 = 8;
 
 /// Migrations in order, each one taking the database from index `n` to `n + 1`.
 /// Append, never edit: an entry that has already run somewhere will not run
@@ -132,6 +132,7 @@ const ACCOUNT_MIGRATIONS: &[&str] = &[
     CREATE_INTERVIEWS,
     CREATE_RECORDINGS,
     CREATE_RECORDING_EVENTS,
+    CREATE_REPLAY_EVENTS,
 ];
 
 pub fn initialize_account_database(path: &Path) -> rusqlite::Result<()> {
@@ -495,6 +496,47 @@ const CREATE_RECORDING_EVENTS: &str = "
         CREATE INDEX IF NOT EXISTS recordings_active_by_update
             ON recordings(updated_at)
             WHERE state IN ('starting', 'recording', 'finalizing', 'transferring');
+";
+
+/// The interview, replayable without the video.
+///
+/// A recording is an MP4 and a transcript; a replay is what the candidate was
+/// looking at while it happened. The two are delivered together and stored
+/// apart, because one of them is media a provider owns and the other is small
+/// enough to keep and cheap enough to serve.
+///
+/// `(interview_id, seq)` is the primary key, so no two events can claim one
+/// position. It does not rule out a gap: only the server allocating the number
+/// does that, and this is what makes the allocation's answer durable.
+///
+/// The `CHECK`s carry what the application would otherwise be the only place to
+/// know. A `kind` nothing renders and a negative sequence are both rows this
+/// table has no meaning for, whoever wrote them. `at` is the browser's clock
+/// and `received_at` is this server's, because the two disagree and only one of
+/// them is trustworthy.
+///
+/// `ON DELETE CASCADE`, unlike `recordings`. Nothing here is a handle to media
+/// somewhere else, so losing these rows loses only what they say.
+const CREATE_REPLAY_EVENTS: &str = "
+        CREATE TABLE IF NOT EXISTS replay_events (
+            interview_id TEXT NOT NULL REFERENCES interviews(id) ON DELETE CASCADE,
+            seq INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            at INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            bytes INTEGER NOT NULL,
+            received_at INTEGER NOT NULL,
+            PRIMARY KEY (interview_id, seq),
+            CHECK (seq >= 0),
+            CHECK (at >= 0),
+            CHECK (bytes >= 0),
+            CHECK (kind IN ('transcript', 'editor', 'tests', 'stage', 'avatar', 'lifecycle'))
+        );
+
+        CREATE INDEX IF NOT EXISTS replay_events_by_interview_and_kind
+            ON replay_events(interview_id, kind, seq);
+
+        ALTER TABLE recordings ADD COLUMN quota_exceeded INTEGER NOT NULL DEFAULT 0;
 ";
 
 /// Every report read and the per-account quota below both filter on `user_id`,
@@ -1281,6 +1323,14 @@ mod migration_tests {
         // Newest first: `recordings` has foreign keys into `interviews`, so
         // dropping them the other way round would leave a table pointing at one
         // that is gone.
+        if version < 8 {
+            connection
+                .execute_batch(
+                    "DROP TABLE IF EXISTS replay_events;
+                     ALTER TABLE recordings DROP COLUMN quota_exceeded;",
+                )
+                .unwrap();
+        }
         if version < 7 {
             connection
                 .execute_batch(
@@ -1566,6 +1616,7 @@ mod migration_tests {
                 "interviews",
                 "recording_events",
                 "recordings",
+                "replay_events",
                 "reports",
                 "sessions",
                 "users"
