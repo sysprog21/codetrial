@@ -4140,6 +4140,7 @@ fn router_routes_match_a_fixed_allowlist() {
         "/api/interviews/{id}/consent",
         "/api/interviews/{id}/recording",
         "/api/interviews/{id}/end",
+        "/api/interviews/{id}/events",
         "/api/recording/webhook",
     ];
     allowed.sort_unstable();
@@ -4470,6 +4471,190 @@ async fn a_refused_interview_leaves_its_consent_unspent() {
         .await
         .unwrap();
     assert_eq!(retried.status(), 200);
+
+    server.abort();
+    remove_database(path);
+}
+
+/// The replay is the account's own, and only the account's.
+///
+/// The route is the one place an interview id arrives from a browser, so the
+/// owner check is what stands between a replay and anyone who can guess an id.
+#[tokio::test]
+async fn replay_events_are_owner_scoped() {
+    let (base, server, path, client, cookie) = recorded_server("replay-owner").await;
+    let interview = start_interview(&client, &base, &cookie).await;
+
+    let event = json!({
+        "v": codetrial::recording::REPLAY_VERSION,
+        "kind": "transcript",
+        "at": 1_770_000_000_000i64,
+        "payload": { "text": "hello" }
+    });
+    let stored = client
+        .post(format!("{base}/api/interviews/{interview}/events"))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "events": [event, event] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stored.status(), 200);
+    let body = stored.json::<Value>().await.unwrap();
+    assert_eq!(
+        (body["firstSeq"].as_i64(), body["lastSeq"].as_i64()),
+        (Some(0), Some(1))
+    );
+
+    // Somebody else's interview, by id. Not a 403: an account that does not own
+    // an interview should not learn that it exists.
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO users (id, github_id, login, email, email_verified, created_at, updated_at)
+                   VALUES (2, 202, 'two', 'two@example.test', 1, 1, 1);
+                 INSERT INTO interviews (id, account_id, consent_version, consent_at)
+                   VALUES ('int-theirs', 2, '2026-08-21', 1);",
+            )
+            .unwrap();
+    }
+    let theirs = client
+        .post(format!("{base}/api/interviews/int-theirs/events"))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "events": [event] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(theirs.status(), 404);
+    let count: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM replay_events WHERE interview_id = 'int-theirs'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+
+    // And a batch nobody sent by hand.
+    let flood: Vec<Value> = std::iter::repeat_n(event.clone(), 200).collect();
+    let refused = client
+        .post(format!("{base}/api/interviews/{interview}/events"))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "events": flood }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 413);
+
+    // A batch with nothing in it gets no range of sequence numbers, because
+    // none were allocated.
+    let empty = client
+        .post(format!("{base}/api/interviews/{interview}/events"))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "events": [] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(empty.status(), 400);
+    assert_eq!(
+        empty.json::<Value>().await.unwrap()["code"],
+        "replay_envelope_invalid"
+    );
+
+    let signed_out = client
+        .post(format!("{base}/api/interviews/{interview}/events"))
+        .json(&json!({ "events": [event] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(signed_out.status(), 401);
+
+    // The byte ceiling, over HTTP, with one row standing in for eight megabytes
+    // of replay: what is under test is the refusal and the flag, not SQLite's
+    // ability to hold five thousand rows.
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, created_at, updated_at
+        ) VALUES ('rec-replay', 1, ?1, 'interview-abc12345', ?1,
+            'one@example.test', 'recording', 1, 1)
+        ",
+                [&interview],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "
+        INSERT INTO replay_events (interview_id, seq, kind, at, payload, bytes, received_at)
+        VALUES (?1, 9999, 'transcript', 1, '{}', ?2, 1)
+        ",
+                rusqlite::params![&interview, codetrial::recording::MAX_REPLAY_BYTES],
+            )
+            .unwrap();
+    }
+    let over = client
+        .post(format!("{base}/api/interviews/{interview}/events"))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "events": [event] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(over.status(), 413);
+    assert_eq!(
+        over.json::<Value>().await.unwrap()["code"],
+        "replay_quota_exceeded"
+    );
+    let (state, flag): (String, i64) = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT state, quota_exceeded FROM recordings WHERE id = 'rec-replay'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (state.as_str(), flag),
+        ("recording", 1),
+        "the replay stopped growing; the recording did not fail"
+    );
+
+    // Withdrawal closes ingest. A browser with a buffer will flush it after the
+    // candidate has said stop, and a replay that keeps growing past a
+    // withdrawal is not a withdrawal.
+    {
+        let withdrawn = client
+            .delete(format!("{base}/api/interviews/{interview}/consent"))
+            .header("cookie", cookie.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(withdrawn.status(), 204);
+    }
+    let flushed = client
+        .post(format!("{base}/api/interviews/{interview}/events"))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "events": [event] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(flushed.status(), 404);
+    let stored_after: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM replay_events WHERE interview_id = ?1",
+            [&interview],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        stored_after, 3,
+        "the two stored above plus the synthetic quota row, and nothing after the withdrawal"
+    );
 
     server.abort();
     remove_database(path);

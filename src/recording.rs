@@ -2622,3 +2622,204 @@ fn redact_replay_string(text: &str) -> String {
     }
     text[..end].to_string()
 }
+
+/// How many events one request may carry, and how large that request may be.
+///
+/// The browser batches: a transcript line, an editor snapshot and a timer tick
+/// inside one second are three events and one round trip. Both bounds exist so
+/// that a batch is a batch rather than a way around the per-event limit.
+pub const MAX_REPLAY_BATCH: usize = 32;
+pub const MAX_REPLAY_BATCH_BYTES: usize = 256 * 1024;
+
+/// What one ingest request did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ingest {
+    /// A batch with nothing in it. Not an error the database can see, and not
+    /// something to answer with a range of sequence numbers nobody was given.
+    Empty,
+    /// The sequence numbers allocated, in order.
+    Stored { first: i64, last: i64 },
+    /// Nothing was stored, and nothing more will be. The recording is not
+    /// failed: a replay that stopped growing is still a recording worth
+    /// keeping.
+    QuotaExceeded,
+    /// No such interview, or not this account's.
+    NoInterview,
+}
+
+/// Appends a batch, allocating each sequence number as it goes.
+///
+/// Allocation is inside the insert, not around it. `SELECT MAX(seq)` and then
+/// `INSERT` is two statements with a gap in the middle, and two writers in that
+/// gap both pick the same number: one of them loses to the primary key and its
+/// event is gone. `INSERT ... SELECT` from the same table is one statement, and
+/// SQLite serializes writers, so the number is chosen and taken together.
+///
+/// The quota is checked once, before the batch. Checking per event would let a
+/// batch straddle the limit and store half of itself, and half a batch is a
+/// replay with a hole in it.
+/// Whether this account may still write to this interview.
+///
+/// Withdrawn consent closes it. A browser that buffered events before the
+/// withdrawal will try to flush them afterwards, and consent that stops the
+/// video while the replay keeps growing is not withdrawal.
+fn ingestible(
+    connection: &rusqlite::Connection,
+    interview_id: &str,
+    account_id: i64,
+) -> rusqlite::Result<bool> {
+    let open: i64 = connection.query_row(
+        "
+        SELECT COUNT(*) FROM interviews
+        WHERE id = ?1 AND account_id = ?2 AND consent_withdrawn_at IS NULL
+        ",
+        (interview_id, account_id),
+        |row| row.get(0),
+    )?;
+    Ok(open > 0)
+}
+
+pub fn append_replay_events(
+    accounts: &Accounts,
+    interview_id: &str,
+    account_id: i64,
+    events: &[ReplayEvent],
+    now: i64,
+) -> rusqlite::Result<Ingest> {
+    if events.is_empty() {
+        return Ok(Ingest::Empty);
+    }
+    accounts.with(|connection| {
+        // Read first, and only then take the write lock. `BEGIN IMMEDIATE`
+        // takes SQLite's database-wide writer lock, so checking ownership
+        // inside it would let any signed-in caller serialize every other writer
+        // by posting batches for interview ids they guessed. The check inside
+        // the transaction below is still the authority; this one only keeps a
+        // stranger out of the lock queue.
+        if !ingestible(connection, interview_id, account_id)? {
+            return Ok(Ingest::NoInterview);
+        }
+
+        // One IMMEDIATE transaction around the whole batch, so a batch is all
+        // of its events or none of them, and so the sequence it allocates is
+        // contiguous. The mutex around this connection serializes this process;
+        // IMMEDIATE is what a second `codetrial web` on the same database has
+        // to wait on, and it takes the write lock before the quota read rather
+        // than upgrading afterwards, which is where a deferred reader would
+        // find its snapshot stale.
+        let transaction = rusqlite::Transaction::new_unchecked(
+            connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        if !ingestible(&transaction, interview_id, account_id)? {
+            return Ok(Ingest::NoInterview);
+        }
+
+        let (count, bytes): (i64, i64) = transaction.query_row(
+            "
+        SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM replay_events WHERE interview_id = ?1
+        ",
+            [interview_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let incoming: i64 = events
+            .iter()
+            .map(|event| i64::try_from(payload_bytes(&event.payload)).unwrap_or(i64::MAX))
+            .sum();
+        if count + events.len() as i64 > MAX_REPLAY_EVENTS || bytes + incoming > MAX_REPLAY_BYTES {
+            // The flag is on the recording, because that is what a reviewer
+            // opens: a replay that is missing its tail should say so where the
+            // replay is read, not only in a log nobody reads.
+            //
+            // An interview whose recording never started has no row to flag,
+            // and this updates nothing. The refusal still stands: the producer
+            // is told the ceiling was reached, and there is no replay to review
+            // without a recording to review it beside.
+            transaction.execute(
+                "UPDATE recordings SET quota_exceeded = 1 WHERE interview_id = ?1",
+                [interview_id],
+            )?;
+            transaction.commit()?;
+            return Ok(Ingest::QuotaExceeded);
+        }
+
+        let mut first = None;
+        let mut last = 0;
+        for event in events {
+            let payload = event.payload.to_string();
+            let bytes = payload.len() as i64;
+
+            // Allocated inside the insert and read back out of it. A
+            // SELECT-then-INSERT has a gap two writers land in, and a MAX(seq)
+            // read after the insert can return the other writer's row rather
+            // than this one's.
+            let seq: i64 = transaction.query_row(
+                "
+        INSERT INTO replay_events (interview_id, seq, kind, at, payload, bytes, received_at)
+        SELECT ?1,
+               COALESCE((SELECT MAX(seq) FROM replay_events WHERE interview_id = ?1), -1) + 1,
+               ?2, ?3, ?4, ?5, ?6
+        RETURNING seq
+        ",
+                (
+                    interview_id,
+                    event.kind.as_str(),
+                    event.at,
+                    &payload,
+                    bytes,
+                    now,
+                ),
+                |row| row.get(0),
+            )?;
+            first.get_or_insert(seq);
+            last = seq;
+        }
+        transaction.commit()?;
+
+        // `first` is set on the first pass, because an empty batch returned
+        // above.
+        Ok(Ingest::Stored {
+            first: first.unwrap_or(last),
+            last,
+        })
+    })
+}
+
+/// Every event of an interview, in the order they were allocated.
+pub fn replay_events(
+    accounts: &Accounts,
+    interview_id: &str,
+    account_id: i64,
+    after: i64,
+) -> rusqlite::Result<Vec<(i64, ReplayEvent)>> {
+    accounts.with(|connection| {
+        // Scoped in the query rather than by the caller. The read routes are a
+        // later task, and an id from a URL is the only thing they will have.
+        let mut statement = connection.prepare(
+            "
+        SELECT seq, kind, at, payload FROM replay_events
+        WHERE interview_id = ?1 AND seq > ?2
+          AND interview_id IN (SELECT id FROM interviews WHERE account_id = ?3)
+        ORDER BY seq
+        ",
+        )?;
+        let rows = statement
+            .query_map((interview_id, after, account_id), |row| {
+                let kind: String = row.get(1)?;
+                let payload: String = row.get(3)?;
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    ReplayEvent {
+                        // A row the table's own `CHECK` allows and this binary
+                        // does not is a producer from a later deploy. It comes
+                        // back as `Lifecycle` rather than taking the read down.
+                        kind: ReplayKind::parse(&kind).unwrap_or(ReplayKind::Lifecycle),
+                        at: row.get(2)?,
+                        payload: serde_json::from_str(&payload).unwrap_or(Value::Null),
+                    },
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })
+}

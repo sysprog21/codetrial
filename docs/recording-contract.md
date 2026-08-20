@@ -489,9 +489,53 @@ The two per-interview limits are whichever comes first, and both exist so that a
 stuck producer costs a bounded amount rather than the disk. Over either,
 `POST /api/interviews/{id}/events` answers `413 replay_quota_exceeded` and sets
 `recordings.quota_exceeded`; the recording itself is not failed, because a
-replay that stopped growing is still a recording worth keeping. That route and
-its sequence allocation are the ingest task's; what is here is the shape it
-enforces.
+replay that stopped growing is still a recording worth keeping. An interview
+whose recording never started has no row to flag, and the refusal stands
+anyway: the producer is told the ceiling was reached, and there is no replay to
+review without a recording to review it beside.
+
+### Ingest
+
+`POST /api/interviews/{id}/events`, signed in, with `{"events": [...]}`.
+
+| Answer | When |
+|---|---|
+| `200 {"firstSeq", "lastSeq"}` | stored, and those are the numbers they were given |
+| `400 replay_envelope_invalid` | not the envelope, not this version of it, or a batch with nothing in it |
+| `400 replay_kind_unknown` | a kind nothing renders |
+| `413 replay_event_too_large` | one payload over 64 KiB |
+| `413 replay_batch_too_large` | over 32 events, or over 256 KiB of body |
+| `413 replay_quota_exceeded` | the interview is at one of its two ceilings |
+| `404 recording_not_found` | no such interview, not this account's, or consent withdrawn |
+| `404 recording_not_enabled` | this server records nothing |
+
+A batch is all of its events or none. A batch that stored its first half and
+refused its second would be a replay with a hole in it, and the producer has no
+way to learn which half survived, so validation of every event happens before
+the first insert and the inserts share one `IMMEDIATE` transaction.
+
+Withdrawn consent closes ingest for good, and closes it in the same shape as an
+id that was never this account's. A browser that buffered events before the
+withdrawal will try to flush them afterwards, and consent that stops the video
+while the replay keeps growing is not withdrawal. What is already stored is the
+deletion path's to remove, not ingest's.
+
+Cross-account is `404` rather than `403`, the same as everywhere else an
+interview id arrives from a browser: an account that does not own an interview
+should not learn that it exists.
+
+Sequences are allocated inside the insert itself:
+
+```sql
+INSERT INTO replay_events (...)
+SELECT ?1, COALESCE((SELECT MAX(seq) FROM replay_events WHERE interview_id = ?1), -1) + 1, ...
+RETURNING seq
+```
+
+A `SELECT MAX(seq)` followed by an `INSERT` has a gap two writers land in, and
+reading `MAX(seq)` back after the insert can return the other writer's row
+rather than this one's. `RETURNING` is what makes the number the server
+allocated the number the caller is told.
 
 ### Redaction
 
@@ -508,7 +552,9 @@ the interview in order to protect it.
   `session` is deliberately not on that list: it would take `sessionId` and
   `sessionName` with it, and the session cookie is `HttpOnly` and unreachable
   from any producer.
-- Any string starting with `data:` or `blob:`, replaced with `[media removed]`.
+- Any string that begins, after leading whitespace, with `data:` or `blob:`,
+  replaced with `[media removed]`. Whitespace is skipped because a browser that
+  wrote `" data:image/png..."` wrote a data URL.
   This is the one thing a replay must never carry: the video is the provider's,
   delivered under a permission that expires, and a frame smuggled into an event
   outlives it.
@@ -640,6 +686,7 @@ failure that has no symptom until it has a bad one.
 | `stopped_at` | INTEGER | yes | when the provider agreed to stop; an egress id with no `stopped_at` is a job still running |
 | `deleted_at` | INTEGER | yes | when the media was deleted |
 | `delete_error` | TEXT | yes | a short machine code for a partial failure |
+| `quota_exceeded` | INTEGER | no | default 0; set when the replay hit a ceiling and stopped growing |
 | `deleted_by` | TEXT | yes | `expiry`, `consent_withdrawn`, or `operator` |
 
 Two `CHECK`s state one rule in both directions:

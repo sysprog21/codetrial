@@ -356,6 +356,7 @@ fn web_router(
             post(start_recording_handler).get(recording_status_handler),
         )
         .route("/api/interviews/{id}/end", post(end_interview_handler))
+        .route("/api/interviews/{id}/events", post(replay_events_handler))
         .route(
             crate::recording::WEBHOOK_ROUTE,
             post(recording_webhook_handler),
@@ -2621,6 +2622,115 @@ async fn finish_recording(
                     "error": "The recording could not be stopped.",
                     "recordingId": recording.id
                 }),
+            )
+        }
+    }
+}
+
+/// The replay, arriving one batch at a time.
+///
+/// Authenticated and owner-scoped like everything else about an interview, and
+/// redacted before it is stored: this is the last place a payload is the
+/// candidate's and the first it is this server's.
+async fn replay_events_handler(
+    State(state): State<AppState>,
+    UriPath(interview_id): UriPath<String>,
+    request: Request<Body>,
+) -> Response {
+    use crate::recording::{Ingest, MAX_REPLAY_BATCH, MAX_REPLAY_BATCH_BYTES};
+
+    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+    if state.recorder.is_none() {
+        return json_response(
+            StatusCode::NOT_FOUND,
+            json!({ "code": "recording_not_enabled", "error": "This server does not record interviews." }),
+        );
+    }
+    let Ok(body) = to_bytes(request.into_body(), MAX_REPLAY_BATCH_BYTES).await else {
+        return json_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            json!({ "code": "replay_batch_too_large", "error": "Too much replay at once." }),
+        );
+    };
+    let Some(events) = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .and_then(|body| body.get("events")?.as_array().cloned())
+    else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "code": "replay_envelope_invalid", "error": "Replay events must be a list." }),
+        );
+    };
+    if events.is_empty() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "code": "replay_envelope_invalid", "error": "A batch with no events in it." }),
+        );
+    }
+    if events.len() > MAX_REPLAY_BATCH {
+        return json_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            json!({ "code": "replay_batch_too_large", "error": "Too many events at once." }),
+        );
+    }
+
+    // Every event, or none. A batch that stored its first half and refused the
+    // second would be a replay with a hole in it, and the producer has no way
+    // to know which half survived.
+    let mut parsed = Vec::with_capacity(events.len());
+    for event in &events {
+        match crate::recording::parse_replay_event(event) {
+            Ok(event) => parsed.push(event),
+            Err(rejection) => {
+                return json_response(
+                    if rejection == crate::recording::ReplayRejection::Oversize {
+                        StatusCode::PAYLOAD_TOO_LARGE
+                    } else {
+                        StatusCode::BAD_REQUEST
+                    },
+                    json!({ "code": rejection.as_str(), "error": "That is not a replay event." }),
+                );
+            }
+        }
+    }
+
+    let now = current_epoch_seconds() as i64;
+    let stored = blocking(move || {
+        crate::recording::append_replay_events(&accounts, &interview_id, user.id, &parsed, now)
+    })
+    .await;
+    match stored {
+        Ok(Ingest::Stored { first, last }) => json_response(
+            StatusCode::OK,
+            json!({ "firstSeq": first, "lastSeq": last }),
+        ),
+
+        // Not a failed recording. A replay that stopped growing is still a
+        // recording worth keeping, and the flag is where a reviewer will see
+        // that its tail is missing.
+        Ok(Ingest::QuotaExceeded) => json_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            json!({
+                "code": "replay_quota_exceeded",
+                "error": "This interview has recorded as much replay as it can."
+            }),
+        ),
+        Ok(Ingest::Empty) => json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "code": "replay_envelope_invalid", "error": "A batch with no events in it." }),
+        ),
+        Ok(Ingest::NoInterview) => json_response(
+            StatusCode::NOT_FOUND,
+            json!({ "code": "recording_not_found", "error": "No such interview." }),
+        ),
+        Err(error) => {
+            eprintln!("could not store replay events: {error}");
+            json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "Could not store the replay." }),
             )
         }
     }

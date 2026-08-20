@@ -14,7 +14,7 @@ use codetrial::accounts::{ACCOUNT_SCHEMA_VERSION, initialize_account_database};
 /// shape `src/accounts.rs` uses for its own migration tests, and for the same
 /// reason: a test that ends by panicking is the one whose leftovers you want
 /// gone.
-struct Scratch(PathBuf);
+pub(crate) struct Scratch(PathBuf);
 
 impl Drop for Scratch {
     fn drop(&mut self) {
@@ -25,7 +25,7 @@ impl Drop for Scratch {
 }
 
 impl Scratch {
-    fn new(label: &str) -> Self {
+    pub(crate) fn new(label: &str) -> Self {
         Self(std::env::temp_dir().join(format!(
             "codetrial-recording-{label}-{}-{}.db",
             std::process::id(),
@@ -36,11 +36,11 @@ impl Scratch {
         )))
     }
 
-    fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.0
     }
 
-    fn open(&self) -> rusqlite::Connection {
+    pub(crate) fn open(&self) -> rusqlite::Connection {
         let connection = rusqlite::Connection::open(&self.0).unwrap();
 
         // Foreign keys are off by default on every new handle, and the cascade
@@ -94,7 +94,7 @@ fn index_sql(connection: &rusqlite::Connection, name: &str) -> String {
 /// directly rather than through the HTTP routes, because this file is about the
 /// schema and a router in the way would only be able to reach the states the
 /// routes already allow.
-fn seed(connection: &rusqlite::Connection) {
+pub(crate) fn seed(connection: &rusqlite::Connection) {
     connection
         .execute_batch(
             "
@@ -2077,6 +2077,282 @@ mod replay {
 
     fn envelope(kind: &str, payload: Value) -> Value {
         json!({ "v": REPLAY_VERSION, "kind": kind, "at": 1_770_000_000_000i64, "payload": payload })
+    }
+
+    /// Ingest, against a real database.
+    ///
+    /// The sequence is the whole ordering guarantee, so what these check is
+    /// that it never repeats and never skips, whatever arrives.
+    mod ingest {
+        use std::sync::Arc;
+
+        use codetrial::accounts::{Accounts, GitHubLoginConfig};
+        use codetrial::recording::{
+            Ingest, MAX_REPLAY_EVENT_BYTES, MAX_REPLAY_EVENTS, MAX_REPLAY_STRING, ReplayKind,
+            ReplayRejection, append_replay_events, parse_replay_event, replay_events,
+        };
+        use serde_json::json;
+
+        use crate::Scratch;
+
+        fn harness(label: &str) -> (Scratch, Arc<Accounts>) {
+            let scratch = Scratch::new(label);
+            codetrial::accounts::initialize_account_database(scratch.path()).unwrap();
+            {
+                let connection = scratch.open();
+                crate::seed(&connection);
+                connection
+                    .execute_batch(
+                        "INSERT INTO users (id, github_id, login, email, email_verified, created_at, updated_at)
+                           VALUES (2, 202, 'two', 'two@example.test', 1, 1, 1);
+                         INSERT INTO interviews (id, account_id, consent_version, consent_at, room_name)
+                           VALUES ('int-other', 2, '2026-08-21', 11, 'interview-def67890');",
+                    )
+                    .unwrap();
+            }
+            let accounts = Arc::new(
+                Accounts::open(GitHubLoginConfig {
+                    oauth: None,
+                    session_secret: "replay".to_string(),
+                    db_path: scratch.path().to_path_buf(),
+                    oauth_base_url: String::new(),
+                    api_base_url: String::new(),
+                })
+                .unwrap(),
+            );
+            (scratch, accounts)
+        }
+
+        fn event(kind: ReplayKind, text: &str) -> codetrial::recording::ReplayEvent {
+            parse_replay_event(&json!({
+                "v": codetrial::recording::REPLAY_VERSION,
+                "kind": kind.as_str(),
+                "at": 1_770_000_000_000i64,
+                "payload": { "text": text }
+            }))
+            .unwrap()
+        }
+
+        #[tokio::test]
+        async fn replay_ingest_monotonic() {
+            let (_scratch, accounts) = harness("ingest-monotonic");
+
+            assert_eq!(
+                append_replay_events(
+                    &accounts,
+                    "int-1",
+                    1,
+                    &[
+                        event(ReplayKind::Transcript, "one"),
+                        event(ReplayKind::Editor, "two")
+                    ],
+                    10,
+                )
+                .unwrap(),
+                Ingest::Stored { first: 0, last: 1 }
+            );
+            assert_eq!(
+                append_replay_events(
+                    &accounts,
+                    "int-1",
+                    1,
+                    &[event(ReplayKind::Tests, "three")],
+                    11
+                )
+                .unwrap(),
+                Ingest::Stored { first: 2, last: 2 },
+                "a second batch continues where the first stopped"
+            );
+
+            let stored = replay_events(&accounts, "int-1", 1, -1).unwrap();
+            assert_eq!(
+                stored.iter().map(|(seq, _)| *seq).collect::<Vec<_>>(),
+                vec![0, 1, 2],
+                "no gaps and no repeats, which is the whole ordering guarantee"
+            );
+            assert_eq!(stored[0].1.payload["text"], "one");
+
+            // Each interview counts on its own, or one candidate's replay would
+            // renumber another's.
+            assert_eq!(
+                append_replay_events(
+                    &accounts,
+                    "int-other",
+                    2,
+                    &[event(ReplayKind::Transcript, "theirs")],
+                    12,
+                )
+                .unwrap(),
+                Ingest::Stored { first: 0, last: 0 }
+            );
+
+            // And somebody else's interview is not this account's to write to.
+            assert_eq!(
+                append_replay_events(
+                    &accounts,
+                    "int-other",
+                    1,
+                    &[event(ReplayKind::Transcript, "not mine")],
+                    13,
+                )
+                .unwrap(),
+                Ingest::NoInterview
+            );
+            assert_eq!(
+                replay_events(&accounts, "int-other", 2, -1).unwrap().len(),
+                1
+            );
+        }
+
+        #[tokio::test]
+        async fn replay_ingest_concurrent_writers() {
+            let (scratch, accounts) = harness("ingest-concurrent");
+
+            // Separate handles, so these are separate SQLite connections and
+            // not two callers behind one mutex. Four writers, five batches
+            // each, two events per batch: enough interleaving that a
+            // SELECT-then-INSERT allocation loses a race almost every run.
+            let writers: Vec<_> = (0..4)
+                .map(|_| {
+                    let accounts = Arc::new(
+                        Accounts::open(GitHubLoginConfig {
+                            oauth: None,
+                            session_secret: "replay".to_string(),
+                            db_path: scratch.path().to_path_buf(),
+                            oauth_base_url: String::new(),
+                            api_base_url: String::new(),
+                        })
+                        .unwrap(),
+                    );
+                    std::thread::spawn(move || {
+                        for round in 0..5 {
+                            append_replay_events(
+                                &accounts,
+                                "int-1",
+                                1,
+                                &[
+                                    event(ReplayKind::Transcript, "a"),
+                                    event(ReplayKind::Editor, "b"),
+                                ],
+                                round,
+                            )
+                            .unwrap();
+                        }
+                    })
+                })
+                .collect();
+            for writer in writers {
+                writer.join().unwrap();
+            }
+
+            let stored = replay_events(&accounts, "int-1", 1, -1).unwrap();
+            assert_eq!(
+                stored.iter().map(|(seq, _)| *seq).collect::<Vec<_>>(),
+                (0..40).collect::<Vec<_>>(),
+                "forty events, numbered once each, with nothing skipped"
+            );
+            drop(accounts);
+        }
+
+        #[tokio::test]
+        async fn replay_ingest_oversize_event() {
+            // Refused at the parse, before anything reaches the database: the
+            // ingest path never sees an event the schema would not have.
+            //
+            // Built from many fields rather than one enormous string, because a
+            // single string is trimmed to `MAX_REPLAY_STRING` and would come
+            // back under the limit: what the event ceiling catches is bulk the
+            // trim cannot reach.
+            let payload: serde_json::Map<String, serde_json::Value> = (0..8)
+                .map(|field| {
+                    (
+                        format!("f{field}"),
+                        serde_json::Value::String("q".repeat(MAX_REPLAY_STRING)),
+                    )
+                })
+                .collect();
+            let oversize = json!({
+                "v": codetrial::recording::REPLAY_VERSION,
+                "kind": "editor",
+                "at": 1,
+                "payload": payload
+            });
+            assert!(
+                codetrial::recording::payload_bytes(&oversize["payload"]) > MAX_REPLAY_EVENT_BYTES
+            );
+            assert_eq!(
+                parse_replay_event(&oversize),
+                Err(ReplayRejection::Oversize)
+            );
+
+            let (_scratch, accounts) = harness("ingest-oversize");
+            assert_eq!(replay_events(&accounts, "int-1", 1, -1).unwrap().len(), 0);
+        }
+
+        #[tokio::test]
+        async fn replay_ingest_quota_refusal() {
+            let (scratch, accounts) = harness("ingest-quota");
+            scratch
+                .open()
+                .execute(
+                    "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, created_at, updated_at
+        ) VALUES ('rec-1', 1, 'int-1', 'interview-abc12345', 'int-1',
+            'one@example.test', 'recording', 1, 1)
+        ",
+                    [],
+                )
+                .unwrap();
+
+            // Fill to the event ceiling directly, because writing five thousand
+            // events through the ingest path tests SQLite rather than the
+            // quota.
+            let connection = scratch.open();
+            for seq in 0..MAX_REPLAY_EVENTS {
+                connection
+                    .execute(
+                        "
+        INSERT INTO replay_events (interview_id, seq, kind, at, payload, bytes, received_at)
+        VALUES ('int-1', ?1, 'transcript', 1, '{}', 2, 1)
+        ",
+                        [seq],
+                    )
+                    .unwrap();
+            }
+
+            assert_eq!(
+                append_replay_events(
+                    &accounts,
+                    "int-1",
+                    1,
+                    &[event(ReplayKind::Transcript, "x")],
+                    20
+                )
+                .unwrap(),
+                Ingest::QuotaExceeded
+            );
+            assert_eq!(
+                replay_events(&accounts, "int-1", 1, -1).unwrap().len() as i64,
+                MAX_REPLAY_EVENTS,
+                "nothing is stored past the ceiling"
+            );
+
+            // The recording is flagged and not failed. A replay that stopped
+            // growing is still a recording worth keeping, and the flag is where
+            // a reviewer sees that its tail is missing.
+            let (state, flag): (String, i64) = scratch
+                .open()
+                .query_row(
+                    "SELECT state, quota_exceeded FROM recordings WHERE id = 'rec-1'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(state, "recording");
+            assert_eq!(flag, 1);
+        }
     }
 
     #[test]
