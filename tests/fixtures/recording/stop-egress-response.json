@@ -1,0 +1,7 @@
+{
+  "egress_id": "EG_fixtureEgress01",
+  "room_id": "RM_fixtureRoom0001",
+  "room_name": "interview-3f9a2c17",
+  "status": "EGRESS_ENDING",
+  "started_at": "1770000000000000000"
+}

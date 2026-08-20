@@ -1,13 +1,19 @@
-//! LiveKit access tokens.
+//! LiveKit access tokens, and the one credential that arrives rather than
+//! leaves: the JWT LiveKit signs its webhooks with.
 //!
 //! Both the HTTP layer (candidate tokens) and the agent runtime (join and room
 //! admin tokens) mint these, so the signing lives here rather than in either
-//! caller.
+//! caller. Verification lives here for the same reason: it is the same
+//! algorithm read backwards, and a second copy of it elsewhere would be a
+//! second chance to accept something this one refuses.
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
-use sha2::Sha256;
+use sha2::{Digest as _, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -141,4 +147,111 @@ fn sign_jwt(
 
 fn b64_json(value: &Value) -> serde_json::Result<String> {
     serde_json::to_vec(value).map(|bytes| URL_SAFE_NO_PAD.encode(bytes))
+}
+
+/// The content type LiveKit sends webhooks with. Custom on purpose upstream,
+/// so a receiver checks the signature before parsing rather than after.
+pub const LIVEKIT_WEBHOOK_CONTENT_TYPE: &str = "application/webhook+json";
+
+/// Why a LiveKit webhook was refused. One value per distinguishable cause,
+/// because the handler answers all of them the same way and the operator
+/// debugging a webhook that never arrives needs to know which one it was: a
+/// clock skew and a stolen key are the same 401 and completely different
+/// problems.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebhookRejection {
+    /// Not three base64url segments carrying JSON claims.
+    Malformed,
+    /// Signed by a project this server does not serve.
+    UnknownKey,
+    /// The right key, the wrong secret.
+    BadSignature,
+    /// Outside the token's own validity window.
+    Expired,
+    /// A valid signature over bytes other than the ones that arrived. This is
+    /// the case a signature alone does not catch, and the reason LiveKit puts
+    /// a digest of the body inside the token.
+    BodyMismatch,
+}
+
+impl std::fmt::Display for WebhookRejection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Malformed => "malformed",
+            Self::UnknownKey => "unknown_key",
+            Self::BadSignature => "bad_signature",
+            Self::Expired => "expired",
+            Self::BodyMismatch => "body_mismatch",
+        })
+    }
+}
+
+/// Whether `authorization` is LiveKit's signature over exactly `body`.
+///
+/// The header is the bare JWT, with no `Bearer` prefix: that is what
+/// `webhook/url_notifier.go` sets, and accepting a prefix it never sends would
+/// only widen what this function has to be right about.
+///
+/// The order is forced. `iss` names the project whose secret verifies the
+/// token, so it has to be read out of an unverified payload before there is
+/// anything to verify with; every later step then runs against claims the
+/// signature has already vouched for. Upstream's own receiver does the same.
+pub fn verify_livekit_webhook(
+    api_key: &str,
+    api_secret: &str,
+    authorization: &str,
+    body: &[u8],
+    now_seconds: u64,
+) -> Result<(), WebhookRejection> {
+    let (signing_input, signature) = authorization
+        .rsplit_once('.')
+        .ok_or(WebhookRejection::Malformed)?;
+    let (_, payload) = signing_input
+        .split_once('.')
+        .ok_or(WebhookRejection::Malformed)?;
+    let claims: Value = URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .ok_or(WebhookRejection::Malformed)?;
+
+    // The JWT header is never read, and that is the point. Algorithm confusion
+    // needs a verifier that takes `alg` from the token; this one always
+    // computes HMAC-SHA256, so `{"alg":"none"}` fails the signature check like
+    // any other forgery. Parsing the header to reject what it already rejects
+    // would be code defending against nothing. Raised in review twice; written
+    // down so it is not raised a third time.
+
+    if claims.get("iss").and_then(Value::as_str) != Some(api_key) {
+        return Err(WebhookRejection::UnknownKey);
+    }
+    if !verify_hs256(api_secret, signing_input, signature) {
+        return Err(WebhookRejection::BadSignature);
+    }
+
+    // A token with no `exp` is refused rather than treated as eternal. LiveKit
+    // always sets one, five minutes out, so the absent case is not a message
+    // this endpoint has to keep working for.
+    let expires_at = claims
+        .get("exp")
+        .and_then(Value::as_u64)
+        .ok_or(WebhookRejection::Malformed)?;
+    let not_before = claims.get("nbf").and_then(Value::as_u64).unwrap_or(0);
+    if now_seconds >= expires_at || now_seconds < not_before {
+        return Err(WebhookRejection::Expired);
+    }
+
+    // Standard base64 with padding, matching `webhook/verifier.go`. A URL-safe
+    // decoder here would reject every digest containing a `+` or a `/`, which
+    // is most of them, and the failure would look like a forged message.
+    //
+    // Compared with `==` rather than in constant time. The digest is a public
+    // function of a body the sender already holds, and the secret-dependent
+    // comparison above is `Mac::verify_slice`, which is constant time. There is
+    // no secret here to leak the prefix length of.
+    let digest = STANDARD.encode(Sha256::digest(body));
+    if claims.get("sha256").and_then(Value::as_str) != Some(digest.as_str()) {
+        return Err(WebhookRejection::BodyMismatch);
+    }
+    Ok(())
 }

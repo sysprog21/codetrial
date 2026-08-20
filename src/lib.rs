@@ -3,6 +3,7 @@ pub mod agent;
 pub mod config;
 pub mod gemini;
 pub mod livekit;
+pub mod recording;
 pub mod runtime;
 pub mod token;
 pub mod web;

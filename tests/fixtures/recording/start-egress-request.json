@@ -1,0 +1,26 @@
+{
+  "room_name": "interview-3f9a2c17",
+  "custom_base_url": "https://recording.codetrial.example/recording/index.html",
+  "audio_only": false,
+  "video_only": false,
+  "advanced": {
+    "width": 1280,
+    "height": 720,
+    "framerate": 30,
+    "video_codec": "H264_MAIN",
+    "video_bitrate": 2000,
+    "audio_codec": "AAC",
+    "audio_bitrate": 128
+  },
+  "file_outputs": [
+    {
+      "file_type": "MP4",
+      "filepath": "codetrial/Rf2Kq7XmZ0pB4nT8sVdLwA.mp4",
+      "disable_manifest": true,
+      "gcp": {
+        "credentials": "<service account key JSON>",
+        "bucket": "codetrial-recording-staging"
+      }
+    }
+  ]
+}

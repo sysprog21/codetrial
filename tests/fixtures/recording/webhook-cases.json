@@ -1,0 +1,55 @@
+{
+  "apiKey": "APIfixturekey",
+  "apiSecret": "fixture-secret-not-a-real-livekit-credential",
+  "now": 1770000001,
+  "cases": [
+    {
+      "name": "egress_ended",
+      "body": "webhook-egress-ended.json",
+      "authorization": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJBUElmaXh0dXJla2V5IiwibmJmIjoxNzcwMDAwMDAwLCJleHAiOjE3NzAwMDAzMDAsInNoYTI1NiI6InpLR2RxNFJ0M3M3aDZKb0hIcFFQSDNXY0hZc1d5d3ZiMkFSNHNEaWhjMU09In0.JsavsETdtAXhGxF3RDk1RZQKqgqbtyT27I_7gSISY6c",
+      "verdict": "accepted"
+    },
+    {
+      "name": "egress_ended retry",
+      "body": "webhook-egress-ended-duplicate.json",
+      "authorization": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJBUElmaXh0dXJla2V5IiwibmJmIjoxNzcwMDAwMDAwLCJleHAiOjE3NzAwMDAzMDAsInNoYTI1NiI6ImxER2g3TTVOdHhKZnFyLzV4ODRYQkd3bjY3NzdHcUwrZXR1dWtZVk5pbDg9In0.N3-raCC9aaSjus-QXMexl6NIt8TUzWZjyGaXbd3woR4",
+      "verdict": "accepted"
+    },
+    {
+      "name": "room_finished",
+      "body": "webhook-room-finished.json",
+      "authorization": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJBUElmaXh0dXJla2V5IiwibmJmIjoxNzcwMDAwMDAwLCJleHAiOjE3NzAwMDAzMDAsInNoYTI1NiI6InN5N1VTdE4wRk9MMnhUaU1abndXWCtmQjB4RG5wTk5uaFVtVmlTem0xM3M9In0.UyJCbxfmINeytsw3T63i4boEkc1W_gWPx5mOtYanwOw",
+      "verdict": "accepted"
+    },
+    {
+      "name": "wrong secret",
+      "body": "webhook-egress-ended.json",
+      "authorization": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJBUElmaXh0dXJla2V5IiwibmJmIjoxNzcwMDAwMDAwLCJleHAiOjE3NzAwMDAzMDAsInNoYTI1NiI6InpLR2RxNFJ0M3M3aDZKb0hIcFFQSDNXY0hZc1d5d3ZiMkFSNHNEaWhjMU09In0.LrHRmdwFQ1TJv4l2XwU1_cFIbdN5cVXeQ0OQEmg2W5I",
+      "verdict": "bad_signature"
+    },
+    {
+      "name": "body swapped under a valid signature",
+      "body": "webhook-egress-ended.json",
+      "authorization": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJBUElmaXh0dXJla2V5IiwibmJmIjoxNzcwMDAwMDAwLCJleHAiOjE3NzAwMDAzMDAsInNoYTI1NiI6InN5N1VTdE4wRk9MMnhUaU1abndXWCtmQjB4RG5wTk5uaFVtVmlTem0xM3M9In0.UyJCbxfmINeytsw3T63i4boEkc1W_gWPx5mOtYanwOw",
+      "verdict": "body_mismatch"
+    },
+    {
+      "name": "expired",
+      "body": "webhook-egress-ended.json",
+      "authorization": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJBUElmaXh0dXJla2V5IiwibmJmIjoxNzY5OTk5Njk5LCJleHAiOjE3Njk5OTk5OTksInNoYTI1NiI6InpLR2RxNFJ0M3M3aDZKb0hIcFFQSDNXY0hZc1d5d3ZiMkFSNHNEaWhjMU09In0.Ey05tlC916R9Q4xQw1fekEBb98EQM8rn5RUL-2fTNJI",
+      "verdict": "expired"
+    },
+    {
+      "name": "another project's key",
+      "body": "webhook-egress-ended.json",
+      "authorization": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJBUElvdGhlcnByb2plY3QiLCJuYmYiOjE3NzAwMDAwMDAsImV4cCI6MTc3MDAwMDMwMCwic2hhMjU2IjoiektHZHE0UnQzczdoNkpvSEhwUVBIM1djSFlzV3l3dmIyQVI0c0RpaGMxTT0ifQ.HZBIv8uLuv5Rdccu1Pod9m9SJbR_AJWis_AXimAhMhE",
+      "verdict": "unknown_key"
+    },
+    {
+      "name": "not a jwt",
+      "body": "webhook-egress-ended.json",
+      "authorization": "Bearer nope",
+      "verdict": "malformed"
+    }
+  ]
+}
