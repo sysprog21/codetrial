@@ -119,7 +119,7 @@ impl Accounts {
 /// Bumped whenever a migration is added below. SQLite carries it in the file
 /// header, so an existing database announces which migrations it has already
 /// run instead of quietly keeping an old shape behind `IF NOT EXISTS`.
-pub const ACCOUNT_SCHEMA_VERSION: i64 = 5;
+pub const ACCOUNT_SCHEMA_VERSION: i64 = 6;
 
 /// Migrations in order, each one taking the database from index `n` to `n + 1`.
 /// Append, never edit: an entry that has already run somewhere will not run
@@ -130,6 +130,7 @@ const ACCOUNT_MIGRATIONS: &[&str] = &[
     DISCARD_CLEARTEXT_SESSIONS,
     ADD_VERIFIED_EMAIL,
     CREATE_INTERVIEWS,
+    CREATE_RECORDINGS,
 ];
 
 pub fn initialize_account_database(path: &Path) -> rusqlite::Result<()> {
@@ -309,6 +310,118 @@ const CREATE_INTERVIEWS: &str = "
         CREATE UNIQUE INDEX IF NOT EXISTS interviews_pending_per_account
             ON interviews(account_id, consent_version)
             WHERE room_name IS NULL AND consent_withdrawn_at IS NULL;
+";
+
+/// One row per recording, and the only place CodeTrial knows a media file
+/// exists.
+///
+/// Nothing here holds media. What it holds is the handles: which room, which
+/// Egress job, which staged object, which Drive file and permission, and who
+/// the file was shared with. Losing a row does not lose a recording, it loses
+/// the ability to find and delete one, which is why the foreign key is
+/// `RESTRICT` rather than `CASCADE`. Deleting an account cascades into
+/// `interviews`, that cascade reaches this `RESTRICT`, and the whole delete
+/// fails; the file outlives the row and nothing else knows where it is.
+///
+/// The two `CHECK`s are one rule read in both directions: a recording that
+/// exists must know which room it recorded and who it is for, and a recording
+/// that has been deleted must have given up both, along with every locator for
+/// bytes that are gone. `NOT NULL` could state the first half and not the
+/// second, and a tombstone that quietly kept a candidate's address would be a
+/// deletion that deleted the wrong thing. The ids stay: `egress_id` and the
+/// tombstone fields are what a later audit is answered from.
+///
+/// Removing the row itself stays an explicit step. `RESTRICT` does not soften
+/// once `deleted_at` is set, so whatever deletes accounts has to delete their
+/// recordings first.
+///
+/// The foreign key is composite, `(account_id, interview_id)` into
+/// `interviews(account_id, id)`, rather than two independent references. Two
+/// references can disagree: each would be satisfied, and the row would attach
+/// one account's recording to another account's interview, which is an
+/// authorization bug the schema would have permitted. There is no separate
+/// reference to `users`, because it would add nothing: an account cannot be
+/// deleted without cascading through `interviews`, and that is where the
+/// refusal happens.
+///
+/// `interview_id` is UNIQUE: one interview is one recording. `idempotency_key`
+/// is UNIQUE for the same reason a webhook dedups on its event id, which is
+/// that a retried start must not become a second Egress job.
+///
+/// `room_name` and `recipient_email` are nullable and guarded by a `CHECK`
+/// instead. Task 11 clears them when it tombstones, so `NOT NULL` would make
+/// the deletion write impossible and force a sentinel; the `CHECK` says the
+/// real rule, which is that a recording that has not been deleted must have
+/// both.
+///
+/// `egress_id` is null until the provider answers, so its uniqueness is a
+/// partial index. A plain UNIQUE would be satisfied by any number of nulls in
+/// SQLite, which is the right behaviour and the wrong place to rely on it.
+///
+/// `recipient_email` is a copy, not a lookup. It records the address the file
+/// was actually shared with; the account's verified address can change
+/// afterwards and the permission that was granted did not.
+///
+/// `id TEXT PRIMARY KEY NOT NULL` says the same thing twice on purpose. SQLite
+/// permits NULL in any primary key that is not an INTEGER rowid alias, and
+/// permits several of them, so `PRIMARY KEY` alone is not the constraint it
+/// reads as. `interviews.id` and `reports.id` carry the same hole; nothing
+/// inserts a NULL id, and rebuilding a table another table's foreign key
+/// already points at costs more than a hole no code path reaches. New tables
+/// spell it out.
+const CREATE_RECORDINGS: &str = "
+        CREATE UNIQUE INDEX IF NOT EXISTS interviews_account_and_id
+            ON interviews(account_id, id);
+
+        CREATE TABLE IF NOT EXISTS recordings (
+            id TEXT PRIMARY KEY NOT NULL,
+            account_id INTEGER NOT NULL,
+            interview_id TEXT NOT NULL UNIQUE,
+            room_name TEXT,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            egress_id TEXT,
+            gcs_object TEXT,
+            drive_file_id TEXT,
+            drive_permission_id TEXT,
+            recipient_email TEXT,
+            state TEXT NOT NULL,
+            error TEXT,
+            retries INTEGER NOT NULL DEFAULT 0,
+            duration_seconds INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            started_at INTEGER,
+            ended_at INTEGER,
+            ready_at INTEGER,
+            expires_at INTEGER,
+            deleted_at INTEGER,
+            delete_error TEXT,
+            deleted_by TEXT,
+            FOREIGN KEY (account_id, interview_id)
+                REFERENCES interviews(account_id, id) ON DELETE RESTRICT,
+            CHECK (
+                deleted_at IS NOT NULL
+                OR (room_name IS NOT NULL AND recipient_email IS NOT NULL)
+            ),
+            CHECK (
+                deleted_at IS NULL
+                OR (
+                    room_name IS NULL
+                    AND recipient_email IS NULL
+                    AND gcs_object IS NULL
+                    AND drive_file_id IS NULL
+                    AND drive_permission_id IS NULL
+                )
+            )
+        );
+
+        CREATE INDEX IF NOT EXISTS recordings_by_account ON recordings(account_id);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS recordings_by_egress
+            ON recordings(egress_id) WHERE egress_id IS NOT NULL;
+
+        CREATE INDEX IF NOT EXISTS recordings_by_expiry
+            ON recordings(expires_at) WHERE expires_at IS NOT NULL AND deleted_at IS NULL;
 ";
 
 /// Every report read and the per-account quota below both filter on `user_id`,
@@ -779,20 +892,36 @@ pub fn delete_session(accounts: &Accounts, session_id: &str) -> rusqlite::Result
 /// must outlive its sessions, and any account still owning a report is kept
 /// whatever its id, because the report is the thing worth keeping.
 ///
+/// Recordings are excluded for a harder reason than reports. Deleting an
+/// account cascades into `interviews`, and `recordings` references that with
+/// `ON DELETE RESTRICT`, so such a row would not be skipped, it would fail this
+/// statement. No self-declared account can own a recording today, because
+/// recording needs a verified address and that needs a positive id, but a sweep
+/// whose correctness rests on a rule enforced two modules away is one refactor
+/// from failing on every boot.
+///
 /// Returns the rows removed, so the caller can say so rather than sweeping
 /// silently.
 pub fn sweep_expired_sessions(accounts: &Accounts, now: i64) -> rusqlite::Result<(usize, usize)> {
     accounts.with(|connection| {
-        let sessions = connection.execute("DELETE FROM sessions WHERE expires_at <= ?1", [now])?;
-        let users = connection.execute(
+        // One transaction, because the two statements are one decision. The
+        // mutex around this connection serializes this process and says nothing
+        // about a second `codetrial web` on the same database: a recording
+        // inserted between them makes the account delete fail under RESTRICT,
+        // after the sessions have already gone.
+        let transaction = connection.unchecked_transaction()?;
+        let sessions = transaction.execute("DELETE FROM sessions WHERE expires_at <= ?1", [now])?;
+        let users = transaction.execute(
             "
             DELETE FROM users
             WHERE github_id < 0
               AND id NOT IN (SELECT user_id FROM sessions)
               AND id NOT IN (SELECT user_id FROM reports)
+              AND id NOT IN (SELECT account_id FROM recordings)
             ",
             [],
         )?;
+        transaction.commit()?;
         Ok((sessions, users))
     })
 }
@@ -947,6 +1076,23 @@ mod migration_tests {
                     INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES ('d', 7, 100, 1);
                     INSERT INTO reports (id, user_id, problem_id, payload, created_at, updated_at)
                       VALUES ('r', -3, 'two-sum', '{}', 1, 1);
+                    -- A recording is not reachable for a negative id through
+                    -- any route, because recording needs a verified address.
+                    -- Written directly, because the sweep must not depend on
+                    -- that rule holding two modules away: deleting this account
+                    -- cascades into `interviews`, and `recordings` references
+                    -- that with RESTRICT, so the row would fail the delete
+                    -- rather than be skipped by it.
+                    INSERT INTO users (id, github_id, login, created_at, updated_at)
+                      VALUES (-4, -4, 'recorded', 1, 1);
+                    INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES ('e', -4, 100, 1);
+                    INSERT INTO interviews (id, account_id, consent_version, consent_at, room_name)
+                      VALUES ('int-sweep', -4, '2026-08-21', 1, 'interview-sweep01');
+                    INSERT INTO recordings (
+                        id, account_id, interview_id, room_name, idempotency_key,
+                        recipient_email, state, created_at, updated_at
+                    ) VALUES ('rec-sweep', -4, 'int-sweep', 'interview-sweep01', 'key-sweep',
+                        'four@example.test', 'ready', 1, 1);
                     ",
                 )?;
                 Ok(())
@@ -954,7 +1100,7 @@ mod migration_tests {
             .unwrap();
 
         let (sessions, users) = sweep_expired_sessions(&accounts, 1000).unwrap();
-        assert_eq!(sessions, 3, "three sessions were past their expiry");
+        assert_eq!(sessions, 4, "four sessions were past their expiry");
         assert_eq!(users, 1, "only the throwaway that earned nothing goes");
 
         let remaining: Vec<i64> = accounts
@@ -967,9 +1113,11 @@ mod migration_tests {
             })
             .unwrap();
 
-        // -1 swept. -2 kept, its session is live. -3 kept, it owns a report. 7
-        // kept, a real GitHub account outlives its sessions.
-        assert_eq!(remaining, vec![-3, -2, 7]);
+        // -1 swept. -2 kept, its session is live. -3 kept, it owns a report. -4
+        // kept, it owns a recording, and sweeping it would have failed the
+        // statement rather than skipped the row. 7 kept, a real GitHub account
+        // outlives its sessions.
+        assert_eq!(remaining, vec![-4, -3, -2, 7]);
 
         let _ = std::fs::remove_file(&path);
     }
@@ -1056,6 +1204,18 @@ mod migration_tests {
     /// is worth naming.
     fn rewind_to(path: &Path, version: i64) {
         let connection = rusqlite::Connection::open(path).unwrap();
+
+        // Newest first: `recordings` has foreign keys into `interviews`, so
+        // dropping them the other way round would leave a table pointing at one
+        // that is gone.
+        if version < 6 {
+            connection
+                .execute_batch(
+                    "DROP TABLE IF EXISTS recordings;
+                     DROP INDEX IF EXISTS interviews_account_and_id;",
+                )
+                .unwrap();
+        }
         if version < 5 {
             connection
                 .execute_batch("DROP TABLE IF EXISTS interviews;")
@@ -1262,6 +1422,56 @@ mod migration_tests {
         assert_eq!(verified, 0, "whitespace is not a delivery address");
     }
 
+    /// The upgrade an existing deployment actually performs. A fresh database
+    /// runs every migration in one go and proves nothing about the one that
+    /// runs alone against rows that are already there.
+    #[test]
+    fn an_existing_database_gains_the_recordings_table_on_upgrade() {
+        let path = scratch("recordings-upgrade");
+        initialize_account_database(&path).unwrap();
+        let accounts = accounts_at(&path);
+        create_session(
+            &accounts,
+            &GitHubProfile {
+                github_id: 4242,
+                login: "real-candidate".to_string(),
+                avatar_url: None,
+                verified_email: Some("real@example.test".to_string()),
+            },
+        )
+        .unwrap();
+        let user_id = user_id_for_login(&path, "real-candidate");
+        create_interview(&accounts, "int-upgrade", user_id, "2026-08-21", 5).unwrap();
+        drop(accounts);
+        rewind_to(&path, 5);
+        assert!(!tables(&path).contains(&"recordings".to_string()));
+
+        initialize_account_database(&path).unwrap();
+
+        assert_eq!(user_version(&path), ACCOUNT_SCHEMA_VERSION);
+        assert!(tables(&path).contains(&"recordings".to_string()));
+        assert_eq!(logins(&path), vec!["real-candidate".to_string()]);
+
+        // The composite foreign key needs a unique index on the parent, and the
+        // parent table already existed when this migration ran.
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .unwrap();
+        connection
+            .execute(
+                "
+                INSERT INTO recordings (
+                    id, account_id, interview_id, room_name, idempotency_key,
+                    recipient_email, state, created_at, updated_at
+                ) VALUES ('rec-upgrade', ?1, 'int-upgrade', 'interview-up000001', 'key-upgrade',
+                    'real@example.test', 'starting', 6, 6)
+                ",
+                [user_id],
+            )
+            .unwrap();
+    }
+
     #[test]
     fn a_fresh_database_runs_every_migration_and_records_the_version() {
         let path = scratch("fresh");
@@ -1271,7 +1481,7 @@ mod migration_tests {
         assert_eq!(user_version(&path), ACCOUNT_SCHEMA_VERSION);
         assert_eq!(
             tables(&path),
-            vec!["interviews", "reports", "sessions", "users"]
+            vec!["interviews", "recordings", "reports", "sessions", "users"]
         );
     }
 

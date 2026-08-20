@@ -221,6 +221,112 @@ DELETE https://www.googleapis.com/drive/v3/files/{fileId}/permissions/{permissio
 DELETE https://www.googleapis.com/drive/v3/files/{fileId}?supportsAllDrives=true
 ```
 
+## The database
+
+One database, the one at `CODETRIAL_DB_PATH`, default `codetrial.db`.
+`interviewlab.db` at the repo root is a pre-rename leftover and is not migrated.
+
+Schema changes are appended to `ACCOUNT_MIGRATIONS` in `src/accounts.rs` and
+`ACCOUNT_SCHEMA_VERSION` is bumped. `migrate` reads `PRAGMA user_version`, runs
+only the entries after it inside one `IMMEDIATE` transaction, and stamps the new
+version, so a migration runs once or not at all. There is no down migration and
+no rollback test, because there is nothing to roll back to.
+
+A database stamped with a version above the one the binary knows is refused
+rather than opened. Running today's queries against tomorrow's tables is the
+failure that has no symptom until it has a bad one.
+
+### `recordings`
+
+| Column | Type | Null | Meaning |
+|---|---|---|---|
+| `id` | TEXT | no | `recording_id`, primary key, 22 chars from `random_token(16)` |
+| `account_id` | INTEGER | no | with `interview_id`, a composite key into `interviews(account_id, id)`, `ON DELETE RESTRICT` |
+| `interview_id` | TEXT | no | UNIQUE; one interview is one recording |
+| `room_name` | TEXT | yes | the LiveKit room this recorded; cleared when tombstoned |
+| `idempotency_key` | TEXT | no | UNIQUE; a retried start must not become a second Egress job |
+| `egress_id` | TEXT | yes | null until the provider answers; unique among non-null values |
+| `gcs_object` | TEXT | yes | `{prefix}/{recording_id}.mp4`, once staged |
+| `drive_file_id` | TEXT | yes | set by the transfer |
+| `drive_permission_id` | TEXT | yes | set when the reader permission is granted |
+| `recipient_email` | TEXT | yes | the verified address the file was shared with, copied at start; cleared when tombstoned |
+| `state` | TEXT | no | the lifecycle state; the transition table is task 4's |
+| `error` | TEXT | yes | a short machine code, never a provider message |
+| `retries` | INTEGER | no | default 0 |
+| `duration_seconds` | INTEGER | yes | from the provider, once the recording ends |
+| `created_at`, `updated_at` | INTEGER | no | epoch seconds |
+| `started_at`, `ended_at`, `ready_at` | INTEGER | yes | each null until it happens |
+| `expires_at` | INTEGER | yes | the retention deadline |
+| `deleted_at` | INTEGER | yes | when the media was deleted |
+| `delete_error` | TEXT | yes | a short machine code for a partial failure |
+| `deleted_by` | TEXT | yes | `expiry`, `consent_withdrawn`, or `operator` |
+
+Two `CHECK`s state one rule in both directions:
+
+```sql
+CHECK (deleted_at IS NOT NULL
+       OR (room_name IS NOT NULL AND recipient_email IS NOT NULL))
+CHECK (deleted_at IS NULL
+       OR (room_name IS NULL AND recipient_email IS NULL
+           AND gcs_object IS NULL AND drive_file_id IS NULL
+           AND drive_permission_id IS NULL))
+```
+
+A recording that exists must know which room it recorded and who it is for. A
+recording that has been deleted must have given up both, and every locator for
+bytes that are gone. `NOT NULL` states the first half and cannot state the
+second, and a tombstone that quietly kept a candidate's address would be a
+deletion that deleted the wrong thing. `egress_id` and the tombstone fields
+stay: they are what a later audit is answered from.
+
+The foreign key is composite rather than two independent references. Two
+references can disagree: each would be satisfied, and the row would attach one
+account's recording to another account's interview. There is no separate
+reference to `users`, because it would add nothing; an account cannot be deleted
+without cascading through `interviews`, and that is where the refusal happens.
+`interviews` therefore carries a unique index on `(account_id, id)`, which is
+what a composite foreign key needs on the parent side.
+
+Indexes: `recordings_by_account`, a partial unique index
+`recordings_by_egress` over non-null `egress_id`, and a partial
+`recordings_by_expiry` over rows that have a deadline and are not yet deleted.
+
+The foreign key is `RESTRICT`, not `CASCADE`. Nothing here holds media; what it
+holds is the handles, and deleting the row that says a file exists is how the
+file becomes unreachable and undeletable. Deleting an account cascades into
+`interviews`, that cascade reaches this `RESTRICT`, and the whole delete fails.
+
+Removing the row stays an explicit step: `RESTRICT` does not soften once
+`deleted_at` is set, so whatever deletes accounts has to delete their recordings
+first. `sweep_expired_sessions` already excludes accounts that own one, in one
+transaction with its session delete, because otherwise it would fail the
+statement rather than skip the row, after the sessions had already gone.
+
+`recipient_email` is a copy rather than a lookup: the account's verified address
+can change afterwards, and the permission that was granted did not.
+
+`id` is declared `TEXT PRIMARY KEY NOT NULL`, saying the same thing twice on
+purpose. SQLite permits NULL in any primary key that is not an INTEGER rowid
+alias, and permits several of them, so `PRIMARY KEY` alone is not the constraint
+it reads as. `interviews.id` and `reports.id` carry the same hole and keep it:
+nothing inserts a NULL id, and rebuilding a table another table's foreign key
+already points at costs more than a hole no code path reaches.
+
+### `interviews`
+
+| Column | Type | Null | Meaning |
+|---|---|---|---|
+| `id` | TEXT | no | primary key |
+| `account_id` | INTEGER | no | `users(id)`, `ON DELETE CASCADE` |
+| `consent_version` | TEXT | no | the wording that was shown |
+| `consent_at` | INTEGER | no | when it was agreed to |
+| `consent_withdrawn_at` | INTEGER | yes | set once, by `DELETE /api/interviews/{id}/consent` |
+| `room_name` | TEXT | yes | claimed once by `/api/token`; one consent is one room |
+
+A partial unique index on `(account_id, consent_version)` over rows with no room
+and no withdrawal keeps one pending interview per account and wording, so a
+reload reuses it rather than inserting another.
+
 ## Fixtures
 
 `tests/fixtures/recording/` is generated by
