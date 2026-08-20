@@ -52,7 +52,6 @@ let codePublishTimer = null;
 // The agent reads the editor once per 2s watch tick, so publishing every
 // keystroke sends ~10x more full-buffer packets than anyone consumes.
 const CODE_PUBLISH_DEBOUNCE_MS = 300;
-const CANDIDATE_IDENTITY_KEY = "codetrial:candidateIdentity";
 const AUDIO_OUTPUT_KEY = "codetrial:audioOutputId";
 const MEET_PRESENTATION_KEY = "codetrial:meetPresentation";
 const INTEGRITY_HEARTBEAT_MS = 5000;
@@ -541,11 +540,10 @@ async function startMediaMeter(stream, onPeak, onError, shouldStop) {
 async function connect(preflight, presenting = false) {
   setAgentStateLabel("Connecting...");
   try {
-    const candidateIdentity = sessionCandidateIdentity();
     const response = await fetch("/api/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ problemId: problem.id, durationMin, candidateIdentity }),
+      body: JSON.stringify({ problemId: problem.id, durationMin }),
     });
     if (!response.ok) throw new Error((await response.json()).error || "Failed to create a session.");
     const connection = await response.json();
@@ -577,16 +575,6 @@ async function connect(preflight, presenting = false) {
   }
 }
 
-function sessionCandidateIdentity() {
-  const stored = readStored(CANDIDATE_IDENTITY_KEY, sessionStorage);
-  if (/^candidate-[a-z0-9]{6}$/.test(stored || "")) return stored;
-
-  const bytes = new Uint8Array(6);
-  crypto.getRandomValues(bytes);
-  const identity = `candidate-${Array.from(bytes, (byte) => (byte % 36).toString(36)).join("")}`;
-  writeStored(CANDIDATE_IDENTITY_KEY, identity, sessionStorage);
-  return identity;
-}
 
 /// `presenting` is threaded through explicitly. It was read here while only
 /// `connect` had it in scope, so every single interview threw

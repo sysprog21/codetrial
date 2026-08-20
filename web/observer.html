@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CodeTrial interviewer observer</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/vendor/livekit-client.js"></script>
+    <script type="module" src="/observer.js"></script>
+  </head>
+  <body>
+    <main>
+      <section class="audio-check-card">
+        <h1>Interview observer</h1>
+        <p>You can hear the candidate and Jim. Observers cannot speak or use a camera or microphone.</p>
+        <p class="muted small">Confirm the candidate has been told you are joining before you connect. Your participation is part of the interview record.</p>
+        <button id="join-observer" class="start-button" type="button">Join as observer</button>
+        <p id="observer-status" class="muted small" role="status">Waiting to join.</p>
+      </section>
+    </main>
+  </body>
+</html>

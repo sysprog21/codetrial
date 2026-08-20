@@ -78,6 +78,36 @@ pub fn livekit_token(
     sign_jwt(input.api_secret, &claims)
 }
 
+/// A listen-only room credential for the interviewer. Keeping this separate
+/// from `livekit_token` makes a publish-capable observer unrepresentable at
+/// its call site.
+pub fn livekit_observer_token(
+    api_key: &str,
+    api_secret: &str,
+    identity: &str,
+    room: &str,
+    now_seconds: u64,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    sign_jwt(
+        api_secret,
+        &json!({
+            "iss": api_key,
+            "sub": identity,
+            "name": "Interviewer observer",
+            "nbf": now_seconds,
+            "exp": now_seconds + TOKEN_TTL_SECONDS,
+            "video": {
+                "room": room,
+                "roomJoin": true,
+                "canPublish": false,
+                "canSubscribe": true,
+                "canPublishData": false,
+                "canUpdateOwnMetadata": false
+            }
+        }),
+    )
+}
+
 pub fn livekit_room_admin_token(
     api_key: &str,
     api_secret: &str,

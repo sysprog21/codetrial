@@ -22,7 +22,7 @@ use crate::accounts::{
     valid_github_login,
 };
 use crate::config::{DEFAULT_DURATION_MIN, MAX_DURATION_MIN, MIN_DURATION_MIN};
-use crate::token::{LivekitTokenInput, livekit_token};
+use crate::token::{LivekitTokenInput, TOKEN_TTL_SECONDS, livekit_observer_token, livekit_token};
 
 pub use crate::accounts::{ACCOUNT_SCHEMA_VERSION, initialize_account_database};
 pub use crate::current_epoch_seconds;
@@ -214,6 +214,13 @@ struct AppState {
     /// the order two concurrent requests observe, only that they observe
     /// different values.
     provider_counter: Arc<AtomicUsize>,
+    room_authorizations: Arc<Mutex<HashMap<String, RoomAuthorization>>>,
+}
+
+#[derive(Clone, Copy)]
+struct RoomAuthorization {
+    owner_id: i64,
+    expires_at: u64,
 }
 
 /// Opens the connection the server keeps, brings its schema up to date, and
@@ -268,6 +275,7 @@ fn web_router(config: WebServerConfig, dispatcher: Option<Arc<dyn RoomDispatcher
     Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/api/token", post(token_handler))
+        .route("/api/observer-token", post(observer_token_handler))
         .route("/api/login", get(login_handler).post(record_login_handler))
         .route("/api/callback", get(callback_handler))
         .route("/api/session", get(session_handler))
@@ -308,6 +316,7 @@ fn web_router(config: WebServerConfig, dispatcher: Option<Arc<dyn RoomDispatcher
             token_limit: TokenRateLimit::default(),
             login_limit: TokenRateLimit::default(),
             provider_counter: Arc::new(AtomicUsize::new(0)),
+            room_authorizations: Arc::new(Mutex::new(HashMap::new())),
         })
 }
 
@@ -1136,19 +1145,19 @@ pub fn token_response(
         .and_then(Value::as_str)
         .unwrap_or(crate::agent::DEFAULT_PROBLEM_ID);
     let duration_min = token_duration_min(request.get("durationMin"));
-    let identity = request
-        .get("candidateIdentity")
-        .and_then(Value::as_str)
-        .filter(|identity| valid_candidate_identity(identity))
-        .unwrap_or(default_identity);
-    let metadata = json!({ "problemId": problem_id, "durationMin": duration_min }).to_string();
+    let metadata = json!({
+        "problemId": problem_id,
+        "durationMin": duration_min,
+        "candidateIdentity": default_identity,
+    })
+    .to_string();
 
     Ok(TokenResponse {
         token: livekit_token(LivekitTokenInput {
             api_key: config.api_key,
             api_secret: config.api_secret,
             name: "Candidate",
-            identity,
+            identity: default_identity,
             room: room_name,
             metadata: &metadata,
             now_seconds,
@@ -1159,24 +1168,13 @@ pub fn token_response(
     })
 }
 
-/// The identity handed out when the browser supplies none. Shares a definition
-/// with [`valid_candidate_identity`] rather than repeating the shape, so the
-/// server cannot issue something it would refuse to accept back.
+/// The server, rather than the browser, mints the identity the room agent uses
+/// to recognize its candidate.
 fn generated_candidate_identity() -> String {
     format!("candidate-{}", suffix(CANDIDATE_SUFFIX_LEN))
 }
 
 const CANDIDATE_SUFFIX_LEN: usize = 6;
-
-fn valid_candidate_identity(identity: &str) -> bool {
-    let Some(suffix) = identity.strip_prefix("candidate-") else {
-        return false;
-    };
-    suffix.len() == CANDIDATE_SUFFIX_LEN
-        && suffix
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-}
 
 pub async fn static_file(root: &Path, path: &str) -> Option<PathBuf> {
     static_file_meta(root, path).await.map(|(path, _)| path)
@@ -1257,8 +1255,8 @@ async fn token_handler(
     if state.accounts.is_none() {
         return state.accounts_error();
     }
-    match current_user(state.accounts.as_ref(), request.headers()).await {
-        Ok(Some(_)) => {}
+    let user = match current_user(state.accounts.as_ref(), request.headers()).await {
+        Ok(Some(user)) => user,
         Ok(None) => {
             return json_response(
                 StatusCode::UNAUTHORIZED,
@@ -1271,7 +1269,7 @@ async fn token_handler(
                 json!({ "error": "Could not read account session." }),
             );
         }
-    }
+    };
 
     let client = client_ip(request.headers(), peer, state.config.trusted_proxy_hops);
     if !state.token_limit.allow(client, Instant::now()) {
@@ -1342,6 +1340,18 @@ async fn token_handler(
         );
     }
 
+    state
+        .room_authorizations
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(
+            room_name,
+            RoomAuthorization {
+                owner_id: user.id,
+                expires_at: current_epoch_seconds() + TOKEN_TTL_SECONDS,
+            },
+        );
+
     json_response(
         StatusCode::OK,
         json!({
@@ -1350,6 +1360,75 @@ async fn token_handler(
             "roomName": response.room_name
         }),
     )
+}
+
+async fn observer_token_handler(State(state): State<AppState>, request: Request<Body>) -> Response {
+    let user = match current_user(state.accounts.as_ref(), request.headers()).await {
+        Ok(Some(user)) => user,
+        Ok(None) => return unauthorized_response(),
+        Err(_) => {
+            return json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "Could not read account session." }),
+            );
+        }
+    };
+    let Ok(body) = to_bytes(request.into_body(), MAX_BODY_BYTES).await else {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    };
+    let Some(room_name) = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .and_then(|body| body.get("roomName")?.as_str().map(str::to_owned))
+    else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "Observer requests need a room name." }),
+        );
+    };
+    let now = current_epoch_seconds();
+    let authorized = {
+        let mut rooms = state
+            .room_authorizations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        rooms.retain(|_, grant| grant.expires_at > now);
+        rooms
+            .get(&room_name)
+            .is_some_and(|grant| grant.owner_id == user.id)
+    };
+    if !authorized {
+        return json_response(
+            StatusCode::FORBIDDEN,
+            json!({ "error": "You are not allowed to observe this room." }),
+        );
+    }
+    let Some(provider) = state
+        .config
+        .pool
+        .for_room(&room_name, &state.config.room_prefix)
+    else {
+        return json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": "Server is missing LiveKit credentials." }),
+        );
+    };
+    let identity = format!("observer-{}", suffix(12));
+    match livekit_observer_token(
+        &provider.api_key,
+        &provider.api_secret,
+        &identity,
+        &room_name,
+        now,
+    ) {
+        Ok(token) => json_response(
+            StatusCode::OK,
+            json!({ "token": token, "serverUrl": provider.url, "roomName": room_name }),
+        ),
+        Err(error) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": error.to_string() }),
+        ),
+    }
 }
 
 async fn web_static_handler(
@@ -1633,25 +1712,11 @@ mod tests {
         SocketAddr::from(([10, 0, 0, 9], 4000))
     }
 
-    /// Three places agree on this shape: the browser that generates and stores
-    /// it, the validator that accepts it back, and the server-side fallback. If
-    /// they drift, a client identity is silently refused and every reload
-    /// becomes a new participant again, which is the failure the stored
-    /// identity exists to prevent.
     #[test]
-    fn the_generated_identity_satisfies_the_validator_that_accepts_it_back() {
+    fn generated_candidate_identity_has_the_livekit_prefix() {
         let generated = generated_candidate_identity();
-
-        assert!(
-            valid_candidate_identity(&generated),
-            "the server issued an identity its own validator rejects: {generated}"
-        );
-        assert!(valid_candidate_identity("candidate-a1b2c3"));
-        assert!(!valid_candidate_identity("interviewer-interview-local"));
-        assert!(!valid_candidate_identity("candidate-a1b2c"));
-        assert!(!valid_candidate_identity("candidate-a1b2c3d"));
-        assert!(!valid_candidate_identity("candidate-A1B2C3"));
-        assert!(!valid_candidate_identity("candidate-a1b2c!"));
+        assert!(generated.starts_with("candidate-"));
+        assert_eq!(generated.len(), "candidate-".len() + CANDIDATE_SUFFIX_LEN);
     }
 
     #[test]

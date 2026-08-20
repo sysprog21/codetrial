@@ -415,6 +415,11 @@ sessions come from, is capped separately at the same rate. Behind a reverse
 proxy, set `CODETRIAL_TRUSTED_PROXY_HOPS` or every request will be charged
 to the proxy.
 
+An authenticated interview owner can open `/observer.html?room=<room-name>`
+to let an interviewer join a room as a listen-only observer. Observers cannot
+publish audio, video, or data; tell the candidate before they join because the
+observer is a participant in the interview record.
+
 Interviewer timing rules (silence threshold, interjection cooldowns, review
 interval) are constants at the top of `src/agent.rs`.
 

@@ -796,6 +796,19 @@ fn is_agent_participant(participant: &serde_json::Value) -> bool {
 
 fn is_candidate(participant: &RemoteParticipant) -> bool {
     participant.kind() == ParticipantKind::Standard
+        && candidate_identity_matches(&participant.identity().0, &participant.metadata())
+}
+
+pub fn candidate_identity_matches(identity: &str, metadata: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(metadata)
+        .ok()
+        .and_then(|metadata| {
+            metadata
+                .get("candidateIdentity")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .is_some_and(|minted| minted == identity && minted.starts_with("candidate-"))
 }
 
 /// A second agent in the room would answer over the top of this one, so the
@@ -2802,4 +2815,16 @@ mod tests {
         assert!(pixel[2] < 60, "blue belongs in byte 2, got {pixel:?}");
         assert_eq!(pixel[3], 255, "alpha belongs in byte 3, got {pixel:?}");
     }
+}
+#[test]
+fn observer_is_not_the_candidate() {
+    assert!(candidate_identity_matches(
+        "candidate-a1b2c3",
+        r#"{"candidateIdentity":"candidate-a1b2c3"}"#,
+    ));
+    assert!(!candidate_identity_matches("observer-a1b2c3", "{}"));
+    assert!(!candidate_identity_matches(
+        "candidate-a1b2c3",
+        r#"{"candidateIdentity":"candidate-other"}"#,
+    ));
 }

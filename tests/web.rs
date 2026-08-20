@@ -12,12 +12,14 @@ use codetrial::accounts::MAX_REPORTS_PER_USER;
 use codetrial::config::{
     DEFAULT_DURATION_MIN, DEFAULT_WEB_DIR, MAX_DURATION_MIN, MIN_DURATION_MIN,
 };
+use codetrial::livekit::candidate_identity_matches;
 use codetrial::runtime::{
     TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_REPORT, TOPIC_TEST_RESULTS,
     TOPIC_TRANSCRIPTION,
 };
 use codetrial::token::{
-    LivekitTokenInput, TOKEN_TTL_SECONDS, livekit_room_admin_token, livekit_token,
+    LivekitTokenInput, TOKEN_TTL_SECONDS, livekit_observer_token, livekit_room_admin_token,
+    livekit_token,
 };
 use codetrial::web::{
     MAX_BODY_BYTES, MAX_REPORT_BYTES, RoomDispatcher, TOKEN_RATE_LIMIT, TokenConfig,
@@ -110,6 +112,20 @@ fn room_admin_token_can_manage_only_the_target_room() {
 }
 
 #[test]
+fn observer_token_cannot_publish() {
+    let claims = claims(
+        &livekit_observer_token("key", "secret", "observer-abc", "interview-abc", 1000).unwrap(),
+    );
+
+    assert_eq!(claims["sub"], "observer-abc");
+    assert_eq!(claims["video"]["room"], "interview-abc");
+    assert_eq!(claims["video"]["roomJoin"], true);
+    assert_eq!(claims["video"]["canPublish"], false);
+    assert_eq!(claims["video"]["canPublishData"], false);
+    assert_eq!(claims["video"]["canSubscribe"], true);
+}
+
+#[test]
 fn token_response_matches_frontend_contract() {
     let response = token_response(
         &TokenConfig {
@@ -132,12 +148,12 @@ fn token_response_matches_frontend_contract() {
     assert_eq!(claims["video"]["room"], response.room_name);
     assert_eq!(
         claims["metadata"],
-        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90})).unwrap()
+        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90,"candidateIdentity":"candidate-fixed"})).unwrap()
     );
 }
 
 #[test]
-fn token_response_preserves_valid_browser_session_identity() {
+fn token_response_mints_the_candidate_identity() {
     let response = token_response(
         &TokenConfig {
             api_key: "devkey",
@@ -151,18 +167,23 @@ fn token_response_preserves_valid_browser_session_identity() {
     )
     .unwrap();
 
-    assert_eq!(claims(&response.token)["sub"], "candidate-a1b2c3");
+    let claims = claims(&response.token);
+    assert_eq!(claims["sub"], "candidate-fallback");
+    assert_eq!(
+        serde_json::from_str::<Value>(claims["metadata"].as_str().unwrap()).unwrap()["candidateIdentity"],
+        "candidate-fallback"
+    );
 }
 
 #[test]
-fn token_response_rejects_malformed_browser_session_identity() {
+fn token_response_ignores_a_supplied_candidate_identity() {
     let response = token_response(
         &TokenConfig {
             api_key: "devkey",
             api_secret: "devsecret",
             server_url: "wss://example.livekit.cloud",
         },
-        br#"{"candidateIdentity":"agent-interview-fixed"}"#,
+        br#"{"candidateIdentity":"candidate-a1b2c3"}"#,
         "interview-fixed",
         "candidate-fallback",
         2000,
@@ -866,28 +887,11 @@ fn static_interview_script_keeps_transcript_and_report_contract() {
 }
 
 #[test]
-fn static_interview_script_reuses_candidate_identity_across_reload() {
+fn static_interview_script_leaves_candidate_identity_to_the_server() {
     let source = fs::read_to_string("web/interview.js").unwrap();
 
-    assert!(source.contains(r#"const CANDIDATE_IDENTITY_KEY = "codetrial:candidateIdentity""#));
-    assert!(source.contains("const candidateIdentity = sessionCandidateIdentity()"));
-    assert!(
-        source
-            .contains("JSON.stringify({ problemId: problem.id, durationMin, candidateIdentity })")
-    );
-
-    // The fact, not the spelling: the identity round-trips through
-    // sessionStorage under that key. Naming the helper here pinned an
-    // implementation detail and broke on a rename that changed no behavior.
-    assert!(source.contains("readStored(CANDIDATE_IDENTITY_KEY, sessionStorage)"));
-    assert!(source.contains("writeStored(CANDIDATE_IDENTITY_KEY, identity, sessionStorage)"));
-
-    // The browser's shape has to be the one src/web.rs accepts back, or a
-    // stored identity is refused and the reload fix quietly stops working.
-    assert!(
-        source.contains("/^candidate-[a-z0-9]{6}$/"),
-        "browser identity shape drifted from valid_candidate_identity"
-    );
+    assert!(source.contains("JSON.stringify({ problemId: problem.id, durationMin })"));
+    assert!(!source.contains("candidateIdentity"));
 }
 
 #[test]
@@ -1588,11 +1592,66 @@ async fn token_api_matches_frontend_contract_over_http() {
     assert_eq!(claims["video"]["canPublish"], true);
     assert_eq!(claims["video"]["canSubscribe"], true);
     assert_eq!(claims["video"]["canPublishData"], true);
-    assert_eq!(
-        claims["metadata"],
-        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90})).unwrap()
-    );
+    let metadata: Value = serde_json::from_str(claims["metadata"].as_str().unwrap()).unwrap();
+    assert_eq!(metadata["problemId"], "merge-intervals");
+    assert_eq!(metadata["durationMin"], 90);
+    assert_eq!(metadata["candidateIdentity"], claims["sub"]);
 
+    server.abort();
+    remove_database(db_path);
+}
+
+#[tokio::test]
+async fn observer_is_not_the_candidate() {
+    let (config, cookie, db_path) = signed_in_web_config("observer");
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+    let candidate: Value = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let room = candidate["roomName"].as_str().unwrap();
+    let candidate_claims = claims(candidate["token"].as_str().unwrap());
+    let observer = client
+        .post(format!("{base}/api/observer-token"))
+        .header("cookie", &cookie)
+        .json(&json!({ "roomName": room }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(observer.status(), 200);
+    let observer: Value = observer.json().await.unwrap();
+    let observer_claims = claims(observer["token"].as_str().unwrap());
+    assert_ne!(candidate_claims["sub"], observer_claims["sub"]);
+    assert_eq!(
+        serde_json::from_str::<Value>(candidate_claims["metadata"].as_str().unwrap()).unwrap()["candidateIdentity"],
+        candidate_claims["sub"],
+    );
+    assert_eq!(observer_claims["video"]["canPublish"], false);
+    assert_eq!(observer_claims["video"]["canPublishData"], false);
+    assert!(candidate_identity_matches(
+        candidate_claims["sub"].as_str().unwrap(),
+        candidate_claims["metadata"].as_str().unwrap(),
+    ));
+    assert!(!candidate_identity_matches(
+        observer_claims["sub"].as_str().unwrap(),
+        "{}",
+    ));
+
+    let denied = client
+        .post(format!("{base}/api/observer-token"))
+        .header("cookie", &cookie)
+        .json(&json!({ "roomName": "interview-not-owned" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 403);
     server.abort();
     remove_database(db_path);
 }
@@ -1637,10 +1696,10 @@ async fn token_api_rejects_malformed_body_and_defaults_an_empty_one() {
 
     assert_eq!(body["roomName"], "interview-local");
     assert_eq!(claims["video"]["room"], "interview-local");
-    assert_eq!(
-        claims["metadata"],
-        serde_json::to_string(&json!({"problemId":"two-sum","durationMin":45})).unwrap()
-    );
+    let metadata: Value = serde_json::from_str(claims["metadata"].as_str().unwrap()).unwrap();
+    assert_eq!(metadata["problemId"], "two-sum");
+    assert_eq!(metadata["durationMin"], 45);
+    assert_eq!(metadata["candidateIdentity"], claims["sub"]);
     assert_eq!(dispatcher.rooms(), vec!["interview-local"]);
 
     server.abort();
