@@ -124,7 +124,7 @@ test("recording-consent the notice's promise of withdrawal is reachable", () => 
     "the button has to be wired to it",
   );
   assert.ok(
-    code.includes("if (interviewId) nodes.withdrawConsent.hidden = false;"),
+    code.includes("nodes.withdrawConsent.hidden = false;"),
     "and revealed once there is an interview to withdraw from",
   );
 

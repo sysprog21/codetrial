@@ -482,6 +482,18 @@ nothing. LiveKit delivers webhooks to `POST /api/recording/webhook`, which
 verifies the signature over the body before parsing it and refuses without
 saying which step failed.
 
+`GET /api/interviews/{id}/recording` answers the owner with the state, the error
+code, and what to do about it, and the interview page shows that in words: a
+candidate who agreed to be recorded is owed the answer to "is it". It returns no
+object path, Drive file id, or permission id, because those are handles to media.
+
+Failures carry a recovery, not just a code. A recording that never produced
+anything can be started again; one whose file exists and could not be delivered
+cannot, because that would mean being recorded twice. The table is in
+[`docs/recording-contract.md`](docs/recording-contract.md), along with the
+structured audit lines, of which `recording_cleanup_failed` is the one an
+operator has to act on.
+
 A sweeper runs at startup and every minute. It retries a start that never
 reached the provider after one minute, then five, then fifteen, asking the
 provider what it already has for the room first so a lost egress id becomes an

@@ -49,6 +49,7 @@ import { runBrowserTests } from "./runners.js";
 const languages = ["python", "javascript", "c", "cpp", "java"];
 let editorInitialized = false;
 let codePublishTimer = null;
+let recordingPoll = null;
 // The agent reads the editor once per 2s watch tick, so publishing every
 // keystroke sends ~10x more full-buffer packets than anyone consumes.
 const CODE_PUBLISH_DEBOUNCE_MS = 300;
@@ -66,6 +67,10 @@ function consentGiven() {
   return !recordingEnabled || nodes.recordingConsent.checked;
 }
 const INTEGRITY_HEARTBEAT_MS = 5000;
+/// Slower than the timer on purpose: the states a recording moves through are
+/// minutes apart, and a poll per second would be a request per second for a
+/// word that does not change.
+const RECORDING_POLL_MS = 15000;
 const params = new URLSearchParams(window.location.search);
 // Start this independent request while the problem data is loading. It has to
 // settle rather than reject: nothing awaits it until init() reaches the sign-in
@@ -142,6 +147,7 @@ const nodes = {
   mic: document.querySelector("#mic"),
   end: document.querySelector("#end"),
   withdrawConsent: document.querySelector("#withdraw-consent"),
+  recordingState: document.querySelector("#recording-state"),
   editor: document.querySelector("#editor"),
   editorHighlight: document.querySelector("#editor-highlight"),
   compileDisclosure: document.querySelector(".compile-disclosure"),
@@ -580,7 +586,6 @@ async function connect(preflight, presenting = false) {
     if (!consentGiven()) throw new Error("Agree to the recording notice before starting.");
     const interviewId = await recordConsent();
     state.interviewId = interviewId;
-    if (interviewId) nodes.withdrawConsent.hidden = false;
     const response = await fetch("/api/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -590,6 +595,17 @@ async function connect(preflight, presenting = false) {
     const connection = await response.json();
     await connectLiveKit(connection, preflight, presenting);
     state.connected = true;
+    // After the room, not before it. The server refuses to record an interview
+    // that has not claimed a room, so starting here rather than alongside the
+    // consent request is the difference between a recording and a failure
+    // nobody asked for.
+    // Both conditions said out loud. `recordConsent` returns null where the
+    // server records nothing, so the id alone is enough today, and a reader
+    // should not have to know that to see why this is safe.
+    if (recordingEnabled && state.interviewId) {
+      nodes.withdrawConsent.hidden = false;
+      await startRecording();
+    }
   } catch (error) {
     // Swallowed for the candidate, logged for everyone else. Offline practice
     // mode is a reasonable fallback but a terrible diagnosis: it looks the same
@@ -616,6 +632,111 @@ async function connect(preflight, presenting = false) {
   }
 }
 
+
+/// Asks the server to start recording, and then to keep saying whether it is.
+///
+/// The candidate agreed to be recorded and is owed the answer to "is it". A
+/// silent failure here is the worst outcome available: they believe the
+/// interview is being kept and it is not.
+async function startRecording() {
+  try {
+    const response = await fetch(`/api/interviews/${encodeURIComponent(state.interviewId)}/recording`, {
+      method: "POST",
+    });
+    if (!response.ok) throw new Error((await response.json())?.error || "The recording could not be started.");
+    showRecordingState(await response.json());
+  } catch (error) {
+    // Still polls. A refused start and a start that succeeded and could not be
+    // read back look the same from here, and the status route is the thing that
+    // can tell them apart: it answers 404 when there is nothing, and polling
+    // stops on that.
+    // Neutral, not a verdict. This call cannot tell a refused start from one
+    // that worked and could not be read back, and the status route can.
+    console.warn("codetrial recording_start_failed", error);
+    nodes.recordingState.hidden = false;
+    nodes.recordingState.textContent = "Checking whether the recording started.";
+  }
+  // One timer, cleared first. `connect` runs again on a reconnect, and an
+  // interval per attempt is a request per attempt per period forever. Armed
+  // only when the first answer was not already terminal, because
+  // `showRecordingState` clears it and an interval created afterwards would
+  // survive one pointless request.
+  clearInterval(recordingPoll);
+  if (!nodes.recordingState.dataset.settled) {
+    recordingPoll = setInterval(pollRecordingState, RECORDING_POLL_MS);
+  }
+}
+
+async function pollRecordingState() {
+  if (!state.interviewId) return;
+  try {
+    const response = await fetch(`/api/interviews/${encodeURIComponent(state.interviewId)}/recording`);
+    if (response.ok) {
+      showRecordingState(await response.json());
+      return;
+    }
+    // Gone, not ours, or signed out. None of these change by asking again, and
+    // a session that expired would otherwise be a request every fifteen seconds
+    // for the rest of the page's life.
+    if ([401, 403, 404].includes(response.status)) {
+      stopRecordingPoll();
+      if (response.status === 401) {
+        nodes.recordingState.hidden = false;
+        nodes.recordingState.textContent = "Sign in again to see the recording status.";
+      }
+    }
+  } catch (error) {
+    // The interview is the thing that matters; a status that cannot be read is
+    // left showing whatever it last said rather than blanked.
+    console.warn("codetrial recording_status_failed", error);
+  }
+}
+
+/// The state in words a candidate can act on. "failed" is not an instruction,
+/// so the recovery the server returns is what picks the sentence.
+function showRecordingState(status) {
+  const words = {
+    starting: "Recording is starting.",
+    recording: "Recording.",
+    finalizing: "Recording is finishing.",
+    transferring: "Recording is being saved.",
+    ready: "Recording saved. The link goes to your verified GitHub email.",
+    deleted: "Recording deleted.",
+  };
+  const recovery = {
+    start_again: "Recording stopped and was not kept.",
+    retry_delivery: "Recording was kept and has not been delivered yet.",
+    none: "Recording stopped at your request.",
+    wait_for_operator: "Recording is turned off on this server.",
+    // Neither of these means the recording is gone, and saying it was not kept
+    // would be the opposite of true: the media may still exist.
+    delete_by_hand: "Recording deletion needs an operator. It has not been deleted yet.",
+    clear_the_row_by_hand: "Recording was deleted. Its record needs an operator.",
+  };
+  nodes.recordingState.hidden = false;
+  // The recovery wins where there is one. A recording that is `transferring`
+  // with `drive_failed` is being saved and is also not delivered, and the
+  // second half is the half worth saying.
+  nodes.recordingState.textContent =
+    recovery[status?.recovery] || words[status?.state] || "Recording stopped and was not kept.";
+
+  // Nothing changes after a terminal state, so nothing keeps asking. Ending the
+  // interview is not the end of the recording: `transferring` and `ready` both
+  // happen afterwards, which is exactly when a candidate wants to know.
+  // A `failed` recording whose recovery is another delivery attempt is not
+  // finished: the transfer queue can still deliver it, and the candidate is the
+  // person who wants to know when it does.
+  const settled = ["ready", "deleted", "cleanup_failed"].includes(status?.state)
+    || (status?.state === "failed" && status?.recovery !== "retry_delivery");
+  // Recorded on the element rather than in a variable, because `startRecording`
+  // reads it after this runs and the two are not in the same call.
+  if (settled) {
+    nodes.recordingState.dataset.settled = "1";
+    stopRecordingPoll();
+  } else {
+    delete nodes.recordingState.dataset.settled;
+  }
+}
 
 /// Takes consent back, mid-interview.
 ///
@@ -816,6 +937,15 @@ function setLocalAudioEnabled(enabled) {
   for (const track of state.localUserStream?.getAudioTracks?.() || []) {
     track.enabled = enabled;
   }
+}
+
+/// Stops asking about a recording once the interview is over.
+///
+/// The interval outlives the room otherwise: an inert timer at best, and a
+/// request every fifteen seconds for a word that will not change at worst.
+function stopRecordingPoll() {
+  clearInterval(recordingPoll);
+  recordingPoll = null;
 }
 
 function stopLocalMedia() {

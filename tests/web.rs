@@ -4267,6 +4267,124 @@ async fn a_start_overtaken_mid_flight_stops_its_own_job() {
     remove_database(path);
 }
 
+/// A completion carrying nothing is a failure, driven through the real webhook.
+///
+/// The predicate is unit tested; this is the path a candidate's recording
+/// actually takes, signature and all. Sending an empty completion through the
+/// transfer shared a zero-byte video.
+#[tokio::test]
+async fn a_completion_with_no_file_fails_the_recording() {
+    let provider = std::sync::Arc::new(FakeRecordingProvider::default());
+    let (base, server, path, client, cookie) =
+        recorded_server_with_provider("empty-completion", provider.clone()).await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    assert_eq!(
+        client
+            .post(format!("{base}/api/token"))
+            .header("cookie", cookie.clone())
+            .json(&json!({ "interviewId": interview }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        client
+            .post(format!("{base}/api/interviews/{interview}/recording"))
+            .header("cookie", cookie.clone())
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        202
+    );
+
+    let ended = json!({
+        "event": "egress_ended",
+        "id": "EV_empty",
+        "createdAt": "1770000123",
+        "egressInfo": {
+            "egressId": "EG_web_fake",
+            "status": "EGRESS_COMPLETE",
+            "fileResults": []
+        }
+    })
+    .to_string();
+    let response = post_webhook(&client, &base, &ended).await;
+    assert_eq!(response.status(), 200);
+
+    let (state, error): (String, Option<String>) = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT state, error FROM recordings WHERE interview_id = ?1",
+            [&interview],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(state, "failed");
+    assert_eq!(error.as_deref(), Some("partial_output"));
+
+    // And the status route says what to do about it, which "failed" does not.
+    let status = client
+        .get(format!("{base}/api/interviews/{interview}/recording"))
+        .header("cookie", cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(status.status(), 200);
+    let body = status.json::<Value>().await.unwrap();
+    assert_eq!(body["error"], "partial_output");
+    assert_eq!(body["recovery"], "start_again");
+    for handle in ["gcsObject", "driveFileId", "drivePermissionId"] {
+        assert!(
+            body.get(handle).is_none(),
+            "the status route must not hand back {handle}"
+        );
+    }
+
+    server.abort();
+    remove_database(path);
+}
+
+/// Signs a webhook body the way LiveKit does and posts it.
+///
+/// The signature covers the exact bytes, so the body is passed as a string and
+/// never re-serialized between here and the request.
+async fn post_webhook(client: &reqwest::Client, base: &str, body: &str) -> reqwest::Response {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = json!({
+        "iss": "devkey",
+        "nbf": now,
+        "exp": now + 300,
+        "sha256": base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(body.as_bytes())),
+    });
+    let header = URL_SAFE_NO_PAD.encode(json!({ "alg": "HS256", "typ": "JWT" }).to_string());
+    let payload = URL_SAFE_NO_PAD.encode(claims.to_string());
+    let signing_input = format!("{header}.{payload}");
+    let mut mac = HmacSha256::new_from_slice(b"devsecret").unwrap();
+    mac.update(signing_input.as_bytes());
+    let token = format!(
+        "{signing_input}.{}",
+        URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+    );
+
+    client
+        .post(format!("{base}{}", codetrial::recording::WEBHOOK_ROUTE))
+        .header("authorization", token)
+        .header("content-type", "application/webhook+json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap()
+}
+
 /// A malformed body is a client error, whether or not this server records.
 ///
 /// The consent check reads the body too, and it answers 403 to anything it

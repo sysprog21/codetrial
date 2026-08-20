@@ -494,7 +494,7 @@ fn recording_schema_reopen() {
     // is not restated here; `TODO.md` records the correction.
 }
 
-mod lifecycle {
+pub(crate) mod lifecycle {
     use std::sync::{Arc, Mutex};
 
     use codetrial::accounts::{Accounts, GitHubLoginConfig};
@@ -509,14 +509,14 @@ mod lifecycle {
     /// A clock a test can move. The retry schedule is minutes long and the
     /// stale sweep is a quarter of an hour, so a test that waited for either
     /// would be a test nobody runs.
-    struct TestClock(Mutex<i64>);
+    pub(crate) struct TestClock(Mutex<i64>);
 
     impl TestClock {
         fn new(now: i64) -> Arc<Self> {
             Arc::new(Self(Mutex::new(now)))
         }
 
-        fn advance(&self, seconds: i64) {
+        pub(crate) fn advance(&self, seconds: i64) {
             *self.0.lock().unwrap() += seconds;
         }
     }
@@ -531,15 +531,15 @@ mod lifecycle {
     /// needs. Every failure this pipeline has to survive is the provider's, and
     /// none can be produced against LiveKit on demand.
     #[derive(Default)]
-    struct FakeProvider {
+    pub(crate) struct FakeProvider {
         started: Mutex<Vec<StartEgress>>,
         stopped: Mutex<Vec<String>>,
-        refuse_start: Mutex<bool>,
-        refuse_stop: Mutex<bool>,
+        pub(crate) refuse_start: Mutex<bool>,
+        pub(crate) refuse_stop: Mutex<bool>,
         next_egress: Mutex<usize>,
         /// An Egress job the provider already has for the room, which is what a
         /// start whose id was never written down leaves behind.
-        adopt: Mutex<Option<String>>,
+        pub(crate) adopt: Mutex<Option<String>>,
     }
 
     impl FakeProvider {
@@ -547,11 +547,11 @@ mod lifecycle {
             Arc::new(Self::default())
         }
 
-        fn starts(&self) -> usize {
+        pub(crate) fn starts(&self) -> usize {
             self.started.lock().unwrap().len()
         }
 
-        fn stops(&self) -> Vec<String> {
+        pub(crate) fn stops(&self) -> Vec<String> {
             self.stopped.lock().unwrap().clone()
         }
     }
@@ -619,7 +619,7 @@ mod lifecycle {
 
     /// A database with an account and two interviews that have claimed rooms,
     /// plus the pieces a recording runs against.
-    fn harness(
+    pub(crate) fn harness(
         label: &str,
     ) -> (
         Scratch,
@@ -663,7 +663,7 @@ mod lifecycle {
         (scratch, accounts, provider, clock, recorder)
     }
 
-    fn start(
+    pub(crate) fn start(
         accounts: &Accounts,
         recorder: &Recorder,
         interview: &str,
@@ -691,7 +691,7 @@ mod lifecycle {
         )
     }
 
-    fn state_of(accounts: &Accounts, id: &str) -> RecordingState {
+    pub(crate) fn state_of(accounts: &Accounts, id: &str) -> RecordingState {
         recording_by_id(accounts, id).unwrap().unwrap().state
     }
 
@@ -834,7 +834,7 @@ mod lifecycle {
         )
         .await
         .unwrap();
-        assert_eq!(stopped, RecordingState::Failed);
+        assert_eq!(stopped, (RecordingState::Failed, true));
         assert_eq!(
             provider.stops(),
             vec!["EG_live@interview-abc12345".to_string()]
@@ -872,7 +872,7 @@ mod lifecycle {
         )
         .await
         .unwrap();
-        assert_eq!(stopped, RecordingState::Finalizing);
+        assert_eq!(stopped, (RecordingState::Finalizing, true));
         assert_eq!(
             provider.stops(),
             vec!["EG_live@interview-abc12345".to_string()]
@@ -893,7 +893,11 @@ mod lifecycle {
         )
         .await
         .unwrap();
-        assert_eq!(again, RecordingState::Finalizing);
+        assert_eq!(
+            again,
+            (RecordingState::Finalizing, false),
+            "the second caller did not move it, and has to be told so"
+        );
         assert_eq!(
             provider.stops(),
             vec!["EG_live@interview-abc12345".to_string()],
@@ -1278,4 +1282,786 @@ mod lifecycle {
             "a pruned event is forgotten, which is what bounded means"
         );
     }
+}
+
+/// Every way a recording can fail, driven through an injected provider.
+///
+/// None of these can be produced against LiveKit or Google Drive on demand, so
+/// the failure is the thing being injected and the terminal state is the thing
+/// being asserted. What each test pins is that the recording ends up somewhere
+/// a person can act on, with a reason that says which action.
+mod failure {
+    use std::sync::{Arc, Mutex};
+
+    use codetrial::accounts::Accounts;
+    use codetrial::recording::{
+        Clock, DeliveryProvider, Failure, Recorder, Recording, RecordingState, STALE_SECONDS,
+        completed_with_output, delete_recording, deliver_recording, recording_by_id, stale_after,
+        sweep_recordings, transition,
+    };
+    use serde_json::json;
+
+    use super::Scratch;
+    use super::lifecycle::{TestClock, harness, start, state_of};
+
+    /// Drive, as far as this pipeline is concerned: three calls, each of which
+    /// can be told to refuse.
+    #[derive(Default)]
+    struct FakeDelivery {
+        /// A database to move the row in while `transfer` is running, standing
+        /// in for a withdrawal that lands mid-delivery. It is the only way to
+        /// reach that interleaving from a test.
+        preempt: Mutex<Option<std::path::PathBuf>>,
+        /// What to run there. The default moves the row out of `transferring`,
+        /// which is a withdrawal; a test that wants a competing delivery says
+        /// so here.
+        preempt_sql: Mutex<Option<String>>,
+        /// The same, applied during `share` rather than `transfer`, for the
+        /// race at the permission boundary.
+        preempt_share: Mutex<Option<std::path::PathBuf>>,
+        refuse_transfer: Mutex<bool>,
+        refuse_share: Mutex<bool>,
+        refuse_delete: Mutex<bool>,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl FakeDelivery {
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl DeliveryProvider for FakeDelivery {
+        fn transfer<'a>(
+            &'a self,
+            _gcs_object: &'a str,
+            _filename: &'a str,
+            _recording_id: &'a str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.calls.lock().unwrap().push("transfer".to_string());
+                if let Some(path) = self.preempt.lock().unwrap().as_ref() {
+                    let statement = self.preempt_sql.lock().unwrap().clone().unwrap_or_else(|| {
+                        "UPDATE recordings SET state = 'failed', error = 'consent_withdrawn' WHERE state = 'transferring'"
+                            .to_string()
+                    });
+                    rusqlite::Connection::open(path)
+                        .unwrap()
+                        .execute(&statement, [])
+                        .unwrap();
+                }
+                if *self.refuse_transfer.lock().unwrap() {
+                    return Err("the upload was refused".to_string());
+                }
+                Ok("drive-file-1".to_string())
+            })
+        }
+
+        fn share<'a>(
+            &'a self,
+            _drive_file_id: &'a str,
+            _recipient_email: &'a str,
+            _expires_at: i64,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.calls.lock().unwrap().push("share".to_string());
+                if let Some(path) = self.preempt_share.lock().unwrap().as_ref() {
+                    rusqlite::Connection::open(path)
+                        .unwrap()
+                        .execute(
+                            "UPDATE recordings SET state = 'failed', error = 'consent_withdrawn' WHERE state = 'transferring'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                if *self.refuse_share.lock().unwrap() {
+                    return Err("the permission was refused".to_string());
+                }
+                Ok("permission-1".to_string())
+            })
+        }
+
+        fn revoke_and_delete<'a>(
+            &'a self,
+            drive_file_id: Option<&'a str>,
+            permission: Option<(&'a str, &'a str)>,
+            gcs_object: Option<&'a str>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                // The arguments, not just the call. A cleanup that removed the
+                // Drive file and left the staged bytes would pass an assertion
+                // that only counted calls. The permission carries the file it
+                // is on, which is not always the file being deleted.
+                self.calls.lock().unwrap().push(format!(
+                    "revoke_and_delete file={} permission={} on={} object={}",
+                    drive_file_id.unwrap_or("-"),
+                    permission.map_or("-", |(_, id)| id),
+                    permission.map_or("-", |(file, _)| file),
+                    gcs_object.unwrap_or("-")
+                ));
+                if *self.refuse_delete.lock().unwrap() {
+                    return Err("the file would not delete".to_string());
+                }
+                Ok(())
+            })
+        }
+    }
+
+    /// A recording that reached `transferring`, which is where delivery starts.
+    async fn transferring(
+        accounts: &Arc<Accounts>,
+        recorder: &Recorder,
+        clock: &TestClock,
+    ) -> Recording {
+        let recording = start(accounts, recorder, "int-1", "rec-1").unwrap();
+        codetrial::recording::record_egress_id(
+            accounts,
+            recorder.clock.as_ref(),
+            &recording.id,
+            "EG_done",
+        )
+        .unwrap();
+        transition(
+            accounts,
+            recorder.clock.as_ref(),
+            &recording.id,
+            RecordingState::Transferring,
+            None,
+        )
+        .unwrap();
+        let _ = clock;
+        recording_by_id(accounts, &recording.id).unwrap().unwrap()
+    }
+
+    #[tokio::test]
+    async fn failure_start_gives_up_after_its_retries() {
+        let (_scratch, accounts, provider, clock, recorder) = harness("failure-start");
+        start(&accounts, &recorder, "int-1", "rec-1").unwrap();
+        *provider.refuse_start.lock().unwrap() = true;
+
+        for delay in codetrial::recording::RETRY_BACKOFF_SECONDS {
+            clock.advance(delay);
+            sweep_recordings(&accounts, &recorder).await;
+        }
+        assert_eq!(provider.starts(), 3, "one minute, then five, then fifteen");
+
+        // Out of retries ends it, without waiting for the stale rule. A
+        // provider that refused every time is a different ending from nobody
+        // having said anything, and the reason has to say which. The minute is
+        // the sweeper's own floor: it does not look at a row somebody touched
+        // moments ago, and the third attempt touched this one.
+        clock.advance(60);
+        assert_eq!(sweep_recordings(&accounts, &recorder).await.failed, 1);
+        assert_eq!(provider.starts(), 3, "and no fourth attempt");
+        assert_eq!(state_of(&accounts, "rec-1"), RecordingState::Failed);
+
+        let recording = recording_by_id(&accounts, "rec-1").unwrap().unwrap();
+        let failure = Failure::parse(recording.error.as_deref().unwrap()).unwrap();
+        assert_eq!(failure, Failure::Start);
+
+        // The reason names the recovery. A recording that never produced
+        // anything can be started again, and saying so is the difference
+        // between a status and an instruction.
+        assert_eq!(failure.recovery(), "start_again");
+        let _ = STALE_SECONDS;
+    }
+
+    #[tokio::test]
+    async fn failure_partial_output_is_not_a_completion() {
+        // The provider says it finished and hands back nothing worth moving.
+        // Sending that through the transfer shared a zero-byte video.
+        let expected = "codetrial/rec.mp4";
+        let ended = |files: serde_json::Value| {
+            json!({
+                "event": "egress_ended",
+                "egressInfo": { "status": "EGRESS_COMPLETE", "fileResults": files }
+            })
+        };
+
+        assert!(!completed_with_output(&ended(json!([])), expected));
+        assert!(
+            !completed_with_output(
+                &ended(json!([{ "filename": expected, "size": "0" }])),
+                expected
+            ),
+            "no bytes is not a recording"
+        );
+        assert!(
+            !completed_with_output(
+                &ended(json!([{ "filename": "codetrial/rec.json", "size": "412" }])),
+                expected
+            ),
+            "a manifest is a file with a name and a size, and delivering it is delivering the wrong thing"
+        );
+        assert!(completed_with_output(
+            &ended(json!([{ "filename": expected, "size": "30750000" }])),
+            expected
+        ));
+
+        // `int64` crosses protojson as a string, so a quoted count is the shape
+        // this pipeline receives. A number is accepted too: it is a serializer
+        // setting on somebody else's service, and throwing a recording away
+        // over a configuration nobody here controls is the worse mistake.
+        assert!(completed_with_output(
+            &ended(json!([{ "filename": expected, "size": 30_750_000 }])),
+            expected
+        ));
+
+        assert_eq!(Failure::PartialOutput.recovery(), "start_again");
+        assert_eq!(
+            Failure::LimitReached.recovery(),
+            "wait_for_operator",
+            "an allowance the candidate cannot raise is not one they can retry past"
+        );
+    }
+
+    #[tokio::test]
+    async fn failure_webhook_that_never_arrives_still_ends() {
+        let (_scratch, accounts, provider, clock, recorder) = harness("failure-webhook");
+        let recording = start(&accounts, &recorder, "int-1", "rec-1").unwrap();
+        codetrial::recording::record_egress_id(
+            &accounts,
+            recorder.clock.as_ref(),
+            &recording.id,
+            "EG_silent",
+        )
+        .unwrap();
+
+        // Nothing ever says what happened to it. Without the sweeper this row
+        // holds the account's one active slot forever.
+        clock.advance(stale_after(
+            RecordingState::Recording,
+            recorder.config.max_minutes,
+        ));
+        assert_eq!(sweep_recordings(&accounts, &recorder).await.failed, 1);
+        assert_eq!(state_of(&accounts, "rec-1"), RecordingState::Failed);
+        assert_eq!(
+            recording_by_id(&accounts, "rec-1")
+                .unwrap()
+                .unwrap()
+                .error
+                .as_deref(),
+            Some(Failure::LostWebhook.as_str())
+        );
+        assert_eq!(
+            provider.stops(),
+            vec!["EG_silent@interview-abc12345".to_string()],
+            "and the job it was waiting on is stopped rather than left running"
+        );
+    }
+
+    #[tokio::test]
+    async fn failure_drive_leaves_the_bytes_where_they_are() {
+        let (_scratch, accounts, _provider, clock, recorder) = harness("failure-drive");
+        let recording = transferring(&accounts, &recorder, &clock).await;
+        let delivery = FakeDelivery::default();
+
+        *delivery.refuse_transfer.lock().unwrap() = true;
+        assert_eq!(
+            deliver_recording(
+                &accounts,
+                &recorder,
+                &delivery,
+                &recording,
+                "one@example.test",
+                clock.now() + 86_400,
+            )
+            .await,
+            Err(Failure::Drive)
+        );
+
+        // Still `transferring`, which is what makes the recovery reachable: a
+        // failure that moved the row to `failed` would advertise another
+        // delivery attempt from a state no transition can leave.
+        assert_eq!(state_of(&accounts, "rec-1"), RecordingState::Transferring);
+        let row = recording_by_id(&accounts, "rec-1").unwrap().unwrap();
+        assert_eq!(row.error.as_deref(), Some(Failure::Drive.as_str()));
+        assert_eq!(row.retries, 1, "the attempt is counted");
+
+        // Another delivery, not another interview. The bytes are still in the
+        // staging bucket, and telling a candidate to record again would be
+        // telling them to be recorded twice.
+        assert_eq!(Failure::Drive.recovery(), "retry_delivery");
+        assert_eq!(delivery.calls(), vec!["transfer".to_string()]);
+
+        // And the retry works, from the state the failure left behind.
+        *delivery.refuse_transfer.lock().unwrap() = false;
+        let row = recording_by_id(&accounts, "rec-1").unwrap().unwrap();
+        assert_eq!(
+            deliver_recording(
+                &accounts,
+                &recorder,
+                &delivery,
+                &row,
+                "one@example.test",
+                clock.now() + 86_400,
+            )
+            .await,
+            Ok(RecordingState::Ready),
+            "retry_delivery has to be a recovery something can perform"
+        );
+    }
+
+    #[tokio::test]
+    async fn failure_drive_after_the_upload_keeps_the_file_id() {
+        let (scratch, accounts, _provider, clock, recorder) = harness("failure-share");
+        let recording = transferring(&accounts, &recorder, &clock).await;
+        let delivery = FakeDelivery::default();
+        *delivery.refuse_share.lock().unwrap() = true;
+
+        assert_eq!(
+            deliver_recording(
+                &accounts,
+                &recorder,
+                &delivery,
+                &recording,
+                "one@example.test",
+                clock.now() + 86_400,
+            )
+            .await,
+            Err(Failure::Drive)
+        );
+
+        // The file is in the Shared Drive. A row that forgot its id is a file
+        // nothing can find, and nothing can delete. It stays `transferring`,
+        // because the share is the step that failed and the upload is not worth
+        // doing again.
+        let drive_file: Option<String> = scratch
+            .open()
+            .query_row(
+                "SELECT drive_file_id FROM recordings WHERE id = 'rec-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(drive_file.as_deref(), Some("drive-file-1"));
+    }
+
+    /// A retry after a share failure does not upload the file again.
+    ///
+    /// The first attempt already put it in the Shared Drive. Uploading again
+    /// leaves that one there with nothing naming it, which is a file nobody can
+    /// find and nobody can delete.
+    #[tokio::test]
+    async fn failure_drive_retry_keeps_the_file_it_already_uploaded() {
+        let (_scratch, accounts, _provider, clock, recorder) = harness("failure-retry");
+        let recording = transferring(&accounts, &recorder, &clock).await;
+        let delivery = FakeDelivery::default();
+        *delivery.refuse_share.lock().unwrap() = true;
+        assert!(
+            deliver_recording(
+                &accounts,
+                &recorder,
+                &delivery,
+                &recording,
+                "one@example.test",
+                clock.now() + 86_400,
+            )
+            .await
+            .is_err()
+        );
+
+        *delivery.refuse_share.lock().unwrap() = false;
+        let row = recording_by_id(&accounts, "rec-1").unwrap().unwrap();
+        assert_eq!(
+            deliver_recording(
+                &accounts,
+                &recorder,
+                &delivery,
+                &row,
+                "one@example.test",
+                clock.now() + 86_400,
+            )
+            .await,
+            Ok(RecordingState::Ready)
+        );
+        assert_eq!(
+            delivery
+                .calls()
+                .iter()
+                .filter(|call| *call == "transfer")
+                .count(),
+            1,
+            "one upload, however many times the share is attempted"
+        );
+    }
+
+    /// A recording that already ended reaches no provider at all.
+    ///
+    /// The staged object is written down first and only for a `transferring`
+    /// row, so a delivery called after a withdrawal stops before it can make a
+    /// Drive copy of a recording nobody consented to keep.
+    #[tokio::test]
+    async fn failure_drive_refuses_a_recording_that_already_ended() {
+        let (scratch, accounts, _provider, clock, recorder) = harness("failure-ended");
+        let recording = transferring(&accounts, &recorder, &clock).await;
+        scratch
+            .open()
+            .execute(
+                "UPDATE recordings SET state = 'failed', error = 'consent_withdrawn' WHERE id = 'rec-1'",
+                [],
+            )
+            .unwrap();
+
+        let delivery = FakeDelivery::default();
+        assert_eq!(
+            deliver_recording(
+                &accounts,
+                &recorder,
+                &delivery,
+                &recording,
+                "one@example.test",
+                clock.now() + 86_400,
+            )
+            .await,
+            Err(Failure::Drive)
+        );
+        assert_eq!(
+            delivery.calls(),
+            Vec::<String>::new(),
+            "nothing remote happens for a recording that has ended"
+        );
+        assert_eq!(state_of(&accounts, "rec-1"), RecordingState::Failed);
+    }
+
+    /// A delivery that lost its row mid-flight takes what it made with it.
+    ///
+    /// The winner is a withdrawal or a deletion, so the file this attempt
+    /// created belongs to a recording that has ended, and nothing is going to
+    /// come back for it.
+    #[tokio::test]
+    async fn failure_drive_that_loses_its_row_cleans_up_after_itself() {
+        let (scratch, accounts, _provider, clock, recorder) = harness("failure-lost");
+        let recording = transferring(&accounts, &recorder, &clock).await;
+
+        let delivery = FakeDelivery::default();
+        *delivery.preempt.lock().unwrap() = Some(scratch.path().to_path_buf());
+
+        assert_eq!(
+            deliver_recording(
+                &accounts,
+                &recorder,
+                &delivery,
+                &recording,
+                "one@example.test",
+                clock.now() + 86_400,
+            )
+            .await,
+            Err(Failure::Drive)
+        );
+        let cleanup = delivery
+            .calls()
+            .into_iter()
+            .find(|call| call.starts_with("revoke_and_delete"))
+            .expect("what this attempt made goes with the recording that ended");
+        assert!(cleanup.contains("file=drive-file-1"), "{cleanup}");
+        assert!(
+            cleanup.contains("object=codetrial/rec-1.mp4"),
+            "the winner ended, so the staged bytes go with the file: {cleanup}"
+        );
+        assert_eq!(state_of(&accounts, "rec-1"), RecordingState::Failed);
+    }
+
+    /// A delivery that lost to another delivery deletes only what it made.
+    ///
+    /// The staged object is what the winner is reading from, and a file the
+    /// loser reused belongs to an earlier attempt. Deleting either because this
+    /// call lost a race takes media from somebody who still wants it.
+    #[tokio::test]
+    async fn failure_drive_that_loses_to_another_delivery_keeps_the_shared_object() {
+        let (scratch, accounts, _provider, clock, recorder) = harness("failure-shared");
+        let recording = transferring(&accounts, &recorder, &clock).await;
+
+        // The winner writes its own file id while this one is uploading, and
+        // leaves the row transferring: another delivery is still working.
+        let delivery = FakeDelivery::default();
+        *delivery.preempt.lock().unwrap() = Some(scratch.path().to_path_buf());
+        *delivery.preempt_sql.lock().unwrap() = Some(
+            "UPDATE recordings SET drive_file_id = 'drive-winner' WHERE state = 'transferring'"
+                .to_string(),
+        );
+
+        assert_eq!(
+            deliver_recording(
+                &accounts,
+                &recorder,
+                &delivery,
+                &recording,
+                "one@example.test",
+                clock.now() + 86_400,
+            )
+            .await,
+            Err(Failure::Drive)
+        );
+        let cleanup = delivery
+            .calls()
+            .into_iter()
+            .find(|call| call.starts_with("revoke_and_delete"))
+            .expect("the file this attempt uploaded goes");
+        assert!(cleanup.contains("file=drive-file-1"), "{cleanup}");
+        assert!(
+            cleanup.contains("object=-"),
+            "the staged object is the winner's source, not this attempt's to delete: {cleanup}"
+        );
+
+        // And the winner's row is untouched. Recording this delivery's failure
+        // would put its error and retry count on somebody else's delivery.
+        let winner = recording_by_id(&accounts, "rec-1").unwrap().unwrap();
+        assert_eq!(winner.error, None);
+        assert_eq!(winner.retries, 0);
+        let drive_file: Option<String> = scratch
+            .open()
+            .query_row(
+                "SELECT drive_file_id FROM recordings WHERE id = 'rec-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(drive_file.as_deref(), Some("drive-winner"));
+    }
+
+    /// A delivery that reused a file and created its own permission revokes
+    /// that permission without deleting the file it borrowed.
+    ///
+    /// Drive cannot revoke a permission without knowing which file it is on,
+    /// and the file here belongs to an earlier attempt: revoking needs its id,
+    /// deleting must not use it.
+    #[tokio::test]
+    async fn failure_drive_loser_revokes_its_permission_without_deleting_a_borrowed_file() {
+        let (scratch, accounts, _provider, clock, recorder) = harness("failure-borrowed");
+        let recording = transferring(&accounts, &recorder, &clock).await;
+
+        // An earlier attempt already uploaded, so this one reuses that file.
+        scratch
+            .open()
+            .execute(
+                "UPDATE recordings SET drive_file_id = 'drive-earlier' WHERE id = 'rec-1'",
+                [],
+            )
+            .unwrap();
+
+        // The row moves while this attempt is sharing.
+        let delivery = FakeDelivery::default();
+        *delivery.preempt_share.lock().unwrap() = Some(scratch.path().to_path_buf());
+
+        assert_eq!(
+            deliver_recording(
+                &accounts,
+                &recorder,
+                &delivery,
+                &recording,
+                "one@example.test",
+                clock.now() + 86_400,
+            )
+            .await,
+            Err(Failure::Drive)
+        );
+        let cleanup = delivery
+            .calls()
+            .into_iter()
+            .find(|call| call.starts_with("revoke_and_delete"))
+            .expect("the permission this attempt granted has to be revoked");
+        assert!(
+            cleanup.contains("permission=permission-1") && cleanup.contains("on=drive-earlier"),
+            "revoking needs the file the permission is on: {cleanup}"
+        );
+        assert!(
+            cleanup.contains("file=-"),
+            "and the borrowed file is not this attempt's to delete: {cleanup}"
+        );
+    }
+
+    /// The same loss, against a winner that has already failed its own share.
+    ///
+    /// `drive_failed` means the queue will come back, so the staged object
+    /// stays. The file this invocation uploaded and never recorded belongs to
+    /// nobody and still has to go.
+    #[tokio::test]
+    async fn failure_drive_loser_deletes_its_file_even_when_the_winner_will_retry() {
+        let (scratch, accounts, _provider, clock, recorder) = harness("failure-both");
+        let recording = transferring(&accounts, &recorder, &clock).await;
+
+        let delivery = FakeDelivery::default();
+        *delivery.preempt.lock().unwrap() = Some(scratch.path().to_path_buf());
+        *delivery.preempt_sql.lock().unwrap() = Some(
+            "UPDATE recordings SET drive_file_id = 'drive-winner', error = 'drive_failed' WHERE state = 'transferring'"
+                .to_string(),
+        );
+
+        assert_eq!(
+            deliver_recording(
+                &accounts,
+                &recorder,
+                &delivery,
+                &recording,
+                "one@example.test",
+                clock.now() + 86_400,
+            )
+            .await,
+            Err(Failure::Drive)
+        );
+        let cleanup = delivery
+            .calls()
+            .into_iter()
+            .find(|call| call.starts_with("revoke_and_delete"))
+            .expect("an uploaded file nothing names has to go");
+        assert!(cleanup.contains("file=drive-file-1"), "{cleanup}");
+        assert!(
+            cleanup.contains("object=-"),
+            "the retry needs the staged bytes: {cleanup}"
+        );
+    }
+
+    #[tokio::test]
+    async fn failure_drive_delivers_when_it_can() {
+        let (scratch, accounts, _provider, clock, recorder) = harness("delivery");
+        let recording = transferring(&accounts, &recorder, &clock).await;
+        let delivery = FakeDelivery::default();
+        let expires_at = clock.now() + 86_400;
+
+        assert_eq!(
+            deliver_recording(
+                &accounts,
+                &recorder,
+                &delivery,
+                &recording,
+                "one@example.test",
+                expires_at,
+            )
+            .await,
+            Ok(RecordingState::Ready)
+        );
+        assert_eq!(state_of(&accounts, "rec-1"), RecordingState::Ready);
+
+        let (permission, expiry): (Option<String>, Option<i64>) = scratch
+            .open()
+            .query_row(
+                "SELECT drive_permission_id, expires_at FROM recordings WHERE id = 'rec-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(permission.as_deref(), Some("permission-1"));
+        assert_eq!(
+            expiry,
+            Some(expires_at),
+            "retention has a deadline or it is not retention"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_failure() {
+        let (scratch, accounts, _provider, clock, recorder) = harness("cleanup");
+        let recording = transferring(&accounts, &recorder, &clock).await;
+        let delivery = FakeDelivery::default();
+        deliver_recording(
+            &accounts,
+            &recorder,
+            &delivery,
+            &recording,
+            "one@example.test",
+            clock.now() + 86_400,
+        )
+        .await
+        .unwrap();
+        let ready = recording_by_id(&accounts, "rec-1").unwrap().unwrap();
+
+        *delivery.refuse_delete.lock().unwrap() = true;
+        assert!(
+            delete_recording(&accounts, &recorder, &delivery, &ready, "expiry")
+                .await
+                .is_err()
+        );
+        assert!(
+            delivery.calls().last().is_some_and(|call| {
+                call.contains("file=drive-file-1")
+                    && call.contains("permission=permission-1")
+                    && call.contains("object=codetrial/rec-1.mp4")
+            }),
+            "deletion needs all three handles: {:?}",
+            delivery.calls()
+        );
+
+        // Terminal for the pipeline and an alert for a person: the media
+        // outlived the attempt to delete it, and nothing automatic is going to
+        // fix that.
+        assert_eq!(state_of(&accounts, "rec-1"), RecordingState::CleanupFailed);
+        let email: Option<String> = scratch
+            .open()
+            .query_row(
+                "SELECT recipient_email FROM recordings WHERE id = 'rec-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            email.as_deref(),
+            Some("one@example.test"),
+            "nothing is tombstoned while the file it describes is still there"
+        );
+
+        // And when it does delete, the row gives up everything that described
+        // what was deleted.
+        *delivery.refuse_delete.lock().unwrap() = false;
+        let failed = recording_by_id(&accounts, "rec-1").unwrap().unwrap();
+        assert_eq!(
+            delete_recording(&accounts, &recorder, &delivery, &failed, "expiry").await,
+            Ok(RecordingState::Deleted)
+        );
+        let (email, drive, by): (Option<String>, Option<String>, Option<String>) = scratch
+            .open()
+            .query_row(
+                "SELECT recipient_email, drive_file_id, deleted_by FROM recordings WHERE id = 'rec-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(email, None);
+        assert_eq!(drive, None);
+        assert_eq!(by.as_deref(), Some("expiry"));
+    }
+
+    /// The audit line is one line of JSON, whatever the provider put in the
+    /// error it reported.
+    ///
+    /// The first version escaped quotes and backslashes by hand, which lets a
+    /// newline through: everything after it reads as a second log entry that
+    /// nobody wrote.
+    #[test]
+    fn audit_lines_survive_what_a_provider_can_say() {
+        for hostile in [
+            "line one\nline two",
+            "{\"event\":\"forged\"}",
+            "tab\there",
+            "quote\" and backslash\\",
+            "null\u{0}byte",
+        ] {
+            // The line `audit` actually emitted, not one rebuilt here: a second
+            // copy of the escaping would agree with the first by construction.
+            let line =
+                codetrial::recording::audit("recording_failed", "rec-1", &[("error", hostile)]);
+            assert_eq!(
+                line.lines().count(),
+                1,
+                "one event is one line, whatever is in it: {line}"
+            );
+            let parsed: serde_json::Value = serde_json::from_str(&line)
+                .unwrap_or_else(|error| panic!("{line} should be JSON: {error}"));
+            assert_eq!(parsed["event"], "recording_failed");
+            assert_eq!(parsed["recording_id"], "rec-1");
+            assert_eq!(parsed["error"], hostile);
+        }
+
+        // Bounded, because the value can be a provider's error body and a log
+        // line is not a place to put one.
+        let long = "x".repeat(10_000);
+        let line = codetrial::recording::audit("recording_failed", "rec-1", &[("error", &long)]);
+        let parsed: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert!(parsed["error"].as_str().unwrap().len() < 1_000);
+    }
+
+    fn _unused(_: &Scratch) {}
 }

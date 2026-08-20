@@ -901,13 +901,16 @@ pub fn prune_webhook_events(accounts: &Accounts, before: i64) -> rusqlite::Resul
 /// A failed stop leaves the row where it was moved to and the job still
 /// running, which the sweeper finds once the row goes stale. That is the cost
 /// of this order and it is the smaller one: the alternative loses the intent.
+/// The `bool` is whether this call moved the row, and it is reported even when
+/// the provider then refuses. The move happened; a caller that only audited on
+/// `Ok` lost the record of a state change that is now in the database.
 pub async fn stop_recording(
     accounts: &Arc<Accounts>,
     recorder: &Recorder,
     recording: &Recording,
     next: RecordingState,
     reason: Option<&str>,
-) -> Result<RecordingState, String> {
+) -> Result<(RecordingState, bool), StopFailure> {
     let (state, mine) = {
         let accounts = accounts.clone();
         let clock = recorder.clock.clone();
@@ -923,22 +926,41 @@ pub async fn stop_recording(
             )
         })
         .await
-        .map_err(|error| format!("could not record the stop: {error}"))?
-        .ok_or_else(|| "the recording went away while it was being stopped".to_string())?
+        .map_err(|error| StopFailure {
+            state: recording.state,
+            moved: false,
+            error: format!("could not record the stop: {error}"),
+        })?
+        .ok_or_else(|| StopFailure {
+            state: recording.state,
+            moved: false,
+            error: "the recording went away while it was being stopped".to_string(),
+        })?
     };
     if !mine {
         // Somebody else moved it, and whatever they did includes telling the
-        // provider. There is nothing left here.
-        return Ok(state);
+        // provider. There is nothing left here, and the caller has to be told
+        // that rather than counting a move it did not make.
+        return Ok((state, false));
     }
     if let Some(egress_id) = &recording.egress_id {
-        recorder
+        if let Err(error) = recorder
             .provider
             .stop(
                 egress_id,
                 recording.room_name.as_deref().unwrap_or_default(),
             )
-            .await?;
+            .await
+        {
+            // The row moved and the provider did not agree. Both go back, so
+            // the caller can audit the change it made and the sweeper can keep
+            // asking about the job.
+            return Err(StopFailure {
+                state,
+                moved: true,
+                error,
+            });
+        }
 
         // Written only after the provider agreed. A row with an egress id and
         // no `stopped_at` is a job that still needs stopping, which is the only
@@ -953,7 +975,7 @@ pub async fn stop_recording(
             );
         }
     }
-    Ok(state)
+    Ok((state, true))
 }
 
 /// Stops a job whose recording stopped being active while the provider was
@@ -993,6 +1015,23 @@ pub async fn settle_new_egress(
             "recording {} was stopped before it started and its job is still running: {error}",
             settled.id
         ),
+    }
+}
+
+/// A stop whose row moved and whose provider did not agree.
+///
+/// Both halves matter to the caller: the state change is real and has to be
+/// audited, and the job is still running and has to be swept for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StopFailure {
+    pub state: RecordingState,
+    pub moved: bool,
+    pub error: String,
+}
+
+impl std::fmt::Display for StopFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.error)
     }
 }
 
@@ -1178,20 +1217,28 @@ pub async fn sweep_recordings(accounts: &Arc<Accounts>, recorder: &Recorder) -> 
     for recording in stale {
         let age = now - recording.updated_at;
         if kill_switch {
-            eprintln!(
-                "{{\"event\":\"recording_killed\",\"recording_id\":\"{}\",\"reason\":\"kill_switch\"}}",
-                recording.id
-            );
-            if stop_recording(
-                accounts,
-                recorder,
-                &recording,
-                RecordingState::Failed,
-                Some("kill_switch"),
-            )
-            .await
-            .is_ok()
-            {
+            if moved_by_this_call(
+                &recording.id,
+                stop_recording(
+                    accounts,
+                    recorder,
+                    &recording,
+                    RecordingState::Failed,
+                    Some(Failure::KillSwitch.as_str()),
+                )
+                .await,
+            ) {
+                // Inside, like the other sweep paths. Two sweepers reading the
+                // same row both reported a kill, and one of them killed
+                // nothing.
+                audit(
+                    "recording_killed",
+                    &recording.id,
+                    &[
+                        ("reason", Failure::KillSwitch.as_str()),
+                        ("recovery", Failure::KillSwitch.recovery()),
+                    ],
+                );
                 outcome.failed += 1;
             }
             continue;
@@ -1209,24 +1256,80 @@ pub async fn sweep_recordings(accounts: &Arc<Accounts>, recorder: &Recorder) -> 
             }
             continue;
         }
+
+        // Out of retries and still with nothing to show for them. This is its
+        // own ending rather than the stale one: the provider refused every
+        // time, which is a different thing from nobody having said anything,
+        // and `Failure::Start` is the word for it.
+        if recording.state == RecordingState::Starting
+            && recording.egress_id.is_none()
+            && retry_delay(recording.retries).is_none()
+        {
+            if moved_by_this_call(
+                &recording.id,
+                stop_recording(
+                    accounts,
+                    recorder,
+                    &recording,
+                    RecordingState::Failed,
+                    Some(Failure::Start.as_str()),
+                )
+                .await,
+            ) {
+                // After the transition. Two sweepers can read the same row, and
+                // an audit line written first says a recording failed on the
+                // strength of a move this sweep did not make.
+                audit(
+                    "recording_failed",
+                    &recording.id,
+                    &[
+                        ("reason", Failure::Start.as_str()),
+                        ("recovery", Failure::Start.recovery()),
+                    ],
+                );
+                outcome.failed += 1;
+            }
+            continue;
+        }
         if age < stale_after(recording.state, recorder.config.max_minutes) {
             continue;
         }
-        eprintln!(
-            "{{\"event\":\"recording_abandoned\",\"recording_id\":\"{}\",\"state\":\"{}\",\"age_seconds\":{age}}}",
-            recording.id,
-            recording.state.as_str()
-        );
-        if stop_recording(
-            accounts,
-            recorder,
-            &recording,
-            RecordingState::Failed,
-            Some("abandoned"),
-        )
-        .await
-        .is_ok()
-        {
+
+        // A delivery that already failed keeps its own reason. Overwriting it
+        // with `abandoned` would change the recovery from "retry the delivery"
+        // to "record again", for a recording whose media may still exist.
+        let already = recording
+            .error
+            .as_deref()
+            .and_then(Failure::parse)
+            .filter(|failure| *failure == Failure::Drive);
+        let reason = already.unwrap_or(Failure::LostWebhook);
+        if moved_by_this_call(
+            &recording.id,
+            stop_recording(
+                accounts,
+                recorder,
+                &recording,
+                RecordingState::Failed,
+                // `None` where the row already says why: `transition`
+                // coalesces, and a reason passed here would replace it.
+                already.is_none().then_some(reason.as_str()),
+            )
+            .await,
+        ) {
+            // After the transition, and only when this sweep made it. Two
+            // sweepers reading the same row both reported an abandonment, and
+            // one of them had moved nothing.
+            audit(
+                "recording_abandoned",
+                &recording.id,
+                &[
+                    ("state", recording.state.as_str()),
+                    ("reason", reason.as_str()),
+                    ("recovery", reason.recovery()),
+                    ("age_seconds", &age.to_string()),
+                ],
+            );
             outcome.failed += 1;
         }
     }
@@ -1255,10 +1358,13 @@ pub async fn sweep_recordings(accounts: &Arc<Accounts>, recorder: &Recorder) -> 
                 let id = orphan.id.clone();
                 let _ = blocking(move || mark_stopped(&accounts, clock.as_ref(), &id)).await;
             }
-            Err(error) => eprintln!(
-                "{{\"event\":\"recording_still_running\",\"recording_id\":\"{}\",\"error\":\"{error}\"}}",
-                orphan.id
-            ),
+            Err(error) => {
+                audit(
+                    "recording_still_running",
+                    &orphan.id,
+                    &[("error", &error), ("action", "stop_by_hand")],
+                );
+            }
         }
     }
     outcome
@@ -1372,4 +1478,877 @@ async fn retry_start(accounts: &Arc<Accounts>, recorder: &Recorder, recording: &
             false
         }
     }
+}
+
+/// One structured line on stderr, which is the only audit trail this pipeline
+/// has.
+///
+/// JSON because it is read by whatever collects logs rather than by a person
+/// scrolling, and ids only because a deletion log that named an address would
+/// outlive the deletion it recorded. `state` and `reason` are enumerated
+/// values, never provider text.
+/// Returns the line it wrote, so a test can assert on the thing that was
+/// emitted rather than on a second copy of this function.
+pub fn audit(event: &str, recording_id: &str, fields: &[(&str, &str)]) -> String {
+    // Serialized, not escaped by hand. A provider error can carry a newline,
+    // and hand-rolled escaping that covers quotes and backslashes lets that
+    // newline end the line: everything after it reads as a second log entry
+    // that nobody wrote.
+    let mut line = serde_json::Map::new();
+    line.insert("event".to_string(), json!(event));
+    line.insert("recording_id".to_string(), json!(recording_id));
+    for (key, value) in fields {
+        // Bounded, because the value can be a provider's error body and a log
+        // line is not a place to put one.
+        let value: String = value.chars().take(AUDIT_FIELD_LIMIT).collect();
+        line.insert((*key).to_string(), json!(value));
+    }
+    let line = Value::Object(line).to_string();
+    eprintln!("{line}");
+    line
+}
+
+/// Characters, not bytes, so a truncation cannot split one.
+///
+/// It bounds the values only. Event names and field keys are string literals in
+/// this crate, and the recording id is 22 characters by construction; nothing
+/// caller-supplied reaches either.
+const AUDIT_FIELD_LIMIT: usize = 400;
+
+/// Where a recording can fail, and what it means.
+///
+/// One value per failure a person would act on differently. The provider's own
+/// message never reaches the row: it goes to the audit line, and the row
+/// carries the code, so `error` stays something a status route can show and a
+/// query can group by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Failure {
+    /// The provider refused to start, three retries apart.
+    Start,
+    /// The recording ended and produced nothing worth moving.
+    PartialOutput,
+    /// Nothing said what happened to it, and the row went stale.
+    LostWebhook,
+    /// The provider gave up on its own.
+    Egress,
+    /// The provider abandoned the job.
+    Aborted,
+    /// The project ran out of the allowance this job needed.
+    LimitReached,
+    /// The media exists and could not be delivered. Not terminal: the bytes are
+    /// still in the staging bucket, so the recording stays in `transferring`
+    /// and another attempt is the recovery.
+    Drive,
+    /// The media outlived the attempt to delete it.
+    Cleanup,
+    /// The media was deleted and the row could not be updated to say so.
+    Tombstone,
+    /// Consent was taken back.
+    ConsentWithdrawn,
+    /// An operator turned recording off while this was running.
+    KillSwitch,
+}
+
+impl Failure {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "provider_start_failed",
+            Self::PartialOutput => "partial_output",
+            Self::LostWebhook => "abandoned",
+            Self::Egress => "egress_failed",
+            Self::Aborted => "egress_aborted",
+            Self::LimitReached => "egress_limit_reached",
+            Self::Drive => "drive_failed",
+            Self::Cleanup => "cleanup_failed",
+            Self::Tombstone => "tombstone_failed",
+            Self::ConsentWithdrawn => "consent_withdrawn",
+            Self::KillSwitch => "kill_switch",
+        }
+    }
+
+    /// What a person does about it, in the words the status route uses.
+    ///
+    /// Written down because "failed" is not an instruction. A candidate whose
+    /// recording failed before it produced anything can start another one; a
+    /// candidate whose file exists and could not be delivered cannot, and
+    /// telling them to retry would be telling them to be recorded twice.
+    pub fn recovery(self) -> &'static str {
+        match self {
+            Self::Start | Self::LostWebhook | Self::Egress | Self::Aborted => "start_again",
+
+            // Not the candidate's to fix, and starting again would hit the same
+            // ceiling.
+            Self::LimitReached => "wait_for_operator",
+            Self::PartialOutput => "start_again",
+
+            // The bytes are in the staging bucket. Retrying the delivery is the
+            // pipeline's job, and it is not a second interview.
+            Self::Drive => "retry_delivery",
+            // Neither of these is anything a candidate or the pipeline can do.
+            Self::Cleanup => "delete_by_hand",
+            Self::Tombstone => "clear_the_row_by_hand",
+            Self::ConsentWithdrawn => "none",
+            Self::KillSwitch => "wait_for_operator",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        [
+            Self::Start,
+            Self::PartialOutput,
+            Self::LostWebhook,
+            Self::Egress,
+            Self::Aborted,
+            Self::LimitReached,
+            Self::Drive,
+            Self::Cleanup,
+            Self::Tombstone,
+            Self::ConsentWithdrawn,
+            Self::KillSwitch,
+        ]
+        .into_iter()
+        .find(|failure| failure.as_str() == value)
+    }
+}
+
+/// Whether an `egress_ended` carried a file worth moving.
+///
+/// `EGRESS_COMPLETE` with no file result, or a file of no bytes, is the shape
+/// a truncated recording arrives in: the provider finished, and there is
+/// nothing to deliver. Treating it as a success sent an empty object through
+/// the transfer and shared a zero-byte video with a candidate.
+pub fn completed_with_output(event: &Value, expected_object: &str) -> bool {
+    event
+        .pointer("/egressInfo/fileResults")
+        .and_then(Value::as_array)
+        .is_some_and(|files| {
+            files.iter().any(|file| {
+                // The object this recording is going to transfer, not any file
+                // the job happened to write. A manifest or a segment playlist
+                // is a file with a name and a size, and delivering one of those
+                // is delivering the wrong thing.
+                file.get("filename")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| name == expected_object)
+                    && file.get("size").is_some_and(byte_count_is_positive)
+            })
+        })
+}
+
+/// `int64` crosses protojson as a string, so a quoted count is the shape this
+/// pipeline receives. A number is accepted too: it is a serializer setting on
+/// somebody else's service, and rejecting a size that is plainly present would
+/// throw away a recording over a configuration nobody here controls.
+fn byte_count_is_positive(size: &Value) -> bool {
+    size.as_str()
+        .and_then(|size| size.parse::<u64>().ok())
+        .or_else(|| size.as_u64())
+        .is_some_and(|size| size > 0)
+}
+
+/// Where a recording's media goes once the provider is done with it.
+///
+/// A trait for the same reason [`RecordingProvider`] is one: every failure this
+/// stage has to survive belongs to somebody else's service, and a transfer that
+/// half-succeeds cannot be produced against Google Drive on demand.
+pub trait DeliveryProvider: Send + Sync + 'static {
+    /// The Drive file id, given the staged object.
+    fn transfer<'a>(
+        &'a self,
+        gcs_object: &'a str,
+        filename: &'a str,
+        recording_id: &'a str,
+    ) -> BoxFuture<'a, Result<String, String>>;
+    /// The permission id, given the file and who may read it.
+    fn share<'a>(
+        &'a self,
+        drive_file_id: &'a str,
+        recipient_email: &'a str,
+        expires_at: i64,
+    ) -> BoxFuture<'a, Result<String, String>>;
+    /// Revoke, delete the Drive file, delete the staged object, in that order.
+    ///
+    /// The permission carries the file it is on, and that file is not
+    /// necessarily the one being deleted. A delivery that reused an earlier
+    /// attempt's file and then created its own permission has to revoke that
+    /// permission without deleting a file somebody else is still using, and
+    /// Drive cannot revoke a permission without knowing which file it is on.
+    fn revoke_and_delete<'a>(
+        &'a self,
+        drive_file_id: Option<&'a str>,
+        permission: Option<(&'a str, &'a str)>,
+        gcs_object: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<(), String>>;
+}
+
+/// Moves the file to its Shared Drive and shares it with the person it belongs
+/// to.
+///
+/// Only from `transferring`, and the recording stays there when it fails. The
+/// bytes are still in the staging bucket, so a delivery failure is retryable by
+/// definition and moving to `failed` would advertise a recovery no transition
+/// could reach. `error` records `drive_failed` and `retries` counts the
+/// attempts; the schedule that makes them belongs to the transfer queue.
+///
+/// The Drive ids are written as they are earned, one statement each. A transfer
+/// that succeeded and a share that failed must leave the file id behind, or the
+/// file is in the Shared Drive and nothing knows where.
+pub async fn deliver_recording(
+    accounts: &Arc<Accounts>,
+    recorder: &Recorder,
+    delivery: &dyn DeliveryProvider,
+    recording: &Recording,
+    recipient_email: &str,
+    expires_at: i64,
+) -> Result<RecordingState, Failure> {
+    let gcs_object = gcs_object_path(&recorder.config.gcs_prefix, &recording.id);
+    let filename = format!("{}.mp4", recording.id);
+    let fail = |step: &str, error: &str| {
+        audit(
+            "recording_delivery_failed",
+            &recording.id,
+            &[
+                ("step", step),
+                ("error", error),
+                ("reason", Failure::Drive.as_str()),
+                ("recovery", Failure::Drive.recovery()),
+            ],
+        );
+        Failure::Drive
+    };
+
+    // The staged object is written down before anything remote happens. It is
+    // derivable from the recording id, but the deletion path reads it from the
+    // row, and a delivery that ended anywhere except success used to leave that
+    // column empty: the bytes stayed in the bucket with nothing naming them.
+    let recorded = {
+        let accounts = accounts.clone();
+        let id = recording.id.clone();
+        let gcs_object = gcs_object.clone();
+        blocking(move || set_gcs_object(&accounts, &id, &gcs_object)).await
+    };
+
+    // `Err` is not `Ok(false)`. A database failure is not a confirmed state
+    // race, and treating it as one sends the cleanup path after media that is
+    // still wanted.
+    if recorded.is_err() {
+        let failure = fail(
+            "record_object",
+            "the staged object could not be written down",
+        );
+        record_delivery_failure(accounts, recorder, &recording.id).await;
+        return Err(failure);
+    }
+    if !recorded.unwrap_or(false) {
+        // Nothing remote happens until this is written down, and it is written
+        // only for a recording that is still transferring. Creating media whose
+        // cleanup handle was never recorded, or creating it at all for a
+        // recording that already ended, are the two failures this ordering
+        // exists to prevent.
+        let failure = fail(
+            "record_object",
+            "the staged object could not be written to a transferring recording",
+        );
+        record_delivery_failure(accounts, recorder, &recording.id).await;
+        return Err(failure);
+    }
+
+    // An earlier attempt may have uploaded and then failed to share. Uploading
+    // again would leave that file in the Shared Drive with nothing naming it.
+    let existing = {
+        let accounts = accounts.clone();
+        let id = recording.id.clone();
+        blocking(move || delivery_handles(&accounts, &id)).await
+    };
+    let Ok((existing, existing_permission, _)) = existing else {
+        // Not knowing whether a file exists is not permission to make another
+        // one. A read failure read as "no file" is how the no-orphan guarantee
+        // stops holding during exactly the trouble it is for.
+        let failure = fail("read_handles", "the delivery handles could not be read");
+        record_delivery_failure(accounts, recorder, &recording.id).await;
+        return Err(failure);
+    };
+    let uploaded = existing.is_none();
+    let drive_file_id = match existing {
+        Some(drive_file_id) => drive_file_id,
+        None => match delivery
+            .transfer(&gcs_object, &filename, &recording.id)
+            .await
+        {
+            Ok(id) => id,
+            Err(error) => {
+                let failure = fail("transfer", &error);
+                record_delivery_failure(accounts, recorder, &recording.id).await;
+                return Err(failure);
+            }
+        },
+    };
+
+    // Written before the share, and its failure stops the delivery. A file in
+    // the Shared Drive that no row names is a file nothing can find and nothing
+    // can delete, and going on to share it would hand somebody a link to it.
+    //
+    // Only when this call uploaded. Reusing an id the row already holds and
+    // then writing it again would fail the `IS NULL` guard and send this
+    // delivery off to delete the file it was reusing.
+    let stored = if uploaded {
+        let accounts = accounts.clone();
+        let id = recording.id.clone();
+        let drive_file_id = drive_file_id.clone();
+        blocking(move || set_drive_file(&accounts, &id, &drive_file_id)).await
+    } else {
+        Ok(true)
+    };
+    if stored.is_err() {
+        // A write that failed is not a state race. The file stays where it is,
+        // because the row may still want it and the next attempt reuses the id
+        // once this can be written down.
+        let failure = fail("record_file", "the Drive file id could not be written down");
+        record_delivery_failure(accounts, recorder, &recording.id).await;
+        return Err(failure);
+    }
+    if !stored.unwrap_or(false) {
+        // The row left `transferring` while the upload ran, which a withdrawal
+        // or a kill switch does. The file this call created belongs to nobody,
+        // so it goes rather than sitting in the Shared Drive with nothing
+        // naming it.
+        let failure = fail(
+            "record_file",
+            "the Drive file id could not be written to a transferring recording",
+        );
+
+        // No `record_delivery_failure` here. That write is guarded on
+        // `transferring`, which is the state the row that beat this one is in,
+        // so recording a failure would put this delivery's error and retry
+        // count on somebody else's delivery.
+        clean_up_after_losing(
+            accounts,
+            delivery,
+            &recording.id,
+            "record_file",
+            (uploaded.then_some(drive_file_id.as_str()), None),
+            &gcs_object,
+        )
+        .await;
+        return Err(failure);
+    }
+
+    // A permission this recording already has is not shared again. Asking Drive
+    // to grant the same person the same access twice is either a duplicate
+    // grant or an error, and neither is what a retry wanted.
+    let shared = existing_permission.is_none();
+    let permission_id = match existing_permission {
+        Some(permission_id) => permission_id,
+        None => match delivery
+            .share(&drive_file_id, recipient_email, expires_at)
+            .await
+        {
+            Ok(id) => id,
+            Err(error) => {
+                let failure = fail("share", &error);
+                record_delivery_failure(accounts, recorder, &recording.id).await;
+                return Err(failure);
+            }
+        },
+    };
+
+    // The permission id first, on its own, for the same reason the file id was:
+    // a permission nothing names is one nothing can revoke.
+    let stored = if shared {
+        let accounts = accounts.clone();
+        let id = recording.id.clone();
+        let permission_id = permission_id.clone();
+        blocking(move || set_drive_permission(&accounts, &id, &permission_id)).await
+    } else {
+        Ok(true)
+    };
+    if stored.is_err() {
+        let failure = fail(
+            "record_permission",
+            "the permission id could not be written down",
+        );
+        record_delivery_failure(accounts, recorder, &recording.id).await;
+        return Err(failure);
+    }
+    if !stored.unwrap_or(false) {
+        let failure = fail(
+            "record_permission",
+            "the permission id could not be written to a transferring recording",
+        );
+        clean_up_after_losing(
+            accounts,
+            delivery,
+            &recording.id,
+            "record_permission",
+            (
+                uploaded.then_some(drive_file_id.as_str()),
+                shared.then_some((drive_file_id.as_str(), permission_id.as_str())),
+            ),
+            &gcs_object,
+        )
+        .await;
+        return Err(failure);
+    }
+
+    let finished = {
+        let accounts = accounts.clone();
+        let clock = recorder.clock.clone();
+        let id = recording.id.clone();
+        blocking(move || finish_delivery(&accounts, clock.as_ref(), &id, expires_at)).await
+    };
+
+    // `Ok(false)` is a row that was no longer `transferring`, which means
+    // somebody else moved it: a withdrawal, a kill switch. Reporting `Ready`
+    // then would announce a delivery the row does not have.
+    if finished.is_err() {
+        let failure = fail("finish", "the delivery could not be written down");
+        record_delivery_failure(accounts, recorder, &recording.id).await;
+        return Err(failure);
+    }
+    if !finished.unwrap_or(false) {
+        // A lost race, not a failure of this delivery: somebody else moved the
+        // row and their state is the right one, so recording a failure over it
+        // would overwrite a newer answer with an older complaint. What this
+        // delivery made goes with it, because nothing is going to come back for
+        // a file belonging to a recording that ended.
+        audit(
+            "recording_delivery_lost",
+            &recording.id,
+            &[("step", "finish")],
+        );
+        clean_up_after_losing(
+            accounts,
+            delivery,
+            &recording.id,
+            "finish",
+            (
+                uploaded.then_some(drive_file_id.as_str()),
+                shared.then_some((drive_file_id.as_str(), permission_id.as_str())),
+            ),
+            &gcs_object,
+        )
+        .await;
+        return Err(Failure::Drive);
+    }
+    audit("recording_ready", &recording.id, &[]);
+    Ok(RecordingState::Ready)
+}
+
+/// Revokes, deletes, and tombstones, in that order.
+///
+/// A failure anywhere is `cleanup_failed`, which is terminal for the pipeline
+/// and an alert for a person: the media outlived the attempt to delete it, and
+/// nothing automatic is going to fix that.
+pub async fn delete_recording(
+    accounts: &Arc<Accounts>,
+    recorder: &Recorder,
+    delivery: &dyn DeliveryProvider,
+    recording: &Recording,
+    deleted_by: &str,
+) -> Result<RecordingState, String> {
+    let stored = {
+        let accounts = accounts.clone();
+        let id = recording.id.clone();
+        blocking(move || delivery_handles(&accounts, &id)).await
+    };
+    let Ok((drive_file_id, drive_permission_id, gcs_object)) = stored else {
+        return Err("could not read the delivery handles".to_string());
+    };
+
+    // The permission is named with the file it is on, which for a deletion is
+    // the same file. The pair exists for the delivery paths, where it is not.
+    let permission = drive_file_id.as_deref().zip(drive_permission_id.as_deref());
+    if let Err(error) = delivery
+        .revoke_and_delete(drive_file_id.as_deref(), permission, gcs_object.as_deref())
+        .await
+    {
+        // The transition first, and the line only if this call made it. A
+        // concurrent deletion can win, and an audit record telling an operator
+        // that cleanup failed for a row that is `deleted` sends them looking
+        // for a file that is not there.
+        let moved = {
+            let accounts = accounts.clone();
+            let clock = recorder.clock.clone();
+            let id = recording.id.clone();
+            blocking(move || {
+                transition(
+                    &accounts,
+                    clock.as_ref(),
+                    &id,
+                    RecordingState::CleanupFailed,
+                    Some(Failure::Cleanup.as_str()),
+                )
+            })
+            .await
+        };
+        if let Ok(Some((_, true))) = moved {
+            audit(
+                "recording_cleanup_failed",
+                &recording.id,
+                &[
+                    ("step", "revoke_and_delete"),
+                    ("error", &error),
+                    ("reason", Failure::Cleanup.as_str()),
+                    ("action", Failure::Cleanup.recovery()),
+                ],
+            );
+        }
+        return Err(error);
+    }
+
+    let tombstoned = {
+        let accounts = accounts.clone();
+        let clock = recorder.clock.clone();
+        let id = recording.id.clone();
+        let deleted_by = deleted_by.to_string();
+        blocking(move || tombstone(&accounts, clock.as_ref(), &id, &deleted_by)).await
+    };
+
+    // A zero-row update is somebody else's deletion, not this one's. Reporting
+    // `recording_deleted` for it would put two deletions in the log for one
+    // file.
+    if let Ok(false) = tombstoned {
+        return Ok(RecordingState::Deleted);
+    }
+    if let Err(error) = tombstoned {
+        // The media is gone and the row still says otherwise, holding the
+        // recipient address and handles for files that no longer exist. That is
+        // a person's problem, and the row has to say so rather than sitting in
+        // `ready` describing a recording nobody can watch.
+        let moved = {
+            let accounts = accounts.clone();
+            let clock = recorder.clock.clone();
+            let id = recording.id.clone();
+            blocking(move || {
+                transition(
+                    &accounts,
+                    clock.as_ref(),
+                    &id,
+                    RecordingState::CleanupFailed,
+                    Some(Failure::Tombstone.as_str()),
+                )
+            })
+            .await
+        };
+        if let Ok(Some((_, true))) = moved {
+            audit(
+                "recording_cleanup_failed",
+                &recording.id,
+                &[
+                    ("step", "tombstone"),
+                    ("error", &error.to_string()),
+                    ("reason", Failure::Tombstone.as_str()),
+                    ("action", Failure::Tombstone.recovery()),
+                    ("media", "already_deleted"),
+                ],
+            );
+        }
+        return Err(format!("the deletion could not be written down: {error}"));
+    }
+    audit("recording_deleted", &recording.id, &[("by", deleted_by)]);
+    Ok(RecordingState::Deleted)
+}
+
+/// Whether this call is the one that moved the row.
+///
+/// A provider that refused the stop does not undo the move: the row is in its
+/// new state either way, and a caller that audited only on success lost the
+/// record of a change that is now in the database. The refusal is the
+/// sweeper's, and the missing `stopped_at` is what brings it back.
+fn moved_by_this_call(
+    recording_id: &str,
+    outcome: Result<(RecordingState, bool), StopFailure>,
+) -> bool {
+    match outcome {
+        Ok((_, moved)) => moved,
+        Err(failure) => {
+            report_stop_failure(recording_id, None, &failure);
+            failure.moved
+        }
+    }
+}
+
+/// One place that decides which of the two stop failures this is.
+///
+/// `moved` is the difference. With it the transition happened and the provider
+/// refused; without it the transition never happened and the provider was never
+/// called, and reporting that as a refusal sends an operator to the wrong
+/// service.
+pub fn report_stop_failure(recording_id: &str, step: Option<&str>, failure: &StopFailure) {
+    let event = if failure.moved {
+        "recording_stop_refused"
+    } else {
+        "recording_stop_not_recorded"
+    };
+    match step {
+        Some(step) => audit(
+            event,
+            recording_id,
+            &[("step", step), ("error", &failure.error)],
+        ),
+        None => audit(event, recording_id, &[("error", &failure.error)]),
+    };
+}
+
+/// What a delivery that lost its row may delete.
+///
+/// Two questions, not one, and they have different answers. A Drive file this
+/// invocation uploaded and could not record is nobody's and always goes. The
+/// staged object belongs to the recording, and goes only when the recording is
+/// over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CleanupScope {
+    /// What this call created. `false` only when the row could not be read,
+    /// because not knowing is not permission to delete.
+    mine: bool,
+    /// The staged object, which another delivery may still be reading from and
+    /// which retention owns.
+    object: bool,
+}
+
+async fn cleanup_scope(accounts: &Arc<Accounts>, recording_id: &str) -> CleanupScope {
+    let accounts = accounts.clone();
+    let recording_id = recording_id.to_string();
+    let Ok(Some(row)) = blocking(move || recording_by_id(&accounts, &recording_id)).await else {
+        return CleanupScope {
+            mine: false,
+            object: false,
+        };
+    };
+    if row.error.as_deref().and_then(Failure::parse) == Some(Failure::Drive) {
+        // A delivery the queue will come back to. Its staged object stays; the
+        // file this invocation uploaded and never recorded does not belong to
+        // that retry and would be orphaned by keeping it.
+        return CleanupScope {
+            mine: true,
+            object: false,
+        };
+    }
+    match row.state {
+        RecordingState::Transferring | RecordingState::Ready => CleanupScope {
+            mine: true,
+            object: false,
+        },
+        RecordingState::Failed | RecordingState::CleanupFailed | RecordingState::Deleted => {
+            CleanupScope {
+                mine: true,
+                object: true,
+            }
+        }
+        _ => CleanupScope {
+            mine: false,
+            object: false,
+        },
+    }
+}
+
+/// The cleanup one lost delivery is allowed to perform.
+///
+/// `mine` is what this invocation created: a file it uploaded, and a permission
+/// it granted paired with the file that permission is on. A file it reused
+/// belongs to an earlier attempt and the staged object belongs to the
+/// recording, so deleting either because this call lost a race takes media from
+/// somebody who still wants it.
+async fn clean_up_after_losing(
+    accounts: &Arc<Accounts>,
+    delivery: &dyn DeliveryProvider,
+    recording_id: &str,
+    step: &str,
+    mine: (Option<&str>, Option<(&str, &str)>),
+    gcs_object: &str,
+) {
+    let scope = cleanup_scope(accounts, recording_id).await;
+    let (drive_file_id, permission) = if scope.mine { mine } else { (None, None) };
+    let object = scope.object.then_some(gcs_object);
+    if drive_file_id.is_none() && permission.is_none() && object.is_none() {
+        return;
+    }
+    report_cleanup(
+        recording_id,
+        step,
+        delivery
+            .revoke_and_delete(drive_file_id, permission, object)
+            .await,
+    );
+}
+
+/// A cleanup that itself failed, said out loud.
+///
+/// These run on paths already handling a failure, and swallowing them meant a
+/// withdrawal that won mid-delivery could leave a Drive file and staged bytes
+/// behind with nothing recorded and nobody told.
+fn report_cleanup(recording_id: &str, step: &str, outcome: Result<(), String>) {
+    if let Err(error) = outcome {
+        audit(
+            "recording_cleanup_failed",
+            recording_id,
+            &[
+                ("step", step),
+                ("error", &error),
+                ("reason", Failure::Cleanup.as_str()),
+                ("action", Failure::Cleanup.recovery()),
+            ],
+        );
+    }
+}
+
+/// A delivery attempt that did not work, without moving the recording.
+///
+/// The row stays in `transferring` because the bytes are still in the staging
+/// bucket and another attempt is the recovery. Moving it to `failed` advertised
+/// `retry_delivery` from a state no transition could leave.
+async fn record_delivery_failure(
+    accounts: &Arc<Accounts>,
+    recorder: &Recorder,
+    recording_id: &str,
+) {
+    let accounts = accounts.clone();
+    let clock = recorder.clock.clone();
+    let recording_id = recording_id.to_string();
+    let _ = blocking(move || {
+        accounts.with(|connection| {
+            connection.execute(
+                "
+        UPDATE recordings
+        SET error = ?2, retries = retries + 1, updated_at = ?3
+        WHERE id = ?1 AND state = 'transferring'
+        ",
+                (&recording_id, Failure::Drive.as_str(), clock.now()),
+            )?;
+            Ok(())
+        })
+    })
+    .await;
+}
+
+/// `false` when the row was no longer `transferring`, or already names a file.
+///
+/// The `IS NULL` guard is what stops two concurrent deliveries from both
+/// uploading and the second overwriting the first, which orphans a file in the
+/// Shared Drive. The loser deletes what it made.
+fn set_drive_file(
+    accounts: &Accounts,
+    recording_id: &str,
+    drive_file_id: &str,
+) -> rusqlite::Result<bool> {
+    accounts.with(|connection| {
+        let changed = connection.execute(
+            "
+        UPDATE recordings SET drive_file_id = ?2
+        WHERE id = ?1 AND state = 'transferring' AND drive_file_id IS NULL
+        ",
+            (recording_id, drive_file_id),
+        )?;
+        Ok(changed > 0)
+    })
+}
+
+fn set_drive_permission(
+    accounts: &Accounts,
+    recording_id: &str,
+    permission_id: &str,
+) -> rusqlite::Result<bool> {
+    accounts.with(|connection| {
+        let changed = connection.execute(
+            "
+        UPDATE recordings SET drive_permission_id = ?2
+        WHERE id = ?1 AND state = 'transferring' AND drive_permission_id IS NULL
+        ",
+            (recording_id, permission_id),
+        )?;
+        Ok(changed > 0)
+    })
+}
+
+/// `false` when the row is not `transferring`, which is the whole check: a
+/// delivery called against a recording that already ended must not reach the
+/// provider at all.
+fn set_gcs_object(
+    accounts: &Accounts,
+    recording_id: &str,
+    gcs_object: &str,
+) -> rusqlite::Result<bool> {
+    accounts.with(|connection| {
+        let changed = connection.execute(
+            "UPDATE recordings SET gcs_object = ?2 WHERE id = ?1 AND state = 'transferring'",
+            (recording_id, gcs_object),
+        )?;
+        Ok(changed > 0)
+    })
+}
+
+/// `false` when the row was no longer `transferring`, which is somebody else
+/// having moved it.
+fn finish_delivery(
+    accounts: &Accounts,
+    clock: &dyn Clock,
+    recording_id: &str,
+    expires_at: i64,
+) -> rusqlite::Result<bool> {
+    let now = clock.now();
+    accounts.with(|connection| {
+        let changed = connection.execute(
+            "
+        UPDATE recordings
+        SET expires_at = ?2,
+            state = 'ready',
+            -- Cleared, or a delivery that failed once and then worked would be
+            -- `ready` still carrying `drive_failed`, and the status route would
+            -- tell a candidate their recording had not been delivered.
+            error = NULL,
+            ready_at = ?3,
+            updated_at = ?3
+        WHERE id = ?1 AND state = 'transferring'
+        ",
+            (recording_id, expires_at, now),
+        )?;
+        Ok(changed > 0)
+    })
+}
+
+fn delivery_handles(
+    accounts: &Accounts,
+    recording_id: &str,
+) -> rusqlite::Result<(Option<String>, Option<String>, Option<String>)> {
+    accounts.with(|connection| {
+        connection.query_row(
+            "SELECT drive_file_id, drive_permission_id, gcs_object FROM recordings WHERE id = ?1",
+            [recording_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+    })
+}
+
+/// Records the deletion and gives up everything that described what was
+/// deleted.
+///
+/// One statement, because the schema's own `CHECK` refuses a half-tombstone: a
+/// row with `deleted_at` set and a recipient address still in it is not a state
+/// this table has.
+fn tombstone(
+    accounts: &Accounts,
+    clock: &dyn Clock,
+    recording_id: &str,
+    deleted_by: &str,
+) -> rusqlite::Result<bool> {
+    let now = clock.now();
+    accounts.with(|connection| {
+        let changed = connection.execute(
+            "
+        UPDATE recordings
+        SET state = 'deleted',
+            deleted_at = ?2,
+            deleted_by = ?3,
+            room_name = NULL,
+            recipient_email = NULL,
+            gcs_object = NULL,
+            drive_file_id = NULL,
+            drive_permission_id = NULL,
+            updated_at = ?2
+        WHERE id = ?1 AND deleted_at IS NULL
+        ",
+            (recording_id, now, deleted_by),
+        )?;
+        Ok(changed > 0)
+    })
 }

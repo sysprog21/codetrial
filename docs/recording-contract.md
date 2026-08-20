@@ -253,6 +253,9 @@ fails.
 Three retries after the first attempt: one minute, then five, then fifteen. The
 first attempt is not a retry, and the route that makes it does not count one
 when the provider refuses; counting it made the first retry five minutes out.
+Running out of retries is its own ending, `provider_start_failed`, rather than
+waiting for the stale rule: a provider that refused every time is a different
+thing from nobody having said anything, and the reason has to say which.
 
 Every retry asks the provider what it already has for the room before starting
 anything. A start that succeeded and whose id this side never wrote down leaves
@@ -284,6 +287,139 @@ project could end another project's recording by naming its room.
 that would have created them, and the next sweep stops everything already
 running with reason `kill_switch` and a structured line on stderr. A switch that
 can be raced is not a kill switch.
+
+## Failures, and what a person does about them
+
+Every failure is a code in `recordings.error` and a recovery in
+`Failure::recovery`. "Failed" is not an instruction: a candidate whose recording
+never produced anything can start another, and a candidate whose file exists and
+could not be delivered cannot, because telling them to retry would be telling
+them to be recorded twice.
+
+| Code | State | Cause | Recovery |
+|---|---|---|---|
+| `provider_start_failed` | `failed` | the provider refused every attempt | `start_again`, after retries at 1, 5 and 15 minutes |
+| `abandoned` | `failed` | nothing said what happened and the row went stale | `start_again` |
+| `partial_output` | `failed` | `EGRESS_COMPLETE` with no file, or a file of no bytes | `start_again` |
+| `egress_failed` | `failed` | the provider gave up | `start_again` |
+| `egress_aborted` | `failed` | the provider abandoned the job | `start_again` |
+| `egress_limit_reached` | `failed` | the project ran out of its allowance | `wait_for_operator` |
+| `tombstone_failed` | `cleanup_failed` | the media was deleted and the row could not be updated | `clear_the_row_by_hand` |
+| `drive_failed` | `transferring` | the media exists and could not be delivered | `retry_delivery` |
+| `consent_withdrawn` | `failed` | consent was taken back | `none` |
+| `kill_switch` | `failed` | an operator turned recording off | `wait_for_operator` |
+| `cleanup_failed` | `cleanup_failed` | the media outlived the attempt to delete it | `delete_by_hand` |
+
+A completion with nothing in it is not a completion. `EGRESS_COMPLETE` whose
+file result is missing, unnamed, or zero bytes is how a truncated recording
+arrives, and sending it through the transfer shared a zero-byte video with a
+candidate. The size is parsed from a string, because `int64` crosses protojson
+that way and a numeric one is a shape this pipeline never receives.
+
+A delivery that loses its row cleans up after itself only when the winning state
+is final. The stale sweep moves a `transferring` row to `failed` while keeping
+`drive_failed` precisely so the queue can try again, and deleting the staged
+object out from under that would leave a recording whose recovery is "retry the
+delivery" with nothing left to deliver. Not knowing the winner is not permission
+to delete either.
+
+A `transferring` row that goes stale is failed with its own reason kept:
+overwriting `drive_failed` with `abandoned` would change the recovery from
+"retry the delivery" to "record again", for a recording whose media may still
+exist.
+
+`retry_delivery` is therefore a recovery nothing performs yet. The transfer
+queue is what claims `transferring` rows and `failed` rows carrying
+`drive_failed`, and until it exists the word describes what should happen rather
+than what does. `drive_failed` is also unreachable in the shipped path, because
+nothing calls `deliver_recording` outside its tests: the pipeline stops at
+`transferring` and the sweep fails it as `abandoned`.
+
+A delivery failure is not terminal, and that is the point. The bytes are still
+in the staging bucket, so the recording stays `transferring` with `drive_failed`
+recorded and `retries` counted. Moving it to `failed` advertised a recovery no
+transition could reach.
+
+The staged object path is written to the row before anything remote happens.
+It is derivable from the recording id, but the deletion path reads it from the
+row, and a delivery that ended anywhere except success used to leave that column
+empty: the bytes stayed in the bucket with nothing naming them. A delivery that
+cannot write it down makes no remote call at all.
+
+A retry reuses the `drive_file_id` the last attempt recorded rather than
+uploading again. It cannot make the same promise about a permission: a crash
+between Drive accepting the share and the write that records it leaves one
+nothing names. Deleting the file removes its permissions, so retention still
+reaches it, and the transfer queue's claim is what closes the window.
+
+Each Drive handle is written on its own and only while the row is still
+`transferring`. A withdrawal that wins the race leaves a file this delivery
+created and nothing naming it, so that file is deleted rather than left in the
+Shared Drive.
+
+`revoke_and_delete` is one call covering three remote operations and records no
+progress between them, so a revoke that succeeded and a delete that failed
+cannot be resumed step by step. The transfer and retention tasks own that;
+until then a retry repeats all three, which is why each has to be idempotent.
+
+### Status
+
+`GET /api/interviews/{id}/recording` answers the owner with the recording id,
+the state, the error code, the recovery, and the retry count. `404` for an
+interview with no recording, for somebody else's, and for a server that records
+nothing; those are one answer because telling them apart enumerates other
+people's interviews.
+
+A server that records nothing answers a status request exactly as one with no
+such recording does, which is exactly how it answers somebody else's. Three
+states, one reply: telling them apart is a way to learn about other people's
+interviews and about this deployment.
+
+It returns no Drive file id and no permission id: those are handles to media,
+and a status route that returned them would be a way to reach a recording
+without the permission that governs it. The `recordingId` it does return derives
+the staged object name, which is not a capability, because the bucket is private
+and reaching it needs the service account.
+
+The error code goes through `Failure::parse` on the way out, so only an
+enumerated value can reach a client. The column is written by this crate today,
+and a route that echoed whatever was in it is one refactor away from handing
+back a provider's error body.
+
+### Audit
+
+One structured line on stderr per event, through `recording::audit`. JSON
+because it is read by whatever collects logs rather than by a person scrolling.
+Every value is a string, counts included, so the schema has one shape, and every
+value is bounded.
+
+Nothing here writes a candidate's name, address, or room. A deletion record that
+named an address would outlive the deletion it recorded, so `recording_deleted`
+carries an id and who asked. The one field this cannot promise about is `error`,
+which is a provider's own message on a failure line: it is bounded and it is not
+parsed, and these lines belong wherever the provider's own logs belong.
+
+| Event | Fields beyond `recording_id` |
+|---|---|
+| `recording_failed` | `reason`, `recovery` |
+| `recording_delivery_failed` | `step`, `error`, `reason`, `recovery` |
+| `recording_delivery_lost` | `step` |
+| `recording_ready` | |
+| `recording_deleted` | `by` |
+| `recording_cleanup_failed` | `step`, `error`, `reason`, `action`, and `media` when the bytes were already gone |
+| `recording_killed` | `reason`, `recovery` |
+| `recording_abandoned` | `state`, `reason`, `recovery`, `age_seconds` |
+| `recording_still_running` | `error`, `action` |
+| `recording_stop_refused` | `error`, and `step` where a route asked |
+| `recording_stop_not_recorded` | `error`; the transition itself failed, so no provider call was made |
+
+Every line that reports a state change is written after that change and only by
+the caller that made it. Two sweepers can read the same row, and one of them
+moved nothing.
+
+`recording_cleanup_failed` is the one an operator has to act on: it names
+`action: delete_by_hand`, because nothing automatic is going to fix a file that
+would not delete.
 
 ### Where the pipeline currently stops
 
@@ -335,6 +471,11 @@ POST https://www.googleapis.com/drive/v3/files/{fileId}/permissions
   "expirationTime": "<RFC 3339, 24 hours out>"
 }
 ```
+
+A permission is always named with the file it is on. Drive cannot revoke one
+without that, and the file a delivery is revoking on is not always a file it may
+delete: an attempt that reused an earlier upload and then granted its own
+permission has to take back the grant and leave the file.
 
 Revocation and deletion, in that order:
 

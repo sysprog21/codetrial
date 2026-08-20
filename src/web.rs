@@ -353,7 +353,7 @@ fn web_router(
         )
         .route(
             "/api/interviews/{id}/recording",
-            post(start_recording_handler),
+            post(start_recording_handler).get(recording_status_handler),
         )
         .route("/api/interviews/{id}/end", post(end_interview_handler))
         .route(
@@ -2137,10 +2137,12 @@ async fn withdraw_consent_handler(
                 {
                     // Still 204. The candidate said no and that is recorded;
                     // whether the provider heard it is the sweeper's problem,
-                    // not theirs.
-                    eprintln!(
-                        "recording {} could not be stopped after consent withdrawal: {error}",
-                        recording.id
+                    // not theirs. Through `audit`, because the message is the
+                    // provider's and a newline in it would forge a log line.
+                    crate::recording::report_stop_failure(
+                        &recording.id,
+                        Some("consent_withdrawn"),
+                        &error,
                     );
                 }
             }
@@ -2473,6 +2475,73 @@ fn start_refusal_response(refusal: crate::recording::StartRefusal) -> Response {
     }
 }
 
+/// What happened to this interview's recording.
+///
+/// Ids and states only. The staged object, the Drive file and the permission
+/// are handles to media, and a status route that returned them would be a way
+/// to reach a recording without the permission that governs it.
+async fn recording_status_handler(
+    State(state): State<AppState>,
+    UriPath(interview_id): UriPath<String>,
+    request: Request<Body>,
+) -> Response {
+    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+
+    // A server that records nothing answers exactly as one with no such
+    // recording does. Three states, one reply: telling them apart is a way to
+    // learn about other people's interviews and about this deployment.
+    let missing = || {
+        json_response(
+            StatusCode::NOT_FOUND,
+            json!({ "code": "recording_not_found", "error": "No recording for that interview." }),
+        )
+    };
+    if state.recorder.is_none() {
+        return missing();
+    }
+    let found = blocking(move || {
+        crate::recording::recording_for_interview(&accounts, &interview_id, user.id)
+    })
+    .await;
+    match found {
+        Ok(None) => missing(),
+        Ok(Some(recording)) => {
+            // Through `Failure::parse`, so only an enumerated code can reach a
+            // client. The column is written by this crate today, and a status
+            // route that echoed whatever was in it is one refactor away from
+            // handing back a provider's error body.
+            let failure = recording
+                .error
+                .as_deref()
+                .and_then(crate::recording::Failure::parse);
+            json_response(
+                StatusCode::OK,
+                json!({
+                    "recordingId": recording.id,
+                    "state": recording.state.as_str(),
+                    "error": failure.map(crate::recording::Failure::as_str),
+
+                    // What a person does about it. "failed" is not an
+                    // instruction, and a candidate whose file exists and could
+                    // not be delivered must not be told to record again.
+                    "recovery": failure.map(crate::recording::Failure::recovery),
+                    "retries": recording.retries,
+                }),
+            )
+        }
+        Err(error) => {
+            eprintln!("could not read a recording status: {error}");
+            json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "Could not read the recording status." }),
+            )
+        }
+    }
+}
+
 /// The interview is over.
 ///
 /// One of the two ways a recording stops normally, and neither is optional: the
@@ -2539,12 +2608,12 @@ async fn finish_recording(
         RecordingState::Finalizing
     };
     match crate::recording::stop_recording(accounts, recorder, recording, next, reason).await {
-        Ok(state) => json_response(
+        Ok((state, _)) => json_response(
             StatusCode::ACCEPTED,
             json!({ "recordingId": recording.id, "state": state.as_str() }),
         ),
         Err(error) => {
-            eprintln!("recording {} could not be stopped: {error}", recording.id);
+            crate::recording::report_stop_failure(&recording.id, Some("end"), &error);
             json_response(
                 StatusCode::BAD_GATEWAY,
                 json!({
@@ -2848,12 +2917,37 @@ async fn apply_webhook(
         }
         "egress_ended" | "egress_updated" => {
             // The provider's own words about how it ended. `EGRESS_COMPLETE` is
-            // the only one that produced a file worth moving.
-            let (next, reason) = match status {
-                "EGRESS_COMPLETE" => (RecordingState::Transferring, None),
-                "EGRESS_FAILED" => (RecordingState::Failed, Some("egress_failed")),
-                "EGRESS_ABORTED" => (RecordingState::Failed, Some("egress_aborted")),
-                "EGRESS_LIMIT_REACHED" => (RecordingState::Failed, Some("egress_limit_reached")),
+            // the only one that produced a file worth moving. The object this
+            // recording is going to transfer, not any file the job happened to
+            // write.
+            let expected_object =
+                crate::recording::gcs_object_path(&recorder.config.gcs_prefix, &recording.id);
+            let (next, failure) = match status {
+                // A completion with nothing in it is not a completion. A
+                // missing file result, or one of no bytes, is how a truncated
+                // recording arrives, and sending it through the transfer shared
+                // a zero-byte video with a candidate.
+                "EGRESS_COMPLETE"
+                    if crate::recording::completed_with_output(event, &expected_object) =>
+                {
+                    (RecordingState::Transferring, None)
+                }
+                "EGRESS_COMPLETE" => (
+                    RecordingState::Failed,
+                    Some(crate::recording::Failure::PartialOutput),
+                ),
+                "EGRESS_FAILED" => (
+                    RecordingState::Failed,
+                    Some(crate::recording::Failure::Egress),
+                ),
+                "EGRESS_ABORTED" => (
+                    RecordingState::Failed,
+                    Some(crate::recording::Failure::Aborted),
+                ),
+                "EGRESS_LIMIT_REACHED" => (
+                    RecordingState::Failed,
+                    Some(crate::recording::Failure::LimitReached),
+                ),
 
                 // `EGRESS_ACTIVE` and `EGRESS_STARTING` on an update say
                 // nothing new, and in particular do not say the job has
@@ -2879,8 +2973,8 @@ async fn apply_webhook(
             let accounts = accounts.clone();
             let clock = recorder.clock.clone();
             let id = recording.id.clone();
-            let reason = reason.map(str::to_string);
-            blocking(move || {
+            let reason = failure.map(|failure| failure.as_str().to_string());
+            let moved = blocking(move || {
                 crate::recording::transition(
                     &accounts,
                     clock.as_ref(),
@@ -2889,8 +2983,23 @@ async fn apply_webhook(
                     reason.as_deref(),
                 )
             })
-            .await
-            .is_ok()
+            .await;
+
+            // After the transition, and only when it moved. A late
+            // `EGRESS_FAILED` for a row that has already advanced is refused by
+            // the table, and an audit line written first said a recording had
+            // failed while its status said otherwise.
+            if let (Some(failure), Ok(Some((_, true)))) = (failure, &moved) {
+                crate::recording::audit(
+                    "recording_failed",
+                    &recording.id,
+                    &[
+                        ("reason", failure.as_str()),
+                        ("recovery", failure.recovery()),
+                    ],
+                );
+            }
+            moved.is_ok()
         }
         _ => true,
     }
