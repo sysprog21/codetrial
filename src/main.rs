@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use codetrial::config::{AgentConfig, DEFAULT_ROOM_PREFIX, DEFAULT_WEB_ADDR, DEFAULT_WEB_DIR};
+use codetrial::config::{
+    AgentConfig, DEFAULT_DURATION_MIN, DEFAULT_ROOM_PREFIX, DEFAULT_WEB_ADDR, DEFAULT_WEB_DIR,
+};
 use codetrial::web::{RoomDispatcher, WebServerConfig};
 
 const DEFAULT_CONFIG_DIR: &str = "config";
@@ -184,6 +186,19 @@ fn run_web(options: CliOptions) -> Result<(), String> {
         &provider_dir(&options),
         should_discover_providers(&options),
     );
+
+    // After `extend_pool`, so the "is this project in the pool" check sees the
+    // pool the server will actually serve, and before the listener does any
+    // work: a half-configured recording block is a startup failure, never a
+    // surprise at the moment a candidate's interview ends.
+    let recording = codetrial::config::load_recording(
+        &values,
+        &pool,
+        interview_duration_min(&values),
+        production,
+    )
+    .map_err(|error| error.to_string())?;
+
     let config = WebServerConfig {
         web_dir: PathBuf::from(value_or(&values, "CODETRIAL_WEB_DIR", DEFAULT_WEB_DIR)),
         github_client_id: nonempty(&values, "GITHUB_CLIENT_ID"),
@@ -197,6 +212,7 @@ fn run_web(options: CliOptions) -> Result<(), String> {
         production: is_production(&values),
         trusted_proxy_hops: trusted_proxy_hops(&values),
         compiler_explorer_enabled: compiler_explorer_enabled(&values),
+        recording,
         pool,
     };
 
@@ -359,6 +375,7 @@ fn run_serve(options: CliOptions) -> Result<(), String> {
     let session_secret = Some(value_or(&values, "SESSION_SECRET", DEFAULT_SESSION_SECRET));
     let db_path = Some(account_db_path(&values));
     let trusted_proxy_hops = trusted_proxy_hops(&values);
+    let recording_values = values.clone();
     let mut config =
         codetrial::config::load_from_pairs(values).map_err(|error| error.to_string())?;
     let room_name = fixed_room_name.unwrap_or_else(|| format!("{}-local", config.room_prefix));
@@ -370,6 +387,17 @@ fn run_serve(options: CliOptions) -> Result<(), String> {
         should_discover_providers(&options),
     );
     let config = select_provider(config, &room_name, false)?;
+
+    // After `select_provider`, which narrows the pool to the one project this
+    // room belongs to, so a recording URL naming any other project is refused
+    // here for the same reason it is refused in `run_web`.
+    let recording = codetrial::config::load_recording(
+        &recording_values,
+        &config.pool,
+        config.default_duration_min,
+        false,
+    )
+    .map_err(|error| error.to_string())?;
     let web_config = WebServerConfig {
         web_dir: PathBuf::from(config.web_dir.clone()),
         github_client_id,
@@ -383,6 +411,7 @@ fn run_serve(options: CliOptions) -> Result<(), String> {
         production: false,
         trusted_proxy_hops,
         compiler_explorer_enabled: config.compiler_explorer_enabled,
+        recording,
         pool: config.pool.clone(),
     };
 
@@ -713,6 +742,15 @@ fn is_production(values: &BTreeMap<String, String>) -> bool {
 
 /// Zero unless the operator states how many proxies front this server, so the
 /// default never trusts a forwarded client address.
+/// The configured interview length, which is what a recording's maximum
+/// duration has to clear. Read here rather than through `load_from_pairs`
+/// because `codetrial web` deliberately runs without a full agent config.
+fn interview_duration_min(values: &BTreeMap<String, String>) -> u32 {
+    nonempty(values, "CODETRIAL_DURATION_MIN")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(DEFAULT_DURATION_MIN)
+}
+
 fn trusted_proxy_hops(values: &BTreeMap<String, String>) -> u32 {
     nonempty(values, "CODETRIAL_TRUSTED_PROXY_HOPS")
         .and_then(|value| value.parse().ok())

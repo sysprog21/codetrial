@@ -69,6 +69,10 @@ pub struct WebServerConfig {
     /// client from `X-Forwarded-For`, which is only safe once every request is
     /// known to pass through that many proxies you control.
     pub trusted_proxy_hops: u32,
+    /// Production recording, or `None` when it is off, which is every
+    /// deployment that has not provisioned the resources in
+    /// `docs/recording-contract.md`.
+    pub recording: Option<crate::config::RecordingConfig>,
     /// Every LiveKit project this server can hand a candidate to, primary
     /// first. The single source: the primary used to be stored here and again
     /// in three flat fields, which cost a fallback chain at every read and a

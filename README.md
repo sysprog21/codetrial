@@ -426,6 +426,39 @@ scripts/gemini-check.sh          # live Gemini credential check
 | `CODETRIAL_DB_PATH` | `codetrial.db` | SQLite account and report records |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | unset | optional OAuth redirect support for `/api/login` |
 
+### Recording
+
+Off unless `CODETRIAL_RECORDING_ENABLED=true`, and a half-configured block is a
+startup failure rather than a surprise when a candidate's interview ends. See
+[`docs/recording-contract.md`](docs/recording-contract.md) for what has to be
+provisioned first.
+
+These values are validated at startup today; the pipeline that consumes them is
+still being built, so turning the switch on validates a configuration and
+records nothing. The keys are documented here because they have one owner and
+one meaning, not because the feature is finished.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CODETRIAL_RECORDING_ENABLED` | `false` | master switch; everything below is ignored while it is off |
+| `CODETRIAL_RECORDING_GCS_BUCKET` | required when enabled | private staging bucket Egress writes to |
+| `CODETRIAL_RECORDING_GCS_PREFIX` | `codetrial` | object path prefix; the object is `{prefix}/{recording_id}.mp4` |
+| `CODETRIAL_RECORDING_DRIVE_ID` | required when enabled | platform-owned Shared Drive the recording is delivered to |
+| `CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON` | required when enabled | service-account key JSON, supplied from a secret store and never from a committed env file |
+| `CODETRIAL_RECORDING_TEMPLATE_BASE_URL` | required when enabled | public HTTPS origin serving `/recording/index.html`; loopback and private addresses are refused because Egress fetches it from the public internet |
+| `CODETRIAL_RECORDING_LIVEKIT_URL`, `..._API_KEY`, `..._API_SECRET` | unset | optional override; all three or none. When unset, recording follows the LiveKit project that owns the room. The URL must name a project in the pool, or no room this server creates would ever be recorded |
+| `CODETRIAL_RECORDING_MAX_MINUTES` | `45` | recording ceiling; refused below `CODETRIAL_DURATION_MIN`, since a recording that stops first is missing the part a reviewer wanted |
+| `CODETRIAL_RECORDING_BITRATE` | `2000` | target video bitrate in kbps, bounded to 200 to 8000 |
+| `CODETRIAL_RECORDING_KILL_SWITCH` | `false` | refuses new recordings and stops active ones |
+| `CODETRIAL_RECORDING_TIMEOUT_SECONDS` | `900` | ceiling on one recording's provider calls |
+| `CODETRIAL_RECORDING_INTEGRATION` | unset | set to `1` only by `scripts/recording-integration.sh`; the plain `cargo test` stays credential-free |
+
+There is deliberately no separate webhook secret. LiveKit signs webhooks with
+the project's own API key and secret, so verification uses the recording
+override credentials when they are set and the room's project credentials
+otherwise. A `CODETRIAL_RECORDING_WEBHOOK_SECRET` would be a value an operator
+believed was checked and nothing checked.
+
 `/api/token` requires a recorded GitHub username session and is capped at 30
 requests per minute per client; `POST /api/login`, which is where those
 sessions come from, is capped separately at the same rate. Behind a reverse

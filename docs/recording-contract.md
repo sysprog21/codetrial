@@ -154,6 +154,12 @@ caller apart "wrong secret" from "wrong digest" hands them a probe.
 
 `verify_livekit_webhook` in `src/token.rs` is the only implementation.
 
+There is no separate webhook secret, and there must not be one. LiveKit signs
+with the project's own API key and secret, so verification uses
+`CODETRIAL_RECORDING_LIVEKIT_API_KEY`/`_SECRET` when the override is set and
+the room's provider credentials otherwise. A `CODETRIAL_RECORDING_WEBHOOK_SECRET`
+key would be a value an operator believed was checked while nothing checked it.
+
 ### Delivery is at-least-once
 
 LiveKit retries any webhook it did not get a 2xx for. A retry is a *fresh,

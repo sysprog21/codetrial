@@ -507,3 +507,520 @@ pub fn compiler_explorer_enabled(value: Option<&str>) -> bool {
 pub fn gemini_candidate_video_enabled(value: Option<&str>) -> bool {
     parse_bool(value, DEFAULT_GEMINI_CANDIDATE_VIDEO_ENABLED)
 }
+
+/// Production recording, or its absence.
+///
+/// One struct rather than a dozen loose keys because the values are only
+/// meaningful together: a bucket with no service account cannot be written to,
+/// and a template URL with no Egress project cannot be fetched by anything.
+/// Absent means recording is off, which is the default and the state every
+/// deployment is in until an operator provisions the resources in
+/// `docs/recording-contract.md`.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RecordingConfig {
+    /// `None` means record on whichever LiveKit project owns the room, which
+    /// is how rooms are routed today. `Some` names one of the pool's projects
+    /// with its own credentials, for a key scoped to `roomRecord`.
+    pub livekit: Option<RecordingLivekit>,
+    pub gcs_bucket: String,
+    pub gcs_prefix: String,
+    pub drive_id: String,
+    pub service_account_json: String,
+    pub max_minutes: u32,
+    /// Kilobits per second, the unit `EncodingOptions.video_bitrate` uses.
+    pub bitrate: u32,
+    pub kill_switch: bool,
+    pub template_base_url: String,
+    pub timeout_seconds: u64,
+    pub integration: bool,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RecordingLivekit {
+    pub url: String,
+    pub api_key: String,
+    pub api_secret: String,
+}
+
+/// Redacting, for the same reason [`Provider`] redacts: `WebServerConfig`
+/// derives `Debug`, so anything reachable from it can reach a log line. The
+/// service-account key is the worst of these, because it is a private key in a
+/// string field and it would print in full.
+impl fmt::Debug for RecordingConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RecordingConfig")
+            .field("livekit", &self.livekit)
+            .field("gcs_bucket", &self.gcs_bucket)
+            .field("gcs_prefix", &self.gcs_prefix)
+            .field("drive_id", &self.drive_id)
+            .field("service_account_json", &"<redacted>")
+            .field("max_minutes", &self.max_minutes)
+            .field("bitrate", &self.bitrate)
+            .field("kill_switch", &self.kill_switch)
+            .field("template_base_url", &self.template_base_url)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("integration", &self.integration)
+            .finish()
+    }
+}
+
+impl fmt::Debug for RecordingLivekit {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The host, not the URL. `validate_livekit_url` accepts a query string
+        // and userinfo, which is exactly why no message in this file prints a
+        // LiveKit URL, and `Debug` is a message like any other.
+        formatter
+            .debug_struct("RecordingLivekit")
+            .field("host", &host_of(livekit_authority(&self.url)))
+            .field("api_key", &"<redacted>")
+            .field("api_secret", &"<redacted>")
+            .finish()
+    }
+}
+
+/// The authority of a URL, or the whole string when it has no scheme. Shared by
+/// the redaction above and the project comparison below, so that neither can
+/// mistake a credential for part of a hostname.
+fn livekit_authority(url: &str) -> &str {
+    url.split_once("://")
+        .map_or(url, |(_, rest)| rest)
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .rsplit('@')
+        .next()
+        .unwrap_or_default()
+}
+
+/// Matches `DEFAULT_DURATION_MIN`, and validation refuses anything below the
+/// configured interview length: a recording that stops before the interview
+/// does produces an artifact that is missing exactly the part a reviewer would
+/// have watched it for.
+pub const DEFAULT_RECORDING_MAX_MINUTES: u32 = DEFAULT_DURATION_MIN;
+/// Kilobits per second. The contract's ceiling, written down in one place.
+pub const DEFAULT_RECORDING_BITRATE: u32 = crate::recording::OUTPUT_VIDEO_BITRATE;
+/// Bounds, not preferences. Below the floor the 720p output is unwatchable and
+/// the recording is worthless; above the ceiling an operator has quietly
+/// tripled the transcode bill for a talking-head video.
+pub const MIN_RECORDING_BITRATE: u32 = 200;
+pub const MAX_RECORDING_BITRATE: u32 = 8_000;
+pub const DEFAULT_RECORDING_GCS_PREFIX: &str = "codetrial";
+pub const DEFAULT_RECORDING_TIMEOUT_SECONDS: u64 = 900;
+
+/// The credentials that only make sense together. Naming them as a group is
+/// what makes a half-configured deployment fail at startup instead of at the
+/// moment a candidate's interview ends.
+const RECORDING_REQUIRED_KEYS: &[&str] = &[
+    "CODETRIAL_RECORDING_GCS_BUCKET",
+    "CODETRIAL_RECORDING_DRIVE_ID",
+    "CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON",
+    "CODETRIAL_RECORDING_TEMPLATE_BASE_URL",
+];
+
+/// The LiveKit override. All three or none: a URL with no secret is a project
+/// nothing can call, and a secret with no URL is a credential for nowhere.
+const RECORDING_LIVEKIT_KEYS: [&str; 3] = [
+    "CODETRIAL_RECORDING_LIVEKIT_URL",
+    "CODETRIAL_RECORDING_LIVEKIT_API_KEY",
+    "CODETRIAL_RECORDING_LIVEKIT_API_SECRET",
+];
+
+/// Reads the recording block, or reports every reason it cannot be used.
+///
+/// Separate from [`load_from_pairs`] because the two callers disagree about
+/// what else must be present: `codetrial serve` insists on a Gemini key, and
+/// `codetrial web` deliberately does not. Both need this, and neither should
+/// have to reimplement it.
+///
+/// Errors carry key names and reasons, never values. A validation message is a
+/// log line, and a log line holding a service-account key is the same incident
+/// as committing one.
+pub fn load_recording(
+    values: &BTreeMap<String, String>,
+    pool: &ProviderPool,
+    interview_duration_min: u32,
+    production: bool,
+) -> Result<Option<RecordingConfig>, ConfigError> {
+    // The switch is read strictly and on its own, in that order. Strictly,
+    // because `CODETRIAL_RECORDING_ENABLED=ture` would otherwise turn recording
+    // off silently: the safe direction, arrived at by accident, with no consent
+    // prompt, no artifact, and nothing said. On its own, because everything
+    // below really is ignored while recording is off, and a deployment that
+    // does not record must not fail to start over a typo in a value nothing
+    // reads.
+    let mut invalid_entries = Vec::new();
+    if !recording_flag(values, "CODETRIAL_RECORDING_ENABLED", &mut invalid_entries)
+        || !invalid_entries.is_empty()
+    {
+        return if invalid_entries.is_empty() {
+            Ok(None)
+        } else {
+            Err(ConfigError {
+                missing_keys: Vec::new(),
+                invalid_entries,
+            })
+        };
+    }
+    let kill_switch = recording_flag(
+        values,
+        "CODETRIAL_RECORDING_KILL_SWITCH",
+        &mut invalid_entries,
+    );
+    let integration = recording_flag(
+        values,
+        "CODETRIAL_RECORDING_INTEGRATION",
+        &mut invalid_entries,
+    );
+
+    let present = |key: &str| {
+        values
+            .get(key)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+    };
+    let mut missing_keys = RECORDING_REQUIRED_KEYS
+        .iter()
+        .copied()
+        .filter(|key| present(key).is_none())
+        .collect::<Vec<_>>();
+
+    let configured_livekit = RECORDING_LIVEKIT_KEYS
+        .iter()
+        .filter(|key| present(key).is_some())
+        .count();
+    if configured_livekit != 0 && configured_livekit != RECORDING_LIVEKIT_KEYS.len() {
+        missing_keys.extend(
+            RECORDING_LIVEKIT_KEYS
+                .iter()
+                .copied()
+                .filter(|key| present(key).is_none()),
+        );
+    }
+
+    let livekit = (configured_livekit == RECORDING_LIVEKIT_KEYS.len()).then(|| RecordingLivekit {
+        url: present("CODETRIAL_RECORDING_LIVEKIT_URL")
+            .unwrap_or_default()
+            .to_string(),
+        api_key: present("CODETRIAL_RECORDING_LIVEKIT_API_KEY")
+            .unwrap_or_default()
+            .to_string(),
+        api_secret: present("CODETRIAL_RECORDING_LIVEKIT_API_SECRET")
+            .unwrap_or_default()
+            .to_string(),
+    });
+    if let Some(livekit) = &livekit {
+        if let Err(message) = validate_livekit_url(&livekit.url, production) {
+            invalid_entries.push(format!("CODETRIAL_RECORDING_LIVEKIT_URL: {message}"));
+        } else if !pool
+            .providers
+            .iter()
+            .any(|provider| same_livekit_host(&provider.url, &livekit.url))
+        {
+            // Egress runs inside the project that holds the room, so recording
+            // against a project this server never hands a token for records
+            // nothing. The message names no URL: a LiveKit URL can carry a
+            // query string, and this one reaches stderr.
+            invalid_entries.push(
+                "CODETRIAL_RECORDING_LIVEKIT_URL names a LiveKit project that is not in the \
+                 provider pool, so no room this server creates would ever be recorded"
+                    .to_string(),
+            );
+        }
+    }
+
+    if let Some(url) = present("CODETRIAL_RECORDING_TEMPLATE_BASE_URL")
+        && let Err(message) = validate_template_base_url(url)
+    {
+        invalid_entries.push(format!("CODETRIAL_RECORDING_TEMPLATE_BASE_URL: {message}"));
+    }
+
+    let max_minutes = recording_number(
+        values,
+        "CODETRIAL_RECORDING_MAX_MINUTES",
+        DEFAULT_RECORDING_MAX_MINUTES,
+        &mut invalid_entries,
+    );
+    if max_minutes < interview_duration_min {
+        invalid_entries.push(format!(
+            "CODETRIAL_RECORDING_MAX_MINUTES is {max_minutes}, below the {interview_duration_min} \
+             minute interview, so a recording would stop before the interview does"
+        ));
+    }
+
+    let bitrate = recording_number(
+        values,
+        "CODETRIAL_RECORDING_BITRATE",
+        DEFAULT_RECORDING_BITRATE,
+        &mut invalid_entries,
+    );
+    if !(MIN_RECORDING_BITRATE..=MAX_RECORDING_BITRATE).contains(&bitrate) {
+        invalid_entries.push(format!(
+            "CODETRIAL_RECORDING_BITRATE is {bitrate} kbps, outside \
+             {MIN_RECORDING_BITRATE}..={MAX_RECORDING_BITRATE}"
+        ));
+    }
+
+    let timeout_seconds = recording_number(
+        values,
+        "CODETRIAL_RECORDING_TIMEOUT_SECONDS",
+        DEFAULT_RECORDING_TIMEOUT_SECONDS,
+        &mut invalid_entries,
+    );
+    if timeout_seconds == 0 {
+        invalid_entries
+            .push("CODETRIAL_RECORDING_TIMEOUT_SECONDS must be at least one second".to_string());
+    }
+
+    if !missing_keys.is_empty() || !invalid_entries.is_empty() {
+        return Err(ConfigError {
+            missing_keys,
+            invalid_entries,
+        });
+    }
+
+    Ok(Some(RecordingConfig {
+        livekit,
+        gcs_bucket: present("CODETRIAL_RECORDING_GCS_BUCKET")
+            .unwrap_or_default()
+            .to_string(),
+        gcs_prefix: optional(
+            values,
+            "CODETRIAL_RECORDING_GCS_PREFIX",
+            DEFAULT_RECORDING_GCS_PREFIX,
+        ),
+        drive_id: present("CODETRIAL_RECORDING_DRIVE_ID")
+            .unwrap_or_default()
+            .to_string(),
+        service_account_json: present("CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON")
+            .unwrap_or_default()
+            .to_string(),
+        max_minutes,
+        bitrate,
+        kill_switch,
+        template_base_url: present("CODETRIAL_RECORDING_TEMPLATE_BASE_URL")
+            .unwrap_or_default()
+            .trim_end_matches('/')
+            .to_string(),
+        timeout_seconds,
+        integration,
+    }))
+}
+
+/// A recording number, where a value that is present and unparseable is an
+/// error rather than a silent fall back to the default.
+///
+/// `optional_u32` defaults on a parse failure, which is right for a tuning knob
+/// and wrong here: an operator who wrote `CODETRIAL_RECORDING_BITRATE=2 Mbps`
+/// would get a server that started, recorded, and billed at whatever the
+/// default happened to be.
+fn recording_number<T: std::str::FromStr>(
+    values: &BTreeMap<String, String>,
+    key: &'static str,
+    default: T,
+    invalid_entries: &mut Vec<String>,
+) -> T {
+    let Some(value) = values
+        .get(key)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return default;
+    };
+    match value.parse() {
+        Ok(parsed) => parsed,
+        Err(_) => {
+            // The value is not echoed. Every other message in this function
+            // names keys only, and one exception is how the habit dies.
+            invalid_entries.push(format!("{key} is not a number"));
+            default
+        }
+    }
+}
+
+/// A recording boolean, under the same rule: present and unrecognized is an
+/// error. `parse_bool` reads anything it does not know as false, which for a
+/// feature that must fail closed means failing closed silently.
+fn recording_flag(
+    values: &BTreeMap<String, String>,
+    key: &'static str,
+    invalid_entries: &mut Vec<String>,
+) -> bool {
+    let Some(value) = values
+        .get(key)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => true,
+        "0" | "false" | "no" | "off" => false,
+        _ => {
+            invalid_entries.push(format!("{key} must be true or false"));
+            false
+        }
+    }
+}
+
+/// LiveKit Cloud Egress fetches the RoomComposite template over the public
+/// internet, so a loopback or private address is not a URL it can reach. This
+/// is the same rule `scripts/recording-provision-check.sh` applies to the
+/// value an operator records, kept in step deliberately: an operator who
+/// passed the provisioning check should not then fail at startup.
+///
+/// The ceiling, because this is not an SSRF guard and nothing here fetches the
+/// URL: a literal address is classified by parsing it, but `0x7f000001`,
+/// `2130706433` and a hostname that resolves privately all read as ordinary
+/// hosts and are accepted. What this catches is the mistake an operator
+/// actually makes, which is pointing Egress at the machine they are sitting
+/// at. Catching the rest would mean resolving names at startup and again
+/// before every fetch, for a value only an operator can set.
+fn validate_template_base_url(url: &str) -> Result<(), String> {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return Err(
+            "must start with https://, because Egress fetches it from the public internet"
+                .to_string(),
+        );
+    };
+    if rest.contains('?') || rest.contains('#') {
+        return Err("must be an origin and path only; Egress appends its own query".to_string());
+    }
+    let authority = rest.split('/').next().unwrap_or_default();
+    if authority.is_empty() {
+        return Err("has a scheme but no host".to_string());
+    }
+
+    // Refused rather than stripped. Userinfo in a URL is a credential, and this
+    // value is printed by `Debug` and pasted into an Egress request; a password
+    // that survives redaction because it was hiding inside a URL is the leak
+    // nobody looks for.
+    if authority.contains('@') {
+        return Err(
+            "must not carry userinfo; a credential inside a URL is a credential in a log line"
+                .to_string(),
+        );
+    }
+    let Some((host, port)) = split_authority(authority) else {
+        return Err("has a malformed host".to_string());
+    };
+    if host.is_empty() {
+        return Err("has a scheme but no host".to_string());
+    }
+    if let Some(port) = port
+        && port.parse::<u16>().ok().is_none_or(|port| port == 0)
+    {
+        return Err("has a port Egress cannot connect to".to_string());
+    }
+    if is_unreachable_host(host) {
+        return Err(
+            "must not be a loopback or private address; Egress cannot reach it".to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// An authority split into host and port, with the brackets off an IPv6
+/// literal.
+///
+/// Splitting on a colon anywhere is wrong for `[::1]:443`, and splitting on the
+/// last one is wrong for `[::1]` on its own, so the bracketed form is handled
+/// first and separately. An unbracketed IPv6 literal is not a legal authority
+/// and comes back with an empty host, which every caller already refuses.
+fn split_authority(authority: &str) -> Option<(&str, Option<&str>)> {
+    if let Some(rest) = authority.strip_prefix('[') {
+        // An opening bracket with no closing one, or anything after the closing
+        // one that is not a port, is not an authority. Treating `[2001:db8::1`
+        // as a host would let a truncated URL validate.
+        let (host, tail) = rest.split_once(']')?;
+        let port = match tail {
+            "" => None,
+            tail => Some(tail.strip_prefix(':')?),
+        };
+        return Some((host, port));
+    }
+    Some(match authority.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (authority, None),
+    })
+}
+
+fn host_of(authority: &str) -> &str {
+    split_authority(authority).map_or("", |(host, _)| host)
+}
+
+/// Whether a host names this machine or a network Egress cannot route to.
+///
+/// Parsed rather than prefix-matched. The prefix version this replaced rejected
+/// every hostname beginning `fc` or `fd`, which includes `facebook.com`, and
+/// let `[::ffff:127.0.0.1]` straight through.
+fn is_unreachable_host(host: &str) -> bool {
+    // One trailing dot, which is the fully qualified spelling of the same name.
+    // `localhost.` resolves to loopback like `localhost` does.
+    let host = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    let Ok(address) = host.parse::<std::net::IpAddr>() else {
+        return false;
+    };
+
+    // An IPv4 address wearing an IPv6 costume is still that address.
+    let address = match address {
+        std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(address, std::net::IpAddr::V4),
+        other => other,
+    };
+    match address {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+        }
+        std::net::IpAddr::V6(v6) => {
+            // `is_unique_local` and `is_unicast_link_local` are still unstable,
+            // so fc00::/7 and fe80::/10 are matched on the bits rather than
+            // waited for.
+            let leading = v6.segments()[0];
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || leading & 0xfe00 == 0xfc00
+                || leading & 0xffc0 == 0xfe80
+        }
+    }
+}
+
+/// Whether two LiveKit URLs name the same project.
+///
+/// Scheme is ignored because `wss://host` and `https://host` are one endpoint,
+/// but the port is not: two projects on one host would be two ports. The
+/// default port is normalized away, so `wss://host` and `https://host:443` are
+/// recognized as the same place rather than reported as a misconfiguration.
+fn same_livekit_host(left: &str, right: &str) -> bool {
+    fn authority(url: &str) -> Option<String> {
+        let (scheme, rest) = url.split_once("://")?;
+        let authority = rest.split(['/', '?', '#']).next()?;
+
+        // Userinfo is dropped rather than compared. It is a credential, not
+        // part of the endpoint's identity, and two URLs for one project may
+        // legitimately carry different ones.
+        let authority = authority.rsplit('@').next()?;
+        let (host, port) = split_authority(authority)?;
+        let host = host.to_ascii_lowercase();
+        if host.is_empty() {
+            return None;
+        }
+        let default_port = match scheme.to_ascii_lowercase().as_str() {
+            "wss" | "https" => "443",
+            "ws" | "http" => "80",
+            _ => "",
+        };
+        let port = port.filter(|port| !port.is_empty()).unwrap_or(default_port);
+        Some(format!("{host}:{port}"))
+    }
+    match (authority(left), authority(right)) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
+}

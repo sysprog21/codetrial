@@ -718,6 +718,7 @@ async fn static_home_markup_matches_frontend_contract() {
         production: false,
         compiler_explorer_enabled: true,
         trusted_proxy_hops: 0,
+        recording: None,
         pool: Default::default(),
     })
     .await;
@@ -763,6 +764,7 @@ async fn static_interview_markup_exposes_offline_surface() {
         production: false,
         compiler_explorer_enabled: true,
         trusted_proxy_hops: 0,
+        recording: None,
         pool: Default::default(),
     })
     .await;
@@ -2944,6 +2946,7 @@ fn web_config() -> WebServerConfig {
         production: false,
         compiler_explorer_enabled: true,
         trusted_proxy_hops: 0,
+        recording: None,
         pool: primary_pool("wss://example.livekit.cloud", "devkey", "devsecret"),
     }
 }
