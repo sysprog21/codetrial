@@ -601,55 +601,57 @@ impl DeliveryProvider for GoogleDelivery {
                     .body(chunk)
                     .send()
                     .await;
-                let status = match &response {
-                    Ok(response) => response.status().as_u16(),
 
-                    // A dropped connection is the case the resumable protocol
-                    // exists for. It is not an answer, so it goes through the
-                    // same budget as one.
-                    Err(_) => 0,
-                };
-                if status == 200 || status == 201 {
-                    let body: Value = response
-                        .expect("a status implies a response")
-                        .json()
-                        .await
-                        .map_err(|error| format!("the upload answer was not JSON: {error}"))?;
-                    return body
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .ok_or_else(|| "the upload answer carried no file id".to_string());
-                }
-                if status == 308 {
-                    // What the server says it holds, not what this call sent. A
-                    // `308` acknowledging part of a chunk is allowed by the
-                    // protocol, and assuming the whole chunk landed would skip
-                    // those bytes and finish a corrupt file.
-                    let stored =
-                        stored_bytes(&response.expect("a status implies a response"), total)?;
-                    if stored > sent {
-                        sent = stored;
+                // Matched once, so the response stays owned by the branch that
+                // reads it. Deriving a status number first and then unwrapping
+                // the response again needs a sentinel for the no-answer case,
+                // and that sentinel has to be excluded by hand from every
+                // comparison below it.
+                if let Ok(response) = response {
+                    let status = response.status().as_u16();
+                    if status == 200 || status == 201 {
+                        let body: Value = response
+                            .json()
+                            .await
+                            .map_err(|error| format!("the upload answer was not JSON: {error}"))?;
+                        return body
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                            .ok_or_else(|| "the upload answer carried no file id".to_string());
+                    }
+                    if status == 308 {
+                        // What the server says it holds, not what this call
+                        // sent. A `308` acknowledging part of a chunk is
+                        // allowed by the protocol, and assuming the whole chunk
+                        // landed would skip those bytes and finish a corrupt
+                        // file.
+                        let stored = stored_bytes(&response, total)?;
+                        if stored > sent {
+                            sent = stored;
+                            continue;
+                        }
+
+                        // No progress at all. Spend a unit of the budget rather
+                        // than re-sending the same bytes forever.
+                        if budget == 0 {
+                            return Err("the upload made no progress".to_string());
+                        }
+                        budget -= 1;
                         continue;
                     }
-
-                    // No progress at all. Spend a unit of the budget rather
-                    // than re-sending the same bytes forever.
-                    if budget == 0 {
-                        return Err("the upload made no progress".to_string());
+                    if !RETRYABLE_STATUSES.contains(&status) {
+                        return Err(format!("a chunk was refused: {status}"));
                     }
-                    budget -= 1;
-                    continue;
-                }
-                if status != 0 && !RETRYABLE_STATUSES.contains(&status) {
-                    return Err(format!("a chunk was refused: {status}"));
                 }
 
-                // Retryable, or no answer at all. Ask the session what it
-                // actually holds rather than assuming, and spend a unit of the
-                // budget whether or not that moves `sent`: a session stuck at
-                // one offset is exactly the case a per-chunk counter never
-                // escapes.
+                // Retryable, or no answer at all: a dropped connection is the
+                // case the resumable protocol exists for, and it is not an
+                // answer, so it goes through the same budget as one. Ask the
+                // session what it actually holds rather than assuming, and
+                // spend a unit of the budget whether or not that moves `sent`:
+                // a session stuck at one offset is exactly the case a per-chunk
+                // counter never escapes.
                 if budget == 0 {
                     return Err("the upload ran out of retries".to_string());
                 }
@@ -847,6 +849,72 @@ mod tests {
             "retention runs more than once"
         );
         assert!(gone_or_ok(403, "x").is_err());
+    }
+
+    /// `bytes=0-n`, where `n` is the last byte the session holds.
+    fn with_range(range: Option<&str>) -> reqwest::Response {
+        let mut builder = axum::http::Response::builder().status(308);
+        if let Some(range) = range {
+            builder = builder.header(axum::http::header::RANGE, range);
+        }
+        reqwest::Response::from(builder.body(String::new()).unwrap())
+    }
+
+    /// The offset a `308` moves the upload to. Everything here is one
+    /// subtraction away from writing a file with a hole in it: the loop trusts
+    /// this number and never re-sends what it says arrived.
+    #[test]
+    fn a_resume_offset_is_believed_only_when_it_can_be_read_exactly() {
+        // A session that has nothing yet sends no header at all, which is not
+        // an error and must not be read as one.
+        assert_eq!(stored_bytes(&with_range(None), 1_000).unwrap(), 0);
+
+        // Inclusive end, so the count is one more than the index. Off by one
+        // here re-sends a byte or skips one, and only the second is visible.
+        assert_eq!(
+            stored_bytes(&with_range(Some("bytes=0-0")), 1_000).unwrap(),
+            1
+        );
+        assert_eq!(
+            stored_bytes(&with_range(Some("bytes=0-999")), 1_000).unwrap(),
+            1_000
+        );
+        assert_eq!(
+            stored_bytes(&with_range(Some("bytes=0-42 ")), 1_000).unwrap(),
+            43,
+            "a trailing space is still a readable range"
+        );
+
+        // Anything that is not `bytes=0-n` is a header this code cannot act on.
+        // Guessing at one moves the offset past bytes that were never stored,
+        // so each of these has to be an error and not a zero.
+        for range in [
+            "bytes=500-999",
+            "bytes=0-abc",
+            "bytes=0-",
+            "0-999",
+            "",
+            "bytes=0--1",
+        ] {
+            assert!(
+                stored_bytes(&with_range(Some(range)), 1_000).is_err(),
+                "{range:?} must not be guessed at"
+            );
+        }
+
+        // `end + 1` on the largest value a range can name. Wrapping it would
+        // report an empty session and restart a finished upload from zero.
+        assert!(
+            stored_bytes(&with_range(Some(&format!("bytes=0-{}", u64::MAX))), 1_000).is_err(),
+            "an offset that overflows must be refused"
+        );
+
+        // More than the object has means the session is not the one this
+        // transfer opened. Believing it finishes a truncated file.
+        assert!(
+            stored_bytes(&with_range(Some("bytes=0-1000")), 1_000).is_err(),
+            "a session cannot hold more than the object has"
+        );
     }
 
     #[test]
