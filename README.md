@@ -303,6 +303,36 @@ Recordings or copies made in Meet, or by anyone in the call, are outside
 CodeTrial's control. The manual verification procedure is
 `docs/meet-tab-audio-manual-check.md`.
 
+### Proving a recording
+
+`scripts/recording-integration.sh` is the credentialed acceptance, and nothing
+in `./scripts/test.sh` runs it: it needs the isolated LiveKit project, staging
+bucket and Shared Drive from
+[`docs/recording-contract.md`](docs/recording-contract.md), and it creates and
+deletes real media. It needs `ffprobe`, which it refuses without rather than
+discovering at the end of a run: `brew install ffmpeg`, or your package
+manager's equivalent.
+
+The judgement is not in the script. `tests/recording_integration.rs` holds what
+an acceptable recording looks like, 720p at 30 fps give or take one, a duration within 10% of the
+length the run declares the room was up for, at least five seconds of candidate
+video, both audio sources, and the avatar rendering, and those rules run in the default test suite
+against sample documents. A harness whose rules live in shell nobody can run
+without credentials is a harness nobody can check.
+`tests/fixtures/recording/media-output.schema.json` is the shape the script
+writes and that test reads, and one test proves the two lists have not drifted
+apart.
+
+Three numbers the file cannot answer come from the operator running the
+interview: how long the room was up, how long the candidate was on screen, and
+whether the avatar was rendering. That is the harness's ceiling and it is worth
+saying plainly: they are declarations rather than measurements, so an acceptance
+run proves what the file contains and takes the rest on trust. Absent, they are
+zero and false, which fails rather than passes, and `avatar_rendered` stays
+false until a model is published. Turning them into measurements means the
+template reporting them from inside the Egress browser, which belongs with the
+credentialed run rather than ahead of it.
+
 ### Jim's avatar
 
 Jim has a browser-rendered upper-body avatar in the interview sidebar. It is
