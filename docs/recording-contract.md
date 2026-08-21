@@ -963,6 +963,36 @@ DELETE https://www.googleapis.com/drive/v3/files/{fileId}/permissions/{permissio
 DELETE https://www.googleapis.com/drive/v3/files/{fileId}?supportsAllDrives=true
 ```
 
+## The history routes
+
+What a candidate reads about their own interviews, all three signed in and all
+three scoped to the account.
+
+| Route | Answer |
+|---|---|
+| `GET /api/recordings` | one page, newest first, plus `nextCursor` |
+| `GET /api/recordings/{id}` | one recording's state, dates and recovery |
+| `GET /api/recordings/{id}/events` | its replay, snapshot or tail |
+
+Paged by cursor, `<created_at>.<id>`, rather than by offset. A cursor that does
+not parse is `400 cursor_invalid` rather than a silent first page, which would
+read as a list that repeats itself. An offset shifts
+under a row being inserted or deleted, which here means an interview appearing
+twice or not at all while somebody scrolls their own history. One more row than
+a page is read, which is how "is there another page" is answered without a
+second query.
+
+None of these return an object path, a Drive file id or a permission id. Those
+are handles to media, and a history page needs to say whether a recording exists
+and until when, not where it is kept. The room name is absent for the same
+reason: it is a credential's subject.
+
+A deleted or expired recording is `410` on both the detail and the events, with
+`recording_deleted` and `replay_expired` respectively: one was taken away and
+the other waited too long, and they are different things to the person asking.
+Cross-account is `404` on all three, because an account that does not own a
+recording should not learn it exists.
+
 ## Retention and deletion
 
 A recording's media is deleted when its twenty-four hours are up, and

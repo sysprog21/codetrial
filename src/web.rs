@@ -370,6 +370,9 @@ fn web_router(
             crate::recording::REPLAY_ROUTE,
             get(recording_replay_handler),
         )
+        .route("/api/recordings", get(list_recordings_handler))
+        .route("/api/recordings/{id}", get(recording_handler))
+        .route("/api/recordings/{id}/events", get(recording_events_handler))
         .route("/runtime-config.js", get(runtime_config_handler))
         .route(
             "/api/reports",
@@ -2896,6 +2899,257 @@ async fn replay_snapshot_handler(
             )
         }
     }
+}
+
+/// An account's own recordings, newest first.
+///
+/// Paged by cursor rather than by offset: an offset shifts under a row being
+/// inserted or deleted, which here means an interview appearing twice or not at
+/// all while somebody scrolls their own history.
+async fn list_recordings_handler(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    request: Request<Body>,
+) -> Response {
+    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+    if state.recorder.is_none() {
+        return json_response(
+            StatusCode::OK,
+            json!({ "recordings": [], "nextCursor": null }),
+        );
+    }
+
+    // `<created_at>.<id>`, which is the last row of the previous page. Refused
+    // rather than ignored when it does not parse: a cursor that quietly became
+    // "start again" would hand a client the first page a second time, which
+    // reads as a list that repeats rather than as a request that was wrong.
+    let before = match params.get("before") {
+        None => None,
+        Some(cursor) => {
+            let parsed = cursor.split_once('.').and_then(|(created_at, id)| {
+                Some((created_at.parse::<i64>().ok()?, id.to_string()))
+            });
+            match parsed {
+                Some(parsed) => Some(parsed),
+                None => {
+                    return json_response(
+                        StatusCode::BAD_REQUEST,
+                        json!({ "code": "cursor_invalid", "error": "That is not a page cursor." }),
+                    );
+                }
+            }
+        }
+    };
+    let page =
+        blocking(move || crate::recording::recordings_for_account(&accounts, user.id, before))
+            .await;
+    let Ok(mut page) = page else {
+        return json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": "Could not read recordings." }),
+        );
+    };
+
+    // One more than a page was asked for, which is how "is there another page"
+    // is answered without a second count query.
+    let more = page.len() as i64 > crate::recording::RECORDING_PAGE;
+    page.truncate(crate::recording::RECORDING_PAGE as usize);
+    let next = more
+        .then(|| page.last())
+        .flatten()
+        .map(|last| format!("{}.{}", last.created_at, last.id));
+    json_response(
+        StatusCode::OK,
+        json!({
+            "recordings": page
+                .iter()
+                .map(|recording| json!({
+                    "recordingId": recording.id,
+                    "interviewId": recording.interview_id,
+                    "state": recording.state.as_str(),
+                    "error": recording
+                        .error
+                        .as_deref()
+                        .and_then(crate::recording::Failure::parse)
+                        .map(crate::recording::Failure::as_str),
+                    "createdAt": recording.created_at,
+                }))
+                .collect::<Vec<_>>(),
+            "nextCursor": next,
+        }),
+    )
+}
+
+/// One recording, as the person it belongs to may see it.
+///
+/// No object path, no Drive file id, no permission id. Those are handles to
+/// media, and a history page needs to say whether a recording exists and until
+/// when, not where it is kept.
+async fn recording_handler(
+    State(state): State<AppState>,
+    UriPath(recording_id): UriPath<String>,
+    request: Request<Body>,
+) -> Response {
+    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+    let missing = || {
+        json_response(
+            StatusCode::NOT_FOUND,
+            json!({ "code": "recording_not_found", "error": "No such recording." }),
+        )
+    };
+    if state.recorder.is_none() {
+        return missing();
+    }
+    let found =
+        blocking(move || crate::recording::recording_summary(&accounts, &recording_id, user.id))
+            .await;
+    let Ok(found) = found else {
+        return json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": "Could not read the recording." }),
+        );
+    };
+    let Some(summary) = found else {
+        return missing();
+    };
+    if let Some(gone) = gone_response(&summary, current_epoch_seconds() as i64) {
+        return gone;
+    }
+
+    let failure = summary
+        .error
+        .as_deref()
+        .and_then(crate::recording::Failure::parse);
+    json_response(
+        StatusCode::OK,
+        json!({
+            "recordingId": summary.id,
+            "interviewId": summary.interview_id,
+            "state": summary.state.as_str(),
+            "error": failure.map(crate::recording::Failure::as_str),
+            "recovery": failure.map(crate::recording::Failure::recovery),
+            "createdAt": summary.created_at,
+            "readyAt": summary.ready_at,
+            "expiresAt": summary.expires_at,
+            "quotaExceeded": summary.quota_exceeded,
+        }),
+    )
+}
+
+/// The replay of one recording, paged after a sequence number.
+///
+/// The same shape the recording template reads, and the same rules: absent or
+/// negative `after` is the snapshot, a number is the tail.
+async fn recording_events_handler(
+    State(state): State<AppState>,
+    UriPath(recording_id): UriPath<String>,
+    Query(params): Query<HashMap<String, String>>,
+    request: Request<Body>,
+) -> Response {
+    use crate::recording::SnapshotView;
+
+    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+    let missing = || {
+        json_response(
+            StatusCode::NOT_FOUND,
+            json!({ "code": "recording_not_found", "error": "No such recording." }),
+        )
+    };
+    if state.recorder.is_none() {
+        return missing();
+    }
+    let now = current_epoch_seconds() as i64;
+    let after = params
+        .get("after")
+        .and_then(|after| after.parse::<i64>().ok())
+        .unwrap_or(-1);
+
+    let found = {
+        let accounts = accounts.clone();
+        let recording_id = recording_id.clone();
+        blocking(move || crate::recording::recording_summary(&accounts, &recording_id, user.id))
+            .await
+    };
+    let summary = match found {
+        Ok(Some(summary)) => summary,
+        Ok(None) => return missing(),
+
+        // A read that failed is not a recording that does not exist. Answering
+        // `404` for it tells a person their interview is gone when the database
+        // merely had a bad moment.
+        Err(error) => {
+            eprintln!("could not read a recording: {error}");
+            return json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "Could not read the recording." }),
+            );
+        }
+    };
+    if let Some(gone) = gone_response(&summary, now) {
+        return gone;
+    }
+
+    let view = blocking(move || {
+        if after < 0 {
+            crate::recording::replay_snapshot(&accounts, &summary.interview_id, user.id, now)
+        } else {
+            crate::recording::replay_tail(&accounts, &summary.interview_id, user.id, after, now)
+        }
+    })
+    .await;
+    match view {
+        Ok(SnapshotView::Ready(snapshot)) => json_response(StatusCode::OK, replay_body(&snapshot)),
+        Ok(SnapshotView::Expired) => json_response(
+            StatusCode::GONE,
+            json!({ "code": "replay_expired", "error": "This replay is past its retention deadline." }),
+        ),
+        Ok(SnapshotView::Deleted) => json_response(
+            StatusCode::GONE,
+            json!({ "code": "recording_deleted", "error": "This recording has been deleted." }),
+        ),
+        Ok(SnapshotView::NoInterview) => missing(),
+        Err(error) => {
+            eprintln!("could not read a replay: {error}");
+            json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "Could not read the replay." }),
+            )
+        }
+    }
+}
+
+/// `410` for a recording whose media is gone or past its deadline, and nothing
+/// for one that is still there.
+///
+/// One function, because the two routes have to answer this the same way: a
+/// history page that listed a recording as watchable and a replay that answered
+/// `410` would be two answers to one question.
+fn gone_response(summary: &crate::recording::RecordingSummary, now: i64) -> Option<Response> {
+    if summary.deleted_at.is_some() {
+        return Some(json_response(
+            StatusCode::GONE,
+            json!({ "code": "recording_deleted", "error": "This recording has been deleted." }),
+        ));
+    }
+    if summary
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= now)
+    {
+        return Some(json_response(
+            StatusCode::GONE,
+            json!({ "code": "replay_expired", "error": "This recording is past its retention deadline." }),
+        ));
+    }
+    None
 }
 
 /// The replay, read by the page that is recording it.

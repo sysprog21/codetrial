@@ -4138,6 +4138,9 @@ fn router_routes_match_a_fixed_allowlist() {
         "/api/callback",
         "/api/session",
         "/api/logout",
+        "/api/recordings",
+        "/api/recordings/{id}",
+        "/api/recordings/{id}/events",
         "/api/reports",
         "/api/interviews",
         "/api/interviews/{id}/consent",
@@ -4834,6 +4837,217 @@ async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
             .unwrap()
             .status(),
         401
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
+/// The history a candidate reads about their own interviews.
+#[tokio::test]
+async fn history_lists_own_recordings_only() {
+    let (base, server, path, client, cookie) = recorded_server("history-lists").await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO users (id, github_id, login, email, email_verified, created_at, updated_at)
+                   VALUES (2, 202, 'two', 'two@example.test', 1, 1, 1);
+                 INSERT INTO interviews (id, account_id, consent_version, consent_at)
+                   VALUES ('int-theirs', 2, '2026-08-21', 1);",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, created_at, updated_at, ready_at, expires_at
+        ) VALUES ('rec-mine', 1, ?1, 'interview-abc12345', ?1,
+            'one@example.test', 'ready', 10, 10, 12, 99999999999)
+        ",
+                [&interview],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, created_at, updated_at
+        ) VALUES ('rec-theirs', 2, 'int-theirs', 'interview-def67890', 'int-theirs',
+            'two@example.test', 'ready', 11, 11)
+        ",
+                [],
+            )
+            .unwrap();
+    }
+
+    let listed = client
+        .get(format!("{base}/api/recordings"))
+        .header("cookie", cookie.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), 200);
+    let body = listed.json::<Value>().await.unwrap();
+    assert_eq!(
+        body["recordings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["recordingId"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["rec-mine"],
+        "somebody else's interview is not in this account's history"
+    );
+    assert_eq!(body["nextCursor"], Value::Null, "one page holds one row");
+
+    // The detail carries no handle to media: not the object path, not the Drive
+    // file, not the permission.
+    let detail = client
+        .get(format!("{base}/api/recordings/rec-mine"))
+        .header("cookie", cookie.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), 200);
+    let detail = detail.json::<Value>().await.unwrap();
+    assert_eq!(detail["state"], "ready");
+    assert_eq!(detail["readyAt"], 12);
+    let printed = detail.to_string();
+    for handle in ["gcsObject", "driveFileId", "drivePermissionId", "roomName"] {
+        assert!(
+            !printed.contains(handle),
+            "{handle} is a handle to media: {printed}"
+        );
+    }
+
+    server.abort();
+    remove_database(path);
+}
+
+#[tokio::test]
+async fn history_cross_account_denied() {
+    let (base, server, path, client, cookie) = recorded_server("history-cross").await;
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO users (id, github_id, login, email, email_verified, created_at, updated_at)
+                   VALUES (2, 202, 'two', 'two@example.test', 1, 1, 1);
+                 INSERT INTO interviews (id, account_id, consent_version, consent_at)
+                   VALUES ('int-theirs', 2, '2026-08-21', 1);
+                 INSERT INTO recordings (
+                     id, account_id, interview_id, room_name, idempotency_key,
+                     recipient_email, state, created_at, updated_at
+                 ) VALUES ('rec-theirs', 2, 'int-theirs', 'interview-def67890', 'int-theirs',
+                     'two@example.test', 'ready', 11, 11);
+                 INSERT INTO replay_events (interview_id, seq, kind, at, payload, bytes, received_at)
+                   VALUES ('int-theirs', 0, 'transcript', 1, '{}', 2, 1);",
+            )
+            .unwrap();
+    }
+
+    // Not `403`: an account that does not own a recording should not learn that
+    // it exists. The two paths are refused by two different scopings, which is
+    // the point of asking both: the detail is scoped by `recording_summary`'s
+    // `account_id`, and the events by the replay read's own ownership check.
+    for path_suffix in ["", "/events"] {
+        let response = client
+            .get(format!("{base}/api/recordings/rec-theirs{path_suffix}"))
+            .header("cookie", cookie.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 404, "{path_suffix}");
+    }
+    let signed_out = client
+        .get(format!("{base}/api/recordings"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(signed_out.status(), 401);
+
+    // A cursor that does not parse is refused rather than read as "start
+    // again", which would hand back the first page and look like a list that
+    // repeats itself.
+    let nonsense = client
+        .get(format!("{base}/api/recordings?before=not-a-cursor"))
+        .header("cookie", cookie.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(nonsense.status(), 400);
+    assert_eq!(
+        nonsense.json::<Value>().await.unwrap()["code"],
+        "cursor_invalid"
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
+#[tokio::test]
+async fn history_expired_returns_410() {
+    let (base, server, path, client, cookie) = recorded_server("history-expired").await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, created_at, updated_at, expires_at
+        ) VALUES ('rec-expired', 1, ?1, 'interview-abc12345', ?1,
+            'one@example.test', 'ready', 10, 10, 1)
+        ",
+                [&interview],
+            )
+            .unwrap();
+    }
+
+    // Gone rather than missing: this account owns the interview and is owed the
+    // difference between "never yours" and "not any more".
+    for path_suffix in ["", "/events"] {
+        let response = client
+            .get(format!("{base}/api/recordings/rec-expired{path_suffix}"))
+            .header("cookie", cookie.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 410, "{path_suffix}");
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["code"],
+            "replay_expired"
+        );
+    }
+
+    // A deleted recording says so in its own words, because the two are
+    // different things to a person: one waited too long, the other was taken
+    // away.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "
+        UPDATE recordings SET state = 'deleted', deleted_at = 5, expires_at = NULL,
+            room_name = NULL, recipient_email = NULL WHERE id = 'rec-expired'
+        ",
+            [],
+        )
+        .unwrap();
+    let deleted = client
+        .get(format!("{base}/api/recordings/rec-expired"))
+        .header("cookie", cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), 410);
+    assert_eq!(
+        deleted.json::<Value>().await.unwrap()["code"],
+        "recording_deleted"
     );
 
     server.abort();

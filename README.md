@@ -523,6 +523,14 @@ sqlite3 codetrial.db "INSERT INTO delivery_queue
 The worker reopens a `drive_failed` recording when it claims one, and reuses the
 Drive file the earlier attempt uploaded rather than making a second.
 
+`GET /api/recordings` lists an account's own recordings newest first, paged by
+cursor; `GET /api/recordings/{id}` is one of them, and
+`GET /api/recordings/{id}/events` is its replay. None of them return an object
+path, a Drive file id, a permission id or a room name, because those are handles
+to media rather than facts about an interview. A recording that was deleted or
+has expired answers `410` with which of the two it was, and one belonging to
+somebody else answers `404`.
+
 Retention is that same sweeper. A recording is deleted when its twenty-four
 hours are up, and immediately when the candidate withdrew consent, which has no
 deadline because nothing set one. Deletion is three steps in order, each written

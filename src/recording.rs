@@ -3105,6 +3105,98 @@ fn tombstone(
     })
 }
 
+/// One page of an account's recordings, newest first.
+///
+/// Paged by `created_at` and `id` rather than by offset: an offset shifts under
+/// a row being inserted or deleted, which for this list means an interview
+/// appearing twice or not at all while a candidate scrolls. The cursor is the
+/// last row of the previous page.
+pub const RECORDING_PAGE: i64 = 20;
+
+pub fn recordings_for_account(
+    accounts: &Accounts,
+    account_id: i64,
+    before: Option<(i64, String)>,
+) -> rusqlite::Result<Vec<Recording>> {
+    accounts.with(|connection| {
+        // The first page starts above every row rather than at a sentinel that
+        // has to be reasoned about: `created_at < i64::MAX` is true for any
+        // timestamp this table can hold.
+        let (created_at, id) = before.unwrap_or((i64::MAX, String::new()));
+        let mut statement = connection.prepare(&format!(
+            "{SELECT_RECORDING}
+        WHERE account_id = ?1
+          AND (created_at < ?2 OR (created_at = ?2 AND id < ?3))
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?4
+        "
+        ))?;
+        let rows = statement
+            .query_map(
+                (account_id, created_at, id, RECORDING_PAGE + 1),
+                row_to_recording,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })
+}
+
+/// What a reader may know about one recording.
+///
+/// Deliberately not a `Recording`: that carries the room name and the egress
+/// id, and a history page has no use for either. What is here is what a person
+/// asks about their own interview, plus the two dates that say whether it can
+/// still be watched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordingSummary {
+    pub id: String,
+    pub interview_id: String,
+    pub state: RecordingState,
+    pub error: Option<String>,
+    pub created_at: i64,
+    pub ready_at: Option<i64>,
+    pub expires_at: Option<i64>,
+    pub deleted_at: Option<i64>,
+    pub quota_exceeded: bool,
+}
+
+pub fn recording_summary(
+    accounts: &Accounts,
+    recording_id: &str,
+    account_id: i64,
+) -> rusqlite::Result<Option<RecordingSummary>> {
+    accounts.with(|connection| {
+        connection
+            .query_row(
+                "
+        SELECT id, interview_id, state, error, created_at, ready_at, expires_at,
+               deleted_at, quota_exceeded
+        FROM recordings WHERE id = ?1 AND account_id = ?2
+        ",
+                (recording_id, account_id),
+                |row| {
+                    let state: String = row.get(2)?;
+                    Ok(RecordingSummary {
+                        id: row.get(0)?,
+                        interview_id: row.get(1)?,
+                        state: RecordingState::parse(&state).unwrap_or(RecordingState::Failed),
+                        error: row.get(3)?,
+                        created_at: row.get(4)?,
+                        ready_at: row.get(5)?,
+                        expires_at: row.get(6)?,
+                        deleted_at: row.get(7)?,
+                        quota_exceeded: row.get::<_, i64>(8)? != 0,
+                    })
+                },
+            )
+            .map(Some)
+            .or_else(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                error => Err(error),
+            })
+    })
+}
+
 /// Recordings whose media should not exist any more.
 ///
 /// Two reasons, and they are different promises. A recording past `expires_at`
