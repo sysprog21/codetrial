@@ -4106,9 +4106,9 @@ fn router_routes_match_a_fixed_allowlist() {
         );
     }
 
-    // The first argument of every `.route(` call. One of them is a constant
-    // rather than a literal, because the contract fixes that path and
-    // `src/recording.rs` owns it, so it is resolved rather than matched.
+    // The first argument of every `.route(` call. Two of them are constants
+    // rather than literals, because the contract fixes those paths and
+    // `src/recording.rs` owns them, so they are resolved rather than matched.
     let mut routes = router
         .split(".route(")
         .skip(1)
@@ -4116,6 +4116,9 @@ fn router_routes_match_a_fixed_allowlist() {
             let rest = rest.trim_start();
             if rest.starts_with("crate::recording::WEBHOOK_ROUTE") {
                 return codetrial::recording::WEBHOOK_ROUTE.to_string();
+            }
+            if rest.starts_with("crate::recording::REPLAY_ROUTE") {
+                return codetrial::recording::REPLAY_ROUTE.to_string();
             }
             rest.trim_start_matches('"')
                 .split('"')
@@ -4142,6 +4145,7 @@ fn router_routes_match_a_fixed_allowlist() {
         "/api/interviews/{id}/end",
         "/api/interviews/{id}/events",
         "/api/interviews/{id}/snapshot",
+        "/api/recording/replay",
         "/api/recording/webhook",
     ];
     allowed.sort_unstable();
@@ -4703,6 +4707,133 @@ async fn replay_events_are_owner_scoped() {
     assert_eq!(
         stored_after, 3,
         "the two stored above plus the synthetic quota row, and nothing after the withdrawal"
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
+/// The recorder reads the replay with the credential it was given.
+///
+/// The Egress browser holds no session cookie, so this is the one replay read
+/// authorized by a room token. What matters is that the token is verified
+/// rather than parsed, and that it only opens the room it names.
+#[tokio::test]
+async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
+    let (base, server, path, client, cookie) = recorded_server("replay-room-token").await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    let room = "interview-abc12345";
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, created_at, updated_at
+        ) VALUES ('rec-room', 1, ?1, ?2, ?1, 'one@example.test', 'recording', 1, 1)
+        ",
+            [&interview, &room.to_string()],
+        )
+        .unwrap();
+    let event = |kind: &str, text: &str| {
+        json!({
+            "v": codetrial::recording::REPLAY_VERSION,
+            "kind": kind,
+            "at": 1_770_000_000_000i64,
+            "payload": { "text": text }
+        })
+    };
+    let posted = client
+        .post(format!("{base}/api/interviews/{interview}/events"))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "events": [
+            event("editor", "first draft"),
+            event("transcript", "hello"),
+            event("editor", "second draft"),
+        ] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(posted.status(), 200);
+
+    let token_for = |room: &str| {
+        codetrial::token::livekit_token(codetrial::token::LivekitTokenInput {
+            api_key: "devkey",
+            api_secret: "devsecret",
+            identity: "EG_recorder",
+            name: "recorder",
+            room,
+            metadata: "",
+            agent: false,
+            now_seconds: codetrial::current_epoch_seconds(),
+        })
+        .unwrap()
+    };
+    let replay = |token: String, query: &str| {
+        let url = format!("{base}/api/recording/replay{query}");
+        let client = client.clone();
+        async move {
+            client
+                .get(url)
+                .header("authorization", token)
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+
+    let snapshot = replay(token_for(room), "").await;
+    assert_eq!(snapshot.status(), 200);
+    let body = snapshot.json::<Value>().await.unwrap();
+    assert_eq!(body["seq"], 2);
+    assert_eq!(
+        body["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["transcript", "editor"],
+        "the snapshot drops the superseded editor frame"
+    );
+
+    // The tail keeps every frame, superseded or not: a reader carrying on from
+    // a snapshot is replaying, and a frame it never saw is not one to skip.
+    let tail = replay(token_for(room), "?after=0").await;
+    assert_eq!(tail.status(), 200);
+    assert_eq!(
+        tail.json::<Value>().await.unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // A token for another room opens nothing here.
+    let elsewhere = replay(token_for("interview-def67890"), "").await;
+    assert_eq!(elsewhere.status(), 404);
+
+    // Forged and absent credentials are the same answer.
+    let forged = codetrial::token::livekit_token(codetrial::token::LivekitTokenInput {
+        api_key: "devkey",
+        api_secret: "not-the-secret",
+        identity: "EG_recorder",
+        name: "recorder",
+        room,
+        metadata: "",
+        agent: false,
+        now_seconds: codetrial::current_epoch_seconds(),
+    })
+    .unwrap();
+    assert_eq!(replay(forged, "").await.status(), 401);
+    assert_eq!(
+        client
+            .get(format!("{base}/api/recording/replay"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
     );
 
     server.abort();

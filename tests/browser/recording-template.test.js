@@ -34,7 +34,7 @@ test("recording-template dom ids", () => {
     "timer",
     "candidate-video",
     "jim-panel",
-    "jim-canvas",
+    "jim-avatar",
     "jim-state",
     "recording-ready",
   ];
@@ -95,7 +95,10 @@ test("recording-template readiness", () => {
   );
 
   const body = withoutComments(functionBody(script, "markReady"));
-  assert.ok(body.includes("if (started) return;"), "the marker moves once");
+  assert.ok(
+    body.includes("if (started || !cameraAttached || !bootstrapped) return;"),
+    "the marker moves once, and only when there is something worth recording",
+  );
   assert.ok(body.includes('nodes.ready.dataset.ready = "true";'));
   // The console, not a callback. Egress watches Chrome's console output for
   // these two exact strings, so a page that called an injected function would
@@ -139,8 +142,141 @@ test("recording-template readiness", () => {
     "a candidate who left must not be recorded as a frozen last frame",
   );
   assert.ok(
-    /element !== nodes\.candidateVideo/.test(gone),
+    /element === nodes\.candidateVideo/.test(gone),
     "the camera element is the layout's: removing it leaves a rejoining candidate nothing to attach to",
+  );
+  assert.ok(
+    /cameraAttached = false;/.test(gone),
+    "and a camera that left before readiness must not still count as one",
+  );
+  assert.ok(
+    /cameraAttached = false;\s*[\s\S]{0,400}?refreshCandidate\(room\);/.test(gone),
+    "then ask again: a republished camera is already on that element and the old track's detach clears it",
+  );
+});
+
+test("recording-bootstrap snapshot-first", () => {
+  const body = withoutComments(functionBody(script, "connect"));
+  const snapshot = body.indexOf("await pumpReplay()");
+  const loop = body.indexOf("schedulePoll()");
+  assert.ok(snapshot !== -1, "the template asks for the replay");
+  assert.ok(loop !== -1, "and keeps asking");
+  assert.ok(
+    snapshot < loop,
+    "the snapshot is awaited before the loop starts, or a tail can land while it is still in flight",
+  );
+
+  // A timer scheduled after the answer, not an interval with a busy flag: the
+  // second is the first with a way to get it wrong.
+  const poll = withoutComments(functionBody(script, "schedulePoll"));
+  assert.ok(poll.includes("if (replayClosed) return;"));
+  assert.ok(poll.includes("setTimeout(() => void pumpReplay().then(schedulePoll)"));
+  assert.ok(!/setInterval/.test(code), "no interval can outpace a slow answer");
+
+  const pump = withoutComments(functionBody(script, "pumpReplay"));
+  assert.ok(
+    pump.includes('const query = lastSeq < 0 ? "" : `?after=${lastSeq}`;'),
+    "the first call asks for a snapshot and every later one asks for what came after",
+  );
+  assert.ok(
+    pump.includes("headers: { authorization: token || \"\" }"),
+    "the room token is the credential; this page has no cookie to send",
+  );
+  assert.ok(
+    /\/api\/recording\/replay/.test(pump),
+    "and it reads the route that authorizes by room rather than by account",
+  );
+});
+
+test("recording-bootstrap late-join", () => {
+  // A recorder that starts after the interview began gets the state of the
+  // interview, not the keystrokes that produced it. That is what the snapshot
+  // is, and this page must not paint before it has one.
+  const ready = withoutComments(functionBody(script, "markReady"));
+  assert.ok(
+    ready.includes("!cameraAttached || !bootstrapped"),
+    "readiness waits for both the camera and the replay",
+  );
+
+  const pump = withoutComments(functionBody(script, "pumpReplay"));
+  assert.ok(
+    /replayClosed = true;\s*bootstrapped = true;/.test(pump),
+    "a refused or expired replay still lets the recording start; the camera is worth the file",
+  );
+  assert.ok(
+    /catch \{[^}]*giveUpEventually\(\);/.test(pump),
+    "a dropped request does not count as a snapshot",
+  );
+  assert.ok(
+    pump.includes("if (response.ok) body = await response.json();"),
+    "the body is read inside the same guard, or a truncated answer ends the polling",
+  );
+  assert.ok(
+    pump.includes("signal: AbortSignal.timeout(REPLAY_TIMEOUT_MS)"),
+    "a request that hangs answers neither way, and the first read is what the recording waits on",
+  );
+  const giveUp = withoutComments(functionBody(script, "giveUpEventually"));
+  assert.ok(
+    giveUp.includes("if (Date.now() - openedAt < REPLAY_BOOTSTRAP_MS) return;"),
+    "but a replay that never answers must not hold the recording forever either",
+  );
+  assert.ok(
+    !/replayAttempts/.test(code),
+    "measured on the clock, not counted in attempts: each attempt can burn its whole timeout",
+  );
+  assert.ok(giveUp.includes("bootstrapped = true;"));
+  assert.ok(
+    /const RETRY_NEVER = \[401, 403, 404, 410\];/.test(code),
+    "a 500 or a dropped connection is a bad moment, not an answer",
+  );
+  assert.ok(
+    /catch \{[\s\S]*?\}/.test(pump),
+    "a dropped request is retried rather than treated as a refusal",
+  );
+  assert.ok(
+    pump.includes("lastSeq = Math.max(lastSeq, body.seq)"),
+    "the cursor never goes backwards, or a slow response would replay what was already applied",
+  );
+  assert.ok(
+    !/body\?\.seq !== "number"[\s\S]{0,200}seq >= 0/.test(pump),
+    "an empty replay answers seq -1 and is a perfectly good snapshot; refusing it would never bootstrap",
+  );
+});
+
+test("recording-bootstrap ordering", () => {
+  const pump = withoutComments(functionBody(script, "pumpReplay"));
+  assert.ok(
+    pump.includes("for (const event of body.events) applyReplayEvent(event);"),
+    "events are applied in the order they arrive, which is the order the server allocated",
+  );
+  assert.ok(
+    /try \{\s*for \(const event of body\.events/.test(pump),
+    "and a body this page did not expect cannot end the polling by throwing",
+  );
+  assert.ok(
+    pump.includes('if (!Array.isArray(body?.events) || typeof body?.seq !== "number")'),
+    "a 200 without the two fields this route always sends came from something else",
+  );
+  assert.ok(
+    !/sort\(/.test(pump),
+    "no client-side reordering: the sequence is the server's answer, not a hint",
+  );
+
+  const apply = withoutComments(functionBody(script, "applyReplayEvent"));
+  for (const kind of ["stage", "editor", "tests", "avatar"]) {
+    assert.ok(apply.includes(`case "${kind}":`), `the layout renders ${kind} events`);
+  }
+  assert.ok(
+    apply.includes("default:"),
+    "an unknown kind is ignored rather than refused: a later deploy's producer is not a reason to stop",
+  );
+  assert.ok(
+    !/innerHTML/.test(code),
+    "the candidate's own code is rendered as text; markup in it would be markup in the recording",
+  );
+  assert.ok(
+    apply.includes("nodes.code.textContent = payload.code"),
+    "and the editor panel is written as text",
   );
 });
 

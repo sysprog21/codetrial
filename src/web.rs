@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::connect_info::IntoMakeServiceWithConnectInfo;
-use axum::extract::{ConnectInfo, OriginalUri, Path as UriPath, State};
+use axum::extract::{ConnectInfo, OriginalUri, Path as UriPath, Query, State};
 use axum::http::{HeaderValue, Method, Request, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{AppendHeaders, IntoResponse, Response};
@@ -364,6 +364,10 @@ fn web_router(
         .route(
             crate::recording::WEBHOOK_ROUTE,
             post(recording_webhook_handler),
+        )
+        .route(
+            crate::recording::REPLAY_ROUTE,
+            get(recording_replay_handler),
         )
         .route("/runtime-config.js", get(runtime_config_handler))
         .route(
@@ -2748,6 +2752,25 @@ async fn replay_events_handler(
     }
 }
 
+/// One body shape for both replay reads, so a caller that starts with a
+/// snapshot and carries on with the tail parses one thing.
+fn replay_body(snapshot: &crate::recording::Snapshot) -> Value {
+    json!({
+        "seq": snapshot.seq,
+        "quotaExceeded": snapshot.quota_exceeded,
+        "events": snapshot
+            .events
+            .iter()
+            .map(|(seq, event)| json!({
+                "seq": seq,
+                "kind": event.kind.as_str(),
+                "at": event.at,
+                "payload": event.payload,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
 /// Where a late join starts.
 ///
 /// The snapshot is the replay with the superseded frames dropped, and `seq` is
@@ -2778,23 +2801,7 @@ async fn replay_snapshot_handler(
         blocking(move || crate::recording::replay_snapshot(&accounts, &interview_id, user.id, now))
             .await;
     match view {
-        Ok(SnapshotView::Ready(snapshot)) => json_response(
-            StatusCode::OK,
-            json!({
-                "seq": snapshot.seq,
-                "quotaExceeded": snapshot.quota_exceeded,
-                "events": snapshot
-                    .events
-                    .iter()
-                    .map(|(seq, event)| json!({
-                        "seq": seq,
-                        "kind": event.kind.as_str(),
-                        "at": event.at,
-                        "payload": event.payload,
-                    }))
-                    .collect::<Vec<_>>(),
-            }),
-        ),
+        Ok(SnapshotView::Ready(snapshot)) => json_response(StatusCode::OK, replay_body(&snapshot)),
 
         // Gone rather than not-found: this account owns the interview and is
         // owed the difference between "never yours" and "not any more".
@@ -2809,6 +2816,121 @@ async fn replay_snapshot_handler(
         Ok(SnapshotView::NoInterview) => missing(),
         Err(error) => {
             eprintln!("could not read a replay snapshot: {error}");
+            json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "Could not read the replay." }),
+            )
+        }
+    }
+}
+
+/// The replay, read by the page that is recording it.
+///
+/// The recording template holds no session cookie, only the join token Egress
+/// minted for it, so this is the one replay read authorized by a room
+/// credential rather than by an account. The token is signed with the project's
+/// own secret, which this server holds, and it names the room it is good for:
+/// that is the difference between the recorder of this room and anyone who
+/// guessed a room name.
+///
+/// `after` chooses the shape. Absent or negative is the snapshot, which is the
+/// replay with superseded frames dropped; a sequence number is everything after
+/// it. One route, because the template's loop is the same call either way.
+async fn recording_replay_handler(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    request: Request<Body>,
+) -> Response {
+    use crate::recording::SnapshotView;
+
+    let Some(accounts) = state.accounts.clone() else {
+        return state.accounts_error();
+    };
+    let Some(recorder) = state.recorder.clone() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let refused = || {
+        json_response(
+            StatusCode::UNAUTHORIZED,
+            json!({ "error": "room_token_invalid" }),
+        )
+    };
+    let authorization = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let Some(key) = crate::token::livekit_token_issuer(&authorization) else {
+        return refused();
+    };
+    let Some((api_key, api_secret)) = webhook_credentials(&state, &recorder, &authorization) else {
+        return refused();
+    };
+    let now = recorder.clock.now().max(0);
+    let Ok(room_name) =
+        crate::token::livekit_room_from_token(&api_key, &api_secret, &authorization, now as u64)
+    else {
+        return refused();
+    };
+
+    // The same rule the webhook route applies: a credential from one project
+    // must not read another project's room.
+    if !signed_by_the_rooms_project(&state, &recorder, Some(&room_name), &key) {
+        return refused();
+    }
+
+    let after = params
+        .get("after")
+        .and_then(|after| after.parse::<i64>().ok())
+        .unwrap_or(-1);
+    let found = {
+        let accounts = accounts.clone();
+        let room_name = room_name.clone();
+        blocking(move || crate::recording::recording_for_room(&accounts, &room_name)).await
+    };
+    let Ok(Some(recording)) = found else {
+        return json_response(
+            StatusCode::NOT_FOUND,
+            json!({ "code": "recording_not_found", "error": "No recording for that room." }),
+        );
+    };
+
+    let view = blocking(move || {
+        if after < 0 {
+            crate::recording::replay_snapshot(
+                &accounts,
+                &recording.interview_id,
+                recording.account_id,
+                now,
+            )
+        } else {
+            crate::recording::replay_tail(
+                &accounts,
+                &recording.interview_id,
+                recording.account_id,
+                after,
+                now,
+            )
+        }
+    })
+    .await;
+    match view {
+        Ok(SnapshotView::Ready(snapshot)) => json_response(StatusCode::OK, replay_body(&snapshot)),
+        Ok(SnapshotView::Expired) => json_response(
+            StatusCode::GONE,
+            json!({ "code": "replay_expired", "error": "This replay is past its retention deadline." }),
+        ),
+        Ok(SnapshotView::Deleted) => json_response(
+            StatusCode::GONE,
+            json!({ "code": "recording_deleted", "error": "This recording has been deleted." }),
+        ),
+        Ok(SnapshotView::NoInterview) => json_response(
+            StatusCode::NOT_FOUND,
+            json!({ "code": "recording_not_found", "error": "No replay for that room." }),
+        ),
+        Err(error) => {
+            eprintln!("could not read a replay for a room: {error}");
             json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({ "error": "Could not read the replay." }),
@@ -2954,7 +3076,7 @@ fn webhook_credentials(
     recorder: &crate::recording::Recorder,
     authorization: &str,
 ) -> Option<(String, String)> {
-    let key = crate::token::livekit_webhook_key(authorization)?;
+    let key = crate::token::livekit_token_issuer(authorization)?;
     if let Some(livekit) = &recorder.config.livekit
         && livekit.api_key == key
     {

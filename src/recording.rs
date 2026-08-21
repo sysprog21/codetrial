@@ -11,6 +11,11 @@
 /// so changing it is a deployment change and not only a code change.
 pub const WEBHOOK_ROUTE: &str = "/api/recording/webhook";
 
+/// Where the recording template reads the replay it is rendering. Fixed here
+/// beside the webhook route because the template is served by this repo and the
+/// path is part of what task 1 pinned.
+pub const REPLAY_ROUTE: &str = "/api/recording/replay";
+
 /// The RoomComposite custom template, served out of `web/` like every other
 /// static asset. Egress fetches it over the public internet and appends its
 /// own `url`, `token` and `layout` query parameters.
@@ -2846,6 +2851,31 @@ pub fn replay_snapshot(
     account_id: i64,
     now: i64,
 ) -> rusqlite::Result<SnapshotView> {
+    replay_view(accounts, interview_id, account_id, -1, now)
+}
+
+/// Everything after `seq`, under the same guards.
+///
+/// What a reader that already holds a snapshot asks for next. Superseded frames
+/// are not dropped here: a caller carrying on from a snapshot is replaying, and
+/// an editor frame it never saw is not one to skip.
+pub fn replay_tail(
+    accounts: &Accounts,
+    interview_id: &str,
+    account_id: i64,
+    after: i64,
+    now: i64,
+) -> rusqlite::Result<SnapshotView> {
+    replay_view(accounts, interview_id, account_id, after.max(0), now)
+}
+
+fn replay_view(
+    accounts: &Accounts,
+    interview_id: &str,
+    account_id: i64,
+    after: i64,
+    now: i64,
+) -> rusqlite::Result<SnapshotView> {
     accounts.with(|connection| {
         let transaction = connection.unchecked_transaction()?;
         if !replay_open(&transaction, interview_id, account_id)? {
@@ -2895,10 +2925,11 @@ pub fn replay_snapshot(
             .map(|kind| format!("'{}'", kind.as_str()))
             .collect::<Vec<_>>()
             .join(", ");
-        let mut statement = transaction.prepare(&format!(
-            "
+        let query = if after < 0 {
+            format!(
+                "
         SELECT seq, kind, at, payload FROM replay_events
-        WHERE interview_id = ?1 AND seq <= ?2
+        WHERE interview_id = ?1 AND seq <= ?2 AND seq > ?3
           AND (kind NOT IN ({superseded})
                OR seq = (SELECT MAX(seq) FROM replay_events newer
                          WHERE newer.interview_id = ?1
@@ -2906,9 +2937,18 @@ pub fn replay_snapshot(
                            AND newer.seq <= ?2))
         ORDER BY seq
         "
-        ))?;
+            )
+        } else {
+            "
+        SELECT seq, kind, at, payload FROM replay_events
+        WHERE interview_id = ?1 AND seq <= ?2 AND seq > ?3
+        ORDER BY seq
+        "
+            .to_string()
+        };
+        let mut statement = transaction.prepare(&query)?;
         let events = statement
-            .query_map((interview_id, seq), row_to_replay_event)?
+            .query_map((interview_id, seq, after), row_to_replay_event)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(statement);
         transaction.commit()?;

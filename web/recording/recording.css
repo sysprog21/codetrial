@@ -110,9 +110,46 @@ body {
   overflow: hidden;
 }
 
-.jim-canvas {
+.jim-avatar {
+  position: relative;
   width: 100%;
   height: 100%;
+}
+
+.jim-avatar canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.jim-avatar-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.jim-avatar-initial {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  background: #33332c;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+/* Once there is a render, the fallback is behind it and would only show through
+   the transparent parts of the model. */
+.jim-avatar[data-avatar-state="ready"] .jim-avatar-fallback {
+  display: none;
 }
 
 .jim-state {

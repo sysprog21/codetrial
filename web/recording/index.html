@@ -31,7 +31,16 @@
              word the candidate said. -->
         <video id="candidate-video" class="candidate" autoplay playsinline muted></video>
         <div id="jim-panel" class="jim">
-          <canvas id="jim-canvas" class="jim-canvas"></canvas>
+          <!-- The fallback is markup rather than a blank mount, because the
+               model is a 404 in this repo today and a recording of an empty box
+               where the interviewer should be is worse than one that says he is
+               here by voice. The renderer's canvas covers it once it loads. -->
+          <div id="jim-avatar" class="jim-avatar" data-avatar-state="loading">
+            <p id="jim-avatar-fallback" class="jim-avatar-fallback">
+              <span class="jim-avatar-initial" aria-hidden="true">J</span>
+              <span class="jim-avatar-note">Jim is here by voice.</span>
+            </p>
+          </div>
           <p id="jim-state" class="jim-state">Waiting for the interviewer</p>
         </div>
       </aside>

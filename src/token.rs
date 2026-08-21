@@ -195,7 +195,7 @@ impl std::fmt::Display for WebhookRejection {
 ///
 /// Nothing here is trusted. The value chooses which secret to try, and the
 /// signature check is what decides.
-pub fn livekit_webhook_key(authorization: &str) -> Option<String> {
+pub fn livekit_token_issuer(authorization: &str) -> Option<String> {
     let (signing_input, _) = authorization.rsplit_once('.')?;
     let (_, payload) = signing_input.split_once('.')?;
     let claims: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).ok()?).ok()?;
@@ -274,6 +274,66 @@ pub fn verify_livekit_webhook(
         return Err(WebhookRejection::BodyMismatch);
     }
     Ok(())
+}
+
+/// The room a LiveKit join token was minted for, once the signature says the
+/// token is real.
+///
+/// This is how the recording template proves who it is. It carries no session
+/// cookie, only the token Egress minted for it, and that token is signed with
+/// the project's own secret, which this server holds. Verifying it is the
+/// difference between "the recorder of this room" and "anyone who guessed a
+/// room name".
+///
+/// The room, not the identity: an Egress recorder joins hidden and its identity
+/// is the provider's to choose, so the grant is what says which room this
+/// credential is good for.
+pub fn livekit_room_from_token(
+    api_key: &str,
+    api_secret: &str,
+    token: &str,
+    now_seconds: u64,
+) -> Result<String, WebhookRejection> {
+    let (signing_input, signature) = token.rsplit_once('.').ok_or(WebhookRejection::Malformed)?;
+    let (_, payload) = signing_input
+        .split_once('.')
+        .ok_or(WebhookRejection::Malformed)?;
+    let claims: Value = URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .ok_or(WebhookRejection::Malformed)?;
+
+    // The header is not read, for the same reason it is not read above: this
+    // always computes HMAC-SHA256, so a token claiming another algorithm fails
+    // the signature check like any other forgery.
+    if claims.get("iss").and_then(Value::as_str) != Some(api_key) {
+        return Err(WebhookRejection::UnknownKey);
+    }
+    if !verify_hs256(api_secret, signing_input, signature) {
+        return Err(WebhookRejection::BadSignature);
+    }
+    let expires_at = claims
+        .get("exp")
+        .and_then(Value::as_u64)
+        .ok_or(WebhookRejection::Malformed)?;
+    let not_before = claims.get("nbf").and_then(Value::as_u64).unwrap_or(0);
+    if now_seconds >= expires_at || now_seconds < not_before {
+        return Err(WebhookRejection::Expired);
+    }
+
+    // `roomJoin` as well as the name. A token good for something other than
+    // joining is not a recorder's, whatever room it names.
+    let grant = claims.get("video").ok_or(WebhookRejection::Malformed)?;
+    if grant.get("roomJoin").and_then(Value::as_bool) != Some(true) {
+        return Err(WebhookRejection::Malformed);
+    }
+    grant
+        .get("room")
+        .and_then(Value::as_str)
+        .filter(|room| !room.is_empty())
+        .map(str::to_string)
+        .ok_or(WebhookRejection::Malformed)
 }
 
 /// A credential for starting and stopping one room's Egress.

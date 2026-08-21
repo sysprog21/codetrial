@@ -613,6 +613,88 @@ receives a file, which is the start of a recording, not the read of a replay.
 An interview whose recording never started still has a replay and it is readable.
 Expiry and deletion are read from the recording when there is one.
 
+### The template's replay read
+
+The recording template holds no session cookie. It holds the join token Egress
+minted for it, which is signed with the LiveKit project's own secret, and that
+secret is one this server has. So the template authorizes with the token:
+
+    GET /api/recording/replay[?after=<seq>]
+    Authorization: <the join token, bare, no Bearer prefix>
+
+The token is verified rather than parsed: signature against the project's
+secret, `exp` and `nbf`, `roomJoin` true, and the room it names. The key that
+signed it has to belong to the project that owns that room, the same rule the
+webhook route applies. The room then names the recording, which names the
+interview, which is whose replay is returned.
+
+The rule this enforces, stated plainly, is that a participant of a room may read
+that room's replay. It is not narrower than that, and the ceiling is worth
+writing down: a candidate's own join token and an observer token would pass it
+too. Today that grants nothing, because every join token for an interview room
+belongs either to the account that owns the interview or to this server's own
+agent, and the observer route only issues one to the interview's owner. A
+credential handed to anyone else, a reviewer's viewing token among them, would
+have to narrow this check first. Task 7a's credentialed run is where to learn
+whether the Egress token carries a distinguishing grant, `hidden` or `recorder`,
+that this check could require.
+
+`after` chooses the shape. Absent or negative is the snapshot; a sequence number
+is everything after it, superseded frames included, because a reader carrying on
+from a snapshot is replaying and a frame it never saw is not one to skip. Both
+answer with the same body, so the template's loop parses one thing.
+
+The template awaits its first read before starting the loop, which is what makes
+"one complete snapshot, then ordered events" true rather than hoped for, and
+then schedules each next read 500 ms after the last one landed rather than on an
+interval, so a slow answer cannot stack up behind a request still out.
+
+A refused or expired replay does not stop the recording: the camera and the
+interviewer's voice are still worth the file. It does stop the polling, on
+`401`, `403`, `404` and `410`, because an expired replay does not un-expire and
+a credential this route refused stays refused for the life of the job.
+
+Each read is abandoned after four seconds. A request that hangs answers neither
+way, and the first read is what the recording waits on, so one stalled
+connection would otherwise hold the interview at an empty layout for good.
+
+A `500`, a dropped connection or an abandoned read is a bad moment rather than
+an answer. It is
+retried, and it does not count as a snapshot: a recording that started on the
+first dropped request would open with the empty layout the snapshot exists to
+prevent. Ten seconds after the page opened it records anyway, because a replay
+that never answers must not hold the interview either. Ten seconds on the clock
+rather than a count of attempts: with a four second abort behind each one, a
+count would be a minute and a half of an interview nobody is recording.
+
+The Jim panel carries fallback markup rather than an empty mount. The VRM model
+is not published in this repo, so without it every recording would show a blank
+box where the interviewer should be.
+
+### What the producers send
+
+The payload shapes the template renders, and therefore what the producers in
+`web/interview.js` have to emit. Unknown kinds are ignored rather than refused,
+so a producer from a later deploy does not stop a recording.
+
+| Kind | Payload | Rendered as |
+|---|---|---|
+| `stage` | `{title, meta, remainingSeconds}` | the problem heading and the clock |
+| `editor` | `{code, language}` | the code panel, as text |
+| `tests` | `{passed, failed, total}` | one line, red if anything failed |
+| `avatar` | `{state}`, one of `speaking`, `thinking`, `listening` | Jim's expression and label |
+| `transcript` | `{speaker, text}` | nothing here; the replay page renders it |
+| `lifecycle` | `{state}` | nothing here |
+
+The code panel is written with `textContent`. This is the candidate's own code
+rendered into a page a recorder screenshots sixty times a second, and markup in
+it would be markup in the recording.
+
+Jim is rendered locally rather than subscribed: the interviewer publishes audio
+and no video, so the face in the file is the template's own VRM render, its
+mouth driven by the amplitude of that audio and its expression by the replay's
+`avatar` events.
+
 ### Redaction
 
 Removed, not refused. A producer that accidentally carried a token should still
