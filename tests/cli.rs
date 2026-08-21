@@ -292,7 +292,10 @@ fn binary_serve_refuses_production() {
 
     assert_eq!(code, 1);
     assert!(stdout.is_empty());
-    assert!(stderr.contains("single-room local mode"), "{stderr}");
+    assert!(
+        stderr.contains("cannot run with NODE_ENV=production"),
+        "{stderr}"
+    );
 }
 
 /// `serve` used to read the proxy-hop count straight from the process
@@ -303,11 +306,15 @@ fn binary_serve_refuses_production() {
 #[test]
 fn binary_serve_reads_deployment_keys_from_the_config_file() {
     let source = std::fs::read_to_string("src/main.rs").unwrap();
+
+    // Ends at the closing brace in column zero rather than at whatever item
+    // happens to follow. Keying on the next `async fn` meant deleting the
+    // function that used to sit there silently emptied this test's haystack.
     let serve = source
         .split_once("fn run_serve(")
         .expect("run_serve should exist")
         .1
-        .split_once("\nasync fn ")
+        .split_once("\n}\n")
         .expect("run_serve should end")
         .0;
 

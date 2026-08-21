@@ -477,6 +477,137 @@ fn the_primary_id_is_reserved_whatever_the_casing() {
     }
 }
 
+/// Which project leads the rotation is the operator's call, and the ones they
+/// did not name still have to stay in it.
+#[test]
+fn the_operator_chooses_which_provider_leads_the_rotation() {
+    use codetrial::config::{Provider, ProviderPool, order_providers};
+
+    let provider = |id: &str| Provider {
+        id: id.to_string(),
+        url: format!("wss://{id}.example"),
+        api_key: "k".to_string(),
+        api_secret: "s".to_string(),
+        google_api_key: String::new(),
+    };
+    let pool = || {
+        vec![
+            provider("primary"),
+            provider("bochengC"),
+            provider("charliechiou"),
+        ]
+    };
+    let ids = |providers: &[Provider]| {
+        providers
+            .iter()
+            .map(|entry| entry.id.clone())
+            .collect::<Vec<_>>()
+    };
+
+    // Named first, in the order given, and the rest keep the order they had.
+    let mut providers = pool();
+    assert!(order_providers(&mut providers, "charliechiou").is_empty());
+    assert_eq!(ids(&providers), ["charliechiou", "primary", "bochengC"]);
+
+    let mut providers = pool();
+    assert!(order_providers(&mut providers, "charliechiou, bochengC").is_empty());
+    assert_eq!(ids(&providers), ["charliechiou", "bochengC", "primary"]);
+
+    // No order is the order discovery produced.
+    let mut providers = pool();
+    assert!(order_providers(&mut providers, "").is_empty());
+    assert_eq!(ids(&providers), ["primary", "bochengC", "charliechiou"]);
+
+    // A name nobody answers to is reported rather than dropped in silence, and
+    // it must not take a real provider out of the rotation with it.
+    let mut providers = pool();
+    let warnings = order_providers(&mut providers, "charliechiou,typo,charliechiou");
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    assert!(warnings.iter().any(|warning| warning.contains("typo")));
+    assert_eq!(ids(&providers), ["charliechiou", "primary", "bochengC"]);
+
+    // The whole reason `primary` stopped meaning "first": a room with no
+    // provider segment was minted by the environment credentials, so leading
+    // the rotation with another project must not re-point it.
+    let mut providers = pool();
+    order_providers(&mut providers, "charliechiou");
+    let pool = ProviderPool { providers };
+    assert_eq!(
+        pool.primary().map(|entry| entry.id.as_str()),
+        Some("primary")
+    );
+    assert_eq!(
+        pool.for_room("interview-a1b2c3d4", "interview")
+            .map(|entry| entry.id.as_str()),
+        Some("primary"),
+        "a segment-less room still belongs to the environment credentials"
+    );
+    // And selection really does start where the operator said.
+    assert_eq!(pool.select(0).map(|e| e.id.as_str()), Some("charliechiou"));
+    assert_eq!(pool.select(1).map(|e| e.id.as_str()), Some("primary"));
+    assert_eq!(pool.select(2).map(|e| e.id.as_str()), Some("bochengC"));
+}
+
+/// A rotation that visits one project twice is buying less than its length
+/// suggests, and `--config <a provider file>` produces exactly that by
+/// accident.
+#[test]
+fn a_pool_says_how_many_projects_it_actually_spreads_over() {
+    use codetrial::config::{Provider, pool_summary};
+
+    let at = |id: &str, host: &str| Provider {
+        id: id.to_string(),
+        url: format!("wss://{host}.livekit.cloud"),
+        api_key: "k".to_string(),
+        api_secret: "s".to_string(),
+        google_api_key: String::new(),
+    };
+
+    let (summary, warnings) = pool_summary(&[
+        at("primary", "one"),
+        at("bochengC", "two"),
+        at("charliechiou", "three"),
+    ]);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(
+        summary.contains("3 provider(s) over 3 project(s)"),
+        "{summary}"
+    );
+    // Rotation order is the point of the line, so it has to be readable in it.
+    assert!(
+        summary.contains("primary=wss://one.livekit.cloud"),
+        "{summary}"
+    );
+
+    // The `--config` accident: the environment provider and a discovered file
+    // naming one project.
+    let (summary, warnings) = pool_summary(&[
+        at("primary", "two"),
+        at("bochengC", "two"),
+        at("charliechiou", "three"),
+    ]);
+    assert!(
+        summary.contains("3 provider(s) over 2 project(s)"),
+        "{summary}"
+    );
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("primary"), "{warnings:?}");
+    assert!(warnings[0].contains("bochengC"), "{warnings:?}");
+
+    // The summary reaches stderr on every start, so it carries the id and the
+    // URL the browser is handed anyway, and neither credential.
+    let (summary, _) = pool_summary(&[Provider {
+        id: "primary".to_string(),
+        url: "wss://one.livekit.cloud".to_string(),
+        api_key: "APIsentinelkey".to_string(),
+        api_secret: "sentinelsecretvalue".to_string(),
+        google_api_key: "googlesentinelkey".to_string(),
+    }]);
+    for secret in ["APIsentinelkey", "sentinelsecretvalue", "googlesentinelkey"] {
+        assert!(!summary.contains(secret), "{secret} leaked into: {summary}");
+    }
+}
+
 #[test]
 fn plaintext_livekit_is_local_only() {
     for url in ["ws://127.0.0.1:7880", "http://127.0.0.1:7880"] {

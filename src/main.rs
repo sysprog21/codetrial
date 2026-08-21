@@ -1,8 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
-use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use codetrial::config::{
     AgentConfig, DEFAULT_DURATION_MIN, DEFAULT_ROOM_PREFIX, DEFAULT_WEB_ADDR, DEFAULT_WEB_DIR,
@@ -185,6 +183,7 @@ fn run_web(options: CliOptions) -> Result<(), String> {
         production,
         &provider_dir(&options),
         should_discover_providers(&options),
+        &value_or(&values, codetrial::config::PROVIDER_ORDER_KEY, ""),
     );
 
     // After `extend_pool`, so the "is this project in the pool" check sees the
@@ -366,10 +365,12 @@ fn run_serve(options: CliOptions) -> Result<(), String> {
     // room while `production` is false. Refusing here beats booting a server
     // that mints rooms nobody is listening in.
     if is_production(&values) {
-        return Err("serve is a single-room local mode and cannot run with \
-                    NODE_ENV=production; run `codetrial web`, which dispatches an \
-                    interviewer per room when GOOGLE_API_KEY is set"
-            .to_string());
+        return Err(
+            "serve is a local mode and cannot run with NODE_ENV=production; \
+                    run `codetrial web`, which serves the same way and is the \
+                    mode meant to be deployed"
+                .to_string(),
+        );
     }
 
     let fixed_room_name = nonempty(&values, "INTERVIEW_ROOM_NAME");
@@ -382,21 +383,25 @@ fn run_serve(options: CliOptions) -> Result<(), String> {
     let db_path = Some(account_db_path(&values));
     let trusted_proxy_hops = trusted_proxy_hops(&values);
     let recording_values = values.clone();
+    let provider_order = value_or(&values, codetrial::config::PROVIDER_ORDER_KEY, "");
     let mut config =
         codetrial::config::load_from_pairs(values).map_err(|error| error.to_string())?;
-    let room_name = fixed_room_name.unwrap_or_else(|| format!("{}-local", config.room_prefix));
     // `serve` refused to run in production above.
     extend_pool(
         &mut config.pool,
         false,
         &provider_dir(&options),
         should_discover_providers(&options),
+        &provider_order,
     );
-    let config = select_provider(config, &room_name, false)?;
 
-    // After `select_provider`, which narrows the pool to the one project this
-    // room belongs to, so a recording URL naming any other project is refused
-    // here for the same reason it is refused in `run_web`.
+    // No `select_provider`. This process hosts an interviewer per room rather
+    // than one for a room named up front, so there is no single project to
+    // narrow the credentials to: the dispatcher is handed the provider the
+    // token was minted from, with the room.
+    //
+    // A recording URL naming a project outside the pool is refused here for the
+    // same reason it is refused in `run_web`.
     let recording = codetrial::config::load_recording(
         &recording_values,
         &config.pool,
@@ -418,7 +423,11 @@ fn run_serve(options: CliOptions) -> Result<(), String> {
         github_oauth_base_url: None,
         github_api_base_url: None,
         room_prefix: config.room_prefix.clone(),
-        fixed_room_name: Some(room_name.clone()),
+
+        // Only when the operator names one. `serve` used to invent
+        // `<prefix>-local` and pin every interview to it, which meant the
+        // rotation was built on every start and consulted on none of them.
+        fixed_room_name,
         production: false,
         trusted_proxy_hops,
         compiler_explorer_enabled: config.compiler_explorer_enabled,
@@ -426,141 +435,28 @@ fn run_serve(options: CliOptions) -> Result<(), String> {
         pool: config.pool.clone(),
     };
 
+    initialize_accounts(&web_config)?;
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
     runtime
-        .block_on(run_combined(listener, config, web_config, room_name))
-        .map_err(|error| error.to_string())
-}
+        .block_on(async {
+            let listener = tokio::net::TcpListener::from_std(listener)?;
 
-async fn run_combined(
-    listener: std::net::TcpListener,
-    config: AgentConfig,
-    web_config: WebServerConfig,
-    room_name: String,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    initialize_accounts(&web_config)?;
-    let listener = tokio::net::TcpListener::from_std(listener)?;
-
-    // Built here, not inside the spawn: constructing the service opens the
-    // database, migrates it, and sweeps it, all blocking. Inside the task that
-    // work parks a runtime worker while the already-bound listener backs up.
-    let service = codetrial::web::web_service(web_config);
-    let mut web_task = tokio::spawn(async move { axum::serve(listener, service).await });
-    let mut agent_task = tokio::spawn(async move {
-        run_agent_until_error(
-            || {
-                let config = config.clone();
-                let room_name = room_name.clone();
-                async move {
-                    codetrial::livekit::run_room(
-                        &config,
-                        &room_name,
-                        codetrial::web::current_epoch_seconds(),
-                    )
-                    .await
-                    .map_err(|error| error.to_string())
-                    .or_else(retry_room_end)
-                }
-            },
-            Duration::from_secs(1),
-        )
-        .await
-    });
-
-    // The two sides are not equally fatal, and treating them as if they were is
-    // what took the whole product down mid-interview. The web server is what a
-    // candidate is looking at: their editor, their test runs, their report. The
-    // agent dying is bad, and it is survivable; the web server dying with it
-    // turns one failed interview into a dead service for everyone.
-    //
-    // So the agent gets a bounded number of restarts and the web server keeps
-    // serving through them. Bounded, not infinite, because an unrecoverable
-    // cause such as a bad API key would otherwise spin forever and look
-    // healthy.
-    tokio::select! {
-        result = &mut web_task => {
-            agent_task.abort();
-            match result {
-                Ok(Ok(())) => Err("web side exited".into()),
-                Ok(Err(error)) => Err(format!("web side failed: {error}").into()),
-                Err(error) => Err(format!("web side task failed: {error}").into()),
-            }
-        }
-        result = &mut agent_task => {
-            // Say it loudly and keep serving. An operator sees this line; a
-            // candidate mid-interview sees the interviewer leave, which the
-            // browser already surfaces as a banner rather than a frozen page.
-            match result {
-                Ok(Ok(())) => eprintln!("WARNING: agent side exited; web server still serving"),
-                Ok(Err(error)) => eprintln!(
-                    "WARNING: agent side failed after {AGENT_RESTART_ATTEMPTS} attempts, \
-                     web server still serving: {error}"
-                ),
-                Err(error) => eprintln!(
-                    "WARNING: agent side task failed, web server still serving: {error}"
-                ),
-            }
-            match web_task.await {
-                Ok(Ok(())) => Err("web side exited".into()),
-                Ok(Err(error)) => Err(format!("web side failed: {error}").into()),
-                Err(error) => Err(format!("web side task failed: {error}").into()),
-            }
-        }
-    }
-}
-
-/// How many times a failing agent is restarted before `serve` gives up on it.
-/// Bounded so an unrecoverable cause, a rejected API key being the obvious one,
-/// stops rather than spinning forever behind a healthy-looking process.
-const AGENT_RESTART_ATTEMPTS: u32 = 5;
-
-/// Runs the agent, restarting it through transient failures.
-///
-/// A clean room end is not a failure and never consumes an attempt: `serve`
-/// hosts one room and the agent returns each time a candidate leaves. Only real
-/// errors do, and they used to be fatal on the first one, which is how a single
-/// 404 from duplicate-agent eviction ended an interview.
-async fn run_agent_until_error<F, Fut>(
-    mut run_once: F,
-    restart_delay: Duration,
-) -> Result<(), String>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = Result<(), String>>,
-{
-    let mut attempts_left = AGENT_RESTART_ATTEMPTS;
-    loop {
-        match run_once().await {
-            // The budget counts CONSECUTIVE failures, and a completed room
-            // refills it. Counting cumulatively meant a server up for days
-            // exhausted its restarts on five unrelated transient failures
-            // spread across a hundred healthy interviews, and then sat there
-            // serving rooms no interviewer would ever join. What the bound is
-            // actually for is the unrecoverable case, a rejected API key say,
-            // which fails immediately every time and never reaches this arm.
-            Ok(()) => attempts_left = AGENT_RESTART_ATTEMPTS,
-            Err(error) => {
-                if attempts_left == 0 {
-                    return Err(error);
-                }
-                attempts_left -= 1;
-                eprintln!(
-                    "WARNING: agent run failed, restarting ({attempts_left} attempts left): {error}"
-                );
-            }
-        }
-        tokio::time::sleep(restart_delay).await;
-    }
-}
-
-/// An empty room is not a failure: the candidate simply has not opened the tab
-/// yet, so `serve` swallows it and waits for the next join.
-fn retry_room_end(error: String) -> Result<(), String> {
-    if error.contains("room closed before a candidate joined") {
-        Ok(())
-    } else {
-        Err(error)
-    }
+            // Built before the spawn for the same reason `run_web` does it:
+            // constructing the service opens the database, migrates it and
+            // sweeps it, all blocking, and doing that inside the serving task
+            // parks a worker while the bound listener backs up.
+            let dispatcher = Arc::new(LocalDispatcher {
+                config,
+                runtime: tokio::runtime::Handle::current(),
+                live: Arc::default(),
+            }) as Arc<dyn RoomDispatcher>;
+            axum::serve(
+                listener,
+                codetrial::web::web_service_with_dispatcher(web_config, Some(dispatcher)),
+            )
+            .await
+        })
+        .map_err(|error| format!("web server failed: {error}"))
 }
 
 fn run_livekit(config: AgentConfig, room_name: &str) -> Result<(), String> {
@@ -643,6 +539,7 @@ fn select_provider(
 fn load_agent_config(options: &CliOptions) -> Result<AgentConfig, String> {
     let values = load_values(options)?;
     let production = is_production(&values);
+    let provider_order = value_or(&values, codetrial::config::PROVIDER_ORDER_KEY, "");
     let mut config =
         codetrial::config::load_from_pairs(values).map_err(|error| error.to_string())?;
     extend_pool(
@@ -650,6 +547,7 @@ fn load_agent_config(options: &CliOptions) -> Result<AgentConfig, String> {
         production,
         &provider_dir(options),
         should_discover_providers(options),
+        &provider_order,
     );
     Ok(config)
 }
@@ -718,15 +616,33 @@ fn extend_pool(
     production: bool,
     config_dir: &std::path::Path,
     discover: bool,
+    order: &str,
 ) {
-    if !discover {
-        return;
+    if discover {
+        let (providers, warnings) = codetrial::config::discover_providers(config_dir, production);
+        for warning in warnings {
+            eprintln!("{warning}");
+        }
+        pool.providers.extend(providers);
     }
-    let (providers, warnings) = codetrial::config::discover_providers(config_dir, production);
-    for warning in warnings {
+
+    // Outside the `discover` guard: an order naming the environment provider is
+    // still an order, and a deployment with discovery off should not silently
+    // ignore the one it was given.
+    for warning in codetrial::config::order_providers(&mut pool.providers, order) {
         eprintln!("{warning}");
     }
-    pool.providers.extend(providers);
+
+    // Said once, at startup, in rotation order. Every provider question asked
+    // of a running server so far has been answerable only by reading the config
+    // directory and the argv back to itself and guessing which won.
+    if !pool.providers.is_empty() {
+        let (summary, warnings) = codetrial::config::pool_summary(&pool.providers);
+        eprintln!("{summary}");
+        for warning in warnings {
+            eprintln!("WARNING: {warning}");
+        }
+    }
 }
 
 /// Refuses to start on a database that will not migrate, before anything is
@@ -846,11 +762,7 @@ fn account_db_path(values: &BTreeMap<String, String>) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-    use std::time::Duration;
+    use std::sync::Arc;
 
     /// The capacity slot is released by dropping, so an interview that panics
     /// gives its slot back like one that ends. Sixteen leaked slots would
@@ -874,112 +786,6 @@ mod tests {
             live.lock().unwrap().is_empty(),
             "a panicking interview must not keep its slot"
         );
-    }
-
-    /// The restart loop under a scripted sequence of outcomes: the closure is
-    /// handed the attempt number and says what that attempt does. Returns the
-    /// error the loop finally gave up with and how many attempts it took.
-    async fn attempts_until_error(outcome: fn(usize) -> Result<(), String>) -> (String, usize) {
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let error = super::run_agent_until_error(
-            {
-                let attempts = Arc::clone(&attempts);
-                move || {
-                    let attempts = Arc::clone(&attempts);
-                    async move { outcome(attempts.fetch_add(1, Ordering::SeqCst)) }
-                }
-            },
-            Duration::ZERO,
-        )
-        .await
-        .expect_err("the loop must surface a persistent failure");
-        (error, attempts.load(Ordering::SeqCst))
-    }
-
-    #[tokio::test]
-    async fn agent_loop_restarts_after_clean_room_completion() {
-        let (error, attempts) = attempts_until_error(|attempt| {
-            if attempt < 2 {
-                Ok(())
-            } else {
-                Err("stop".to_string())
-            }
-        })
-        .await;
-
-        assert_eq!(error, "stop");
-
-        // Two clean completions, then the failure and its restart budget. A
-        // clean room end must never consume an attempt: `serve` hosts one room
-        // and the agent returns every time a candidate leaves, so counting
-        // those would exhaust the budget on an entirely healthy day.
-        assert_eq!(attempts, 2 + 1 + super::AGENT_RESTART_ATTEMPTS as usize);
-    }
-
-    /// A budget that is never refilled is a slow-motion outage: a server up for
-    /// days accumulates unrelated transient failures until the agent stops
-    /// restarting, while the web side keeps serving rooms nobody will join.
-    #[tokio::test]
-    async fn a_completed_room_refills_the_restart_budget() {
-        let (error, attempts) = attempts_until_error(|attempt| {
-            // Alternates failure and success far more times than the budget
-            // allows, which is a flaky day, not a broken deployment, and must
-            // not exhaust anything.
-            if attempt >= 40 {
-                Err("give up".to_string())
-            } else if attempt.is_multiple_of(2) {
-                Err("transient".to_string())
-            } else {
-                Ok(())
-            }
-        })
-        .await;
-
-        assert_eq!(error, "give up");
-
-        // Twenty failures survived because each was followed by a clean room.
-        // Only the unbroken run at the end spends the budget.
-        assert_eq!(attempts, 40 + 1 + super::AGENT_RESTART_ATTEMPTS as usize);
-    }
-
-    /// The agent used to die on its first error, and in `serve` that aborted
-    /// the web task and exited the process, so one 404 from duplicate-agent
-    /// eviction ended the interview and took the editor and the report with it.
-    #[tokio::test]
-    async fn agent_loop_survives_transient_failures_and_still_gives_up() {
-        let (recovered, attempts) = attempts_until_error(|attempt| {
-            // Fails once, then runs clean forever, which is what a transient
-            // LiveKit or Gemini error looks like.
-            if attempt == 0 {
-                Err("transient".to_string())
-            } else if attempt < 4 {
-                Ok(())
-            } else {
-                Err("done".to_string())
-            }
-        })
-        .await;
-
-        // It recovered from the first error rather than surfacing it, and the
-        // budget it spent doing so is not refunded by the clean runs between.
-        assert_eq!(recovered, "done");
-        assert!(attempts > 4);
-    }
-
-    #[tokio::test]
-    async fn agent_loop_retries_after_room_closes_before_candidate() {
-        let (error, attempts) = attempts_until_error(|attempt| {
-            if attempt == 0 {
-                super::retry_room_end("room closed before a candidate joined".to_string())
-            } else {
-                Err("stop".to_string())
-            }
-        })
-        .await;
-
-        assert_eq!(error, "stop");
-        // One swallowed room-close, then the failure and its restart budget.
-        assert_eq!(attempts, 1 + 1 + super::AGENT_RESTART_ATTEMPTS as usize);
     }
 
     fn agent_config(pool: codetrial::config::ProviderPool) -> super::AgentConfig {

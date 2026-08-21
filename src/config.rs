@@ -93,18 +93,45 @@ impl fmt::Debug for Provider {
     }
 }
 
+/// Provider pooling: the LiveKit projects this deployment can put an interview
+/// on, and the record of which one each room went to.
+///
+/// The feature is the pooling. Round robin is only the policy that picks, and
+/// [`ProviderPool::select`] is the one place it lives, so swapping it for
+/// least-loaded or weighted touches nothing else.
+///
+/// The unit is the room, not the connection. Every participant in one interview
+/// has to hold credentials for the same project or the candidate and the agent
+/// are in two different ones and never meet, which is why the choice is
+/// recorded in the room name rather than repeated by whoever needs it next.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderPool {
-    /// Primary first, then discovered providers sorted by id. `read_dir` order
-    /// is unspecified, and sorting is what makes round-robin fairness and the
-    /// skipped-file warnings the same on every run. Cross-process agreement no
-    /// longer rides on this order: the room name carries the provider id.
+    /// Primary first, then discovered providers sorted by id, and then whatever
+    /// [`order_providers`] was told to lead with. `read_dir` order is
+    /// unspecified, and sorting is what makes round-robin fairness and the
+    /// skipped-file warnings the same on every run. Nothing may read a meaning
+    /// into a position: this is a rotation, and the operator can rotate it.
+    /// Cross-process agreement does not ride on the order either, because the
+    /// room name carries the provider id.
     pub providers: Vec<Provider>,
 }
 
 impl ProviderPool {
+    /// The credentials from the environment, which is what a room with no
+    /// provider segment was minted by.
+    ///
+    /// Looked up by id rather than taken from the front, because
+    /// `CODETRIAL_PROVIDER_ORDER` can put any provider first. Position used to
+    /// carry this meaning, and leaving it that way would mean reordering the
+    /// pool silently re-pointed every `<prefix>-<suffix>` room at whichever
+    /// project the operator happened to list first.
+    ///
+    /// Falling back to the front covers the pool built entirely from files,
+    /// where there is no environment provider and some project still has to
+    /// answer.
     pub fn primary(&self) -> Option<&Provider> {
-        self.providers.first()
+        self.get(PRIMARY_PROVIDER_ID)
+            .or_else(|| self.providers.first())
     }
 
     pub fn get(&self, id: &str) -> Option<&Provider> {
@@ -171,6 +198,105 @@ fn is_provider_id(id: &str) -> bool {
     crate::accounts::valid_github_login(id)
         && !id.contains("--")
         && !id.eq_ignore_ascii_case(PRIMARY_PROVIDER_ID)
+}
+
+/// Names the providers that lead the rotation, in order, comma separated.
+pub const PROVIDER_ORDER_KEY: &str = "CODETRIAL_PROVIDER_ORDER";
+
+/// Puts the providers this names at the front, in the order given.
+///
+/// Which project leads is an operator decision, not an alphabetical accident.
+/// Discovery sorts by id so that a run is reproducible, and that ordering is
+/// fine as a default and useless as a policy: it cannot express "spend the
+/// account with quota to burn before the one that costs money".
+///
+/// Anything not named keeps the order it already had and follows. A pool is
+/// capacity, so an unlisted provider has to stay in the rotation rather than
+/// drop out of it: silently serving from fewer projects than are configured is
+/// the failure this whole feature exists to avoid.
+///
+/// [`ProviderPool::primary`] resolves by id, so wherever a provider called
+/// `primary` exists, leading the rotation with another project does not make it
+/// the answer for rooms that carry no provider segment. The exception is a pool
+/// built entirely from files, which has no `primary` to resolve and falls back
+/// to the front: there, and only there, this does move which project answers
+/// for a segment-less room.
+pub fn order_providers(providers: &mut Vec<Provider>, order: &str) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let mut leading = Vec::with_capacity(providers.len());
+    for name in order
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        // Removed as it is placed, so a name listed twice misses on its second
+        // appearance rather than moving the same provider ahead of itself. The
+        // two ways to miss are told apart by looking in what has already been
+        // placed: one warning covering both would send an operator who mistyped
+        // one name hunting for a duplicate that is not there.
+        match providers.iter().position(|provider| provider.id == name) {
+            Some(index) => leading.push(providers.remove(index)),
+            None if leading.iter().any(|provider| provider.id == name) => {
+                warnings.push(format!(
+                    "{PROVIDER_ORDER_KEY}: {name} is listed more than once; ignoring the repeat"
+                ));
+            }
+            None => warnings.push(format!(
+                "{PROVIDER_ORDER_KEY}: no provider is named {name}; ignoring it"
+            )),
+        }
+    }
+    leading.append(providers);
+    *providers = leading;
+    warnings
+}
+
+/// The rotation, one line, and a word about any project appearing twice in it.
+///
+/// Pooling is the one feature whose whole value is invisible from a single
+/// interview: it either spread the load or it did not, and nothing a candidate
+/// sees says which. An operator adding a project needs to read back what the
+/// process actually built, not what the config directory implies.
+///
+/// Two providers naming one project is the case worth calling out. It is not an
+/// error, and different keys on one project are a legitimate thing to hold, but
+/// a rotation that visits the same quota twice per cycle is buying less than
+/// its length suggests. That happens by accident whenever `--config` names a
+/// file that discovery also picks up, which is the ordinary way to point a
+/// local run at a second project.
+pub fn pool_summary(providers: &[Provider]) -> (String, Vec<String>) {
+    let rotation = providers
+        .iter()
+        .map(|provider| format!("{}={}", provider.id, provider.url))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    // Counted here rather than derived from the number of warnings. Deriving it
+    // holds only while every repeat produces exactly one line, which is a rule
+    // nothing states and that reporting a duplicate against all of its earlier
+    // twins rather than the first would break, taking the count negative.
+    let mut warnings = Vec::new();
+    let mut projects = 0;
+    for (index, provider) in providers.iter().enumerate() {
+        match providers[..index]
+            .iter()
+            .find(|earlier| same_livekit_project(&earlier.url, &provider.url))
+        {
+            Some(earlier) => warnings.push(format!(
+                "{} and {} are the same LiveKit project, so the rotation spends two of its turns on one quota",
+                earlier.id, provider.id
+            )),
+            None => projects += 1,
+        }
+    }
+
+    (
+        format!(
+            "provider pooling: {} provider(s) over {projects} project(s): {rotation}",
+            providers.len()
+        ),
+        warnings,
+    )
 }
 
 /// `local` is the operator's own primary config and `example` is the
