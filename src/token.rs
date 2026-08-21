@@ -206,26 +206,35 @@ pub fn livekit_token_issuer(authorization: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Whether `authorization` is LiveKit's signature over exactly `body`.
+/// The claims of a token this server's own secret vouches for, or why it does
+/// not.
 ///
-/// The header is the bare JWT, with no `Bearer` prefix: that is what
-/// `webhook/url_notifier.go` sets, and accepting a prefix it never sends would
-/// only widen what this function has to be right about.
+/// Both inbound credentials go through here. They differ only in what they ask
+/// of a token already known to be real: a webhook has to match a body digest, a
+/// recorder's token has to name a room it may join. Everything before that is
+/// the same check, and the module's argument against a second copy of the
+/// signing step is the same argument against a second copy of this one. Two
+/// prologues drift, and the half that drifts is the half that accepts something
+/// the other refuses.
 ///
 /// The order is forced. `iss` names the project whose secret verifies the
 /// token, so it has to be read out of an unverified payload before there is
 /// anything to verify with; every later step then runs against claims the
 /// signature has already vouched for. Upstream's own receiver does the same.
-pub fn verify_livekit_webhook(
+///
+/// The JWT header is never read, and that is the point. Algorithm confusion
+/// needs a verifier that takes `alg` from the token; this one always computes
+/// HMAC-SHA256, so `{"alg":"none"}` fails the signature check like any other
+/// forgery. Parsing the header to reject what it already rejects would be code
+/// defending against nothing. Raised in review twice; written down so it is not
+/// raised a third time.
+fn verified_claims(
     api_key: &str,
     api_secret: &str,
-    authorization: &str,
-    body: &[u8],
+    token: &str,
     now_seconds: u64,
-) -> Result<(), WebhookRejection> {
-    let (signing_input, signature) = authorization
-        .rsplit_once('.')
-        .ok_or(WebhookRejection::Malformed)?;
+) -> Result<Value, WebhookRejection> {
+    let (signing_input, signature) = token.rsplit_once('.').ok_or(WebhookRejection::Malformed)?;
     let (_, payload) = signing_input
         .split_once('.')
         .ok_or(WebhookRejection::Malformed)?;
@@ -234,13 +243,6 @@ pub fn verify_livekit_webhook(
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .ok_or(WebhookRejection::Malformed)?;
-
-    // The JWT header is never read, and that is the point. Algorithm confusion
-    // needs a verifier that takes `alg` from the token; this one always
-    // computes HMAC-SHA256, so `{"alg":"none"}` fails the signature check like
-    // any other forgery. Parsing the header to reject what it already rejects
-    // would be code defending against nothing. Raised in review twice; written
-    // down so it is not raised a third time.
 
     if claims.get("iss").and_then(Value::as_str) != Some(api_key) {
         return Err(WebhookRejection::UnknownKey);
@@ -251,7 +253,7 @@ pub fn verify_livekit_webhook(
 
     // A token with no `exp` is refused rather than treated as eternal. LiveKit
     // always sets one, five minutes out, so the absent case is not a message
-    // this endpoint has to keep working for.
+    // either caller has to keep working for.
     let expires_at = claims
         .get("exp")
         .and_then(Value::as_u64)
@@ -260,15 +262,31 @@ pub fn verify_livekit_webhook(
     if now_seconds >= expires_at || now_seconds < not_before {
         return Err(WebhookRejection::Expired);
     }
+    Ok(claims)
+}
+
+/// Whether `authorization` is LiveKit's signature over exactly `body`.
+///
+/// The header is the bare JWT, with no `Bearer` prefix: that is what
+/// `webhook/url_notifier.go` sets, and accepting a prefix it never sends would
+/// only widen what this function has to be right about.
+pub fn verify_livekit_webhook(
+    api_key: &str,
+    api_secret: &str,
+    authorization: &str,
+    body: &[u8],
+    now_seconds: u64,
+) -> Result<(), WebhookRejection> {
+    let claims = verified_claims(api_key, api_secret, authorization, now_seconds)?;
 
     // Standard base64 with padding, matching `webhook/verifier.go`. A URL-safe
     // decoder here would reject every digest containing a `+` or a `/`, which
     // is most of them, and the failure would look like a forged message.
     //
     // Compared with `==` rather than in constant time. The digest is a public
-    // function of a body the sender already holds, and the secret-dependent
-    // comparison above is `Mac::verify_slice`, which is constant time. There is
-    // no secret here to leak the prefix length of.
+    // function of a body the sender already holds, and the one secret-dependent
+    // comparison happened in `verified_claims`, which uses `Mac::verify_slice`.
+    // There is no secret here to leak the prefix length of.
     let digest = STANDARD.encode(Sha256::digest(body));
     if claims.get("sha256").and_then(Value::as_str) != Some(digest.as_str()) {
         return Err(WebhookRejection::BodyMismatch);
@@ -294,33 +312,7 @@ pub fn livekit_room_from_token(
     token: &str,
     now_seconds: u64,
 ) -> Result<String, WebhookRejection> {
-    let (signing_input, signature) = token.rsplit_once('.').ok_or(WebhookRejection::Malformed)?;
-    let (_, payload) = signing_input
-        .split_once('.')
-        .ok_or(WebhookRejection::Malformed)?;
-    let claims: Value = URL_SAFE_NO_PAD
-        .decode(payload)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .ok_or(WebhookRejection::Malformed)?;
-
-    // The header is not read, for the same reason it is not read above: this
-    // always computes HMAC-SHA256, so a token claiming another algorithm fails
-    // the signature check like any other forgery.
-    if claims.get("iss").and_then(Value::as_str) != Some(api_key) {
-        return Err(WebhookRejection::UnknownKey);
-    }
-    if !verify_hs256(api_secret, signing_input, signature) {
-        return Err(WebhookRejection::BadSignature);
-    }
-    let expires_at = claims
-        .get("exp")
-        .and_then(Value::as_u64)
-        .ok_or(WebhookRejection::Malformed)?;
-    let not_before = claims.get("nbf").and_then(Value::as_u64).unwrap_or(0);
-    if now_seconds >= expires_at || now_seconds < not_before {
-        return Err(WebhookRejection::Expired);
-    }
+    let claims = verified_claims(api_key, api_secret, token, now_seconds)?;
 
     // `roomJoin` as well as the name. A token good for something other than
     // joining is not a recorder's, whatever room it names.
