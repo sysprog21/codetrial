@@ -523,6 +523,12 @@ sqlite3 codetrial.db "INSERT INTO delivery_queue
 The worker reopens a `drive_failed` recording when it claims one, and reuses the
 Drive file the earlier attempt uploaded rather than making a second.
 
+`web/replay.html` is where a candidate reads their own interviews back: the
+recordings they made, what was said, the editor and test snapshots by the time
+they happened, and the report beside them. It holds no link to a video, because
+the routes below hand it no way to build one; what it says about the file is
+which of its states it is in, and what that means.
+
 `GET /api/recordings` lists an account's own recordings newest first, paged by
 cursor; `GET /api/recordings/{id}` is one of them, and
 `GET /api/recordings/{id}/events` is its replay. None of them return an object

@@ -981,3 +981,88 @@ p {
     animation: none;
   }
 }
+
+/* The replay page: an account reading its own interviews back. Two columns on
+   a desktop, one on anything narrower, because a list beside a transcript is
+   unreadable at phone widths. */
+
+.replay-shell {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 1.5rem;
+  align-items: start;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+@media (max-width: 860px) {
+  .replay-shell {
+    grid-template-columns: 1fr;
+  }
+}
+
+.replay-list {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.replay-item,
+.replay-moment {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--float-surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.replay-item + .replay-item,
+.replay-list li + li,
+.replay-timeline li + li {
+  margin-top: 0.35rem;
+}
+
+.replay-moment.current {
+  border-color: var(--accent, #8ab4f8);
+}
+
+.replay-panels {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .replay-panels {
+    grid-template-columns: 1fr;
+  }
+}
+
+.replay-transcript,
+.replay-timeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.replay-line {
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 0.95rem;
+}
+
+.replay-code {
+  margin: 0;
+  padding: 0.75rem;
+  overflow-x: auto;
+  background: var(--float-surface);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  white-space: pre;
+}

@@ -1914,7 +1914,10 @@ function renderReport() {
 }
 
 function saveHistory() {
-  const entry = { id: randomId(), date: new Date().toISOString(), problemId: problem.id, problemTitle: problem.title, durationMin, report: state.report };
+  // The interview id travels with the report so the replay page can put the
+  // two beside each other. Reports are keyed by their own id and recordings by
+  // theirs, and without this the only thing relating them is the clock.
+  const entry = { id: randomId(), date: new Date().toISOString(), interviewId: state.interviewId, problemId: problem.id, problemTitle: problem.title, durationMin, report: state.report };
   return saveReportHistory(entry);
 }
 

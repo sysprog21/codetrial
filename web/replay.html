@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CodeTrial - Recordings</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script type="module" src="/replay.js"></script>
+  </head>
+  <body>
+    <main class="replay-shell">
+      <aside class="replay-sidebar">
+        <div class="brand">CODETRIAL</div>
+        <h1>Your recordings</h1>
+        <p class="muted small">
+          Interviews this account recorded. A recording is kept for 24 hours and then deleted,
+          along with everything on this page.
+        </p>
+        <ul id="replay-list" class="replay-list"></ul>
+        <button id="replay-more" class="pill-button" type="button" hidden>Older</button>
+        <p id="replay-empty" class="muted small" hidden>No recordings yet.</p>
+      </aside>
+
+      <section class="replay-detail">
+        <header>
+          <h2 id="replay-title">Choose a recording</h2>
+          <p id="replay-status" class="muted small" role="status"></p>
+          <!-- What happened to the video, in words. There is no link here and
+               there is not going to be one: the file was shared with the
+               address GitHub verified, and this page never holds a URL to
+               media. -->
+          <p id="replay-media" class="muted small"></p>
+        </header>
+
+        <div class="replay-panels">
+          <section>
+            <h3>What was said</h3>
+            <ol id="replay-transcript" class="replay-transcript"></ol>
+          </section>
+          <section>
+            <h3>Moments</h3>
+            <!-- Every editor and test snapshot, by the time it happened. The
+                 replay is a list of moments rather than a video scrubber,
+                 because the events are what this server has. -->
+            <ol id="replay-timeline" class="replay-timeline"></ol>
+          </section>
+        </div>
+
+        <section>
+          <h3 id="replay-moment-label">Code</h3>
+          <pre id="replay-code" class="replay-code"></pre>
+          <p id="replay-tests" class="muted small"></p>
+        </section>
+
+        <section>
+          <h3>Report</h3>
+          <div id="replay-report" class="replay-report"></div>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>
