@@ -7,7 +7,6 @@ edition = "2024"
 axum = "0.8"
 base64 = "0.22"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-getrandom = "0.4.3"
 hmac = "0.12"
 jpeg-encoder = "0.7"
 livekit = "0.8.3"

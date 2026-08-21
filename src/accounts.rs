@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use ring::rand::SecureRandom;
 use serde_json::{Value, json};
 
 use crate::current_epoch_seconds;
@@ -964,9 +965,11 @@ pub fn valid_github_login(value: &str) -> bool {
 /// someone else's handle lands on their row and hands over their reports. Each
 /// recorded login therefore gets a fresh id, and a negative one, because GitHub
 /// ids are positive and the two kinds of account must never collide.
-pub fn recorded_account_id() -> Result<i64, getrandom::Error> {
+pub fn recorded_account_id() -> std::io::Result<i64> {
     let mut bytes = [0u8; 8];
-    getrandom::fill(&mut bytes)?;
+    ring::rand::SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| std::io::Error::other("could not read system entropy"))?;
 
     // Lands in `i64::MIN ..= -1` and cannot overflow, which negating a random
     // magnitude can. `github_id` is UNIQUE, so the one-in-2^63 repeat fails the
@@ -1173,9 +1176,11 @@ pub fn session_key(token: &str) -> String {
     URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(token.as_bytes()))
 }
 
-pub fn random_token(bytes: usize) -> Result<String, getrandom::Error> {
+pub fn random_token(bytes: usize) -> std::io::Result<String> {
     let mut token = vec![0; bytes];
-    getrandom::fill(&mut token)?;
+    ring::rand::SystemRandom::new()
+        .fill(&mut token)
+        .map_err(|_| std::io::Error::other("could not read system entropy"))?;
     Ok(URL_SAFE_NO_PAD.encode(token))
 }
 

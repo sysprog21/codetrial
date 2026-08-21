@@ -13,6 +13,7 @@ use axum::http::{HeaderValue, Method, Request, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{AppendHeaders, IntoResponse, Response};
 use axum::routing::{delete, get, post};
+use ring::rand::SecureRandom;
 use serde_json::{Value, json};
 
 use crate::accounts::{
@@ -2026,15 +2027,14 @@ fn room_and_provider(
 /// Room names are not secrets, so the old `SystemTime::now().as_nanos()` was
 /// not an exploit. It was the wrong tool for a namespace that must not collide,
 /// and it read as random to anyone who did not look. Two tokens minted inside
-/// the same nanosecond tick produced the same suffix, and `getrandom` was
-/// already a dependency with `random_token` already written.
+/// the same nanosecond tick produced the same suffix.
 ///
 /// Falls back to the clock only if the OS entropy source fails, which is the
 /// same behaviour as before rather than a panic in the middle of a request.
 fn suffix(len: usize) -> String {
     const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
     let mut bytes = vec![0u8; len];
-    if getrandom::fill(&mut bytes).is_err() {
+    if ring::rand::SystemRandom::new().fill(&mut bytes).is_err() {
         let mut value = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
