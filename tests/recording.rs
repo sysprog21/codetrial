@@ -658,6 +658,12 @@ pub(crate) mod lifecycle {
         let recorder = Recorder {
             provider: provider.clone(),
             clock: clock.clone(),
+
+            // Retention is the one path that needs a delivery provider on the
+            // recorder, and the tests that exercise it put their own fake here.
+            // Everything else runs without one, which is also what a deployment
+            // whose credentials failed looks like.
+            delivery: None,
             config: recording_config(),
         };
         (scratch, accounts, provider, clock, recorder)
@@ -1322,6 +1328,8 @@ mod failure {
         refuse_transfer: Mutex<bool>,
         refuse_share: Mutex<bool>,
         refuse_delete: Mutex<bool>,
+        refuse_revoke: Mutex<bool>,
+        refuse_object_delete: Mutex<bool>,
         calls: Mutex<Vec<String>>,
     }
 
@@ -1408,6 +1416,57 @@ mod failure {
                 Ok(())
             })
         }
+
+        fn revoke<'a>(
+            &'a self,
+            drive_file_id: &'a str,
+            permission_id: &'a str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.calls.lock().unwrap().push(format!(
+                    "revoke on={drive_file_id} permission={permission_id}"
+                ));
+                if *self.refuse_revoke.lock().unwrap() {
+                    return Err("the permission would not revoke".to_string());
+                }
+                Ok(())
+            })
+        }
+
+        fn delete_file<'a>(
+            &'a self,
+            drive_file_id: &'a str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push(format!("delete_file file={drive_file_id}"));
+                if *self.refuse_delete.lock().unwrap() {
+                    return Err("the file would not delete".to_string());
+                }
+                Ok(())
+            })
+        }
+
+        fn delete_object<'a>(
+            &'a self,
+            gcs_object: &'a str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push(format!("delete_object object={gcs_object}"));
+                if *self.refuse_object_delete.lock().unwrap() {
+                    return Err("the staged object would not delete".to_string());
+                }
+                Ok(())
+            })
+        }
     }
 
     /// A recording that reached `transferring`, which is where delivery starts.
@@ -1424,6 +1483,13 @@ mod failure {
             "EG_done",
         )
         .unwrap();
+
+        // The webhook marks the job stopped before it moves the row, and
+        // retention will not touch a recording whose Egress job was never
+        // confirmed stopped, so a helper that skipped this would be building a
+        // state the pipeline does not produce.
+        codetrial::recording::mark_stopped(accounts, recorder.clock.as_ref(), &recording.id)
+            .unwrap();
         transition(
             accounts,
             recorder.clock.as_ref(),
@@ -2308,6 +2374,378 @@ mod failure {
         );
     }
 
+    /// Retention: the media, and everything that describes it, going away.
+    mod retention {
+        use std::sync::Arc;
+
+        use codetrial::recording::{
+            Clock, RecordingState, delete_recording, due_for_deletion, recording_by_id,
+            sweep_recordings,
+        };
+
+        use super::super::lifecycle::{harness, state_of};
+        use super::{FakeDelivery, transferring};
+
+        /// A delivered recording, ready and dated.
+        async fn delivered(
+            accounts: &Arc<codetrial::accounts::Accounts>,
+            recorder: &codetrial::recording::Recorder,
+            clock: &super::super::lifecycle::TestClock,
+            delivery: &FakeDelivery,
+        ) -> codetrial::recording::Recording {
+            let recording = transferring(accounts, recorder, clock).await;
+            codetrial::recording::deliver_recording(
+                accounts,
+                recorder,
+                delivery,
+                &recording,
+                "one@example.test",
+                86_400,
+            )
+            .await
+            .unwrap();
+            recording_by_id(accounts, &recording.id).unwrap().unwrap()
+        }
+
+        #[tokio::test]
+        async fn retention_revokes_and_deletes() {
+            let (scratch, accounts, _provider, clock, recorder) = harness("retention-deletes");
+            let delivery = Arc::new(FakeDelivery::default());
+            let ready = delivered(&accounts, &recorder, &clock, &delivery).await;
+
+            // The replay is part of what was recorded, so it is part of what is
+            // deleted.
+            scratch
+                .open()
+                .execute(
+                    "
+        INSERT INTO replay_events (interview_id, seq, kind, at, payload, bytes, received_at)
+        VALUES ('int-1', 0, 'transcript', 1, '{}', 2, 1)
+        ",
+                    [],
+                )
+                .unwrap();
+
+            // Nothing is due until the deadline passes.
+            assert!(due_for_deletion(&accounts, clock.now()).unwrap().is_empty());
+            clock.advance(86_401);
+            assert_eq!(
+                due_for_deletion(&accounts, clock.now())
+                    .unwrap()
+                    .iter()
+                    .map(|row| row.id.clone())
+                    .collect::<Vec<_>>(),
+                vec![ready.id.clone()]
+            );
+
+            let recorder = codetrial::recording::Recorder {
+                delivery: Some(delivery.clone()),
+                ..recorder
+            };
+            let outcome = sweep_recordings(&accounts, &recorder).await;
+            assert_eq!(outcome.deleted, 1);
+            assert_eq!(state_of(&accounts, &ready.id), RecordingState::Deleted);
+
+            let calls = delivery.calls();
+            assert_eq!(
+                calls[calls.len() - 3..],
+                [
+                    "revoke on=drive-file-1 permission=permission-1".to_string(),
+                    "delete_file file=drive-file-1".to_string(),
+                    "delete_object object=codetrial/rec-1.mp4".to_string(),
+                ],
+                "revoke, file, object, in that order: {calls:?}"
+            );
+            let replay: i64 = scratch
+                .open()
+                .query_row(
+                    "SELECT COUNT(*) FROM replay_events WHERE interview_id = 'int-1'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                replay, 0,
+                "a replay kept after the media is gone keeps the interview"
+            );
+
+            // And a second pass finds nothing: a tombstoned row is not due
+            // again.
+            assert!(due_for_deletion(&accounts, clock.now()).unwrap().is_empty());
+        }
+
+        #[tokio::test]
+        async fn retention_waits_for_a_job_that_never_stopped() {
+            // Tombstoning gives up the room name, which is the only thing the
+            // orphan sweep has to stop an Egress job with. A recording deleted
+            // while its job is still running is a job nobody can stop, writing
+            // media into a bucket this pass has just emptied.
+            let (scratch, accounts, provider, clock, recorder) = harness("retention-unstopped");
+            let delivery = Arc::new(FakeDelivery::default());
+            let ready = delivered(&accounts, &recorder, &clock, &delivery).await;
+            scratch
+                .open()
+                .execute(
+                    "UPDATE recordings SET stopped_at = NULL, expires_at = 1 WHERE id = ?1",
+                    [&ready.id],
+                )
+                .unwrap();
+
+            assert!(
+                due_for_deletion(&accounts, clock.now()).unwrap().is_empty(),
+                "not while the job may still be writing"
+            );
+
+            // The orphan sweep stops it, and then it is due.
+            let recorder = codetrial::recording::Recorder {
+                delivery: Some(delivery.clone()),
+                ..recorder
+            };
+            clock.advance(codetrial::recording::STALE_SECONDS + 1);
+            sweep_recordings(&accounts, &recorder).await;
+            assert!(!provider.stops().is_empty(), "the job is stopped first");
+            assert_eq!(
+                due_for_deletion(&accounts, clock.now()).unwrap().len(),
+                1,
+                "and then the media can go"
+            );
+        }
+
+        #[tokio::test]
+        async fn retention_partial_failure_retries() {
+            let (scratch, accounts, _provider, clock, recorder) = harness("retention-partial");
+            let delivery = Arc::new(FakeDelivery::default());
+            let ready = delivered(&accounts, &recorder, &clock, &delivery).await;
+            clock.advance(86_401);
+
+            // The staged object refuses. The revoke and the file deletion
+            // already happened, and the row says so.
+            *delivery.refuse_object_delete.lock().unwrap() = true;
+            assert!(
+                delete_recording(&accounts, &recorder, delivery.as_ref(), &ready, "expiry")
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                state_of(&accounts, &ready.id),
+                RecordingState::CleanupFailed
+            );
+            let (file, permission, object): (Option<String>, Option<String>, Option<String>) =
+                scratch
+                    .open()
+                    .query_row(
+                        "SELECT drive_file_id, drive_permission_id, gcs_object FROM recordings WHERE id = ?1",
+                        [&ready.id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .unwrap();
+            assert_eq!((file, permission), (None, None), "the steps that worked");
+            assert_eq!(
+                object.as_deref(),
+                Some("codetrial/rec-1.mp4"),
+                "and the one that did not"
+            );
+
+            // The retry resumes rather than repeating: no second revoke on a
+            // permission that is already gone, which is what fails forever.
+            *delivery.refuse_object_delete.lock().unwrap() = false;
+            let again = recording_by_id(&accounts, &ready.id).unwrap().unwrap();
+            let before = delivery.calls().len();
+            assert!(
+                delete_recording(&accounts, &recorder, delivery.as_ref(), &again, "expiry")
+                    .await
+                    .is_ok()
+            );
+            assert_eq!(
+                delivery.calls()[before..],
+                ["delete_object object=codetrial/rec-1.mp4".to_string()],
+                "one step left, and only that step"
+            );
+            assert_eq!(state_of(&accounts, &ready.id), RecordingState::Deleted);
+        }
+
+        #[tokio::test]
+        async fn retention_cleanup_script_lists_without_deleting() {
+            // `scripts/test.sh` runs `sh -n` over the scripts, which proves
+            // they parse. This is the part that matters about this one: what it
+            // selects, and that its default mode writes nothing.
+            if std::process::Command::new("sh")
+                .args(["-c", "command -v sqlite3"])
+                .output()
+                .map(|out| !out.status.success())
+                .unwrap_or(true)
+            {
+                eprintln!("skipping: sqlite3 is not installed");
+                return;
+            }
+
+            let (scratch, accounts, _provider, clock, recorder) = harness("retention-script");
+            let delivery = Arc::new(FakeDelivery::default());
+            let ready = delivered(&accounts, &recorder, &clock, &delivery).await;
+            scratch
+                .open()
+                .execute(
+                    "UPDATE recordings SET expires_at = 1 WHERE id = ?1",
+                    [&ready.id],
+                )
+                .unwrap();
+
+            let listed = std::process::Command::new("./scripts/recording-cleanup.sh")
+                .args([
+                    "--db",
+                    scratch.path().to_str().unwrap(),
+                    "--now",
+                    "1000",
+                    "--dry-run",
+                ])
+                .output()
+                .unwrap();
+            assert!(listed.status.success(), "{listed:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&listed.stdout).trim(),
+                ready.id,
+                "the expired recording, by id"
+            );
+            assert!(
+                String::from_utf8_lossy(&listed.stderr).contains("nothing was changed"),
+                "the default mode says what it did not do"
+            );
+
+            // And it did not: the row is untouched, media and all.
+            let (state, expires_at, file): (String, Option<i64>, Option<String>) = scratch
+                .open()
+                .query_row(
+                    "SELECT state, expires_at, drive_file_id FROM recordings WHERE id = ?1",
+                    [&ready.id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!((state.as_str(), expires_at), ("ready", Some(1)));
+            assert_eq!(file.as_deref(), Some("drive-file-1"));
+            assert!(delivery.calls().iter().all(|call| !call.contains("delete")));
+
+            // `--expire` is the operator's, and it says so on the row: the
+            // tombstone records a person asking rather than a deadline
+            // arriving.
+            let marked = std::process::Command::new("./scripts/recording-cleanup.sh")
+                .args([
+                    "--db",
+                    scratch.path().to_str().unwrap(),
+                    "--now",
+                    "1000",
+                    "--expire",
+                    &ready.id,
+                ])
+                .output()
+                .unwrap();
+            assert!(marked.status.success(), "{marked:?}");
+            let asked: Option<String> = scratch
+                .open()
+                .query_row(
+                    "SELECT deleted_by FROM recordings WHERE id = ?1",
+                    [&ready.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(asked.as_deref(), Some("operator"));
+
+            let recorder = codetrial::recording::Recorder {
+                delivery: Some(delivery.clone()),
+                ..recorder
+            };
+            assert_eq!(sweep_recordings(&accounts, &recorder).await.deleted, 1);
+            let tombstone: Option<String> = scratch
+                .open()
+                .query_row(
+                    "SELECT deleted_by FROM recordings WHERE id = ?1",
+                    [&ready.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                tombstone.as_deref(),
+                Some("operator"),
+                "\"expiry\" would say the deadline came, and it did not"
+            );
+
+            // An id nobody has is a failure rather than a quiet success.
+            let missing = std::process::Command::new("./scripts/recording-cleanup.sh")
+                .args([
+                    "--db",
+                    scratch.path().to_str().unwrap(),
+                    "--expire",
+                    "rec-nobody",
+                ])
+                .output()
+                .unwrap();
+            assert!(!missing.status.success());
+        }
+
+        #[tokio::test]
+        async fn retention_tombstone_fields() {
+            let (scratch, accounts, _provider, clock, recorder) = harness("retention-tombstone");
+            let delivery = Arc::new(FakeDelivery::default());
+            let ready = delivered(&accounts, &recorder, &clock, &delivery).await;
+            clock.advance(86_401);
+            delete_recording(&accounts, &recorder, delivery.as_ref(), &ready, "expiry")
+                .await
+                .unwrap();
+
+            // Read as strings, so one query answers "what is kept" and "what is
+            // given up" without a tuple nobody can read.
+            let kept: Vec<Option<String>> = scratch
+                .open()
+                .query_row(
+                    "
+        SELECT CAST(deleted_at AS TEXT), deleted_by, delete_error,
+               recipient_email, room_name, gcs_object
+        FROM recordings WHERE id = ?1
+        ",
+                    [&ready.id],
+                    |row| (0..6).map(|column| row.get(column)).collect(),
+                )
+                .unwrap();
+            assert_eq!(
+                kept[0].as_deref(),
+                Some(clock.now().to_string().as_str()),
+                "when"
+            );
+            assert_eq!(kept[1].as_deref(), Some("expiry"), "and why");
+            assert_eq!(kept[2], None, "nothing partial about this one");
+            assert_eq!(
+                &kept[3..],
+                &[None, None, None],
+                "an address kept forever against a file that is gone is the opposite of retention"
+            );
+        }
+
+        #[tokio::test]
+        async fn retention_takes_a_withdrawn_recording_without_waiting() {
+            // A withdrawal has no deadline: nothing set one, because the
+            // recording may never have been delivered. The person said stop,
+            // which is the whole schedule.
+            let (_scratch, accounts, _provider, clock, recorder) = harness("retention-withdrawn");
+            let delivery = Arc::new(FakeDelivery::default());
+            let ready = delivered(&accounts, &recorder, &clock, &delivery).await;
+
+            // Withdrawn after delivery, which is the case the transition table
+            // will not carry: a `ready` row cannot become `failed`, so the
+            // interview is the only place that says stop.
+            codetrial::accounts::withdraw_consent(&accounts, "int-1", 1, clock.now()).unwrap();
+
+            let due = due_for_deletion(&accounts, clock.now()).unwrap();
+            assert_eq!(due.len(), 1, "no deadline to wait for");
+
+            let recorder = codetrial::recording::Recorder {
+                delivery: Some(delivery.clone()),
+                ..recorder
+            };
+            assert_eq!(sweep_recordings(&accounts, &recorder).await.deleted, 1);
+            let row = recording_by_id(&accounts, &ready.id).unwrap().unwrap();
+            assert_eq!(row.state, RecordingState::Deleted);
+        }
+    }
+
     #[tokio::test]
     async fn cleanup_failure() {
         let (scratch, accounts, _provider, clock, recorder) = harness("cleanup");
@@ -2331,14 +2769,30 @@ mod failure {
                 .await
                 .is_err()
         );
-        assert!(
-            delivery.calls().last().is_some_and(|call| {
-                call.contains("file=drive-file-1")
-                    && call.contains("permission=permission-1")
-                    && call.contains("object=codetrial/rec-1.mp4")
-            }),
-            "deletion needs all three handles: {:?}",
-            delivery.calls()
+
+        // Three steps in order, and the third never runs because the second
+        // refused. Each one is written down as it succeeds, so what stops here
+        // is where the next attempt starts rather than where this one began.
+        let calls = delivery.calls();
+        assert_eq!(
+            calls[calls.len() - 2..],
+            [
+                "revoke on=drive-file-1 permission=permission-1".to_string(),
+                "delete_file file=drive-file-1".to_string(),
+            ],
+            "deletion is revoke, file, object, in that order: {calls:?}"
+        );
+        let permission: Option<String> = scratch
+            .open()
+            .query_row(
+                "SELECT drive_permission_id FROM recordings WHERE id = 'rec-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            permission, None,
+            "the revoke that worked is not repeated by the retry"
         );
 
         // Terminal for the pipeline and an alert for a person: the media

@@ -425,6 +425,11 @@ pub struct Recorder {
     pub provider: Arc<dyn RecordingProvider>,
     pub clock: Arc<dyn Clock>,
     pub config: RecordingConfig,
+    /// Where media goes and where it is deleted from. `None` is a deployment
+    /// whose credentials could not build a client: it still records, and the
+    /// sweeper still resolves rows, but nothing delivers or deletes, which is
+    /// the state the binary refuses to start in.
+    pub delivery: Option<Arc<dyn DeliveryProvider>>,
 }
 
 /// A recording, as the routes and the sweeper read it.
@@ -1191,6 +1196,8 @@ pub fn bump_retry(
 pub struct SweepOutcome {
     pub retried: usize,
     pub failed: usize,
+    /// Recordings whose media was deleted by this pass.
+    pub deleted: usize,
 }
 
 /// Resolves recordings nobody is looking after.
@@ -1248,6 +1255,47 @@ pub async fn sweep_recordings(accounts: &Arc<Accounts>, recorder: &Recorder) -> 
     }
 
     let mut outcome = SweepOutcome::default();
+
+    // Retention, before the stale pass rather than after it. A recording whose
+    // media is due to go does not need chasing for a webhook first, and a row
+    // this pass tombstones is one the pass below no longer sees.
+    if let Some(delivery) = recorder.delivery.as_ref() {
+        let due = {
+            let accounts = accounts.clone();
+            blocking(move || due_for_deletion(&accounts, now)).await
+        };
+        match due {
+            Ok(due) => {
+                for recording in due {
+                    let reason = {
+                        let accounts = accounts.clone();
+                        let recording = recording.clone();
+                        blocking(move || Ok(deletion_reason(&accounts, &recording)))
+                            .await
+                            .unwrap_or("expiry")
+                    };
+                    match delete_recording(
+                        accounts,
+                        recorder,
+                        delivery.as_ref(),
+                        &recording,
+                        reason,
+                    )
+                    .await
+                    {
+                        Ok(_) => outcome.deleted += 1,
+
+                        // Already audited as `recording_cleanup_failed`, which
+                        // is the line an operator acts on. Counted here so the
+                        // sweep's own summary says a pass had trouble.
+                        Err(_) => outcome.failed += 1,
+                    }
+                }
+            }
+            Err(error) => eprintln!("WARNING: retention could not read its work: {error}"),
+        }
+    }
+
     for recording in stale {
         let age = now - recording.updated_at;
         if kill_switch {
@@ -2231,19 +2279,48 @@ pub trait DeliveryProvider: Send + Sync + 'static {
         recipient_email: &'a str,
         expires_at: i64,
     ) -> BoxFuture<'a, Result<String, String>>;
-    /// Revoke, delete the Drive file, delete the staged object, in that order.
+    /// Take back one grant. The permission carries the file it is on, and that
+    /// file is not necessarily one the caller may delete: a delivery that
+    /// reused an earlier attempt's file and then created its own permission has
+    /// to revoke that grant and leave the file.
+    fn revoke<'a>(
+        &'a self,
+        drive_file_id: &'a str,
+        permission_id: &'a str,
+    ) -> BoxFuture<'a, Result<(), String>>;
+
+    /// Delete the Shared Drive file.
+    fn delete_file<'a>(&'a self, drive_file_id: &'a str) -> BoxFuture<'a, Result<(), String>>;
+
+    /// Delete the staged object.
+    fn delete_object<'a>(&'a self, gcs_object: &'a str) -> BoxFuture<'a, Result<(), String>>;
+
+    /// All three, in that order, for a caller with nothing to record between
+    /// them.
     ///
-    /// The permission carries the file it is on, and that file is not
-    /// necessarily the one being deleted. A delivery that reused an earlier
-    /// attempt's file and then created its own permission has to revoke that
-    /// permission without deleting a file somebody else is still using, and
-    /// Drive cannot revoke a permission without knowing which file it is on.
+    /// Retention does not use this: it writes down each step as it succeeds, so
+    /// a revoke that worked and a delete that did not can be resumed rather
+    /// than repeated from the start. This is for the cleanup a lost delivery
+    /// does, where there is no row left to record progress on.
     fn revoke_and_delete<'a>(
         &'a self,
         drive_file_id: Option<&'a str>,
         permission: Option<(&'a str, &'a str)>,
         gcs_object: Option<&'a str>,
-    ) -> BoxFuture<'a, Result<(), String>>;
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            if let Some((file_id, permission_id)) = permission {
+                self.revoke(file_id, permission_id).await?;
+            }
+            if let Some(drive_file_id) = drive_file_id {
+                self.delete_file(drive_file_id).await?;
+            }
+            if let Some(gcs_object) = gcs_object {
+                self.delete_object(gcs_object).await?;
+            }
+            Ok(())
+        })
+    }
 }
 
 /// Moves the file to its Shared Drive and shares it with the person it belongs
@@ -2526,13 +2603,70 @@ pub async fn delete_recording(
         return Err("could not read the delivery handles".to_string());
     };
 
-    // The permission is named with the file it is on, which for a deletion is
-    // the same file. The pair exists for the delivery paths, where it is not.
-    let permission = drive_file_id.as_deref().zip(drive_permission_id.as_deref());
-    if let Err(error) = delivery
-        .revoke_and_delete(drive_file_id.as_deref(), permission, gcs_object.as_deref())
-        .await
+    // Three steps, each written down as it succeeds. One call covering all
+    // three records nothing between them, so a revoke that worked and a file
+    // deletion that did not could only be retried from the start: the row still
+    // named a permission that was already gone, and the retry's revoke failed
+    // on it forever. Clearing each handle as its step lands makes the row the
+    // progress, and every step idempotent by construction, because a handle
+    // that is null is a step nothing repeats.
+    let mut failed = None;
+    if let (Some(file_id), Some(permission_id)) =
+        (drive_file_id.as_deref(), drive_permission_id.as_deref())
     {
+        match delivery.revoke(file_id, permission_id).await {
+            Ok(()) => {
+                let accounts = accounts.clone();
+                let id = recording.id.clone();
+                if let Err(error) =
+                    blocking(move || clear_handle(&accounts, &id, "drive_permission_id")).await
+                {
+                    // The grant is gone and the row still names it. Reported
+                    // rather than swallowed: the next pass repeats a revoke
+                    // that will `404`, which is harmless, and an operator
+                    // reading `cleanup_failed` learns the database is the thing
+                    // that is broken.
+                    failed = Some(("clear_permission", error.to_string()));
+                }
+            }
+            Err(error) => failed = Some(("revoke", error)),
+        }
+    }
+    if failed.is_none()
+        && let Some(file_id) = drive_file_id.as_deref()
+    {
+        match delivery.delete_file(file_id).await {
+            Ok(()) => {
+                let accounts = accounts.clone();
+                let id = recording.id.clone();
+                if let Err(error) =
+                    blocking(move || clear_handle(&accounts, &id, "drive_file_id")).await
+                {
+                    failed = Some(("clear_file", error.to_string()));
+                }
+            }
+            Err(error) => failed = Some(("delete_file", error)),
+        }
+    }
+    if failed.is_none()
+        && let Some(object) = gcs_object.as_deref()
+    {
+        match delivery.delete_object(object).await {
+            Ok(()) => {
+                let accounts = accounts.clone();
+                let id = recording.id.clone();
+                if let Err(error) =
+                    blocking(move || clear_handle(&accounts, &id, "gcs_object")).await
+                {
+                    failed = Some(("clear_object", error.to_string()));
+                }
+            }
+            Err(error) => failed = Some(("delete_object", error)),
+        }
+    }
+    if let Some((step, error)) = failed {
+        let error = format!("{step}: {error}");
+
         // The transition first, and the line only if this call made it. A
         // concurrent deletion can win, and an audit record telling an operator
         // that cleanup failed for a row that is `deleted` sends them looking
@@ -2557,7 +2691,7 @@ pub async fn delete_recording(
                 "recording_cleanup_failed",
                 &recording.id,
                 &[
-                    ("step", "revoke_and_delete"),
+                    ("step", step),
                     ("error", &error),
                     ("reason", Failure::Cleanup.as_str()),
                     ("action", Failure::Cleanup.recovery()),
@@ -2932,7 +3066,11 @@ fn tombstone(
 ) -> rusqlite::Result<bool> {
     let now = clock.now();
     accounts.with(|connection| {
-        let changed = connection.execute(
+        let transaction = rusqlite::Transaction::new_unchecked(
+            connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let changed = transaction.execute(
             "
         UPDATE recordings
         SET state = 'deleted',
@@ -2948,7 +3086,116 @@ fn tombstone(
         ",
             (recording_id, now, deleted_by),
         )?;
+
+        // The replay goes with the media, in the same write. The consent
+        // disclosure promises deletion, and a replay is the interview without
+        // the video: what was said, what was typed, what the tests said.
+        // Keeping it after the file is gone keeps the interview.
+        if changed > 0 {
+            transaction.execute(
+                "
+        DELETE FROM replay_events
+        WHERE interview_id = (SELECT interview_id FROM recordings WHERE id = ?1)
+        ",
+                [recording_id],
+            )?;
+        }
+        transaction.commit()?;
         Ok(changed > 0)
+    })
+}
+
+/// Recordings whose media should not exist any more.
+///
+/// Two reasons, and they are different promises. A recording past `expires_at`
+/// has had its twenty-four hours. A recording whose candidate withdrew consent
+/// has had a person say stop, and it has no deadline at all: nothing set one,
+/// because it may never have been delivered.
+///
+/// Withdrawal is read from the interview as well as from the recording's own
+/// error, because the two say it at different moments. A withdrawal during the
+/// interview fails the recording with `consent_withdrawn`; one after delivery
+/// leaves a `ready` row the transition table will not move, and the interview
+/// is the only place that says stop.
+///
+/// `cleanup_failed` rows come back too. That is what makes a partial deletion
+/// resumable: the handles the last attempt could not remove are still on the
+/// row, and the ones it did remove are not.
+///
+/// A recording whose Egress job was never confirmed stopped is not due, however
+/// old it is. Tombstoning gives up the room name, which is the only thing the
+/// orphan sweep has to stop that job with, and a job nobody can stop keeps
+/// writing media into a bucket this pass has just emptied. The sweep below
+/// stops it first; the next pass takes the row.
+pub fn due_for_deletion(accounts: &Accounts, now: i64) -> rusqlite::Result<Vec<Recording>> {
+    accounts.with(|connection| {
+        let mut statement = connection.prepare(&format!(
+            "{SELECT_RECORDING}
+        WHERE deleted_at IS NULL
+          AND state IN ('ready', 'failed', 'cleanup_failed')
+          AND (egress_id IS NULL OR stopped_at IS NOT NULL)
+          AND ((expires_at IS NOT NULL AND expires_at <= ?1)
+               OR error = ?2
+               OR interview_id IN (
+                   SELECT id FROM interviews WHERE consent_withdrawn_at IS NOT NULL
+               ))
+        ORDER BY id
+        "
+        ))?;
+        let rows = statement
+            .query_map((now, Failure::ConsentWithdrawn.as_str()), row_to_recording)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })
+}
+
+/// Why this recording's media is being deleted, in the words the tombstone
+/// keeps. `operator` is the third, and it is a person running the cleanup
+/// script rather than anything this module decides.
+fn deletion_reason(accounts: &Accounts, recording: &Recording) -> &'static str {
+    if recording.error.as_deref() == Some(Failure::ConsentWithdrawn.as_str()) {
+        return "consent_withdrawn";
+    }
+    let asked: rusqlite::Result<(Option<String>, bool)> = accounts.with(|connection| {
+        connection.query_row(
+            "
+        SELECT deleted_by,
+               (SELECT consent_withdrawn_at IS NOT NULL FROM interviews WHERE id = interview_id)
+        FROM recordings WHERE id = ?1
+        ",
+            [&recording.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+    });
+    let (asked_by, withdrawn) = asked.unwrap_or((None, false));
+    if withdrawn {
+        return "consent_withdrawn";
+    }
+
+    // A person who brought this deletion forward said so on the row before the
+    // sweeper found it. Their word for it survives, because "expiry" would say
+    // the deadline came and it did not.
+    if asked_by.as_deref() == Some("operator") {
+        return "operator";
+    }
+    "expiry"
+}
+
+/// Give up one handle, now that what it named is gone.
+///
+/// The column name is a literal from this module rather than a value from
+/// anywhere else: three call sites, three constants, and no way for a caller to
+/// name a column this function was not written for.
+fn clear_handle(accounts: &Accounts, recording_id: &str, column: &str) -> rusqlite::Result<()> {
+    let statement = match column {
+        "drive_permission_id" => "UPDATE recordings SET drive_permission_id = NULL WHERE id = ?1",
+        "drive_file_id" => "UPDATE recordings SET drive_file_id = NULL WHERE id = ?1",
+        "gcs_object" => "UPDATE recordings SET gcs_object = NULL WHERE id = ?1",
+        other => unreachable!("no handle called {other}"),
+    };
+    accounts.with(|connection| {
+        connection.execute(statement, [recording_id])?;
+        Ok(())
     })
 }
 

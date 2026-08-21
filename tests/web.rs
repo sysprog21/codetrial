@@ -5000,6 +5000,7 @@ async fn recorded_server_with_provider(
     let recorder = codetrial::recording::Recorder {
         provider,
         clock: std::sync::Arc::new(codetrial::recording::SystemClock),
+        delivery: None,
         config: recording_config(),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

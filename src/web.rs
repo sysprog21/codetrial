@@ -616,8 +616,8 @@ fn spawn_recording_sweeper(accounts: Arc<Accounts>, recorder: crate::recording::
             let outcome = crate::recording::sweep_recordings(&accounts, &recorder).await;
             if outcome != crate::recording::SweepOutcome::default() {
                 eprintln!(
-                    "recording sweep retried {} and failed {}",
-                    outcome.retried, outcome.failed
+                    "recording sweep retried {} deleted {} failed {}",
+                    outcome.retried, outcome.deleted, outcome.failed
                 );
             }
             tokio::time::sleep(SWEEP_INTERVAL).await;
@@ -645,23 +645,37 @@ const DELIVERY_INTERVAL: Duration = Duration::from_secs(10);
 /// before they listen and refuse to start without one. It is reachable from
 /// this function, which is public and is what the tests build, and there the
 /// warning is the right answer.
+/// The delivery client, or a warning and none.
+///
+/// A `None` here is a deployment that records and never hands anything over,
+/// which the binary refuses to start in: `codetrial web` and `codetrial serve`
+/// parse the key before they listen. It is reachable from the public router
+/// constructors, which is what the tests build, and there a warning is the
+/// right answer rather than a panic inside a constructor.
+fn delivery_provider(
+    recording: &crate::config::RecordingConfig,
+) -> Option<Arc<dyn crate::recording::DeliveryProvider>> {
+    match crate::delivery::GoogleDelivery::new(
+        &recording.service_account_json,
+        &recording.gcs_bucket,
+        &recording.drive_id,
+        Arc::new(|| crate::current_epoch_seconds() as i64),
+    ) {
+        Ok(delivery) => Some(Arc::new(delivery)),
+        Err(error) => {
+            eprintln!("WARNING: recordings cannot be delivered or deleted: {error}");
+            None
+        }
+    }
+}
+
 fn spawn_delivery_worker(accounts: Arc<Accounts>, recorder: crate::recording::Recorder) {
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         eprintln!("recording is configured but there is no runtime to deliver on");
         return;
     };
-    let clock = recorder.clock.clone();
-    let delivery = match crate::delivery::GoogleDelivery::new(
-        &recorder.config.service_account_json,
-        &recorder.config.gcs_bucket,
-        &recorder.config.drive_id,
-        Arc::new(move || clock.now()),
-    ) {
-        Ok(delivery) => Arc::new(delivery),
-        Err(error) => {
-            eprintln!("WARNING: recordings cannot be delivered: {error}");
-            return;
-        }
+    let Some(delivery) = recorder.delivery.clone() else {
+        return;
     };
     handle.spawn(async move {
         loop {
@@ -721,6 +735,7 @@ pub fn web_service_with_dispatcher(
                 livekit: recording.livekit.clone(),
             }),
             clock: Arc::new(crate::recording::SystemClock),
+            delivery: delivery_provider(recording),
             config: recording.clone(),
         });
     web_router(config, dispatcher, recorder).into_make_service_with_connect_info::<SocketAddr>()

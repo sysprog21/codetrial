@@ -523,6 +523,40 @@ sqlite3 codetrial.db "INSERT INTO delivery_queue
 The worker reopens a `drive_failed` recording when it claims one, and reuses the
 Drive file the earlier attempt uploaded rather than making a second.
 
+Retention is that same sweeper. A recording is deleted when its twenty-four
+hours are up, and immediately when the candidate withdrew consent, which has no
+deadline because nothing set one. Deletion is three steps in order, each written
+down as it succeeds: revoke the permission, delete the Shared Drive file, delete
+the staged object, then tombstone the row. A step that fails leaves the
+recording in `cleanup_failed` with the handles it could not remove still on the
+row, so the next pass resumes rather than repeating a revoke on a permission
+that is already gone.
+
+The tombstone keeps `deleted_at`, `deleted_by` and `delete_error` and gives up
+everything else: the recipient address, the room name and every handle. An
+address kept forever against a file that is gone is the opposite of what
+retention means. The interview's replay events go in the same write, because a
+replay is the interview without the video and keeping it after the media is
+deleted keeps the interview. Tombstones themselves are kept indefinitely: they
+are a few hundred bytes that say a deletion happened, which is the record an
+audit asks for.
+
+Deleting an account means deleting its recordings first. The composite foreign
+key into `interviews` is `RESTRICT` and does not soften once `deleted_at` is
+set, so an account delete cascades into `interviews` and fails there.
+
+`scripts/recording-cleanup.sh` is the operator entrypoint. With no arguments it
+lists what is due and changes nothing; `--expire ID...` brings named recordings
+forward and marks them as an operator's, so the running server's sweeper deletes
+their media on its next pass and the tombstone says a person asked. It
+deliberately does not talk to Drive or GCS: a second implementation of a
+deletion is a second thing that can be wrong about what it deleted, and with no
+server running nothing is deleted until there is one.
+
+Copies a candidate or an interviewer already downloaded are outside CodeTrial's
+control. The consent notice says so rather than promising a deletion this
+pipeline cannot perform.
+
 A sweeper runs at startup and every minute. It retries a start that never
 reached the provider after one minute, then five, then fifteen, asking the
 provider what it already has for the room first so a lost egress id becomes an

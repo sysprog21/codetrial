@@ -701,68 +701,66 @@ impl DeliveryProvider for GoogleDelivery {
         })
     }
 
-    fn revoke_and_delete<'a>(
+    fn revoke<'a>(
         &'a self,
-        drive_file_id: Option<&'a str>,
-        permission: Option<(&'a str, &'a str)>,
-        gcs_object: Option<&'a str>,
+        drive_file_id: &'a str,
+        permission_id: &'a str,
     ) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
             let token = self.access_token().await?;
+            let response = self
+                .http
+                .delete(format!(
+                    "https://www.googleapis.com/drive/v3/files/{drive_file_id}/permissions/{permission_id}?supportsAllDrives=true"
+                ))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .map_err(|error| format!("the revoke failed: {error}"))?;
+            if response.status().as_u16() == 401 {
+                self.invalidate().await;
+            }
+            gone_or_ok(response.status().as_u16(), "the revoke")
+        })
+    }
 
-            // Revoke, delete the file, delete the staging object, in that
-            // order. Deleting the file takes its permissions with it, so an
-            // order that deleted first would leave a revoke with nothing to
-            // revoke on; this way each step is still meaningful if the next one
-            // fails.
-            if let Some((file_id, permission_id)) = permission {
-                let response = self
-                    .http
-                    .delete(format!(
-                        "https://www.googleapis.com/drive/v3/files/{file_id}/permissions/{permission_id}?supportsAllDrives=true"
-                    ))
-                    .bearer_auth(&token)
-                    .send()
-                    .await
-                    .map_err(|error| format!("the revoke failed: {error}"))?;
-                if response.status().as_u16() == 401 {
-                    self.invalidate().await;
-                }
-                gone_or_ok(response.status().as_u16(), "the revoke")?;
+    fn delete_file<'a>(&'a self, drive_file_id: &'a str) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let token = self.access_token().await?;
+            let response = self
+                .http
+                .delete(format!(
+                    "https://www.googleapis.com/drive/v3/files/{drive_file_id}?supportsAllDrives=true"
+                ))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .map_err(|error| format!("the file deletion failed: {error}"))?;
+            if response.status().as_u16() == 401 {
+                self.invalidate().await;
             }
-            if let Some(file_id) = drive_file_id {
-                let response = self
-                    .http
-                    .delete(format!(
-                        "https://www.googleapis.com/drive/v3/files/{file_id}?supportsAllDrives=true"
-                    ))
-                    .bearer_auth(&token)
-                    .send()
-                    .await
-                    .map_err(|error| format!("the file deletion failed: {error}"))?;
-                if response.status().as_u16() == 401 {
-                    self.invalidate().await;
-                }
-                gone_or_ok(response.status().as_u16(), "the file deletion")?;
+            gone_or_ok(response.status().as_u16(), "the file deletion")
+        })
+    }
+
+    fn delete_object<'a>(&'a self, gcs_object: &'a str) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let token = self.access_token().await?;
+            let response = self
+                .http
+                .delete(format!(
+                    "https://storage.googleapis.com/storage/v1/b/{}/o/{}",
+                    self.bucket,
+                    encode_path(gcs_object)
+                ))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .map_err(|error| format!("the staged object deletion failed: {error}"))?;
+            if response.status().as_u16() == 401 {
+                self.invalidate().await;
             }
-            if let Some(object) = gcs_object {
-                let response = self
-                    .http
-                    .delete(format!(
-                        "https://storage.googleapis.com/storage/v1/b/{}/o/{}",
-                        self.bucket,
-                        encode_path(object)
-                    ))
-                    .bearer_auth(&token)
-                    .send()
-                    .await
-                    .map_err(|error| format!("the staged object deletion failed: {error}"))?;
-                if response.status().as_u16() == 401 {
-                    self.invalidate().await;
-                }
-                gone_or_ok(response.status().as_u16(), "the staged object deletion")?;
-            }
-            Ok(())
+            gone_or_ok(response.status().as_u16(), "the staged object deletion")
         })
     }
 }

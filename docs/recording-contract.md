@@ -963,6 +963,94 @@ DELETE https://www.googleapis.com/drive/v3/files/{fileId}/permissions/{permissio
 DELETE https://www.googleapis.com/drive/v3/files/{fileId}?supportsAllDrives=true
 ```
 
+## Retention and deletion
+
+A recording's media is deleted when its twenty-four hours are up, and
+immediately when the candidate withdrew consent. Withdrawal has no deadline
+because nothing set one: the recording may never have been delivered.
+
+Withdrawal is read from two places, because they say it at different moments. A
+withdrawal during the interview fails the recording with `consent_withdrawn`;
+one after delivery leaves a `ready` row the transition table will not move, and
+the interview's `consent_withdrawn_at` is the only place that says stop.
+
+Deletion is four steps, in this order, each written down as it succeeds:
+
+1. Revoke the reader permission, then clear `drive_permission_id`.
+2. Delete the Shared Drive file, then clear `drive_file_id`.
+3. Delete the staged object, then clear `gcs_object`.
+4. Tombstone the row, which deletes the interview's replay events in the same
+   write.
+
+Any step that fails leaves the recording in `cleanup_failed` with the handles it
+could not remove still on the row, and the ones it did remove gone. That is what
+makes the next attempt a resumption rather than a repeat: a second revoke on a
+permission that is already gone is a call that fails forever. The row is the
+progress, and every step is idempotent by construction, because a handle that is
+null is a step nothing repeats.
+
+A step whose remote call worked and whose handle could not be cleared is
+reported as a failure too. The next pass repeats that step, which answers `404`
+and counts as done; what an operator reading `cleanup_failed` learns is that the
+database is the thing that is broken.
+
+A recording whose Egress job was never confirmed stopped is not due, however old
+it is. Tombstoning gives up the room name, which is the only thing the orphan
+sweep has to stop that job with, and a job nobody can stop keeps writing media
+into a bucket the deletion has just emptied. The orphan sweep stops it first and
+the next retention pass takes the row.
+
+A recording is only due while it is `ready`, `failed` or `cleanup_failed`. One
+still `transferring` is being uploaded, and withdrawal moves it out of that
+state on its own. A recording that failed for some other reason and was never
+delivered has no deadline at all: its staged object is the bucket's lifecycle
+rule to collect, which is why that rule is provisioned rather than optional.
+
+`cleanup_failed` is an alert, not a state anything retries silently. It is also
+picked up by the next retention pass, so an outage that ends means the deletion
+finishes on its own; what it will not do is quietly stop trying.
+
+The tombstone keeps `deleted_at`, `deleted_by` and `delete_error` and gives up
+everything else: `recipient_email`, `room_name`, `gcs_object`, `drive_file_id`
+and `drive_permission_id`. An address kept forever against a file that is gone
+is the opposite of what retention means, and the schema's `CHECK` refuses the
+half-tombstone that would keep it. `deleted_by` is `expiry`, `consent_withdrawn`
+or `operator`.
+
+The replay goes with the media. A replay is the interview without the video, so
+keeping it after the file is deleted keeps the interview. Ingest already refuses
+after a withdrawal; this is what removes what was already stored.
+
+Tombstones are kept indefinitely. They are a few hundred bytes saying a deletion
+happened, which is the record an audit asks for, and they carry nothing that
+describes a person.
+
+Deleting an account means deleting its recordings first. The composite foreign
+key into `interviews` is `RESTRICT` and does not soften once `deleted_at` is
+set, so an account delete cascades into `interviews` and fails there.
+
+Two things outside this repository are the operator's, both provisioned in the
+list above: the GCS lifecycle rule on the staging bucket, which is the backstop
+for objects this pipeline never got to delete, and the Shared Drive policy that
+has to permit an expiring reader permission.
+
+`scripts/recording-cleanup.sh` is the operator entrypoint. With no arguments it
+lists what is due and changes nothing. `--expire ID...` brings named recordings'
+deadlines forward and writes `deleted_by = 'operator'` on them, so the sweeper
+deletes their media on its next pass and the tombstone says a person asked
+rather than that a deadline arrived. That is the third value `deleted_by` takes,
+and this is what produces it.
+
+The script does not talk to Drive or GCS itself, because a second
+implementation of a deletion is a second thing that can be wrong about what it
+deleted. A marked recording is deleted by the running server, and with no server
+running nothing is deleted until there is one, which the script says rather than
+implying otherwise.
+
+Copies a candidate or an interviewer already downloaded are outside this
+pipeline's control. The consent notice discloses that rather than promising a
+deletion nothing here can perform.
+
 ## The database
 
 One database, the one at `CODETRIAL_DB_PATH`, default `codetrial.db`.
