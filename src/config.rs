@@ -748,6 +748,18 @@ pub fn load_recording(
         ));
     }
 
+    // The credential is parsed here, not at the first delivery. A key that
+    // cannot be read is a deployment that records interviews it can never hand
+    // over, and finding that out an hour into the first one is finding it out
+    // from a candidate.
+    if let Some(service_account) = present("CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON")
+        && let Err(message) = crate::delivery::readable_service_account(service_account)
+    {
+        invalid_entries.push(format!(
+            "CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON: {message}"
+        ));
+    }
+
     let bitrate = recording_number(
         values,
         "CODETRIAL_RECORDING_BITRATE",

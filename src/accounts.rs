@@ -119,7 +119,7 @@ impl Accounts {
 /// Bumped whenever a migration is added below. SQLite carries it in the file
 /// header, so an existing database announces which migrations it has already
 /// run instead of quietly keeping an old shape behind `IF NOT EXISTS`.
-pub const ACCOUNT_SCHEMA_VERSION: i64 = 8;
+pub const ACCOUNT_SCHEMA_VERSION: i64 = 9;
 
 /// Migrations in order, each one taking the database from index `n` to `n + 1`.
 /// Append, never edit: an entry that has already run somewhere will not run
@@ -133,6 +133,7 @@ const ACCOUNT_MIGRATIONS: &[&str] = &[
     CREATE_RECORDINGS,
     CREATE_RECORDING_EVENTS,
     CREATE_REPLAY_EVENTS,
+    CREATE_DELIVERY_QUEUE,
 ];
 
 pub fn initialize_account_database(path: &Path) -> rusqlite::Result<()> {
@@ -537,6 +538,43 @@ const CREATE_REPLAY_EVENTS: &str = "
             ON replay_events(interview_id, kind, seq);
 
         ALTER TABLE recordings ADD COLUMN quota_exceeded INTEGER NOT NULL DEFAULT 0;
+";
+
+/// The work outstanding between a finished recording and a delivered one.
+///
+/// One row per recording that still owes a delivery, and no row for one that
+/// does not: success deletes the row, and giving up deletes it too, because
+/// `recordings.state` and `recordings.error` are where the outcome lives. A
+/// queue that kept its history would be a second, disagreeing answer to what
+/// happened to a recording.
+///
+/// `claimed_at` and `claim` are the whole concurrency story. A worker claims a
+/// row before it touches Drive, so two workers cannot both see no
+/// `drive_file_id`, both upload, and leave the loser's file in the Shared Drive
+/// with nothing naming it. A claim older than the stale window is reclaimable,
+/// because the worker holding it may have died with the process, and `claim` is
+/// what keeps the worker that was replaced from writing over its replacement:
+/// every later write names the claim it was made under.
+///
+/// `ON DELETE CASCADE` from `recordings`: a recording that is gone owes no
+/// delivery. That is the opposite of the `RESTRICT` on the account key, and for
+/// the opposite reason, since nothing here is a handle to media.
+const CREATE_DELIVERY_QUEUE: &str = "
+        CREATE TABLE IF NOT EXISTS delivery_queue (
+            recording_id TEXT PRIMARY KEY NOT NULL
+                REFERENCES recordings(id) ON DELETE CASCADE,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            run_after INTEGER NOT NULL,
+            claimed_at INTEGER,
+            claim TEXT,
+            error TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            CHECK (attempts >= 0),
+            CHECK (run_after >= 0)
+        );
+
+        CREATE INDEX IF NOT EXISTS delivery_queue_due ON delivery_queue(run_after);
 ";
 
 /// Every report read and the per-account quota below both filter on `user_id`,
@@ -1323,6 +1361,11 @@ mod migration_tests {
         // Newest first: `recordings` has foreign keys into `interviews`, so
         // dropping them the other way round would leave a table pointing at one
         // that is gone.
+        if version < 9 {
+            connection
+                .execute_batch("DROP TABLE IF EXISTS delivery_queue;")
+                .unwrap();
+        }
         if version < 8 {
             connection
                 .execute_batch(
@@ -1613,6 +1656,7 @@ mod migration_tests {
         assert_eq!(
             tables(&path),
             vec![
+                "delivery_queue",
                 "interviews",
                 "recording_events",
                 "recordings",

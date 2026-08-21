@@ -576,7 +576,7 @@ mod recording {
         load_recording,
     };
 
-    const SERVICE_ACCOUNT: &str = r#"{"type":"service_account","private_key":"KEYMATERIAL-4bd2"}"#;
+    const SERVICE_ACCOUNT: &str = r#"{"type":"service_account","client_email":"codetrial@example.iam.gserviceaccount.com","private_key":"KEYMATERIAL-4bd2"}"#;
     const RECORDING_SECRET: &str = "recording-api-secret-9f3c";
     const RECORDING_KEY: &str = "APIrecordingkey";
 

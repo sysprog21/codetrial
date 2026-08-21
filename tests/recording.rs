@@ -1553,6 +1553,358 @@ mod failure {
         );
     }
 
+    /// The delivery queue: the work between a recording with a file and a
+    /// candidate who can read it.
+    ///
+    /// What these are about is the claim. Without one, two workers both see no
+    /// `drive_file_id`, both upload, and the loser's file sits in the Shared
+    /// Drive with nothing naming it and nothing able to delete it.
+    mod transfer {
+        use codetrial::recording::{
+            Clock, DELIVERY_BACKOFF_SECONDS, DeliveryOutcome, Failure, RecordingState,
+            claim_delivery, delivery_attempts, enqueue_delivery, recording_by_id,
+            run_delivery_queue,
+        };
+
+        use super::super::lifecycle::{harness, start, state_of};
+        use super::{FakeDelivery, transferring};
+
+        #[tokio::test]
+        async fn transfer_no_duplicate_drive_file() {
+            let (_scratch, accounts, _provider, clock, recorder) = harness("transfer-duplicate");
+            let recording = transferring(&accounts, &recorder, &clock).await;
+            enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
+
+            // The second start is what a webhook LiveKit sent twice looks like.
+            enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
+            let queued: i64 = _scratch
+                .open()
+                .query_row("SELECT COUNT(*) FROM delivery_queue", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(queued, 1, "one delivery, however many times it was queued");
+
+            // One claim, then nothing: the second worker finds the row taken
+            // and goes away rather than uploading beside the first.
+            let first = claim_delivery(&accounts, clock.now()).unwrap();
+            assert_eq!(first.map(|(row, _)| row.id), Some(recording.id.clone()));
+            assert_eq!(
+                claim_delivery(&accounts, clock.now())
+                    .unwrap()
+                    .map(|(row, _)| row.id),
+                None,
+                "a claimed row is not claimable again"
+            );
+
+            // The claim a worker was replaced under is not one it may write
+            // with. Without this, a worker whose claim expired mid-upload could
+            // delete the row its replacement is holding, and the replacement's
+            // delivery would finish into a queue that had forgotten it.
+            codetrial::recording::finish_delivery_work(&accounts, &recording.id, "not-my-claim")
+                .unwrap();
+
+            // Nor may it reschedule or fail it. "Not ours" is a third answer,
+            // because failing the recording here would stop a delivery another
+            // worker is in the middle of and delete the file it uploaded.
+            assert_eq!(
+                codetrial::recording::reschedule_delivery(
+                    &accounts,
+                    &recording.id,
+                    "not-my-claim",
+                    "drive_failed",
+                    clock.now(),
+                )
+                .unwrap(),
+                codetrial::recording::Reschedule::NotOurs
+            );
+            assert_eq!(
+                delivery_attempts(&accounts, &recording.id).unwrap(),
+                Some(1)
+            );
+
+            // And the delivery itself, through the worker, leaves one file.
+            let delivery = FakeDelivery::default();
+            assert_eq!(
+                run_delivery_queue(&accounts, &recorder, &delivery).await,
+                DeliveryOutcome::default(),
+                "nothing is due while the claim is fresh"
+            );
+            clock.advance(codetrial::recording::DELIVERY_CLAIM_SECONDS + 1);
+            assert_eq!(
+                run_delivery_queue(&accounts, &recorder, &delivery).await,
+                DeliveryOutcome {
+                    delivered: 1,
+                    ..DeliveryOutcome::default()
+                }
+            );
+            assert_eq!(state_of(&accounts, &recording.id), RecordingState::Ready);
+            assert_eq!(
+                delivery.calls(),
+                vec!["transfer".to_string(), "share".to_string()],
+                "one upload and one share, not two of either"
+            );
+            assert_eq!(
+                delivery_attempts(&accounts, &recording.id).unwrap(),
+                None,
+                "a delivered recording owes no more work"
+            );
+        }
+
+        #[tokio::test]
+        async fn transfer_resumes_after_restart() {
+            let (scratch, accounts, _provider, clock, recorder) = harness("transfer-restart");
+            let recording = transferring(&accounts, &recorder, &clock).await;
+            enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
+
+            // A worker that uploaded and then died with the process: the file
+            // id is written down, the claim is still held, and nothing has
+            // shared it.
+            let delivery = FakeDelivery::default();
+            *delivery.refuse_share.lock().unwrap() = true;
+            assert_eq!(
+                run_delivery_queue(&accounts, &recorder, &delivery).await,
+                DeliveryOutcome {
+                    retrying: 1,
+                    ..DeliveryOutcome::default()
+                }
+            );
+            let row = recording_by_id(&accounts, &recording.id).unwrap().unwrap();
+            assert_eq!(
+                state_of(&accounts, &recording.id),
+                RecordingState::Transferring
+            );
+            let file: Option<String> = scratch
+                .open()
+                .query_row(
+                    "SELECT drive_file_id FROM recordings WHERE id = ?1",
+                    [&recording.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(file.as_deref(), Some("drive-file-1"));
+            assert_eq!(row.error.as_deref(), Some(Failure::Drive.as_str()));
+
+            // The retry is not due yet, and then it is.
+            assert_eq!(
+                run_delivery_queue(&accounts, &recorder, &delivery).await,
+                DeliveryOutcome::default(),
+                "a backoff nothing waits for is not a backoff"
+            );
+            clock.advance(DELIVERY_BACKOFF_SECONDS[0]);
+            *delivery.refuse_share.lock().unwrap() = false;
+            assert_eq!(
+                run_delivery_queue(&accounts, &recorder, &delivery).await,
+                DeliveryOutcome {
+                    delivered: 1,
+                    ..DeliveryOutcome::default()
+                }
+            );
+
+            assert_eq!(state_of(&accounts, &recording.id), RecordingState::Ready);
+            assert_eq!(
+                delivery
+                    .calls()
+                    .iter()
+                    .filter(|call| *call == "transfer")
+                    .count(),
+                1,
+                "the second attempt reused the file the first one uploaded"
+            );
+        }
+
+        #[tokio::test]
+        async fn transfer_gives_up_on_a_schedule() {
+            let (_scratch, accounts, _provider, clock, recorder) = harness("transfer-schedule");
+            let recording = transferring(&accounts, &recorder, &clock).await;
+            enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
+            let delivery = FakeDelivery::default();
+            *delivery.refuse_transfer.lock().unwrap() = true;
+
+            // Three attempts, at zero, one minute and five.
+            for backoff in DELIVERY_BACKOFF_SECONDS {
+                assert_eq!(
+                    run_delivery_queue(&accounts, &recorder, &delivery).await,
+                    DeliveryOutcome {
+                        retrying: 1,
+                        ..DeliveryOutcome::default()
+                    }
+                );
+                assert_eq!(
+                    run_delivery_queue(&accounts, &recorder, &delivery).await,
+                    DeliveryOutcome::default(),
+                    "not due yet"
+                );
+                clock.advance(backoff);
+            }
+            assert_eq!(
+                run_delivery_queue(&accounts, &recorder, &delivery).await,
+                DeliveryOutcome {
+                    failed: 1,
+                    ..DeliveryOutcome::default()
+                }
+            );
+
+            // Failed with the reason an operator can act on, rather than left
+            // for the sweeper to abandon.
+            assert_eq!(state_of(&accounts, &recording.id), RecordingState::Failed);
+            let row = recording_by_id(&accounts, &recording.id).unwrap().unwrap();
+            assert_eq!(row.error.as_deref(), Some(Failure::Drive.as_str()));
+            assert_eq!(delivery_attempts(&accounts, &recording.id).unwrap(), None);
+            assert_eq!(
+                delivery.calls().len(),
+                3,
+                "three attempts, not one and not forever"
+            );
+        }
+
+        #[tokio::test]
+        async fn transfer_retries_a_delivery_an_operator_asked_for() {
+            let (_scratch, accounts, _provider, clock, recorder) = harness("transfer-reopen");
+            let recording = transferring(&accounts, &recorder, &clock).await;
+            enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
+            let delivery = FakeDelivery::default();
+            *delivery.refuse_transfer.lock().unwrap() = true;
+
+            // Run it out of attempts, which is the state `drive_failed` leaves.
+            for backoff in DELIVERY_BACKOFF_SECONDS {
+                run_delivery_queue(&accounts, &recorder, &delivery).await;
+                clock.advance(backoff);
+            }
+            run_delivery_queue(&accounts, &recorder, &delivery).await;
+            assert_eq!(state_of(&accounts, &recording.id), RecordingState::Failed);
+            assert_eq!(Failure::Drive.recovery(), "retry_delivery");
+
+            // The recovery, performed: the row is queued again and the worker
+            // reopens it. The bytes never left the staging bucket, which is why
+            // this is a delivery to retry rather than an interview to record
+            // again.
+            *delivery.refuse_transfer.lock().unwrap() = false;
+            enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
+            assert_eq!(
+                run_delivery_queue(&accounts, &recorder, &delivery).await,
+                DeliveryOutcome {
+                    delivered: 1,
+                    ..DeliveryOutcome::default()
+                }
+            );
+            assert_eq!(state_of(&accounts, &recording.id), RecordingState::Ready);
+
+            // And a recording that failed for any other reason stays failed: a
+            // reopen for one code must not become a reopen for all of them.
+            let other = start(&accounts, &recorder, "int-2", "rec-2").unwrap();
+            codetrial::recording::transition(
+                &accounts,
+                recorder.clock.as_ref(),
+                &other.id,
+                RecordingState::Failed,
+                Some(Failure::Egress.as_str()),
+            )
+            .unwrap();
+            let before = delivery.calls().len();
+            enqueue_delivery(&accounts, &other.id, clock.now()).unwrap();
+            assert_eq!(
+                run_delivery_queue(&accounts, &recorder, &delivery).await,
+                DeliveryOutcome::default()
+            );
+            assert_eq!(state_of(&accounts, &other.id), RecordingState::Failed);
+            assert_eq!(
+                delivery.calls().len(),
+                before,
+                "an egress failure has no file in the bucket to deliver"
+            );
+        }
+
+        #[tokio::test]
+        async fn transfer_is_not_swept_while_it_is_queued() {
+            // The sweeper's job is rows nothing is moving. A delivery takes up
+            // to half an hour and touches nothing while it runs, and a second
+            // one waits behind it, so a recording the queue still owes work on
+            // is not stale however old its row looks.
+            let (_scratch, accounts, _provider, clock, recorder) = harness("transfer-not-stale");
+            let recording = transferring(&accounts, &recorder, &clock).await;
+            enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
+            clock.advance(codetrial::recording::STALE_SECONDS * 2);
+
+            let stale =
+                codetrial::recording::stale_active(&accounts, Some(clock.now() - 60)).unwrap();
+            assert!(
+                stale.iter().all(|row| row.id != recording.id),
+                "a queued delivery is work in progress, not an abandoned row"
+            );
+
+            // The kill switch still takes it: a kill switch that waited for an
+            // upload is not one.
+            let killed = codetrial::recording::stale_active(&accounts, None).unwrap();
+            assert!(killed.iter().any(|row| row.id == recording.id));
+        }
+
+        #[tokio::test]
+        async fn transfer_requeues_a_delivery_nobody_is_doing() {
+            // The transition to `transferring` and the queue insert are two
+            // writes. A process that died between them leaves a recording that
+            // owes a delivery and a queue that has never heard of it, and
+            // without this the sweeper would abandon it fifteen minutes later.
+            let (_scratch, accounts, _provider, clock, recorder) = harness("transfer-orphan");
+            let recording = transferring(&accounts, &recorder, &clock).await;
+            assert_eq!(delivery_attempts(&accounts, &recording.id).unwrap(), None);
+
+            assert_eq!(
+                codetrial::recording::requeue_orphaned_deliveries(&accounts, clock.now()).unwrap(),
+                1
+            );
+            assert_eq!(
+                codetrial::recording::requeue_orphaned_deliveries(&accounts, clock.now()).unwrap(),
+                0,
+                "a queue that already knows is not told twice"
+            );
+
+            // And the sweep repairs before it reads: a restart longer than the
+            // stale window leaves exactly this row, and a sweep that read it as
+            // stale first would fail the recording it had just queued.
+            clock.advance(codetrial::recording::STALE_SECONDS * 2);
+            codetrial::recording::sweep_recordings(&accounts, &recorder).await;
+            assert_eq!(
+                state_of(&accounts, &recording.id),
+                RecordingState::Transferring
+            );
+
+            let delivery = FakeDelivery::default();
+            assert_eq!(
+                run_delivery_queue(&accounts, &recorder, &delivery).await,
+                DeliveryOutcome {
+                    delivered: 1,
+                    ..DeliveryOutcome::default()
+                }
+            );
+            assert_eq!(state_of(&accounts, &recording.id), RecordingState::Ready);
+        }
+
+        #[tokio::test]
+        async fn transfer_skips_a_recording_that_moved_on() {
+            let (scratch, accounts, _provider, clock, recorder) = harness("transfer-withdrawn");
+            let recording = transferring(&accounts, &recorder, &clock).await;
+            enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
+
+            // A withdrawal that landed while the delivery was queued. The media
+            // is somebody else's problem now, and uploading it would hand out a
+            // file that has been recalled.
+            scratch
+                .open()
+                .execute(
+                    "UPDATE recordings SET state = 'failed', error = 'consent_withdrawn' WHERE id = ?1",
+                    [&recording.id],
+                )
+                .unwrap();
+
+            let delivery = FakeDelivery::default();
+            assert_eq!(
+                run_delivery_queue(&accounts, &recorder, &delivery).await,
+                DeliveryOutcome::default()
+            );
+            assert!(delivery.calls().is_empty(), "nothing was uploaded");
+            assert_eq!(delivery_attempts(&accounts, &recording.id).unwrap(), None);
+        }
+    }
+
     #[tokio::test]
     async fn failure_drive_leaves_the_bytes_where_they_are() {
         let (_scratch, accounts, _provider, clock, recorder) = harness("failure-drive");
@@ -1567,7 +1919,7 @@ mod failure {
                 &delivery,
                 &recording,
                 "one@example.test",
-                clock.now() + 86_400,
+                86_400,
             )
             .await,
             Err(Failure::Drive)
@@ -1597,7 +1949,7 @@ mod failure {
                 &delivery,
                 &row,
                 "one@example.test",
-                clock.now() + 86_400,
+                86_400,
             )
             .await,
             Ok(RecordingState::Ready),
@@ -1619,7 +1971,7 @@ mod failure {
                 &delivery,
                 &recording,
                 "one@example.test",
-                clock.now() + 86_400,
+                86_400,
             )
             .await,
             Err(Failure::Drive)
@@ -1658,7 +2010,7 @@ mod failure {
                 &delivery,
                 &recording,
                 "one@example.test",
-                clock.now() + 86_400,
+                86_400,
             )
             .await
             .is_err()
@@ -1673,7 +2025,7 @@ mod failure {
                 &delivery,
                 &row,
                 "one@example.test",
-                clock.now() + 86_400,
+                86_400,
             )
             .await,
             Ok(RecordingState::Ready)
@@ -1714,7 +2066,7 @@ mod failure {
                 &delivery,
                 &recording,
                 "one@example.test",
-                clock.now() + 86_400,
+                86_400,
             )
             .await,
             Err(Failure::Drive)
@@ -1747,7 +2099,7 @@ mod failure {
                 &delivery,
                 &recording,
                 "one@example.test",
-                clock.now() + 86_400,
+                86_400,
             )
             .await,
             Err(Failure::Drive)
@@ -1791,7 +2143,7 @@ mod failure {
                 &delivery,
                 &recording,
                 "one@example.test",
-                clock.now() + 86_400,
+                86_400,
             )
             .await,
             Err(Failure::Drive)
@@ -1854,7 +2206,7 @@ mod failure {
                 &delivery,
                 &recording,
                 "one@example.test",
-                clock.now() + 86_400,
+                86_400,
             )
             .await,
             Err(Failure::Drive)
@@ -1898,7 +2250,7 @@ mod failure {
                 &delivery,
                 &recording,
                 "one@example.test",
-                clock.now() + 86_400,
+                86_400,
             )
             .await,
             Err(Failure::Drive)
@@ -1920,6 +2272,10 @@ mod failure {
         let (scratch, accounts, _provider, clock, recorder) = harness("delivery");
         let recording = transferring(&accounts, &recorder, &clock).await;
         let delivery = FakeDelivery::default();
+
+        // Read off the clock the delivery itself reads, because the deadline is
+        // twenty-four hours from the share rather than from whenever the caller
+        // decided to start one.
         let expires_at = clock.now() + 86_400;
 
         assert_eq!(
@@ -1929,7 +2285,7 @@ mod failure {
                 &delivery,
                 &recording,
                 "one@example.test",
-                expires_at,
+                86_400,
             )
             .await,
             Ok(RecordingState::Ready)
@@ -1963,7 +2319,7 @@ mod failure {
             &delivery,
             &recording,
             "one@example.test",
-            clock.now() + 86_400,
+            86_400,
         )
         .await
         .unwrap();

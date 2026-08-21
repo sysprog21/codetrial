@@ -221,7 +221,7 @@ impl StartEgress {
     }
 }
 
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// The provider, as the pipeline needs it.
 ///
@@ -820,10 +820,20 @@ pub fn stale_active(
         // Written as a null-checked comparison rather than as a sentinel
         // timestamp, because `updated_at <= i64::MAX` reads as a bug even when
         // it is not one.
+        //
+        // A recording the delivery queue still owes work on is not stale,
+        // whatever its `updated_at` says. An upload runs for up to half an hour
+        // and touches nothing while it does, and a second delivery waits behind
+        // it, so without this the sweeper fails a transfer that is running and
+        // the worker then deletes the file it had just uploaded. Every
+        // outstanding row, not only the claimed one, for the queued case. The
+        // kill switch still takes them, because a kill switch that waited for
+        // an upload is not one.
         let mut statement = connection.prepare(&format!(
             "{SELECT_RECORDING}
         WHERE state IN ('starting', 'recording', 'finalizing', 'transferring')
           AND (?1 IS NULL OR updated_at <= ?1)
+          AND (?1 IS NULL OR id NOT IN (SELECT recording_id FROM delivery_queue))
         "
         ))?;
         let rows = statement
@@ -1197,6 +1207,25 @@ pub async fn sweep_recordings(accounts: &Arc<Accounts>, recorder: &Recorder) -> 
     let now = recorder.clock.now();
     let kill_switch = recorder.config.kill_switch;
     let cutoff = if kill_switch { None } else { Some(now - 60) };
+
+    // A transferring recording nobody is delivering. The transition and the
+    // queue insert are two writes, so a process that died between them leaves a
+    // row that owes a delivery and a queue that has never heard of it. Repaired
+    // here rather than guarded against with a wider transaction: this is the
+    // sweep that already exists to find work nothing is moving.
+    //
+    // Before the stale read, not after it. A restart longer than the stale
+    // window leaves exactly such a row, and a sweep that read it as stale first
+    // would fail the recording it had just queued a delivery for.
+    {
+        let accounts = accounts.clone();
+        match blocking(move || requeue_orphaned_deliveries(&accounts, now)).await {
+            Ok(0) => {}
+            Ok(requeued) => eprintln!("recording sweep queued {requeued} orphaned deliveries"),
+            Err(error) => eprintln!("WARNING: could not queue orphaned deliveries: {error}"),
+        }
+    }
+
     let stale = {
         let accounts = accounts.clone();
         match blocking(move || stale_active(&accounts, cutoff)).await {
@@ -1651,6 +1680,537 @@ fn byte_count_is_positive(size: &Value) -> bool {
         .is_some_and(|size| size > 0)
 }
 
+// The delivery queue: the work between a recording that has a file and one that
+// has been handed to the person it belongs to.
+//
+// One row per recording that still owes a delivery, and none for one that does
+// not. Success deletes the row; giving up deletes it too, because
+// `recordings.state` and `recordings.error` are where an outcome lives and a
+// queue that kept its own history would be a second answer that can disagree.
+
+/// Three attempts, at zero, one minute and five. The first is the delivery
+/// itself; a Drive call that failed twice in six minutes is failing for a
+/// reason another minute will not fix, and the bytes are still in the staging
+/// bucket for an operator to retry deliberately.
+pub const DELIVERY_ATTEMPTS: i64 = 3;
+pub const DELIVERY_BACKOFF_SECONDS: [i64; 2] = [60, 300];
+
+/// How long a claim is honoured before another worker may take the row.
+///
+/// A worker that died with the process holds its claim forever otherwise, and
+/// the recording sits in `transferring` until the sweeper abandons it.
+///
+/// An hour, which is longer than any upload this pipeline produces: a
+/// forty-five minute interview at the configured bitrate is a few hundred
+/// megabytes, and even a slow link finishes inside it. The number matters
+/// because a claim that expires under a running upload is exactly how two
+/// workers end up uploading at once, and the resumable session the first one
+/// holds is invisible to the second.
+pub const DELIVERY_CLAIM_SECONDS: i64 = 3600;
+
+/// Put a recording in line for delivery.
+///
+/// Called when a recording reaches `transferring`, and idempotent: a webhook
+/// LiveKit sent twice must not become two deliveries. `run_after` is now,
+/// because the first attempt is the delivery itself rather than a retry.
+pub fn enqueue_delivery(accounts: &Accounts, recording_id: &str, now: i64) -> rusqlite::Result<()> {
+    accounts.with(|connection| {
+        connection.execute(
+            "
+        INSERT INTO delivery_queue (recording_id, attempts, run_after, created_at, updated_at)
+        VALUES (?1, 0, ?2, ?2, ?2)
+        ON CONFLICT (recording_id) DO NOTHING
+        ",
+            (recording_id, now),
+        )?;
+        Ok(())
+    })
+}
+
+/// Take one due row, or nothing.
+///
+/// The claim and the attempt count move in the same statement as the selection,
+/// so two workers cannot both take the same row: SQLite serializes the writes,
+/// and the second one finds a row whose `claimed_at` no longer matches what it
+/// selected on.
+///
+/// Rows are due when `run_after` has passed and they are either unclaimed or
+/// claimed longer ago than a delivery can take. The recording itself is read
+/// back with the claim, because a queue row on its own says nothing about what
+/// to deliver.
+pub fn claim_delivery(
+    accounts: &Accounts,
+    now: i64,
+) -> rusqlite::Result<Option<(Recording, String)>> {
+    accounts.with(|connection| {
+        let transaction = rusqlite::Transaction::new_unchecked(
+            connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+
+        // The claim is a fresh token every time, so a worker whose claim
+        // expired cannot finish or reschedule the row its replacement now
+        // holds: its writes name a claim the row no longer has. A failure here
+        // is the system's random source, which is not a condition to deliver
+        // through: without a token this claim could be written over by the
+        // worker it replaced.
+        let claim = crate::accounts::random_token(16)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let claimed: Option<String> = transaction
+            .query_row(
+                "
+        UPDATE delivery_queue
+        SET claimed_at = ?1, claim = ?3, attempts = attempts + 1, updated_at = ?1
+        WHERE recording_id = (
+            SELECT recording_id FROM delivery_queue
+            WHERE run_after <= ?1
+              AND (claimed_at IS NULL OR claimed_at <= ?2)
+            ORDER BY run_after
+            LIMIT 1
+        )
+        RETURNING recording_id
+        ",
+                (now, now - DELIVERY_CLAIM_SECONDS, &claim),
+                |row| row.get(0),
+            )
+            .map(Some)
+            .or_else(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                error => Err(error),
+            })?;
+        let Some(recording_id) = claimed else {
+            transaction.commit()?;
+            return Ok(None);
+        };
+        let recording = transaction
+            .query_row(
+                &format!("{SELECT_RECORDING} WHERE id = ?1"),
+                [&recording_id],
+                row_to_recording,
+            )
+            .map(Some)
+            .or_else(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                error => Err(error),
+            })?;
+        transaction.commit()?;
+        Ok(recording.map(|recording| (recording, claim)))
+    })
+}
+
+/// How many attempts a queued delivery has already had.
+pub fn delivery_attempts(accounts: &Accounts, recording_id: &str) -> rusqlite::Result<Option<i64>> {
+    accounts.with(|connection| {
+        connection
+            .query_row(
+                "SELECT attempts FROM delivery_queue WHERE recording_id = ?1",
+                [recording_id],
+                |row| row.get(0),
+            )
+            .map(Some)
+            .or_else(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                error => Err(error),
+            })
+    })
+}
+
+/// The row is done with, whichever way it ended.
+///
+/// Named with the claim it was done under. A worker whose claim expired while
+/// it worked would otherwise delete the row its replacement is holding, and the
+/// replacement's delivery would finish into a queue that had forgotten it.
+pub fn finish_delivery_work(
+    accounts: &Accounts,
+    recording_id: &str,
+    claim: &str,
+) -> rusqlite::Result<()> {
+    accounts.with(|connection| {
+        connection.execute(
+            "DELETE FROM delivery_queue WHERE recording_id = ?1 AND claim = ?2",
+            (recording_id, claim),
+        )?;
+        Ok(())
+    })
+}
+
+/// Release a failed claim so the next attempt can happen later.
+///
+/// Returns whether there is another attempt. When there is not, the row is gone
+/// and the caller is the one that has to fail the recording: a queue row for a
+/// delivery nobody will attempt again is work that never happens, and the
+/// sweeper would eventually abandon the recording with a less useful reason.
+pub fn reschedule_delivery(
+    accounts: &Accounts,
+    recording_id: &str,
+    claim: &str,
+    error: &str,
+    now: i64,
+) -> rusqlite::Result<Reschedule> {
+    accounts.with(|connection| {
+        // One transaction, because the read and the write are one decision: a
+        // row reclaimed between them would be read as this worker's and written
+        // as somebody else's.
+        let transaction = rusqlite::Transaction::new_unchecked(
+            connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+
+        // Under this claim, or not at all. A row that has been reclaimed is
+        // somebody else's work now, and rescheduling it would push their
+        // attempt into the future for a failure that was not theirs.
+        let attempts: i64 = match transaction.query_row(
+            "SELECT attempts FROM delivery_queue WHERE recording_id = ?1 AND claim = ?2",
+            (recording_id, claim),
+            |row| row.get(0),
+        ) {
+            Ok(attempts) => attempts,
+
+            // Not this worker's row any more: it was reclaimed while this
+            // attempt ran, or finished by somebody else. Saying "exhausted"
+            // here would fail a recording another worker is in the middle of
+            // delivering, and take its Drive file with it.
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(Reschedule::NotOurs),
+            Err(error) => return Err(error),
+        };
+        let Some(backoff) = DELIVERY_BACKOFF_SECONDS.get(attempts.max(1) as usize - 1) else {
+            // The row stays, still claimed. Deleting it here would leave a
+            // `transferring` recording with an empty queue until the caller
+            // fails it, which is exactly what the sweeper's repair looks for:
+            // it would queue the row again and the next claim would reopen it,
+            // turning an operator-only retry into an automatic one. The caller
+            // deletes it after the failure is written down.
+            transaction.commit()?;
+            return Ok(Reschedule::Exhausted);
+        };
+        transaction.execute(
+            "
+        UPDATE delivery_queue
+        SET claimed_at = NULL, claim = NULL, run_after = ?2, error = ?3, updated_at = ?4
+        WHERE recording_id = ?1 AND claim = ?5
+        ",
+            (recording_id, now + backoff, error, now, claim),
+        )?;
+        transaction.commit()?;
+        Ok(Reschedule::Again)
+    })
+}
+
+/// What became of a failed attempt. Three answers, because the caller does
+/// something different with each and a bool could only carry two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reschedule {
+    /// Due again after the backoff.
+    Again,
+    /// Out of attempts. The caller fails the recording.
+    Exhausted,
+    /// The row is somebody else's now. The caller does nothing at all.
+    NotOurs,
+}
+
+/// How long a delivered recording is readable before its permission expires and
+/// the retention sweep deletes it. The contract's twenty-four hours, in one
+/// place, because the Drive permission and the deletion deadline have to be the
+/// same number or one of them is a lie.
+pub const RETENTION_SECONDS: i64 = 24 * 60 * 60;
+
+/// What one pass of the delivery queue did, for the caller to log.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct DeliveryOutcome {
+    pub delivered: usize,
+    pub retrying: usize,
+    pub failed: usize,
+}
+
+/// Work the queue until there is nothing due.
+///
+/// This is what makes completion asynchronous: the webhook that ends a
+/// recording queues the delivery and answers, and the upload happens here,
+/// under a claim, with a schedule behind it.
+pub async fn run_delivery_queue(
+    accounts: &Arc<Accounts>,
+    recorder: &Recorder,
+    delivery: &dyn DeliveryProvider,
+) -> DeliveryOutcome {
+    let mut outcome = DeliveryOutcome::default();
+    loop {
+        let now = recorder.clock.now();
+        let claimed = {
+            let accounts = accounts.clone();
+            match blocking(move || claim_delivery(&accounts, now)).await {
+                Ok(claimed) => claimed,
+                Err(error) => {
+                    eprintln!("WARNING: the delivery queue could not read its work: {error}");
+                    return outcome;
+                }
+            }
+        };
+        let Some((recording, claim)) = claimed else {
+            return outcome;
+        };
+
+        // A delivery an operator asked for again. `retry_delivery` is the
+        // recovery `drive_failed` names, and this is where it happens: the row
+        // goes back to `transferring` and the attempt runs like any other. The
+        // guard is in the statement rather than in the transition table,
+        // because "failed for this one reason" is not a state the table has and
+        // giving it one would make every other failure re-openable too.
+        let recording = if recording.state == RecordingState::Failed {
+            let reopened = {
+                let accounts = accounts.clone();
+                let clock = recorder.clock.clone();
+                let id = recording.id.clone();
+                blocking(move || reopen_delivery(&accounts, clock.as_ref(), &id)).await
+            };
+            match reopened {
+                Ok(Some(recording)) => recording,
+                _ => recording,
+            }
+        } else {
+            recording
+        };
+
+        // A row that left `transferring` while it waited: a withdrawal, a kill
+        // switch, an operator. Its media is somebody else's problem now, and
+        // delivering it would hand out a file that has been recalled.
+        if recording.state != RecordingState::Transferring {
+            let accounts = accounts.clone();
+            let id = recording.id.clone();
+            let claim = claim.clone();
+            let _ = blocking(move || finish_delivery_work(&accounts, &id, &claim)).await;
+            continue;
+        }
+
+        // Read from the row rather than from the account, and read now rather
+        // than at start: the address was copied into the row when the recording
+        // began, which is the address the candidate consented with.
+        let recipient = {
+            let accounts = accounts.clone();
+            let id = recording.id.clone();
+            blocking(move || recipient_of(&accounts, &id)).await
+        };
+        let recipient = match recipient {
+            Ok(Some(recipient)) => recipient,
+
+            // A read that failed is a bad moment for the database, not a
+            // recording without an address. The claim is left to expire, which
+            // is what makes the next pass pick this row up again.
+            Err(error) => {
+                eprintln!("WARNING: a delivery could not read its recipient: {error}");
+                return outcome;
+            }
+
+            // No address on a `transferring` row is a state the schema's own
+            // `CHECK` does not have, so this is a row somebody wrote around it.
+            // There is nobody to share with and no retry that invents one, so
+            // it is failed with the code an operator can act on.
+            Ok(None) => {
+                outcome.failed += 1;
+                let accounts = accounts.clone();
+                let clock = recorder.clock.clone();
+                let id = recording.id.clone();
+                let claim = claim.clone();
+                let _ = blocking(move || {
+                    // The row is released only once the failure is written
+                    // down. Deleting it first leaves a `transferring` recording
+                    // with an empty queue, which is what the sweeper's repair
+                    // looks for, and the attempt nobody authorized happens by
+                    // itself.
+                    let moved = transition(
+                        &accounts,
+                        clock.as_ref(),
+                        &id,
+                        RecordingState::Failed,
+                        Some(Failure::Drive.as_str()),
+                    );
+                    if moved.is_ok() {
+                        let _ = finish_delivery_work(&accounts, &id, &claim);
+                    }
+                    moved
+                })
+                .await;
+                audit(
+                    "recording_failed",
+                    &recording.id,
+                    &[
+                        ("reason", Failure::Drive.as_str()),
+                        ("recovery", Failure::Drive.recovery()),
+                        ("step", "recipient"),
+                    ],
+                );
+                continue;
+            }
+        };
+
+        let delivered = deliver_recording(
+            accounts,
+            recorder,
+            delivery,
+            &recording,
+            &recipient,
+            RETENTION_SECONDS,
+        )
+        .await;
+        let id = recording.id.clone();
+        match delivered {
+            Ok(_) => {
+                outcome.delivered += 1;
+                let accounts = accounts.clone();
+                let claim = claim.clone();
+                let _ = blocking(move || finish_delivery_work(&accounts, &id, &claim)).await;
+            }
+            Err(failure) => {
+                let again = {
+                    let accounts = accounts.clone();
+                    let id = id.clone();
+                    let reason = failure.as_str().to_string();
+                    let claim = claim.clone();
+
+                    // Read again rather than reused. `now` is from before the
+                    // upload, and an attempt that took longer than the backoff
+                    // would schedule its retry in the past.
+                    let failed_at = recorder.clock.now();
+                    blocking(move || {
+                        reschedule_delivery(&accounts, &id, &claim, &reason, failed_at)
+                    })
+                    .await
+                };
+                match again {
+                    Ok(Reschedule::Again) => {
+                        outcome.retrying += 1;
+                        continue;
+                    }
+
+                    // Reclaimed while this attempt ran, or already finished.
+                    // Failing the recording here would stop a delivery another
+                    // worker is in the middle of and delete the file it
+                    // uploaded.
+                    Ok(Reschedule::NotOurs) => continue,
+                    Ok(Reschedule::Exhausted) => {}
+                    Err(error) => {
+                        eprintln!("WARNING: a delivery could not be rescheduled: {error}");
+                        continue;
+                    }
+                }
+
+                // Out of attempts, or a queue row that has gone. The recording
+                // is failed here rather than left for the sweeper, because
+                // `drive_failed` says what an operator can do about it and
+                // `abandoned` does not.
+                outcome.failed += 1;
+                let accounts = accounts.clone();
+                let clock = recorder.clock.clone();
+                let id = id.clone();
+                let claim = claim.clone();
+                let moved = blocking(move || {
+                    let moved = transition(
+                        &accounts,
+                        clock.as_ref(),
+                        &id,
+                        RecordingState::Failed,
+                        Some(Failure::Drive.as_str()),
+                    );
+
+                    // Only once the failure is written down. A transition that
+                    // errored and a row that was deleted anyway is a
+                    // `transferring` recording with an empty queue, which the
+                    // sweeper repairs into an attempt nobody authorized.
+                    //
+                    // A database that cannot write this leaves the row queued
+                    // and the next pass tries again. That is the right answer
+                    // for a moment of trouble and no answer at all for a
+                    // database that stays broken, which is a condition nothing
+                    // else here survives either.
+                    if moved.is_ok() {
+                        let _ = finish_delivery_work(&accounts, &id, &claim);
+                    }
+                    moved
+                })
+                .await;
+                if let Ok(Some((_, true))) = moved {
+                    audit(
+                        "recording_failed",
+                        &recording.id,
+                        &[
+                            ("reason", Failure::Drive.as_str()),
+                            ("recovery", Failure::Drive.recovery()),
+                            ("attempts", &DELIVERY_ATTEMPTS.to_string()),
+                        ],
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Queue any `transferring` recording the queue does not know about.
+///
+/// Idempotent and cheap: the insert names rows the queue is missing, so a
+/// database where nothing went wrong writes nothing.
+pub fn requeue_orphaned_deliveries(accounts: &Accounts, now: i64) -> rusqlite::Result<usize> {
+    accounts.with(|connection| {
+        connection.execute(
+            "
+        INSERT INTO delivery_queue (recording_id, attempts, run_after, created_at, updated_at)
+        SELECT id, 0, ?1, ?1, ?1 FROM recordings
+        WHERE state = 'transferring'
+          AND id NOT IN (SELECT recording_id FROM delivery_queue)
+        ",
+            [now],
+        )
+    })
+}
+
+/// Put a recording that failed its delivery back in line for one.
+///
+/// Only from `failed` with `drive_failed`, and only while the media is still
+/// there: a tombstoned row has nothing to deliver, and a recording that failed
+/// for any other reason has no file in the staging bucket to try again with.
+///
+/// Returns the reopened row, or `None` when the guard refused, so the caller
+/// works from what the database says rather than from what it asked for.
+pub fn reopen_delivery(
+    accounts: &Accounts,
+    clock: &dyn Clock,
+    recording_id: &str,
+) -> rusqlite::Result<Option<Recording>> {
+    accounts.with(|connection| {
+        let moved = connection.execute(
+            "
+        UPDATE recordings
+        SET state = 'transferring', updated_at = ?2
+        WHERE id = ?1 AND state = 'failed' AND error = ?3 AND deleted_at IS NULL
+        ",
+            (recording_id, clock.now(), Failure::Drive.as_str()),
+        )?;
+        if moved == 0 {
+            return Ok(None);
+        }
+        audit(
+            "recording_delivery_reopened",
+            recording_id,
+            &[("reason", Failure::Drive.as_str())],
+        );
+        connection
+            .query_row(
+                &format!("{SELECT_RECORDING} WHERE id = ?1"),
+                [recording_id],
+                row_to_recording,
+            )
+            .map(Some)
+    })
+}
+
+fn recipient_of(accounts: &Accounts, recording_id: &str) -> rusqlite::Result<Option<String>> {
+    accounts.with(|connection| {
+        connection.query_row(
+            "SELECT recipient_email FROM recordings WHERE id = ?1",
+            [recording_id],
+            |row| row.get(0),
+        )
+    })
+}
+
 /// Where a recording's media goes once the provider is done with it.
 ///
 /// A trait for the same reason [`RecordingProvider`] is one: every failure this
@@ -1704,7 +2264,7 @@ pub async fn deliver_recording(
     delivery: &dyn DeliveryProvider,
     recording: &Recording,
     recipient_email: &str,
-    expires_at: i64,
+    retention_seconds: i64,
 ) -> Result<RecordingState, Failure> {
     let gcs_object = gcs_object_path(&recorder.config.gcs_prefix, &recording.id);
     let filename = format!("{}.mp4", recording.id);
@@ -1837,6 +2397,12 @@ pub async fn deliver_recording(
         .await;
         return Err(failure);
     }
+
+    // Read from the clock here rather than taken from the caller. The deadline
+    // is twenty-four hours of readable file, and an upload that took forty
+    // minutes would otherwise hand the candidate twenty-three hours and twenty
+    // minutes of it.
+    let expires_at = recorder.clock.now() + retention_seconds;
 
     // A permission this recording already has is not shared again. Asking Drive
     // to grant the same person the same access twice is either a duplicate
@@ -2168,13 +2734,41 @@ async fn clean_up_after_losing(
     if drive_file_id.is_none() && permission.is_none() && object.is_none() {
         return;
     }
-    report_cleanup(
-        recording_id,
-        step,
-        delivery
-            .revoke_and_delete(drive_file_id, permission, object)
-            .await,
-    );
+    let outcome = delivery
+        .revoke_and_delete(drive_file_id, permission, object)
+        .await;
+    let deleted = outcome.is_ok();
+    report_cleanup(recording_id, step, outcome);
+
+    // A handle that names a file this call just deleted is worse than no
+    // handle: a later attempt reads it, skips the upload, and tries to share
+    // something that is not there. Guarded on the value, so a row that has
+    // moved on to some other file keeps it.
+    if deleted && let Some(drive_file_id) = drive_file_id {
+        let accounts = accounts.clone();
+        let recording_id = recording_id.to_string();
+        let drive_file_id = drive_file_id.to_string();
+        let _ = blocking(move || forget_drive_file(&accounts, &recording_id, &drive_file_id)).await;
+    }
+}
+
+/// Give up a Drive handle whose file is gone.
+fn forget_drive_file(
+    accounts: &Accounts,
+    recording_id: &str,
+    drive_file_id: &str,
+) -> rusqlite::Result<()> {
+    accounts.with(|connection| {
+        connection.execute(
+            "
+        UPDATE recordings
+        SET drive_file_id = NULL, drive_permission_id = NULL
+        WHERE id = ?1 AND drive_file_id = ?2 AND deleted_at IS NULL
+        ",
+            (recording_id, drive_file_id),
+        )?;
+        Ok(())
+    })
 }
 
 /// A cleanup that itself failed, said out loud.

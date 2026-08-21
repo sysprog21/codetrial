@@ -11,6 +11,7 @@ getrandom = "0.4.3"
 hmac = "0.12"
 jpeg-encoder = "0.7"
 livekit = "0.8.3"
+ring = "0.17"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
 serde_json = "1"

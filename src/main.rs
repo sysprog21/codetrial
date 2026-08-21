@@ -203,6 +203,7 @@ fn run_web(options: CliOptions) -> Result<(), String> {
         nonempty(&values, "GITHUB_CLIENT_ID").is_some()
             && nonempty(&values, "GITHUB_CLIENT_SECRET").is_some(),
     )?;
+    recording_can_deliver(recording.as_ref())?;
 
     let config = WebServerConfig {
         web_dir: PathBuf::from(value_or(&values, "CODETRIAL_WEB_DIR", DEFAULT_WEB_DIR)),
@@ -407,6 +408,7 @@ fn run_serve(options: CliOptions) -> Result<(), String> {
         recording.is_some(),
         github_client_id.is_some() && github_client_secret.is_some(),
     )?;
+    recording_can_deliver(recording.as_ref())?;
     let web_config = WebServerConfig {
         web_dir: PathBuf::from(config.web_dir.clone()),
         github_client_id,
@@ -762,6 +764,28 @@ fn is_production(values: &BTreeMap<String, String>) -> bool {
 /// only when it has the pair, so an id with no secret is exactly as unable to
 /// verify anyone as no id at all, and would have started a server that refused
 /// every interview while looking configured.
+/// A deployment that records has to be able to hand the file over.
+///
+/// The key is parsed here, before the listener does any work, because the
+/// alternative is a server that records interviews and discovers at the first
+/// delivery that it can never sign for one. Configuration already checked the
+/// shape; this is the credential itself.
+fn recording_can_deliver(
+    recording: Option<&codetrial::config::RecordingConfig>,
+) -> Result<(), String> {
+    let Some(recording) = recording else {
+        return Ok(());
+    };
+    codetrial::delivery::GoogleDelivery::new(
+        &recording.service_account_json,
+        &recording.gcs_bucket,
+        &recording.drive_id,
+        std::sync::Arc::new(|| 0),
+    )
+    .map(|_| ())
+    .map_err(|error| format!("CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON: {error}"))
+}
+
 fn recording_needs_verified_identity(recording: bool, oauth: bool) -> Result<(), String> {
     if recording && !oauth {
         return Err(
@@ -1058,6 +1082,39 @@ mod tests {
     /// both, so an id with no secret verifies exactly as many people as no id
     /// at all, and would have started a server that refused every interview
     /// while looking configured.
+    #[test]
+    fn a_service_account_that_cannot_sign_stops_the_server() {
+        // Not at the first delivery, which is an hour into somebody's
+        // interview, and not as a warning that leaves the server running with
+        // no way to hand a recording over.
+        let mut recording = codetrial::config::RecordingConfig {
+            livekit: None,
+            gcs_bucket: "codetrial-staging".to_string(),
+            gcs_prefix: "codetrial".to_string(),
+            drive_id: "0AKfixtureDriveId".to_string(),
+            service_account_json: r#"{"client_email":"a@b.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----
+bm90IGEga2V5
+-----END PRIVATE KEY-----
+"}"#.to_string(),
+            max_minutes: 45,
+            bitrate: 2000,
+            kill_switch: false,
+            template_base_url: "https://recording.example".to_string(),
+            timeout_seconds: 900,
+            integration: false,
+        };
+        let error = super::recording_can_deliver(Some(&recording)).unwrap_err();
+        assert!(
+            error.contains("CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON"),
+            "{error}"
+        );
+
+        // And a deployment that records nothing needs no credential at all.
+        assert!(super::recording_can_deliver(None).is_ok());
+        recording.service_account_json = String::new();
+        assert!(super::recording_can_deliver(Some(&recording)).is_err());
+    }
+
     #[test]
     fn recording_needs_both_oauth_credentials_or_it_refuses_to_start() {
         assert!(super::recording_needs_verified_identity(false, false).is_ok());

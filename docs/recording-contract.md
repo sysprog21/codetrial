@@ -771,6 +771,92 @@ table, whoever wrote it.
 `ON DELETE CASCADE`, unlike `recordings`. Nothing here is a handle to media
 somewhere else, so losing these rows loses only what they say.
 
+## The delivery queue
+
+Between a recording that has a file and a candidate who can read it. One row per
+recording that still owes a delivery, and none for one that does not: success
+deletes the row and giving up deletes it too, because `recordings.state` and
+`recordings.error` are where an outcome lives and a queue that kept its own
+history would be a second answer that can disagree.
+
+| Column | Type | Null | Meaning |
+|---|---|---|---|
+| `recording_id` | TEXT | no | primary key, `recordings(id)` `ON DELETE CASCADE` |
+| `attempts` | INTEGER | no | incremented by the claim, not by the outcome |
+| `run_after` | INTEGER | no | when this row is next due |
+| `claimed_at` | INTEGER | yes | null while nobody holds it |
+| `claim` | TEXT | yes | the token that claim was taken under |
+| `error` | TEXT | yes | the last failure, for an operator reading the queue |
+| `created_at`, `updated_at` | INTEGER | no | epoch seconds |
+
+The claim is the whole concurrency story. A worker claims a row before it
+touches Drive, so two workers cannot both see no `drive_file_id`, both upload,
+and leave the loser's file in the Shared Drive with nothing naming it and
+nothing able to delete it. The claim and the attempt count move in the same
+statement as the selection, inside an `IMMEDIATE` transaction.
+
+A recording somebody is actively delivering is not stale, whatever its
+`updated_at` says: the sweeper skips rows with a live claim. An upload runs for
+up to half an hour and touches nothing while it does, so without that the
+sweeper fails it mid-transfer and the worker then deletes the file it had just
+uploaded. The kill switch still takes it, because a kill switch that waited for
+an upload is not one.
+
+A claim older than an hour is reclaimable, because the worker holding it may
+have died with the process. An hour rather than a few minutes: a claim that
+expires under a running upload is how two workers end up uploading at once,
+which is the thing the claim exists to prevent, and a forty-five minute
+interview is a few hundred megabytes that finish inside it on any link worth
+recording over.
+
+Every later write names the claim it was made under, and a write that finds the
+row is no longer its own does nothing rather than treating it as a failure. A
+worker whose claim expired mid-upload would otherwise delete or reschedule the
+row its replacement is holding, or fail a recording somebody else is halfway
+through delivering and take the file with it.
+
+The transition to `transferring` and the queue insert are two writes, so a
+process that dies between them leaves a recording that owes a delivery and a
+queue that has never heard of it. The sweeper repairs that: any `transferring`
+recording the queue does not know about is queued, before the same sweep reads
+its stale rows rather than after, because a restart longer than the stale window
+leaves exactly such a row and the other order fails the recording it had just
+queued a delivery for. That is cheaper than a wider
+transaction across two modules, and it is the sweep that already exists to find
+work nothing is moving.
+
+Three attempts, at zero, one minute and five. The first is the delivery itself.
+After the third the recording is `failed` with `drive_failed`, in that order and
+then the queue row is deleted: the other order leaves a window where the
+recording is still `transferring` with an empty queue, which is exactly what the
+sweeper's repair looks for, and the retry an operator is supposed to authorize
+would happen by itself. The row is gone because a queue row nobody will attempt
+again is work that never happens and the sweeper would eventually abandon the
+recording with a less useful reason.
+
+The remaining window is the other way round and is bounded: a process that dies
+after the failure and before the delete leaves a queue row against a
+`drive_failed` recording, and the next claim reopens it. That is one more
+attempt than the policy says and no other difference, because the attempt reuses
+the file the earlier one uploaded.
+
+A `308` is read for the bytes the session says it holds, and the header has to
+be exactly `bytes=0-n` within the object's size. Anything else is a header this
+code cannot act on, and guessing at it moves the offset past bytes that were
+never stored, which finishes a file with a hole in it.
+
+`retry_delivery`, the recovery `drive_failed` names, is an operator inserting a
+queue row by hand. The worker reopens a `drive_failed` recording when it claims
+one, guarded in the statement rather than in the transition table: "failed for
+this one reason" is not a state the table has, and giving it one would make every
+other failure re-openable too. The bytes never left the staging bucket, which is
+why this is a delivery to retry rather than an interview to record again.
+
+Enqueueing happens where a recording reaches `transferring`, and only when that
+transition moved the row. A webhook LiveKit sent twice must not become two
+deliveries; the queue's `ON CONFLICT DO NOTHING` is the second half of that
+rather than the first.
+
 ## Google Drive delivery
 
 All calls carry `supportsAllDrives=true`. Without it the API pretends a Shared
@@ -796,10 +882,46 @@ file instead of creating a second one:
 
 ```text
 GET https://www.googleapis.com/drive/v3/files
-  ?q=appProperties has {key='codetrial_recording_id' and value='<recording_id>'}
+  ?q=appProperties has { key='codetrial_recording_id' and value='<recording_id>' }
   &corpora=drive&driveId=<shared drive id>
   &includeItemsFromAllDrives=true&supportsAllDrives=true
 ```
+
+Chunks are `UPLOAD_CHUNK_BYTES`, eight megabytes, which is a multiple of the
+256 KiB the protocol requires and small enough that one chunk is the memory a
+delivery costs. A retryable answer, `429`, `500`, `502`, `503` or `504`, and a dropped
+connection are both handled by asking the session what it actually holds and
+carrying on from there, out of a budget of eight for the whole upload. A budget
+for the transfer rather than a count per chunk: per chunk is the shape that
+looks right and is unbounded, because a session that keeps reporting the same
+offset hands back a chunk to re-send and a counter that starts again with each
+one never runs out. Everything else is an answer rather than a hiccup, and
+attempts beyond the budget belong to the delivery queue, because a retry a
+worker cannot see is a retry nobody can bound.
+
+One transfer runs for at most half an hour, which is bounded below the queue's
+claim window on purpose: a transfer that outlived its claim would still be
+running while another worker started a second one, and two resumable sessions
+against one recording is exactly the duplicate the claim exists to prevent.
+
+Each range has to come back `206` with the length it asked for, checked before
+the body is read and again after. A proxy that ignores `Range` answers `200`
+with the whole object, and buffering that is however many gigabytes the
+recording is rather than the one chunk this delivery is supposed to cost; a
+chunked answer with no length is refused for the same reason.
+
+A `401` clears the cached token. It is the one answer that says the credential
+is wrong whatever the local clock thinks, and without clearing it every attempt
+in the queue's schedule would reuse the same rejected token.
+
+The permission's expiry is read off the clock at the share rather than when the
+delivery was queued. Twenty-four hours means twenty-four hours of readable file,
+and an upload that took forty minutes would otherwise hand the candidate
+twenty-three hours and twenty minutes of it.
+
+A resumable session that is never finished creates no file. That is why an
+attempt that dies mid-upload leaves nothing for the duplicate search to find and
+nothing in the Drive for retention to chase.
 
 Reader permission, with expiry:
 
@@ -813,6 +935,21 @@ POST https://www.googleapis.com/drive/v3/files/{fileId}/permissions
   "expirationTime": "<RFC 3339, 24 hours out>"
 }
 ```
+
+`expirationTime` is accepted on this permission because it is a `user`
+permission with the `reader` role on a file, less than a year out, which is the
+whole restriction list Drive documents. It is defence in depth rather than the
+retention mechanism: the deletion at expiry is what actually removes the media,
+and the permission expiring is what covers the gap if a deletion is late.
+
+A cleanup that deletes a file this delivery uploaded also clears the row's
+`drive_file_id` and `drive_permission_id`, when the whole cleanup succeeded. A
+cleanup whose file deletion worked and whose staging deletion did not leaves the
+row naming a file that is gone; that row is one whose recording has already
+moved on, which is the only reason this cleanup runs, so nothing will read the
+handle again. A handle naming a file that is gone
+is worse than no handle: a later attempt reads it, skips the upload, and tries
+to share something that is not there.
 
 A permission is always named with the file it is on. Drive cannot revoke one
 without that, and the file a delivery is revoking on is not always a file it may

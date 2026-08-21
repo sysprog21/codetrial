@@ -293,6 +293,7 @@ dependencies = [
  "jpeg-encoder",
  "livekit",
  "reqwest",
+ "ring",
  "rusqlite",
  "serde_json",
  "sha2",

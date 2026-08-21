@@ -337,6 +337,7 @@ fn web_router(
     let accounts = login.and_then(open_accounts);
     if let (Some(accounts), Some(recorder)) = (&accounts, &recorder) {
         spawn_recording_sweeper(accounts.clone(), recorder.clone());
+        spawn_delivery_worker(accounts.clone(), recorder.clone());
     }
     Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
@@ -620,6 +621,63 @@ fn spawn_recording_sweeper(accounts: Arc<Accounts>, recorder: crate::recording::
                 );
             }
             tokio::time::sleep(SWEEP_INTERVAL).await;
+        }
+    });
+}
+
+/// How often the delivery queue is asked whether anything is due.
+///
+/// Ten seconds, because the queue's own `run_after` is what schedules a retry
+/// and this only decides how late the first attempt can be. A recording that
+/// waits ten seconds for its upload to begin is a recording nobody noticed
+/// waiting.
+const DELIVERY_INTERVAL: Duration = Duration::from_secs(10);
+
+/// The upload that a finished recording still owes.
+///
+/// Separate from the sweeper, because they answer different questions: the
+/// sweeper looks for rows nothing is moving, and this moves them. Running them
+/// on one timer would tie the pace of deliveries to the pace of a scan.
+///
+/// A deployment whose credentials do not build a delivery client gets a warning
+/// and no worker rather than a panic in a router constructor. The binary does
+/// not reach that case: `codetrial web` and `codetrial serve` parse the key
+/// before they listen and refuse to start without one. It is reachable from
+/// this function, which is public and is what the tests build, and there the
+/// warning is the right answer.
+fn spawn_delivery_worker(accounts: Arc<Accounts>, recorder: crate::recording::Recorder) {
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        eprintln!("recording is configured but there is no runtime to deliver on");
+        return;
+    };
+    let clock = recorder.clock.clone();
+    let delivery = match crate::delivery::GoogleDelivery::new(
+        &recorder.config.service_account_json,
+        &recorder.config.gcs_bucket,
+        &recorder.config.drive_id,
+        Arc::new(move || clock.now()),
+    ) {
+        Ok(delivery) => Arc::new(delivery),
+        Err(error) => {
+            eprintln!("WARNING: recordings cannot be delivered: {error}");
+            return;
+        }
+    };
+    handle.spawn(async move {
+        loop {
+            let outcome = crate::recording::run_delivery_queue(
+                &accounts,
+                &recorder,
+                delivery.as_ref() as &dyn crate::recording::DeliveryProvider,
+            )
+            .await;
+            if outcome != crate::recording::DeliveryOutcome::default() {
+                eprintln!(
+                    "recording delivery delivered {} retrying {} failed {}",
+                    outcome.delivered, outcome.retrying, outcome.failed
+                );
+            }
+            tokio::time::sleep(DELIVERY_INTERVAL).await;
         }
     });
 }
@@ -3284,20 +3342,42 @@ async fn apply_webhook(
             if stopped.is_err() {
                 return false;
             }
-            let accounts = accounts.clone();
-            let clock = recorder.clock.clone();
-            let id = recording.id.clone();
-            let reason = failure.map(|failure| failure.as_str().to_string());
-            let moved = blocking(move || {
-                crate::recording::transition(
-                    &accounts,
-                    clock.as_ref(),
-                    &id,
-                    next,
-                    reason.as_deref(),
-                )
-            })
-            .await;
+            let moved = {
+                let accounts = accounts.clone();
+                let clock = recorder.clock.clone();
+                let id = recording.id.clone();
+                let reason = failure.map(|failure| failure.as_str().to_string());
+                blocking(move || {
+                    crate::recording::transition(
+                        &accounts,
+                        clock.as_ref(),
+                        &id,
+                        next,
+                        reason.as_deref(),
+                    )
+                })
+                .await
+            };
+
+            // Queued only when this call moved the row, and after the move
+            // rather than before it. A webhook LiveKit sent twice must not
+            // become two deliveries, and the queue's own `ON CONFLICT` is the
+            // second half of that rather than the first.
+            if next == RecordingState::Transferring
+                && let Ok(Some((_, true))) = &moved
+            {
+                let accounts = accounts.clone();
+                let id = recording.id.clone();
+                let now = recorder.clock.now();
+                if let Err(error) =
+                    blocking(move || crate::recording::enqueue_delivery(&accounts, &id, now)).await
+                {
+                    // Not fatal to the webhook: the row is `transferring` and
+                    // the sweeper will not lose it. It does mean nobody has
+                    // queued the delivery, which is worth a line.
+                    eprintln!("WARNING: could not queue a delivery: {error}");
+                }
+            }
 
             // After the transition, and only when it moved. A late
             // `EGRESS_FAILED` for a row that has already advanced is refused by

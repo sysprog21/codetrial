@@ -433,12 +433,20 @@ startup failure rather than a surprise when a candidate's interview ends. See
 [`docs/recording-contract.md`](docs/recording-contract.md) for what has to be
 provisioned first.
 
-The pipeline is still being built. Turning the switch on today records to the
-staging bucket and stops at `transferring`: nothing yet moves the file to the
-Shared Drive or shares it, so a completed recording holds the account's one
-active slot until the sweeper fails it fifteen minutes later. Leave the switch
-off until the transfer step lands. The keys are documented here because they
-have one owner and one meaning, not because the feature is finished.
+The pipeline now runs end to end in code: a finished recording is queued for
+delivery, uploaded to the Shared Drive, and shared with the candidate's verified
+address for twenty-four hours. What has not happened is a run against the real
+Google and LiveKit APIs, which needs the provisioning in
+[`docs/recording-contract.md`](docs/recording-contract.md) and credentials this
+checkout does not have. Until that acceptance run passes, treat the switch as
+unproven rather than finished: every failure mode here is somebody else's
+service, and a fake provider agreeing with this code says nothing about whether
+Drive does.
+
+The service account is checked at startup, not at the first delivery. The
+configuration layer checks its shape and the server parses the key itself before
+it listens, so a credential that cannot sign stops the deployment rather than
+producing a server that records interviews it can never hand over.
 
 Recording requires the GitHub OAuth app. A recording is delivered to the
 primary verified address GitHub returns for the signed-in account, so
@@ -493,6 +501,27 @@ cannot, because that would mean being recorded twice. The table is in
 [`docs/recording-contract.md`](docs/recording-contract.md), along with the
 structured audit lines, of which `recording_cleanup_failed` is the one an
 operator has to act on.
+
+Delivery is asynchronous, and that is the point: the webhook that ends a
+recording queues the upload and answers, rather than holding a request open for
+however long a few hundred megabytes take to reach Drive. The queue is one row
+per recording that still owes a delivery, claimed before any remote call, so two
+workers cannot both upload and leave one file in the Shared Drive with nothing
+naming it. Three attempts, at zero, one minute and five; after that the
+recording is `failed` with `drive_failed`, which names `retry_delivery` as its
+recovery.
+
+That recovery is an operator action, because the bytes are still in the staging
+bucket and only a person knows whether whatever broke Drive has been fixed:
+
+```sh
+sqlite3 codetrial.db "INSERT INTO delivery_queue
+  (recording_id, attempts, run_after, created_at, updated_at)
+  VALUES ('<recording_id>', 0, strftime('%s','now'), strftime('%s','now'), strftime('%s','now'))"
+```
+
+The worker reopens a `drive_failed` recording when it claims one, and reuses the
+Drive file the earlier attempt uploaded rather than making a second.
 
 A sweeper runs at startup and every minute. It retries a start that never
 reached the provider after one minute, then five, then fifteen, asking the
