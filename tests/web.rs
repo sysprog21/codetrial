@@ -683,7 +683,7 @@ async fn runtime_config_can_disable_compiled_language_runs() {
     assert_eq!(enabled.headers().get("cache-control").unwrap(), "no-store");
     assert_eq!(
         enabled.text().await.unwrap(),
-        "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = true;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"https://godbolt.org\";\nglobalThis.CODETRIAL_RECORDING_ENABLED = false;\nglobalThis.CODETRIAL_CONSENT_VERSION = \"2026-08-21\";\n"
+        "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = true;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"https://godbolt.org\";\nglobalThis.CODETRIAL_RECORDING_ENABLED = false;\nglobalThis.CODETRIAL_CONSENT_VERSION = \"2026-08-21\";\nglobalThis.CODETRIAL_REPLAY_VERSION = 1;\n"
     );
     enabled_server.abort();
 
@@ -698,7 +698,7 @@ async fn runtime_config_can_disable_compiled_language_runs() {
     assert_eq!(disabled.status(), 200);
     assert_eq!(
         disabled.text().await.unwrap(),
-        "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = false;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"\";\nglobalThis.CODETRIAL_RECORDING_ENABLED = false;\nglobalThis.CODETRIAL_CONSENT_VERSION = \"2026-08-21\";\n"
+        "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = false;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"\";\nglobalThis.CODETRIAL_RECORDING_ENABLED = false;\nglobalThis.CODETRIAL_CONSENT_VERSION = \"2026-08-21\";\nglobalThis.CODETRIAL_REPLAY_VERSION = 1;\n"
     );
     disabled_server.abort();
 

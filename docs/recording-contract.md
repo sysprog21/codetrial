@@ -686,6 +686,27 @@ so a producer from a later deploy does not stop a recording.
 | `transcript` | `{speaker, text}` | nothing here; the replay page renders it |
 | `lifecycle` | `{state}` | nothing here |
 
+The producers live in `web/interview.js`, one call site per kind, all of them
+through `recordReplay`: one answer to "is this server recording" and one place
+the replay stops when the server says it has heard enough. Events are batched to
+the server's own limit of thirty two and flushed every second, and a batch that
+fails is dropped rather than retried, because a queue that grew through an
+outage would deliver a burst of stale state on top of the newer state that had
+already arrived. A `413` or a `404` stops the producers for the rest of the
+interview: over quota and withdrawn consent both mean everything after this is
+refused.
+
+Cadence is where the per-interview budget goes. The editor rides the debounce
+the agent's `code_update` already uses; the transcript is one event per spoken
+turn rather than per chunk; the clock is restated every fifteen seconds, because
+every second would be twenty-seven hundred events for a number the viewer can
+read off the video; and the interviewer's state is sent on the change rather
+than on the participant event that happened to carry it.
+
+`CODETRIAL_REPLAY_VERSION` travels through `/runtime-config.js` for the same
+reason the consent version does: a second spelling of it in the page would have
+every event refused.
+
 The code panel is written with `textContent`. This is the candidate's own code
 rendered into a page a recorder screenshots sixty times a second, and markup in
 it would be markup in the recording.

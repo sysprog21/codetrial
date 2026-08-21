@@ -61,6 +61,11 @@ const MEET_PRESENTATION_KEY = "codetrial:meetPresentation";
 // record", and the wrong one would show a candidate no notice.
 const recordingEnabled = globalThis.CODETRIAL_RECORDING_ENABLED === true;
 const consentVersion = globalThis.CODETRIAL_CONSENT_VERSION || "";
+/// The envelope version the server accepts. It travels through the runtime
+/// config for the same reason the consent version does: two spellings of a
+/// version are one deploy away from disagreeing, and this one decides whether
+/// every event is refused.
+const replayVersion = globalThis.CODETRIAL_REPLAY_VERSION || 1;
 
 /// Whether the recording notice has been agreed to, or does not apply.
 function consentGiven() {
@@ -605,6 +610,16 @@ async function connect(preflight, presenting = false) {
     if (recordingEnabled && state.interviewId) {
       nodes.withdrawConsent.hidden = false;
       await startRecording();
+      // First event of the replay, so a template that joins late knows the
+      // interview was already running rather than inferring it from silence.
+      recordReplay("lifecycle", { state: "started" });
+      // The problem was rendered in the lobby, before this interview existed,
+      // so its heading was dropped. Without this the recording shows a blank
+      // title for the whole interview.
+      recordStage();
+      // The starter code, once, so a candidate who never types is not recorded
+      // beside an empty editor.
+      recordReplay("editor", { code: currentCode(), language: state.language });
     }
   } catch (error) {
     // Swallowed for the candidate, logged for everyone else. Offline practice
@@ -754,6 +769,11 @@ async function withdrawRecordingConsent() {
       method: "DELETE",
     });
     if (!response.ok) throw new Error("The server did not accept the request.");
+    // The replay stops here, not at the next refusal. The server will refuse
+    // it, so this changes nothing it can see; what it changes is that a
+    // candidate who has just said stop does not keep sending their editor and
+    // their words for another second while the answer comes back.
+    closeReplay();
     // "Requested", not "stopped". This route records the withdrawal; stopping
     // the provider and scheduling the deletion is the recording lifecycle's
     // work, and a button that reports a completed action it did not perform is
@@ -765,6 +785,88 @@ async function withdrawRecordingConsent() {
     nodes.withdrawConsent.disabled = false;
     setBanner("connection", "Could not stop the recording. Try again, or end the interview.");
   }
+}
+
+// The replay: what the candidate was looking at, sent to the server so the
+// recording template can render it and the replay page can play it back. The
+// video is the provider's; this is the part CodeTrial owns.
+//
+// Batched, because an event per keystroke is a request per keystroke. Thirty
+// two events and a second are both the server's limits, not guesses.
+const REPLAY_FLUSH_MS = 1000;
+const REPLAY_MAX_BATCH = 32;
+
+/// How often the clock and the problem heading are restated.
+///
+/// Every second would be twenty-seven hundred events in a forty-five minute
+/// interview, most of the per-interview budget spent on a number the viewer
+/// can read off the video anyway. Fifteen seconds is a clock that is never
+/// more than fifteen seconds stale in a replay nobody scrubs to the second.
+const REPLAY_STAGE_MS = 15000;
+
+let replayQueue = [];
+let replayTimer = null;
+let replayClosed = false;
+let replayStageAt = 0;
+let replayAvatarState = "";
+
+/// One event onto the queue.
+///
+/// Every producer goes through here, so there is one answer to "is this server
+/// recording", one place the envelope is written, and one place the replay
+/// stops when the server says it has heard enough.
+function recordReplay(kind, payload) {
+  if (!recordingEnabled || !state.interviewId || replayClosed) return;
+  replayQueue.push({ v: replayVersion, kind, at: Date.now(), payload });
+  if (replayQueue.length >= REPLAY_MAX_BATCH) {
+    void flushReplay();
+    return;
+  }
+  replayTimer ||= setTimeout(() => void flushReplay(), REPLAY_FLUSH_MS);
+}
+
+/// Stop producing, and forget what has not gone yet.
+///
+/// Called when the candidate withdraws consent and when the server says it has
+/// heard enough. The queue is dropped rather than flushed: these are events
+/// from before a decision that says they should not be stored.
+function closeReplay() {
+  replayClosed = true;
+  replayQueue = [];
+  clearTimeout(replayTimer);
+  replayTimer = null;
+}
+
+/// Send what is queued.
+///
+/// Dropped rather than retried on a failure. The events are a description of an
+/// interview that is still happening, and a queue that grew through an outage
+/// would deliver a burst of stale state after it, on top of the newer state
+/// that had already arrived.
+async function flushReplay() {
+  clearTimeout(replayTimer);
+  replayTimer = null;
+  if (!replayQueue.length || replayClosed) return;
+  const batch = replayQueue.splice(0, REPLAY_MAX_BATCH);
+  try {
+    const response = await fetch(`/api/interviews/${encodeURIComponent(state.interviewId)}/events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ events: batch }),
+    });
+    // Over quota, or an interview whose consent has been withdrawn. Both mean
+    // the server will refuse everything after this, and a producer that kept
+    // posting would spend the rest of the interview being told so.
+    if (response.status === 413 || response.status === 404) closeReplay();
+  } catch {
+    // Offline. The interview is what matters and it is still running.
+  }
+  if (replayQueue.length) replayTimer ||= setTimeout(() => void flushReplay(), REPLAY_FLUSH_MS);
+}
+
+/// The problem heading, as the recording shows it.
+function recordStage() {
+  recordReplay("stage", { title: problem.title, meta: nodes.meta.textContent });
 }
 
 /// Writes down what the candidate agreed to, and returns the interview id the
@@ -1291,6 +1393,9 @@ async function consumeTranscript(room, reader, participant) {
   if (text.trim()) {
     updateTranscriptSegment(id, speaker, text, final);
     updateCaptions(speaker, text);
+    // Once per turn, at the end of the stream, not once per chunk: a chunk is a
+    // few words and a turn is a sentence, and the replay is read as sentences.
+    recordReplay("transcript", { speaker, text: text.trim() });
   }
 }
 
@@ -1345,6 +1450,11 @@ async function toggleMicrophone() {
 function renderProblem() {
   nodes.title.textContent = problem.title;
   nodes.meta.textContent = `${problem.difficulty} · ${problem.topics.join(", ")}`;
+  // The heading the recording shows. Sent from here rather than assembled in
+  // the template, so the two pages name the problem the same way. This render
+  // happens in the lobby, before there is an interview to attach it to, which
+  // is why `connect` sends it again once there is one.
+  recordStage();
   nodes.problemPanel.innerHTML = `
     <div class="problem-detail">
       ${problem.statement.map((text) => `<p>${escapeHtml(text)}</p>`).join("")}
@@ -1642,6 +1752,10 @@ function tickTimer() {
   state.remaining = tick.remaining;
   nodes.timer.textContent = formatTime(tick.remaining);
   nodes.timer.classList.toggle("urgent", tick.urgent);
+  if (Date.now() - replayStageAt >= REPLAY_STAGE_MS) {
+    replayStageAt = Date.now();
+    recordReplay("stage", { remainingSeconds: tick.remaining });
+  }
   if (tick.warn) publish(topics.control, timeWarningPayload(tick.remaining));
   if (tick.expired) endInterview("time_up");
 }
@@ -1657,6 +1771,11 @@ async function runTests() {
   state.testStatus = finalRunnerStatus(summary, state.testStatus);
   renderResults(summary);
   publish(topics.tests, testPayload(summary));
+  recordReplay("tests", {
+    passed: summary.passed,
+    failed: Math.max(0, summary.total - summary.passed),
+    total: summary.total,
+  });
   if (!state.room) {
     addTranscript("you", "I ran the tests.", true);
     addTranscript("interviewer", summary.setupError ? "I could not run that yet. Check the setup error and keep going." : `${summary.passed}/${summary.total} tests passed. Explain what changed.`, true);
@@ -1700,11 +1819,19 @@ function flushPendingCodePublish() {
   clearTimeout(codePublishTimer);
   codePublishTimer = null;
   publish(topics.code, codeUpdatePayload(currentCode(), state.language, Date.now()));
+  // The same debounce the agent gets. An event per keystroke would be the
+  // whole per-interview budget spent on the first ten minutes of typing.
+  recordReplay("editor", { code: currentCode(), language: state.language });
 }
 
 function endInterview(reason) {
   if (state.phase !== "live") return;
   state.phase = "ending";
+  // Last event, and sent rather than queued: the page is about to stop being
+  // the kind of page that flushes timers, and an "ended" nobody sent leaves a
+  // replay that just stops.
+  recordReplay("lifecycle", { state: "ended", reason });
+  void flushReplay();
   // The end_interview payload carries the final buffer, so drop any debounced
   // code_update still in flight rather than racing it.
   clearTimeout(codePublishTimer);
@@ -1917,6 +2044,12 @@ function updateAgentState() {
   // `challenging` wait for src/agent.rs to publish lk.avatar.state; inventing
   // them here would be the avatar guessing at the interviewer's intent.
   avatar?.setExpression(value);
+  // On the change, not on the tick. This runs for every participant event, and
+  // an interviewer who stays in one state for a minute is one event, not sixty.
+  if (value !== replayAvatarState) {
+    replayAvatarState = value;
+    recordReplay("avatar", { state: value });
+  }
   // Only an agent that actually publishes its state may close the jaw. Muting
   // on the "listening" fallback is the same bug as muting on a missing agent
   // participant: an interviewer whose attribute never arrives, or arrives

@@ -1767,9 +1767,10 @@ async fn runtime_config_handler(State(state): State<AppState>) -> Response {
     // because the server is the side that validates it and two spellings of a
     // version are one deploy away from disagreeing.
     body.push_str(&format!(
-        "globalThis.CODETRIAL_RECORDING_ENABLED = {};\nglobalThis.CODETRIAL_CONSENT_VERSION = \"{}\";\n",
+        "globalThis.CODETRIAL_RECORDING_ENABLED = {};\nglobalThis.CODETRIAL_CONSENT_VERSION = \"{}\";\nglobalThis.CODETRIAL_REPLAY_VERSION = {};\n",
         state.config.recording.is_some(),
-        crate::recording::CONSENT_VERSION
+        crate::recording::CONSENT_VERSION,
+        crate::recording::REPLAY_VERSION
     ));
     (
         StatusCode::OK,
