@@ -2011,7 +2011,10 @@ fn room_and_provider(
     let provider = config.pool.select(counter);
 
     // The primary contributes no segment, so a single-provider deployment keeps
-    // the room names it already has.
+    // the room names it already has. Comparing exactly is sound only because
+    // `is_provider_id` reserves the word case-insensitively upstream, so no
+    // provider spelled `Primary` can reach this line. The asymmetry is
+    // load-bearing: do not "fix" one of the two comparisons on its own.
     let segment = provider
         .map(|provider| provider.id.as_str())
         .filter(|id| *id != crate::config::PRIMARY_PROVIDER_ID)

@@ -149,14 +149,25 @@ contents, so they are generated rather than hand-edited.
 To spread rooms over more than one LiveKit project, add
 `config/codetrial.env.<id>` per extra project, each with its own `LIVEKIT_URL`,
 `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` and optionally `GOOGLE_API_KEY`. The id
-is the part after the last dot and must be lowercase letters and digits: it
-appears in the room name (`interview-<id>-xxxxxxxx`), which is how
-`codetrial run-livekit ROOM` knows which project to join. Give both processes
-the same config directory, which is `config/` by default and otherwise the
-directory holding the `--config` file; the agent refuses a room naming a
-project it cannot see rather than joining the wrong one. A file that is
-incomplete or unreadable is reported and skipped, and never stops the primary
-project from serving.
+is the part after `codetrial.env.` and must be a GitHub username (1 to 39
+letters, digits, or single dashes; no leading, trailing or doubled dash, and
+not `primary` in any casing): it appears in the room name
+(`interview-<id>-xxxxxxxx`), which is how `codetrial run-livekit ROOM` knows
+which project to join. The id is matched case-sensitively, so on a
+case-insensitive filesystem `codetrial.env.Foo` and `codetrial.env.foo` are one
+file, not two projects. Give both processes the same config directory, which is
+`config/` by default and otherwise the directory holding the `--config` file;
+the agent refuses a room naming a project it cannot see rather than joining the
+wrong one. A file that is incomplete or unreadable is reported and skipped, and
+never stops the primary project from serving.
+
+Adding the first id that contains a dash is the one change worth draining old
+processes for. A binary from before dashes were allowed splits the room name at
+the first dash rather than the last, so it reads `interview-eu-west-xxxxxxxx` as
+project `eu`: it refuses the room, as above, unless a project really is named
+`eu`, in which case the candidate and the agent land in different projects. Room
+names minted before the change are unaffected, because the random suffix holds
+no dash and there was only ever one dash to split on.
 
 ### 4. GitHub handle
 

@@ -351,21 +351,62 @@ fn a_file_that_looks_like_a_provider_but_cannot_be_one_says_so() {
                 "codetrial.env.eu",
                 &provider_file("wss://eu.example", "k", "s"),
             ),
-            // Uppercase and dashes cannot survive a room name. The name has no
-            // lowercase twin on purpose: a case-insensitive filesystem would
-            // otherwise fold the two fixtures into one file.
+            // GitHub-style names, including uppercase letters and dashes, are
+            // valid provider ids. Ids are matched exactly, so no name here may
+            // gain a case twin: a case-insensitive filesystem would fold the
+            // two fixtures into one file and quietly test half of this.
             (
                 "codetrial.env.ASIA",
                 &provider_file("wss://upper.example", "k", "s"),
+            ),
+            // The ends of the length range, which is where an off-by-one lives.
+            (
+                "codetrial.env.a",
+                &provider_file("wss://short.example", "k", "s"),
+            ),
+            (
+                &format!("codetrial.env.{}", "b".repeat(39)),
+                &provider_file("wss://long.example", "k", "s"),
+            ),
+            (
+                &format!("codetrial.env.{}", "c".repeat(40)),
+                &provider_file("wss://toolong.example", "k", "s"),
             ),
             (
                 "codetrial.env.eu-west",
                 &provider_file("wss://dashed.example", "k", "s"),
             ),
+            (
+                "codetrial.env.bochengC",
+                &provider_file("wss://bocheng.example", "k", "s"),
+            ),
             // Taken by the credentials from the environment.
             (
                 "codetrial.env.primary",
                 &provider_file("wss://clash.example", "k", "s"),
+            ),
+            // A dash may only sit between two alphanumerics.
+            (
+                "codetrial.env.bad--name",
+                &provider_file("wss://bad.example", "k", "s"),
+            ),
+            (
+                "codetrial.env.-eu",
+                &provider_file("wss://lead.example", "k", "s"),
+            ),
+            (
+                "codetrial.env.eu-",
+                &provider_file("wss://trail.example", "k", "s"),
+            ),
+            (
+                "codetrial.env.-",
+                &provider_file("wss://dash.example", "k", "s"),
+            ),
+            // Outside the alphabet entirely. Without this the predicate could
+            // accept anything and the rest of these fixtures would not notice.
+            (
+                "codetrial.env.eu_west",
+                &provider_file("wss://under.example", "k", "s"),
             ),
             // Expected to be here, and not a provider.
             (
@@ -387,20 +428,53 @@ fn a_file_that_looks_like_a_provider_but_cannot_be_one_says_so() {
 
     assert_eq!(
         providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
-        vec!["eu"]
+        vec!["ASIA", "a", &"b".repeat(39), "bochengC", "eu", "eu-west"]
     );
-    for named in ["ASIA", "eu-west", "primary", "link"] {
+    for named in [
+        "primary",
+        "bad--name",
+        "-eu",
+        "eu-",
+        "eu_west",
+        &"c".repeat(40),
+        "link",
+    ] {
         assert!(
             warnings.iter().any(|warning| warning.contains(named)),
             "no warning names {named}: {warnings:?}"
         );
     }
-    // `local` and `example` belong here, so they are not noise.
-    assert_eq!(warnings.len(), 4, "{warnings:?}");
+
+    // `local` and `example` belong here, so they are not noise. The bare `-` is
+    // counted here but not named above: asserting a warning contains "-" would
+    // pass on any of them, since the fixture path itself has dashes.
+    assert_eq!(warnings.len(), 8, "{warnings:?}");
     assert!(
         !warnings.iter().any(|warning| warning.contains("root:")),
         "a symlink must not be read: {warnings:?}"
     );
+}
+
+/// Needs a directory of its own: on a case-insensitive filesystem
+/// `codetrial.env.PRIMARY` and `codetrial.env.primary` are one file, so putting
+/// both in the fixture above would silently test one of them.
+#[test]
+fn the_primary_id_is_reserved_whatever_the_casing() {
+    for spelling in ["PRIMARY", "Primary", "pRiMaRy"] {
+        let dir = provider_fixture(
+            &format!("reserved-{spelling}"),
+            &[(
+                &format!("codetrial.env.{spelling}"),
+                &provider_file("wss://clash.example", "k", "s"),
+            )],
+        );
+        let (providers, warnings) = codetrial::config::discover_providers(&dir, false);
+        assert!(providers.is_empty(), "{spelling} was loaded: {providers:?}");
+        assert!(
+            warnings.iter().any(|warning| warning.contains(spelling)),
+            "no warning names {spelling}: {warnings:?}"
+        );
+    }
 }
 
 #[test]
@@ -447,6 +521,22 @@ fn a_room_name_names_the_provider_that_signed_its_token() {
     assert_eq!(
         provider_id_from_room("interview-eu-a1b2c3d4", "interview"),
         Some("eu")
+    );
+    assert_eq!(
+        provider_id_from_room("interview-bochengC-a1b2c3d4", "interview"),
+        Some("bochengC")
+    );
+    assert_eq!(
+        provider_id_from_room("interview-eu-west-a1b2c3d4", "interview"),
+        Some("eu-west")
+    );
+
+    // The split is at the LAST dash, not the second. This is the assert that
+    // fails if someone reverts `rsplit_once` to `split_once`, which parses this
+    // as `a` and routes the agent to a different project than the candidate.
+    assert_eq!(
+        provider_id_from_room("interview-a-b-c-d1234567", "interview"),
+        Some("a-b-c")
     );
 
     // The primary contributes no segment, so single-provider deployments keep

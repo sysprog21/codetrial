@@ -135,26 +135,42 @@ impl ProviderPool {
     }
 }
 
-/// The provider segment of `<prefix>-<id>-<suffix>`. `<prefix>-<suffix>`, which
-/// is what a single-provider deployment mints, has none.
+/// The provider segment of `<prefix>-<id>-<suffix>`. Split at the final dash:
+/// GitHub-style provider ids may themselves contain dashes. The
+/// `<prefix>-<suffix>` a single-provider deployment mints has no segment.
+///
+/// Every name the pre-dash version of this could mint still parses to the same
+/// id, because the suffix alphabet holds no dash and so there was only ever one
+/// dash to split on. The one window where the two disagree is a mixed-version
+/// deployment that gains a dashed id: an old binary reads
+/// `<prefix>-eu-west-<suffix>` as `eu`. It then finds no such project and
+/// refuses the room, which is the safe answer, unless a project really is named
+/// `eu`. Drain the old binaries before adding a dashed id.
 pub fn provider_id_from_room<'a>(room_name: &'a str, room_prefix: &str) -> Option<&'a str> {
     room_name
         .strip_prefix(room_prefix)?
         .strip_prefix('-')?
-        .split_once('-')
+        .rsplit_once('-')
         .map(|(id, _)| id)
 }
 
-/// Provider ids end up inside room names, so they get the same alphabet as the
-/// room suffix and no separator can appear in one. `primary` is taken by the
-/// credentials from the environment.
+/// Provider ids are GitHub usernames, because a provider file normally belongs
+/// to its operator. The shape comes from `accounts` rather than being spelled
+/// out again: two definitions of "GitHub username" in one crate is one that
+/// drifts.
+///
+/// Stricter than that one in two ways, because this is a name an operator
+/// chooses for a file rather than a name a candidate reports about themselves.
+/// Consecutive dashes are refused, matching what GitHub accepts today, and
+/// nothing legacy has to keep working. `primary` is taken by the credentials
+/// from the environment, and reserved in any casing so no file can shadow it.
+///
+/// Ids are otherwise matched exactly, so a case-insensitive filesystem holds
+/// `Foo` or `foo`, never both.
 fn is_provider_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 16
-        && id
-            .chars()
-            .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
-        && id != PRIMARY_PROVIDER_ID
+    crate::accounts::valid_github_login(id)
+        && !id.contains("--")
+        && !id.eq_ignore_ascii_case(PRIMARY_PROVIDER_ID)
 }
 
 /// `local` is the operator's own primary config and `example` is the
@@ -192,7 +208,7 @@ pub fn discover_providers(dir: &Path, production: bool) -> (Vec<Provider>, Vec<S
         }
         if !is_provider_id(id) {
             warnings.push(format!(
-                "{}: skipped, a provider id must be 1 to 16 lowercase letters or digits and cannot be {PRIMARY_PROVIDER_ID}",
+                "{}: skipped, a provider id must be a GitHub username (1 to 39 letters or digits, single dashes between them) and cannot be {PRIMARY_PROVIDER_ID} in any casing",
                 entry.path().display()
             ));
             continue;
