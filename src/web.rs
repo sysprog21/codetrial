@@ -1084,6 +1084,7 @@ async fn logout_handler(State(state): State<AppState>, request: Request<Body>) -
 /// copy in each because the two must not drift: whatever makes one of them
 /// refuse a request has to make the other refuse it too, and report data is the
 /// last place to discover that only one endpoint got a fix.
+#[allow(clippy::result_large_err)] // Responses are immediately returned by HTTP handlers.
 async fn signed_in_owner(
     state: &AppState,
     headers: &header::HeaderMap,
@@ -2278,6 +2279,7 @@ fn recording_requires_consent() -> Response {
 /// `Ok(None)` where recording is off, which is the state every deployment is in
 /// until an operator provisions it: there is no consent to check because there
 /// is nothing to consent to.
+#[allow(clippy::result_large_err)] // Responses are immediately returned by HTTP handlers.
 async fn checked_consent(
     state: &AppState,
     accounts: &Arc<Accounts>,
@@ -2331,6 +2333,7 @@ async fn checked_consent(
 /// second window has a room they may join and a recording that must not begin,
 /// which is the recording lifecycle's problem: the authoritative check runs
 /// immediately before the provider call.
+#[allow(clippy::result_large_err)] // Responses are immediately returned by HTTP handlers.
 async fn claim_consent(
     accounts: &Arc<Accounts>,
     user_id: i64,
