@@ -443,6 +443,14 @@ fn content_security_policy(config: &WebServerConfig) -> String {
     for provider in &config.pool.providers {
         connect.extend(livekit_origins(&provider.url));
     }
+
+    // The recording template is served from this origin and joins the room the
+    // recording project owns. Where that project is named separately it may not
+    // be one of the pool's, and a template that cannot open its own signaling
+    // socket records a page that never joined anything.
+    if let Some(livekit) = config.recording.as_ref().and_then(|it| it.livekit.as_ref()) {
+        connect.extend(livekit_origins(&livekit.url));
+    }
     if !config.production {
         // The browser checks stand up a Compiler Explorer mock and a LiveKit
         // server on loopback ports this process never learns about, so a local

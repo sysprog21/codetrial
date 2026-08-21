@@ -31,7 +31,7 @@ export function firstPartyScripts() {
 /// cannot find, so a renamed function fails the test that pins it instead of
 /// silently asserting against an empty string.
 export function functionBody(source, name) {
-  const start = source.search(new RegExp(`^(?:async )?function ${name}\\(`, "m"));
+  const start = source.search(new RegExp(`^(?:export )?(?:async )?function ${name}\\(`, "m"));
   if (start === -1) throw new Error(`no function named ${name}`);
   const end = source.indexOf("\n}\n", start);
   return source.slice(start, end === -1 ? source.length : end);

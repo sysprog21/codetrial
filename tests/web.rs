@@ -4477,6 +4477,54 @@ async fn a_refused_interview_leaves_its_consent_unspent() {
     remove_database(path);
 }
 
+/// The template Egress loads, and the policy it loads under.
+///
+/// The page is served by the same static fallback as the rest of `web/`, so
+/// what is worth pinning is that the path task 1 fixed is reachable and that
+/// the policy permits the socket the template has to open. A blocked signaling
+/// socket is a recording of a page that never joined a room, and nothing in the
+/// pipeline can tell that from an interview nobody spoke in.
+#[tokio::test]
+async fn the_recording_template_is_reachable_under_a_policy_that_permits_its_room() {
+    let mut config = WebServerConfig {
+        web_dir: Path::new("web").to_path_buf(),
+        ..web_config()
+    };
+    let mut recording = recording_config();
+    recording.livekit = Some(codetrial::config::RecordingLivekit {
+        url: "wss://recording.livekit.cloud".to_string(),
+        api_key: "key".to_string(),
+        api_secret: "secret".to_string(),
+    });
+    config.recording = Some(recording);
+    let (base, server) = spawn_web_server(config).await;
+
+    let template = reqwest::get(format!("{base}{}", codetrial::recording::TEMPLATE_PATH))
+        .await
+        .unwrap();
+    assert_eq!(template.status(), 200);
+    let policy = template
+        .headers()
+        .get("content-security-policy")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let body = template.text().await.unwrap();
+    assert!(body.contains(r#"id="recording-ready""#), "{body}");
+
+    // Both schemes on the recording project's host, for the same reason the
+    // pool's are: the SDK opens the socket at `wss://` and then calls the same
+    // host over HTTPS.
+    assert!(policy.contains("wss://recording.livekit.cloud"), "{policy}");
+    assert!(
+        policy.contains("https://recording.livekit.cloud"),
+        "{policy}"
+    );
+
+    server.abort();
+}
+
 /// The replay is the account's own, and only the account's.
 ///
 /// The route is the one place an interview id arrives from a browser, so the

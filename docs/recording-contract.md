@@ -131,6 +131,47 @@ and carries no query string of its own. Egress appends `url`, `token` and
 The join token is minted by Egress, not by CodeTrial, so its lifetime is the
 provider's to set.
 
+The page is `web/recording/index.html` with `web/recording/recording.js` and
+`web/recording/recording.css` beside it, served by the same static fallback as
+the rest of `web/`. It is not the candidate's page and it is not signed in.
+
+The candidate is found by elimination: not the interviewer, which is `isAgent`
+in `web/lib.js` and nothing restated here; not the recorder, which is a hidden
+participant or one whose identity begins `EG_`; and publishing a track whose
+source is `Camera`, because a screen share is video too and is not a face. Every
+subscription goes through that one selector, so "the candidate" cannot come to
+mean "whoever published video first".
+
+An observer cannot be mistaken for the candidate: observer tokens carry
+`canPublish: false`, so an observer publishes no camera for the rule to pick.
+
+A track that goes away is detached, which clears its element rather than leaving
+a candidate who left recorded as a frozen last frame for the rest of the
+interview. The elements the SDK minted go with it; the camera element in the
+layout does not, because a rejoining candidate needs something to attach to.
+
+Egress records what the page plays, so every audio track in the room except the
+recorder's is attached to an element. The camera element is muted, so the
+candidate's voice arrives once rather than twice. Audio that is subscribed and
+never attached is audio the file does not have, which reads back as an interview
+where the candidate answers questions nobody can hear.
+
+`#recording-ready` carries `data-ready`, `false` until the room is joined and
+the candidate's camera is attached, and it moves once. A frame recorded before
+that is a frame of an empty layout, and nothing downstream can tell the
+difference. At the same moment the page logs
+`START_RECORDING` to the console, and it logs `END_RECORDING` when the room
+disconnects, so a finished interview does not pay for a black tail until the
+provider's timeout. Those two exact strings on the console are the signal:
+Egress watches Chrome's console output, there is no injected callback, and a
+page that waited for one would never start the recording it was loaded for.
+
+The policy the template loads under names the recording project's LiveKit
+origin, both schemes, for the same reason the pool's projects are named: the SDK
+opens the signaling socket at `wss://` and then calls the same host over HTTPS.
+A blocked socket records a page that never joined a room, which looks exactly
+like an interview nobody spoke in.
+
 ## Webhook authentication
 
 LiveKit signs the request body, not the request line. The full rule, taken from

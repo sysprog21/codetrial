@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>CodeTrial - Recording</title>
+    <link rel="stylesheet" href="/recording/recording.css">
+    <script src="/vendor/livekit-client.js"></script>
+    <script type="module" src="/recording/recording.js"></script>
+  </head>
+  <body>
+    <!-- The recorder's viewport, not a responsive page. Egress renders at a
+         fixed size and the output is a video file, so this layout is built for
+         one shape and does not reflow. -->
+    <main id="stage" class="stage">
+      <section class="work">
+        <header class="work-header">
+          <!-- Empty until the replay bootstrap fills them. A placeholder here
+               is a frame of the recording that says something untrue: "00:00"
+               reads as a timer at zero rather than as a panel with no data. -->
+          <h1 id="problem-title"></h1>
+          <p id="problem-meta"></p>
+        </header>
+        <pre id="code" class="code" aria-label="Candidate code"></pre>
+        <section id="tests" class="tests" aria-label="Test results"></section>
+      </section>
+
+      <aside class="people">
+        <div id="timer" class="timer"></div>
+        <!-- `playsinline` and `muted`: the recorder composites the room's audio
+             itself, so a video element that also played it would double every
+             word the candidate said. -->
+        <video id="candidate-video" class="candidate" autoplay playsinline muted></video>
+        <div id="jim-panel" class="jim">
+          <canvas id="jim-canvas" class="jim-canvas"></canvas>
+          <p id="jim-state" class="jim-state">Waiting for the interviewer</p>
+        </div>
+      </aside>
+    </main>
+
+    <!-- The one thing the fixture and a person watching a stuck render both
+         read. `data-ready` flips to "true" once the room is joined and the
+         candidate's camera is on screen, and never before: a frame recorded
+         ahead of that is a frame of an empty layout. -->
+    <div id="recording-ready" data-ready="false" hidden></div>
+  </body>
+</html>

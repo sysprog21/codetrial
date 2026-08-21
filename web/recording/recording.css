@@ -1,0 +1,124 @@
+/* The recorder's page, sized for the Egress viewport rather than for a person.
+   No media queries and no responsive units: the output is a video file of one
+   fixed shape, and a layout that reflowed would only ever reflow wrong. */
+
+:root {
+  color-scheme: dark;
+  --ink: #e8ecf1;
+  --muted: #9aa7b4;
+  --panel: #161b22;
+  --edge: #232b34;
+  --pass: #3fb950;
+  --fail: #f85149;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #0d1117;
+  color: var(--ink);
+  font: 16px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.stage {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  gap: 16px;
+  height: 100vh;
+  padding: 16px;
+}
+
+.work {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 12px;
+  min-width: 0;
+}
+
+.work-header h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+#problem-meta {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.code {
+  margin: 0;
+  padding: 12px;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  white-space: pre;
+  font-size: 15px;
+}
+
+.tests {
+  min-height: 84px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.tests .pass {
+  color: var(--pass);
+}
+
+.tests .fail {
+  color: var(--fail);
+}
+
+.people {
+  display: grid;
+  grid-template-rows: auto 202px 1fr;
+  gap: 12px;
+}
+
+.timer {
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  font-size: 24px;
+  text-align: center;
+}
+
+.candidate {
+  width: 100%;
+  height: 100%;
+  background: #000;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.jim {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.jim-canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.jim-state {
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
