@@ -295,3 +295,24 @@ No face or voice data is collected for avatar control. The analyser reads Jim's
 synthesized speech, never the candidate's microphone, and no candidate emotion
 is inferred or persisted. The model and every animation stay in static browser
 assets. Render work is capped at one canvas.
+
+## Accessibility and the render loop
+
+The canvas is `role="img"` with the label "Jim, the AI interviewer". It carried
+`aria-hidden="true"` while it had no name, which was the right answer then: an
+unlabeled canvas announced to a screen reader is worse than a hidden one. A
+picture of a person whose whole useful content is "this is the interviewer"
+needs one sentence, not a live region.
+
+The render loop stops scheduling frames while the document is hidden and starts
+again on `visibilitychange`. Browsers already throttle `requestAnimationFrame`
+in a background tab, so what this buys is the analyser read and the humanoid
+update stopping too. There is one door into the loop, `resumeAvatar`, which
+refuses to open a second one and refuses to open any while the model is still
+loading: `createAvatar` returns before the model has arrived, and a visibility
+change during that window would otherwise start a loop that poses nothing.
+
+The media contract is unchanged by any of this. No first-party script captures a
+canvas stream, the only tracks published are the candidate's microphone and
+camera, and the recording template renders the same avatar from the same
+vendored bundle rather than subscribing to a second one.

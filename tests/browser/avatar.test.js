@@ -414,6 +414,66 @@ test("avatar interrupt on destroy stops the pose stream", async () => {
   assert.equal(model.poses.length, 1);
 });
 
+test("avatar canvas has an accessible name", () => {
+  const renderer = read("web/avatar/vrm.js");
+  // `img` with a label, not `aria-hidden`. Hiding it was the right answer for
+  // an unlabeled canvas, and the wrong one once there is something to say: a
+  // screen reader announcing "Jim, the AI interviewer" once is the whole useful
+  // content of a picture of a person.
+  assert.match(renderer, /canvas\.setAttribute\("role", "img"\)/);
+  assert.match(renderer, /canvas\.setAttribute\("aria-label", "Jim, the AI interviewer"\)/);
+  assert.ok(
+    !/canvas\.setAttribute\("aria-hidden"/.test(renderer),
+    "a labeled canvas that is also hidden announces nothing",
+  );
+});
+
+test("avatar stops rendering while the page is hidden", () => {
+  const script = read("web/interview.js");
+  const pump = functionBody(script, "pumpAvatar");
+  assert.match(
+    pump,
+    /if \(document\.hidden\) \{\s*avatarFrame = null;\s*return;\s*\}/,
+    "a hidden page stops asking for frames rather than asking and returning early",
+  );
+  const resume = functionBody(script, "resumeAvatar");
+  assert.match(resume, /avatarFrame !== null/, "and does not start a second loop");
+  assert.match(
+    resume,
+    /avatar\.state\(\) !== "ready"/,
+    "nor one that poses nothing while the model is still loading",
+  );
+  assert.match(
+    script,
+    /window\.__codetrialAvatarFrames = \(\) => avatar\?\.frames\(\) \?\? 0;\s*\n[\s\S]{0,300}?resumeAvatar\(\);/,
+    "the loop starts through the same door the visibility change uses",
+  );
+  assert.match(script, /addEventListener\("visibilitychange", resumeAvatar\)/);
+});
+
+test("avatar publishes no track", () => {
+  // The avatar is rendered locally in every page that shows one, and that is
+  // the media contract: no canvas stream is published to the room, so no
+  // recording route, no bandwidth, and no second copy of Jim to keep in sync.
+  for (const name of firstPartyScripts()) {
+    const source = read(`web/${name}`);
+    // A canvas becomes a track exactly one way, and this repo does it nowhere.
+    assert.ok(
+      !/captureStream\(/.test(source),
+      `web/${name} captures a canvas stream, which is the first half of publishing one`,
+    );
+    // What is published is a device: the candidate's microphone and camera,
+    // named at the call. Anything else is a track this page invented.
+    for (const call of captures(source, /publishTrack\([^)]*\{([^}]*)\}/g)) {
+      assert.match(
+        call,
+        /source\.(Microphone|Camera)/,
+        `web/${name} publishes something that is not a device`,
+      );
+    }
+  }
+});
+
 test("avatar reduced-motion keeps the mouth and drops the decoration", async () => {
   const { avatar, model } = await readyAvatar({ reducedMotion: true });
   avatar.setSpeaking(true);

@@ -1162,12 +1162,25 @@ function startAvatar() {
     // Read by the avatar browser check, which has no other way to tell a
     // running render loop from a canvas that was created once and abandoned.
     window.__codetrialAvatarFrames = () => avatar?.frames() ?? 0;
-    pumpAvatar();
+    // Through `resumeAvatar`, not straight into the loop. A tab that became
+    // visible while the model was still loading has already started one, and
+    // two loops is two analyser reads and two poses a frame.
+    resumeAvatar();
   });
 }
 
 function pumpAvatar(at) {
   if (!avatar) return;
+  // A hidden document stops asking for frames rather than asking and returning
+  // early. Browsers already throttle `requestAnimationFrame` in a background
+  // tab, so what this buys is small and it is not nothing: the analyser read
+  // and the humanoid update stop too, and `resumeAvatar` below is what starts
+  // them again. Written as "stop scheduling" rather than "skip a frame"
+  // because a loop that keeps scheduling is a loop that is still running.
+  if (document.hidden) {
+    avatarFrame = null;
+    return;
+  }
   avatarFrame = requestAnimationFrame(pumpAvatar);
   // Hidden by the CSS breakpoint, which the candidate can cross at any time by
   // narrowing the window or docking devtools. startAvatar only samples this
@@ -1187,6 +1200,20 @@ function pumpAvatar(at) {
   // took to reach us.
   avatar.frame(at ?? performance.now());
 }
+
+/// Starts the render loop again after the tab comes back.
+///
+/// One listener for the life of the page, added beside the loop rather than
+/// inside it: a listener added per frame is sixty listeners a second.
+function resumeAvatar() {
+  // `state()` and not just `avatar`: `createAvatar` returns before the model
+  // has loaded, so a visibility change during the load would otherwise start a
+  // loop that poses nothing sixty times a second.
+  if (!avatar || avatar.state() !== "ready" || document.hidden || avatarFrame !== null) return;
+  pumpAvatar();
+}
+
+document.addEventListener("visibilitychange", resumeAvatar);
 
 /// Jim's own track, never the candidate's. `createMediaElementSource` would be
 /// the obvious call and is the wrong one: it returns silence for a

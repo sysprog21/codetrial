@@ -333,6 +333,17 @@ a neutral panel saying Jim is present by voice. The renderer is imported only
 after the model URL answers, so a checkout with no model never downloads the
 bundle at all.
 
+The canvas carries `role="img"` and the label "Jim, the AI interviewer", which
+is the whole useful content of a picture of a person; it used to be
+`aria-hidden`, which was right while it had no name and wrong once it had one.
+The render loop stops asking for frames while the document is hidden and starts
+again on `visibilitychange`, so a backgrounded tab is not reading an analyser
+and posing a humanoid rig sixty times a second.
+
+The recording template renders the same avatar from the same vendored bundle,
+driven by the same interviewer audio. There is no second Jim and no second way
+of drawing him.
+
 The mouth is driven by an analyser on Jim's own audio track. The candidate's
 microphone is never observed, no face or voice data is collected for avatar
 control, and no candidate emotion is inferred or persisted. `prefers-reduced-motion:

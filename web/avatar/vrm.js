@@ -51,10 +51,13 @@ const ARM_REST_ROTATION_Z = 1.2;
 export async function loadVrm({ mount, url = MODEL_URL }) {
   const canvas = mount.ownerDocument.createElement("canvas");
   canvas.className = "jim-avatar-canvas";
-  // A canvas is a graphic with no text alternative; task 4 gives it a label and
-  // the reduced-motion behavior. Until then it is decorative, and announcing an
-  // unlabeled canvas to a screen reader is worse than hiding it.
-  canvas.setAttribute("aria-hidden", "true");
+  // A canvas is a graphic with no text alternative, so it gets one. `img` and
+  // not `application`: what is on it is a picture of the interviewer, and a
+  // screen reader announcing "Jim, the interviewer" once is the whole useful
+  // content. It used to be `aria-hidden`, which was the right answer for an
+  // unlabeled canvas and the wrong one for a labeled one.
+  canvas.setAttribute("role", "img");
+  canvas.setAttribute("aria-label", "Jim, the AI interviewer");
 
   const renderer = new WebGLRenderer({ canvas, alpha: true, antialias: true });
   renderer.setPixelRatio(Math.min(mount.ownerDocument.defaultView?.devicePixelRatio || 1, 2));
