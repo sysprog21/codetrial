@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
+use ::livekit::DisconnectReason;
 use ::livekit::ParticipantKind;
 use ::livekit::data_stream::api::StreamTextOptions;
 use ::livekit::options::TrackPublishOptions;
@@ -338,6 +339,29 @@ pub async fn run_room(
                                 "interview ended by the browser: room={room_name} topic={topic}"
                             );
                             return Ok(());
+                        }
+                    }
+
+                    // The server's own word for why the agent is going away.
+                    // Without it the only trace is the event channel closing a
+                    // moment later, which says a disconnect happened and
+                    // nothing about whose fault it was: a duplicate identity, a
+                    // deleted room and a signal drop all look identical from
+                    // there, and they need three different fixes.
+                    //
+                    // `DuplicateIdentity` is the one worth naming outright. The
+                    // agent identity is derived from the room name, so a second
+                    // agent process on the same room is not a near-miss, it is
+                    // the same string, and the server evicts whichever joined
+                    // first. `is_duplicate_agent` cannot see that case: it
+                    // matches on the identity being different.
+                    RoomEvent::Disconnected { reason } => {
+                        if reason == DisconnectReason::DuplicateIdentity {
+                            eprintln!(
+                                "another agent joined room={room_name} as {agent_identity} and took the session; this one is a second agent process on the same room"
+                            );
+                        } else {
+                            eprintln!("disconnected from room={room_name}: {reason:?}");
                         }
                     }
                     RoomEvent::ParticipantConnected(participant)
@@ -945,7 +969,22 @@ async fn candidate_metadata(
             {
                 return Ok(Some(candidate_pair(&participant)));
             }
-            Ok(Some(other)) => deferred.push(other),
+            Ok(Some(other)) => {
+                // The wait has its own event loop, so a disconnect here never
+                // reaches the one in `run_room`. Passing it on in silence is
+                // how this ends as the bare "room closed before a candidate
+                // joined" below, which names the symptom and not one of the
+                // several unrelated causes: a duplicate identity, a deleted
+                // room and a dropped signal socket all arrive here looking
+                // identical, and they need three different fixes.
+                if let RoomEvent::Disconnected { reason } = &other {
+                    eprintln!(
+                        "disconnected from room={} while waiting for a candidate: {reason:?}",
+                        room.name()
+                    );
+                }
+                deferred.push(other);
+            }
             Ok(None) => return Err("room closed before a candidate joined".into()),
         }
     }
