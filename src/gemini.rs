@@ -343,12 +343,15 @@ fn live_setup_message(boot: &RuntimeBootstrap<'_>) -> Value {
             "realtimeInputConfig": {
                 "activityHandling": "START_OF_ACTIVITY_INTERRUPTS",
 
-                // Was absent, which left the API's own endpointing window in
-                // force and unmeasurable. Naming it is what makes the wait
-                // between a candidate stopping and the reply starting into
-                // something that can be tuned rather than just observed.
+                // Both halves of the endpointing decision are named here.
+                // Either one left absent puts the API's own value in force,
+                // where it cannot be measured or tuned, and the two fail in
+                // opposite directions: the silence window decides how long to
+                // wait before answering, and the start sensitivity decides how
+                // readily a reply already in flight is abandoned.
                 "automaticActivityDetection": {
-                    "silenceDurationMs": boot.silence_ms
+                    "silenceDurationMs": boot.silence_ms,
+                    "startOfSpeechSensitivity": boot.start_sensitivity
                 }
             },
             "contextWindowCompression": {
@@ -631,6 +634,14 @@ mod tests {
             setup["realtimeInputConfig"]["automaticActivityDetection"]["silenceDurationMs"],
             json!(boot.silence_ms),
             "the configured silence window must be sent, not defaulted"
+        );
+
+        // Absent, Gemini reverts to interrupting eagerly, and the only symptom
+        // is an interviewer cut off mid-sentence with no line saying why.
+        assert_eq!(
+            setup["realtimeInputConfig"]["automaticActivityDetection"]["startOfSpeechSensitivity"],
+            json!(boot.start_sensitivity),
+            "the configured start sensitivity must be sent, not defaulted"
         );
         assert_eq!(
             setup["contextWindowCompression"]["slidingWindow"],

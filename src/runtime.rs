@@ -24,6 +24,7 @@ pub struct RuntimeBootstrap<'a> {
     pub report_model: &'a str,
     pub voice: &'a str,
     pub silence_ms: u32,
+    pub start_sensitivity: &'a str,
     pub instructions: String,
     pub greeting: String,
 }
@@ -45,6 +46,7 @@ pub fn bootstrap<'a>(
         report_model: &config.gemini_report_model,
         voice: &config.gemini_voice,
         silence_ms: config.gemini_silence_ms,
+        start_sensitivity: &config.gemini_start_sensitivity,
         instructions: build_instructions(problem, duration_min),
         greeting: greeting(),
     }

@@ -17,6 +17,23 @@ pub const DEFAULT_GEMINI_LIVE_MODEL: &str = "gemini-3.1-flash-live-preview";
 /// short interrupts people while they are still talking.
 pub const DEFAULT_GEMINI_SILENCE_MS: u32 = 700;
 
+/// How readily Gemini decides the candidate has started speaking, and so how
+/// readily it abandons a reply it is part way through delivering.
+///
+/// `LOW` because the interviewer is usually the one talking, and the cost of
+/// the two mistakes is not symmetric. Missing a real interruption for a moment
+/// is a candidate waiting a beat to be heard. Taking a cough, a keystroke or
+/// the interviewer's own voice returning through an open speaker as an
+/// interruption throws away a reply already generated: one measured session
+/// discarded 5.9 seconds of speech mid-sentence, twice as often as it finished
+/// a turn.
+///
+/// A knob rather than a constant for the same reason the silence window is one.
+/// The right value is a property of the room and the hardware, and a candidate
+/// on headphones can afford to be interrupted more eagerly than one on a laptop
+/// speaker.
+pub const DEFAULT_GEMINI_START_SENSITIVITY: &str = "START_SENSITIVITY_LOW";
+
 /// The clamp exists for a typo, not for an API limit. A previous version of
 /// this said "Gemini accepts at most two seconds" and capped at 2000, which is
 /// wrong: setup was measured accepting 2001, 5000 and 30000 against the live
@@ -439,6 +456,7 @@ pub struct AgentConfig {
     pub gemini_report_model: String,
     pub gemini_voice: String,
     pub gemini_silence_ms: u32,
+    pub gemini_start_sensitivity: String,
     pub room_prefix: String,
     pub default_duration_min: u32,
     pub web_dir: String,
@@ -582,6 +600,7 @@ pub fn load_from_pairs(
         gemini_voice: optional(&values, "GEMINI_VOICE", DEFAULT_GEMINI_VOICE),
         gemini_silence_ms: optional_u32(&values, "GEMINI_SILENCE_MS", DEFAULT_GEMINI_SILENCE_MS)
             .min(MAX_GEMINI_SILENCE_MS),
+        gemini_start_sensitivity: start_sensitivity_or_default(&values),
         room_prefix: optional(&values, "CODETRIAL_ROOM_PREFIX", DEFAULT_ROOM_PREFIX),
         default_duration_min: optional_u32(&values, "CODETRIAL_DURATION_MIN", DEFAULT_DURATION_MIN),
         web_dir: optional(&values, "CODETRIAL_WEB_DIR", DEFAULT_WEB_DIR),
@@ -614,6 +633,34 @@ fn optional(values: &BTreeMap<String, String>, key: &str, default: &str) -> Stri
         .get(key)
         .filter(|value| !value.trim().is_empty())
         .map_or_else(|| default.to_string(), |value| value.trim().to_string())
+}
+
+/// The two values the API names, and nothing else.
+///
+/// A typo here is worse than a rejected config: the field is one Gemini ignores
+/// when it cannot read it, so `START_SENSITIVITY_LOWW` would silently restore
+/// the eager default this exists to move away from, and the only evidence would
+/// be an interviewer that gets cut off again for no stated reason. The short
+/// spellings are accepted because the long ones are shouted API constants and
+/// nobody types them twice.
+fn start_sensitivity_or_default(values: &BTreeMap<String, String>) -> String {
+    match optional(
+        values,
+        "GEMINI_START_SENSITIVITY",
+        DEFAULT_GEMINI_START_SENSITIVITY,
+    )
+    .to_ascii_uppercase()
+    .as_str()
+    {
+        "LOW" | "START_SENSITIVITY_LOW" => "START_SENSITIVITY_LOW".to_string(),
+        "HIGH" | "START_SENSITIVITY_HIGH" => "START_SENSITIVITY_HIGH".to_string(),
+        other => {
+            eprintln!(
+                "GEMINI_START_SENSITIVITY: {other} is not LOW or HIGH; using {DEFAULT_GEMINI_START_SENSITIVITY}"
+            );
+            DEFAULT_GEMINI_START_SENSITIVITY.to_string()
+        }
+    }
 }
 
 fn report_model_or_default(values: &BTreeMap<String, String>) -> String {

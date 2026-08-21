@@ -1,8 +1,8 @@
 use codetrial::config::{
     DEFAULT_COMPILER_EXPLORER_ENABLED, DEFAULT_DURATION_MIN,
     DEFAULT_GEMINI_CANDIDATE_VIDEO_ENABLED, DEFAULT_GEMINI_LIVE_MODEL, DEFAULT_GEMINI_REPORT_MODEL,
-    DEFAULT_GEMINI_SILENCE_MS, DEFAULT_GEMINI_VOICE, DEFAULT_ROOM_PREFIX, DEFAULT_WEB_ADDR,
-    DEFAULT_WEB_DIR, MAX_GEMINI_SILENCE_MS, load_from_pairs,
+    DEFAULT_GEMINI_SILENCE_MS, DEFAULT_GEMINI_START_SENSITIVITY, DEFAULT_GEMINI_VOICE,
+    DEFAULT_ROOM_PREFIX, DEFAULT_WEB_ADDR, DEFAULT_WEB_DIR, MAX_GEMINI_SILENCE_MS, load_from_pairs,
 };
 use serde_json::Value;
 
@@ -73,6 +73,12 @@ fn config_defaults_optional_names_and_web_runtime_fields() {
     assert_eq!(config.gemini_live_model, DEFAULT_GEMINI_LIVE_MODEL);
     assert_eq!(config.gemini_report_model, DEFAULT_GEMINI_REPORT_MODEL);
     assert_eq!(config.gemini_voice, DEFAULT_GEMINI_VOICE);
+
+    // The literal, not the constant. Which value the default holds is the
+    // thing under test, and comparing it against itself passes however it is
+    // set. `LOW` is the cautious one: `HIGH` is what cuts the interviewer off
+    // mid-sentence, and flipping the default there has to fail here.
+    assert_eq!(config.gemini_start_sensitivity, "START_SENSITIVITY_LOW");
     assert_eq!(config.room_prefix, DEFAULT_ROOM_PREFIX);
     assert_eq!(config.default_duration_min, DEFAULT_DURATION_MIN);
     assert_eq!(config.web_dir, DEFAULT_WEB_DIR);
@@ -605,6 +611,46 @@ fn a_pool_says_how_many_projects_it_actually_spreads_over() {
     }]);
     for secret in ["APIsentinelkey", "sentinelsecretvalue", "googlesentinelkey"] {
         assert!(!summary.contains(secret), "{secret} leaked into: {summary}");
+    }
+}
+
+/// A value Gemini cannot read is a field Gemini ignores, which silently
+/// restores the eager default and shows up only as an interviewer being cut
+/// off. So anything unrecognized lands on the safe value, loudly.
+#[test]
+fn an_unreadable_start_sensitivity_falls_back_rather_than_reaching_the_wire() {
+    let load = |value: &str| {
+        load_from_pairs([
+            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+            ("LIVEKIT_API_KEY", "key"),
+            ("LIVEKIT_API_SECRET", "secret"),
+            ("GOOGLE_API_KEY", "google"),
+            ("GEMINI_START_SENSITIVITY", value),
+        ])
+        .expect("complete config should load")
+        .gemini_start_sensitivity
+    };
+
+    // Both spellings of each, because the long ones are shouted API constants.
+    for low in [
+        "LOW",
+        "low",
+        "START_SENSITIVITY_LOW",
+        "start_sensitivity_low",
+    ] {
+        assert_eq!(load(low), "START_SENSITIVITY_LOW", "{low}");
+    }
+    for high in ["HIGH", "high", "START_SENSITIVITY_HIGH"] {
+        assert_eq!(load(high), "START_SENSITIVITY_HIGH", "{high}");
+    }
+
+    // The typo that would otherwise reach the wire and be dropped there.
+    for bad in ["START_SENSITIVITY_LOWW", "medium", "0", "  "] {
+        assert_eq!(
+            load(bad),
+            DEFAULT_GEMINI_START_SENSITIVITY,
+            "{bad} must not reach the wire"
+        );
     }
 }
 
