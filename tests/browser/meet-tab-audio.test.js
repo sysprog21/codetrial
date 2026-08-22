@@ -64,10 +64,12 @@ test("meet-mode dom ids", () => {
   assert.equal([...list.matchAll(/<li>/g)].length, 5, "the mode documents exactly five steps");
 });
 
-// A bare "no getUserMedia" is false: the media preflight is mandatory and calls
-// it once. So pin which FILES may capture, across every first-party script and
-// not just this one. Matching the whole file rather than line by line catches a
-// call wrapped across lines; the extra alternatives catch the obvious dodges.
+// A bare "no getUserMedia" is false: the media preflight is mandatory and has
+// to capture. So pin which FILES may capture, across every first-party script
+// and not just this one. Matching the whole file rather than line by line
+// catches a call wrapped across lines; the extra alternatives catch the obvious
+// dodges. One site, because the preflight asks per device through a single
+// request path: a second site means a new capture, not a second device.
 test("meet-mode getusermedia allowlist", () => {
   const capture = /getUserMedia\s*\(|\[\s*["']getUserMedia["']\s*\]|getUserMedia\s*\.\s*(?:call|apply|bind)/g;
   const sites = firstPartyScripts.flatMap((name) =>
@@ -208,3 +210,16 @@ test("meet presentation releases the camera without accusing the candidate", () 
   );
 });
 
+// Both device requests failing used to schedule a retry each, and both retries
+// called back into the same function, so a denied prompt doubled the number of
+// in-flight getUserMedia calls every two seconds until the tab ran out of memory.
+test("the media preflight retries through a single shared timer", () => {
+  const source = read("interview.js");
+  const scheduled = [...source.matchAll(/setTimeout\(startUserMedia/g)];
+  assert.equal(scheduled.length, 0,
+    "startUserMedia must be scheduled through retryUserMedia, which collapses concurrent retries");
+  assert.match(source, /mediaRetry \?\?= setTimeout/,
+    "the shared retry timer must not be replaced by a fresh one while it is pending");
+  assert.match(source, /clearTimeout\(mediaRetry\)/,
+    "finishing the preflight must cancel the pending retry");
+});

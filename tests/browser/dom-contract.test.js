@@ -268,6 +268,26 @@ test("output confirmation is required but not blocked by tone timing", () => {
   assert.doesNotMatch(script, /nodes\.audioJoin\.focus\(\);\s*finish\(\)/);
 });
 
+test("a replacement preflight camera gets a fresh face check", () => {
+  const script = read("interview.js");
+  // Dropping the dead track, forgetting its face check, and asking for a
+  // replacement are one step: any two of the three leave the panel judging a
+  // camera that is gone.
+  assert.match(script, /userStream\.removeTrack\(camera\);\s*resetFaceCheck\(\);\s*retryUserMedia\(\);/s);
+  // The reset replaces the whole record instead of clearing fields one by one,
+  // so a field added later cannot be missed by a reset written before it.
+  assert.match(script, /function resetFaceCheck\(\)[\s\S]*faceCheck = \{[^}]*generation: faceCheck\.generation \+ 1[^}]*\}/,
+    "resetFaceCheck must replace the record, not clear a subset of it");
+  assert.match(script, /function resetFaceCheck\(\)[\s\S]*cameraIntegrityVideo\.srcObject = null/,
+    "the replaced camera's frames must stop reaching the detector");
+  // startFaceCheck awaits three times, and the camera can be replaced across
+  // any of them, so every resumption has to re-check that this run still owns
+  // the check rather than testing it once at the top.
+  const stale = [...script.matchAll(/\bstale\(\)/g)];
+  assert.equal(stale.length, 3,
+    "a stale detector must not publish a verdict for the replacement camera");
+});
+
 test("runtime config can withdraw compiled language test runs", async () => {
   const previous = globalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL;
   globalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = "";
