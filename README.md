@@ -16,20 +16,20 @@ LiveKit tokens, and runs the interviewer agent.
 ## How it works
 
 ```
-┌────────────────────────────┐       WebRTC         ┌─────────────────────┐
-│ Browser (static, no build) │  mic + camera ─────▶ │ LiveKit Cloud       │
-│  · editor + syntax colors  │                      │ (SFU)               │
-│  · problem panel, timer    │                      └─────┬───────────────┘
-│  · test runners            │  data channel              │
-│  · report + history        │  code_update / control /   │
-└────────────┬───────────────┘  test_results / report     ▼
-             │
-             │ /api/*                ┌─────────────────────┐
-             ▼                       │ Rust agent          │
-┌────────────────────────────┐       │ (LiveKit runner)    │
-│ Rust web server            │       │  Gemini Live   ◀────┤ voice, barge-in,
-│  · token minting           │       │  Gemini Flash  ◀────┤ vision, scoring
-│  · GitHub handle           │       └─────────────────────┘
+┌────────────────────────────┐ WebRTC: mic + camera ┌─────────────────────┐
+│ Browser (static, no build) ├─────────────────────▶│ LiveKit Cloud       │
+│  · editor + syntax colors  ├─────────────────────▶│ (SFU)               │
+│  · problem panel, timer    │  data channel        └─────┬───────────────┘
+│  · test runners            │  code_update, control,     │
+│  · report + history        │  test_results, report      │
+└────────────┬───────────────┘                            ▼
+             │                            ┌──────────────────────────────────┐
+             │ /api/*                     │ Rust agent (LiveKit runner)      │
+             ▼                            │  · Gemini Live: voice, barge-in  │
+┌────────────────────────────┐            │  · Gemini Flash: vision, scoring │
+│ Rust web server            │            └──────────────────────────────────┘
+│  · token minting           │
+│  · GitHub handle           │
 │  · SQLite report history   │
 └────────────────────────────┘
 ```
