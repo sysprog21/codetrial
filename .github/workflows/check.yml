@@ -29,9 +29,22 @@ jobs:
     # giving up, and cargo builds the LiveKit SDK from source. Both are minutes,
     # neither is an hour: the default six-hour ceiling only ever gets reached by
     # something wedged.
-    timeout-minutes: 30
+    #
+    # 45 rather than 30 since the mutation step landed. Its steady state is
+    # small -- measured at 16s build plus 23s test per mutant against a warm
+    # target/, so the seven-mutant diff that motivated it took four and a half
+    # minutes -- but the first run after a cargo-mutants version bump builds the
+    # tool from source, which is minutes on its own. A prebuilt release binary
+    # would remove that, at the cost of a download to pin and verify the way
+    # scripts/fetch-vendor.sh does.
+    timeout-minutes: 45
     steps:
+      # Full history, because the mutation step below diffs against the base
+      # branch and a shallow clone has no merge base to diff from. 52 commits
+      # and 26 MB: the fetch does not show up next to the cargo build.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Install native build dependency
         run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev
@@ -112,6 +125,48 @@ jobs:
 
       - name: Run gates
         run: ./scripts/test.sh
+
+      # A tool rather than a dependency, so it gets its own cache key. Sharing
+      # the cargo cache above would mean a lockfile bump throwing away a build
+      # of something the lockfile does not describe. `cargo install` is a no-op
+      # when the pinned version is already on the path, so the cache hit path
+      # costs nothing.
+      - name: Cache cargo-mutants
+        if: github.event_name == 'pull_request'
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin/cargo-mutants
+          key: cargo-mutants-27.1.0-${{ runner.os }}-${{ steps.rust.outputs.id }}
+
+      - name: Install cargo-mutants
+        if: github.event_name == 'pull_request'
+        run: cargo install cargo-mutants --locked --version 27.1.0
+
+      # `cargo test` proves the tests pass. This proves they can fail. The gap
+      # it closes is not hypothetical: the CODE_SETTLE gate in livekit.rs
+      # shipped with its whole predicate revertible to a constant and every Rust
+      # test still green, because the one test naming the constant had been
+      # edited to step around it rather than exercise it.
+      #
+      # Scoped to the diff, not the crate. The crate is 1840 mutants and hours
+      # of runner time, and a mutant surviving in code this branch never touched
+      # is somebody else's gap reported at the worst possible moment. Scoped
+      # this way the cost tracks the change: the diff that motivated this
+      # produced seven mutants, three of them on the predicate in question, and
+      # one of those three found a boundary the new test had only bracketed.
+      #
+      # `--in-place` because cargo-mutants otherwise copies the tree and builds
+      # it from cold, discarding the target/ that the cache and the gates above
+      # just paid for. The runner is disposable, so a dirtied tree costs nothing.
+      #
+      # Pull requests only. A push to main has already merged; the question this
+      # asks is what a change failed to test, and that is worth answering while
+      # the change can still be edited.
+      - name: Mutation-test the diff
+        if: github.event_name == 'pull_request'
+        run: |
+          git diff "origin/${{ github.base_ref }}...HEAD" -- '*.rs' >"$RUNNER_TEMP/pr.diff"
+          cargo mutants --in-place --in-diff "$RUNNER_TEMP/pr.diff"
 
       # Its own step, not part of `cargo test`. It drives a real browser through
       # the offline interview and is hermetic now, with the Compiler Explorer
