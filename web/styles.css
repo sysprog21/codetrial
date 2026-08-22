@@ -649,7 +649,7 @@ p {
 #editor,
 #editor-highlight {
   position: absolute;
-  inset: 0;
+  inset: 0 0 0 3.25rem;
   margin: 0;
   border: 0;
   padding: 1rem;
@@ -657,8 +657,9 @@ p {
   font-size: 0.875rem;
   line-height: 1.5;
   tab-size: 4;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
+  /* Not pre-wrap: the gutter numbers logical lines, so a wrapped line would
+     put every number below it against the wrong row. Long lines scroll. */
+  white-space: pre;
   overflow: auto;
 }
 
@@ -668,13 +669,40 @@ p {
   overflow: hidden;
 }
 
+#editor-lines {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3.25rem;
+  margin: 0;
+  padding: 1rem 0.5rem;
+  overflow: hidden;
+  color: var(--muted);
+  background: #181816;
+  border-right: 1px solid var(--hairline);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  text-align: right;
+  user-select: none;
+}
+
 #editor {
   resize: none;
   outline: 0;
+  /* The textarea is the only one of the three layers that scrolls; the other
+     two are driven from its scrollTop. A classic, space-consuming scrollbar
+     would shrink its content box below theirs, so its scroll range would run
+     past what they can follow and the painted text would sit a line above the
+     caret near the end of a long file. Wheel, keys, and the caret still scroll. */
+  scrollbar-width: none;
   background: transparent;
   /* Transparent glyphs: the overlay supplies the visible, colored ones. */
   color: transparent;
   caret-color: #f4f4f0;
+}
+
+#editor::-webkit-scrollbar {
+  display: none;
 }
 
 #editor::selection {

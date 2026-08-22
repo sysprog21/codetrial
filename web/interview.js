@@ -8,6 +8,7 @@ import {
   sustainedPeak,
 } from "./audio-check.js";
 import { highlight } from "./highlight.js";
+import { indentSelection } from "./editor.js";
 import {
   createTranscriptView,
   finalRunnerStatus,
@@ -155,6 +156,7 @@ const nodes = {
   recordingState: document.querySelector("#recording-state"),
   editor: document.querySelector("#editor"),
   editorHighlight: document.querySelector("#editor-highlight"),
+  editorLines: document.querySelector("#editor-lines"),
   compileDisclosure: document.querySelector(".compile-disclosure"),
   run: document.querySelector("#run-tests"),
   resultsLabel: document.querySelector("#results-label"),
@@ -259,6 +261,33 @@ function renderRuntimeConfig() {
     : "C, C++ and Java test runs are disabled by this server.";
 }
 
+// Assigning `value` wipes the native undo stack, and a candidate who indents
+// once has then lost their whole editing history. Route the change through the
+// browser's editing command instead, over just the span that actually changed.
+function applyIndent(next) {
+  const editor = nodes.editor;
+  const previous = editor.value;
+  if (next.value === previous) {
+    editor.setSelectionRange(next.start, next.end);
+    return;
+  }
+  let head = 0;
+  while (previous[head] === next.value[head]) head += 1;
+  let tail = 0;
+  while (tail < Math.min(previous.length, next.value.length) - head
+    && previous[previous.length - 1 - tail] === next.value[next.value.length - 1 - tail]) tail += 1;
+  const inserted = next.value.slice(head, next.value.length - tail);
+  editor.setSelectionRange(head, previous.length - tail);
+  const rewritten = inserted
+    ? document.execCommand?.("insertText", false, inserted)
+    : document.execCommand?.("delete");
+  if (!rewritten) {
+    editor.value = next.value;
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  editor.setSelectionRange(next.start, next.end);
+}
+
 function bindEvents() {
   nodes.problemTab.addEventListener("click", () => selectTab("problem"));
   nodes.transcriptTab.addEventListener("click", () => selectTab("transcript"));
@@ -295,6 +324,26 @@ function bindEvents() {
   nodes.editor.addEventListener("scroll", () => {
     nodes.editorHighlight.scrollTop = nodes.editor.scrollTop;
     nodes.editorHighlight.scrollLeft = nodes.editor.scrollLeft;
+    nodes.editorLines.scrollTop = nodes.editor.scrollTop;
+  });
+  // Tab indents, so it cannot also move focus. Escape arms the next Tab to do
+  // that instead, or a candidate driving the page from the keyboard is stuck
+  // in the textarea with no way out.
+  let tabLeavesEditor = false;
+  nodes.editor.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      tabLeavesEditor = true;
+      return;
+    }
+    // A modifier's own keydown must not disarm it. Shift fires one of its own
+    // before Tab does, so without this Escape then Shift+Tab outdents instead
+    // of moving focus backwards, and reverse tab order has no way out at all.
+    if (["Shift", "Control", "Alt", "Meta"].includes(event.key)) return;
+    const indents = event.key === "Tab" && !tabLeavesEditor;
+    tabLeavesEditor = false;
+    if (!indents) return;
+    event.preventDefault();
+    applyIndent(indentSelection(nodes.editor.value, nodes.editor.selectionStart, nodes.editor.selectionEnd, event.shiftKey));
   });
   nodes.editor.addEventListener("input", () => {
     state.codeByLanguage[state.language] = nodes.editor.value;
@@ -2095,6 +2144,7 @@ function setAgentStateLabel(label, ready = false) {
 
 function paintEditor() {
   nodes.editorHighlight.firstElementChild.innerHTML = highlight(currentCode(), state.language);
+  nodes.editorLines.textContent = Array.from({ length: currentCode().split("\n").length }, (_, index) => index + 1).join("\n");
 }
 
 function currentCode() {
