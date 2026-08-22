@@ -132,6 +132,7 @@ const state = {
   integrityAnalysisDetail: "not_configured",
   // Distinguishes "the interviewer has not arrived" from "the interviewer left".
   sawAgent: false,
+  agentIdentity: null,
   // Set once the room is joined and never cleared. Offline practice may score
   // itself; a real interview may not be scored by the browser.
   joinedRoom: false,
@@ -1235,7 +1236,7 @@ async function receiveReport(room, payload) {
 // them play the same track into the shared tab, audibly doubled, while
 // setSinkId only ever reaches the newest.
 function playRemoteAudio(track, participant) {
-  if (track.kind !== "audio" || typeof track.attach !== "function") return;
+  if (track.kind !== "audio" || typeof track.attach !== "function" || !isCurrentAgent(participant)) return;
   const element = jimAudio ?? document.createElement("audio");
   track.attach(element);
   element.autoplay = true;
@@ -1551,6 +1552,7 @@ async function consumeTranscript(room, reader, participant) {
   const attrs = reader.info?.attributes || {};
   const id = attrs["lk.segment_id"] || reader.info?.id || randomId();
   const speaker = participant?.identity === room.localParticipant.identity ? "you" : "interviewer";
+  if (speaker === "interviewer" && !isCurrentAgent(participant)) return;
   const final = attrs["lk.transcription_final"] === "true";
   let text = "";
   try {
@@ -2210,7 +2212,8 @@ async function publishIntegrityEvent(input) {
 
 function updateAgentState() {
   const participants = [...(state.room?.remoteParticipants?.values?.() || [])];
-  const agent = participants.find(isAgent);
+  const agent = participants.find((participant) => participant.identity === state.agentIdentity)
+    || (!state.agentIdentity && participants.find(isAgent));
   if (!agent) {
     setAgentStateLabel("Waiting", false);
     // "Waiting" is honest but useless on its own: it looks identical whether
@@ -2241,6 +2244,7 @@ function updateAgentState() {
   // rather than to blank: the interviewer returning is not evidence about the
   // camera or the network.
   state.sawAgent = true;
+  state.agentIdentity ||= agent.identity;
   setBanner("interviewer", "");
   // The published attribute and the label are two different questions. The pill
   // has to say something even when the attribute is missing, so it falls back;
@@ -2265,6 +2269,12 @@ function updateAgentState() {
   // stale, would talk through the whole interview with his mouth shut. Audio is
   // the signal that cannot lie, and silence closes the mouth on its own.
   if (published) avatar?.setSpeaking(published === "speaking");
+}
+
+function isCurrentAgent(participant) {
+  if (!isAgent(participant)) return false;
+  if (!state.agentIdentity) state.agentIdentity = participant.identity;
+  return participant.identity === state.agentIdentity;
 }
 
 function setAgentStateLabel(label, ready = false) {
