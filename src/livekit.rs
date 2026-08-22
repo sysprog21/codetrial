@@ -97,6 +97,9 @@ const WRAP_UP_WAIT: Duration = Duration::from_secs(8);
 /// is watching a spinner, so this is the point where waiting stops being worth
 /// more than a fallback report.
 const REPORT_TIMEOUT: Duration = Duration::from_secs(45);
+/// A candidate who has just typed is still working, even if their speech has
+/// paused. Give them a beat before a periodic review tries to take the floor.
+const CODE_SETTLE: Duration = Duration::from_secs(10);
 
 /// Whether the candidate is in the room, and since when they have not been.
 ///
@@ -287,7 +290,7 @@ pub async fn run_room(
                     close_room(&room).await;
                     return Ok(());
                 }
-                if let Some(prompt) = turn.activity.watch_prompt(&turn.state) {
+                if let Some(prompt) = turn.activity.watch_prompt(&turn.state, Instant::now()) {
                     gemini.send_text(&prompt).await?;
                     turn.activity.mark_speaking();
                 }
@@ -602,11 +605,15 @@ impl RuntimeActivity {
         }
     }
 
-    fn watch_prompt(&mut self, state: &RuntimeState) -> Option<String> {
-        let now = Instant::now();
+    /// `now` is passed in rather than sampled here, like every other method on
+    /// this struct. Sampling internally makes the boundaries untestable: a test
+    /// can set `last_code_change` to exactly `CODE_SETTLE` ago, but the clock
+    /// read inside would already have moved past it, so a half-open window and
+    /// a closed one behave identically to every test that can be written.
+    fn watch_prompt(&mut self, state: &RuntimeState, now: Instant) -> Option<String> {
         let decision = timing_decision(&TimingInput {
             agent_busy: self.floor != Floor::Listening,
-            user_talking: false,
+            user_talking: now.duration_since(self.last_code_change) < CODE_SETTLE,
             idle_seconds: now
                 .duration_since(
                     self.last_user_speech
@@ -2365,12 +2372,12 @@ mod tests {
         activity.last_agent_speech = now - Duration::from_secs(16);
         activity.last_nudge = now - Duration::from_secs(31);
 
-        let prompt = activity.watch_prompt(&state).unwrap();
+        let prompt = activity.watch_prompt(&state, now).unwrap();
 
         assert!(prompt.contains("silent AND has not typed"));
-        assert!(activity.watch_prompt(&state).is_none());
+        assert!(activity.watch_prompt(&state, now).is_none());
 
-        activity.last_code_change = now;
+        activity.last_code_change = now - CODE_SETTLE - Duration::from_secs(1);
         activity.last_user_speech = now - Duration::from_secs(5);
         activity.last_agent_speech = now - Duration::from_secs(5);
         activity.last_review = now - Duration::from_secs(31);
@@ -2379,11 +2386,46 @@ mod tests {
             .code
             .push_str("\nseen = {}\nfor i, n in enumerate(nums):\n    pass");
 
-        let prompt = activity.watch_prompt(&state).unwrap();
+        let prompt = activity.watch_prompt(&state, now).unwrap();
 
         assert!(prompt.contains("Periodic editor snapshot"));
         assert_eq!(activity.code_at_last_review, state.code);
-        assert!(activity.watch_prompt(&state).is_none());
+        assert!(activity.watch_prompt(&state, now).is_none());
+    }
+
+    /// The point of CODE_SETTLE. Without it the whole gate can be reverted to a
+    /// bare `false` and every other test still passes: the periodic review is
+    /// the only caller that can fire while the candidate is mid-edit.
+    #[test]
+    fn recent_typing_holds_off_the_periodic_review() {
+        let now = Instant::now();
+        let mut activity = RuntimeActivity::new(now);
+        let mut state = RuntimeState {
+            code: "def two_sum(nums, target):\n    return []".to_string(),
+            ..RuntimeState::default()
+        };
+        // Everything a proactive review needs is satisfied except the settle.
+        activity.last_user_speech = now - Duration::from_secs(5);
+        activity.last_agent_speech = now - Duration::from_secs(5);
+        activity.last_review = now - Duration::from_secs(31);
+        activity.last_interjection = now - Duration::from_secs(46);
+        state
+            .code
+            .push_str("\nseen = {}\nfor i, n in enumerate(nums):\n    pass");
+
+        activity.last_code_change = now - CODE_SETTLE + Duration::from_secs(1);
+        assert!(
+            activity.watch_prompt(&state, now).is_none(),
+            "a candidate who typed a second ago is still working; the review must wait"
+        );
+
+        // Exactly CODE_SETTLE has settled: the window is half-open. Without
+        // this the boundary is only bracketed, and `<` reads the same as `<=`.
+        activity.last_code_change = now - CODE_SETTLE;
+        let prompt = activity
+            .watch_prompt(&state, now)
+            .expect("an edit exactly CODE_SETTLE old has settled; the review may take the floor");
+        assert!(prompt.contains("Periodic editor snapshot"));
     }
 
     #[test]

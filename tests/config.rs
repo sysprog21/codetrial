@@ -74,9 +74,9 @@ fn config_defaults_optional_names_and_web_runtime_fields() {
     assert_eq!(config.gemini_report_model, DEFAULT_GEMINI_REPORT_MODEL);
     assert_eq!(config.gemini_voice, DEFAULT_GEMINI_VOICE);
 
-    // The literal, not the constant. Which value the default holds is the
-    // thing under test, and comparing it against itself passes however it is
-    // set. `LOW` is the cautious one: `HIGH` is what cuts the interviewer off
+    // The literal, not the constant. Which value the default holds is the thing
+    // under test, and comparing it against itself passes however it is set.
+    // `LOW` is the cautious one: `HIGH` is what cuts the interviewer off
     // mid-sentence, and flipping the default there has to fail here.
     assert_eq!(config.gemini_start_sensitivity, "START_SENSITIVITY_LOW");
     assert_eq!(config.room_prefix, DEFAULT_ROOM_PREFIX);
