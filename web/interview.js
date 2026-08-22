@@ -54,6 +54,8 @@ let recordingPoll = null;
 // The agent reads the editor once per 2s watch tick, so publishing every
 // keystroke sends ~10x more full-buffer packets than anyone consumes.
 const CODE_PUBLISH_DEBOUNCE_MS = 300;
+const CAPTION_TICK_MS = 300;
+const CAPTION_CHARS_PER_TICK = 8;
 const AUDIO_OUTPUT_KEY = "codetrial:audioOutputId";
 const MEET_PRESENTATION_KEY = "codetrial:meetPresentation";
 
@@ -1558,14 +1560,14 @@ async function consumeTranscript(room, reader, participant) {
       // Not `text.trim()`: this runs per chunk and would copy the whole turn so
       // far just to ask whether it is empty. Non-empty is enough here, and the
       // post-loop write below does the trim once.
-      if (text) updateCaptions(speaker, text);
+      if (text) updateCaptions(speaker, text, id);
     }
   } catch {
     // Keep whatever arrived before the stream broke.
   }
   if (text.trim()) {
     updateTranscriptSegment(id, speaker, text, final);
-    updateCaptions(speaker, text);
+    updateCaptions(speaker, text, id);
     // Once per turn, at the end of the stream, not once per chunk: a chunk is a
     // few words and a turn is a sentence, and the replay is read as sentences.
     recordReplay("transcript", { speaker, text: text.trim() });
@@ -1580,12 +1582,43 @@ const CAPTION_MAX_CHARS = 160;
 // a silent pause clears the editor's corner.
 const CAPTION_IDLE_HIDE_MS = 12000;
 let captionIdleTimer = null;
+let interviewerCaption = { id: null, text: "", shown: 0, timer: null };
 
-function updateCaptions(speaker, text) {
+function updateCaptions(speaker, text, id = null) {
   if (!nodes.captionsText) return;
+  if (speaker === "interviewer") {
+    if (interviewerCaption.id !== id) {
+      clearTimeout(interviewerCaption.timer);
+      interviewerCaption = { id, text: "", shown: 0, timer: null };
+    }
+    // The longest, not the latest. Every interim publish carries the whole turn
+    // so far on a stream of its own, so one that lands out of order is a
+    // shorter copy of what is already on screen, and taking it would rewind the
+    // reveal to a few characters and replay the line.
+    if (text.length > interviewerCaption.text.length) interviewerCaption.text = text;
+    if (!interviewerCaption.timer) paceInterviewerCaption();
+    return;
+  }
+  // Stop pacing Jim: the next tick would otherwise repaint his line over the
+  // candidate's. A later chunk of the same segment restarts it through the
+  // `!interviewerCaption.timer` check below.
+  clearTimeout(interviewerCaption.timer);
+  interviewerCaption.timer = null;
   const clipped = captionWindow(text, CAPTION_MAX_CHARS);
   nodes.captionsText.textContent = `[${speaker === "you" ? "You" : "Jim"}]: ${clipped}`;
   showCaptions();
+}
+
+function paceInterviewerCaption() {
+  const caption = interviewerCaption;
+  caption.shown = Math.min(caption.text.length, caption.shown + CAPTION_CHARS_PER_TICK);
+  nodes.captionsText.textContent = `[Jim]: ${captionWindow(caption.text.slice(0, caption.shown), CAPTION_MAX_CHARS)}`;
+  showCaptions();
+  if (caption.shown < caption.text.length) {
+    caption.timer = setTimeout(paceInterviewerCaption, CAPTION_TICK_MS);
+  } else {
+    caption.timer = null;
+  }
 }
 
 /// Captions are a live subtitle, not a log: the transcript tab already keeps
