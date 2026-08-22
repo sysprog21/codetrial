@@ -43,6 +43,19 @@ start.addEventListener("click", async (event) => {
   window.location.href = `/interview?problem=${encodeURIComponent(problem)}&duration=${duration}`;
 });
 
+// Returning from the media preflight can restore this page from the browser's
+// back/forward cache after the start button was deliberately disabled.
+window.addEventListener("pageshow", (event) => {
+  // Only the restore. A normal load fires this too, after `load`, which is
+  // late enough to re-enable a button the candidate already pressed and hand
+  // them a second navigation; and it would run before `loadAccount` has
+  // answered, so the gate it restores is the placeholder rather than the
+  // session's.
+  if (!event.persisted) return;
+  start.disabled = false;
+  setStartGate(signInFirst);
+});
+
 nodes.loginLink.addEventListener("click", async () => {
   nodes.loginLink.disabled = true;
   await recordGitHubLogin(true);

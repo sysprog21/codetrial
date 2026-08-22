@@ -357,6 +357,10 @@ function bindEvents() {
       codePublishTimer = null;
     }, CODE_PUBLISH_DEBOUNCE_MS);
   });
+  nodes.report.addEventListener("click", (event) => {
+    if (event.target.closest("#done")) window.location.assign("/");
+    if (event.target.closest("#download-report")) downloadReport();
+  });
 }
 
 /// True when nobody is signed in, in which case the candidate is sent back to
@@ -2115,10 +2119,6 @@ function renderReport() {
     language: state.language,
     code: currentCode(),
   });
-  document.querySelector("#done").addEventListener("click", () => {
-    window.location.href = "/";
-  });
-  document.querySelector("#download-report").addEventListener("click", downloadReport);
 }
 
 function saveHistory() {
@@ -2135,8 +2135,10 @@ function downloadReport() {
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = `interview-report-${problem.id}-${new Date().toISOString().slice(0, 10)}.md`;
+  document.body.append(anchor);
   anchor.click();
-  URL.revokeObjectURL(url);
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function buildMarkdown() {
