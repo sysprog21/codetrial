@@ -285,6 +285,12 @@ fn helpers_match_frozen_fixture() {
         expected["numbered"]["empty"].as_str().unwrap()
     );
     assert!(!significant_change("a\nb", "a\nb\nc"));
+    // Tab types four spaces, so reindenting a block moves characters without
+    // changing any code. Counting content rather than layout keeps that from
+    // spending a proactive-review turn on a question with no answer in it.
+    let flat = "if a:\nreturn 1\n".repeat(10);
+    let indented = flat.replace('\n', "\n    ");
+    assert!(!significant_change(&flat, &indented));
     assert_eq!(
         significant_change("", &"x".repeat(81)),
         expected["significantChange"]["emptyToLong"]

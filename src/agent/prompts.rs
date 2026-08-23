@@ -301,8 +301,13 @@ pub fn numbered(code: &str) -> String {
         .join("\n")
 }
 
+/// Counted over non-whitespace characters, so the threshold measures content
+/// rather than layout. Tab types four spaces, so reindenting a twenty-line
+/// block moves eighty characters without changing a line of the code, and a
+/// character count would spend a turn asking the candidate about it.
 pub fn significant_change(old: &str, new: &str) -> bool {
-    old.chars().count().abs_diff(new.chars().count()) > 80
+    let content = |code: &str| code.chars().filter(|c| !c.is_whitespace()).count();
+    content(old).abs_diff(content(new)) > 80
         || old
             .matches('\n')
             .count()

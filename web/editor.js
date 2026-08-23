@@ -1,20 +1,27 @@
+const INDENT = "    ";
+
 export function indentSelection(value, start, end, outdent = false) {
-  if (start === end) {
-    if (!outdent) return { value: `${value.slice(0, start)}\t${value.slice(end)}`, start: start + 1, end: end + 1 };
-  }
   // Not lastIndexOf alone: a negative fromIndex clamps to 0 and still matches
   // there, so a document that opens with a blank line would resolve the
   // caret at position 0 onto the second line and indent the wrong one.
   const lineStart = start === 0 ? 0 : value.lastIndexOf("\n", start - 1) + 1;
-  // An end position at the next line's start does not select that line.
-  const firstLineEnd = value.indexOf("\n", lineStart);
-  const blockEnd = start === end
-    ? (firstLineEnd === -1 ? value.length : firstLineEnd)
-    : (end > lineStart && value[end - 1] === "\n" ? end - 1 : end);
+  // A caret past the indentation types an indent where it sits, the way a
+  // caret anywhere else types a character. A caret still inside the
+  // indentation is asking for another level on the line, so it goes through
+  // the block path and the insert lands at column 0. Otherwise the level it
+  // builds is off by the column it happened to sit at, and on a line the
+  // candidate pasted with tabs the spaces would land between them.
+  if (start === end && !outdent && !/^[ \t]*$/.test(value.slice(lineStart, start))) {
+    return { value: `${value.slice(0, start)}${INDENT}${value.slice(end)}`, start: start + INDENT.length, end: end + INDENT.length };
+  }
   const changes = [];
-  for (let at = lineStart; at < blockEnd || (start === end && at === lineStart);) {
+  // `at < end` and not a precomputed block end: `end` is exclusive, so a line
+  // starting there is not selected and the loop stops on its own. Deriving a
+  // separate bound by backing off a trailing newline cannot tell that newline
+  // apart from a selected blank line's own, and skipped it.
+  for (let at = lineStart; at < end || at === lineStart;) {
     const indentation = value.slice(at).match(/^\t|^ {1,4}/)?.[0] || "";
-    changes.push({ at, remove: outdent ? indentation.length : 0, insert: outdent ? "" : "\t" });
+    changes.push({ at, remove: outdent ? indentation.length : 0, insert: outdent ? "" : INDENT });
     const next = value.indexOf("\n", at);
     if (next === -1) break;
     at = next + 1;
@@ -30,5 +37,8 @@ export function indentSelection(value, start, end, outdent = false) {
     const change = changes[index];
     value = `${value.slice(0, change.at)}${change.insert}${value.slice(change.at + change.remove)}`;
   }
-  return { value, start: map(start, true), end: map(end, false) };
+  // A caret is one position, so it maps once: `includeAtPosition` has to be the
+  // same on both ends or a column-0 caret is left behind the indent it just
+  // inserted. A real selection keeps the exclusive end it started with.
+  return { value, start: map(start, true), end: map(end, start === end) };
 }
