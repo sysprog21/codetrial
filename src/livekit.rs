@@ -206,6 +206,12 @@ pub async fn run_room(
         boot: &boot,
         started_at,
     };
+    let ids = RoomIdentities {
+        room_name,
+        agent: &agent_identity,
+        candidate: &candidate_identity,
+        now_seconds,
+    };
 
     let mut turn = TurnState {
         state: RuntimeState::default(),
@@ -312,78 +318,12 @@ pub async fn run_room(
                 {
                     continue;
                 }
-                match event {
-                    RoomEvent::DataReceived { payload, topic, participant, .. } => {
-                        let sender = participant.as_ref().map(|participant| participant.identity().0);
-                        let Some((topic, payload)) = interview_packet(
-                            topic.as_deref(),
-                            sender.as_deref(),
-                            &candidate_identity,
-                            &payload,
-                        ) else {
-                            continue;
-                        };
-                        let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
-                        if handle_data_packet(
-                            &room,
-                            &mut context,
-                            interview,
-                            topic,
-                            &payload,
-                        )
-                        .await?
-                        .is_break()
-                        {
-                            // The browser asking to end is the ordinary way an
-                            // interview finishes, and it was the one exit that
-                            // said nothing. Indistinguishable in the log from
-                            // the agent dying and being restarted under it.
-                            eprintln!(
-                                "interview ended by the browser: room={room_name} topic={topic}"
-                            );
-                            return Ok(());
-                        }
-                    }
-
-                    // The server's own word for why the agent is going away.
-                    // Without it the only trace is the event channel closing a
-                    // moment later, which says a disconnect happened and
-                    // nothing about whose fault it was: a duplicate identity, a
-                    // deleted room and a signal drop all look identical from
-                    // there, and they need three different fixes.
-                    //
-                    // `DuplicateIdentity` is the one worth naming outright. The
-                    // agent identity is derived from the room name, so a second
-                    // agent process on the same room is not a near-miss, it is
-                    // the same string, and the server evicts whichever joined
-                    // first. `is_duplicate_agent` cannot see that case: it
-                    // matches on the identity being different.
-                    RoomEvent::Disconnected { reason } => {
-                        if reason == DisconnectReason::DuplicateIdentity {
-                            eprintln!(
-                                "another agent joined room={room_name} as {agent_identity} and took the session; this one is a second agent process on the same room"
-                            );
-                        } else {
-                            eprintln!("disconnected from room={room_name}: {reason:?}");
-                        }
-                    }
-                    RoomEvent::ParticipantConnected(participant)
-                        if is_duplicate_agent(&participant, &agent_identity) =>
-                    {
-                        evict_duplicate_agent(config, room_name, &participant, now_seconds).await?;
-                    }
-                    RoomEvent::ParticipantDisconnected(participant)
-                        if participant.identity().0 == candidate_identity =>
-                    {
-                        eprintln!("candidate left room={room_name}; waiting for a return");
-                        presence.left(Instant::now());
-                    }
-                    RoomEvent::ParticipantConnected(participant)
-                        if participant.identity().0 == candidate_identity =>
-                    {
-                        presence.returned();
-                    }
-                    _ => {}
+                let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
+                if handle_room_event(&room, &mut context, &mut presence, interview, &ids, event)
+                    .await?
+                    .is_break()
+                {
+                    return Ok(());
                 }
             }
             event = gemini.next_event() => {
@@ -410,42 +350,162 @@ pub async fn run_room(
                 set_agent_state(&room, &mut turn.agent_state, AGENT_STATE_LISTENING).await?;
             }
             frame = next_audio_frame(&mut media.audio), if media.audio.is_some() => {
-                let Some(frame) = frame else {
-                    flush_audio(&mut gemini, &mut media.audio_bytes).await?;
-                    media.audio = None;
-                    continue;
-                };
-
-                // Not `last_user_speech`. LiveKit delivers frames for as long
-                // as the track is live, silence included, so stamping here made
-                // the interview permanently "just spoke": `idle_seconds` never
-                // reached SILENCE_THRESHOLD_S and the nudge never fired. Real
-                // speech is stamped on `InputTranscript`, where Gemini has
-                // already decided that words were said.
-                append_pcm16_bytes(&frame, &mut media.audio_bytes);
-                if media.audio_bytes.len() >= GEMINI_AUDIO_BUFFER_BYTES {
-                    flush_audio(&mut gemini, &mut media.audio_bytes).await?;
-                }
+                pump_audio(&mut media, &mut gemini, frame).await?;
             }
             frame = next_video_frame(&mut media.video), if media.video.is_some() => {
-                let Some(frame) = frame else {
-                    media.video = None;
-                    continue;
-                };
-                if should_send_video_frame(media.last_video_frame.elapsed()) {
-                    // Stamped on the attempt, not the success: the dimensions
-                    // come off the wire, and a source stuck emitting frames
-                    // that will not encode must cost one try per interval
-                    // rather than one per arriving frame.
-                    media.last_video_frame = Instant::now();
-                    match encode_video_frame_jpeg(&frame, GEMINI_VIDEO_JPEG_QUALITY) {
-                        Ok(bytes) => gemini.send_video_frame(&bytes, GEMINI_VIDEO_MIME_TYPE).await?,
-                        Err(error) => eprintln!("skipping unencodable video frame: {error}"),
-                    }
-                }
+                pump_video(&mut media, &mut gemini, frame).await?;
             }
         }
     }
+}
+
+/// Buffers one arriving audio frame, and flushes when there is enough to send.
+///
+/// `None` is the track ending: what is buffered goes now, because nothing else
+/// is going to arrive to push it over the threshold.
+async fn pump_audio(
+    media: &mut CandidateMedia,
+    gemini: &mut GeminiLiveSession,
+    frame: Option<AudioFrame<'static>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let Some(frame) = frame else {
+        flush_audio(gemini, &mut media.audio_bytes).await?;
+        media.audio = None;
+        return Ok(());
+    };
+
+    // Not `last_user_speech`. LiveKit delivers frames for as long as the track
+    // is live, silence included, so stamping here made the interview
+    // permanently "just spoke": `idle_seconds` never reached
+    // SILENCE_THRESHOLD_S and the nudge never fired. Real speech is stamped on
+    // `InputTranscript`, where Gemini has already decided that words were said.
+    append_pcm16_bytes(&frame, &mut media.audio_bytes);
+    if media.audio_bytes.len() >= GEMINI_AUDIO_BUFFER_BYTES {
+        flush_audio(gemini, &mut media.audio_bytes).await?;
+    }
+    Ok(())
+}
+
+/// Sends one arriving video frame, at most one per interval.
+async fn pump_video(
+    media: &mut CandidateMedia,
+    gemini: &mut GeminiLiveSession,
+    frame: Option<BoxVideoFrame>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let Some(frame) = frame else {
+        media.video = None;
+        return Ok(());
+    };
+    if !should_send_video_frame(media.last_video_frame.elapsed()) {
+        return Ok(());
+    }
+
+    // Stamped on the attempt, not the success: the dimensions come off the
+    // wire, and a source stuck emitting frames that will not encode must cost
+    // one try per interval rather than one per arriving frame.
+    media.last_video_frame = Instant::now();
+    match encode_video_frame_jpeg(&frame, GEMINI_VIDEO_JPEG_QUALITY) {
+        Ok(bytes) => {
+            gemini
+                .send_video_frame(&bytes, GEMINI_VIDEO_MIME_TYPE)
+                .await?
+        }
+        Err(error) => eprintln!("skipping unencodable video frame: {error}"),
+    }
+    Ok(())
+}
+
+/// One LiveKit room event that was not the candidate's media.
+///
+/// `Break` means the interview is over: the browser asked to end it, and the
+/// report has already been published by the time this returns.
+async fn handle_room_event(
+    room: &Room,
+    context: &mut GeminiEventContext<'_>,
+    presence: &mut CandidatePresence,
+    interview: InterviewContext<'_>,
+    ids: &RoomIdentities<'_>,
+    event: RoomEvent,
+) -> Result<ControlFlow<()>, Box<dyn std::error::Error + Send + Sync>> {
+    let RoomIdentities {
+        room_name,
+        agent: agent_identity,
+        candidate: candidate_identity,
+        now_seconds,
+    } = *ids;
+    let config = interview.config;
+    match event {
+        RoomEvent::DataReceived {
+            payload,
+            topic,
+            participant,
+            ..
+        } => {
+            let sender = participant
+                .as_ref()
+                .map(|participant| participant.identity().0);
+            let Some((topic, payload)) = interview_packet(
+                topic.as_deref(),
+                sender.as_deref(),
+                candidate_identity,
+                &payload,
+            ) else {
+                return Ok(ControlFlow::Continue(()));
+            };
+            if handle_data_packet(room, context, interview, topic, &payload)
+                .await?
+                .is_break()
+            {
+                // The browser asking to end is the ordinary way an
+                // interview finishes, and it was the one exit that
+                // said nothing. Indistinguishable in the log from
+                // the agent dying and being restarted under it.
+                eprintln!("interview ended by the browser: room={room_name} topic={topic}");
+                return Ok(ControlFlow::Break(()));
+            }
+        }
+
+        // The server's own word for why the agent is going away.
+        // Without it the only trace is the event channel closing a
+        // moment later, which says a disconnect happened and
+        // nothing about whose fault it was: a duplicate identity, a
+        // deleted room and a signal drop all look identical from
+        // there, and they need three different fixes.
+        //
+        // `DuplicateIdentity` is the one worth naming outright. The
+        // agent identity is derived from the room name, so a second
+        // agent process on the same room is not a near-miss, it is
+        // the same string, and the server evicts whichever joined
+        // first. `is_duplicate_agent` cannot see that case: it
+        // matches on the identity being different.
+        RoomEvent::Disconnected { reason } => {
+            if reason == DisconnectReason::DuplicateIdentity {
+                eprintln!(
+                    "another agent joined room={room_name} as {agent_identity} and took the session; this one is a second agent process on the same room"
+                );
+            } else {
+                eprintln!("disconnected from room={room_name}: {reason:?}");
+            }
+        }
+        RoomEvent::ParticipantConnected(participant)
+            if is_duplicate_agent(&participant, agent_identity) =>
+        {
+            evict_duplicate_agent(config, room_name, &participant, now_seconds).await?;
+        }
+        RoomEvent::ParticipantDisconnected(participant)
+            if participant.identity().0 == candidate_identity =>
+        {
+            eprintln!("candidate left room={room_name}; waiting for a return");
+            presence.left(Instant::now());
+        }
+        RoomEvent::ParticipantConnected(participant)
+            if participant.identity().0 == candidate_identity =>
+        {
+            presence.returned();
+        }
+        _ => {}
+    }
+    Ok(ControlFlow::Continue(()))
 }
 
 /// Mints the agent token and connects. Split out so `run_room` reads as the
@@ -1032,6 +1092,19 @@ async fn next_video_frame(stream: &mut Option<NativeVideoStream>) -> Option<BoxV
 
 /// The immutable side of a running interview: fixed once the candidate joins,
 /// and needed only when the interview ends and the report is written.
+#[derive(Clone, Copy)]
+/// The identities this room was joined with, fixed for the life of the
+/// interview. Grouped because deciding whose event just arrived needs several
+/// of them at once, and passing them one at a time made the signature of every
+/// handler a list of four strings whose order was the only thing keeping them
+/// apart.
+struct RoomIdentities<'a> {
+    room_name: &'a str,
+    agent: &'a str,
+    candidate: &'a str,
+    now_seconds: u64,
+}
+
 #[derive(Clone, Copy)]
 struct InterviewContext<'a> {
     config: &'a AgentConfig,

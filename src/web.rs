@@ -3563,115 +3563,120 @@ async fn apply_webhook(
             .is_ok()
         }
         "egress_ended" | "egress_updated" => {
-            // The provider's own words about how it ended. `EGRESS_COMPLETE` is
-            // the only one that produced a file worth moving. The object this
-            // recording is going to transfer, not any file the job happened to
-            // write.
-            let expected_object =
-                crate::recording::gcs_object_path(&recorder.config.gcs_prefix, &recording.id);
-            let (next, failure) = match status {
-                // A completion with nothing in it is not a completion. A
-                // missing file result, or one of no bytes, is how a truncated
-                // recording arrives, and sending it through the transfer shared
-                // a zero-byte video with a candidate.
-                "EGRESS_COMPLETE"
-                    if crate::recording::completed_with_output(event, &expected_object) =>
-                {
-                    (RecordingState::Transferring, None)
-                }
-                "EGRESS_COMPLETE" => (
-                    RecordingState::Failed,
-                    Some(crate::recording::Failure::PartialOutput),
-                ),
-                "EGRESS_FAILED" => (
-                    RecordingState::Failed,
-                    Some(crate::recording::Failure::Egress),
-                ),
-                "EGRESS_ABORTED" => (
-                    RecordingState::Failed,
-                    Some(crate::recording::Failure::Aborted),
-                ),
-                "EGRESS_LIMIT_REACHED" => (
-                    RecordingState::Failed,
-                    Some(crate::recording::Failure::LimitReached),
-                ),
-
-                // `EGRESS_ACTIVE` and `EGRESS_STARTING` on an update say
-                // nothing new, and in particular do not say the job has
-                // stopped: marking it stopped here would tell the orphan sweep
-                // to stop watching a job that is still running.
-                _ => return true,
-            };
-
-            // Terminal, whichever way it ended, so the row stops being one the
-            // sweeper has to chase. A failure here fails the whole application,
-            // because the alternative is a terminal row that looks stopped and
-            // a job that is not.
-            let stopped = {
-                let accounts = accounts.clone();
-                let clock = recorder.clock.clone();
-                let id = recording.id.clone();
-                blocking(move || crate::recording::mark_stopped(&accounts, clock.as_ref(), &id))
-                    .await
-            };
-            if stopped.is_err() {
-                return false;
-            }
-            let moved = {
-                let accounts = accounts.clone();
-                let clock = recorder.clock.clone();
-                let id = recording.id.clone();
-                let reason = failure.map(|failure| failure.as_str().to_string());
-                blocking(move || {
-                    crate::recording::transition(
-                        &accounts,
-                        clock.as_ref(),
-                        &id,
-                        next,
-                        reason.as_deref(),
-                    )
-                })
-                .await
-            };
-
-            // Queued only when this call moved the row, and after the move
-            // rather than before it. A webhook LiveKit sent twice must not
-            // become two deliveries, and the queue's own `ON CONFLICT` is the
-            // second half of that rather than the first.
-            if next == RecordingState::Transferring
-                && let Ok(Some((_, true))) = &moved
-            {
-                let accounts = accounts.clone();
-                let id = recording.id.clone();
-                let now = recorder.clock.now();
-                if let Err(error) =
-                    blocking(move || crate::recording::enqueue_delivery(&accounts, &id, now)).await
-                {
-                    // Not fatal to the webhook: the row is `transferring` and
-                    // the sweeper will not lose it. It does mean nobody has
-                    // queued the delivery, which is worth a line.
-                    eprintln!("WARNING: could not queue a delivery: {error}");
-                }
-            }
-
-            // After the transition, and only when it moved. A late
-            // `EGRESS_FAILED` for a row that has already advanced is refused by
-            // the table, and an audit line written first said a recording had
-            // failed while its status said otherwise.
-            if let (Some(failure), Ok(Some((_, true)))) = (failure, &moved) {
-                crate::recording::audit(
-                    "recording_failed",
-                    &recording.id,
-                    &[
-                        ("reason", failure.as_str()),
-                        ("recovery", failure.recovery()),
-                    ],
-                );
-            }
-            moved.is_ok()
+            apply_egress_status(accounts, recorder, &recording, event, status).await
         }
         _ => true,
     }
+}
+
+/// What the provider's own word for how a job ended means for the row.
+///
+/// `None` is an update that says nothing new. `EGRESS_ACTIVE` and
+/// `EGRESS_STARTING` in particular do not say the job has stopped, and marking
+/// it stopped here would tell the orphan sweep to stop watching a job that is
+/// still running.
+fn egress_outcome(
+    status: &str,
+    event: &Value,
+    expected_object: &str,
+) -> Option<(
+    crate::recording::RecordingState,
+    Option<crate::recording::Failure>,
+)> {
+    use crate::recording::{Failure, RecordingState};
+    let outcome = match status {
+        // A completion with nothing in it is not a completion. A missing file
+        // result, or one of no bytes, is how a truncated recording arrives, and
+        // sending it through the transfer shared a zero-byte video with a
+        // candidate.
+        "EGRESS_COMPLETE" if crate::recording::completed_with_output(event, expected_object) => {
+            (RecordingState::Transferring, None)
+        }
+        "EGRESS_COMPLETE" => (RecordingState::Failed, Some(Failure::PartialOutput)),
+        "EGRESS_FAILED" => (RecordingState::Failed, Some(Failure::Egress)),
+        "EGRESS_ABORTED" => (RecordingState::Failed, Some(Failure::Aborted)),
+        "EGRESS_LIMIT_REACHED" => (RecordingState::Failed, Some(Failure::LimitReached)),
+        _ => return None,
+    };
+    Some(outcome)
+}
+
+/// Applies one `egress_ended` or `egress_updated` to the row it names.
+async fn apply_egress_status(
+    accounts: &Arc<Accounts>,
+    recorder: &crate::recording::Recorder,
+    recording: &crate::recording::Recording,
+    event: &Value,
+    status: &str,
+) -> bool {
+    use crate::recording::RecordingState;
+
+    // The object this recording is going to transfer, not any file the job
+    // happened to write.
+    let expected_object =
+        crate::recording::gcs_object_path(&recorder.config.gcs_prefix, &recording.id);
+    let Some((next, failure)) = egress_outcome(status, event, &expected_object) else {
+        return true;
+    };
+
+    // Terminal, whichever way it ended, so the row stops being one the sweeper
+    // has to chase. A failure here fails the whole application, because the
+    // alternative is a terminal row that looks stopped and a job that is not.
+    let stopped = {
+        let accounts = accounts.clone();
+        let clock = recorder.clock.clone();
+        let id = recording.id.clone();
+        blocking(move || crate::recording::mark_stopped(&accounts, clock.as_ref(), &id)).await
+    };
+    if stopped.is_err() {
+        return false;
+    }
+    let moved = {
+        let accounts = accounts.clone();
+        let clock = recorder.clock.clone();
+        let id = recording.id.clone();
+        let reason = failure.map(|failure| failure.as_str().to_string());
+        blocking(move || {
+            crate::recording::transition(&accounts, clock.as_ref(), &id, next, reason.as_deref())
+        })
+        .await
+    };
+
+    // Queued only when this call moved the row, and after the move rather than
+    // before it. A webhook LiveKit sent twice must not become two deliveries,
+    // and the queue's own `ON CONFLICT` is the second half of that rather than
+    // the first.
+    if next == RecordingState::Transferring
+        && let Ok(Some((_, true))) = &moved
+    {
+        let accounts = accounts.clone();
+        let id = recording.id.clone();
+        let now = recorder.clock.now();
+        if let Err(error) =
+            blocking(move || crate::recording::enqueue_delivery(&accounts, &id, now)).await
+        {
+            // Not fatal to the webhook: the row is `transferring` and the
+            // sweeper will not lose it. It does mean nobody has queued the
+            // delivery, which is worth a line.
+            eprintln!("WARNING: could not queue a delivery: {error}");
+        }
+    }
+
+    // After the transition, and only when it moved. A late `EGRESS_FAILED` for
+    // a row that has already advanced is refused by the table, and an audit
+    // line written first said a recording had failed while its status said
+    // otherwise.
+    if let (Some(failure), Ok(Some((_, true)))) = (failure, &moved) {
+        crate::recording::audit(
+            "recording_failed",
+            &recording.id,
+            &[
+                ("reason", failure.as_str()),
+                ("recovery", failure.recovery()),
+            ],
+        );
+    }
+    moved.is_ok()
 }
 
 #[cfg(test)]
