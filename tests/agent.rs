@@ -1097,6 +1097,100 @@ fn final_report_matches_frontend_publish_contract() {
     assert_eq!(fallback["hintsUsed"], 1);
 }
 
+/// Gemini's transcription drops a `#hashtag` into speech that carried no such
+/// word. It lands in the candidate's own live transcript and in the report that
+/// decides the hire, so it has to be gone before either sees it.
+#[test]
+fn a_transcription_artifact_never_reaches_the_transcript() {
+    let mut transcript = Vec::new();
+    let mut turn = SpeakerTurn::default();
+
+    // Split across fragments, which is why the artifact cannot be filtered as
+    // it arrives: neither half is the token.
+    turn.record(&mut transcript, "Candidate", "I put in two loops. #hash");
+    let whole = turn.record(&mut transcript, "Candidate", "tag Please give me a hint.");
+
+    assert_eq!(whole, "I put in two loops. Please give me a hint.");
+    assert_eq!(
+        transcript,
+        vec!["Candidate: I put in two loops. Please give me a hint."]
+    );
+    assert_eq!(turn.text(), "I put in two loops. Please give me a hint.");
+}
+
+/// The filter is narrow on purpose. A candidate says "hash map" and "hash
+/// table" all interview, and an interviewer transcript that quietly loses them
+/// is worse than one that keeps a stray token.
+#[test]
+fn the_artifact_filter_leaves_the_words_candidates_actually_say() {
+    let mut transcript = Vec::new();
+    let mut turn = SpeakerTurn::default();
+
+    let whole = turn.record(
+        &mut transcript,
+        "Candidate",
+        "A hash map beats a hash table here, and hashtag is just a word.",
+    );
+
+    assert_eq!(
+        whole,
+        "A hash map beats a hash table here, and hashtag is just a word."
+    );
+
+    // Spacing survives untouched on the ordinary path, which is every line
+    // with no octothorpe in it: fragments arrive pre-spaced and re-joining them
+    // would move the words around.
+    let mut spaced = SpeakerTurn::default();
+    let mut lines = Vec::new();
+    assert_eq!(
+        spaced.record(&mut lines, "Candidate", "two  spaces  held"),
+        "two  spaces  held"
+    );
+}
+
+/// A turn that is nothing but the artifact said nothing. It must not open a
+/// transcript line, or the report reads a speaker with no words in the row and
+/// the browser gets an empty live segment.
+#[test]
+fn an_artifact_only_turn_says_nothing_at_all() {
+    let mut transcript = Vec::new();
+    let mut turn = SpeakerTurn::default();
+
+    assert_eq!(turn.record(&mut transcript, "Candidate", "#hashtag"), "");
+    assert!(transcript.is_empty(), "a speaker with no words got a line");
+    assert!(!turn.is_open());
+
+    // The line opens when a real word arrives, under the same turn.
+    let whole = turn.record(&mut transcript, "Candidate", " I mean two loops.");
+    assert_eq!(whole, "I mean two loops.");
+    assert_eq!(transcript, vec!["Candidate: I mean two loops."]);
+    assert!(turn.is_open());
+}
+
+/// Clearing and advancing are separate questions. An artifact-only turn has to
+/// be cleared or it concatenates into whatever is said next, but it never
+/// published a segment, so it does not give up an id either.
+#[test]
+fn an_artifact_only_turn_is_cleared_without_spending_a_segment_id() {
+    let mut transcript = Vec::new();
+    let mut turn = SpeakerTurn::default();
+    let first_id = turn.segment_id("candidate");
+
+    turn.record(&mut transcript, "Candidate", "#hashtag");
+    turn.finish();
+
+    assert_eq!(
+        turn.segment_id("candidate"),
+        first_id,
+        "a turn that published nothing must not burn a segment id"
+    );
+    assert_eq!(
+        turn.record(&mut transcript, "Candidate", "Two loops."),
+        "Two loops.",
+        "the artifact leaked into the next turn"
+    );
+}
+
 /// One spoken turn is many recognition fragments. The agent is the only place
 /// that sees the turn boundary, so it accumulates rather than publishing each
 /// fragment as a finished segment: that is what forced the browser to guess at

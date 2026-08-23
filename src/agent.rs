@@ -77,6 +77,45 @@ pub struct TranscriptItem<'a> {
     pub text: &'a str,
 }
 
+/// What Gemini's transcription emits where the audio carried no such word.
+///
+/// One string rather than a list, because one is what has actually been
+/// observed and a list invites guesses about what else might show up. It
+/// reaches the candidate's own live transcript and the report prompt, so it is
+/// dropped at the point the turn is assembled rather than at either reader.
+const TRANSCRIPTION_ARTIFACT: &str = "#hashtag";
+
+/// The assembled turn as it should be shown and written down.
+///
+/// Cleaned here and never in [`SpeakerTurn::text`]'s accumulator: fragments
+/// have to concatenate exactly as they arrived, and the artifact can arrive
+/// split across two of them, so a per-fragment filter would miss it and a
+/// per-fragment trim would glue words together.
+///
+/// The `#` guard is the whole test for "is there anything here to clean", and
+/// it is deliberately loose: "C#" trips it, and so does any other octothorpe a
+/// candidate says out loud. All that costs is that runs of spaces in such a
+/// line come back as single spaces, which nobody reading an interview
+/// transcript can tell. Splicing the token out by byte offset would preserve
+/// them exactly and buys nothing for the length it adds.
+fn spoken_text(text: &str) -> String {
+    let text = text.trim();
+    if !text.contains('#') {
+        return text.to_string();
+    }
+    text.split_whitespace()
+        .filter(|word| {
+            // Trailing punctuation only: the leading `#` is what separates the
+            // artifact from "hashtag" said out loud, and from the "hash map"
+            // and "hash table" a candidate says all interview.
+            !word
+                .trim_end_matches(|c: char| c.is_ascii_punctuation())
+                .eq_ignore_ascii_case(TRANSCRIPTION_ARTIFACT)
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// One speaker's turn, assembled from the fragments Gemini emits as it
 /// recognizes speech.
 ///
@@ -98,14 +137,28 @@ impl SpeakerTurn {
     /// Adds a fragment to this turn and to the session transcript, replacing
     /// the line the turn already owns rather than appending another one.
     /// Returns the whole turn so far, which is what gets published.
-    pub fn record(&mut self, transcript: &mut Vec<String>, speaker: &str, fragment: &str) -> &str {
+    pub fn record(
+        &mut self,
+        transcript: &mut Vec<String>,
+        speaker: &str,
+        fragment: &str,
+    ) -> String {
         // Concatenated exactly as received. Gemini emits transcription as
         // incremental pieces that already carry their own leading spaces and
         // may split mid-word, so inserting a separator turns "Hey, I'm" + ",
         // so" into "Hey, I'm , so" and "Hel" + "lo" into "Hel lo". Only the
-        // assembled turn is trimmed.
+        // assembled turn is cleaned.
         self.text.push_str(fragment);
-        let line = format!("{speaker}: {}", self.text.trim());
+        let spoken = spoken_text(&self.text);
+
+        // A turn that is nothing but artifact has not said anything yet.
+        // Opening a line for it puts a speaker with no words into the report
+        // and publishes an empty live segment; the line opens when the first
+        // real word arrives, which for a split token is the next fragment.
+        if spoken.is_empty() {
+            return spoken;
+        }
+        let line = format!("{speaker}: {spoken}");
         match self.line {
             Some(index) => transcript[index] = line,
             None => {
@@ -113,7 +166,7 @@ impl SpeakerTurn {
                 transcript.push(line);
             }
         }
-        self.text.trim()
+        spoken
     }
 
     /// Stable for the life of one turn, so the browser patches one row instead
@@ -122,22 +175,32 @@ impl SpeakerTurn {
         format!("{speaker}-{}", self.index)
     }
 
+    /// Whether this turn has said anything. Asked of the cleaned text, because
+    /// a turn holding only an artifact published no segment and owes no line.
     pub fn is_open(&self) -> bool {
-        !self.text.trim().is_empty()
+        !self.text().is_empty()
     }
 
-    pub fn text(&self) -> &str {
-        self.text.trim()
+    pub fn text(&self) -> String {
+        spoken_text(&self.text)
     }
 
     /// Ends the turn. The next fragment starts a new segment id and a new
     /// transcript line.
+    ///
+    /// Clearing and advancing are separate questions. Anything at all has to be
+    /// cleared or it concatenates into the next turn, but only a turn that
+    /// reached the transcript gives up its id: one that was nothing but
+    /// artifact never published a segment under it.
     pub fn finish(&mut self) {
+        if self.text.trim().is_empty() {
+            return;
+        }
         if self.is_open() {
             self.index += 1;
-            self.text.clear();
-            self.line = None;
         }
+        self.text.clear();
+        self.line = None;
     }
 }
 
