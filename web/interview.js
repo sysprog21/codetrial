@@ -9,6 +9,8 @@ import {
 } from "./audio-check.js";
 import { highlight } from "./highlight.js";
 import { indentSelection } from "./editor.js";
+import { createDevicePool } from "./devices.js";
+import { createFaceCheck } from "./face-check.js";
 import {
   createTranscriptView,
   finalRunnerStatus,
@@ -382,20 +384,33 @@ async function signInRequired() {
 function runAudioCheck() {
   return new Promise((resolve) => {
     const mediaDevices = navigator.mediaDevices;
-    const userMediaSupported = Boolean(mediaDevices?.getUserMedia);
-    const browserSupported = userMediaSupported;
+    const browserSupported = Boolean(mediaDevices?.getUserMedia);
     let outputConfirmed = false;
     let meterRetry = null;
-    let mediaRetry = null;
     let advanced = false;
+
+    // Built before anything reads it: `refresh` runs on the first frame and
+    // asks the pool what the devices are doing.
+    const pool = createDevicePool({
+      mediaDevices,
+      isFinished: () => finished,
+      onChange: () => refresh(),
+    });
+    const trackOf = (kind) => pool.trackOf(kind);
+    // Derived, not stored. This was a `let` written inside `sampleReadiness`
+    // and read from the face check, so whether the camera worked depended on
+    // who had run most recently.
+    const cameraReady = () => videoTrackReady(trackOf("video"));
     let micPeak = 0;
-    // One record, because a reset has to clear all of it. `generation` is what
-    // makes a detect() still in flight for a replaced camera harmless: it
-    // compares against the record's current value and finds itself stale.
-    // `running` and `generation` were separate flags for the same fact and a
-    // reset that forgot either of them left the panel judging a dead camera.
-    let faceCheck = { running: false, generation: 0, detector: null, ready: true, error: null };
-    let userStream = null;
+    const faceCheck = createFaceCheck({
+      video: nodes.cameraIntegrityVideo,
+      trackOf: () => trackOf("video"),
+      isReady: cameraReady,
+      isFinished: () => finished,
+      createDetector: createFacePresenceDetector,
+      verdictOf: facePresenceVerdict,
+      onVerdict: () => refresh(),
+    });
     let context = null;
     let hint = null;
     let hintUntil = 0;
@@ -420,29 +435,29 @@ function runAudioCheck() {
     // the way through: it is the only signal that can only be judged against a
     // track the candidate already granted.
     const sampleReadiness = () => {
-      // Keyed on the track, not on the stream. `userStream` exists from the
-      // moment the preflight asks for a device, so testing it here would
+      // Keyed on the track, not on the pool's stream. The stream exists from
+      // the moment the preflight asks for a device, so testing it here would
       // overwrite the reason the request actually failed -- the permission the
       // candidate denied -- with "no active video track" on every frame, and
       // paint the panel red while the prompt is still on screen.
-      const camera = trackOf(devices.camera);
-      if (camera) devices.camera.error = cameraReady() ? null : "no active video track";
+      const camera = trackOf("video");
+      if (camera) pool.setError("video", cameraReady() ? null : "no active video track");
       // An ended track never revives, and while it sits in the stream the retry
       // sees a video track and asks for nothing. The gate has no bypass, so an
       // unplugged camera would strand the candidate. A muted track can come
       // back on its own, so only the ended one is dropped.
       if (camera?.readyState === "ended") {
-        userStream.removeTrack(camera);
-        resetFaceCheck();
-        retryUserMedia();
+        pool.dropTrack(camera);
+        faceCheck.reset();
+        pool.retry();
       }
       return mediaReadiness({
         browserSupported,
         outputConfirmed,
         micPeak,
-        micError: devices.mic.error,
+        micError: pool.errorOf("audio"),
         cameraReady: cameraReady(),
-        cameraError: devices.camera.error,
+        cameraError: pool.errorOf("video"),
         faceReady: faceCheck.ready,
         faceError: faceCheck.error,
       });
@@ -481,55 +496,16 @@ function runAudioCheck() {
       }
     };
 
-    // Replaces the record rather than clearing five fields, so a field added
-    // later cannot be left behind by a reset that predates it.
-    function resetFaceCheck() {
-      void faceCheck.detector?.close?.();
-      nodes.cameraIntegrityVideo.srcObject = null;
-      faceCheck = { running: false, generation: faceCheck.generation + 1, detector: null, ready: true, error: null };
-    }
-
-    const startFaceCheck = async () => {
-      if (faceCheck.running || !cameraReady()) return;
-      faceCheck.running = true;
-      const generation = ++faceCheck.generation;
-      // Every await below is a chance for the camera to be replaced underneath
-      // this run, so each resumption re-checks that it is still the current one.
-      const stale = () => generation !== faceCheck.generation;
-      nodes.cameraIntegrityVideo.muted = true;
-      nodes.cameraIntegrityVideo.playsInline = true;
-      nodes.cameraIntegrityVideo.srcObject = new MediaStream([trackOf(devices.camera)]);
-      await nodes.cameraIntegrityVideo.play?.().catch(() => {});
-      const detector = await createFacePresenceDetector();
-      if (stale()) {
-        void detector.close?.();
-        return;
-      }
-      faceCheck.detector = detector;
-      // No detector means no verdict to wait for, not a failed one.
-      faceCheck.ready = !detector.available;
-      refresh();
-      if (!detector.available) return;
-      const check = async () => {
-        if (finished || stale() || !detector.available) return;
-        const verdict = facePresenceVerdict(await detector.detect(nodes.cameraIntegrityVideo));
-        if (stale()) return;
-        ({ ready: faceCheck.ready, error: faceCheck.error } = verdict);
-        refresh();
-        setTimeout(check, 1000);
-      };
-      void check();
-    };
 
     const finish = () => {
       if (!sampleReadiness().ready) return;
       finished = true;
       nodes.audioCheck.hidden = true;
       clearTimeout(meterRetry);
-      clearTimeout(mediaRetry);
-      void faceCheck.detector?.close?.();
+      pool.cancelRetry();
+      faceCheck.close();
       void context?.close().catch(() => {});
-      resolve({ userStream });
+      resolve({ userStream: pool.stream });
     };
 
     // Browsers keep audio blocked until a user gesture, and the tone is the
@@ -589,9 +565,9 @@ function runAudioCheck() {
 
     const watchMic = () =>
       startMediaMeter(
-        userStream,
+        pool.stream,
         (peak) => {
-          devices.mic.error = null;
+          pool.setError("audio", null);
           recentPeaks.push(peak);
           if (recentPeaks.length > MIC_CONFIRM_FRAMES) recentPeaks.shift();
           // Latched once proven: the candidate should not have to keep talking
@@ -601,7 +577,7 @@ function runAudioCheck() {
           refresh();
         },
         (error) => {
-          devices.mic.error = error;
+          pool.setError("audio", error);
           // A device that went away has not proven anything about the one that
           // replaces it.
           micPeak = 0;
@@ -612,99 +588,19 @@ function runAudioCheck() {
           refresh();
           // The gate has no bypass, so it must recover on its own once the
           // candidate grants access or plugs a device back in. Distinct from
-          // `mediaRetry`: this one restarts the level meter over a track we
+          // the pool's retry: this one restarts the level meter over a track we
           // already hold, that one asks the browser for a device again.
           meterRetry = setTimeout(watchMic, 2000);
         },
         () => finished,
       );
-    // One record per device rather than a `let` per signal. The lifecycle is
-    // the same for both -- ask, hold a track, say why not, retry -- and the
-    // bugs here came from writing it twice: two retry timers that did not know
-    // about each other, and a "was a request made" flag doing duty as "is there
-    // a working device". What differs per device is `accept` and `onTrack`.
-    const devices = {
-      mic: {
-        kind: "audio",
-        constraints: { audio: true },
-        pending: false,
-        error: null,
-        // A live track is enough here: the meter is what proves a microphone
-        // actually carries sound, and it runs for the rest of the preflight.
-        accept: (track) => Boolean(track),
-        onTrack: () => watchMic(),
-      },
-      camera: {
-        kind: "video",
-        constraints: { video: true },
-        pending: false,
-        error: null,
-        // Granted is not working. A track that arrives already ended or muted
-        // would paint the step green over a black square.
-        accept: (track) => videoTrackReady(track),
-        onTrack: () => void startFaceCheck(),
-      },
-    };
-    // `userStream` stays the single owner of the tracks, because it is what the
-    // candidate joins the room with. The records describe the request, not the
-    // result, so nothing can disagree with the stream about what is live.
-    const trackOf = (device) => userStream?.getTracks().find((each) => each.kind === device.kind) ?? null;
-    // Derived, not stored. This was a `let` written inside `sampleReadiness`
-    // and read from `startFaceCheck`, so whether the camera worked depended on
-    // who had run most recently.
-    const cameraReady = () => videoTrackReady(trackOf(devices.camera));
-    // One timer for both devices, not one each. Each device used to schedule
-    // its own retry and both called back here, so denying both prompts doubled
-    // the number of in-flight requests every two seconds until the tab died.
-    const retryUserMedia = () => {
-      if (finished) return;
-      mediaRetry ??= setTimeout(() => {
-        mediaRetry = null;
-        startUserMedia();
-      }, 2000);
-    };
-    // A track that resolves after the preflight has no owner: the stream the
-    // candidate joins with is already handed over, so a late one would only
-    // turn a device back on behind their back. Anything unclaimed is stopped.
-    const claimTrack = (stream, kind) => {
-      const track = finished ? null : stream.getTracks().find((each) => each.kind === kind);
-      for (const spare of stream.getTracks()) if (spare !== track) spare.stop();
-      return track;
-    };
-    // `pending` matters as much as the shared timer: a retry must not open a
-    // second prompt while the first is still on screen.
-    const requestDevice = (device) => {
-      if (device.pending || trackOf(device)) return;
-      device.pending = true;
-      void mediaDevices.getUserMedia(device.constraints).then((stream) => {
-        const track = claimTrack(stream, device.kind);
-        if (!device.accept(track)) {
-          track?.stop();
-          device.error = `no active ${device.kind} track`;
-          retryUserMedia();
-          return;
-        }
-        device.error = null;
-        userStream.addTrack(track);
-        device.onTrack();
-      }).catch((error) => {
-        device.error = String(error?.message || error);
-        retryUserMedia();
-      }).finally(() => {
-        device.pending = false;
-        refresh();
-      });
-    };
-    const startUserMedia = () => {
-      if (!userMediaSupported) {
-        for (const device of Object.values(devices)) device.error = "getUserMedia is not supported";
-        refresh();
-        return;
-      }
-      userStream ||= new MediaStream();
-      for (const device of Object.values(devices)) requestDevice(device);
-    };
-    void startUserMedia();
+    // A live track is enough for the microphone: the meter is what proves one
+    // actually carries sound, and it runs for the rest of the preflight.
+    pool.configure("audio", { accept: (track) => Boolean(track), onTrack: () => watchMic() });
+    // Granted is not working. A track that arrives already ended or muted would
+    // paint the step green over a black square.
+    pool.configure("video", { accept: (track) => videoTrackReady(track), onTrack: () => void faceCheck.start() });
+    pool.start();
     refresh();
   });
 }

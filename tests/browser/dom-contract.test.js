@@ -269,21 +269,19 @@ test("output confirmation is required but not blocked by tone timing", () => {
 });
 
 test("a replacement preflight camera gets a fresh face check", () => {
-  const script = read("interview.js");
   // Dropping the dead track, forgetting its face check, and asking for a
   // replacement are one step: any two of the three leave the panel judging a
-  // camera that is gone.
-  assert.match(script, /userStream\.removeTrack\(camera\);\s*resetFaceCheck\(\);\s*retryUserMedia\(\);/s);
-  // The reset replaces the whole record instead of clearing fields one by one,
-  // so a field added later cannot be missed by a reset written before it.
-  assert.match(script, /function resetFaceCheck\(\)[\s\S]*faceCheck = \{[^}]*generation: faceCheck\.generation \+ 1[^}]*\}/,
-    "resetFaceCheck must replace the record, not clear a subset of it");
-  assert.match(script, /function resetFaceCheck\(\)[\s\S]*cameraIntegrityVideo\.srcObject = null/,
-    "the replaced camera's frames must stop reaching the detector");
-  // startFaceCheck awaits three times, and the camera can be replaced across
-  // any of them, so every resumption has to re-check that this run still owns
-  // the check rather than testing it once at the top.
-  const stale = [...script.matchAll(/\bstale\(\)/g)];
+  // camera that is gone. This is the wiring `face-check.test.js` cannot see,
+  // because it is about who calls the reset rather than what the reset does.
+  assert.match(read("interview.js"),
+    /pool\.dropTrack\(camera\);\s*faceCheck\.reset\(\);\s*pool\.retry\(\);/s);
+
+  // start() awaits three times, and the camera can be replaced across any of
+  // them, so every resumption has to re-check that this run still owns the
+  // check rather than testing it once at the top. Counted rather than asserted
+  // behaviorally: a test can prove one resumption bails, not that a fourth
+  // await added later remembered to.
+  const stale = [...read("face-check.js").matchAll(/\bstale\(\)/g)];
   assert.equal(stale.length, 3,
     "a stale detector must not publish a verdict for the replacement camera");
 });

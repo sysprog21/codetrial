@@ -75,7 +75,7 @@ test("meet-mode getusermedia allowlist", () => {
   const sites = firstPartyScripts.flatMap((name) =>
     [...read(name).matchAll(capture)].map(() => name));
 
-  assert.deepEqual(sites, ["interview.js"],
+  assert.deepEqual(sites, ["devices.js"],
     "a new getUserMedia call site appeared; Meet mode must not capture audio for Meet");
 });
 
@@ -213,13 +213,17 @@ test("meet presentation releases the camera without accusing the candidate", () 
 // Both device requests failing used to schedule a retry each, and both retries
 // called back into the same function, so a denied prompt doubled the number of
 // in-flight getUserMedia calls every two seconds until the tab ran out of memory.
+// `devices.test.js` drives the collapsing itself, by denying both prompts and
+// counting the requests that follow. What is left here is the shape a counting
+// test cannot see: that no second path schedules a start behind the timer's
+// back, which is how the doubling bug arrived in the first place.
 test("the media preflight retries through a single shared timer", () => {
-  const source = read("interview.js");
-  const scheduled = [...source.matchAll(/setTimeout\(startUserMedia/g)];
-  assert.equal(scheduled.length, 0,
-    "startUserMedia must be scheduled through retryUserMedia, which collapses concurrent retries");
-  assert.match(source, /mediaRetry \?\?= setTimeout/,
+  const source = read("devices.js");
+  const scheduled = [...source.matchAll(/\bschedule\(/g)];
+  assert.equal(scheduled.length, 1,
+    "the start must be scheduled only by retry(), which collapses concurrent retries");
+  assert.match(source, /retryTimer \?\?= schedule\(/,
     "the shared retry timer must not be replaced by a fresh one while it is pending");
-  assert.match(source, /clearTimeout\(mediaRetry\)/,
+  assert.match(read("interview.js"), /pool\.cancelRetry\(\)/,
     "finishing the preflight must cancel the pending retry");
 });
