@@ -2,7 +2,10 @@
 //! a chain the server can check.
 //!
 //! Deliberately separate from the rest of the runtime state, because this is
-//! the only place that treats browser input as hostile.
+//! the only place that treats browser input as hostile. Test runs are bounded
+//! here too, for the same reason and not because they are integrity evidence:
+//! they arrive on a topic the candidate publishes, and every field of them is
+//! read back to a model.
 //!
 //! # What the chain proves, and what it does not
 //!
@@ -28,7 +31,116 @@
 
 use sha2::{Digest, Sha256};
 
-use super::{MAX_INTEGRITY_TEXT, json_int};
+use super::{
+    MAX_INTEGRITY_TEXT, MAX_TEST_CASES, MAX_TEST_FAILURES, MAX_TEST_TEXT, json_int, python_truthy,
+    spoken_language,
+};
+
+/// Bounds a test-run packet before anything stores or renders it.
+///
+/// `apply_test_results` in the parent module says why these counts are narrated
+/// and never scored. This is the other half of that boundary, and it is the
+/// half that matters more: the counts are one number a reader can discount,
+/// while `setupError` and the failure strings are free text that lands verbatim
+/// in `read_editor_text` and in the report prompt. Unbounded, they are a way
+/// for the candidate to write directly into the prompt that decides the hire.
+///
+/// Unlike `sanitize_integrity_event` this does not reject a run for being
+/// malformed: one is still a run the interviewer should react to, so every
+/// field falls back to something harmless rather than dropping the event. The
+/// one thing it will not do is invent a run, which is what the empty case below
+/// is about.
+pub fn sanitize_test_run(payload: &serde_json::Value) -> serde_json::Value {
+    // An absent or empty packet reads as "no run happened", and that has to
+    // survive sanitizing. Bounding one into shape would build a packet out of
+    // nothing and tell the report a run occurred and scored zero, which is the
+    // same kind of false claim this function exists to stop.
+    if !python_truthy(payload) {
+        return serde_json::Value::Null;
+    }
+    // Line breaks go before the length bound, and they are the ones that
+    // matter: `format_test_run` builds a line per failure and joins them, and
+    // `test_results_reaction` wraps the result in a `[SYSTEM EVENT]` block. A
+    // `got` carrying its own newline therefore writes a whole line of the
+    // interviewer's prompt, and it can make that line look like ours.
+    //
+    // `is_control` is not the whole test. U+2028 and U+2029 are separators
+    // rather than controls, so they pass it, and a model reading the prompt may
+    // well break a line on them: the thing being defended is what the model
+    // sees, not what `str::lines` splits on.
+    //
+    // Brackets stay: "expected [1, 2, 3], got [3, 2, 1]" is the string this
+    // bound is generous enough to fit, and mangling it to protect against a
+    // delimiter the model reads as prose costs more than it buys.
+    let text = |value: Option<&serde_json::Value>| {
+        value.and_then(serde_json::Value::as_str).map(|value| {
+            value
+                .chars()
+                .filter(|c| !c.is_control() && !matches!(c, '\u{2028}' | '\u{2029}'))
+                .take(MAX_TEST_TEXT)
+                .collect::<String>()
+        })
+    };
+    // Clamped against each other and not only against the ceiling.
+    // `apply_test_results` reads `passed == total` as every case passing, so two
+    // independent clamps map a claimed 100 of 150 onto 99 of 99 and hand the
+    // congratulatory reaction to a run that failed a third of its cases. A
+    // sanitizer is allowed to drop meaning, never to upgrade a failing run into
+    // a clean one, so what carries across the ceiling is whether the claim was
+    // "all of them" and not the digits it was written with.
+    let claimed = |key| payload.get(key).and_then(json_int).unwrap_or(0).max(0);
+    let claimed_total = claimed("total");
+    let claimed_passed = claimed("passed").min(claimed_total);
+    let total = claimed_total.min(MAX_TEST_CASES);
+    let passed = if claimed_passed == claimed_total {
+        total
+    } else {
+        // The branch is only reached with `claimed_passed < claimed_total`, so
+        // `claimed_total` is at least one and `total - 1` cannot go negative.
+        claimed_passed.min(total - 1)
+    };
+    let failures = payload
+        .get("failures")
+        .and_then(serde_json::Value::as_array)
+        .map(|failures| {
+            failures
+                .iter()
+                // Bounded before the filter, not after: filtering first walks
+                // the whole array to decide it has nothing, so an array of
+                // non-objects costs its full length to yield zero failures.
+                .take(MAX_TEST_FAILURES)
+                .filter_map(serde_json::Value::as_object)
+                .map(|failure| {
+                    serde_json::json!({
+                        // "?" rather than null: the renderer prints `label`
+                        // unconditionally, and a null reads as a test named None.
+                        "label": text(failure.get("label")).unwrap_or_else(|| "?".to_string()),
+                        "expected": text(failure.get("expected")),
+                        "got": text(failure.get("got")),
+                        "error": text(failure.get("error")),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    serde_json::json!({
+        "passed": passed,
+        "total": total,
+        // The same allowlist the spoken acknowledgement uses, so a run cannot
+        // claim a language the product does not offer. Note this stores the
+        // display name, "Python" and not "python": the renderer speaks this
+        // field, and the slug the rest of the runtime keys off lives in
+        // `RuntimeState::language`.
+        "language": payload
+            .get("language")
+            .and_then(serde_json::Value::as_str)
+            .and_then(spoken_language)
+            .unwrap_or("?"),
+        "setupError": text(payload.get("setupError")),
+        "failures": failures,
+    })
+}
 
 pub fn sanitize_integrity_event(payload: &serde_json::Value) -> Option<serde_json::Value> {
     let text = |key| {

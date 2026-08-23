@@ -9,7 +9,7 @@ mod problems;
 mod prompts;
 
 use integrity::integrity_hash;
-pub use integrity::sanitize_integrity_event;
+pub use integrity::{sanitize_integrity_event, sanitize_test_run};
 pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, get_problem};
 pub use prompts::{
     ReportPromptInput, build_instructions, format_test_run, greeting, language_choice,
@@ -30,6 +30,27 @@ const MAX_INTEGRITY_EVENTS: usize = 25;
 /// catches a browser that outgrows this bound, but not a server that outgrows
 /// the browser, and only one of those is caught by bytes already on disk.
 pub const MAX_INTEGRITY_TEXT: usize = 80;
+/// Per-field bound on a test run's free text. Not shared with the browser the
+/// way `MAX_INTEGRITY_TEXT` is: nothing hashes these, so truncating past what
+/// the producer sent costs a few characters of a failure message rather than
+/// breaking a chain. Larger than the integrity bound because a useful line
+/// reads "expected [1, 2, 3], got [3, 2, 1]" and 80 characters cuts that in
+/// half; small enough that four failures plus a setup error cannot crowd out
+/// the code and the transcript in the report prompt.
+const MAX_TEST_TEXT: usize = 200;
+/// Clamp on the reported pass and case counts. The largest judge in the bank
+/// holds seven cases, so this only has to stop a forged count from rendering
+/// as a wall of digits; it is not a claim that the number is true.
+const MAX_TEST_CASES: i64 = 99;
+/// How many failures a run may carry into the prompt. Named because both the
+/// sanitizer and the renderer cap the list and the two have to agree: the
+/// renderer would otherwise be silently capping a list the sanitizer already
+/// bounded, and a change to one would look like it had taken effect.
+///
+/// `web/lib.js` sends four as well, but that is the producer being tidy rather
+/// than a contract. Nothing hashes this list, so a browser that sends more
+/// simply has the extra dropped here, and no same-number test is owed.
+const MAX_TEST_FAILURES: usize = 4;
 pub const WATCH_TICK_S: f64 = 2.0;
 pub const SILENCE_THRESHOLD_S: f64 = 15.0;
 pub const TEST_REACTION_COOLDOWN_S: f64 = 20.0;
@@ -448,6 +469,17 @@ fn apply_test_results(
     payload: &serde_json::Value,
     since_last_test_reaction_seconds: f64,
 ) -> DataEventResult {
+    // Bounded before it is stored, not before it is rendered. Both readers of
+    // `last_test_run` put it in front of a model, so the sanitized value has to
+    // be the only one that exists past this line.
+    let payload = &sanitize_test_run(payload);
+    // The sanitizer reports "no run happened" as null, and the caller has to
+    // honor that or the refusal to invent a run is undone one line later:
+    // counting it and reacting to it is what telling the report a run occurred
+    // looks like from here.
+    if payload.is_null() {
+        return DataEventResult::default();
+    }
     state.last_test_run = Some(payload.clone());
     state.test_runs += 1;
 
