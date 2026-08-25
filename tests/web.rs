@@ -290,6 +290,7 @@ async fn token_endpoint_rate_limits_a_noisy_client() {
 async fn responses_carry_baseline_security_headers() {
     let (base, server) = spawn_web_server(WebServerConfig {
         web_dir: Path::new("web").to_path_buf(),
+        pool: primary_pool("wss://example.livekit.cloud:443", "devkey", "devsecret"),
         ..web_config()
     })
     .await;
@@ -341,7 +342,15 @@ async fn responses_carry_baseline_security_headers() {
 
     // The page reaches LiveKit and Compiler Explorer directly, so each has to
     // be named or the interview cannot connect.
-    assert!(policy.contains("wss://example.livekit.cloud"), "{policy}");
+    assert!(
+        policy.contains("wss://example.livekit.cloud:443"),
+        "{policy}"
+    );
+
+    // LiveKit Cloud hands the SDK a regional host from `/settings/regions` and
+    // it retries there, so the configured host alone leaves the retry blocked.
+    assert!(policy.contains("https://*.livekit.cloud"), "{policy}");
+    assert!(policy.contains("wss://*.livekit.cloud"), "{policy}");
     assert!(policy.contains("https://godbolt.org"), "{policy}");
 
     // Pyodide is served from web/vendor/pyodide/, so the CDN that used to
@@ -4075,7 +4084,8 @@ async fn consent_withdrawal_stops_egress() {
 /// negative that only an exhaustive list can observe. A containment check would
 /// pass while an ingest route sat beside the ones it named.
 ///
-/// Read as text out of `src/web.rs` because axum does not hand back the routes
+/// Read as text out of `src/web/mod.rs` because axum does not hand back the
+/// routes
 /// it was given. That makes this a tripwire on the source rather than on the
 /// running router, which is the trade the whole file already makes for the
 /// browser side.
@@ -4087,7 +4097,7 @@ async fn consent_withdrawal_stops_egress() {
 /// all.
 #[test]
 fn router_routes_match_a_fixed_allowlist() {
-    let source = fs::read_to_string("src/web.rs").unwrap();
+    let source = fs::read_to_string("src/web/mod.rs").unwrap();
     let router = source
         .split_once("    Router::new()")
         .expect("web_router builds a Router")
@@ -5338,4 +5348,230 @@ fn interview_rows(path: &std::path::Path) -> Vec<(String, String, i64, Option<i6
         .unwrap()
         .map(Result::unwrap)
         .collect()
+}
+
+/// A LiveKit stand-in that answers `/rtc/validate` with one fixed status, which
+/// is the whole of what the quota probe reads.
+async fn spawn_livekit_quota_stub(
+    status: axum::http::StatusCode,
+    delay: Duration,
+) -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = axum::Router::new().route(
+        "/rtc/validate",
+        axum::routing::get(move || async move {
+            tokio::time::sleep(delay).await;
+            if status == axum::http::StatusCode::TOO_MANY_REQUESTS {
+                (
+                    status,
+                    "connection minutes limit exceeded. please contact the project owner.",
+                )
+            } else {
+                (status, "success")
+            }
+        }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, router).await });
+    (format!("ws://127.0.0.1:{}", addr.port()), server)
+}
+
+/// A quota check must never make starting an interview wait for the shared
+/// client's 30-second backstop when a provider accepts connections but stalls.
+#[tokio::test]
+async fn a_stalled_quota_probe_does_not_delay_token_issuance() {
+    let (provider, stub) =
+        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::from_secs(3)).await;
+    let (mut config, cookie, db_path) = signed_in_web_config("quota-probe-timeout");
+    config.pool = primary_pool(&provider, "available-key", "available-secret");
+    let (base, server) = spawn_web_server(config).await;
+
+    let started = std::time::Instant::now();
+    let response = reqwest::Client::new()
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "a stalled quota probe must use its short timeout"
+    );
+
+    server.abort();
+    stub.abort();
+    remove_database(db_path);
+}
+
+/// A project out of connection minutes refuses the candidate's WebSocket, and a
+/// browser cannot see the status on a refused upgrade: it surfaces as a bare
+/// socket error, so the candidate is told only that the connection failed. The
+/// pool exists precisely so one spent project is not the end of the interview,
+/// so the server has to ask before it hands the token out.
+#[tokio::test]
+async fn a_provider_out_of_connection_minutes_is_passed_over() {
+    let (exhausted, first) =
+        spawn_livekit_quota_stub(axum::http::StatusCode::TOO_MANY_REQUESTS, Duration::ZERO).await;
+    let (healthy, second) =
+        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
+
+    let (mut config, cookie, db_path) = signed_in_web_config("quota-failover");
+    config.pool = codetrial::config::ProviderPool {
+        providers: vec![
+            codetrial::config::Provider {
+                id: codetrial::config::PRIMARY_PROVIDER_ID.to_string(),
+                url: exhausted.clone(),
+                api_key: "spent-key".to_string(),
+                api_secret: "spent-secret".to_string(),
+                google_api_key: String::new(),
+            },
+            codetrial::config::Provider {
+                id: "spare".to_string(),
+                url: healthy.clone(),
+                api_key: "spare-key".to_string(),
+                api_secret: "spare-secret".to_string(),
+                google_api_key: String::new(),
+            },
+        ],
+    };
+    let (base, server) = spawn_web_server(config).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body = response.json::<Value>().await.unwrap();
+
+    assert_eq!(
+        body["serverUrl"], healthy,
+        "the candidate must be sent to the project that still has minutes: {body}"
+    );
+    // The room name carries the provider id, which is how the agent resolves the
+    // same project. Landing on the spare is not enough if the room still says
+    // primary: the agent would join the project the candidate was moved off.
+    assert!(
+        body["roomName"].as_str().unwrap().contains("-spare-"),
+        "the room must name the project the candidate was moved to: {body}"
+    );
+
+    server.abort();
+    first.abort();
+    second.abort();
+    remove_database(db_path);
+}
+
+/// With nothing left to fail over to, the honest answer names the cause. The
+/// browser cannot: a refused upgrade reaches it as an unexplained socket error,
+/// so a candidate would go looking at their own network for a quota this server
+/// already knows is spent.
+#[tokio::test]
+async fn every_provider_out_of_minutes_is_refused_with_the_reason() {
+    let (exhausted, stub) =
+        spawn_livekit_quota_stub(axum::http::StatusCode::TOO_MANY_REQUESTS, Duration::ZERO).await;
+
+    let (mut config, cookie, db_path) = signed_in_web_config("quota-exhausted");
+    config.pool = primary_pool(&exhausted, "spent-key", "spent-secret");
+    let (base, server) = spawn_web_server(config).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 503);
+    let body = response.json::<Value>().await.unwrap();
+    assert_eq!(body["code"], "livekit_quota_exhausted", "{body}");
+
+    server.abort();
+    stub.abort();
+    remove_database(db_path);
+}
+
+/// A dead project must not skew the pool. It still consumes its turn in the
+/// rotation, so the project after it serves its own share and no more.
+///
+/// The failure this pins is not a refusal but a lopsided one: taking a single
+/// rotation step per request and adding the retry offset locally leaves every
+/// request starting at the dead project again, so its neighbour answers twice
+/// as often as the rest. With three projects and one spent, six starts must
+/// split three and three, not four and two.
+#[tokio::test]
+async fn a_dead_project_does_not_skew_the_rotation() {
+    let (spent, spent_stub) =
+        spawn_livekit_quota_stub(axum::http::StatusCode::TOO_MANY_REQUESTS, Duration::ZERO).await;
+    let (first, first_stub) =
+        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
+    let (second, second_stub) =
+        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
+
+    let (mut config, cookie, db_path) = signed_in_web_config("quota-rotation");
+    config.pool = codetrial::config::ProviderPool {
+        providers: vec![
+            codetrial::config::Provider {
+                id: codetrial::config::PRIMARY_PROVIDER_ID.to_string(),
+                url: spent.clone(),
+                api_key: "spent-key".to_string(),
+                api_secret: "spent-secret".to_string(),
+                google_api_key: String::new(),
+            },
+            codetrial::config::Provider {
+                id: "first".to_string(),
+                url: first.clone(),
+                api_key: "first-key".to_string(),
+                api_secret: "first-secret".to_string(),
+                google_api_key: String::new(),
+            },
+            codetrial::config::Provider {
+                id: "second".to_string(),
+                url: second.clone(),
+                api_key: "second-key".to_string(),
+                api_secret: "second-secret".to_string(),
+                google_api_key: String::new(),
+            },
+        ],
+    };
+    let (base, server) = spawn_web_server(config).await;
+
+    let client = reqwest::Client::new();
+    let mut served = std::collections::HashMap::new();
+    for _ in 0..6 {
+        let body = client
+            .post(format!("{base}/api/token"))
+            .header("cookie", &cookie)
+            .header("content-type", "application/json")
+            .body("{}")
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        let url = body["serverUrl"].as_str().unwrap().to_string();
+        *served.entry(url).or_insert(0) += 1;
+    }
+
+    assert_eq!(
+        served.get(&spent),
+        None,
+        "a spent project must serve nobody"
+    );
+    assert_eq!(served.get(&first), Some(&3), "{served:?}");
+    assert_eq!(served.get(&second), Some(&3), "{served:?}");
+
+    server.abort();
+    spent_stub.abort();
+    first_stub.abort();
+    second_stub.abort();
+    remove_database(db_path);
 }

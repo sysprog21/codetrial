@@ -336,7 +336,7 @@ test("sanitizeReport bounds text so the largest possible report still fits", () 
   assert.equal(report.codingFeedback.strengths.length, 4);
   assert.equal(report.communicationFeedback.improvements.length, 4);
   assert.equal(report.integrityEvents.length, 25);
-  assert.ok(new TextEncoder().encode(JSON.stringify(report)).length < 64 * 1024, "MAX_REPORT_BYTES in src/web.rs");
+  assert.ok(new TextEncoder().encode(JSON.stringify(report)).length < 64 * 1024, "MAX_REPORT_BYTES in src/web/mod.rs");
 });
 
 // A report with nothing in it is stored in localStorage and POSTed to
