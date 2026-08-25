@@ -234,3 +234,75 @@ test("an ended track is replaced instead of counted as a device the pool holds",
     "the dead track was left in the stream the candidate joins with",
   );
 });
+
+// The pool drops the dead track itself, so whatever the caller was running
+// over it -- the preflight's face check, its level meter -- has to be told in
+// the same step. Otherwise the replacement arrives and nothing notices it is a
+// different device, and a face check already bound to the old one refuses to
+// start over the new one.
+test("the caller is told when the pool drops a device that ended", async () => {
+  const lost = [];
+  const { pool } = poolWith(async (constraints) =>
+    new FakeStream([new FakeTrack(constraints.audio ? "audio" : "video")]));
+  // Merged onto the hooks `poolWith` already set, because a caller that names
+  // one of the three must not blank the other two.
+  pool.configure("video", { onLost: () => lost.push("video") });
+
+  pool.start();
+  await settle();
+  assert.deepEqual(lost, [], "nothing was lost while both devices were live");
+
+  pool.trackOf("video").readyState = "ended";
+  pool.start();
+  await settle();
+
+  assert.deepEqual(lost, ["video"], "the camera was replaced behind the caller's back");
+  assert.equal(pool.trackOf("video").readyState, "live");
+});
+
+// The preflight reads its signals on every animation frame, and that read drops
+// an ended track. So `onLost` runs inside a read that the hook itself restarts:
+// the audio hook calls refresh(), refresh() reads again, and the read would drop
+// the same track a second time if it were still there. Removing before notifying
+// is what makes that bottom out after one pass instead of recursing until the
+// stack gives out and the preflight page dies.
+//
+// Pinned here rather than in the caller because the ordering is the pool's to
+// keep, and swapping the two lines reads just as naturally as leaving them.
+test("a dropped track is gone from the stream before the caller is told", async () => {
+  const { pool } = poolWith(
+    async (constraints) => new FakeStream([new FakeTrack(constraints.audio ? "audio" : "video")]),
+    { retryMs: 10_000 },
+  );
+  pool.start();
+  await settle();
+
+  let seen = "not called";
+  pool.configure("audio", { onLost: () => { seen = pool.trackOf("audio"); } });
+  pool.dropTrack(pool.trackOf("audio"));
+
+  assert.equal(seen, null, "onLost must not see the track it is being told about");
+  assert.equal(pool.trackOf("audio"), null);
+  pool.cancelRetry();
+});
+
+// Same rule for the pool's own drop of an ended track, the other route in.
+test("the pool's own drop of an ended track also removes before notifying", async () => {
+  let finished = false;
+  const { pool } = poolWith(
+    async (constraints) => new FakeStream([new FakeTrack(constraints.audio ? "audio" : "video")]),
+    { isFinished: () => finished, retryMs: 10 },
+  );
+  pool.start();
+  await settle();
+
+  pool.trackOf("audio").readyState = "ended";
+  let seen = "not called";
+  pool.configure("audio", { onLost: () => { seen = pool.trackOf("audio"); } });
+  pool.retry();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.equal(seen, null, "onLost must not see the ended track still in the stream");
+  finished = true;
+  pool.cancelRetry();
+});

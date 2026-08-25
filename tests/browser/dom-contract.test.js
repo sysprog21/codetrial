@@ -271,10 +271,19 @@ test("output confirmation is required but not blocked by tone timing", () => {
 test("a replacement preflight camera gets a fresh face check", () => {
   // Dropping the dead track, forgetting its face check, and asking for a
   // replacement are one step: any two of the three leave the panel judging a
-  // camera that is gone. This is the wiring `face-check.test.js` cannot see,
-  // because it is about who calls the reset rather than what the reset does.
-  assert.match(read("interview.js"),
-    /pool\.dropTrack\(camera\);\s*faceCheck\.reset\(\);\s*pool\.retry\(\);/s);
+  // camera that is gone. Both routes to that step now end in `onLost`, so this
+  // asserts the hook rather than a sequence written out at the call site. This
+  // is the wiring `face-check.test.js` cannot see, because it is about who
+  // calls the reset rather than what the reset does.
+  assert.match(read("interview.js"), /onLost: \(\) => faceCheck\.reset\(\)/,
+    "losing a camera must reset the face check");
+
+  // The preflight notices an ended camera per frame and the pool notices one on
+  // a retry pass. Neither may reset the check by hand: `dropTrack` fires
+  // `onLost` for the first and `requestDevice` for the second, and a caller
+  // pairing the two by hand is what left the reset written at two sites.
+  assert.doesNotMatch(read("interview.js"), /faceCheck\.reset\(\);/,
+    "the face check reset belongs to onLost, not to a call site");
 
   // start() awaits three times, and the camera can be replaced across any of
   // them, so every resumption has to re-check that this run still owns the
@@ -284,6 +293,24 @@ test("a replacement preflight camera gets a fresh face check", () => {
   const stale = [...read("face-check.js").matchAll(/\bstale\(\)/g)];
   assert.equal(stale.length, 3,
     "a stale detector must not publish a verdict for the replacement camera");
+});
+
+// The camera's liveness is judged on every preflight frame. The microphone's
+// is not: a level meter over a device that went away reports silence rather
+// than an error, so nothing asked the pool to look again and the media gate,
+// which has no bypass, stayed shut for the rest of the preflight.
+test("a preflight microphone that goes away is asked for again", () => {
+  const script = read("interview.js");
+  // One loop covers both kinds, so the microphone is no longer the case that
+  // can be forgotten: naming a kind here is what asks the pool to look again.
+  assert.match(script,
+    /for \(const kind of \["audio", "video"\]\)[\s\S]*?pool\.dropTrack\(track\);\s*pool\.retry\(\);/,
+    "a dead device of either kind must reopen the request the pool makes");
+  // Anchored to the audio hook and lazily matched, so a rename of the video
+  // hook cannot silently widen the slice this is read out of.
+  assert.match(script,
+    /pool\.configure\("audio",[\s\S]*?onLost: \(\) => \{\s*meterGeneration \+= 1;\s*micPeak = 0;\s*recentPeaks\.length = 0;/,
+    "dropping a microphone must invalidate its meter and readiness state");
 });
 
 test("runtime config can withdraw compiled language test runs", async () => {

@@ -443,12 +443,19 @@ function runAudioCheck() {
       const camera = trackOf("video");
       if (camera) pool.setError("video", cameraReady() ? null : "no active video track");
       // An ended track never revives, and while it sits in the stream the retry
-      // sees a video track and asks for nothing. The gate has no bypass, so an
-      // unplugged camera would strand the candidate. A muted track can come
-      // back on its own, so only the ended one is dropped.
-      if (camera?.readyState === "ended") {
-        pool.dropTrack(camera);
-        faceCheck.reset();
+      // sees a device of that kind and asks for nothing. The gate has no bypass,
+      // so an unplugged device would strand the candidate. A muted track can
+      // come back on its own, so only the ended one is dropped.
+      //
+      // Both kinds, one rule. The camera is dropped here rather than left to the
+      // retry tick because its liveness is judged per frame just above; the
+      // microphone has no such judgement, because a meter over a device that
+      // went away reports silence rather than an error. `dropTrack` fires
+      // `onLost`, so whatever was running over the track is torn down with it.
+      for (const kind of ["audio", "video"]) {
+        const track = trackOf(kind);
+        if (track?.readyState !== "ended") continue;
+        pool.dropTrack(track);
         pool.retry();
       }
       return mediaReadiness({
@@ -563,8 +570,14 @@ function runAudioCheck() {
     nodes.recordingConsentStep.hidden = !recordingEnabled;
     nodes.recordingConsent.addEventListener("change", refresh);
 
-    const watchMic = () =>
-      startMediaMeter(
+    // One meter at a time. The pool can hand back a replacement microphone
+    // now, and both ways back into here -- a fresh track and the meter's own
+    // retry -- would otherwise leave the previous AudioContext reading the
+    // track that went away and repainting the bar from it every frame.
+    let meterGeneration = 0;
+    const watchMic = () => {
+      const generation = ++meterGeneration;
+      return startMediaMeter(
         pool.stream,
         (peak) => {
           pool.setError("audio", null);
@@ -592,14 +605,34 @@ function runAudioCheck() {
           // already hold, that one asks the browser for a device again.
           meterRetry = setTimeout(watchMic, 2000);
         },
-        () => finished,
+        () => finished || generation !== meterGeneration,
       );
+    };
     // A live track is enough for the microphone: the meter is what proves one
     // actually carries sound, and it runs for the rest of the preflight.
-    pool.configure("audio", { accept: (track) => Boolean(track), onTrack: () => watchMic() });
+    pool.configure("audio", {
+      accept: (track) => Boolean(track),
+      onTrack: () => watchMic(),
+      onLost: () => {
+        meterGeneration += 1;
+        micPeak = 0;
+        recentPeaks.length = 0;
+        clearTimeout(meterRetry);
+        nodes.audioMeterFill.style.width = "0%";
+        refresh();
+      },
+    });
     // Granted is not working. A track that arrives already ended or muted would
     // paint the step green over a black square.
-    pool.configure("video", { accept: (track) => videoTrackReady(track), onTrack: () => void faceCheck.start() });
+    pool.configure("video", {
+      accept: (track) => videoTrackReady(track),
+      onTrack: () => void faceCheck.start(),
+      // The pool drops an ended camera on its own now. A check still bound to
+      // that track would keep judging its last frame, and `start` refuses to
+      // run while one is already running, so the replacement would never be
+      // watched at all.
+      onLost: () => faceCheck.reset(),
+    });
     pool.start();
     refresh();
   });

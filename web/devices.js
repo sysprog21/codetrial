@@ -29,10 +29,16 @@ export function createDevicePool({
   let stream = null;
   let retryTimer = null;
 
-  const devices = {
-    audio: { kind: "audio", constraints: { audio: true }, pending: false, error: null, accept: () => true, onTrack: () => {} },
-    video: { kind: "video", constraints: { video: true }, pending: false, error: null, accept: () => true, onTrack: () => {} },
-  };
+  const device = (kind) => ({
+    kind,
+    constraints: { [kind]: true },
+    pending: false,
+    error: null,
+    accept: () => true,
+    onTrack: () => {},
+    onLost: () => {},
+  });
+  const devices = { audio: device("audio"), video: device("video") };
 
   // `stream` stays the single owner of the tracks, because it is what the
   // candidate joins the room with. The records describe the request, not the
@@ -64,11 +70,17 @@ export function createDevicePool({
   const requestDevice = (device) => {
     // An ended track never revives, and while it sits in the stream it looks
     // like a device this pool already holds, so the retry asks for nothing and
-    // the candidate is stranded with no way back. The preflight does this for
-    // the camera, because it has its own reason to notice one going away and
-    // reset the face check; nobody was doing it for the microphone.
+    // the candidate is stranded with no way back.
+    //
+    // `onLost` is what makes it safe for the pool to do this rather than the
+    // preflight: whatever the caller was running over that track -- a face
+    // check, a level meter -- has to be torn down in the same step, or the
+    // replacement arrives and nothing notices it is a different device.
     const held = trackOf(device.kind);
-    if (held?.readyState === "ended") stream.removeTrack(held);
+    if (held?.readyState === "ended") {
+      stream.removeTrack(held);
+      device.onLost();
+    }
 
     if (device.pending || trackOf(device.kind)) return;
     device.pending = true;
@@ -107,10 +119,12 @@ export function createDevicePool({
     get stream() {
       return stream;
     },
-    /// `accept` decides whether a granted track counts, and `onTrack` runs once
-    /// one does. Set before `start`, because the first grant can arrive inside it.
-    configure(kind, { accept, onTrack }) {
-      Object.assign(devices[kind], { accept, onTrack });
+    /// `accept` decides whether a granted track counts, `onTrack` runs once one
+    /// does, and `onLost` runs when the pool drops one that ended. Set before
+    /// `start`, because the first grant can arrive inside it. Merged rather than
+    /// assigned, so naming two of the three does not blank the third.
+    configure(kind, overrides) {
+      Object.assign(devices[kind], overrides);
     },
     start,
     retry,
@@ -121,8 +135,13 @@ export function createDevicePool({
     },
     // An ended track never revives, and while it sits in the stream the retry
     // sees a track of that kind and asks for nothing.
+    /// Fires `onLost` like the pool's own drop does, so a caller that notices an
+    /// ended track first does not have to pair the removal with the teardown by
+    /// hand. That pairing is what left the face check reset at two sites.
     dropTrack(track) {
+      if (!track) return;
       stream?.removeTrack(track);
+      devices[track.kind]?.onLost();
     },
     cancelRetry() {
       unschedule(retryTimer);
