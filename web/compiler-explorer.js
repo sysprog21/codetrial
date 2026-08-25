@@ -110,7 +110,9 @@ export function mapCompilerResponse(response) {
 }
 
 function cHarness(spec, candidateCode) {
-  return `#include <stdbool.h>
+  return `#include <limits.h>
+#include <math.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -234,20 +236,28 @@ ${spec.cases.map((testCase, index) => cppCase(spec, testCase, index)).join("\n")
 
 function cppPrelude() {
   return `#include <algorithm>
+#include <array>
 #include <chrono>
+#include <climits>
 #include <cmath>
+#include <deque>
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <list>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <queue>
 #include <set>
 #include <sstream>
+#include <stack>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 using namespace std;
