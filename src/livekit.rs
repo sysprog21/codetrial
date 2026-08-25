@@ -70,7 +70,7 @@ const CANDIDATE_ABSENCE_LIMIT: Duration = Duration::from_secs(90);
 
 use crate::gemini::{
     GeminiEvent, GeminiFunctionCall, GeminiLiveSession, generate_report, open_live_session,
-    redact_api_key,
+    redact_api_key, resume_live_session,
 };
 use crate::runtime::{
     AGENT_NAME, RuntimeBootstrap, TOOL_LOG_HINT, TOOL_READ_EDITOR, TOPIC_REPORT,
@@ -85,6 +85,11 @@ const GEMINI_VIDEO_MIME_TYPE: &str = "image/jpeg";
 const GEMINI_VIDEO_FRAME_INTERVAL: Duration = Duration::from_secs(1);
 const GEMINI_VIDEO_JPEG_QUALITY: u8 = 75;
 const GEMINI_OUTPUT_AUDIO_SAMPLE_RATE: u32 = 24_000;
+/// Gemini closes a connection roughly every ten minutes, so the longest
+/// interview this offers needs about nine resumptions. The ceiling is here to
+/// stop a socket that fails immediately from spinning, not to bound a healthy
+/// interview; past it the supervisor restart takes over as before.
+const GEMINI_RESUME_LIMIT: usize = 16;
 const LIVEKIT_OUTPUT_CHANNELS: u32 = 1;
 const LIVEKIT_OUTPUT_QUEUE_MS: u32 = 100;
 const LIVEKIT_OUTPUT_FRAME_QUEUE: usize = 6_000;
@@ -152,6 +157,33 @@ fn interview_packet<'a>(
         return None;
     }
     Some((topic, serde_json::from_slice(payload).ok()?))
+}
+
+/// Decides whether a closed Gemini socket may be continued, and spends one of
+/// the budgeted attempts when it may.
+///
+/// This is the half of resuming that can be judged. `cargo test` cannot open a
+/// Gemini session, but every rule about when not to try one is arithmetic over
+/// a counter and an `Option`, so it lives here where tests can reach it rather
+/// than inside the reconnect it authorises.
+///
+/// Refuses when the server never offered a resumable checkpoint, and once the
+/// ceiling is reached. Both leave the caller to end the room, which is what
+/// happened for every close before resuming existed at all.
+fn take_resume_attempt(resumed: &mut usize, handle: Option<String>) -> Result<String, String> {
+    if *resumed >= GEMINI_RESUME_LIMIT {
+        return Err(format!("already resumed {resumed} times"));
+    }
+    let Some(handle) = handle else {
+        return Err("no resumption handle was offered".to_string());
+    };
+
+    // Spent before the reconnect rather than after it. A socket that fails to
+    // come back is the case the ceiling exists for, and counting only the
+    // successes would let an endpoint failing instantly be retried without
+    // bound.
+    *resumed += 1;
+    Ok(handle)
 }
 
 pub async fn run_room(
@@ -239,6 +271,8 @@ pub async fn run_room(
     gemini.send_text(&boot.greeting).await?;
     turn.activity.mark_speaking();
 
+    let mut resumed = 0usize;
+
     let mut watch = tokio::time::interval(Duration::from_secs_f64(WATCH_TICK_S));
 
     // Checked on the watch tick rather than given its own timer arm: the tick
@@ -297,7 +331,17 @@ pub async fn run_room(
                     return Ok(());
                 }
                 if let Some(prompt) = turn.activity.watch_prompt(&turn.state, Instant::now()) {
-                    gemini.send_text(&prompt).await?;
+                    // Not `?`. Every write below is one the reader may be
+                    // about to explain: a socket Gemini has closed fails the
+                    // next send long before `next_event` drains and reports
+                    // it, and audio flushes every hundred milliseconds, so
+                    // propagating here is how a closed socket ended the
+                    // interview from the write side without the arm that
+                    // resumes it ever running.
+                    if let Err(error) = gemini.send_text(&prompt).await {
+                        eprintln!("Gemini nudge failed ({error}); waiting for the close to be reported");
+                        continue;
+                    }
                     turn.activity.mark_speaking();
                 }
             }
@@ -307,16 +351,21 @@ pub async fn run_room(
                     gemini.close().await?;
                     return Ok(());
                 };
-                if handle_media_event(
+                match handle_media_event(
                     &mut media,
                     &mut gemini,
                     &candidate_identity,
                     config.gemini_candidate_video_enabled,
                     &event,
                 )
-                .await?
+                .await
                 {
-                    continue;
+                    Ok(true) => continue,
+                    Ok(false) => {}
+                    Err(error) => {
+                        eprintln!("Gemini media attach failed ({error}); waiting for the close to be reported");
+                        continue;
+                    }
                 }
                 let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
                 if handle_room_event(&room, &mut context, &mut presence, interview, &ids, event)
@@ -328,16 +377,58 @@ pub async fn run_room(
             }
             event = gemini.next_event() => {
                 let Some(event) = event else {
-                    // The interview ends here whenever Gemini hangs up, which
-                    // from the candidate's side is the interviewer stopping
-                    // mid-sentence with the transcript cut at the same word.
-                    // The reason came over the socket and is logged by the
-                    // reader task; this line is what ties that to the room.
-                    eprintln!(
-                        "Gemini session ended; ending interview room={room_name} and letting the supervisor restart"
-                    );
-                    close_room(&room).await;
-                    return Ok(());
+                    // Gemini hung up. Usually that is the ten-minute cap on a
+                    // single connection rather than anything wrong, so the
+                    // session continues on a new socket instead of ending the
+                    // interview. The reason came over the socket and is logged
+                    // by the reader task; these lines tie that to the room.
+                    //
+                    // The reconnect sits here rather than behind a function of
+                    // its own because everything decidable about it is in
+                    // `take_resume_attempt`, which is tested. What is left is
+                    // two awaits nothing in `cargo test` can reach, and a name
+                    // wrapping only those would add a mutant no test can kill
+                    // to a gate that is worth keeping honest.
+                    let resumed_session = match take_resume_attempt(&mut resumed, gemini.resumption_handle()) {
+                        Ok(handle) => {
+                            // The socket is already gone; this closes the
+                            // writer half and the reader task. A close on a
+                            // dead socket errors, and that error says nothing
+                            // the caller can act on.
+                            let _ = gemini.shutdown().await;
+                            resume_live_session(&config.google_api_key, &boot, &handle)
+                                .await
+                                .map_err(|error| error.to_string())
+                        }
+                        Err(refused) => Err(refused),
+                    };
+                    match resumed_session {
+                        Ok(session) => {
+                            gemini = session;
+                            eprintln!(
+                                "Gemini session resumed ({resumed} so far); the interview continues where it left off"
+                            );
+
+                            // Whatever was mid-flight died with the socket. The
+                            // turn ids have to close here for the same reason
+                            // an interruption closes them: left open, the next
+                            // thing either party says appends to an utterance
+                            // that was cut off, and the panel and the report
+                            // both read the two as one.
+                            let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
+                            cut_off_turn(context.activity, context.output_audio);
+                            close_turns(&room, &mut context).await?;
+                            set_agent_state(&room, &mut turn.agent_state, AGENT_STATE_LISTENING).await?;
+                            continue;
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "Gemini session ended and could not be resumed ({error}); ending interview room={room_name} and letting the supervisor restart"
+                            );
+                            close_room(&room).await;
+                            return Ok(());
+                        }
+                    }
                 };
                 let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
                 handle_gemini_event(&room, &mut context, event, Interruptible::Yes).await?;
@@ -350,10 +441,19 @@ pub async fn run_room(
                 set_agent_state(&room, &mut turn.agent_state, AGENT_STATE_LISTENING).await?;
             }
             frame = next_audio_frame(&mut media.audio), if media.audio.is_some() => {
-                pump_audio(&mut media, &mut gemini, frame).await?;
+                // The fastest writer in the loop, and so the one that reaches a
+                // closed socket first: a flush leaves every hundred
+                // milliseconds of speech. Dropping the frame costs a tenth of a
+                // second of audio the resumed session did not need; propagating
+                // cost the interview.
+                if let Err(error) = pump_audio(&mut media, &mut gemini, frame).await {
+                    eprintln!("Gemini audio write failed ({error}); waiting for the close to be reported");
+                }
             }
             frame = next_video_frame(&mut media.video), if media.video.is_some() => {
-                pump_video(&mut media, &mut gemini, frame).await?;
+                if let Err(error) = pump_video(&mut media, &mut gemini, frame).await {
+                    eprintln!("Gemini video write failed ({error}); waiting for the close to be reported");
+                }
             }
         }
     }
@@ -2996,6 +3096,60 @@ mod tests {
         assert_eq!(pixel[3], 255, "alpha belongs in byte 3, got {pixel:?}");
     }
 }
+/// The ceiling is a boundary, so both sides of it are named. One attempt short
+/// of the limit still resumes; the limit itself does not, and neither does the
+/// count past it that a wrong comparison would let through.
+#[test]
+fn the_resume_ceiling_admits_the_last_attempt_and_refuses_the_one_after() {
+    let mut last = GEMINI_RESUME_LIMIT - 1;
+    assert_eq!(
+        take_resume_attempt(&mut last, Some("handle-abc".to_string())),
+        Ok("handle-abc".to_string()),
+        "the attempt below the ceiling is the one the longest interview needs"
+    );
+    assert_eq!(last, GEMINI_RESUME_LIMIT);
+
+    let mut at_limit = GEMINI_RESUME_LIMIT;
+    assert!(take_resume_attempt(&mut at_limit, Some("handle-abc".to_string())).is_err());
+    assert_eq!(
+        at_limit, GEMINI_RESUME_LIMIT,
+        "a refused attempt is not a spent one"
+    );
+}
+
+/// A socket that never reached a resumable checkpoint cannot be continued, and
+/// asking anyway would restart the interview from the greeting. Refusing must
+/// also leave the budget alone, or a handleless close would eat the attempts a
+/// later one needs.
+#[test]
+fn a_missing_handle_refuses_without_spending_an_attempt() {
+    let mut resumed = 2;
+
+    assert!(take_resume_attempt(&mut resumed, None).is_err());
+
+    assert_eq!(resumed, 2);
+}
+
+/// Exactly one attempt per resume. Started away from zero on purpose: at zero a
+/// counter that multiplied instead of adding would look identical to one that
+/// added.
+#[test]
+fn each_resume_spends_one_attempt_and_hands_back_its_own_handle() {
+    let mut resumed = 3;
+
+    assert_eq!(
+        take_resume_attempt(&mut resumed, Some("handle-first".to_string())),
+        Ok("handle-first".to_string())
+    );
+    assert_eq!(resumed, 4);
+
+    assert_eq!(
+        take_resume_attempt(&mut resumed, Some("handle-second".to_string())),
+        Ok("handle-second".to_string())
+    );
+    assert_eq!(resumed, 5);
+}
+
 #[test]
 fn observer_is_not_the_candidate() {
     assert!(candidate_identity_matches(
