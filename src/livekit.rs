@@ -13,7 +13,7 @@
 //! - Event handling (`handle_media_event`, `handle_data_packet`,
 //!   `handle_gemini_event`): the three sources that drive the session.
 //! - `OutputAudio` and its worker: Gemini's audio, paced onto a LiveKit track.
-//! - Media codecs (`append_pcm16_bytes` through `encode_video_frame_jpeg`):
+//! - Media codecs (`append_pcm16_bytes` through `encode_video_frame_jpeg_off_thread`):
 //!   pure functions, no room state, each covered by the tests at the bottom of
 //!   this file.
 //! - Report building (`publish_report` through `report_data_packet`).
@@ -404,7 +404,7 @@ async fn pump_video(
     // wire, and a source stuck emitting frames that will not encode must cost
     // one try per interval rather than one per arriving frame.
     media.last_video_frame = Instant::now();
-    match encode_video_frame_jpeg(&frame, GEMINI_VIDEO_JPEG_QUALITY) {
+    match encode_video_frame_jpeg_off_thread(&frame, GEMINI_VIDEO_JPEG_QUALITY).await {
         Ok(bytes) => {
             gemini
                 .send_video_frame(&bytes, GEMINI_VIDEO_MIME_TYPE)
@@ -1856,9 +1856,15 @@ fn frame_to_rgba(frame: &BoxVideoFrame) -> Result<(Vec<u8>, u16, u16), String> {
     Ok((rgba, jpeg_width, jpeg_height))
 }
 
-fn encode_video_frame_jpeg(frame: &BoxVideoFrame, quality: u8) -> Result<Vec<u8>, String> {
-    let (rgba, jpeg_width, jpeg_height) = frame_to_rgba(frame)?;
-
+/// The compression on its own, so the caller can put it somewhere other than
+/// the executor. Owned pixels rather than the frame, because the frame does not
+/// cross a thread and this does.
+fn encode_rgba_jpeg(
+    rgba: &[u8],
+    jpeg_width: u16,
+    jpeg_height: u16,
+    quality: u8,
+) -> Result<Vec<u8>, String> {
     // Chroma is subsampled 2x2 here, because that is what `Encoder::new` picks
     // below quality 90 and nothing below overrides it. Deliberate: the source
     // is I420, whose chroma is already 4:2:0, so encoding it at full resolution
@@ -1867,9 +1873,28 @@ fn encode_video_frame_jpeg(frame: &BoxVideoFrame, quality: u8) -> Result<Vec<u8>
     // `set_sampling_factor(SamplingFactor::F_1_1)` before the call.
     let mut jpeg = Vec::new();
     Encoder::new(&mut jpeg, quality)
-        .encode(&rgba, jpeg_width, jpeg_height, ColorType::Rgba)
+        .encode(rgba, jpeg_width, jpeg_height, ColorType::Rgba)
         .map_err(|error| error.to_string())?;
     Ok(jpeg)
+}
+
+/// A frame to JPEG bytes, with the compression moved off the executor.
+///
+/// The colour conversion stays inline: it is libyuv, which is compiled
+/// optimized whatever profile this crate is built at, and the frame it borrows
+/// does not cross a thread. The JPEG pass is the one that costs, and it is pure
+/// Rust: measured at 6.8ms per 720p frame in release and 138ms in a dev build.
+/// It shares an executor with Gemini's audio events, so at a frame a second
+/// that stall lands in the middle of a conversation and the candidate hears it
+/// as the reply arriving late.
+async fn encode_video_frame_jpeg_off_thread(
+    frame: &BoxVideoFrame,
+    quality: u8,
+) -> Result<Vec<u8>, String> {
+    let (rgba, jpeg_width, jpeg_height) = frame_to_rgba(frame)?;
+    tokio::task::spawn_blocking(move || encode_rgba_jpeg(&rgba, jpeg_width, jpeg_height, quality))
+        .await
+        .map_err(|error| format!("jpeg encode task did not finish: {error}"))?
 }
 
 async fn publish_report(
@@ -2939,7 +2964,8 @@ mod tests {
             buffer,
         };
 
-        let bytes = encode_video_frame_jpeg(&frame, GEMINI_VIDEO_JPEG_QUALITY).unwrap();
+        let (rgba, width, height) = frame_to_rgba(&frame).unwrap();
+        let bytes = encode_rgba_jpeg(&rgba, width, height, GEMINI_VIDEO_JPEG_QUALITY).unwrap();
 
         assert!(bytes.starts_with(&[0xff, 0xd8]));
         assert!(bytes.ends_with(&[0xff, 0xd9]));
