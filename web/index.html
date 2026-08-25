@@ -629,15 +629,21 @@
         </button>
       </section>
 
-      <section class="duration-row" aria-label="Duration">
-        <button class="duration-button" type="button" data-duration="30">30 min</button>
-        <button class="duration-button selected" type="button" data-duration="45">45 min</button>
-        <button class="duration-button" type="button" data-duration="60">60 min</button>
-      </section>
+      <!-- Sticky: the problem grid is 150 cards tall, so a start control that
+           scrolls with it sits ten screens below the fold and reads as a page
+           with no way to begin. -->
+      <div class="launch-bar">
+        <section class="duration-row" aria-label="Duration">
+          <button class="duration-button" type="button" data-duration="10">10 min</button>
+          <button class="duration-button" type="button" data-duration="30">30 min</button>
+          <button class="duration-button selected" type="button" data-duration="45">45 min</button>
+          <button class="duration-button" type="button" data-duration="60">60 min</button>
+        </section>
 
-      <section class="start-row">
-        <button id="start" class="start-button" type="button">Start interview</button>
-      </section>
+        <section class="start-row">
+          <button id="start" class="start-button" type="button">Start interview</button>
+        </section>
+      </div>
 
       <section id="history" class="history" hidden></section>
 
