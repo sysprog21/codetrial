@@ -536,6 +536,7 @@ fn apply_test_results(
     // `last_test_run` put it in front of a model, so the sanitized value has to
     // be the only one that exists past this line.
     let payload = &sanitize_test_run(payload);
+
     // The sanitizer reports "no run happened" as null, and the caller has to
     // honor that or the refusal to invent a run is undone one line later:
     // counting it and reacting to it is what telling the report a run occurred

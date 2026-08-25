@@ -456,28 +456,26 @@ async fn handle_room_event(
                 .await?
                 .is_break()
             {
-                // The browser asking to end is the ordinary way an
-                // interview finishes, and it was the one exit that
-                // said nothing. Indistinguishable in the log from
-                // the agent dying and being restarted under it.
+                // The browser asking to end is the ordinary way an interview
+                // finishes, and it was the one exit that said nothing.
+                // Indistinguishable in the log from the agent dying and being
+                // restarted under it.
                 eprintln!("interview ended by the browser: room={room_name} topic={topic}");
                 return Ok(ControlFlow::Break(()));
             }
         }
 
-        // The server's own word for why the agent is going away.
-        // Without it the only trace is the event channel closing a
-        // moment later, which says a disconnect happened and
-        // nothing about whose fault it was: a duplicate identity, a
-        // deleted room and a signal drop all look identical from
+        // The server's own word for why the agent is going away. Without it the
+        // only trace is the event channel closing a moment later, which says a
+        // disconnect happened and nothing about whose fault it was: a duplicate
+        // identity, a deleted room and a signal drop all look identical from
         // there, and they need three different fixes.
         //
-        // `DuplicateIdentity` is the one worth naming outright. The
-        // agent identity is derived from the room name, so a second
-        // agent process on the same room is not a near-miss, it is
-        // the same string, and the server evicts whichever joined
-        // first. `is_duplicate_agent` cannot see that case: it
-        // matches on the identity being different.
+        // `DuplicateIdentity` is the one worth naming outright. The agent
+        // identity is derived from the room name, so a second agent process on
+        // the same room is not a near-miss, it is the same string, and the
+        // server evicts whichever joined first. `is_duplicate_agent` cannot see
+        // that case: it matches on the identity being different.
         RoomEvent::Disconnected { reason } => {
             if reason == DisconnectReason::DuplicateIdentity {
                 eprintln!(
