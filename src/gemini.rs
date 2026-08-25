@@ -1,4 +1,5 @@
 use std::io;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -15,6 +16,12 @@ use crate::runtime::{RuntimeBootstrap, TOOL_LOG_HINT, TOOL_READ_EDITOR};
 
 const LIVE_WEBSOCKET_ENDPOINT: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 const SETUP_TIMEOUT: Duration = Duration::from_secs(15);
+/// Bounds the socket itself, where `SETUP_TIMEOUT` bounds the exchange over it.
+/// Without this a connect that never answers hangs its caller for as long as
+/// the OS allows, and the caller is `run_room`'s loop: an interview whose
+/// candidate leaves during a stalled reconnect would not notice they had gone,
+/// and its own deadline would not fire either.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Per attempt, so three tries plus backoff stay inside `REPORT_TIMEOUT`.
 const REPORT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(12);
 const REPORT_RETRY_BACKOFF: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
@@ -26,6 +33,12 @@ pub struct GeminiLiveSession {
     writer: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
     reader: JoinHandle<()>,
     events: Receiver<GeminiEvent>,
+    /// Shared with the reader task, which is the only writer. Held beside the
+    /// event channel rather than sent through it because it is wanted at
+    /// exactly the moment the channel is finished: after the socket closed and
+    /// the last events were drained, when the caller has to decide whether it
+    /// can resume.
+    resumption: Arc<Mutex<Option<String>>>,
 }
 
 impl GeminiLiveSession {
@@ -62,6 +75,16 @@ impl GeminiLiveSession {
 
     pub async fn next_event(&mut self) -> Option<GeminiEvent> {
         self.events.recv().await
+    }
+
+    /// The most recent resumable checkpoint the server offered, or `None` if
+    /// it never offered one. Valid for two hours after the session ends, so a
+    /// caller that reconnects promptly can hand this straight back.
+    pub fn resumption_handle(&self) -> Option<String> {
+        self.resumption
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
     }
 
     pub async fn close(mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -109,7 +132,18 @@ pub async fn open_live_session(
     api_key: &str,
     boot: &RuntimeBootstrap<'_>,
 ) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
-    open_live_session_at(&gemini_live_websocket_url(api_key), boot).await
+    open_live_session_at(&gemini_live_websocket_url(api_key), boot, None).await
+}
+
+/// Continues the session `handle` came from, keeping everything said so far.
+/// The caller must not re-send the greeting after this: the model still
+/// remembers giving it.
+pub async fn resume_live_session(
+    api_key: &str,
+    boot: &RuntimeBootstrap<'_>,
+    handle: &str,
+) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
+    open_live_session_at(&gemini_live_websocket_url(api_key), boot, Some(handle)).await
 }
 
 /// Gemini answers 503 often enough that a single attempt loses reports for a
@@ -193,11 +227,14 @@ async fn generate_report_once(
 async fn open_live_session_at(
     url: &str,
     boot: &RuntimeBootstrap<'_>,
+    resume: Option<&str>,
 ) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
-    let (mut stream, _) = connect_async(url).await?;
+    let (mut stream, _) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(url))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Gemini connect timed out"))??;
     stream
         .send(Message::Text(
-            serde_json::to_string(&live_setup_message(boot))?.into(),
+            serde_json::to_string(&live_setup_message(boot, resume))?.into(),
         ))
         .await?;
     tokio::time::timeout(SETUP_TIMEOUT, wait_for_setup_complete(&mut stream))
@@ -205,6 +242,12 @@ async fn open_live_session_at(
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Gemini setup timed out"))??;
     let (writer, mut reader) = stream.split();
     let (sender, events) = channel(GEMINI_EVENT_QUEUE);
+
+    // Seeded with the handle we resumed from: the server does not always
+    // re-issue one immediately, and losing it here would turn the next
+    // reconnect into the cold start this exists to avoid.
+    let resumption = Arc::new(Mutex::new(resume.map(str::to_string)));
+    let handles = Arc::clone(&resumption);
     let reader = tokio::spawn(async move {
         while let Some(message) = reader.next().await {
             // Both arms below used to end the session without saying anything.
@@ -234,7 +277,14 @@ async fn open_live_session_at(
             let Some(text) = websocket_message_text(message) else {
                 continue;
             };
-            for event in parse_server_events(&text) {
+            let message = parse_server_message(&text);
+            if let Some(handle) = message.resumption_handle {
+                *handles.lock().unwrap_or_else(|error| error.into_inner()) = Some(handle);
+            }
+            if let Some(time_left) = message.go_away_time_left {
+                eprintln!("Gemini will close this connection in {time_left}; will resume");
+            }
+            for event in message.events {
                 // Bounded on purpose: a stalled main loop must slow the socket
                 // down, not let inbound audio pile up without a ceiling.
                 if sender.send(event).await.is_err() {
@@ -247,6 +297,7 @@ async fn open_live_session_at(
         writer,
         reader,
         events,
+        resumption,
     })
 }
 
@@ -304,7 +355,12 @@ pub fn redact_api_key(text: &str, api_key: &str) -> String {
         .replace(&percent_encode_query_value(api_key), "[REDACTED]")
 }
 
-fn live_setup_message(boot: &RuntimeBootstrap<'_>) -> Value {
+/// `resume` carries a handle from a previous connection's
+/// `sessionResumptionUpdate`. Absent, this asks the server to start a fresh
+/// resumable session; present, it continues the earlier one with its history
+/// intact, which is the difference between a reconnect the candidate hears as
+/// a pause and one they hear as the interviewer starting over.
+fn live_setup_message(boot: &RuntimeBootstrap<'_>, resume: Option<&str>) -> Value {
     json!({
         "setup": {
             "model": format!("models/{}", gemini_model_id(boot.live_model)),
@@ -357,7 +413,15 @@ fn live_setup_message(boot: &RuntimeBootstrap<'_>) -> Value {
             "contextWindowCompression": {
                 "slidingWindow": {}
             },
-            "sessionResumption": {}
+
+            // Solves a different limit from the compression above it. That one
+            // raises the ceiling on a session's length; this one survives the
+            // socket, which the server closes after about ten minutes however
+            // much of the session is left to run.
+            "sessionResumption": match resume {
+                Some(handle) => json!({ "handle": handle }),
+                None => json!({}),
+            }
         }
     })
 }
@@ -460,11 +524,48 @@ fn websocket_message_text(message: Message) -> Option<String> {
     }
 }
 
+/// One inbound frame, split into the parts the interview reacts to and the
+/// connection bookkeeping it only records.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ServerMessage {
+    events: Vec<GeminiEvent>,
+    /// From `sessionResumptionUpdate`, and only once the server marks the
+    /// point resumable. An update that is not resumable carries a handle that
+    /// would be refused on reconnect, so it must not overwrite a good one.
+    resumption_handle: Option<String>,
+    /// From `goAway`: how long this socket has left. Advisory, and logged
+    /// rather than acted on, because the reconnect path is driven by the close
+    /// itself and works whether or not the warning arrives.
+    go_away_time_left: Option<String>,
+}
+
+#[cfg(test)]
 fn parse_server_events(text: &str) -> Vec<GeminiEvent> {
+    parse_server_message(text).events
+}
+
+fn parse_server_message(text: &str) -> ServerMessage {
     let Ok(message) = serde_json::from_str::<Value>(text) else {
-        return Vec::new();
+        return ServerMessage::default();
     };
     let mut events = Vec::new();
+
+    let resumption_handle = message
+        .get("sessionResumptionUpdate")
+        .filter(|update| {
+            update
+                .get("resumable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .and_then(|update| update.get("newHandle").and_then(Value::as_str))
+        .filter(|handle| !handle.is_empty())
+        .map(str::to_string);
+
+    let go_away_time_left = message
+        .pointer("/goAway/timeLeft")
+        .and_then(Value::as_str)
+        .map(str::to_string);
 
     if let Some(parts) = message
         .pointer("/serverContent/modelTurn/parts")
@@ -535,7 +636,11 @@ fn parse_server_events(text: &str) -> Vec<GeminiEvent> {
         }
     }
 
-    events
+    ServerMessage {
+        events,
+        resumption_handle,
+        go_away_time_left,
+    }
 }
 
 fn percent_encode_query_value(value: &str) -> String {
@@ -579,7 +684,7 @@ mod tests {
         let config = live_config(&[("GEMINI_VOICE", "Kore")]);
         let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
 
-        let message = live_setup_message(&boot);
+        let message = live_setup_message(&boot, None);
         let setup = &message["setup"];
 
         assert_eq!(setup["model"], "models/gemini-live");
@@ -650,13 +755,77 @@ mod tests {
         assert_eq!(setup["sessionResumption"], json!({}));
     }
 
+    /// The empty object above asks for handles; this is what spends one. A
+    /// setup that drops the handle reconnects into a session with no history,
+    /// which the candidate hears as the interviewer starting the interview
+    /// over ten minutes in.
+    #[test]
+    fn live_setup_carries_the_resumption_handle_when_resuming() {
+        let config = live_config(&[]);
+        let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+
+        let setup = live_setup_message(&boot, Some("handle-abc"))["setup"].clone();
+
+        assert_eq!(
+            setup["sessionResumption"],
+            json!({ "handle": "handle-abc" })
+        );
+    }
+
+    #[test]
+    fn resumption_update_is_taken_only_once_the_server_marks_it_resumable() {
+        let resumable = parse_server_message(
+            r#"{"sessionResumptionUpdate":{"newHandle":"handle-abc","resumable":true}}"#,
+        );
+        assert_eq!(resumable.resumption_handle.as_deref(), Some("handle-abc"));
+
+        // Mid-turn updates arrive with `resumable` absent or false. Their
+        // handle is refused on reconnect, so taking one would replace a
+        // working checkpoint with a broken one.
+        let mid_turn = parse_server_message(
+            r#"{"sessionResumptionUpdate":{"newHandle":"handle-mid","resumable":false}}"#,
+        );
+        assert_eq!(mid_turn.resumption_handle, None);
+
+        let unmarked =
+            parse_server_message(r#"{"sessionResumptionUpdate":{"newHandle":"handle-bare"}}"#);
+        assert_eq!(unmarked.resumption_handle, None);
+    }
+
+    #[test]
+    fn go_away_time_left_is_read_and_carries_no_events() {
+        let message = parse_server_message(r#"{"goAway":{"timeLeft":"9.5s"}}"#);
+
+        assert_eq!(message.go_away_time_left.as_deref(), Some("9.5s"));
+        assert!(message.events.is_empty());
+    }
+
+    /// The two halves of one frame: Gemini attaches a resumption update to a
+    /// message that is also carrying speech, so reading either one must not
+    /// cost the other.
+    #[test]
+    fn a_frame_can_carry_both_a_resumption_update_and_content() {
+        let message = parse_server_message(
+            r#"{
+                "serverContent":{"outputTranscription":{"text":"go on"}},
+                "sessionResumptionUpdate":{"newHandle":"handle-abc","resumable":true}
+            }"#,
+        );
+
+        assert_eq!(
+            message.events,
+            vec![GeminiEvent::OutputTranscript("go on".to_string())]
+        );
+        assert_eq!(message.resumption_handle.as_deref(), Some("handle-abc"));
+    }
+
     #[test]
     fn live_setup_accepts_model_names_with_resource_prefix() {
         let config = live_config(&[("GEMINI_LIVE_MODEL", "models/gemini-live")]);
         let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
 
         assert_eq!(
-            live_setup_message(&boot)["setup"]["model"],
+            live_setup_message(&boot, None)["setup"]["model"],
             "models/gemini-live"
         );
     }
@@ -906,7 +1075,7 @@ mod tests {
             setup
         });
 
-        let session = open_live_session_at(&format!("ws://{address}"), &boot)
+        let session = open_live_session_at(&format!("ws://{address}"), &boot, None)
             .await
             .unwrap();
         let setup: Value = serde_json::from_str(&server.await.unwrap()).unwrap();
@@ -942,7 +1111,7 @@ mod tests {
                 .unwrap();
         });
 
-        let mut session = open_live_session_at(&format!("ws://{address}"), &boot)
+        let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
             .await
             .unwrap();
 
@@ -951,6 +1120,85 @@ mod tests {
             Some(GeminiEvent::OutputTranscript("hello".to_string()))
         );
         session.close().await.unwrap();
+        server.await.unwrap();
+    }
+
+    /// The whole point of reading the update: the handle has to still be
+    /// there once the socket is gone, because that is when the caller asks.
+    #[tokio::test]
+    async fn the_reader_keeps_the_latest_handle_after_the_socket_closes() {
+        let config = live_config(&[]);
+        let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(socket).await.unwrap();
+            let _ = socket.next().await.unwrap().unwrap();
+            socket
+                .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+                .await
+                .unwrap();
+            for handle in ["handle-first", "handle-latest"] {
+                socket
+                    .send(Message::Text(
+                        format!(
+                            r#"{{"sessionResumptionUpdate":{{"newHandle":"{handle}","resumable":true}}}}"#
+                        )
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+
+            // Ten minutes, compressed: the server hangs up and the reader task
+            // ends, which is the state the caller reads the handle in.
+            socket.close(None).await.unwrap();
+        });
+
+        let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+            .await
+            .unwrap();
+
+        // Draining to the end of the stream is what puts the reader past both
+        // updates and the close.
+        assert_eq!(session.next_event().await, None);
+        assert_eq!(
+            session.resumption_handle().as_deref(),
+            Some("handle-latest")
+        );
+        server.await.unwrap();
+    }
+
+    /// A resumed connection that is closed before the server re-issues an
+    /// update must still be able to resume, or one failure early in a long
+    /// interview would poison every reconnect after it.
+    #[tokio::test]
+    async fn a_resumed_session_keeps_its_handle_until_a_new_one_arrives() {
+        let config = live_config(&[]);
+        let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(socket).await.unwrap();
+            let _ = socket.next().await.unwrap().unwrap();
+            socket
+                .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+                .await
+                .unwrap();
+            socket.close(None).await.unwrap();
+        });
+
+        let mut session =
+            open_live_session_at(&format!("ws://{address}"), &boot, Some("handle-in"))
+                .await
+                .unwrap();
+
+        assert_eq!(session.next_event().await, None);
+        assert_eq!(session.resumption_handle().as_deref(), Some("handle-in"));
         server.await.unwrap();
     }
 }
