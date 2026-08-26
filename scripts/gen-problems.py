@@ -32,6 +32,17 @@ MANIFEST = ROOT / "scripts" / "top-interview-150.json"
 CACHE = ROOT / "problem-bank" / "leetcode"
 ENDPOINT = "https://leetcode.com/graphql"
 LIST_ENDPOINT = "https://leetcode.com/api/problems/all/"
+STUDY_PLAN_QUERY = """
+query studyPlanV2Detail($planSlug: String!) {
+  studyPlanV2Detail(planSlug: $planSlug) {
+    planSubGroups {
+      name
+      questions {
+        titleSlug
+      }
+    }
+  }
+}"""
 
 DETAIL_QUERY = """
 query questionData($titleSlug: String!) {
@@ -59,10 +70,36 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="fetch LeetCode metadata into problem-bank/leetcode",
     )
+    parser.add_argument(
+        "--sync-study-plan",
+        action="store_true",
+        help="sync the Top Interview 150 manifest from LeetCode",
+    )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--delay-ms", type=int, default=250)
     parser.add_argument("--force", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    # --check is the CI gate and only reads. Both other modes reach the network
+    # and write: sync rewrites the manifest, fetch fills the cache. Either one
+    # ahead of --check has it report on staleness it just caused.
+    if args.check and (args.fetch or args.sync_study_plan):
+        parser.error("--check only reads; run it on its own")
+    return args
+
+
+def named(value: object) -> bool:
+    """True when a GraphQL field arrived as a usable, non-blank string."""
+    return isinstance(value, str) and bool(value.strip())
+
+
+def field(value: object, key: str) -> object:
+    """One level into a GraphQL object, or None when the shape is wrong.
+
+    A plain `.get` assumes every level really is an object. When one is not,
+    the caller gets an AttributeError from deep inside a comprehension instead
+    of the RuntimeError its guards were written to raise.
+    """
+    return value.get(key) if isinstance(value, dict) else None
 
 
 def read_json(path: Path) -> object:
@@ -94,14 +131,97 @@ def request_json(url: str, *, body: object | None = None) -> object:
         raise RuntimeError(f"{url} returned {error.code}") from error
 
 
+def check_plan_slugs(slugs: list[str]) -> None:
+    """What any copy of the study plan has to satisfy to be usable here.
+
+    The count is not checked: naming exactly the bank already fixes it, and a
+    second literal 150 is a second thing to update. `tests/browser/
+    leetcode-import.test.js` owns that number, because how many problems ship
+    is a product decision rather than a consistency one.
+    """
+    unique = set(slugs)
+    if len(unique) != len(slugs):
+        repeated = sorted({slug for slug in slugs if slugs.count(slug) > 1})
+        raise RuntimeError(f"duplicate slugs in the plan: {repeated}")
+    bank = {problem["id"] for problem in read_json(SOURCE)}
+    if unique != bank:
+        raise RuntimeError(
+            "plan diverges from problem-bank; port it first. "
+            f"plan adds {sorted(unique - bank)}, plan drops {sorted(bank - unique)}"
+        )
+
+
 def read_manifest() -> list[str]:
+    """The study-plan slugs, checked against the bank they are supposed to name.
+
+    Three callers need the same answer, so the rule lives here rather than in
+    each: `--fetch` walks these slugs, `--check` gates on them, and the sync
+    holds a freshly downloaded plan to the same standard before overwriting the
+    file. Before this, only the sync checked, and only when a human ran it with
+    a network.
+    """
     manifest = read_json(MANIFEST)
     slugs = [slug for section in manifest["sections"] for slug in section["slugs"]]
-    if len(slugs) != 150:
-        raise RuntimeError(f"expected 150 slugs, got {len(slugs)}")
-    if len(set(slugs)) != len(slugs):
-        raise RuntimeError("duplicate slugs in manifest")
+    check_plan_slugs(slugs)
     return slugs
+
+
+def plan_sections(body: object) -> list[dict]:
+    """The sections a study-plan response describes, or a RuntimeError saying why not.
+
+    Pure, and separate from the sync for that reason: no network, no files, so
+    the guards below can be exercised directly instead of through a function
+    that would write the tracked manifest as a side effect of being tested.
+    """
+    errors = field(body, "errors")
+    if errors:
+        first = errors[0] if isinstance(errors, list) else errors
+        raise RuntimeError(f"studyPlanV2Detail: {field(first, 'message') or first}")
+    plan = field(field(body, "data"), "studyPlanV2Detail")
+    if not plan:
+        raise RuntimeError("LeetCode has no top-interview-150 plan")
+    # `or []` rather than a get() default: these keys come back present-and-null,
+    # so a default never fires and `for x in None` raises TypeError instead of
+    # the error the guards are written to report.
+    sections = []
+    for group in field(plan, "planSubGroups") or []:
+        topic = field(group, "name")
+        members = [
+            field(question, "titleSlug") for question in field(group, "questions") or []
+        ]
+        if not named(topic) or not members:
+            raise RuntimeError(f"plan section is unnamed or empty: {topic!r}")
+        if not all(named(slug) for slug in members):
+            raise RuntimeError(f"plan section {topic!r} is missing a slug")
+        sections.append({"topic": topic, "slugs": members})
+    return sections
+
+
+def sync_study_plan() -> None:
+    """Refresh the manifest from the live study plan.
+
+    Everything that can refuse runs before the write, because the manifest is
+    checked in: a bad response has to leave the committed file alone rather
+    than replace it with something the next reader reconstructs from history.
+    """
+    body = request_json(
+        ENDPOINT,
+        body={
+            "query": STUDY_PLAN_QUERY,
+            "variables": {"planSlug": "top-interview-150"},
+        },
+    )
+    sections = plan_sections(body)
+    slugs = [slug for section in sections for slug in section["slugs"]]
+    check_plan_slugs(slugs)
+    write_json(
+        MANIFEST,
+        {
+            "source": "https://leetcode.com/studyplan/top-interview-150/",
+            "sections": sections,
+        },
+    )
+    print(f"synced {len(slugs)} problems in {len(sections)} sections")
 
 
 def cached_problem_list(force: bool) -> object:
@@ -129,7 +249,7 @@ def cached_detail(slug: str, force: bool) -> tuple[bool, object]:
     body = request_json(
         ENDPOINT, body={"query": DETAIL_QUERY, "variables": {"titleSlug": slug}}
     )
-    detail = body.get("data", {}).get("question")
+    detail = field(field(body, "data"), "question")
     if not detail:
         raise RuntimeError(f"{slug}: missing question detail")
     write_json(file, detail)
@@ -209,11 +329,18 @@ def drifted(files: dict[Path, str]) -> list[str]:
 
 def main() -> int:
     args = parse_args()
+    if args.sync_study_plan:
+        sync_study_plan()
     if args.fetch:
         fetch(args.limit, args.delay_ms, args.force)
 
     files = generated()
     if args.check:
+        try:
+            read_manifest()
+        except RuntimeError as error:
+            print(f"scripts/top-interview-150.json: {error}", file=sys.stderr)
+            return 1
         stale = drifted(files)
         if stale:
             print(

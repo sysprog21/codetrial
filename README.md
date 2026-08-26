@@ -133,6 +133,17 @@ python3 scripts/gen-problems.py
 python3 scripts/gen-problem-cards.py
 ```
 
+`scripts/top-interview-150.json` records which problems the study plan asks
+for. Refresh it from LeetCode with:
+
+```bash
+python3 scripts/gen-problems.py --sync-study-plan
+```
+
+The sync refuses to write when the plan and `problem-bank/` disagree, naming
+the problems each side is missing. Port those first. `--check` holds the
+committed manifest to the same rule, so drift fails the gate offline.
+
 The end-to-end browser check additionally needs Playwright and Chromium:
 
 ```bash
