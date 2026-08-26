@@ -258,7 +258,7 @@ export const INTEGRITY_DETAIL_MAX = 80;
 /// legibility and refusing costs every event after it.
 const INTEGRITY_DETAIL_DISALLOWED = /[^0-9A-Za-z _\-=/;:,.]/g;
 
-export function integrityDetail(value) {
+function integrityDetail(value) {
   return String(value).replace(INTEGRITY_DETAIL_DISALLOWED, "").slice(0, INTEGRITY_DETAIL_MAX);
 }
 

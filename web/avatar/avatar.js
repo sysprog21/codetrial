@@ -32,7 +32,7 @@ export const MOUTH_FULL_AMPLITUDE = 0.32;
 
 export const BLINK_INTERVAL_MS = 4200;
 export const BLINK_DURATION_MS = 140;
-export const BREATH_PERIOD_MS = 4000;
+const BREATH_PERIOD_MS = 4000;
 export const BREATH_AMPLITUDE = 0.02;
 
 // Radians. Small on purpose: an upper-body avatar that swings its head reads as
@@ -64,7 +64,7 @@ const EXPRESSION_BY_STATE = {
 // incoming one fades in on, instead of being cut to zero.
 export const EXPRESSION_NAMES = [...new Set(Object.values(EXPRESSION_BY_STATE).map((each) => each.name))];
 
-export function clamp01(value) {
+function clamp01(value) {
   if (!Number.isFinite(value)) return 0;
   return Math.min(Math.max(value, 0), 1);
 }
@@ -73,7 +73,7 @@ export function clamp01(value) {
 /// go through this on the way out, not just on the way in: they were the only
 /// pose fields emitted unclamped, and the contract promises every angle is
 /// inside its bound.
-export function clampTo(value, bound) {
+function clampTo(value, bound) {
   if (!Number.isFinite(value)) return 0;
   return Math.min(Math.max(value, -bound), bound);
 }

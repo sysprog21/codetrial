@@ -51,7 +51,7 @@ export function facePresenceVerdict(sample) {
   };
 }
 
-export function faceEventType(count) {
+function faceEventType(count) {
   if (count === 0) return "FACE_MISSING";
   if (count > 1) return "MULTIPLE_FACES";
   return "FACE_DETECTED";
