@@ -1,3 +1,5 @@
+use rusqlite::OptionalExtension;
+
 use crate::accounts::Accounts;
 
 use super::store::{SELECT_RECORDING, row_to_recording};
@@ -87,11 +89,7 @@ pub fn recording_summary(
                     })
                 },
             )
-            .map(Some)
-            .or_else(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                error => Err(error),
-            })
+            .optional()
     })
 }
 
