@@ -189,12 +189,24 @@ pub(crate) fn livekit_http_origin(url: &str) -> Option<String> {
 /// Scheme and authority, without pulling in a URL parser for one field. The
 /// printable-ASCII check is what keeps a mistyped `LIVEKIT_URL` from making the
 /// whole policy unrepresentable as a header: one origin is dropped instead.
+///
+/// The scheme is lowered here rather than by each caller. RFC 3986 says it is
+/// case-insensitive and `validate_livekit_url` agrees, accepting the scheme
+/// with `eq_ignore_ascii_case`, so `WSS://host` is a URL an operator can
+/// configure and the server will start on. Every reader below then matches the
+/// scheme exactly, and each one fails differently on the uppercase form: the
+/// quota probe finds no HTTP origin and treats the project as available, so an
+/// exhausted project is never passed over, and `livekit_origins` finds no
+/// sibling, so the CSP omits the `https://` origin the SDK needs for
+/// `/settings/regions` and the socket opens onto blocked requests. One
+/// normalization at the boundary is the alternative to three readers each
+/// remembering.
 pub(crate) fn url_origin(url: &str) -> Option<String> {
     let (scheme, rest) = url.split_once("://")?;
     let host = rest.split(['/', '?', '#']).next()?;
     let printable = |value: &str| value.bytes().all(|byte| (0x21..=0x7e).contains(&byte));
     (!scheme.is_empty() && !host.is_empty() && printable(scheme) && printable(host))
-        .then(|| format!("{scheme}://{host}"))
+        .then(|| format!("{}://{host}", scheme.to_ascii_lowercase()))
 }
 
 pub(crate) async fn security_headers(
@@ -294,6 +306,92 @@ mod tests {
 
     /// A host is case-insensitive and may carry userinfo or a port; the suffix
     /// test is none of those things on its own.
+    /// Each conjunct in `url_origin`'s guard, exercised by the input only it
+    /// rejects. The guard is what keeps a mistyped `LIVEKIT_URL` from making
+    /// the whole policy unrepresentable as a header, and every one of its four
+    /// terms was reachable with `&&` replaced by `||` without a test noticing.
+    #[test]
+    fn a_malformed_url_is_refused_one_term_at_a_time() {
+        assert_eq!(url_origin("://host.example"), None, "empty scheme");
+        assert_eq!(url_origin("wss://"), None, "empty host");
+        assert_eq!(url_origin("wss://host .example"), None, "space in the host");
+        assert_eq!(
+            url_origin("w s://host.example"),
+            None,
+            "space in the scheme"
+        );
+
+        // The control characters either end of the printable range, which is
+        // what the bound is actually about: a header cannot carry them.
+        assert_eq!(
+            url_origin("wss://host\u{7f}.example"),
+            None,
+            "DEL in the host"
+        );
+        assert_eq!(
+            url_origin("wss://host\u{1}.example"),
+            None,
+            "SOH in the host"
+        );
+
+        assert_eq!(
+            url_origin("wss://host.example:7880/rtc?x=1"),
+            Some("wss://host.example:7880".to_string()),
+            "a well-formed URL still keeps its port and loses its path"
+        );
+    }
+
+    /// `validate_livekit_url` accepts the scheme case-insensitively, so an
+    /// uppercase one is a URL the server starts on. Every reader here matches
+    /// the scheme exactly, and each fails differently: the quota probe finds no
+    /// HTTP origin and treats an exhausted project as available, and the policy
+    /// loses the sibling origin the SDK needs for `/settings/regions`.
+    #[test]
+    fn an_uppercase_scheme_is_normalized_before_anything_matches_on_it() {
+        assert_eq!(
+            url_origin("WSS://Example.LiveKit.Cloud"),
+            Some("wss://Example.LiveKit.Cloud".to_string()),
+            "the scheme is case-insensitive per RFC 3986; the host is left alone"
+        );
+        assert_eq!(
+            livekit_http_origin("WSS://host.example"),
+            Some("https://host.example".to_string()),
+            "without this the quota probe never runs and the project is assumed available"
+        );
+        assert_eq!(
+            livekit_origins("WSS://host.example"),
+            vec![
+                "https://host.example".to_string(),
+                "wss://host.example".to_string()
+            ],
+            "the sibling origin is what the SDK reaches for regions"
+        );
+
+        // All four schemes, not just the one a cloud deployment uses. A
+        // self-hosted LiveKit is reached over `ws://` in development, and the
+        // arm that pairs it with `http://` is as load bearing there as the
+        // `wss://` arm is in production.
+        for (configured, sibling) in [
+            ("wss://host.example", "https://host.example"),
+            ("ws://host.example", "http://host.example"),
+            ("https://host.example", "wss://host.example"),
+            ("http://host.example", "ws://host.example"),
+        ] {
+            assert_eq!(
+                livekit_origins(configured),
+                vec![sibling.to_string(), configured.to_string()],
+                "{configured} must also name {sibling}"
+            );
+        }
+
+        let policy = policy_for("WSS://uppercase-scheme.livekit.cloud");
+        assert!(
+            policy.contains("wss://uppercase-scheme.livekit.cloud")
+                && policy.contains("https://uppercase-scheme.livekit.cloud"),
+            "both origins must survive an uppercase scheme: {policy}"
+        );
+    }
+
     #[test]
     fn a_cloud_host_is_recognized_through_case_userinfo_and_port() {
         for url in [
