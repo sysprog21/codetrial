@@ -1,3 +1,4 @@
+use rusqlite::OptionalExtension;
 use serde_json::Value;
 
 use crate::accounts::Accounts;
@@ -539,11 +540,7 @@ fn replay_view(
                 (interview_id, account_id),
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
-            .map(Some)
-            .or_else(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                error => Err(error),
-            })?;
+            .optional()?;
         let mut quota_exceeded = false;
         if let Some((state, expires_at, quota)) = recording {
             quota_exceeded = quota != 0;

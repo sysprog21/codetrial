@@ -184,7 +184,7 @@ LiveKit signs the request body, not the request line. The full rule, taken from
 3. The signature is HMAC-SHA256 over `base64url(header).base64url(claims)` with
    the project API secret, base64url without padding.
 4. `exp` is five minutes after issue. A token with no `exp` is refused.
-5. `sha256` is `base64(SHA-256(body))` in **standard** base64, with padding. A
+5. `sha256` is `base64(SHA-256(body))` in standard base64, with padding. A
    URL-safe decoder rejects most real digests.
 6. `Content-Type` is `application/webhook+json`, which upstream chose so that a
    receiver checks the signature before parsing.
@@ -232,7 +232,7 @@ Every state may become itself. A duplicate webhook and a stop asked for twice
 both request a transition that has already happened, and the answer to that is a
 no-op rather than a refusal.
 
-`starting` is written **before** the provider request and the egress id is
+`starting` is written before the provider request and the egress id is
 written after it. That order is the whole point: the other one loses a recording
 that exists whenever the process dies between the call and the write.
 

@@ -13,7 +13,8 @@
 //! - Event handling (`handle_media_event`, `handle_data_packet`,
 //!   `handle_gemini_event`): the three sources that drive the session.
 //! - `OutputAudio` and its worker: Gemini's audio, paced onto a LiveKit track.
-//! - Media codecs (`append_pcm16_bytes` through `encode_video_frame_jpeg_off_thread`):
+//! - Media codecs (`append_pcm16_bytes` through
+//!   `encode_video_frame_jpeg_off_thread`):
 //!   pure functions, no room state, each covered by the tests at the bottom of
 //!   this file.
 //! - Report building (`publish_report` through `report_data_packet`).
@@ -186,6 +187,62 @@ fn take_resume_attempt(resumed: &mut usize, handle: Option<String>) -> Result<St
     Ok(handle)
 }
 
+/// Puts the interview back on a new Gemini socket after the old one closed, or
+/// reports that it cannot be.
+///
+/// `Break` means the caller ends the room and lets the supervisor restart.
+/// Every decision this makes is `take_resume_attempt`'s, which is tested; what
+/// is left here is two awaits nothing in `cargo test` can reach and the
+/// bookkeeping that has to follow a successful one.
+///
+/// The reason the socket closed came over it and is logged by the reader task.
+/// The lines below tie that to the room.
+async fn resume_after_close(
+    room: &Room,
+    context: &mut GeminiEventContext<'_>,
+    interview: InterviewContext<'_>,
+    resumed: &mut usize,
+) -> Result<ControlFlow<()>, Box<dyn std::error::Error + Send + Sync>> {
+    let attempt = match take_resume_attempt(resumed, context.gemini.resumption_handle()) {
+        Ok(handle) => {
+            // The socket is already gone; this closes the writer half and the
+            // reader task. A close on a dead socket errors, and that error says
+            // nothing the caller can act on.
+            let _ = context.gemini.shutdown().await;
+            resume_live_session(&interview.config.google_api_key, interview.boot, &handle)
+                .await
+                .map_err(|error| error.to_string())
+        }
+        Err(refused) => Err(refused),
+    };
+
+    let session = match attempt {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!(
+                "Gemini session ended and could not be resumed ({error}); ending interview room={} and letting the supervisor restart",
+                interview.boot.room_name
+            );
+            close_room(room).await;
+            return Ok(ControlFlow::Break(()));
+        }
+    };
+
+    *context.gemini = session;
+    eprintln!(
+        "Gemini session resumed ({resumed} so far); the interview continues where it left off"
+    );
+
+    // Whatever was mid-flight died with the socket. The turn ids have to close
+    // here for the same reason an interruption closes them: left open, the next
+    // thing either party says appends to an utterance that was cut off, and the
+    // panel and the report both read the two as one.
+    cut_off_turn(context.activity, context.output_audio);
+    close_turns(room, context).await?;
+    set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
+    Ok(ControlFlow::Continue(()))
+}
+
 pub async fn run_room(
     config: &AgentConfig,
     room_name: &str,
@@ -331,13 +388,12 @@ pub async fn run_room(
                     return Ok(());
                 }
                 if let Some(prompt) = turn.activity.watch_prompt(&turn.state, Instant::now()) {
-                    // Not `?`. Every write below is one the reader may be
-                    // about to explain: a socket Gemini has closed fails the
-                    // next send long before `next_event` drains and reports
-                    // it, and audio flushes every hundred milliseconds, so
-                    // propagating here is how a closed socket ended the
-                    // interview from the write side without the arm that
-                    // resumes it ever running.
+                    // Not `?`. Every write below is one the reader may be about
+                    // to explain: a socket Gemini has closed fails the next
+                    // send long before `next_event` drains and reports it, and
+                    // audio flushes every hundred milliseconds, so propagating
+                    // here is how a closed socket ended the interview from the
+                    // write side without the arm that resumes it ever running.
                     if let Err(error) = gemini.send_text(&prompt).await {
                         eprintln!("Gemini nudge failed ({error}); waiting for the close to be reported");
                         continue;
@@ -380,55 +436,15 @@ pub async fn run_room(
                     // Gemini hung up. Usually that is the ten-minute cap on a
                     // single connection rather than anything wrong, so the
                     // session continues on a new socket instead of ending the
-                    // interview. The reason came over the socket and is logged
-                    // by the reader task; these lines tie that to the room.
-                    //
-                    // The reconnect sits here rather than behind a function of
-                    // its own because everything decidable about it is in
-                    // `take_resume_attempt`, which is tested. What is left is
-                    // two awaits nothing in `cargo test` can reach, and a name
-                    // wrapping only those would add a mutant no test can kill
-                    // to a gate that is worth keeping honest.
-                    let resumed_session = match take_resume_attempt(&mut resumed, gemini.resumption_handle()) {
-                        Ok(handle) => {
-                            // The socket is already gone; this closes the
-                            // writer half and the reader task. A close on a
-                            // dead socket errors, and that error says nothing
-                            // the caller can act on.
-                            let _ = gemini.shutdown().await;
-                            resume_live_session(&config.google_api_key, &boot, &handle)
-                                .await
-                                .map_err(|error| error.to_string())
-                        }
-                        Err(refused) => Err(refused),
-                    };
-                    match resumed_session {
-                        Ok(session) => {
-                            gemini = session;
-                            eprintln!(
-                                "Gemini session resumed ({resumed} so far); the interview continues where it left off"
-                            );
-
-                            // Whatever was mid-flight died with the socket. The
-                            // turn ids have to close here for the same reason
-                            // an interruption closes them: left open, the next
-                            // thing either party says appends to an utterance
-                            // that was cut off, and the panel and the report
-                            // both read the two as one.
-                            let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
-                            cut_off_turn(context.activity, context.output_audio);
-                            close_turns(&room, &mut context).await?;
-                            set_agent_state(&room, &mut turn.agent_state, AGENT_STATE_LISTENING).await?;
-                            continue;
-                        }
-                        Err(error) => {
-                            eprintln!(
-                                "Gemini session ended and could not be resumed ({error}); ending interview room={room_name} and letting the supervisor restart"
-                            );
-                            close_room(&room).await;
-                            return Ok(());
-                        }
+                    // interview.
+                    let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
+                    if resume_after_close(&room, &mut context, interview, &mut resumed)
+                        .await?
+                        .is_break()
+                    {
+                        return Ok(());
                     }
+                    continue;
                 };
                 let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
                 handle_gemini_event(&room, &mut context, event, Interruptible::Yes).await?;

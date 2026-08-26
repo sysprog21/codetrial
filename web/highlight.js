@@ -110,7 +110,7 @@ function pattern(spec) {
   return patterns.get(spec);
 }
 
-export function languageSpec(language) {
+function languageSpec(language) {
   return LANGUAGES[language] ?? LANGUAGES.javascript;
 }
 

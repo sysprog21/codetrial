@@ -58,6 +58,7 @@ pub fn sanitize_test_run(payload: &serde_json::Value) -> serde_json::Value {
     if !python_truthy(payload) {
         return serde_json::Value::Null;
     }
+
     // Line breaks go before the length bound, and they are the ones that
     // matter: `format_test_run` builds a line per failure and joins them, and
     // `test_results_reaction` wraps the result in a `[SYSTEM EVENT]` block. A
@@ -81,10 +82,11 @@ pub fn sanitize_test_run(payload: &serde_json::Value) -> serde_json::Value {
                 .collect::<String>()
         })
     };
+
     // Clamped against each other and not only against the ceiling.
-    // `apply_test_results` reads `passed == total` as every case passing, so two
-    // independent clamps map a claimed 100 of 150 onto 99 of 99 and hand the
-    // congratulatory reaction to a run that failed a third of its cases. A
+    // `apply_test_results` reads `passed == total` as every case passing, so
+    // two independent clamps map a claimed 100 of 150 onto 99 of 99 and hand
+    // the congratulatory reaction to a run that failed a third of its cases. A
     // sanitizer is allowed to drop meaning, never to upgrade a failing run into
     // a clean one, so what carries across the ceiling is whether the claim was
     // "all of them" and not the digits it was written with.
@@ -113,7 +115,8 @@ pub fn sanitize_test_run(payload: &serde_json::Value) -> serde_json::Value {
                 .map(|failure| {
                     serde_json::json!({
                         // "?" rather than null: the renderer prints `label`
-                        // unconditionally, and a null reads as a test named None.
+                        // unconditionally, and a null reads as a test named
+                        // None.
                         "label": text(failure.get("label")).unwrap_or_else(|| "?".to_string()),
                         "expected": text(failure.get("expected")),
                         "got": text(failure.get("got")),
@@ -127,6 +130,7 @@ pub fn sanitize_test_run(payload: &serde_json::Value) -> serde_json::Value {
     serde_json::json!({
         "passed": passed,
         "total": total,
+
         // The same allowlist the spoken acknowledgement uses, so a run cannot
         // claim a language the product does not offer. Note this stores the
         // display name, "Python" and not "python": the renderer speaks this

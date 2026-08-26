@@ -149,10 +149,6 @@ fn b64_json(value: &Value) -> serde_json::Result<String> {
     serde_json::to_vec(value).map(|bytes| URL_SAFE_NO_PAD.encode(bytes))
 }
 
-/// The content type LiveKit sends webhooks with. Custom on purpose upstream,
-/// so a receiver checks the signature before parsing rather than after.
-pub const LIVEKIT_WEBHOOK_CONTENT_TYPE: &str = "application/webhook+json";
-
 /// Why a LiveKit webhook was refused. One value per distinguishable cause,
 /// because the handler answers all of them the same way and the operator
 /// debugging a webhook that never arrives needs to know which one it was: a

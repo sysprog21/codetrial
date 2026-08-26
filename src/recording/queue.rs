@@ -1,6 +1,8 @@
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use rusqlite::OptionalExtension;
+
 use crate::accounts::{Accounts, blocking};
 
 use super::store::{SELECT_RECORDING, row_to_recording};
@@ -91,11 +93,7 @@ pub fn claim_delivery(
                 (now, now - DELIVERY_CLAIM_SECONDS, &claim),
                 |row| row.get(0),
             )
-            .map(Some)
-            .or_else(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                error => Err(error),
-            })?;
+            .optional()?;
         let Some(recording_id) = claimed else {
             transaction.commit()?;
             return Ok(None);
@@ -106,11 +104,7 @@ pub fn claim_delivery(
                 [&recording_id],
                 row_to_recording,
             )
-            .map(Some)
-            .or_else(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                error => Err(error),
-            })?;
+            .optional()?;
         transaction.commit()?;
         Ok(recording.map(|recording| (recording, claim)))
     })
@@ -125,11 +119,7 @@ pub fn delivery_attempts(accounts: &Accounts, recording_id: &str) -> rusqlite::R
                 [recording_id],
                 |row| row.get(0),
             )
-            .map(Some)
-            .or_else(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                error => Err(error),
-            })
+            .optional()
     })
 }
 
@@ -177,19 +167,20 @@ pub fn reschedule_delivery(
         // Under this claim, or not at all. A row that has been reclaimed is
         // somebody else's work now, and rescheduling it would push their
         // attempt into the future for a failure that was not theirs.
-        let attempts: i64 = match transaction.query_row(
-            "SELECT attempts FROM delivery_queue WHERE recording_id = ?1 AND claim = ?2",
-            (recording_id, claim),
-            |row| row.get(0),
-        ) {
-            Ok(attempts) => attempts,
+        let attempts: Option<i64> = transaction
+            .query_row(
+                "SELECT attempts FROM delivery_queue WHERE recording_id = ?1 AND claim = ?2",
+                (recording_id, claim),
+                |row| row.get(0),
+            )
+            .optional()?;
 
-            // Not this worker's row any more: it was reclaimed while this
-            // attempt ran, or finished by somebody else. Saying "exhausted"
-            // here would fail a recording another worker is in the middle of
-            // delivering, and take its Drive file with it.
-            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(Reschedule::NotOurs),
-            Err(error) => return Err(error),
+        // Not this worker's row any more: it was reclaimed while this attempt
+        // ran, or finished by somebody else. Saying "exhausted" here would fail
+        // a recording another worker is in the middle of delivering, and take
+        // its Drive file with it.
+        let Some(attempts) = attempts else {
+            return Ok(Reschedule::NotOurs);
         };
         let Some(backoff) = DELIVERY_BACKOFF_SECONDS.get(attempts.max(1) as usize - 1) else {
             // The row stays, still claimed. Deleting it here would leave a

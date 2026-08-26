@@ -35,7 +35,7 @@ const nodes = {
 /// candidate's page and cannot read its editor. Half a second is under a
 /// keystroke's worth of lag in a video, and two requests a second per recording
 /// is nothing beside the encode.
-export const REPLAY_POLL_MS = 500;
+const REPLAY_POLL_MS = 500;
 
 /// How long one replay read may take before it is abandoned.
 ///

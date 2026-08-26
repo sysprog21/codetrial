@@ -1,3 +1,5 @@
+use rusqlite::OptionalExtension;
+
 use crate::accounts::Accounts;
 
 use super::*;
@@ -132,11 +134,7 @@ pub fn begin_recording(
                     [interview_id],
                     row_to_recording,
                 )
-                .map(Some)
-                .or_else(|error| match error {
-                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                    error => Err(error),
-                })?;
+                .optional()?;
             if let Some(existing) = existing {
                 return Ok(if existing.account_id == account_id {
                     Ok((existing, false))
@@ -151,11 +149,7 @@ pub fn begin_recording(
                     (interview_id, account_id),
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
-                .map(Some)
-                .or_else(|error| match error {
-                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                    error => Err(error),
-                })?;
+                .optional()?;
             let Some((room_name, withdrawn)) = interview else {
                 return Ok(Err(StartRefusal::NoConsent));
             };
@@ -259,11 +253,7 @@ pub fn transition(
                 [recording_id],
                 |row| row.get(0),
             )
-            .map(Some)
-            .or_else(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                error => Err(error),
-            })?;
+            .optional()?;
         let Some(current) = current.as_deref().and_then(RecordingState::parse) else {
             return Ok(None);
         };
@@ -315,11 +305,7 @@ pub fn recording_by_id(
                 [recording_id],
                 row_to_recording,
             )
-            .map(Some)
-            .or_else(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                error => Err(error),
-            })
+            .optional()
     })
 }
 
@@ -335,11 +321,7 @@ pub fn recording_for_interview(
                 (interview_id, account_id),
                 row_to_recording,
             )
-            .map(Some)
-            .or_else(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                error => Err(error),
-            })
+            .optional()
     })
 }
 
@@ -354,11 +336,7 @@ pub fn recording_for_room(
                 [room_name],
                 row_to_recording,
             )
-            .map(Some)
-            .or_else(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                error => Err(error),
-            })
+            .optional()
     })
 }
 
@@ -373,11 +351,7 @@ pub fn recording_for_egress(
                 [egress_id],
                 row_to_recording,
             )
-            .map(Some)
-            .or_else(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                error => Err(error),
-            })
+            .optional()
     })
 }
 

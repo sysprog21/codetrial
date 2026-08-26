@@ -35,5 +35,5 @@ worth more than the pinning was.
 
 Bump the version in `FETCH`, replace the five hashes in `SHA256SUMS`, and say in
 the commit message where the bytes came from. The files are overwritten in place
-under the same names, so `VENDOR_CACHE_CONTROL` in `src/web.rs` deliberately
+under the same names, so `VENDOR_CACHE_CONTROL` in `src/web/assets.rs` deliberately
 does not promise immutability.

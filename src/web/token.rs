@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -22,9 +21,10 @@ use crate::token::{LivekitTokenInput, TOKEN_TTL_SECONDS, livekit_observer_token,
 
 use super::auth::current_user;
 use super::consent::{checked_consent, claim_consent};
+use super::pool::{ProviderChoice, room_and_available_provider};
 use super::{
-    AppState, MAX_BODY_BYTES, WebServerConfig, client_ip, json_response, number_json,
-    rate_limited_response, unauthorized_response,
+    AppState, MAX_BODY_BYTES, client_ip, json_response, number_json, rate_limited_response,
+    unauthorized_response,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -449,184 +449,6 @@ pub(crate) async fn observer_token_handler(
             json!({ "error": error.to_string() }),
         ),
     }
-}
-
-/// How long a project's quota verdict is trusted.
-///
-/// LiveKit Cloud bills connection minutes against a period, so a project that
-/// has run out stays out for the rest of it, and one with room to spare does
-/// not fill up inside a minute. Long enough that a burst of interview starts
-/// costs one probe, short enough that topping a project up brings it back
-/// without a restart.
-const PROVIDER_QUOTA_TTL: Duration = Duration::from_secs(60);
-
-/// How long the probe itself may take, which is not the shared client's
-/// 30-second backstop.
-///
-/// This runs while a candidate waits on `/api/token`, and its answer is only an
-/// optimization: a project that does not reply promptly is treated as available
-/// and tried, which is what would have happened without any probe at all.
-/// Waiting half a minute to learn something optional is the worse trade.
-const PROVIDER_QUOTA_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
-
-/// What each project last said about its own quota, so a run of interview
-/// starts does not re-ask a project that just answered.
-///
-/// Keyed by provider id rather than URL, because the id is what the room name
-/// carries and therefore what the agent resolves the same project from.
-#[derive(Clone, Default)]
-pub(crate) struct ProviderQuota(Arc<Mutex<HashMap<String, (bool, Instant)>>>);
-
-impl ProviderQuota {
-    /// Whether this project can still take a connection, from cache where the
-    /// last answer is recent enough and from the project itself otherwise.
-    pub(crate) async fn available(&self, provider: &crate::config::Provider) -> bool {
-        let now = Instant::now();
-        {
-            let cache = self.0.lock().unwrap_or_else(|error| error.into_inner());
-            if let Some((verdict, at)) = cache.get(&provider.id)
-                && now.duration_since(*at) < PROVIDER_QUOTA_TTL
-            {
-                return *verdict;
-            }
-        }
-        let verdict = has_connection_minutes(provider).await;
-        self.0
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(provider.id.clone(), (verdict, Instant::now()));
-        verdict
-    }
-}
-
-/// Whether a project still has connection minutes.
-///
-/// `/rtc/validate` answers this without opening a socket, creating a room or
-/// spending a minute of the quota it is asking about: 200 where the project has
-/// room, 429 where it does not. The room management API is not a substitute --
-/// it answers 200 on an exhausted project, because the limit is on media
-/// connections rather than on the Twirp surface.
-///
-/// Only an explicit 429 takes a project out. A probe that cannot be sent at all
-/// says nothing about quota, and refusing every interview because this server
-/// briefly lost the network would be a worse failure than the one being
-/// avoided: the candidate would be turned away from a project that works.
-async fn has_connection_minutes(provider: &crate::config::Provider) -> bool {
-    let Some(origin) = super::policy::livekit_http_origin(&provider.url) else {
-        return true;
-    };
-    let Ok(token) = livekit_token(LivekitTokenInput {
-        api_key: &provider.api_key,
-        api_secret: &provider.api_secret,
-        name: "quota-probe",
-        identity: "quota-probe",
-        room: "quota-probe",
-        metadata: "",
-        now_seconds: crate::current_epoch_seconds(),
-        agent: false,
-    }) else {
-        return true;
-    };
-    let response = crate::http_client()
-        .get(format!("{origin}/rtc/validate"))
-        .bearer_auth(token)
-        .timeout(PROVIDER_QUOTA_PROBE_TIMEOUT)
-        .send()
-        .await;
-    !matches!(response, Ok(response) if response.status() == StatusCode::TOO_MANY_REQUESTS)
-}
-
-/// Which project this interview runs on, skipping any that has run out.
-pub(crate) enum ProviderChoice<'a> {
-    Ready(String, &'a crate::config::Provider),
-    NoneConfigured,
-    AllExhausted,
-}
-
-/// Round-robin as before, but a project that answers "out of minutes" is passed
-/// over rather than handed to the candidate.
-///
-/// The counter advances per attempt, not per request, so a dead project does
-/// not pin every later interview to the one after it.
-pub(crate) async fn room_and_available_provider(state: &AppState) -> ProviderChoice<'_> {
-    // A pinned development room names the project it belongs to, and moving the
-    // candidate off it would defeat the pin.
-    if !state.config.production
-        && state
-            .config
-            .fixed_room_name
-            .as_deref()
-            .is_some_and(|name| !name.is_empty())
-    {
-        let counter = state.provider_counter.fetch_add(1, Ordering::Relaxed);
-        return match room_and_provider(&state.config, counter) {
-            (room_name, Some(provider)) => ProviderChoice::Ready(room_name, provider),
-            (_, None) => ProviderChoice::NoneConfigured,
-        };
-    }
-
-    if state.config.pool.providers.is_empty() {
-        return ProviderChoice::NoneConfigured;
-    }
-    for _ in 0..state.config.pool.providers.len() {
-        // Bumped per attempt rather than once per request: adding the attempt
-        // number to one shared value locally would leave the next request
-        // starting at the exhausted project again, so the project immediately
-        // after a dead one absorbs its share as well as its own.
-        let counter = state.provider_counter.fetch_add(1, Ordering::Relaxed);
-        let (room_name, provider) = room_and_provider(&state.config, counter);
-        let Some(provider) = provider else {
-            return ProviderChoice::NoneConfigured;
-        };
-        if state.provider_quota.available(provider).await {
-            return ProviderChoice::Ready(room_name, provider);
-        }
-        eprintln!(
-            "livekit provider {} is out of connection minutes; trying the next project",
-            provider.id
-        );
-    }
-    ProviderChoice::AllExhausted
-}
-
-/// Picks the provider first and writes its id into the room name, because the
-/// agent process is launched separately and the room name is the only thing it
-/// is handed. Recomputing the choice on the other side, from a pool assembled
-/// by a second directory scan, is how a candidate ends up holding a token for
-/// one LiveKit project while the agent waits in another.
-///
-/// The primary contributes no segment, so a single-provider deployment keeps
-/// the `<prefix>-<suffix>` room names it already has.
-pub(crate) fn room_and_provider(
-    config: &WebServerConfig,
-    counter: usize,
-) -> (String, Option<&crate::config::Provider>) {
-    if !config.production
-        && let Some(room_name) = config
-            .fixed_room_name
-            .as_deref()
-            .filter(|room_name| !room_name.is_empty())
-    {
-        return (
-            room_name.to_string(),
-            config.pool.for_room(room_name, &config.room_prefix),
-        );
-    }
-    let provider = config.pool.select(counter);
-
-    // The primary contributes no segment, so a single-provider deployment keeps
-    // the room names it already has. Comparing exactly is sound only because
-    // `is_provider_id` reserves the word case-insensitively upstream, so no
-    // provider spelled `Primary` can reach this line. The asymmetry is
-    // load-bearing: do not "fix" one of the two comparisons on its own.
-    let segment = provider
-        .map(|provider| provider.id.as_str())
-        .filter(|id| *id != crate::config::PRIMARY_PROVIDER_ID)
-        .map_or(String::new(), |id| format!("-{id}"));
-    (
-        format!("{}{segment}-{}", config.room_prefix, suffix(8)),
-        provider,
-    )
 }
 
 /// Room-name suffix. Random, not clock-derived.

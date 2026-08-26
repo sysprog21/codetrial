@@ -219,6 +219,7 @@ fn run_web(options: CliOptions) -> Result<(), String> {
         compiler_explorer_enabled: compiler_explorer_enabled(&values),
         recording,
         pool,
+        probe_provider_quota: true,
     };
 
     initialize_accounts(&config)?;
@@ -433,6 +434,7 @@ fn run_serve(options: CliOptions) -> Result<(), String> {
         compiler_explorer_enabled: config.compiler_explorer_enabled,
         recording,
         pool: config.pool.clone(),
+        probe_provider_quota: true,
     };
 
     initialize_accounts(&web_config)?;

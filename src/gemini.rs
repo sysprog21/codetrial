@@ -780,8 +780,8 @@ mod tests {
         assert_eq!(resumable.resumption_handle.as_deref(), Some("handle-abc"));
 
         // Mid-turn updates arrive with `resumable` absent or false. Their
-        // handle is refused on reconnect, so taking one would replace a
-        // working checkpoint with a broken one.
+        // handle is refused on reconnect, so taking one would replace a working
+        // checkpoint with a broken one.
         let mid_turn = parse_server_message(
             r#"{"sessionResumptionUpdate":{"newHandle":"handle-mid","resumable":false}}"#,
         );

@@ -4,25 +4,20 @@ Jim's browser-rendered avatar. Presentation only: Gemini Live, LiveKit audio and
 transcription, barge-in, and interviewer behavior are unchanged by anything here.
 No rendered frame is published as a LiveKit track, sent to the server, or stored.
 
+Related documents: [third-party notices](../THIRD-PARTY-NOTICES.md) for asset
+licenses and attribution; `web/vendor/avatar/README.md` for reproducible bundle
+sources.
+
 ## Status
 
-Shipping. The renderer, the behavior mapping, the fallback, and a licensed
-model are all in the repo.
+Shipping. The renderer, behavior mapping, fallback, and vendored model are all
+in the repo.
 
 ## Model
-
-Every value below was read out of the committed bytes, not from the page the
-file came from.
 
 | Field | Value |
 |---|---|
 | File | `web/vendor/avatar/jim.vrm` |
-| Character | Seed-san |
-| Source | `vrm-c/vrm-specification`, `samples/Seed-san/vrm/Seed-san.vrm` |
-| Author | VirtualCast, Inc. |
-| License | VRM Public License 1.0, <https://vrm.dev/licenses/1.0/> |
-| Commercial redistribution | granted: `allowRedistribution: true`, `commercialUsage: "corporation"`, `avatarPermission: "everyone"`, `modification: "allowModificationRedistribution"` |
-| Credit | REQUIRED: `creditNotation: "required"` |
 | Size | 10,917,800 bytes (10.92 MB) |
 | SHA-256 | `624d0d554bc205bbdc33e22a68a2c3c20edebb3e573011ead8878a65e5329b23` |
 | Spec version | VRM 1.0 |
@@ -31,50 +26,19 @@ file came from.
 | Texture resolution | 1024x1024 maximum |
 | glTF extensions | `VRMC_vrm`, `VRMC_springBone`, `VRMC_node_constraint`, `VRMC_materials_mtoon`, `KHR_materials_unlit`, `KHR_texture_transform`, `KHR_materials_emissive_strength` |
 
-`web/vendor/avatar/LICENSE-jim-vrm.txt` carries the grant verbatim and the
-command that re-reads it from the file.
+See the [third-party notices](../THIRD-PARTY-NOTICES.md) for the model's source,
+license, attribution, and redistribution terms.
 
 ### Where this deviates from the budget, and why that was accepted
 
 17 materials against a budget of 1 to 3, and `VRMC_springBone` physics against
-"minimal physics". Both were accepted because the alternative was not a leaner
-model, it was no model: of everything surveyed, this was the only file where a
-first-party publisher and a permissive embedded grant coincided, with a named
-company as licensor rather than an empty string. Two candidates that advertised
-CC0 turned out to say otherwise inside the bytes, and the most attractive one
-embedded `allowRedistribution: false` and `modification: "prohibited"` while
-its own repository called it CC0.
+"minimal physics." The associated licensing decision is recorded in the
+[third-party notices](../THIRD-PARTY-NOTICES.md).
 
 Revisit the budget when a commissioned model exists, not before. If render cost
 becomes a problem, measure it first.
 
-### The sample-avatar rule, and why this is its exception
-
-This section's rules say not to copy sample avatars from a dependency. Seed-san
-is the VRM specification's sample model, so it collides with the letter of that
-rule. It is admitted anyway, deliberately, and the reasoning is recorded here
-rather than left implicit:
-
-- The rule exists because a dependency's bundled sample usually carries terms
-  that cover demonstrating the library and nothing else. Seed-san's embedded
-  grant is the opposite: redistribution allowed, corporate commercial use
-  allowed, modification allowed, by a named licensor.
-- `vrm-c/vrm-specification` is not a dependency of this repo. Nothing here
-  installs it or links against it.
-
-What the rule still buys, and what remains true of this choice: Jim's face is
-another company's mascot, with robot arms. That is a branding cost, taken
-knowingly. A commissioned model is still the better end state, and task 0 in
-`TODO.md` stays open for it.
-
 ### Requirements on any replacement
-
-Verify the grant from the file. A VRM carries its own machine-readable license
-in the `VRMC_vrm` glTF extension under `meta`: `avatarPermission`,
-`commercialUsage`, `modification`, `allowRedistribution`, `creditNotation`,
-`authors`. Read those out of the actual bytes and record them here. A license
-claim on a download page is not evidence about the file, and in this survey it
-was wrong more often than it was right.
 
 Budget for a commissioned replacement: upper body only, 1 to 3 materials, 512
 to 1024 px textures, minimal physics, 5 to 15 MB.
@@ -87,19 +51,14 @@ a 5 to 15 MB budget is exactly the pressure that pushes an author toward Draco
 or KTX2, and discovering it at delivery time would mean re-vendoring the bundle
 with three more decoders for one model. The shipped model satisfies this.
 
-The model may not be derived from a real person's likeness without a signed
-release. It may not be a sample avatar taken from a dependency either: Three.js
-and `@pixiv/three-vrm` both ship sample models under terms that cover
-demonstrating the library and not redistributing it as a product's interviewer.
-The exception granted above is narrow and rests on the embedded grant, not on
-the file being convenient to obtain.
+Document the replacement's source, license, attribution requirements, and
+redistribution rights in the [third-party notices](../THIRD-PARTY-NOTICES.md).
 
 ## Dependencies
 
-Three.js 0.185.1 and `@pixiv/three-vrm` 3.5.5, both MIT, vendored as one
-pre-bundled ES module at `web/vendor/avatar/three-vrm.js` and pinned by
-`web/vendor/avatar/SHA256SUMS`. `web/vendor/avatar/README.md` records the
-tarballs and the exact command that reproduces the bundle.
+The renderer uses the vendored bundle at `web/vendor/avatar/three-vrm.js`.
+Its components, licenses, and reproducible source details are listed in
+[the third-party notices](../THIRD-PARTY-NOTICES.md).
 
 ### Why a bundle instead of an import map
 

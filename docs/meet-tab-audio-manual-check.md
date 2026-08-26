@@ -27,9 +27,9 @@ re-vendored, or before relying on the mode for a real interview.
    preference that fails to persist, so do not skip it when Jim is already
    audible.
 3. In Meet, click Present now.
-4. Choose **A tab**.
+4. Choose "A tab".
 5. Select the CodeTrial tab.
-6. Enable **Share tab audio** before clicking Share.
+6. Enable "Share tab audio" before clicking Share.
 7. Confirm Meet's microphone is still the candidate microphone, not "None" and
    not a virtual device.
 8. Record 10 seconds in Meet while Jim is speaking and the candidate says one

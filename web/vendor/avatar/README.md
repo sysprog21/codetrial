@@ -12,7 +12,8 @@ Jim's VRM renderer can load without a CDN, a lockfile, or an import map.
   pixiv Inc.
 - `SHA256SUMS`: bare filenames, checked by `scripts/verify-vendor.sh`.
 
-The VRM model itself is not here. `docs/avatar-contract.md` records why, and
+The VRM model is not committed. `make fetch-vendor` downloads it here and
+`SHA256SUMS` pins it; `docs/avatar-contract.md` records why, and
 `web/avatar/avatar.js` shows the neutral panel when it is absent.
 
 ## Sources
@@ -30,7 +31,7 @@ so the pinned pair satisfies it.
 `@pixiv/three-vrm` and `GLTFLoader.js` both import `three` by bare specifier,
 which a browser resolves only through an import map. Import maps cannot be
 loaded from a `src` URL, so one would have to be inlined into
-`web/interview.html`, and `src/web.rs` sets `script-src 'self'` with no
+`web/interview.html`, and `src/web/policy.rs` sets `script-src 'self'` with no
 `'unsafe-inline'` and no nonce. Bundling resolves the specifiers at vendor time
 instead of loosening the policy at runtime.
 

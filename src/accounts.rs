@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ring::rand::SecureRandom;
+use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use crate::current_epoch_seconds;
@@ -746,11 +747,7 @@ pub fn create_interview(
                 .query_row(PENDING, (account_id, consent_version), |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
                 })
-                .map(Some)
-                .or_else(|error| match error {
-                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                    error => Err(error),
-                })
+                .optional()
         };
 
         // Three, because each retry needs another process to both win the
@@ -929,19 +926,18 @@ pub fn withdraw_consent(
     now: i64,
 ) -> rusqlite::Result<bool> {
     accounts.with(|connection| {
-        match connection.query_row(
-            "
+        connection
+            .query_row(
+                "
         UPDATE interviews SET consent_withdrawn_at = COALESCE(consent_withdrawn_at, ?3)
         WHERE id = ?1 AND account_id = ?2
         RETURNING consent_withdrawn_at
         ",
-            (id, account_id, now),
-            |row| row.get::<_, i64>(0),
-        ) {
-            Ok(_) => Ok(true),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
-            Err(error) => Err(error),
-        }
+                (id, account_id, now),
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map(|row| row.is_some())
     })
 }
 
