@@ -2221,40 +2221,37 @@
     }
   },
   {
-    "id": "reverse-linked-list",
-    "title": "Reverse Linked List",
-    "difficulty": "Easy",
+    "id": "reverse-linked-list-ii",
+    "title": "Reverse Linked List II",
+    "difficulty": "Medium",
     "topics": [
-      "Linked List",
-      "Recursion"
+      "Linked List"
     ],
     "statement": [
-      "Given the head of a singly linked list, reverse the list and return the new head."
+      "Given the head of a singly linked list and two integers left and right where left <= right, reverse the nodes of the list from position left to position right, and return the head of the modified list.",
+      "Positions are one-based, so left = 1 refers to the first node."
     ],
     "examples": [
       {
-        "input": "head = [1,2,3,4,5]",
-        "output": "[5,4,3,2,1]"
+        "input": "head = [1,2,3,4,5], left = 2, right = 4",
+        "output": "[1,4,3,2,5]"
       },
       {
-        "input": "head = [1,2]",
-        "output": "[2,1]"
-      },
-      {
-        "input": "head = []",
-        "output": "[]"
+        "input": "head = [5], left = 1, right = 1",
+        "output": "[5]"
       }
     ],
     "constraints": [
-      "0 <= number of nodes <= 5000",
-      "-5000 <= Node.val <= 5000"
+      "1 <= number of nodes <= 500",
+      "-500 <= Node.val <= 500",
+      "1 <= left <= right <= number of nodes"
     ],
     "starterCode": {
-      "python": "# Definition for singly-linked list.\n# class ListNode:\n#     def __init__(self, val=0, next=None):\n#         self.val = val\n#         self.next = next\nclass Solution:\n    def reverseList(self, head: Optional[ListNode]) -> Optional[ListNode]:\n        # Think out loud as you go!\n        pass\n",
-      "javascript": "/**\n * Definition for singly-linked list.\n * function ListNode(val, next) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.next = (next === undefined ? null : next);\n * }\n */\n/**\n * @param {ListNode} head\n * @return {ListNode}\n */\nfunction reverseList(head) {\n  // Think out loud as you go!\n}\n",
-      "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* reverseList(struct ListNode* head) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
-      "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* reverseList(ListNode* head) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
-      "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode reverseList(ListNode head) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
+      "python": "# Definition for singly-linked list.\n# class ListNode:\n#     def __init__(self, val=0, next=None):\n#         self.val = val\n#         self.next = next\nclass Solution:\n    def reverseBetween(self, head: Optional[ListNode], left: int, right: int) -> Optional[ListNode]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * Definition for singly-linked list.\n * function ListNode(val, next) {\n *   this.val = (val === undefined ? 0 : val);\n *   this.next = (next === undefined ? null : next);\n * }\n */\n/**\n * @param {ListNode} head\n * @param {number} left\n * @param {number} right\n * @return {ListNode}\n */\nfunction reverseBetween(head, left, right) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* reverseBetween(struct ListNode* head, int left, int right) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
+      "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* reverseBetween(ListNode* head, int left, int right) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
+      "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode reverseBetween(ListNode head, int left, int right) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
     }
   },
   {

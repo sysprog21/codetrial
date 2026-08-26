@@ -1,0 +1,134 @@
+{
+  "kind": "function",
+  "entry": "reverseBetween",
+  "checker": "exact",
+  "argTypes": [
+    "linkedList",
+    null,
+    null
+  ],
+  "outputType": "linkedList",
+  "cases": [
+    {
+      "label": "reverse a middle span",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        2,
+        4
+      ],
+      "expected": [
+        1,
+        4,
+        3,
+        2,
+        5
+      ]
+    },
+    {
+      "label": "single node",
+      "input": [
+        [
+          5
+        ],
+        1,
+        1
+      ],
+      "expected": [
+        5
+      ]
+    },
+    {
+      "label": "reverse from the head",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        1,
+        3
+      ],
+      "expected": [
+        3,
+        2,
+        1,
+        4,
+        5
+      ]
+    },
+    {
+      "label": "reverse through the tail",
+      "input": [
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        2,
+        4
+      ],
+      "expected": [
+        1,
+        4,
+        3,
+        2
+      ]
+    },
+    {
+      "label": "whole list",
+      "input": [
+        [
+          1,
+          2,
+          3
+        ],
+        1,
+        3
+      ],
+      "expected": [
+        3,
+        2,
+        1
+      ]
+    },
+    {
+      "label": "negative values",
+      "input": [
+        [
+          -1,
+          0,
+          2,
+          7
+        ],
+        2,
+        3
+      ],
+      "expected": [
+        -1,
+        2,
+        0,
+        7
+      ]
+    }
+  ],
+  "paramNames": [
+    "head",
+    "left",
+    "right"
+  ],
+  "paramTypes": [
+    "ListNode",
+    "integer",
+    "integer"
+  ],
+  "returnType": "ListNode"
+}

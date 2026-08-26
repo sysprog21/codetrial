@@ -1,10 +1,8 @@
 {
   "source": "https://leetcode.com/studyplan/top-interview-150/",
-  "titleSource": "https://github.com/logreg-n-coffee/leetcode-top-interview-150",
-  "slugSource": "https://leetcode.com/api/problems/all/",
   "sections": [
     {
-      "topic": "Array and String",
+      "topic": "Array / String",
       "slugs": [
         "merge-sorted-array",
         "remove-element",
@@ -37,19 +35,18 @@
       "slugs": [
         "valid-palindrome",
         "is-subsequence",
-        "container-with-most-water",
         "two-sum-ii-input-array-is-sorted",
-        "3sum",
-        "happy-number"
+        "container-with-most-water",
+        "3sum"
       ]
     },
     {
       "topic": "Sliding Window",
       "slugs": [
+        "minimum-size-subarray-sum",
         "longest-substring-without-repeating-characters",
-        "minimum-window-substring",
         "substring-with-concatenation-of-all-words",
-        "minimum-size-subarray-sum"
+        "minimum-window-substring"
       ]
     },
     {
@@ -71,6 +68,7 @@
         "valid-anagram",
         "group-anagrams",
         "two-sum",
+        "happy-number",
         "contains-duplicate-ii",
         "longest-consecutive-sequence"
       ]
@@ -101,7 +99,7 @@
         "add-two-numbers",
         "merge-two-sorted-lists",
         "copy-list-with-random-pointer",
-        "reverse-linked-list",
+        "reverse-linked-list-ii",
         "reverse-nodes-in-k-group",
         "remove-nth-node-from-end-of-list",
         "remove-duplicates-from-sorted-list-ii",
@@ -111,7 +109,7 @@
       ]
     },
     {
-      "topic": "Binary Tree - General",
+      "topic": "Binary Tree General",
       "slugs": [
         "maximum-depth-of-binary-tree",
         "same-tree",
@@ -130,19 +128,24 @@
       ]
     },
     {
-      "topic": "Binary Tree - BFS",
+      "topic": "Binary Tree BFS",
       "slugs": [
         "binary-tree-right-side-view",
         "average-of-levels-in-binary-tree",
         "binary-tree-level-order-traversal",
-        "binary-tree-zigzag-level-order-traversal",
+        "binary-tree-zigzag-level-order-traversal"
+      ]
+    },
+    {
+      "topic": "Binary Search Tree",
+      "slugs": [
         "minimum-absolute-difference-in-bst",
         "kth-smallest-element-in-a-bst",
         "validate-binary-search-tree"
       ]
     },
     {
-      "topic": "Graph - General",
+      "topic": "Graph General",
       "slugs": [
         "number-of-islands",
         "surrounded-regions",
@@ -153,7 +156,7 @@
       ]
     },
     {
-      "topic": "Graph - BFS",
+      "topic": "Graph BFS",
       "slugs": [
         "snakes-and-ladders",
         "minimum-genetic-mutation",
@@ -181,7 +184,7 @@
       ]
     },
     {
-      "topic": "Divide and Conquer",
+      "topic": "Divide & Conquer",
       "slugs": [
         "convert-sorted-array-to-binary-search-tree",
         "sort-list",
@@ -240,7 +243,7 @@
       ]
     },
     {
-      "topic": "1D Dynamic Programming",
+      "topic": "1D DP",
       "slugs": [
         "climbing-stairs",
         "house-robber",
@@ -250,7 +253,7 @@
       ]
     },
     {
-      "topic": "Multidimensional Dynamic Programming",
+      "topic": "Multidimensional DP",
       "slugs": [
         "triangle",
         "minimum-path-sum",

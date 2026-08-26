@@ -1207,7 +1207,7 @@ fn static_problem_bank_and_judges_cover_each_problem() {
         ("add-two-numbers", "carry extends result"),
         ("merge-two-sorted-lists", "negative values"),
         ("copy-list-with-random-pointer", "duplicate values"),
-        ("reverse-linked-list", "negative values"),
+        ("reverse-linked-list-ii", "negative values"),
         ("reverse-nodes-in-k-group", "k equals one"),
         ("remove-nth-node-from-end-of-list", "remove head"),
         (
