@@ -204,68 +204,15 @@ pub(crate) async fn start_recording_handler(
         return recording_state_now(&accounts, &recording).await;
     }
 
-    let request = crate::recording::StartEgress {
-        room_name: recording.room_name.clone().unwrap_or_default(),
-        template_base_url: recorder.config.template_base_url.clone(),
-        bucket: recorder.config.gcs_bucket.clone(),
-        filepath: crate::recording::gcs_object_path(&recorder.config.gcs_prefix, &recording.id),
-        service_account_json: recorder.config.service_account_json.clone(),
-        bitrate: recorder.config.bitrate,
-    };
-    match recorder.provider.start(&request).await {
-        Ok(egress_id) => {
-            let stored = {
-                let accounts = accounts.clone();
-                let clock = recorder.clock.clone();
-                let recording_id = recording.id.clone();
-                let egress_id = egress_id.clone();
-                blocking(move || {
-                    crate::recording::record_egress_id(
-                        &accounts,
-                        clock.as_ref(),
-                        &recording_id,
-                        &egress_id,
-                    )
-                })
-                .await
-            };
-            if !stored.unwrap_or(false) {
-                // Either the row already names another job, from a sweeper
-                // retry that overtook this call, or the write failed. Either
-                // way this attempt owns a job the row does not, so it stops the
-                // one it just made rather than leaving two running.
-                eprintln!(
-                    "recording {} started a job its row does not name; stopping it",
-                    recording.id
-                );
-                let _ = recorder
-                    .provider
-                    .stop(&egress_id, &request.room_name)
-                    .await
-                    .inspect_err(|error| {
-                        eprintln!("recording {} left a job running: {error}", recording.id)
-                    });
-                return recording_state_now(&accounts, &recording).await;
-            }
-
-            // A stop can land while the provider is still answering: consent
-            // withdrawn, the room finished, the candidate closed the tab. The
-            // row keeps the id whatever state it is in, and this is where a job
-            // that outlived its recording gets stopped. Shared with the
-            // sweeper's retry, which has the same window.
-            crate::recording::settle_new_egress(&accounts, &recorder, &recording.id, &egress_id)
-                .await;
-
-            return recording_state_now(&accounts, &recording).await;
-        }
-        Err(error) => {
-            // Left in `starting`, not failed, and the row is not touched. The
-            // contract promises one minute, then five, then fifteen; a row
-            // moved straight to `failed` is a row that schedule never sees, and
-            // counting this attempt as a retry would push the first retry out
-            // to five minutes.
-            eprintln!("recording {} could not start: {error}", recording.id);
-        }
+    if let Err(error) =
+        crate::recording::start_and_record_egress(&accounts, &recorder, &recording).await
+    {
+        // Left in `starting`, not failed, and the row is not touched. The
+        // contract promises one minute, then five, then fifteen; a row moved
+        // straight to `failed` is a row that schedule never sees, and counting
+        // this attempt as a retry would push the first retry out to five
+        // minutes.
+        eprintln!("recording {} could not start: {error}", recording.id);
     }
     recording_state_now(&accounts, &recording).await
 }

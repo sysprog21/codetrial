@@ -628,11 +628,19 @@ pub fn is_production(values: &BTreeMap<String, String>) -> bool {
         .is_some_and(|value| value.trim() == "production")
 }
 
-fn optional(values: &BTreeMap<String, String>, key: &str, default: &str) -> String {
+/// The trimmed value of `key`, or `None` when it is absent or blank.
+///
+/// One definition of "set", because every caller below needs the same one and a
+/// second spelling of it is a second answer to whether `KEY=" "` counts.
+fn present<'a>(values: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
     values
         .get(key)
-        .filter(|value| !value.trim().is_empty())
-        .map_or_else(|| default.to_string(), |value| value.trim().to_string())
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+}
+
+fn optional(values: &BTreeMap<String, String>, key: &str, default: &str) -> String {
+    present(values, key).map_or_else(|| default.to_string(), str::to_string)
 }
 
 /// The two values the API names, and nothing else.
@@ -862,61 +870,20 @@ pub fn load_recording(
         &mut invalid_entries,
     );
 
-    let present = |key: &str| {
-        values
-            .get(key)
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
-    };
+    let present = |key: &str| present(values, key);
     let mut missing_keys = RECORDING_REQUIRED_KEYS
         .iter()
         .copied()
         .filter(|key| present(key).is_none())
         .collect::<Vec<_>>();
 
-    let configured_livekit = RECORDING_LIVEKIT_KEYS
-        .iter()
-        .filter(|key| present(key).is_some())
-        .count();
-    if configured_livekit != 0 && configured_livekit != RECORDING_LIVEKIT_KEYS.len() {
-        missing_keys.extend(
-            RECORDING_LIVEKIT_KEYS
-                .iter()
-                .copied()
-                .filter(|key| present(key).is_none()),
-        );
-    }
-
-    let livekit = (configured_livekit == RECORDING_LIVEKIT_KEYS.len()).then(|| RecordingLivekit {
-        url: present("CODETRIAL_RECORDING_LIVEKIT_URL")
-            .unwrap_or_default()
-            .to_string(),
-        api_key: present("CODETRIAL_RECORDING_LIVEKIT_API_KEY")
-            .unwrap_or_default()
-            .to_string(),
-        api_secret: present("CODETRIAL_RECORDING_LIVEKIT_API_SECRET")
-            .unwrap_or_default()
-            .to_string(),
-    });
-    if let Some(livekit) = &livekit {
-        if let Err(message) = validate_livekit_url(&livekit.url, production) {
-            invalid_entries.push(format!("CODETRIAL_RECORDING_LIVEKIT_URL: {message}"));
-        } else if !pool
-            .providers
-            .iter()
-            .any(|provider| same_livekit_host(&provider.url, &livekit.url))
-        {
-            // Egress runs inside the project that holds the room, so recording
-            // against a project this server never hands a token for records
-            // nothing. The message names no URL: a LiveKit URL can carry a
-            // query string, and this one reaches stderr.
-            invalid_entries.push(
-                "CODETRIAL_RECORDING_LIVEKIT_URL names a LiveKit project that is not in the \
-                 provider pool, so no room this server creates would ever be recorded"
-                    .to_string(),
-            );
-        }
-    }
+    let livekit = recording_livekit(
+        values,
+        pool,
+        production,
+        &mut missing_keys,
+        &mut invalid_entries,
+    );
 
     if let Some(url) = present("CODETRIAL_RECORDING_TEMPLATE_BASE_URL")
         && let Err(message) = validate_template_base_url(url)
@@ -1006,6 +973,69 @@ pub fn load_recording(
         timeout_seconds,
         integration,
     }))
+}
+
+/// The separate LiveKit project a recording deployment may run egress in.
+///
+/// All three keys or none: a half-named project is reported through
+/// `missing_keys` rather than silently falling back to the room's own project,
+/// because an operator who set two of the three meant to record somewhere else.
+/// `None` here is that fallback being correct, not a failure.
+fn recording_livekit(
+    values: &BTreeMap<String, String>,
+    pool: &ProviderPool,
+    production: bool,
+    missing_keys: &mut Vec<&'static str>,
+    invalid_entries: &mut Vec<String>,
+) -> Option<RecordingLivekit> {
+    let present = |key: &str| present(values, key);
+
+    // Read once and matched on shape. Counting them and then re-reading each
+    // value meant three arms defaulting a key the count had just proved was
+    // there, which would have written an empty URL rather than failed if the
+    // guard above them ever drifted.
+    let found = RECORDING_LIVEKIT_KEYS.map(present);
+
+    // None of the three is the common case: record on the project that owns the
+    // room. Nothing to report.
+    if found.iter().all(Option::is_none) {
+        return None;
+    }
+    let [Some(url), Some(api_key), Some(api_secret)] = found else {
+        missing_keys.extend(
+            RECORDING_LIVEKIT_KEYS
+                .iter()
+                .copied()
+                .filter(|key| present(key).is_none()),
+        );
+        return None;
+    };
+
+    let livekit = RecordingLivekit {
+        url: url.to_string(),
+        api_key: api_key.to_string(),
+        api_secret: api_secret.to_string(),
+    };
+
+    if let Err(message) = validate_livekit_url(&livekit.url, production) {
+        invalid_entries.push(format!("CODETRIAL_RECORDING_LIVEKIT_URL: {message}"));
+    } else if !pool
+        .providers
+        .iter()
+        .any(|provider| same_livekit_host(&provider.url, &livekit.url))
+    {
+        // Egress runs inside the project that holds the room, so recording
+        // against a project this server never hands a token for records
+        // nothing. The message names no URL: a LiveKit URL can carry a query
+        // string, and this one reaches stderr.
+        invalid_entries.push(
+            "CODETRIAL_RECORDING_LIVEKIT_URL names a LiveKit project that is not in the \
+             provider pool, so no room this server creates would ever be recorded"
+                .to_string(),
+        );
+    }
+
+    Some(livekit)
 }
 
 /// A recording number, where a value that is present and unparseable is an

@@ -486,12 +486,12 @@ fn recording_schema_reopen() {
         ACCOUNT_SCHEMA_VERSION
     );
 
-    // The task list asked for the opposite of what this codebase does: an older
-    // binary does not open a migrated database, it refuses, because running
-    // today's queries against tomorrow's tables is the failure that has no
-    // symptom until it has a bad one. That refusal is already pinned by
+    // The obvious expectation is the opposite of what this codebase does: an
+    // older binary does not open a migrated database, it refuses, because
+    // running today's queries against tomorrow's tables is the failure that has
+    // no symptom until it has a bad one. That refusal is already pinned by
     // `a_database_from_a_future_version_is_refused` in `src/accounts.rs`, so it
-    // is not restated here; `TODO.md` records the correction.
+    // is not restated here.
 }
 
 pub(crate) mod lifecycle {

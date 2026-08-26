@@ -247,10 +247,10 @@ fi
 
 if runs delivery || runs cleanup; then
   cat >&2 <<'PENDING'
-The delivery and cleanup phases are task 7b's, and they need the same
-credentialed interview the media phase needs. What they will assert is written
-down in TODO.md: one Drive file, a reader permission expiring within 24 hours,
-and no Drive file and no GCS object after retention runs.
+The delivery and cleanup phases are not implemented here yet, and they need the
+same credentialed interview the media phase needs. What they will assert: one
+Drive file, a reader permission expiring within 24 hours, and no Drive file and
+no GCS object after retention runs.
 PENDING
   exit 2
 fi

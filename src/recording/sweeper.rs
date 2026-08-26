@@ -94,13 +94,79 @@ pub async fn stop_recording(
     Ok((state, true))
 }
 
+/// Asks the provider for an Egress job and ties the row to it.
+///
+/// `Ok(true)` means the row now names the job. `Ok(false)` means a job was
+/// started, could not be recorded, and has been stopped again, so the caller
+/// owes the provider nothing. `Err` is the provider refusing to start at all,
+/// which is the one part the two callers answer differently: a first attempt
+/// leaves the row in `starting` for the schedule to find, and a retry spends
+/// one of its attempts.
+///
+/// Both callers need every other step to be identical, which is why this is one
+/// function: the stop-the-orphan-job branch is the hard-won half, and two
+/// copies of it are two chances to leave an Egress job running that no row
+/// names and no consent withdrawal can reach.
+pub async fn start_and_record_egress(
+    accounts: &Arc<Accounts>,
+    recorder: &Recorder,
+    recording: &Recording,
+) -> Result<bool, String> {
+    let request = StartEgress {
+        room_name: recording.room_name.clone().unwrap_or_default(),
+        template_base_url: recorder.config.template_base_url.clone(),
+        bucket: recorder.config.gcs_bucket.clone(),
+        filepath: gcs_object_path(&recorder.config.gcs_prefix, &recording.id),
+        service_account_json: recorder.config.service_account_json.clone(),
+        bitrate: recorder.config.bitrate,
+    };
+    let egress_id = recorder.provider.start(&request).await?;
+
+    let stored = {
+        let accounts = accounts.clone();
+        let clock = recorder.clock.clone();
+        let id = recording.id.clone();
+        let egress_id = egress_id.clone();
+        blocking(move || record_egress_id(&accounts, clock.as_ref(), &id, &egress_id))
+            .await
+            .unwrap_or(false)
+    };
+
+    if stored {
+        // A stop can land while the provider is still answering: consent
+        // withdrawn, the room finished, the candidate closed the tab. The row
+        // keeps the id whatever state it is in, and this is where a job that
+        // outlived its recording gets stopped.
+        settle_new_egress(accounts, recorder, &recording.id, &egress_id).await;
+    } else {
+        // Either the row already names another job, from the other caller
+        // overtaking this one, or the write failed. Either way this attempt
+        // owns a job the row does not, so it stops the one it just made rather
+        // than leaving two running.
+        eprintln!(
+            "recording {} started a job its row does not name; stopping it",
+            recording.id
+        );
+        let _ = recorder
+            .provider
+            .stop(&egress_id, &request.room_name)
+            .await
+            .inspect_err(|error| {
+                eprintln!("recording {} left a job running: {error}", recording.id)
+            });
+    }
+    Ok(stored)
+}
+
 /// Stops a job whose recording stopped being active while the provider was
 /// answering.
 ///
-/// Both paths that hand a fresh egress id to a row need this: the start route
-/// and the sweeper's retry. A candidate can withdraw consent, a room can
-/// finish, a tab can close, all while `StartRoomCompositeEgress` is still in
-/// flight, and the row that comes back is terminal with a live job attached.
+/// Reached two ways: through `start_and_record_egress`, which both the start
+/// route and the sweeper's retry go through, and directly from the retry's
+/// adopt branch when the provider turns out to already have a job for the room.
+/// A candidate can withdraw consent, a room can finish, a tab can close, all
+/// while `StartRoomCompositeEgress` is still in flight, and the row that comes
+/// back is terminal with a live job attached.
 pub async fn settle_new_egress(
     accounts: &Arc<Accounts>,
     recorder: &Recorder,
@@ -637,53 +703,18 @@ async fn retry_start(accounts: &Arc<Accounts>, recorder: &Recorder, recording: &
         }
     }
 
-    let request = StartEgress {
-        room_name: room_name.clone(),
-        template_base_url: recorder.config.template_base_url.clone(),
-        bucket: recorder.config.gcs_bucket.clone(),
-        filepath: gcs_object_path(&recorder.config.gcs_prefix, &recording.id),
-        service_account_json: recorder.config.service_account_json.clone(),
-        bitrate: recorder.config.bitrate,
-    };
-    let clock = recorder.clock.clone();
-    match recorder.provider.start(&request).await {
-        Ok(egress_id) => {
-            let stored = {
-                let accounts = accounts.clone();
-                let id = recording.id.clone();
-                let egress_id = egress_id.clone();
-                blocking(move || record_egress_id(&accounts, clock.as_ref(), &id, &egress_id))
-                    .await
-                    .unwrap_or(false)
-            };
-            if stored {
-                // The row can have moved while the provider was answering, and
-                // a retry has the same window the first attempt does.
-                settle_new_egress(accounts, recorder, &recording.id, &egress_id).await;
-            } else {
-                // Either the row already names another job, or the write
-                // failed. Either way this attempt owns a job the row does not,
-                // so it stops the one it just made rather than leaving two.
-                eprintln!(
-                    "recording {} started a job its row does not name; stopping it",
-                    recording.id
-                );
-                let _ = recorder
-                    .provider
-                    .stop(&egress_id, &room_name)
-                    .await
-                    .inspect_err(|error| {
-                        eprintln!("recording {} left a job running: {error}", recording.id)
-                    });
-            }
-            stored
-        }
+    match start_and_record_egress(accounts, recorder, recording).await {
+        Ok(stored) => stored,
+
+        // A retry that could not start spends one of its attempts, which is
+        // what moves the row down the one-then-five-then-fifteen schedule.
         Err(error) => {
             eprintln!(
                 "recording {} could not start on retry: {error}",
                 recording.id
             );
             let accounts = accounts.clone();
+            let clock = recorder.clock.clone();
             let id = recording.id.clone();
             let _ = blocking(move || bump_retry(&accounts, clock.as_ref(), &id)).await;
             false
