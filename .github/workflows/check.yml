@@ -1,8 +1,14 @@
 # The gate that scripts/test.sh already describes, run where nobody can forget
-# it. Everything here is one job on purpose: the gates share a cargo build and a
-# vendor tree, and splitting them into parallel jobs would download 24 MB of
-# wasm and rebuild the LiveKit SDK once per job to save a few minutes of
-# wall clock on a repo this size.
+# it.
+#
+# The gates stay in one job, because they share a cargo build and a vendor tree
+# and splitting them would re-download 24 MB of wasm to save seconds. Mutation
+# is the exception and always was: it is the only step whose cost tracks the
+# size of the diff rather than the size of the repo, and on a large one it runs
+# an order of magnitude longer than everything else combined. Serialised behind
+# the gates it hid their result for an hour and reported nothing while it
+# worked. It now runs beside them, split into shards that finish in a quarter of
+# the time and say where they are.
 name: check
 
 on:
@@ -19,6 +25,35 @@ concurrency:
   group: check-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+env:
+  # Every build here is a link-bound build: eleven test binaries between 29 and
+  # 84 MB, each statically linking libwebrtc. Two settings attack that, and both
+  # pay twice because the mutation gate rebuilds once per mutant.
+  #
+  # Debug info is the larger half and was measured: touching one file and
+  # relinking the suite took 16.6s with full debug and 9.9s with
+  # line-tables-only, a 40% cut per mutant. `line-tables-only` rather than `0`
+  # keeps file and line in a CI backtrace, which is the only part of debug info
+  # a failed run here actually uses.
+  #
+  # mold replaces the linker itself. It is the tool built for this shape of
+  # problem, many large static inputs, and it is an apt package on this image.
+  #
+  # Both change the build fingerprint, which is why the cargo cache key below
+  # hashes this file. Without that, a cache saved under the old flags would be
+  # restored forever and rebuilt from scratch every run, which is worse than
+  # having no cache at all.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  RUSTFLAGS: -Clink-arg=-fuse-ld=mold
+
+  # One source for the pin. It was written twice, in the cache key and in the
+  # install, and the guard below skips the install whenever a cached binary
+  # exists: bumping only the install line would leave the old key matching, the
+  # old binary restored, and CI auditing with a version nobody asked for.
+  CARGO_AUDIT_VERSION: 0.22.2
+  CARGO_MUTANTS_VERSION: 27.1.0
+
 jobs:
   check:
     # Pinned rather than `ubuntu-latest`: that label moves to a new image on
@@ -30,13 +65,9 @@ jobs:
     # neither is an hour: the default six-hour ceiling only ever gets reached by
     # something wedged.
     #
-    # 45 rather than 30 since the mutation step landed. Its steady state is
-    # small -- measured at 16s build plus 23s test per mutant against a warm
-    # target/, so the seven-mutant diff that motivated it took four and a half
-    # minutes -- but the first run after a cargo-mutants version bump builds the
-    # tool from source, which is minutes on its own. A prebuilt release binary
-    # would remove that, at the cost of a download to pin and verify the way
-    # scripts/fetch-vendor.sh does.
+    # Back to 45 now that mutation has its own job. This is a wedge detector
+    # rather than a budget: against the six-hour default it catches a job that
+    # has stopped making progress, which is all it is for.
     timeout-minutes: 45
     steps:
       # Full history, because the mutation step below diffs against the base
@@ -46,8 +77,25 @@ jobs:
         with:
           fetch-depth: 0
 
+      # This job ran out of disk on main before it ran out of disk here: the
+      # LiveKit SDK and libwebrtc build to a target/ measured in gigabytes, the
+      # cache restores another copy of the registry beside it, Chromium and the
+      # vendored wasm add their own, and `cargo install` builds a second crate
+      # graph in a temp dir of its own. The image ships tens of gigabytes of
+      # toolchains this repository never asks for, so the space is there to be
+      # had without giving anything up.
+      #
+      # `df` after, so the next failure of this kind reports what was actually
+      # available rather than leaving it to be guessed.
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/powershell /usr/share/swift /usr/local/.ghcup \
+            "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}"
+          df -h /
+
       - name: Install native build dependency
-        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev mold
 
       # The runner image ships a stable toolchain, but not necessarily one new
       # enough for edition 2024, and clippy and rustfmt are gates rather than
@@ -72,27 +120,46 @@ jobs:
       # Keyed on the lockfile, so a dependency bump rebuilds and a source edit
       # does not. The restore-keys line lets that bump start from the previous
       # tree instead of from nothing.
-      - name: Cache cargo
-        uses: actions/cache@v6
+      # Restore and save are separate steps on purpose. `actions/cache` saves
+      # from a post-job step that is skipped unless the job succeeded, so a run
+      # that built the whole dependency graph and then failed one test threw the
+      # build away and made the next run pay for it again. That is not
+      # hypothetical here: nothing saved a cache between 21 and 26 August while
+      # runs failed on disk and were superseded by pushes, so every run in that
+      # window restored a five-day-old target/ and rebuilt the difference, which
+      # is most of why the gates took twelve minutes.
+      #
+      # Keyed on the lockfile, so a dependency bump rebuilds and a source edit
+      # does not. The restore-keys line lets that bump start from the previous
+      # tree instead of from nothing.
+      - name: Restore cargo cache
+        id: cargo-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: cargo-${{ runner.os }}-${{ steps.rust.outputs.id }}-${{ hashFiles('Cargo.lock') }}
+          key: cargo-${{ runner.os }}-${{ steps.rust.outputs.id }}-${{ hashFiles('Cargo.lock', '.github/workflows/check.yml') }}
           restore-keys: cargo-${{ runner.os }}-${{ steps.rust.outputs.id }}-
 
-      # Keyed on the pins rather than on the manifests: SHA256SUMS is what
-      # decides whether the bytes on disk are the right ones, so a cache entry
-      # that survives a version bump would be discarded by fetch-vendor anyway.
-      # No restore-keys for the same reason: a stale entry here is 24 MB of
-      # bytes that fail their hash.
+      # Keyed on the whole tree, not on SHA256SUMS alone. The cached path holds
+      # the committed vendor files as well as the fetched ones, so a key that
+      # only reads the pins is unchanged when a committed file is edited: the
+      # restore then puts the old bytes back over the edit and verify-vendor
+      # passes on content the pull request does not contain. Hashing the tree
+      # costs a re-fetch when a README under web/vendor changes, which is the
+      # cheaper side of that trade.
+      #
+      # At restore time the directory holds only checked-out files, so the key
+      # is a function of the commit. No restore-keys: a stale entry here is
+      # 24 MB of bytes that fail their hash.
       - name: Cache vendored bytes
         uses: actions/cache@v6
         with:
           path: web/vendor
-          key: vendor-${{ hashFiles('web/vendor/**/SHA256SUMS') }}
+          key: vendor-${{ hashFiles('web/vendor/**') }}
 
       # The browser binary, not the npm package. package-lock.json pins the
       # playwright version, and the version is what decides which build of
@@ -123,50 +190,32 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Run gates
-        run: ./scripts/test.sh
-
-      # A tool rather than a dependency, so it gets its own cache key. Sharing
-      # the cargo cache above would mean a lockfile bump throwing away a build
-      # of something the lockfile does not describe. `cargo install` is a no-op
-      # when the pinned version is already on the path, so the cache hit path
-      # costs nothing.
-      - name: Cache cargo-mutants
-        if: github.event_name == 'pull_request'
+      # The gate skips this audit when the binary is missing, which is right for
+      # a contributor's laptop and wrong for CI: a silent skip here means the
+      # dependency surface stops being checked and nothing says so. Installed
+      # ahead of the gate so the skip branch is never the one CI takes.
+      - name: Cache cargo-audit
         uses: actions/cache@v6
         with:
-          path: ~/.cargo/bin/cargo-mutants
-          key: cargo-mutants-27.1.0-${{ runner.os }}-${{ steps.rust.outputs.id }}
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ env.CARGO_AUDIT_VERSION }}-${{ runner.os }}
 
-      - name: Install cargo-mutants
-        if: github.event_name == 'pull_request'
-        run: cargo install cargo-mutants --locked --version 27.1.0
-
-      # `cargo test` proves the tests pass. This proves they can fail. The gap
-      # it closes is not hypothetical: the CODE_SETTLE gate in livekit.rs
-      # shipped with its whole predicate revertible to a constant and every Rust
-      # test still green, because the one test naming the constant had been
-      # edited to step around it rather than exercise it.
+      # Guarded rather than bare: `cargo install` refuses when the binary is
+      # already in place and `~/.cargo/.crates.toml` is not, which is exactly
+      # what a cache hit restores.
       #
-      # Scoped to the diff, not the crate. The crate is 1840 mutants and hours
-      # of runner time, and a mutant surviving in code this branch never touched
-      # is somebody else's gap reported at the worst possible moment. Scoped
-      # this way the cost tracks the change: the diff that motivated this
-      # produced seven mutants, three of them on the predicate in question, and
-      # one of those three found a boundary the new test had only bracketed.
-      #
-      # `--in-place` because cargo-mutants otherwise copies the tree and builds
-      # it from cold, discarding the target/ that the cache and the gates above
-      # just paid for. The runner is disposable, so a dirtied tree costs nothing.
-      #
-      # Pull requests only. A push to main has already merged; the question this
-      # asks is what a change failed to test, and that is worth answering while
-      # the change can still be edited.
-      - name: Mutation-test the diff
-        if: github.event_name == 'pull_request'
+      # The guard asks the binary its version rather than merely whether one
+      # exists, so a restored binary that does not match the pin is replaced
+      # instead of silently used. With the version in the cache key that should
+      # not happen; this is what makes it fail loudly rather than quietly if it
+      # ever does.
+      - name: Install cargo-audit
         run: |
-          git diff "origin/${{ github.base_ref }}...HEAD" -- '*.rs' >"$RUNNER_TEMP/pr.diff"
-          cargo mutants --in-place --in-diff "$RUNNER_TEMP/pr.diff"
+          cargo-audit --version 2>/dev/null | grep -qF " $CARGO_AUDIT_VERSION" \
+            || cargo install cargo-audit --locked --version "$CARGO_AUDIT_VERSION" --force
+
+      - name: Run gates
+        run: ./scripts/test.sh
 
       # Its own step, not part of `cargo test`. It drives a real browser through
       # the offline interview and is hermetic now, with the Compiler Explorer
@@ -181,3 +230,212 @@ jobs:
       # step silently did nothing and is worth chasing.
       - name: Run the browser interview check
         run: cargo test --locked --test web -- --ignored browser_check_accepts_running_rust_server_offline_interview
+
+      # Last, and not conditional on the gates passing. An exact key hit has
+      # nothing new to store; anything else is a build worth keeping whatever
+      # the gates decided about the code. `cancelled()` is excluded because a
+      # superseded run is killed mid-step and has nothing coherent to save.
+      - name: Save cargo cache
+        if: ${{ !cancelled() && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ steps.rust.outputs.id }}-${{ hashFiles('Cargo.lock', '.github/workflows/check.yml') }}
+
+  # How many shards the diff is worth, decided before any of them start.
+  #
+  # A fixed width optimises for the outlier and taxes the common case: four
+  # runners each paying six minutes of setup to test two mutants is worse than
+  # one runner testing eight. `--list` parses the tree without building it, one
+  # second here, so the count is cheap to ask for and the width can follow it.
+  #
+  # One shard per 25 mutants, capped at four. The cap is not about arithmetic:
+  # past that the setup cost of another runner stops paying for itself against
+  # the mutants it would take.
+  plan-mutants:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # This job builds nothing but the tool, and only on a cache miss, so the
+      # workflow-wide mold flag would make it install a linker it has no use
+      # for. Cleared here rather than installing mold to satisfy a flag.
+      RUSTFLAGS: ""
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      width: ${{ steps.plan.outputs.width }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        run: |
+          rustup update stable
+          rustup default stable
+
+      - name: Cache cargo-mutants
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin/cargo-mutants
+          key: cargo-mutants-${{ env.CARGO_MUTANTS_VERSION }}-${{ runner.os }}
+
+      - name: Install cargo-mutants
+        run: |
+          cargo-mutants --version 2>/dev/null | grep -qF " $CARGO_MUTANTS_VERSION" \
+            || cargo install cargo-mutants --locked --version "$CARGO_MUTANTS_VERSION" --force
+
+      - name: Count the mutants this diff is worth
+        id: plan
+        run: |
+          # The default shell is `bash -e` with no pipefail, so the status of a
+          # pipeline is the last command's. Without this, a cargo-mutants that
+          # died would leave count at zero from `wc`, the shard job would skip
+          # on `count != '0'`, and the pull request would go green having
+          # mutation-tested nothing. The list goes to a file first so "cargo
+          # said zero" and "cargo failed" cannot look alike.
+          set -o pipefail
+          git diff "origin/${{ github.base_ref }}...HEAD" -- '*.rs' >"$RUNNER_TEMP/pr.diff"
+          cargo mutants --list --in-diff "$RUNNER_TEMP/pr.diff" >"$RUNNER_TEMP/list.txt"
+          count=$(wc -l <"$RUNNER_TEMP/list.txt" | tr -d ' ')
+          width=$(( (count + 24) / 25 ))
+          [ "$width" -lt 1 ] && width=1
+          [ "$width" -gt 4 ] && width=4
+          {
+            echo "count=$count"
+            echo "width=$width"
+            echo "shards=$(seq 0 $((width - 1)) | jq -R . | jq -sc .)"
+          } >>"$GITHUB_OUTPUT"
+          echo "$count mutants over $width shard(s)" >>"$GITHUB_STEP_SUMMARY"
+
+  # Mutation testing, beside the gates rather than behind them.
+  #
+  # `cargo test` proves the tests pass. This proves they can fail. The gap it
+  # closes is not hypothetical: the CODE_SETTLE gate in livekit.rs shipped with
+  # its whole predicate revertible to a constant and every Rust test still
+  # green, because the one test naming the constant had been edited to step
+  # around it rather than exercise it.
+  #
+  # Scoped to the diff, not the crate. The crate is 1840 mutants and hours of
+  # runner time, and a mutant surviving in code this branch never touched is
+  # somebody else's gap reported at the worst possible moment. Scoped this way
+  # the cost tracks the change.
+  #
+  # Sharded because that cost is not bounded by anything else here. A 34-file
+  # refactor produced 98 mutants at roughly 35s each, an hour of one runner,
+  # which overran the ceiling and told nobody how far it had got. Four shards
+  # divide the mutants between them, so each finishes in about a quarter of the
+  # time and each reports its own count and progress. `fail-fast: false` so one
+  # shard finding a surviving mutant does not cancel the other three and hide
+  # the rest of the answer.
+  #
+  # Pull requests only. A push to main has already merged; the question this
+  # asks is what a change failed to test, and that is worth answering while the
+  # change can still be edited.
+  mutants:
+    needs: plan-mutants
+    # No mutants means no runners. A docs-only or JS-only pull request should
+    # not start a job to discover it has nothing to do.
+    if: needs.plan-mutants.outputs.count != '0'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # Zero-indexed, and it has to stay that way. cargo-mutants slices the
+        # list as "the first n/k on shard 0", so a one-based matrix silently
+        # drops every mutant in the first slice and runs an empty last one: on
+        # a 101-mutant diff that was 75 tested, four green shards, and nothing
+        # anywhere saying a quarter of it went unexamined. The plan job emits
+        # zero-based indices; check that per-shard counts sum to the unsharded
+        # total before trusting any change here.
+        shard: ${{ fromJson(needs.plan-mutants.outputs.shards) }}
+    steps:
+      # Full history: the shard diffs against the base branch, and a shallow
+      # clone has no merge base to diff from.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/powershell /usr/share/swift /usr/local/.ghcup \
+            "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}"
+          df -h /
+
+      - name: Install native build dependency
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev mold
+
+      - name: Install Rust
+        id: rust
+        run: |
+          rustup update stable
+          rustup default stable
+          echo "id=$(rustc -V | sha256sum | cut -c1-12)" >>"$GITHUB_OUTPUT"
+
+      # Restore, never save. The gates job owns this cache; four shards writing
+      # a 1 GB entry under one key would be four uploads for the copy that
+      # happens to finish last. Restoring a prior lockfile's artifacts is what
+      # keeps each shard's baseline build incremental rather than cold, which is
+      # the whole reason `--in-place` is worth using.
+      - name: Restore cargo cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ steps.rust.outputs.id }}-${{ hashFiles('Cargo.lock', '.github/workflows/check.yml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ steps.rust.outputs.id }}-
+
+      # Needed even though no browser runs here: a Rust test reads
+      # web/vendor/avatar/jim.vrm to assert a content-length header, and
+      # cargo-mutants runs the real suite once per mutant.
+      - name: Restore vendored bytes
+        uses: actions/cache/restore@v6
+        with:
+          path: web/vendor
+          key: vendor-${{ hashFiles('web/vendor/**') }}
+
+      - name: Fetch any vendored bytes the cache did not have
+        run: ./scripts/fetch-vendor.sh
+
+      - name: Cache cargo-mutants
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin/cargo-mutants
+          key: cargo-mutants-${{ env.CARGO_MUTANTS_VERSION }}-${{ runner.os }}
+
+      - name: Install cargo-mutants
+        run: |
+          cargo-mutants --version 2>/dev/null | grep -qF " $CARGO_MUTANTS_VERSION" \
+            || cargo install cargo-mutants --locked --version "$CARGO_MUTANTS_VERSION" --force
+
+      # `--in-place` because cargo-mutants otherwise copies the tree and builds
+      # it from cold, discarding the target/ the cache above just restored. The
+      # runner is disposable, so a dirtied tree costs nothing. It is also why
+      # the shards are separate runners rather than `--jobs`: target/ is tens of
+      # gigabytes, so a build directory per job does not fit.
+      #
+      # The mutant list is printed before the run. cargo-mutants draws progress
+      # with a terminal bar that renders as nothing in a log, so without this a
+      # shard looks identical whether it is working or wedged.
+      - name: Mutation-test the diff
+        run: |
+          git diff "origin/${{ github.base_ref }}...HEAD" -- '*.rs' >"$RUNNER_TEMP/pr.diff"
+          echo "::group::Mutants in shard ${{ matrix.shard }}/${{ needs.plan-mutants.outputs.width }}"
+          cargo mutants --list --in-diff "$RUNNER_TEMP/pr.diff" \
+            --shard ${{ matrix.shard }}/${{ needs.plan-mutants.outputs.width }} \
+            | tee "$RUNNER_TEMP/shard.txt"
+          echo "::endgroup::"
+          echo "shard ${{ matrix.shard }}/${{ needs.plan-mutants.outputs.width }}: \
+            $(wc -l <"$RUNNER_TEMP/shard.txt") mutants" >>"$GITHUB_STEP_SUMMARY"
+          cargo mutants --in-place --in-diff "$RUNNER_TEMP/pr.diff" \
+            --shard ${{ matrix.shard }}/${{ needs.plan-mutants.outputs.width }}

@@ -62,3 +62,6 @@ web/vendor/pyodide/*.json
 # And the temp file a download in progress writes, which carries none of those
 # suffixes: a run killed outright leaves one, and it is the same megabytes.
 web/vendor/*/.*.part
+
+# cargo-mutants scratch output; CI runs it on every pull request.
+mutants.out/

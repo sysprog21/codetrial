@@ -50,6 +50,33 @@ eslint_gate() {
   (cd "$ROOT" && ./node_modules/.bin/eslint .)
 }
 
+# The workflow is code and has been wrong in ways review did not catch: a
+# one-based shard matrix that silently skipped a quarter of the mutants, a tool
+# version written twice that could drift, an expression naming an output that no
+# job produced. actionlint reads the YAML, the shell inside a run block, and the
+# workflow expressions, so all three are the kind of thing it refuses.
+#
+# Skipped when absent, like eslint above. It is a single Go binary rather than
+# something `npm ci` brings in, and a checkout without it should say so and move
+# on rather than fail a gate it cannot run.
+actionlint_gate() {
+  if ! command -v actionlint >/dev/null 2>&1; then
+    echo "skipping actionlint: install it to check .github/workflows locally" >&2
+    return 0
+  fi
+
+  (cd "$ROOT" && actionlint)
+}
+
+cargo_audit_gate() {
+  if ! command -v cargo-audit >/dev/null 2>&1; then
+    echo "skipping cargo-audit: run \`cargo install cargo-audit\` to enable it locally" >&2
+    return 0
+  fi
+
+  cargo audit --file "$ROOT/Cargo.lock"
+}
+
 shell_syntax() {
   status=0
   for script in "$ROOT"/scripts/*.sh; do
@@ -76,6 +103,8 @@ gate recording-fixtures node "$ROOT/scripts/gen-recording-fixtures.mjs" --check
 gate todo-deps python3 "$ROOT/scripts/check-todo-deps.py"
 gate browser-tests browser_tests
 gate eslint eslint_gate
+gate cargo-audit cargo_audit_gate
+gate actionlint actionlint_gate
 
 gate browser-check-syntax node --check "$ROOT/scripts/browser-check.cjs"
 gate shell-syntax shell_syntax
