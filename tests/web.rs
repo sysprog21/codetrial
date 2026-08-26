@@ -5761,3 +5761,82 @@ async fn a_dead_project_does_not_skew_the_rotation() {
     second_stub.abort();
     remove_database(db_path);
 }
+
+/// Every route that acts on an account rejects a request carrying no session.
+///
+/// These handlers take an `Owner` extractor rather than checking inline. The
+/// compiler proves the extractor runs; this proves what it answers when nobody
+/// is signed in, for every owner-scoped route rather than the five that had
+/// coverage scattered through this file.
+///
+/// The second half keeps the first half honest. The table is hand-written, so
+/// a thirteenth owner-scoped route would otherwise join nothing: instead every
+/// path literal in the router has to appear either here or in the anonymous
+/// list, and a new one fails until someone says which it is. The two LiveKit
+/// routes are named by constant rather than literal, so they are invisible
+/// here and carry their own signature tests.
+#[tokio::test]
+async fn every_owner_scoped_route_refuses_an_anonymous_request() {
+    let (base, server, path, client, _cookie) = recorded_server("anon-owner-routes").await;
+    let owner_scoped = [
+        (reqwest::Method::GET, "/api/reports"),
+        (reqwest::Method::POST, "/api/reports"),
+        (reqwest::Method::POST, "/api/interviews"),
+        (reqwest::Method::DELETE, "/api/interviews/{id}/consent"),
+        (reqwest::Method::POST, "/api/interviews/{id}/recording"),
+        (reqwest::Method::GET, "/api/interviews/{id}/recording"),
+        (reqwest::Method::POST, "/api/interviews/{id}/end"),
+        (reqwest::Method::POST, "/api/interviews/{id}/events"),
+        (reqwest::Method::GET, "/api/interviews/{id}/snapshot"),
+        (reqwest::Method::GET, "/api/recordings"),
+        (reqwest::Method::GET, "/api/recordings/{id}"),
+        (reqwest::Method::GET, "/api/recordings/{id}/events"),
+    ];
+
+    for (method, route) in owner_scoped.clone() {
+        let target = route.replace("{id}", "some-interview");
+        let status = client
+            .request(method.clone(), format!("{base}{target}"))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status, 401, "{method} {target} answered {status}, not 401");
+    }
+
+    // Routes that answer without a session, each for its own stated reason.
+    let anonymous = [
+        "/healthz",
+        "/api/token",
+        "/api/observer-token",
+        "/api/login",
+        "/api/callback",
+        "/api/session",
+        "/api/logout",
+        "/runtime-config.js",
+    ];
+    let router = std::fs::read_to_string("src/web/mod.rs").unwrap();
+    let declared: Vec<String> = router
+        .match_indices(".route(")
+        .filter_map(|(at, _)| {
+            let rest = &router[at..];
+            let open = rest.find('"')?;
+            let close = rest[open + 1..].find('"')?;
+            Some(rest[open + 1..open + 1 + close].to_string())
+        })
+        .collect();
+    assert!(declared.len() >= 15, "route scrape found only {declared:?}");
+    for route in declared {
+        let known = owner_scoped.iter().any(|(_, path)| *path == route)
+            || anonymous.contains(&route.as_str());
+        assert!(
+            known,
+            "{route} is in the router but is classified neither owner-scoped nor \
+             anonymous; add it to one of the two lists in this test"
+        );
+    }
+
+    server.abort();
+    remove_database(path);
+}

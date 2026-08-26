@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::body::{Body, to_bytes};
-use axum::extract::{ConnectInfo, State};
+use axum::extract::{ConnectInfo, FromRequestParts, State};
+use axum::http::request::Parts;
 use axum::http::{HeaderValue, Request, StatusCode, header};
 use axum::response::{AppendHeaders, IntoResponse, Response};
 use serde_json::{Value, json};
@@ -335,28 +336,39 @@ pub(crate) async fn logout_handler(
         .into_response()
 }
 
-/// The gate both report endpoints sit behind. It is one function rather than a
-/// copy in each because the two must not drift: whatever makes one of them
-/// refuse a request has to make the other refuse it too, and report data is the
-/// last place to discover that only one endpoint got a fix.
-#[allow(clippy::result_large_err)] // Responses are immediately returned by HTTP handlers.
-pub(crate) async fn signed_in_owner(
-    state: &AppState,
-    headers: &header::HeaderMap,
-) -> Result<(Arc<Accounts>, SignedInUser), Response> {
-    let user = match current_user(state.accounts.as_ref(), headers).await {
-        Ok(Some(user)) => user,
-        Ok(None) => return Err(unauthorized_response()),
-        Err(_) => {
-            return Err(json_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error": "Could not read account session." }),
-            ));
+/// The signed-in owner of whatever the route addresses.
+///
+/// Twelve handlers opened with the same four lines resolving this and
+/// returning early. As a parameter the check is part of the signature, so a
+/// handler either asks for an owner and runs after one was established, or it
+/// has no account to act on. Rejections are the responses those twelve copies
+/// already returned.
+pub(crate) struct Owner {
+    pub(crate) accounts: Arc<Accounts>,
+    pub(crate) user: SignedInUser,
+}
+
+impl FromRequestParts<AppState> for Owner {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let user = match current_user(state.accounts.as_ref(), &parts.headers).await {
+            Ok(Some(user)) => user,
+            Ok(None) => return Err(unauthorized_response()),
+            Err(_) => {
+                return Err(json_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({ "error": "Could not read account session." }),
+                ));
+            }
+        };
+        match state.accounts.clone() {
+            Some(accounts) => Ok(Self { accounts, user }),
+            None => Err(state.accounts_error()),
         }
-    };
-    match state.accounts.clone() {
-        Some(accounts) => Ok((accounts, user)),
-        None => Err(state.accounts_error()),
     }
 }
 
