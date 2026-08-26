@@ -4099,8 +4099,14 @@ async fn consent_withdrawal_stops_egress() {
 /// a body. What it establishes is that the set of paths is the set somebody
 /// wrote down, which is what makes "there is no upload route" checkable at
 /// all.
-#[test]
-fn router_routes_match_a_fixed_allowlist() {
+/// Every path `web_router` declares, sorted.
+///
+/// Shared rather than scanned twice: the owner-scope test below needs the same
+/// list, and a second scan is a second chance to disagree about what the
+/// router holds. The greedy version it started with took the first quote after
+/// each `.route(`, which silently aliased both constant-named routes onto the
+/// next literal in the file.
+fn declared_routes() -> Vec<String> {
     let source = fs::read_to_string("src/web/mod.rs").unwrap();
     let router = source
         .split_once("    Router::new()")
@@ -4110,9 +4116,9 @@ fn router_routes_match_a_fixed_allowlist() {
         .expect("the static handler is the fallback")
         .0;
 
-    // The list below is only exhaustive while every route arrives through
-    // `.route(`. A nested or merged router would add paths this scan cannot
-    // see, so adding one has to fail here rather than pass quietly.
+    // This is only exhaustive while every route arrives through `.route(`. A
+    // nested or merged router would add paths this scan cannot see, so adding
+    // one has to fail here rather than pass quietly.
     for composed in [".nest(", ".nest_service(", ".merge(", ".route_service("] {
         assert!(
             !router.contains(composed),
@@ -4142,7 +4148,12 @@ fn router_routes_match_a_fixed_allowlist() {
         })
         .collect::<Vec<_>>();
     routes.sort();
+    routes
+}
 
+#[test]
+fn router_routes_match_a_fixed_allowlist() {
+    let routes = declared_routes();
     let mut allowed = vec![
         "/healthz",
         "/runtime-config.js",
@@ -5762,6 +5773,38 @@ async fn a_dead_project_does_not_skew_the_rotation() {
     remove_database(db_path);
 }
 
+/// Ending an interview that recorded nothing says so, rather than failing.
+///
+/// 204 and no body: the interview ending is the candidate's news whether or
+/// not a recording was running, so there is nothing to report and nothing to
+/// stop. A 404 would tell them the interview was never theirs.
+#[tokio::test]
+async fn ending_an_interview_without_a_recording_is_a_no_op() {
+    let (base, server, path, client, cookie) = recorded_server("end-no-recording").await;
+    let interview = start_interview(&client, &base, &cookie).await;
+
+    let ended = client
+        .post(format!("{base}/api/interviews/{interview}/end"))
+        .header("cookie", cookie.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ended.status(), 204);
+    assert!(ended.bytes().await.unwrap().is_empty());
+
+    // Idempotent, because the browser sends this on unload and on the button.
+    let again = client
+        .post(format!("{base}/api/interviews/{interview}/end"))
+        .header("cookie", cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(again.status(), 204);
+
+    server.abort();
+    remove_database(path);
+}
+
 /// Every route that acts on an account rejects a request carrying no session.
 ///
 /// These handlers take an `Owner` extractor rather than checking inline. The
@@ -5771,10 +5814,8 @@ async fn a_dead_project_does_not_skew_the_rotation() {
 ///
 /// The second half keeps the first half honest. The table is hand-written, so
 /// a thirteenth owner-scoped route would otherwise join nothing: instead every
-/// path literal in the router has to appear either here or in the anonymous
-/// list, and a new one fails until someone says which it is. The two LiveKit
-/// routes are named by constant rather than literal, so they are invisible
-/// here and carry their own signature tests.
+/// route `declared_routes` finds has to appear either here or in the anonymous
+/// list, and a new one fails until someone says which it is.
 #[tokio::test]
 async fn every_owner_scoped_route_refuses_an_anonymous_request() {
     let (base, server, path, client, _cookie) = recorded_server("anon-owner-routes").await;
@@ -5805,7 +5846,9 @@ async fn every_owner_scoped_route_refuses_an_anonymous_request() {
         assert_eq!(status, 401, "{method} {target} answered {status}, not 401");
     }
 
-    // Routes that answer without a session, each for its own stated reason.
+    // Routes that answer without a session. The two LiveKit paths belong here
+    // because they authenticate a signed machine principal against a room
+    // rather than a person against a cookie.
     let anonymous = [
         "/healthz",
         "/api/token",
@@ -5815,19 +5858,10 @@ async fn every_owner_scoped_route_refuses_an_anonymous_request() {
         "/api/session",
         "/api/logout",
         "/runtime-config.js",
+        codetrial::recording::WEBHOOK_ROUTE,
+        codetrial::recording::REPLAY_ROUTE,
     ];
-    let router = std::fs::read_to_string("src/web/mod.rs").unwrap();
-    let declared: Vec<String> = router
-        .match_indices(".route(")
-        .filter_map(|(at, _)| {
-            let rest = &router[at..];
-            let open = rest.find('"')?;
-            let close = rest[open + 1..].find('"')?;
-            Some(rest[open + 1..open + 1 + close].to_string())
-        })
-        .collect();
-    assert!(declared.len() >= 15, "route scrape found only {declared:?}");
-    for route in declared {
+    for route in declared_routes() {
         let known = owner_scoped.iter().any(|(_, path)| *path == route)
             || anonymous.contains(&route.as_str());
         assert!(
