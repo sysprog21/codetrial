@@ -461,6 +461,27 @@ mod tests {
         healthy_server.abort();
     }
 
+    /// The relation the refresher depends on, asserted rather than described.
+    ///
+    /// Deriving the interval from the TTL put the arithmetic in one place but
+    /// left it unchecked: turning the division into a multiplication gives a
+    /// refresh slower than the expiry it exists to beat, so verdicts go stale
+    /// between passes and the probe lands back on the request path. Nothing
+    /// about that fails a test unless the relation itself is one.
+    #[test]
+    fn a_verdict_is_refreshed_before_it_can_expire() {
+        assert!(
+            PROVIDER_QUOTA_REFRESH < PROVIDER_QUOTA_TTL,
+            "refresh every {:?} cannot keep a {:?} cache warm",
+            PROVIDER_QUOTA_REFRESH,
+            PROVIDER_QUOTA_TTL
+        );
+
+        // Not merely shorter: short enough that a pass can be missed and the
+        // next one still lands inside the TTL.
+        assert!(PROVIDER_QUOTA_REFRESH * 2 <= PROVIDER_QUOTA_TTL);
+    }
+
     /// The cache boundary, stated exactly. At the TTL the verdict is stale, so
     /// the next caller re-probes rather than answering from a record that has
     /// just expired.
