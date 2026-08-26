@@ -133,6 +133,32 @@ python3 scripts/gen-problems.py
 python3 scripts/gen-problem-cards.py
 ```
 
+`scripts/top-interview-150.json` records which problems the study plan asks
+for. Refresh it from LeetCode with:
+
+```bash
+python3 scripts/gen-problems.py --sync-study-plan
+```
+
+The sync refuses to write when the plan and `problem-bank/` disagree, naming
+the problems each side is missing. Port those first. `--check` holds the
+committed manifest to the same rule, so drift fails the gate offline.
+
+Two commands cover the porting. `--plan-drift` asks LeetCode what changed
+without writing anything, and `--scaffold SLUG` prints the `problems.json` and
+`judges.json` entries for one problem, filled in as far as LeetCode's metadata
+reaches:
+
+```bash
+python3 scripts/gen-problems.py --plan-drift
+python3 scripts/gen-problems.py --scaffold reverse-linked-list-ii
+```
+
+It stops where it has to. The statement, examples and constraints stay empty
+because the fetcher never asks LeetCode for problem prose, and each judge case
+carries its input without an expected value, because `exampleTestcases` is
+inputs only. Both are written by someone who has read the problem.
+
 The end-to-end browser check additionally needs Playwright and Chromium:
 
 ```bash

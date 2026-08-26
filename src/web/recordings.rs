@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use crate::accounts::{Accounts, blocking, random_token};
 use crate::current_epoch_seconds;
 
-use super::auth::signed_in_owner;
+use super::auth::Owner;
 use super::consent::recording_requires_consent;
 use super::{AppState, MAX_WEBHOOK_BODY_BYTES, json_response, replay_body};
 
@@ -135,12 +135,8 @@ pub(crate) fn spawn_delivery_worker(accounts: Arc<Accounts>, recorder: crate::re
 pub(crate) async fn start_recording_handler(
     State(state): State<AppState>,
     UriPath(interview_id): UriPath<String>,
-    request: Request<Body>,
+    Owner { accounts, user }: Owner,
 ) -> Response {
-    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
-        Ok(owner) => owner,
-        Err(response) => return response,
-    };
     let Some(recorder) = state.recorder.clone() else {
         return json_response(
             StatusCode::NOT_FOUND,
@@ -297,13 +293,8 @@ pub(crate) fn start_refusal_response(refusal: crate::recording::StartRefusal) ->
 pub(crate) async fn recording_status_handler(
     State(state): State<AppState>,
     UriPath(interview_id): UriPath<String>,
-    request: Request<Body>,
+    Owner { accounts, user }: Owner,
 ) -> Response {
-    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
-        Ok(owner) => owner,
-        Err(response) => return response,
-    };
-
     // A server that records nothing answers exactly as one with no such
     // recording does. Three states, one reply: telling them apart is a way to
     // learn about other people's interviews and about this deployment.
@@ -405,12 +396,8 @@ pub(crate) async fn finish_recording(
 pub(crate) async fn list_recordings_handler(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
-    request: Request<Body>,
+    Owner { accounts, user }: Owner,
 ) -> Response {
-    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
-        Ok(owner) => owner,
-        Err(response) => return response,
-    };
     if state.recorder.is_none() {
         return json_response(
             StatusCode::OK,
@@ -487,12 +474,8 @@ pub(crate) async fn list_recordings_handler(
 pub(crate) async fn recording_handler(
     State(state): State<AppState>,
     UriPath(recording_id): UriPath<String>,
-    request: Request<Body>,
+    Owner { accounts, user }: Owner,
 ) -> Response {
-    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
-        Ok(owner) => owner,
-        Err(response) => return response,
-    };
     let missing = || {
         json_response(
             StatusCode::NOT_FOUND,
@@ -546,14 +529,10 @@ pub(crate) async fn recording_events_handler(
     State(state): State<AppState>,
     UriPath(recording_id): UriPath<String>,
     Query(params): Query<HashMap<String, String>>,
-    request: Request<Body>,
+    Owner { accounts, user }: Owner,
 ) -> Response {
     use crate::recording::SnapshotView;
 
-    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
-        Ok(owner) => owner,
-        Err(response) => return response,
-    };
     let missing = || {
         json_response(
             StatusCode::NOT_FOUND,

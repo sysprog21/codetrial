@@ -7,9 +7,8 @@
 
 use std::sync::Arc;
 
-use axum::body::Body;
 use axum::extract::{Path as UriPath, State};
-use axum::http::{Request, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
@@ -18,7 +17,7 @@ use crate::accounts::{
 };
 use crate::current_epoch_seconds;
 
-use super::auth::signed_in_owner;
+use super::auth::Owner;
 use super::{AppState, json_response};
 
 /// Takes consent back.
@@ -30,12 +29,8 @@ use super::{AppState, json_response};
 pub(crate) async fn withdraw_consent_handler(
     State(state): State<AppState>,
     UriPath(interview_id): UriPath<String>,
-    request: Request<Body>,
+    Owner { accounts, user }: Owner,
 ) -> Response {
-    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
-        Ok(owner) => owner,
-        Err(response) => return response,
-    };
     let now = current_epoch_seconds() as i64;
     let withdrawn = {
         let accounts = accounts.clone();

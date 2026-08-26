@@ -874,12 +874,12 @@
       "title": "Reverse Bits"
     },
     {
-      "difficulty": "Easy",
-      "id": "reverse-linked-list",
-      "optimal": "Iterate with previous, current, and next pointers, flipping current.next to previous until the list ends. O(n) time and O(1) extra space. A recursive solution is acceptable if stack depth is discussed.",
-      "pitfalls": "Losing the next pointer before rewiring; returning the old head; mishandling empty or single-node lists; creating unnecessary new nodes; recursive stack overflow on long lists.",
-      "summary": "Given the head of a singly linked list, reverse the list and return the new head.",
-      "title": "Reverse Linked List"
+      "difficulty": "Medium",
+      "id": "reverse-linked-list-ii",
+      "optimal": "Use a dummy node so reversing from position one needs no special case. Walk to the node before left, then splice each following node to the front of the span until right is reached. O(n) time and O(1) extra space.",
+      "pitfalls": "Off-by-one errors from one-based positions; failing when left equals one without a dummy node; losing the node before the span or the node after it; reversing values instead of relinking nodes; mishandling left equal to right.",
+      "summary": "Given the head of a singly linked list and one-based positions left and right, reverse only the nodes in that span and return the head.",
+      "title": "Reverse Linked List II"
     },
     {
       "difficulty": "Hard",

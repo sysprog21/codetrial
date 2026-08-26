@@ -14,18 +14,11 @@ use crate::accounts::{
 };
 use crate::current_epoch_seconds;
 
-use super::auth::signed_in_owner;
+use super::auth::Owner;
 use super::recordings::finish_recording;
 use super::{AppState, MAX_BODY_BYTES, MAX_REPORT_BYTES, json_response, replay_body};
 
-pub(crate) async fn list_reports_handler(
-    State(state): State<AppState>,
-    request: Request<Body>,
-) -> Response {
-    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
-        Ok(owner) => owner,
-        Err(response) => return response,
-    };
+pub(crate) async fn list_reports_handler(Owner { accounts, user }: Owner) -> Response {
     match blocking(move || list_reports(&accounts, user.id)).await {
         Ok(reports) => json_response(StatusCode::OK, json!({ "reports": reports })),
         Err(_) => json_response(
@@ -36,13 +29,9 @@ pub(crate) async fn list_reports_handler(
 }
 
 pub(crate) async fn save_report_handler(
-    State(state): State<AppState>,
+    Owner { accounts, user }: Owner,
     request: Request<Body>,
 ) -> Response {
-    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
-        Ok(owner) => owner,
-        Err(response) => return response,
-    };
     let Ok(body) = to_bytes(request.into_body(), MAX_REPORT_BYTES).await else {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     };
@@ -107,13 +96,9 @@ pub(crate) async fn save_report_handler(
 /// comment saying "call this first" is not.
 pub(crate) async fn create_interview_handler(
     State(state): State<AppState>,
+    Owner { accounts, user }: Owner,
     request: Request<Body>,
 ) -> Response {
-    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
-        Ok(owner) => owner,
-        Err(response) => return response,
-    };
-
     // A server that records nothing has no consent to take. Refusing keeps a
     // stale page from writing rows that mean nothing.
     if state.config.recording.is_none() {
@@ -202,12 +187,8 @@ pub(crate) async fn create_interview_handler(
 pub(crate) async fn end_interview_handler(
     State(state): State<AppState>,
     UriPath(interview_id): UriPath<String>,
-    request: Request<Body>,
+    Owner { accounts, user }: Owner,
 ) -> Response {
-    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
-        Ok(owner) => owner,
-        Err(response) => return response,
-    };
     let Some(recorder) = state.recorder.clone() else {
         return StatusCode::NO_CONTENT.into_response();
     };
@@ -244,14 +225,11 @@ pub(crate) async fn end_interview_handler(
 pub(crate) async fn replay_events_handler(
     State(state): State<AppState>,
     UriPath(interview_id): UriPath<String>,
+    Owner { accounts, user }: Owner,
     request: Request<Body>,
 ) -> Response {
     use crate::recording::{Ingest, MAX_REPLAY_BATCH, MAX_REPLAY_BATCH_BYTES};
 
-    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
-        Ok(owner) => owner,
-        Err(response) => return response,
-    };
     if state.recorder.is_none() {
         return json_response(
             StatusCode::NOT_FOUND,
@@ -353,14 +331,10 @@ pub(crate) async fn replay_events_handler(
 pub(crate) async fn replay_snapshot_handler(
     State(state): State<AppState>,
     UriPath(interview_id): UriPath<String>,
-    request: Request<Body>,
+    Owner { accounts, user }: Owner,
 ) -> Response {
     use crate::recording::SnapshotView;
 
-    let (accounts, user) = match signed_in_owner(&state, request.headers()).await {
-        Ok(owner) => owner,
-        Err(response) => return response,
-    };
     let missing = || {
         json_response(
             StatusCode::NOT_FOUND,

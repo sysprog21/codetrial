@@ -8,14 +8,14 @@ const repoFile = (path) => new URL(`../../${path}`, import.meta.url);
 
 test("top interview manifest records 150 unique slugs grouped by topic", async () => {
   const manifest = JSON.parse(await readFile(repoFile("scripts/top-interview-150.json"), "utf8"));
+  const bank = JSON.parse(await readFile(repoFile("problem-bank/problems.json"), "utf8"));
   const slugs = manifest.sections.flatMap((section) => section.slugs);
 
   assert.equal(slugs.length, 150);
   assert.equal(new Set(slugs).size, 150);
-  assert.equal(manifest.sections.length, 22);
+  assert.equal(manifest.sections.length, 23);
   assert.ok(manifest.sections.every((section) => section.topic && section.slugs.length > 0));
-  assert.ok(slugs.includes("two-sum"));
-  assert.ok(slugs.includes("longest-palindromic-substring"));
+  assert.deepEqual([...new Set(slugs)].sort(), bank.map((problem) => problem.id).sort());
 });
 
 test("leetcode fetcher never asks GraphQL for statement prose", async () => {

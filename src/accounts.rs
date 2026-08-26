@@ -121,7 +121,7 @@ impl Accounts {
 /// Bumped whenever a migration is added below. SQLite carries it in the file
 /// header, so an existing database announces which migrations it has already
 /// run instead of quietly keeping an old shape behind `IF NOT EXISTS`.
-pub const ACCOUNT_SCHEMA_VERSION: i64 = 9;
+pub const ACCOUNT_SCHEMA_VERSION: i64 = 10;
 
 /// Migrations in order, each one taking the database from index `n` to `n + 1`.
 /// Append, never edit: an entry that has already run somewhere will not run
@@ -136,6 +136,7 @@ const ACCOUNT_MIGRATIONS: &[&str] = &[
     CREATE_RECORDING_EVENTS,
     CREATE_REPLAY_EVENTS,
     CREATE_DELIVERY_QUEUE,
+    INDEX_RECORDINGS_BY_ROOM,
 ];
 
 pub fn initialize_account_database(path: &Path) -> rusqlite::Result<()> {
@@ -427,6 +428,21 @@ const CREATE_RECORDINGS: &str = "
 
         CREATE INDEX IF NOT EXISTS recordings_by_expiry
             ON recordings(expires_at) WHERE expires_at IS NOT NULL AND deleted_at IS NULL;
+";
+
+/// `recording_for_room` is the webhook's first query, and it ran as a full scan
+/// of `recordings` until this existed. LiveKit delivers at-least-once, so the
+/// scan repeated per retry, and the table it scanned grows with retention
+/// rather than with load.
+///
+/// Partial, like `recordings_by_egress`: the table's own CHECK forces
+/// `room_name` to NULL once `deleted_at` is set, so restricting the index to
+/// non-null rooms leaves out exactly the soft-deleted rows the lookup can never
+/// match. `room_name = ?1` implies the index predicate, so SQLite still uses
+/// it.
+const INDEX_RECORDINGS_BY_ROOM: &str = "
+        CREATE INDEX IF NOT EXISTS recordings_by_room
+            ON recordings(room_name) WHERE room_name IS NOT NULL;
 ";
 
 /// Every webhook LiveKit has delivered, by its own event id.
@@ -1371,6 +1387,11 @@ mod migration_tests {
         // Newest first: `recordings` has foreign keys into `interviews`, so
         // dropping them the other way round would leave a table pointing at one
         // that is gone.
+        if version < 10 {
+            connection
+                .execute_batch("DROP INDEX IF EXISTS recordings_by_room;")
+                .unwrap();
+        }
         if version < 9 {
             connection
                 .execute_batch("DROP TABLE IF EXISTS delivery_queue;")
@@ -1559,6 +1580,39 @@ mod migration_tests {
             .unwrap();
         assert_eq!(email, None);
         assert_eq!(verified, 0);
+    }
+
+    /// An index that exists but that the planner declines to use buys nothing,
+    /// so this asserts the plan rather than the schema. `recording_for_room` is
+    /// on the webhook path, which LiveKit retries, and it scanned the whole
+    /// table before the index existed.
+    #[test]
+    fn an_existing_database_gains_the_room_lookup_index() {
+        let path = scratch("room-index");
+        initialize_account_database(&path).unwrap();
+        rewind_to(&path, 9);
+        assert!(!index_names(&path).contains(&"recordings_by_room".to_string()));
+
+        initialize_account_database(&path).unwrap();
+
+        assert_eq!(user_version(&path), ACCOUNT_SCHEMA_VERSION);
+        let plan = query_plan(&path);
+        assert!(
+            plan.contains("USING INDEX recordings_by_room"),
+            "the room lookup still does not use the index: {plan}"
+        );
+    }
+
+    /// How SQLite says it will answer the query `recording_for_room` issues.
+    fn query_plan(path: &Path) -> String {
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .query_row(
+                "EXPLAIN QUERY PLAN SELECT id FROM recordings WHERE room_name = ?1",
+                ["interview-anything"],
+                |row| row.get::<_, String>(3),
+            )
+            .unwrap()
     }
 
     fn columns(path: &Path, table: &str) -> Vec<String> {
