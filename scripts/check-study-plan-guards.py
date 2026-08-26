@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove every study-plan guard refuses a malformed response.
+"""Prove the study-plan tooling refuses bad input and scaffolds the right shape.
 
 `plan_sections` and `check_plan_slugs` are what stand between a bad answer
 from LeetCode and a rewritten `scripts/top-interview-150.json`, so what this
@@ -19,6 +19,7 @@ Deleting any guard in either function turns this gate red. Keep it that way.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -43,6 +44,54 @@ def group(name: object, slugs: list[object]) -> dict:
     return {"name": name, "questions": [{"titleSlug": slug} for slug in slugs]}
 
 
+def scaffold_failures(gen: object) -> list:
+    """`--scaffold` turns a LeetCode detail into the two entries a human edits.
+
+    What is checked is the mapping a human would otherwise redo by hand: the
+    argTypes derived from metaData param types, and the flat exampleTestcases
+    lines chunked back into one case per parameter tuple. An off-by-one there
+    produces cases that look plausible and pair the wrong inputs.
+    """
+    detail = {
+        "difficulty": "Medium",
+        "codeSnippets": [
+            {"langSlug": "python3", "code": "class Solution:\n    pass\n"},
+            {"langSlug": "rust", "code": "// not a language this repo ships"},
+        ],
+        "exampleTestcases": "[1,2,3]\n2\n4\n[9]\n1\n1",
+        "metaData": json.dumps(
+            {
+                "name": "reverseBetween",
+                "params": [
+                    {"name": "head", "type": "ListNode"},
+                    {"name": "left", "type": "integer"},
+                    {"name": "right", "type": "integer"},
+                ],
+                "return": {"type": "ListNode"},
+            }
+        ),
+    }
+    problem, judge = gen.scaffold_entries("some-slug", "Some Slug", detail)
+
+    failures = []
+    if judge["argTypes"] != ["linkedList", None, None]:
+        failures.append(f"scaffold: argTypes came out {judge['argTypes']!r}")
+    if judge["outputType"] != "linkedList":
+        failures.append(f"scaffold: outputType came out {judge.get('outputType')!r}")
+    if judge["cases"] != [
+        {"input": [[1, 2, 3], 2, 4]},
+        {"input": [[9], 1, 1]},
+    ]:
+        failures.append(f"scaffold: cases chunked as {judge['cases']!r}")
+    if any("expected" in case for case in judge["cases"]):
+        failures.append("scaffold: invented an expected value it cannot know")
+    if problem["statement"] or problem["examples"]:
+        failures.append("scaffold: filled in prose the fetcher never asked for")
+    if list(problem["starterCode"]) != ["python"]:
+        failures.append(f"scaffold: starters came out {list(problem['starterCode'])}")
+    return failures
+
+
 def main() -> int:
     gen = load_generator()
     slugs = gen.read_manifest()
@@ -65,6 +114,12 @@ def main() -> int:
         ),
         "non-dict data": ({"data": []}, "no top-interview-150 plan"),
         "plan with no groups": (plan(None), "plan diverges from problem-bank"),
+        "scalar planSubGroups": (plan(5), "plan diverges from problem-bank"),
+        "string planSubGroups": (plan("abc"), "plan diverges from problem-bank"),
+        "scalar questions": (
+            plan([whole, {"name": "B", "questions": 7}]),
+            "unnamed or empty",
+        ),
         "non-dict group": (plan([whole, "Two Pointers"]), "unnamed or empty"),
         "null questions": (
             plan([whole, {"name": "B", "questions": None}]),
@@ -114,17 +169,21 @@ def main() -> int:
 
     # The mirror: a plan that agrees with the bank has to survive all of it.
     try:
-        assert gen.plan_sections(plan([whole])) == [{"topic": "All", "slugs": slugs}]
+        sections = gen.plan_sections(plan([whole]))
+        if sections != [{"topic": "All", "slugs": slugs}]:
+            failures.append(f"valid plan: parsed as {sections!r}")
         sections_for(plan([whole]))
     except Exception as error:  # noqa: BLE001
         failures.append(f"valid plan: {type(error).__name__}: {error}")
+
+    failures += scaffold_failures(gen)
 
     if failures:
         for failure in failures:
             print(failure, file=sys.stderr)
         return 1
 
-    print(f"check-study-plan-guards: {len(rejected)} bad plans rejected")
+    print(f"check-study-plan-guards: {len(rejected)} bad plans rejected, scaffold ok")
     return 0
 
 

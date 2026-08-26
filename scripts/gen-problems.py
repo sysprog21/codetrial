@@ -75,6 +75,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="sync the Top Interview 150 manifest from LeetCode",
     )
+    parser.add_argument(
+        "--plan-drift",
+        action="store_true",
+        help="report how the live study plan differs from problem-bank",
+    )
+    parser.add_argument(
+        "--scaffold",
+        metavar="SLUG",
+        default=None,
+        help="print problem-bank and judge entries for one LeetCode problem",
+    )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--delay-ms", type=int, default=250)
     parser.add_argument("--force", action="store_true")
@@ -82,7 +93,9 @@ def parse_args() -> argparse.Namespace:
     # --check is the CI gate and only reads. Both other modes reach the network
     # and write: sync rewrites the manifest, fetch fills the cache. Either one
     # ahead of --check has it report on staleness it just caused.
-    if args.check and (args.fetch or args.sync_study_plan):
+    if args.check and (
+        args.fetch or args.sync_study_plan or args.plan_drift or args.scaffold
+    ):
         parser.error("--check only reads; run it on its own")
     return args
 
@@ -100,6 +113,19 @@ def field(value: object, key: str) -> object:
     of the RuntimeError its guards were written to raise.
     """
     return value.get(key) if isinstance(value, dict) else None
+
+
+def listed(value: object, key: str) -> list:
+    """A list-valued GraphQL field, or empty when it is anything else.
+
+    `field` alone is not enough for the two keys that get iterated: a scalar
+    there means `for x in 5`, which is a TypeError raised from inside a
+    comprehension rather than the guard the caller documented. Empty is the
+    same answer null already gave, so a wrong-typed field fails the slug checks
+    below rather than inventing a third behaviour.
+    """
+    found = field(value, key)
+    return found if isinstance(found, list) else []
 
 
 def read_json(path: Path) -> object:
@@ -180,14 +206,11 @@ def plan_sections(body: object) -> list[dict]:
     plan = field(field(body, "data"), "studyPlanV2Detail")
     if not plan:
         raise RuntimeError("LeetCode has no top-interview-150 plan")
-    # `or []` rather than a get() default: these keys come back present-and-null,
-    # so a default never fires and `for x in None` raises TypeError instead of
-    # the error the guards are written to report.
     sections = []
-    for group in field(plan, "planSubGroups") or []:
+    for group in listed(plan, "planSubGroups"):
         topic = field(group, "name")
         members = [
-            field(question, "titleSlug") for question in field(group, "questions") or []
+            field(question, "titleSlug") for question in listed(group, "questions")
         ]
         if not named(topic) or not members:
             raise RuntimeError(f"plan section is unnamed or empty: {topic!r}")
@@ -222,6 +245,143 @@ def sync_study_plan() -> None:
         },
     )
     print(f"synced {len(slugs)} problems in {len(sections)} sections")
+
+
+# Which judge argType a LeetCode metaData type needs, derived from the entries
+# already in judges.json. `Node` is deliberately absent: the same name covers
+# graph nodes, next-pointer trees, random-pointer lists and quad trees, and only
+# the statement says which, so a scaffold that guessed would be worse than one
+# that says it does not know.
+ARG_TYPES = {
+    "ListNode": "linkedList",
+    "ListNode[]": "linkedListArray",
+    "TreeNode": "binaryTree",
+}
+
+# LeetCode's language slug for each language this repo ships a starter for.
+STARTER_LANGS = {
+    "python": "python3",
+    "javascript": "javascript",
+    "c": "c",
+    "cpp": "cpp",
+    "java": "java",
+}
+
+
+def plan_drift() -> int:
+    """Say how the published plan differs from what this repo holds."""
+    body = request_json(
+        ENDPOINT,
+        body={
+            "query": STUDY_PLAN_QUERY,
+            "variables": {"planSlug": "top-interview-150"},
+        },
+    )
+    live = {slug for section in plan_sections(body) for slug in section["slugs"]}
+    bank = {problem["id"] for problem in read_json(SOURCE)}
+    added, dropped = sorted(live - bank), sorted(bank - live)
+    if not added and not dropped:
+        print(f"in sync: {len(live)} problems")
+        return 0
+    for slug in added:
+        print(f"plan adds:  {slug}")
+    for slug in dropped:
+        print(f"plan drops: {slug}")
+    print(
+        "\nport these first, then run --sync-study-plan. For each added slug:\n"
+        "  python3 scripts/gen-problems.py --scaffold SLUG",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def problem_title(slug: str, force: bool) -> str:
+    body = cached_problem_list(force)
+    for item in body["stat_status_pairs"]:
+        if item["stat"]["question__title_slug"] == slug:
+            return item["stat"]["question__title"]
+    raise RuntimeError(f"{slug}: not in LeetCode's problem list")
+
+
+def scaffold(slug: str, force: bool) -> int:
+    """Print what LeetCode can supply for a problem this repo does not have.
+
+    Not the whole entry, and it says so where it stops. The statement is left
+    empty because the fetcher does not ask for LeetCode's prose, and the judge
+    cases carry inputs without expected values because `exampleTestcases` is
+    inputs only. Both have to be written by someone who has read the problem.
+    """
+    CACHE.mkdir(parents=True, exist_ok=True)
+    _, detail = cached_detail(slug, force)
+    if detail.get("isPaidOnly"):
+        raise RuntimeError(f"{slug}: paid-only, so the runner cannot serve it")
+    problem, judge = scaffold_entries(slug, problem_title(slug, force), detail)
+
+    print(f"# problem-bank/problems.json entry for {slug}")
+    print(json.dumps(problem, indent=2))
+    print(f"\n# problem-bank/judges.json entry for {slug}")
+    print(json.dumps(judge, indent=2))
+    missing = ["statement", "examples", "constraints", "topics"]
+    if None in judge["argTypes"] and "Node" in judge["paramTypes"]:
+        missing.append("argTypes for Node")
+    print(
+        f"\nstill yours to write: {', '.join(missing)}, an expected value for each "
+        f"of the {len(judge['cases'])} cases, and the house starter comment, which "
+        "LeetCode's snippets leave as an empty body.",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def scaffold_entries(slug: str, title: str, detail: dict) -> tuple[dict, dict]:
+    """The two bank entries a LeetCode detail can fill in on its own.
+
+    Pure, so the shape can be checked without the network. What it leaves empty
+    it leaves empty on purpose: the fetcher does not ask for LeetCode's prose,
+    and `exampleTestcases` carries inputs without the expected values, so the
+    statement and every `expected` are written by someone who read the problem.
+    """
+    meta = json.loads(detail["metaData"])
+    snippets = {item["langSlug"]: item["code"] for item in detail["codeSnippets"]}
+    params = meta.get("params", [])
+
+    problem = {
+        "id": slug,
+        "title": title,
+        "difficulty": detail["difficulty"],
+        "topics": [],
+        "statement": [],
+        "examples": [],
+        "constraints": [],
+        "starterCode": {
+            language: snippets[wanted]
+            for language, wanted in STARTER_LANGS.items()
+            if wanted in snippets
+        },
+    }
+
+    # exampleTestcases is one value per line, the params in order, repeating.
+    lines = detail["exampleTestcases"].splitlines()
+    width = max(len(params), 1)
+    cases = [
+        {"input": [json.loads(value) for value in lines[at : at + width]]}
+        for at in range(0, len(lines) - width + 1, width)
+    ]
+    judge = {
+        "kind": "function",
+        "entry": meta["name"],
+        "checker": "exact",
+        "argTypes": [ARG_TYPES.get(param["type"]) for param in params],
+        "cases": cases,
+        "paramNames": [param["name"] for param in params],
+        "paramTypes": [param["type"] for param in params],
+        "returnType": meta["return"]["type"],
+    }
+    output = ARG_TYPES.get(meta["return"]["type"])
+    if output:
+        judge["outputType"] = output
+
+    return problem, judge
 
 
 def cached_problem_list(force: bool) -> object:
@@ -329,6 +489,10 @@ def drifted(files: dict[Path, str]) -> list[str]:
 
 def main() -> int:
     args = parse_args()
+    if args.plan_drift:
+        return plan_drift()
+    if args.scaffold:
+        return scaffold(args.scaffold, args.force)
     if args.sync_study_plan:
         sync_study_plan()
     if args.fetch:
