@@ -291,6 +291,7 @@ async fn responses_carry_baseline_security_headers() {
     let (base, server) = spawn_web_server(WebServerConfig {
         web_dir: Path::new("web").to_path_buf(),
         pool: primary_pool("wss://example.livekit.cloud:443", "devkey", "devsecret"),
+        probe_provider_quota: false,
         ..web_config()
     })
     .await;
@@ -750,6 +751,7 @@ async fn static_home_markup_matches_frontend_contract() {
         trusted_proxy_hops: 0,
         recording: None,
         pool: Default::default(),
+        probe_provider_quota: false,
     })
     .await;
     let html = reqwest::get(base).await.unwrap().text().await.unwrap();
@@ -796,6 +798,7 @@ async fn static_interview_markup_exposes_offline_surface() {
         trusted_proxy_hops: 0,
         recording: None,
         pool: Default::default(),
+        probe_provider_quota: false,
     })
     .await;
     let html = reqwest::get(format!("{base}/interview"))
@@ -2978,6 +2981,7 @@ fn web_config() -> WebServerConfig {
         trusted_proxy_hops: 0,
         recording: None,
         pool: primary_pool("wss://example.livekit.cloud", "devkey", "devsecret"),
+        probe_provider_quota: false,
     }
 }
 
@@ -5350,30 +5354,107 @@ fn interview_rows(path: &std::path::Path) -> Vec<(String, String, i64, Option<i6
         .collect()
 }
 
-/// A LiveKit stand-in that answers `/rtc/validate` with one fixed status, which
-/// is the whole of what the quota probe reads.
+/// The quota stub without a hit counter, which is all most callers need.
 async fn spawn_livekit_quota_stub(
     status: axum::http::StatusCode,
     delay: Duration,
 ) -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
+    let (url, _hits, server) = spawn_counting_quota_stub(status, delay).await;
+    (url, server)
+}
+
+/// Like [`spawn_livekit_quota_stub`], but counts how many times the project was
+/// asked. The count is the whole point of the test below: it is the difference
+/// between a pool that probes on a candidate's request and one that already
+/// knew.
+async fn spawn_counting_quota_stub(
+    status: axum::http::StatusCode,
+    delay: Duration,
+) -> (
+    String,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    tokio::task::JoinHandle<Result<(), std::io::Error>>,
+) {
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = hits.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let router = axum::Router::new().route(
         "/rtc/validate",
-        axum::routing::get(move || async move {
-            tokio::time::sleep(delay).await;
-            if status == axum::http::StatusCode::TOO_MANY_REQUESTS {
-                (
-                    status,
-                    "connection minutes limit exceeded. please contact the project owner.",
-                )
-            } else {
-                (status, "success")
+        axum::routing::get(move || {
+            let counter = counter.clone();
+            async move {
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                tokio::time::sleep(delay).await;
+                if status == axum::http::StatusCode::TOO_MANY_REQUESTS {
+                    (
+                        status,
+                        "connection minutes limit exceeded. please contact the project owner.",
+                    )
+                } else {
+                    (status, "success")
+                }
             }
         }),
     );
     let server = tokio::spawn(async move { axum::serve(listener, router).await });
-    (format!("ws://127.0.0.1:{}", addr.port()), server)
+    (format!("ws://127.0.0.1:{}", addr.port()), hits, server)
+}
+
+/// The pool probes itself, rather than making the first candidate of every
+/// minute pay for the answer.
+///
+/// Before this, the quota verdict was learned lazily on `/api/token` and cached
+/// for a minute, so one request in each window waited on an HTTP round trip per
+/// project it had to consider. The background refresher keeps the cache warm,
+/// which is observable here as a token request that adds no probe of its own.
+#[tokio::test]
+async fn the_pool_probes_in_the_background_so_a_token_request_does_not() {
+    let (provider, hits, stub) =
+        spawn_counting_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
+
+    let (mut config, cookie, db_path) = signed_in_web_config("quota-background-probe");
+    config.pool = primary_pool(&provider, "key", "secret");
+
+    // The one test that wants the refresher, pointed at a local stub. Every
+    // other server here leaves it off, so the suite makes no outbound request.
+    config.probe_provider_quota = true;
+    let (base, server) = spawn_web_server(config).await;
+
+    // The startup pass is the refresher's first action, not a step that blocks
+    // the bind, so it is raced against here rather than assumed complete.
+    let mut probed = 0;
+    for _ in 0..50 {
+        probed = hits.load(std::sync::atomic::Ordering::Relaxed);
+        if probed > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        probed > 0,
+        "the pool must probe its projects without being asked for a token"
+    );
+
+    let response = reqwest::Client::new()
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    assert_eq!(
+        hits.load(std::sync::atomic::Ordering::Relaxed),
+        probed,
+        "the token request must be served from the warm cache, not from a fresh probe"
+    );
+
+    server.abort();
+    stub.abort();
+    remove_database(db_path);
 }
 
 /// A quota check must never make starting an interview wait for the shared
@@ -5454,9 +5535,11 @@ async fn a_provider_out_of_connection_minutes_is_passed_over() {
         body["serverUrl"], healthy,
         "the candidate must be sent to the project that still has minutes: {body}"
     );
-    // The room name carries the provider id, which is how the agent resolves the
-    // same project. Landing on the spare is not enough if the room still says
-    // primary: the agent would join the project the candidate was moved off.
+
+    // The room name carries the provider id, which is how the agent resolves
+    // the same project. Landing on the spare is not enough if the room still
+    // says primary: the agent would join the project the candidate was moved
+    // off.
     assert!(
         body["roomName"].as_str().unwrap().contains("-spare-"),
         "the room must name the project the candidate was moved to: {body}"
@@ -5465,6 +5548,109 @@ async fn a_provider_out_of_connection_minutes_is_passed_over() {
     server.abort();
     first.abort();
     second.abort();
+    remove_database(db_path);
+}
+
+/// A pinned `INTERVIEW_ROOM_NAME` is a convenience, not a promise the candidate
+/// pays for. When the project it names is out of minutes the pin is dropped
+/// rather than honoured: honouring it mints a token whose socket LiveKit
+/// refuses with 429, which reaches the browser as "could not establish signal
+/// connection" and sends the candidate looking at their own network.
+///
+/// The room name has to move with the project. It is the only thing a
+/// separately launched `codetrial run-livekit ROOM` resolves the project from,
+/// so a pinned name kept beside another project's credentials is how the
+/// candidate and the agent end up in different ones.
+#[tokio::test]
+async fn a_pinned_room_on_an_exhausted_project_falls_back_to_the_pool() {
+    let (exhausted, first) =
+        spawn_livekit_quota_stub(axum::http::StatusCode::TOO_MANY_REQUESTS, Duration::ZERO).await;
+    let (healthy, second) =
+        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
+
+    let (mut config, cookie, db_path) = signed_in_web_config("pinned-quota-failover");
+    config.fixed_room_name = Some("interview-local".to_string());
+    config.pool = codetrial::config::ProviderPool {
+        providers: vec![
+            codetrial::config::Provider {
+                id: codetrial::config::PRIMARY_PROVIDER_ID.to_string(),
+                url: exhausted.clone(),
+                api_key: "spent-key".to_string(),
+                api_secret: "spent-secret".to_string(),
+                google_api_key: String::new(),
+            },
+            codetrial::config::Provider {
+                id: "spare".to_string(),
+                url: healthy.clone(),
+                api_key: "spare-key".to_string(),
+                api_secret: "spare-secret".to_string(),
+                google_api_key: String::new(),
+            },
+        ],
+    };
+    let (base, server) = spawn_web_server(config).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body = response.json::<Value>().await.unwrap();
+
+    assert_eq!(
+        body["serverUrl"], healthy,
+        "an exhausted pin must not be handed to the candidate: {body}"
+    );
+    assert_ne!(
+        body["roomName"], "interview-local",
+        "the pinned name belongs to the exhausted project and must be dropped with it: {body}"
+    );
+    assert!(
+        body["roomName"].as_str().unwrap().contains("-spare-"),
+        "the room must name the project the candidate was moved to: {body}"
+    );
+
+    server.abort();
+    first.abort();
+    second.abort();
+    remove_database(db_path);
+}
+
+/// A pinned room whose project still has minutes is left alone. The failover
+/// above must not cost every local run its stable URL.
+#[tokio::test]
+async fn a_pinned_room_on_a_healthy_project_is_kept() {
+    let (healthy, stub) =
+        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
+
+    let (mut config, cookie, db_path) = signed_in_web_config("pinned-quota-healthy");
+    config.fixed_room_name = Some("interview-local".to_string());
+    config.pool = primary_pool(&healthy, "key", "secret");
+    let (base, server) = spawn_web_server(config).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body = response.json::<Value>().await.unwrap();
+
+    assert_eq!(
+        body["roomName"], "interview-local",
+        "a healthy pin is the whole point of INTERVIEW_ROOM_NAME: {body}"
+    );
+    assert_eq!(body["serverUrl"], healthy);
+
+    server.abort();
+    stub.abort();
     remove_database(db_path);
 }
 

@@ -21,6 +21,7 @@ mod auth;
 mod consent;
 mod interviews;
 mod policy;
+mod pool;
 mod recordings;
 mod token;
 
@@ -35,6 +36,7 @@ pub(crate) use {
 // `pub fn` here silently; this way adding one is a deliberate line.
 pub use assets::static_file;
 pub use auth::login_config;
+use pool::{ProviderQuota, QuotaRefresher, spawn_provider_quota_refresher};
 pub use token::{TOKEN_RATE_LIMIT, TokenConfig, TokenResponse, token_response};
 
 pub const MAX_BODY_BYTES: usize = 8 * 1024;
@@ -77,6 +79,16 @@ pub struct WebServerConfig {
     /// dedup pass over the policy that named it twice. An empty pool means no
     /// LiveKit credentials are configured.
     pub pool: crate::config::ProviderPool,
+
+    /// Whether to keep every project's quota verdict fresh in the background.
+    ///
+    /// Opt-in rather than automatic, because `web_router` is also what the
+    /// tests build, dozens of times per binary. A timer started there probes a
+    /// real LiveKit host on a thirty-second beat for the life of the test
+    /// process, which is both live egress from a unit test and work nothing
+    /// asked for. The binaries set it; a test sets it only when the refresher
+    /// is what it is testing, and points it at a stub.
+    pub probe_provider_quota: bool,
 }
 
 /// Cloned per request by axum, so the config sits behind an `Arc`: otherwise
@@ -100,6 +112,11 @@ pub(crate) struct AppState {
     recorder: Option<crate::recording::Recorder>,
     token_limit: TokenRateLimit,
 
+    /// Held only so the background quota refresher stops when this server does.
+    /// Never read.
+    #[allow(dead_code)]
+    quota_refresher: Arc<QuotaRefresher>,
+
     // A separate bucket, for the same reason `/api/token` checks the session
     // before spending its own: login is reachable without any credential, so a
     // flood of it must not lock a signed-in candidate out of a token.
@@ -111,7 +128,8 @@ pub(crate) struct AppState {
     provider_counter: Arc<AtomicUsize>,
     /// What each project last said about its own connection-minute quota, so a
     /// project that has run out is passed over instead of handed to a candidate
-    /// whose browser can only report the refusal as an unexplained socket error.
+    /// whose browser can only report the refusal as an unexplained socket
+    /// error.
     provider_quota: ProviderQuota,
     room_authorizations: Arc<Mutex<HashMap<String, RoomAuthorization>>>,
 }
@@ -200,6 +218,17 @@ pub(crate) fn web_router(
         spawn_recording_sweeper(accounts.clone(), recorder.clone());
         spawn_delivery_worker(accounts.clone(), recorder.clone());
     }
+
+    // Built here rather than in the state literal below, because the refresher
+    // and the request path have to share one cache: a second `default()` would
+    // give the background task its own map and leave every token request
+    // probing inline exactly as it did before.
+    let provider_quota = ProviderQuota::default();
+    let quota_refresher = if config.probe_provider_quota {
+        spawn_provider_quota_refresher(provider_quota.clone(), config.pool.clone())
+    } else {
+        QuotaRefresher::default()
+    };
     Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/api/token", post(token_handler))
@@ -271,7 +300,8 @@ pub(crate) fn web_router(
             token_limit: TokenRateLimit::default(),
             login_limit: TokenRateLimit::default(),
             provider_counter: Arc::new(AtomicUsize::new(0)),
-            provider_quota: ProviderQuota::default(),
+            provider_quota,
+            quota_refresher: Arc::new(quota_refresher),
             room_authorizations: Arc::new(Mutex::new(HashMap::new())),
         })
 }

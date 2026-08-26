@@ -248,6 +248,7 @@ mod tests {
                     google_api_key: String::new(),
                 }],
             },
+            probe_provider_quota: false,
         })
     }
 
