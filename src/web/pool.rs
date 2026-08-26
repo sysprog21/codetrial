@@ -349,8 +349,9 @@ impl Drop for QuotaRefresher {
 ///
 /// Silent when there is no runtime to spawn on, matching the recording workers:
 /// `web_router` is public and can be built outside one, and a server whose
-/// quota cache is merely cold still works. `not_known_exhausted` falls back to probing
-/// inline, which is what it did before this existed.
+/// quota cache is merely cold still works. A cold cache costs an inline probe
+/// on the first request per project, which is what happened before this
+/// existed.
 pub(crate) fn spawn_provider_quota_refresher(
     quota: ProviderQuota,
     pool: ProviderPool,
