@@ -124,6 +124,22 @@ make check           # test gate plus live Gemini credential check
 ./scripts/test.sh    # credential-free CI gate
 ```
 
+Every update to `main` publishes a `latest` prerelease with one self-contained
+`codetrial` executable for Linux, macOS, and Windows. It serves the browser
+application from inside the binary, and falls back to those built-in assets per
+file, so a partially populated web tree is filled in rather than 404ing.
+
+Assets on disk win where they exist. That root is `web/` relative to the working
+directory unless `CODETRIAL_WEB_DIR` names another, so running the binary from a
+checkout picks up edits with no environment variable set.
+
+The macOS build is unsigned. A downloaded copy carries the quarantine attribute
+and refuses to open until you clear it:
+
+```shell
+xattr -d com.apple.quarantine codetrial-aarch64-apple-darwin
+```
+
 `web/problems/`, `web/judges/`, and the problem cards in `web/index.html` are
 generated from `problem-bank/`. Regenerate them after editing that source, or
 the gate fails on the drift:

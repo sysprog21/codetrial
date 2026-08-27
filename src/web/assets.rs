@@ -130,9 +130,10 @@ pub async fn static_file_meta(
 /// refuses the trailing dot and trailing space that Win32 strips, which would
 /// otherwise name one file to the resolver and a different one to the disk.
 ///
-/// Latent on the deployments that exist today, which are all Unix, where a
-/// backslash is an ordinary filename character. It stops being latent the
-/// moment a Windows build ships.
+/// Load-bearing rather than theoretical since the release job below started
+/// publishing a Windows binary. On Unix a backslash is an ordinary filename
+/// character and these answer 404 for want of a file; on Windows they would
+/// resolve.
 ///
 /// A leading dot covers `..` on its own, so there is no separate clause for
 /// it. An empty segment is permitted because it cannot name anything.

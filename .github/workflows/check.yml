@@ -439,3 +439,228 @@ jobs:
             $(wc -l <"$RUNNER_TEMP/shard.txt") mutants" >>"$GITHUB_STEP_SUMMARY"
           cargo mutants --in-place --in-diff "$RUNNER_TEMP/pr.diff" \
             --shard ${{ matrix.shard }}/${{ needs.plan-mutants.outputs.width }}
+
+  # The release is a binary, not a directory beside a binary: `rust-embed`
+  # compiles `web/` (including its WASM) into it. Native runners avoid a
+  # cross-platform linker or packaging toolchain.
+  build:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: ${{ matrix.name }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            extension: ''
+          - name: macOS arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            extension: ''
+          - name: Windows x86_64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+            extension: .exe
+    runs-on: ${{ matrix.os }}
+    env:
+      # Cleared for the same reason `plan-mutants` clears it: the workflow-wide
+      # value is `-Clink-arg=-fuse-ld=mold`, and only the Linux jobs that
+      # install mold can honor it. Two of these three runners cannot have mold
+      # at all, and MSVC hands the flag to `link.exe`, which dies with LNK1117.
+      # Release builds happen once per push rather than once per mutant, so the
+      # linker that is present everywhere is the right trade.
+      RUSTFLAGS: ''
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Install Linux build dependency
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev
+      - name: Fetch browser assets
+        run: ./scripts/fetch-vendor.sh
+        shell: bash
+      # `rust-embed` omits a missing file rather than failing the build, and the
+      # startup warning that would catch it cannot fire in a binary with no
+      # `web/` directory to inspect. Without this, a fetch that quietly no-ops
+      # ships an executable that boots, serves the page, and then strands the
+      # candidate on a Python runtime that never starts.
+      - name: Verify the assets about to be embedded
+        run: ./scripts/verify-vendor.sh
+        shell: bash
+      - name: Build the self-contained executable
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      # The only place the embed is exercised as an embed. `rust-embed` matches
+      # keys exactly in release and reads the same names off the filesystem in
+      # debug, so every test binary the suite builds resolves these paths
+      # through the kernel instead, and normalization bugs are invisible to all
+      # of them. Run from an empty directory, so a fallback to disk cannot
+      # answer and make a missing embed look present.
+      - name: Prove the binary serves without a web tree
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          empty=$(mktemp -d)
+          cp target/${{ matrix.target }}/release/codetrial "$empty/"
+          # Killed from a trap rather than only on the happy path, and with its
+          # output redirected: a server left running past a failed probe holds
+          # the step's stdout open, which turns a one-line failure into a job
+          # that sits until the 45-minute timeout.
+          trap 'pkill -f "codetrial web" || true' EXIT
+          (cd "$empty" && CODETRIAL_WEB_ADDR=127.0.0.1:18999 ./codetrial web >server.log 2>&1 &)
+          for _ in $(seq 1 30); do
+            curl -fs -o /dev/null http://127.0.0.1:18999/ && break
+            sleep 1
+          done
+          status() { curl -sS -o /dev/null -w '%{http_code}' --path-as-is "http://127.0.0.1:18999$1"; }
+          title() { curl -sS --path-as-is "http://127.0.0.1:18999$1" | tr -d '\n' | sed -n 's|.*<title>\(.*\)</title>.*|\1|p'; }
+          # The wasm is last because it is the one the fetch supplies rather
+          # than git: it fails here if the vendored bytes never reached
+          # `.rodata`. The doubled separator is second-to-last because only a
+          # release binary matches embedded keys exactly, so this is the only
+          # place normalization is observable.
+          for probe in / /interview /vendor/avatar/three-vrm.js \
+                       //vendor/avatar/three-vrm.js /vendor/pyodide/pyodide.asm.wasm; do
+            code=$(status "$probe")
+            [ "$code" = 200 ] || { echo "embedded $probe answered $code, not 200" >&2; exit 1; }
+          done
+          [ "$(status /.git/config)" = 404 ] \
+            || { echo "a dotfile was served" >&2; exit 1; }
+
+          # Status is not enough for this one. `web/recording/index.html` is a
+          # nested index, so a resolver that fails to normalize the trailing
+          # slash does not 404: it exhausts its own candidates and falls back
+          # to the root index, answering 200 with the wrong page. Only the
+          # release binary can show it, because a debug build resolves the
+          # embed through the filesystem, where the kernel collapses the
+          # separator whatever the resolver does.
+          for probe in /recording /recording/ //recording/; do
+            found=$(title "$probe")
+            [ "$found" = "CodeTrial - Recording" ] \
+              || { echo "$probe served \"$found\", not the recording page" >&2; exit 1; }
+          done
+          # No backslash probe here. This runner is Linux, where a backslash is
+          # an ordinary filename byte, so the traversal spelling 404s whether or
+          # not the resolver refuses it: the check cannot fail and would only
+          # read as coverage. `normalization_cannot_launder_a_refused_path`
+          # owns that case, asserting the refusal itself rather than an outcome
+          # the platform supplies for free.
+
+      - name: Name release asset
+        run: >-
+          cp target/${{ matrix.target }}/release/codetrial${{ matrix.extension }}
+          codetrial-${{ matrix.target }}${{ matrix.extension }}
+        shell: bash
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codetrial-${{ matrix.target }}
+          path: codetrial-${{ matrix.target }}${{ matrix.extension }}
+
+  # A rolling prerelease keeps the current main build one direct download away.
+  release:
+    needs: [check, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    # `true`, unlike the workflow-level setting on main. That one keeps every
+    # run's verdict because the verdict is the record. This job's output is a
+    # single mutable pointer, so a publish that a newer commit has already
+    # superseded is work whose result must be thrown away regardless.
+    concurrency:
+      group: release-latest
+      cancel-in-progress: true
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # Shallow, and only for the tag push below: `gh release edit` cannot move
+      # a tag that already exists, and the GitHub API ignores `target_commitish`
+      # on a published release.
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: codetrial-*
+          path: dist
+          merge-multiple: true
+      - name: Verify and publish the prerelease
+        shell: bash
+        run: |
+          assets=(
+            dist/codetrial-x86_64-unknown-linux-gnu
+            dist/codetrial-aarch64-apple-darwin
+            dist/codetrial-x86_64-pc-windows-msvc.exe
+          )
+          for asset in "${assets[@]}"; do
+            [ -f "$asset" ] || { echo "missing release asset: $asset" >&2; exit 1; }
+          done
+
+          # Build duration varies by runner and by cache hit, so two pushes in
+          # flight can reach this step out of commit order and leave `latest`
+          # pointing at the older binaries. Cancellation covers the queued case;
+          # this covers the one already running when the newer push lands.
+          git fetch --depth 1 origin main
+          if [ "$(git rev-parse FETCH_HEAD)" != "$GITHUB_SHA" ]; then
+            echo "superseded by a newer main; leaving latest alone"
+            exit 0
+          fi
+
+          # Never `gh release delete` first. That destroys the only download
+          # for the length of the publish, and a create that fails afterwards
+          # leaves nothing at all.
+          #
+          # Drafted for the length of the replacement instead. `gh release
+          # upload` writes one asset at a time and three platforms are three
+          # chances to stop halfway, which on a published release means serving
+          # a Linux binary from this commit beside a Windows one from the last.
+          # Nothing tells a person downloading a pair that they do not match. A
+          # draft serves no downloads at all, so the half-written state is
+          # unreachable rather than merely unlikely, and the tag and the notes
+          # move only once the bytes are known to be there.
+          #
+          # The failure this leaves is a `latest` that 404s with a red build
+          # next to it. That is the trade: loudly absent beats quietly mixed,
+          # and the next push to main republishes it.
+          notes="Automated build of ${GITHUB_SHA:0:7}."
+          if gh release view latest >/dev/null 2>&1; then
+            gh release edit latest --draft
+          else
+            # Only `--target` and `--draft` are create-specific. Title,
+            # prerelease and notes are set by the edit at the bottom, which
+            # runs on both branches, so the notes string has one home.
+            gh release create latest --draft --target "$GITHUB_SHA" --notes ""
+          fi
+
+          gh release upload latest "${assets[@]}" --clobber
+
+          # Sizes, not just presence: an upload cut off partway still leaves a
+          # named asset behind, and a truncated binary is the one outcome this
+          # whole dance exists to keep off the download page.
+          for asset in "${assets[@]}"; do
+            name=$(basename "$asset")
+            want=$(stat -c%s "$asset")
+            got=$(gh release view latest --json assets \
+              --jq ".assets[] | select(.name == \"$name\") | .size")
+            [ "$want" = "$got" ] || {
+              echo "$name uploaded as ${got:-nothing}, expected $want bytes" >&2
+              echo "latest stays drafted rather than serving a mixed set" >&2
+              exit 1
+            }
+          done
+
+          # Only now does anything point at this build.
+          git tag -f latest "$GITHUB_SHA"
+          git push -f origin refs/tags/latest
+          gh release edit latest \
+            --draft=false \
+            --prerelease \
+            --title latest \
+            --notes "$notes"
