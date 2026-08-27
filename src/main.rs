@@ -497,6 +497,12 @@ fn run_gemini_check(config: AgentConfig, room_name: &str) -> Result<(), String> 
         "Gemini setupComplete: model={} voice={} problem={} duration={}min",
         boot.live_model, boot.voice, boot.problem.id, boot.duration_min
     );
+
+    // Said out loud because `make check` runs this, and a green run reads as
+    // "the stack works". It opens a Gemini Live session and never authenticates
+    // against LiveKit, so it passes with a wrong `LIVEKIT_API_SECRET`. Someone
+    // already spent an afternoon treating this line as proof it was right.
+    println!("Not checked here: LiveKit credentials. This never calls LiveKit.");
     Ok(())
 }
 

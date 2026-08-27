@@ -9,6 +9,12 @@
 # ignored. What covers this path is the browser interview check and
 # scripts/browser-check.sh, not unit tests.
 #
+# `run_gemini_check` is the same shape one layer down: it opens a Gemini Live
+# session against Google and closes it. Replacing the body with `Ok(())` cannot
+# be caught by `cargo test`, because a test that reached the real thing would
+# need a live API key and would fail on a machine without one. What this mode
+# actually proves is checked by running it, which is why `make check` does.
+#
 # Keep this list short and each entry justified. An entry that is really "we
 # never got around to testing this" belongs in a test, not here.
-exclude_re = ["run_room"]
+exclude_re = ["run_room", "run_gemini_check"]
