@@ -18,6 +18,7 @@ import {
   endInterviewPayload,
   escapeHtml,
   formatTime,
+  INTEGRITY_DETAIL_MAX,
   integrityEventPayload,
   normalize,
   orPlaceholder,
@@ -246,6 +247,96 @@ test("integrity events are canonical hashed chain payloads", async () => {
   );
 });
 
+test("a camera label is carried as detail without outgrowing the hashed bound", async () => {
+  // The preflight names the camera because nothing in the media path can tell a
+  // virtual camera from a real one. Device labels are long and full of
+  // punctuation, and `detail` is hashed: a producer that emits more than
+  // INTEGRITY_DETAIL_MAX builds a hash the agent cannot reproduce, which stops
+  // the chain for the rest of the interview. That is not hypothetical, it is
+  // why the bound is commented in web/lib.js.
+  // Long enough to be cut, with an astral character across the cut. `.slice()`
+  // counts UTF-16 units, so it would stop early and leave half a surrogate pair
+  // behind; the agent counts code points and would hash the other string. That
+  // divergence is the entire reason `integrityDetail` uses `Array.from`. A label
+  // that fits under the bound exercises none of it.
+  // Placed so the emoji's two UTF-16 units straddle index 80: "camera=" is 7,
+  // the kana are 70, "ab" is 2, so the pair occupies units 79 and 80. A
+  // `.slice(0, 80)` keeps unit 79 and drops its partner.
+  const label = "仮想カメラ".repeat(14) + "ab\u{1F3A5}tail";
+  const event = await integrityEventPayload({
+    type: "MEDIA_PREFLIGHT_PASSED",
+    source: "preflight",
+    detail: `camera=${label}`,
+  });
+  assert.equal(Array.from(event.detail).length, INTEGRITY_DETAIL_MAX);
+  // A well-formed pair is one element from `Array.from`; a lone surrogate is a
+  // one-unit element in the surrogate range, which is what a UTF-16 cut leaves.
+  assert.ok(
+    !Array.from(event.detail).some((c) => c.length === 1 && c.charCodeAt(0) >= 0xd800 && c.charCodeAt(0) <= 0xdfff),
+    "truncation split a surrogate pair",
+  );
+  assert.ok(event.detail.startsWith("camera=仮想カメラ"), event.detail);
+});
+
+test("a device label cannot reorder or hide the report it is printed in", async () => {
+  // The label is whatever the candidate named their device, and it is rendered
+  // into the interviewer's report where escapeHtml handles markup and nothing
+  // handles a right-to-left override. `hidden_or_reordering` in
+  // src/agent/integrity.rs refuses the identical set: a character kept here and
+  // dropped there is a hash the agent cannot reproduce, which stops the chain.
+  const hostile = "camera=\u202Egnitautis\u200B\u00AD\u2066\uFEFF end";
+  const event = await integrityEventPayload({ type: "MEDIA_PREFLIGHT_PASSED", detail: hostile });
+  assert.equal(event.detail, "camera=gnitautis end");
+
+  // Localized labels survive. Stripping them would leave the evidence
+  // unreadable for the people most likely to need it.
+  const localized = await integrityEventPayload({
+    type: "MEDIA_PREFLIGHT_PASSED",
+    detail: "camera=FaceTime HD \u30AB\u30E1\u30E9",
+  });
+  assert.equal(localized.detail, "camera=FaceTime HD \u30AB\u30E1\u30E9");
+
+  // The zero-width non-joiner is orthographic here, not decoration, which is
+  // why the U+200B run is not a solid range on either side.
+  const persian = "camera=\u0645\u06CC\u200C\u0631\u0648\u062F";
+  const kept = await integrityEventPayload({ type: "MEDIA_PREFLIGHT_PASSED", detail: persian });
+  assert.equal(kept.detail, persian);
+});
+
+test("every Unicode bidi control is stripped, not the ones we thought of", async () => {
+  // Bidi_Control is a closed set of twelve. Listing ranges by hand is how
+  // U+061C ARABIC LETTER MARK was missed, so assert the property rather than
+  // the list: the next code point nobody thinks of fails here.
+  const BIDI_CONTROL = [
+    0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e,
+    0x2066, 0x2067, 0x2068, 0x2069,
+  ];
+  for (const codePoint of BIDI_CONTROL) {
+    const event = await integrityEventPayload({
+      type: "MEDIA_PREFLIGHT_PASSED",
+      detail: `a${String.fromCodePoint(codePoint)}b`,
+    });
+    assert.equal(event.detail, "ab", `U+${codePoint.toString(16).toUpperCase()} reached the report`);
+  }
+});
+
+test("a stored report cannot smuggle a reordering character past the render", () => {
+  // `integrityDetail` runs in the producer and the agent refuses what it missed,
+  // but src/web/interviews.rs stores a POSTed report body verbatim and
+  // web/replay.js renders it back through `sanitizeReport`. That path crosses
+  // neither filter, and `escapeHtml` does not touch bidi.
+  const clean = sanitizeReport({
+    problemId: "two-sum",
+    summary: "looked\u202Efine",
+    integrityEvents: [{
+      type: "CAMERA_STOPPED", at: "00:01", severity: "high",
+      source: "camera", detail: "camera=\u202Egnitautis\u200B",
+    }],
+  });
+  assert.equal(clean.integrityEvents[0].detail, "camera=gnitautis");
+  assert.equal(clean.summary, "lookedfine");
+});
+
 test("only the agent may deliver a report, and only on the report topic", () => {
   const agentByKind = { kind: "AGENT" };
   const agentByPermission = { permissions: { agent: true } };
@@ -309,11 +400,13 @@ test("sanitizeReport clamps scores and strips markup from a hostile report", () 
 // `/api/reports` answers an oversized body with a 413 the UI has nothing to do
 // with, so a report has to fit by construction. The shape below is the largest
 // one sanitizeReport can produce: every list at its cap, every string at its
-// cap, and every character a control one. Those cost six bytes each once JSON
-// escapes them to `\u0001`, which beats even a four-byte character, so this is
-// the case the budget has to survive.
+// cap, and every character the most expensive one that survives sanitizing.
+// Control characters used to be that, at six bytes each once JSON escapes them
+// to `\u0001`, but `boundedText` now strips them before render. The dearest
+// survivor is an astral character at four UTF-8 bytes per code point, and code
+// points are the unit the bounds are counted in, so that is the worst case.
 test("sanitizeReport bounds text so the largest possible report still fits", () => {
-  const long = "\u0001".repeat(50_000);
+  const long = "\u{1F3A5}".repeat(50_000);
   const full = { strengths: [long, long, long, long], improvements: [long, long, long, long] };
   const report = sanitizeReport({
     summary: long,
@@ -335,7 +428,9 @@ test("sanitizeReport bounds text so the largest possible report still fits", () 
 
   assert.equal(report.codingFeedback.strengths.length, 4);
   assert.equal(report.communicationFeedback.improvements.length, 4);
-  assert.equal(report.integrityEvents.length, 25);
+  // 27: `MAX_INTEGRITY_EVENTS` in src/agent.rs caps the evidence at 25, and the
+  // report packet merges the first and last heartbeat in beside it.
+  assert.equal(report.integrityEvents.length, 27);
   assert.ok(new TextEncoder().encode(JSON.stringify(report)).length < 64 * 1024, "MAX_REPORT_BYTES in src/web/mod.rs");
 });
 
@@ -372,6 +467,8 @@ test("sanitizeReport preserves a well-formed agent report", () => {
     codingFeedback: { strengths: ["clear"], improvements: ["edge cases"] },
     communicationFeedback: { strengths: ["narrated"], improvements: ["slow down"] },
     integrityEvents: [{ type: "SESSION_START", at: "now", severity: "info", source: "media", durationMs: 0, seq: 1, prevHash: "", hash: "a".repeat(64), detail: null, sourceEventIds: [] }],
+    integrityChainSeq: 412,
+    integrityDropped: 380,
     hintsUsed: 2,
   });
 
@@ -383,6 +480,10 @@ test("sanitizeReport preserves a well-formed agent report", () => {
     codingFeedback: { strengths: ["clear"], improvements: ["edge cases"] },
     communicationFeedback: { strengths: ["narrated"], improvements: ["slow down"] },
     integrityEvents: [{ type: "SESSION_START", at: "now", severity: "info", source: "media", durationMs: 0, seq: 1, prevHash: "", hash: "a".repeat(64), detail: null, sourceEventIds: [] }],
+    // The event list is one row and the chain reached 412, which is the whole
+    // point of carrying these: the list is a subsequence and says so.
+    integrityChainSeq: 412,
+    integrityDropped: 380,
     hintsUsed: 2,
   });
 });

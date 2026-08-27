@@ -2070,9 +2070,37 @@ fn report_with_integrity_events(
     state: &RuntimeState,
 ) -> serde_json::Value {
     if let Some(object) = report.as_object_mut() {
+        // The evidence, plus the heartbeats that bookend it, merged by sequence
+        // rather than appended: a reader goes down this list in the order the
+        // interview happened, and a device-state sample out of place reads as a
+        // fault rather than as a bookend.
+        let kept = state.integrity_events.len() as u64;
+        let liveness = state.integrity_first_heartbeat.iter();
+        let liveness = liveness.chain(state.integrity_last_heartbeat.iter());
+        let samples = liveness.clone().count() as u64;
+        let mut events = state.integrity_events.clone();
+        events.extend(liveness.cloned());
+        events.sort_by_key(|event| event["seq"].as_u64().unwrap_or(0));
         object.insert(
             "integrityEvents".to_string(),
-            serde_json::Value::Array(state.integrity_events.clone()),
+            serde_json::Value::Array(events),
+        );
+
+        // How far verification got, and how much of it this report is not
+        // showing. The array above is a subsequence, so its links cannot be
+        // recomputed by whoever holds the report; without these a reader cannot
+        // tell a retention gap from a deleted row, which is the distinction the
+        // chain exists to make visible.
+        //
+        // The dropped count is derived rather than tallied. Every accepted
+        // event is in the evidence, held as a sample, or gone, and the cursor
+        // counts acceptances, so a counter would have been a fourth place for
+        // the same fact to be wrong.
+        let verified = state.integrity_chain.as_ref().map(|(seq, _)| *seq);
+        object.insert("integrityChainSeq".to_string(), serde_json::json!(verified));
+        object.insert(
+            "integrityDropped".to_string(),
+            serde_json::json!(verified.map(|seq| seq.saturating_sub(kept + samples))),
         );
     }
     report
@@ -2504,6 +2532,71 @@ mod tests {
         );
         assert_eq!(payload["hintsUsed"], 2);
         assert_eq!(report["integrityEvents"][0]["type"], "SESSION_START");
+    }
+
+    /// The liveness pair bookends the evidence, and the closing sample is the
+    /// one that says how the interview ended. Nothing covered this merge, so
+    /// dropping it, duplicating it, or emitting it out of order was invisible.
+    #[test]
+    fn the_report_packet_bookends_the_evidence_with_the_liveness_pair() {
+        let event = |seq: u64, kind: &str| {
+            serde_json::json!({
+                "type": kind,
+                "at": "now",
+                "severity": "info",
+                "source": "media",
+                "durationMs": 0,
+                "seq": seq,
+                "prevHash": "",
+                "hash": "a".repeat(64),
+                "detail": null,
+            })
+        };
+        let packet = |first, last| {
+            report_with_integrity_events(
+                serde_json::json!({}),
+                &RuntimeState {
+                    integrity_events: vec![event(5, "CAMERA_STOPPED")],
+                    integrity_first_heartbeat: first,
+                    integrity_last_heartbeat: last,
+                    integrity_chain: Some((9, "b".repeat(64))),
+                    ..RuntimeState::default()
+                },
+            )
+        };
+
+        let both = packet(
+            Some(event(2, "INTEGRITY_HEARTBEAT")),
+            Some(event(9, "INTEGRITY_HEARTBEAT")),
+        );
+        let seqs: Vec<u64> = both["integrityEvents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["seq"].as_u64().unwrap())
+            .collect();
+        assert_eq!(seqs, vec![2, 5, 9], "merged in the order the interview ran");
+        assert_eq!(both["integrityChainSeq"], 9);
+
+        // Derived, not tallied: nine accepted, one kept as evidence and two
+        // held as samples, so six went for space.
+        assert_eq!(both["integrityDropped"], 6);
+
+        // A run of one has an opening sample and no closing one.
+        let single = packet(Some(event(2, "INTEGRITY_HEARTBEAT")), None);
+        let seqs: Vec<u64> = single["integrityEvents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["seq"].as_u64().unwrap())
+            .collect();
+        assert_eq!(seqs, vec![2, 5], "one sample is one row");
+        assert_eq!(single["integrityDropped"], 7);
+
+        // And an interview that produced no heartbeat at all carries neither.
+        let none = packet(None, None);
+        assert_eq!(none["integrityEvents"].as_array().unwrap().len(), 1);
+        assert_eq!(none["integrityDropped"], 8);
     }
 
     #[test]

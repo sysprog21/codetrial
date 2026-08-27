@@ -672,20 +672,32 @@ fn browser_generated_integrity_events_all_verify_in_the_agent() {
         apply_data_event(&mut state, "integrity", event, TEST_REACTION_COOLDOWN_S);
     }
 
+    // The cursor is the count of acceptances: sequence numbers start at one and
+    // advance by exactly one per accepted event. Comparing it against the
+    // fixture length asks the only question this canary exists to ask, and
+    // recomputes none of the routing that would otherwise cancel itself out.
+    let (verified, _) = state
+        .integrity_chain
+        .clone()
+        .expect("the fixture opens a chain");
     assert_eq!(
-        state.integrity_events.len(),
+        verified as usize,
         events.len(),
-        "the agent rejected {} of {} events the browser actually produces; \
-         the two hash implementations have diverged",
-        events.len() - state.integrity_events.len(),
-        events.len()
+        "the agent refused an event the browser produces, at seq {}; the two \
+         hash implementations have diverged",
+        verified + 1
     );
 
     // Specifically the long one, which is the case that broke.
     let longest = events
         .iter()
         .filter_map(|event| event["detail"].as_str())
-        .map(str::len)
+        // Code points, matching what `MAX_INTEGRITY_TEXT` actually bounds. Byte
+        // length used to stand in for it, which was true while `detail` was
+        // ASCII and is not now that a camera label is carried: a 27-character
+        // Japanese label is 81 bytes and would satisfy this guard while sitting
+        // nowhere near the bound it claims to exercise.
+        .map(|detail| detail.chars().count())
         .max()
         .unwrap_or(0);
     assert!(
@@ -979,22 +991,24 @@ fn data_event_handling_uses_frontend_topics() {
         .and_then(Value::as_str)
         .unwrap()
         .to_string();
+    let invalid_review = integrity_event_with_source_ids(
+        IntegrityEventInput {
+            seq: 3,
+            prev_hash: &invalid_review_prev_hash,
+            event_type: "REVIEW_EVENT",
+            at: "2026-08-15T00:00:03.000Z",
+            severity: "warning",
+            source: "review",
+            duration_ms: 1000,
+            detail: Some("SCREEN_INTERRUPTION_WITH_FACE_MISSING"),
+        },
+        &["99"],
+    );
+    let invalid_review_hash = invalid_review["hash"].as_str().unwrap().to_string();
     apply_data_event(
         &mut state,
         "integrity",
-        &integrity_event_with_source_ids(
-            IntegrityEventInput {
-                seq: 3,
-                prev_hash: &invalid_review_prev_hash,
-                event_type: "REVIEW_EVENT",
-                at: "2026-08-15T00:00:03.000Z",
-                severity: "warning",
-                source: "review",
-                duration_ms: 1000,
-                detail: Some("SCREEN_INTERRUPTION_WITH_FACE_MISSING"),
-            },
-            &["99"],
-        ),
+        &invalid_review,
         TEST_REACTION_COOLDOWN_S,
     );
     assert_eq!(
@@ -1003,18 +1017,19 @@ fn data_event_handling_uses_frontend_topics() {
         "review events cannot cite nonexistent source event ids"
     );
 
-    let second_hash = state.integrity_events[1]
-        .get("hash")
-        .and_then(Value::as_str)
-        .unwrap()
-        .to_string();
+    // Seq 4 chained onto the refused event, not seq 3 again. The browser
+    // advances its own counter for every event it publishes and never reissues
+    // a number the agent already saw, so a citation the agent will not store is
+    // still a link the next event hangs off. Reusing seq 3 here modelled a
+    // producer `web/interview.js` is not: `publishIntegrityEvent` moves
+    // `state.integrityChain` on every delivered event.
     apply_data_event(
         &mut state,
         "integrity",
         &integrity_event_with_source_ids(
             IntegrityEventInput {
-                seq: 3,
-                prev_hash: &second_hash,
+                seq: 4,
+                prev_hash: &invalid_review_hash,
                 event_type: "REVIEW_EVENT",
                 at: "2026-08-15T00:00:03.000Z",
                 severity: "warning",
@@ -1597,14 +1612,11 @@ fn the_integrity_detail_bound_is_the_same_number_on_both_sides() {
 /// The fixture only covers the characters it contains, so this states what it
 /// has to keep containing.
 ///
-/// `sanitize_integrity_event` drops a `detail` carrying one character outside
-/// its allowlist, which makes the agent hash `"detail":null` against a browser
-/// that hashed the text. That is the length-bound bug with a character set
-/// instead of a length, and it was reachable: `FACE_DETECTOR_UNAVAILABLE`
-/// carries a raw `error.message`, and a JS error routinely contains parentheses
-/// and quotes.
+/// `sanitize_integrity_event` drops a `detail` carrying a control character,
+/// which makes the agent hash `"detail":null` against a browser that hashed the
+/// text. That is the length-bound bug with a character set instead of a length.
 #[test]
-fn the_integrity_fixture_exercises_both_sides_of_the_detail_allowlist() {
+fn the_integrity_fixture_exercises_the_detail_control_character_contract() {
     let fixture: Value = serde_json::from_str(include_str!("fixtures/integrity-chain.json"))
         .expect("fixture parses");
     let details: Vec<&str> = fixture
@@ -1624,29 +1636,57 @@ fn the_integrity_fixture_exercises_both_sides_of_the_detail_allowlist() {
          arbitrary error message reaches this field"
     );
 
-    // And one using every character the agent does allow, so a browser that
-    // starts stripping too much fails here rather than quietly losing evidence.
+    // Punctuation stays valid; a browser that over-filters loses useful detail.
     let allowed = "az AZ 09 _-=/;:,.";
     assert!(
         details.contains(&allowed),
-        "the fixture must carry a detail using the whole allowed set; without it \
+        "the fixture must carry a detail using the whole punctuation set; without it \
          a producer that over-filters looks correct"
     );
 
-    // Every detail the browser produces has to survive the agent's filter
-    // unchanged, or it is not a detail the agent can verify.
+    // Every browser detail must survive the agent's filter unchanged. Asserted
+    // through the sanitizer rather than the predicate behind it, so this covers
+    // the contract the wire actually has: a refused character does not shorten
+    // the detail, it nulls it, and then the hashes disagree.
     for detail in &details {
-        assert!(
-            detail
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric()
-                    || matches!(
-                        character,
-                        ' ' | '_' | '-' | '=' | '/' | ';' | ':' | ',' | '.'
-                    )),
-            "the browser emitted a detail the agent's allowlist refuses: {detail:?}"
+        let event = integrity_event(IntegrityEventInput {
+            seq: 1,
+            prev_hash: "",
+            event_type: "MEDIA_PREFLIGHT_PASSED",
+            at: "2026-08-15T00:00:00.000Z",
+            severity: "info",
+            source: "preflight",
+            duration_ms: 0,
+            detail: Some(detail),
+        });
+        assert_eq!(
+            sanitize_integrity_event(&event).expect("the event shape is valid")["detail"],
+            json!(detail),
+            "the browser emitted a detail the agent refuses: {detail:?}"
         );
     }
+}
+
+#[test]
+fn localized_camera_labels_survive_integrity_verification() {
+    let mut state = RuntimeState::default();
+    let detail = "camera=仮想カメラ Café (046d:086b)";
+    apply_data_event(
+        &mut state,
+        "integrity",
+        &integrity_event(IntegrityEventInput {
+            seq: 1,
+            prev_hash: "",
+            event_type: "MEDIA_PREFLIGHT_PASSED",
+            at: "2026-08-15T00:00:00.000Z",
+            severity: "info",
+            source: "preflight",
+            duration_ms: 0,
+            detail: Some(detail),
+        }),
+        TEST_REACTION_COOLDOWN_S,
+    );
+    assert_eq!(state.integrity_events[0]["detail"], detail);
 }
 
 /// The counts and the free text arrive on a topic the candidate's browser
@@ -1942,5 +1982,286 @@ fn honest_counts_survive_ingest_exactly() {
                 "`{field}` changed for the `{name}` run",
             );
         }
+    }
+}
+
+/// Builds a chain the way `web/interview.js` does: every event takes the next
+/// sequence number and hangs off the previous hash, whatever the agent decides
+/// to do with it.
+struct Chain {
+    seq: u64,
+    prev_hash: String,
+}
+
+impl Chain {
+    fn new() -> Self {
+        Self {
+            seq: 0,
+            prev_hash: String::new(),
+        }
+    }
+
+    fn push(&mut self, state: &mut RuntimeState, event_type: &str, severity: &str) {
+        self.push_citing(state, event_type, severity, &[]);
+    }
+
+    fn push_citing(
+        &mut self,
+        state: &mut RuntimeState,
+        event_type: &str,
+        severity: &str,
+        source_event_ids: &[&str],
+    ) {
+        self.seq += 1;
+        let event = integrity_event_with_source_ids(
+            IntegrityEventInput {
+                seq: self.seq,
+                prev_hash: &self.prev_hash,
+                event_type,
+                at: "2026-08-15T00:00:00.000Z",
+                severity,
+                source: if event_type == "INTEGRITY_HEARTBEAT" {
+                    "heartbeat"
+                } else {
+                    "camera"
+                },
+                duration_ms: 0,
+                detail: None,
+            },
+            source_event_ids,
+        );
+        self.prev_hash = event["hash"].as_str().expect("hash").to_string();
+        apply_data_event(state, "integrity", &event, TEST_REACTION_COOLDOWN_S);
+    }
+}
+
+fn stored_types(state: &RuntimeState) -> Vec<&str> {
+    state
+        .integrity_events
+        .iter()
+        .filter_map(|event| event["type"].as_str())
+        .collect()
+}
+
+/// Heartbeats used to evict evidence. One arrives every five seconds and the
+/// buffer holds 25, so a thirty minute interview reported its last two minutes:
+/// a camera that stopped at minute three was gone by minute five, pushed out by
+/// heartbeats reporting that the camera was fine.
+///
+/// The second half matters as much as the first. Eviction and chain
+/// verification used to read the same vector, so dropping an event for space
+/// moved the sequence the next event had to match and every later event was
+/// refused. The cursor is separate now, and this proves it survives a buffer
+/// that turned over twice.
+#[test]
+fn heartbeats_are_evicted_before_evidence_and_do_not_break_the_chain() {
+    let mut state = RuntimeState::default();
+    let mut chain = Chain::new();
+
+    chain.push(&mut state, "SESSION_START", "info");
+    chain.push(&mut state, "CAMERA_STOPPED", "high");
+    // Well past the cap, the way a real interview is.
+    for _ in 0..80 {
+        chain.push(&mut state, "INTEGRITY_HEARTBEAT", "info");
+    }
+
+    assert_eq!(
+        stored_types(&state),
+        vec!["SESSION_START", "CAMERA_STOPPED"],
+        "heartbeats belong in liveness, and nothing should have been evicted"
+    );
+
+    // The heartbeats are not lost, they are filed. The detail is the only
+    // periodic record of analyzer state in the system, so a report that keeps
+    // 25 events and no device-state sample cannot show the analyzer ever ran.
+    let first = state
+        .integrity_first_heartbeat
+        .clone()
+        .expect("heartbeats are kept as liveness, not discarded");
+    let last = state
+        .integrity_last_heartbeat
+        .clone()
+        .expect("and a run of 80 has two ends");
+    assert_eq!(first["seq"], 3, "the opening sample is the first heartbeat");
+    assert_eq!(
+        last["seq"], 82,
+        "the closing sample is the most recent heartbeat"
+    );
+
+    // Evidence past the cap still evicts oldest-first, and that is now the only
+    // eviction there is.
+    for _ in 0..30 {
+        chain.push(&mut state, "CAMERA_STOPPED", "high");
+    }
+    assert_eq!(state.integrity_events.len(), 25);
+    assert!(
+        !stored_types(&state).contains(&"SESSION_START"),
+        "30 real events past the cap should have pushed the opening event out"
+    );
+
+    // The chain must not have noticed any of it.
+    chain.push(&mut state, "MICROPHONE_STOPPED", "high");
+    assert!(
+        stored_types(&state).contains(&"MICROPHONE_STOPPED"),
+        "eviction moved the sequence the next event had to match, so the chain \
+         refused an event the browser numbered correctly: {:?}",
+        stored_types(&state)
+    );
+}
+
+/// A review event may name an event that eviction already removed. Refusing to
+/// store it is right; refusing every event after it is not, and that is what
+/// used to happen because the refusal ran before the chain cursor moved.
+///
+/// Retention is this process's problem. Tampering is the producer's. Only the
+/// second one is allowed to end the chain.
+#[test]
+fn a_review_event_naming_an_evicted_source_does_not_end_the_chain() {
+    let mut state = RuntimeState::default();
+    let mut chain = Chain::new();
+
+    // Evidence, not heartbeats. A heartbeat never reaches the buffer at all, so
+    // citing one would prove the citation invalid for the wrong reason and no
+    // eviction would happen: this test quietly stopped exercising eviction when
+    // liveness moved to its own field.
+    chain.push(&mut state, "SESSION_START", "info");
+    for _ in 0..30 {
+        chain.push(&mut state, "CAMERA_STOPPED", "high");
+    }
+    assert_eq!(state.integrity_events.len(), 25, "the cap must have bitten");
+    assert!(
+        !state
+            .integrity_events
+            .iter()
+            .any(|event| event["seq"].as_u64() == Some(2)),
+        "seq 2 is evidence the cap pushed out, which is what makes the citation stale"
+    );
+
+    chain.push_citing(&mut state, "REVIEW_EVENT", "warning", &["2"]);
+    assert!(
+        !stored_types(&state).contains(&"REVIEW_EVENT"),
+        "a review event with an unretained source should not be stored"
+    );
+
+    // The chain, however, kept going.
+    chain.push(&mut state, "CAMERA_STOPPED", "high");
+    assert!(
+        stored_types(&state).contains(&"CAMERA_STOPPED"),
+        "a retention drop ended the chain: every later event was refused"
+    );
+}
+
+/// The browser slices the event list at the evidence cap plus the two liveness
+/// samples. A cap raised on one side and not the other truncates the report in
+/// silence, dropping the closing device-state sample first.
+#[test]
+fn the_report_row_cap_matches_the_evidence_cap_plus_its_bookends() {
+    let browser = std::fs::read_to_string("web/lib.js").expect("web/lib.js is readable");
+    let declaration = "export const MAX_INTEGRITY_ROWS = ";
+    let start = browser
+        .find(declaration)
+        .expect("web/lib.js declares MAX_INTEGRITY_ROWS")
+        + declaration.len();
+    let rest = &browser[start..];
+    let end = rest.find(';').expect("the declaration ends in a semicolon");
+    let rows: usize = rest[..end]
+        .trim()
+        .parse()
+        .expect("MAX_INTEGRITY_ROWS is a number");
+
+    assert_eq!(
+        rows,
+        codetrial::agent::MAX_INTEGRITY_EVENTS + 2,
+        "the browser keeps {rows} rows and the agent sends up to {} evidence \
+         events plus an opening and a closing heartbeat",
+        codetrial::agent::MAX_INTEGRITY_EVENTS
+    );
+}
+
+/// `durationMs` is candidate-supplied and reaches the report, so its ceiling is
+/// a real bound and not a formality. Nothing pinned it, so a slip in the number
+/// was invisible.
+#[test]
+fn a_duration_is_clamped_to_one_day_of_milliseconds() {
+    let with_duration = |duration: i64| {
+        let event = serde_json::json!({
+            "type": "CAMERA_STOPPED",
+            "at": "2026-08-15T00:00:00.000Z",
+            "severity": "high",
+            "source": "camera",
+            "durationMs": duration,
+            "seq": 1,
+            "prevHash": "",
+            "hash": "a".repeat(64),
+            "detail": null,
+        });
+        sanitize_integrity_event(&event).expect("the event shape is valid")["durationMs"].clone()
+    };
+
+    const ONE_DAY_MS: i64 = 86_400_000;
+    assert_eq!(
+        with_duration(ONE_DAY_MS),
+        json!(ONE_DAY_MS),
+        "the bound itself is allowed"
+    );
+    assert_eq!(
+        with_duration(ONE_DAY_MS + 1),
+        json!(ONE_DAY_MS),
+        "anything past it is cut to it"
+    );
+    assert_eq!(
+        with_duration(-1),
+        json!(0),
+        "and a negative duration is not one"
+    );
+}
+
+/// The fixture proves the browser and the agent strip the same set on a real
+/// payload. This proves the agent enforces it rather than trusting the browser
+/// to have done the stripping, which is the half a fixture cannot cover: the
+/// producer is the adversary, so a hand-built payload must not get further than
+/// one the browser would have cleaned.
+#[test]
+fn a_detail_that_reorders_or_hides_text_is_dropped_but_localized_text_survives() {
+    let detail_with = |detail: &str| {
+        let event = integrity_event(IntegrityEventInput {
+            seq: 1,
+            prev_hash: "",
+            event_type: "MEDIA_PREFLIGHT_PASSED",
+            at: "2026-08-15T00:00:00.000Z",
+            severity: "info",
+            source: "preflight",
+            duration_ms: 0,
+            detail: Some(detail),
+        });
+        sanitize_integrity_event(&event).expect("the event shape itself is valid")["detail"].clone()
+    };
+
+    // Kept: a camera label is evidence a person reads, and most of the world
+    // does not name its devices in ASCII.
+    assert_eq!(
+        detail_with("camera=FaceTime HD \u{30AB}\u{30E1}\u{30E9}"),
+        json!("camera=FaceTime HD \u{30AB}\u{30E1}\u{30E9}")
+    );
+
+    // Kept for the same reason, and the reason the U+200B run has two holes in
+    // it: the zero-width non-joiner is how Persian spells this, not decoration.
+    let persian = "camera=\u{645}\u{6CC}\u{200C}\u{631}\u{648}\u{62F}";
+    assert_eq!(detail_with(persian), json!(persian));
+
+    // Dropped: each of these either reorders or hides the text printed around
+    // it, and the report escapes markup rather than bidirectional overrides.
+    for hostile in [
+        "camera=\u{202E}gnitautis",
+        "camera=OBS\u{200B} Virtual",
+        "camera=soft\u{00AD}hyphen",
+        "camera=\u{2066}isolate",
+        "camera=\u{FEFF}bom",
+    ] {
+        assert_eq!(
+            detail_with(hostile),
+            Value::Null,
+            "detail should have been refused: {hostile:?}"
+        );
     }
 }

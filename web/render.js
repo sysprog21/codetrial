@@ -48,12 +48,36 @@ export function feedbackMarkup(title, section) {
   return `<section><h3>${escapeHtml(title)}</h3><h4>Strengths</h4><ul>${list(section.strengths)}</ul><h4>Improve</h4><ul>${list(section.improvements)}</ul></section>`;
 }
 
-function integrityEvidenceMarkup(events = []) {
-  if (!events.length) return "";
-  const rows = events.map((event, index) => `
+function integrityEvidenceMarkup(report = {}) {
+  const rows = (report.integrityEvents || []).map((event, index) => `
     <li data-integrity-index="${index}"><strong>${escapeHtml(event.severity)}</strong> ${escapeHtml(event.type)} <span>${escapeHtml(event.at)}</span>${event.detail ? `<p>${escapeHtml(event.detail)}</p>` : ""}${sourceEventMarkup(event)}</li>
-  `).join("");
-  return `<section><h3>Integrity Evidence</h3><ul>${rows}</ul></section>`;
+  `).join("") || "<li>(none captured)</li>";
+  return `<section><h3>Integrity Evidence</h3><ul>${rows}</ul><p class="muted small">${escapeHtml(chainSentence(report))}</p></section>`;
+}
+
+/// Says out loud that the list above is a subsequence.
+///
+/// The agent keeps 25 events and verifies every one that arrives, so a busy
+/// interview shows a fraction of what was checked. Without this a reader cannot
+/// tell a retention gap from a deleted row, which is the difference the chain
+/// exists to make visible. A report predating the checkpoint has no numbers and
+/// says so rather than implying nothing was dropped.
+/// One sentence, so the page and the exported markdown cannot drift apart.
+///
+/// They were written twice and already disagreed: one said "This report predates
+/// chain reporting" and the other "Chain reporting predates this report". The
+/// export is the copy that gets forwarded, and two wordings of the same fact in
+/// one file is a promise that they will diverge further.
+export function chainSentence(report) {
+  if (report.integrityChainSeq == null) {
+    return "This report predates chain reporting: how much was dropped for space is unknown.";
+  }
+  const dropped = report.integrityDropped ?? 0;
+  return `Chain verified through event ${report.integrityChainSeq}; ${
+    dropped === 0
+      ? "every event it verified is listed above"
+      : `${dropped} more were verified and not kept, for space`
+  }.`;
 }
 
 function sourceEventMarkup(event) {
@@ -94,7 +118,7 @@ export function reportMarkup({ report, problemTitle, language, code }) {
       </div>${scores}
       <section><h3>${report.incomplete ? "What happened" : "Committee summary"}</h3><p>${escapeHtml(report.summary)}</p></section>
       ${feedback}
-      ${integrityEvidenceMarkup(report.integrityEvents)}
+      ${integrityEvidenceMarkup(report)}
       <details><summary>Your final code (${escapeHtml(language)})</summary><pre>${escapeHtml(code.trimEnd() || "(editor was empty)")}</pre></details>
       <div class="report-actions"><button id="download-report" type="button">Download report (.md)</button><button id="done" type="button">Done - back to lobby</button></div>
     </div>
@@ -151,6 +175,7 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
     const sources = event.sourceEventIds?.length ? ` - sources: ${event.sourceEventIds.map(mdText).join(", ")}` : "";
     return `- ${mdText(event.at)} [${mdText(event.severity)}] ${mdText(event.type)}${event.detail ? ` - ${mdText(event.detail)}` : ""}${sources}`;
   }).join("\n") || "(none captured)";
+  const chainNote = mdText(chainSentence(report));
   const conversation = transcript
     .filter((segment) => segment.final || segment.text.trim())
     .map((segment) => `**${segment.speaker === "interviewer" ? "Jim" : "You"}:** ${mdText(segment.text.trim())}`)
@@ -210,6 +235,8 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
     // evidence, which `sanitizeReport` deliberately keeps.
     "## Integrity Evidence",
     evidence,
+    "",
+    chainNote,
     "",
     `## Final code (${mdText(language)})`,
     fence + info,

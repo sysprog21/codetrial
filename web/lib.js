@@ -241,25 +241,43 @@ export function canonicalJson(value) {
 /// this bound is unverifiable by construction, and the rejection is silent.
 export const INTEGRITY_DETAIL_MAX = 80;
 
-/// Must accept exactly what `sanitize_integrity_event` in `src/agent/integrity.rs`
-/// accepts. That filter is all-or-nothing: a `detail` carrying one character
-/// outside it becomes null there, so the agent hashes `"detail":null` while the
-/// browser hashed the text, the hashes differ, the event is refused, and because
-/// sequence continuity is required every later event is refused too.
+/// The characters neither side keeps: control characters, plus the format
+/// characters that reorder or hide the text around them.
 ///
-/// This is the same failure as the 160-versus-80 length bound, with a character
-/// set instead of a length, and it was live: `FACE_DETECTOR_UNAVAILABLE` carries
-/// `error.message` from `web/face-worker.js`, and a JS error routinely reads
-/// `Cannot read properties of undefined (reading 'a')`. Parentheses and quotes
-/// are not in the agent's set, so the one event that fires when face detection
-/// breaks was also the one event that broke the evidence chain.
+/// Must strip exactly what `hidden_or_reordering` in `src/agent/integrity.rs`
+/// refuses. That filter is all-or-nothing: a `detail` carrying one of these
+/// becomes null there, so the agent hashes `"detail":null` while the browser
+/// hashed the text, the hashes differ, the event is refused, and because
+/// sequence continuity is required every later event is refused too. It is the
+/// 160-versus-80 length bound again, with a character set instead of a length.
 ///
-/// Stripped rather than refused, because losing the characters costs a little
-/// legibility and refusing costs every event after it.
-const INTEGRITY_DETAIL_DISALLOWED = /[^0-9A-Za-z _\-=/;:,.]/g;
+/// Written as explicit code points rather than `\p{Cf}`, because Rust's std has
+/// no general-category lookup: a category on this side and a hand-written list
+/// on that one would drift.
+///
+/// U+200C and U+200D are deliberately absent from the U+200B run. The
+/// zero-width non-joiner is orthographic in Persian and Urdu and the zero-width
+/// joiner builds Indic conjuncts, so stripping them corrupts exactly the
+/// localized labels this filter was widened to keep. Neither reorders anything:
+/// they change how the glyphs beside them connect.
+const INTEGRITY_DETAIL_STRIPPED =
+  /[\p{Cc}\u00AD\u061C\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/gu;
+
+/// A control character is a separator, so prose keeps a space where one stood.
+/// Only the render path wants that; `integrityDetail` feeds a hash and has to
+/// match the agent, which substitutes nothing.
+const CONTROL_SEPARATOR = /\p{Cc}/gu;
+
+/// Code points, not UTF-16 units, matching Rust's `chars().take()`. Slicing a
+/// string directly stops early on any astral character and can leave half a
+/// surrogate pair behind, which is a different string from the one the agent
+/// hashes.
+function codePoints(text, max) {
+  return Array.from(text).slice(0, max).join("");
+}
 
 function integrityDetail(value) {
-  return String(value).replace(INTEGRITY_DETAIL_DISALLOWED, "").slice(0, INTEGRITY_DETAIL_MAX);
+  return codePoints(String(value).replace(INTEGRITY_DETAIL_STRIPPED, ""), INTEGRITY_DETAIL_MAX);
 }
 
 export async function integrityEventPayload(input, previous = { seq: 0, hash: "" }) {
@@ -310,6 +328,22 @@ export function sanitizeReport(raw) {
     return Number.isFinite(number) ? clamp(number, 0, max) : 0;
   };
   const score = (value) => bounded(value, 100);
+  // The chain checkpoint. The event list is a subsequence, so these are what
+  // say how far the agent verified and how much it dropped on purpose; a report
+  // from before they existed has none of them, and `null` reads as "this report
+  // cannot tell you", which is the truth rather than a zero.
+  //
+  // `typeof value === "number"` rather than `Number.isFinite(Number(value))`,
+  // because `Number(null)` is 0 and the agent sends null for a chain that never
+  // advanced. That read an absent checkpoint as "verified through event 0, and
+  // every event is listed above", which is a completeness claim about a report
+  // that has no idea, and the exact thing the absent branch exists to refuse.
+  const count = (value) =>
+    typeof value === "number" && Number.isFinite(value) ? bounded(value, Number.MAX_SAFE_INTEGER) : null;
+  const checkpoint = (raw) => ({
+    integrityChainSeq: count(raw?.integrityChainSeq),
+    integrityDropped: count(raw?.integrityDropped),
+  });
   const feedback = (section) => ({
     strengths: stringList(section?.strengths),
     improvements: stringList(section?.improvements),
@@ -324,6 +358,7 @@ export function sanitizeReport(raw) {
       incomplete: true,
       summary: typeof raw?.summary === "string" ? boundedText(raw.summary) : "",
       integrityEvents: integrityEvents(raw?.integrityEvents),
+      ...checkpoint(raw),
       hintsUsed: bounded(raw?.hintsUsed, 99),
     };
   }
@@ -335,15 +370,26 @@ export function sanitizeReport(raw) {
     codingFeedback: feedback(raw?.codingFeedback),
     communicationFeedback: feedback(raw?.communicationFeedback),
     integrityEvents: integrityEvents(raw?.integrityEvents),
+    ...checkpoint(raw),
     // Bounded like the scores: `JSON.parse` turns 1e999 into Infinity, which
     // would otherwise render as "Infinity hints used" and land in history.
     hintsUsed: bounded(raw?.hintsUsed, 99),
   };
 }
 
+/// The evidence cap in src/agent.rs plus the two heartbeats that
+/// `report_with_integrity_events` merges in beside it. Slicing at the evidence
+/// cap alone would drop the closing device-state sample, which is the half of
+/// the pair that says how the interview ended.
+///
+/// Exported so `tests/agent.rs` can hold it against `MAX_INTEGRITY_EVENTS`, the
+/// way `INTEGRITY_DETAIL_MAX` is already held against `MAX_INTEGRITY_TEXT`. A
+/// cap raised on one side and not the other truncates the report in silence.
+export const MAX_INTEGRITY_ROWS = 27;
+
 function integrityEvents(events) {
   if (!Array.isArray(events)) return [];
-  return events.slice(0, 25).map((event) => ({
+  return events.slice(0, MAX_INTEGRITY_ROWS).map((event) => ({
     type: typeof event?.type === "string" ? boundedText(event.type, 40) : "",
     at: typeof event?.at === "string" ? boundedText(event.at, 40) : "",
     severity: ["info", "warning", "high", "critical"].includes(event?.severity) ? event.severity : "info",
@@ -362,8 +408,27 @@ function integrityEvents(events) {
 // event flood would silently cost someone their history.
 const MAX_REPORT_TEXT = 300;
 
+// Code points, not UTF-16 units, because `detail` now carries whatever the
+// candidate named their camera. `slice` cut an 80-code-point label down to 44
+// and left a lone surrogate on the end, which renders as a replacement glyph in
+// the evidence a reviewer reads. Matches the bound `integrityDetail` enforces.
+/// The last boundary before render, which is why the strip happens here and not
+/// only in `integrityDetail`.
+///
+/// That one runs in the producer and `hidden_or_reordering` runs in the agent,
+/// and one path crosses neither: `save_report_handler` in
+/// src/web/interviews.rs stores a POSTed report body verbatim, and
+/// web/replay.js reads it back through `sanitizeReport` into `reportMarkup`. A
+/// client posting its own report could otherwise put a right-to-left override
+/// straight into the rendered evidence, because `escapeHtml` handles markup and
+/// nothing handles reordering. On the agent-delivered path this is a no-op.
+///
+/// Every rendered free-text field in `sanitizeReport` comes through here.
 function boundedText(value, max = MAX_REPORT_TEXT) {
-  return String(value).slice(0, max);
+  return codePoints(
+    String(value).replace(CONTROL_SEPARATOR, " ").replace(INTEGRITY_DETAIL_STRIPPED, ""),
+    max,
+  );
 }
 
 function stringList(value) {
