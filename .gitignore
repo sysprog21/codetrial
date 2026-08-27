@@ -63,5 +63,8 @@ web/vendor/pyodide/*.json
 # suffixes: a run killed outright leaves one, and it is the same megabytes.
 web/vendor/*/.*.part
 
-# cargo-mutants scratch output; CI runs it on every pull request.
+# cargo-mutants scratch output; CI runs it on every pull request. The tool
+# rotates the previous run to mutants.out.old/ before starting, so both names
+# are scratch and neither belongs in a commit.
 mutants.out/
+mutants.out.old/
