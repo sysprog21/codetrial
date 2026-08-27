@@ -27,14 +27,21 @@ use super::{
     unauthorized_response,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// No `Debug`, for the reason [`crate::config::AgentConfig`] has none: one
+/// field is a credential, and a type that can print it will eventually be
+/// printed. Nothing needs to format this, so the derive is the whole risk.
+#[derive(Clone, PartialEq, Eq)]
 pub struct TokenConfig<'a> {
     pub api_key: &'a str,
     pub api_secret: &'a str,
     pub server_url: &'a str,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Same reason, and the sharpest case of it: `token` is a minted LiveKit
+/// credential a holder can join a room with, not a key that merely mints them.
+/// It is the shortest-lived secret here and the easiest to print by accident,
+/// because it looks like a response body rather than a key.
+#[derive(Clone, PartialEq, Eq)]
 pub struct TokenResponse {
     pub token: String,
     pub server_url: String,

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
@@ -51,7 +52,7 @@ pub const MAX_REPORT_BYTES: usize = 64 * 1024;
 /// retried forever rather than applied.
 pub const MAX_WEBHOOK_BODY_BYTES: usize = 64 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct WebServerConfig {
     pub web_dir: PathBuf,
     pub github_client_id: Option<String>,
@@ -89,6 +90,67 @@ pub struct WebServerConfig {
     /// asked for. The binaries set it; a test sets it only when the refresher
     /// is what it is testing, and points it at a stub.
     pub probe_provider_quota: bool,
+}
+
+/// Redacting by hand, because the derive printed `session_secret` and
+/// `github_client_secret` in full. `Provider` and `RecordingConfig` already
+/// redact for exactly this reason, and their comments name this struct as the
+/// thing whose `Debug` they are defending against: the two fields it holds
+/// itself were the ones nobody checked.
+///
+/// `session_secret` is the sharper of the two. It signs the session cookie, so
+/// a copy in a log is not a credential to steal but the ability to mint any
+/// user's session.
+///
+/// Destructured rather than read through `self`, and written as a full field
+/// list rather than a `finish_non_exhaustive`. A `debug_struct` call chain
+/// compiles happily whatever it omits, so a field added later would silently
+/// stop being printed; the binding below fails to compile until someone decides
+/// in this function whether the new field is a secret.
+impl fmt::Debug for WebServerConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            web_dir,
+            github_client_id,
+            github_client_secret,
+            session_secret,
+            db_path,
+            github_oauth_base_url,
+            github_api_base_url,
+            room_prefix,
+            fixed_room_name,
+            production,
+            compiler_explorer_enabled,
+            trusted_proxy_hops,
+            recording,
+            pool,
+            probe_provider_quota,
+        } = self;
+        formatter
+            .debug_struct("WebServerConfig")
+            .field("web_dir", web_dir)
+            .field("github_client_id", github_client_id)
+            .field(
+                "github_client_secret",
+                &github_client_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "session_secret",
+                &session_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field("db_path", db_path)
+            .field("github_oauth_base_url", github_oauth_base_url)
+            .field("github_api_base_url", github_api_base_url)
+            .field("room_prefix", room_prefix)
+            .field("fixed_room_name", fixed_room_name)
+            .field("production", production)
+            .field("compiler_explorer_enabled", compiler_explorer_enabled)
+            .field("trusted_proxy_hops", trusted_proxy_hops)
+            .field("recording", recording)
+            .field("pool", pool)
+            .field("probe_provider_quota", probe_provider_quota)
+            .finish()
+    }
 }
 
 /// Cloned per request by axum, so the config sits behind an `Arc`: otherwise

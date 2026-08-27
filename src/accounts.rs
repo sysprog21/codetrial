@@ -17,7 +17,10 @@ use crate::current_epoch_seconds;
 /// still signed in when they arrive.
 pub const SESSION_TTL_SECONDS: i64 = 60 * 60 * 24 * 30;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// No `Debug`: `session_secret` signs the session cookie, so a copy in a log
+/// is not a credential to steal but the ability to mint any user's session,
+/// and `oauth` carries the client secret beneath it.
+#[derive(Clone, PartialEq, Eq)]
 pub struct GitHubLoginConfig {
     /// Absent unless an OAuth app is configured. The two credentials are only
     /// ever useful together, so they travel together and a handler that has
@@ -29,7 +32,9 @@ pub struct GitHubLoginConfig {
     pub api_base_url: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Same reason. The pair is only ever useful together, so the secret is never
+/// more than one field away from anything that prints the id.
+#[derive(Clone, PartialEq, Eq)]
 pub struct GitHubOauth {
     pub client_id: String,
     pub client_secret: String,

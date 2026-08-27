@@ -1989,8 +1989,11 @@ fn account_recording_config_does_not_require_github_oauth() {
 
     let login = login_config(&config).expect("recording config should enable account sessions");
 
-    assert_eq!(
-        login.oauth, None,
+    // `is_none` rather than `assert_eq!(.., None)`: that form needs `Debug` on
+    // `GitHubOauth`, and the client secret is the reason that type does not
+    // have one.
+    assert!(
+        login.oauth.is_none(),
         "no OAuth app means no credentials, not blank ones"
     );
     assert_eq!(login.session_secret, "session");
@@ -5873,4 +5876,55 @@ async fn every_owner_scoped_route_refuses_an_anonymous_request() {
 
     server.abort();
     remove_database(path);
+}
+
+/// `Provider` and `RecordingConfig` both hand-write a redacting `Debug`, and
+/// both name `WebServerConfig` as the reason: it derives `Debug`, so anything
+/// reachable from it can reach a log line. The two secrets the struct holds
+/// directly were the ones nobody checked, and the derive printed both in full.
+///
+/// `session_secret` is why this is a test rather than a style note. It signs
+/// the session cookie, so a copy on stderr is not a credential to steal but the
+/// ability to mint any user's session.
+#[test]
+fn web_server_config_debug_redacts_its_own_secrets() {
+    let mut config = web_config();
+    config.github_client_id = Some("public-client-id".to_string());
+    config.github_client_secret = Some("CLIENTSECRET-def456".to_string());
+    config.session_secret = Some("SESSIONSECRET-abc123".to_string());
+
+    let printed = format!("{config:?}");
+    for secret in ["CLIENTSECRET-def456", "SESSIONSECRET-abc123"] {
+        assert!(
+            !printed.contains(secret),
+            "Debug output leaked {secret}: {printed}"
+        );
+    }
+    assert!(
+        printed.contains("<redacted>"),
+        "the redaction should be visible rather than silent: {printed}"
+    );
+
+    // The pool redacts one level down, which is what makes the whole struct
+    // safe to print rather than just its top level.
+    assert!(
+        !printed.contains("devsecret"),
+        "the provider secret leaked through the pool: {printed}"
+    );
+
+    // Absent stays absent: `None` must not print as a redacted value, or an
+    // operator reading a log cannot tell a configured secret from a missing
+    // one.
+    let blank = format!("{:?}", web_config());
+    assert!(
+        blank.contains("session_secret: None"),
+        "an unset secret should read as None: {blank}"
+    );
+
+    // The client id is not a secret, and redacting it would cost the one field
+    // that makes an OAuth misconfiguration diagnosable from a log.
+    assert!(
+        printed.contains("public-client-id"),
+        "the client id is public and should stay readable: {printed}"
+    );
 }
