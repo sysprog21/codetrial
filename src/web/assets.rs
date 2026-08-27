@@ -73,6 +73,37 @@ pub async fn static_file(root: &Path, path: &str) -> Option<PathBuf> {
     static_file_meta(root, path).await.map(|(path, _)| path)
 }
 
+/// Whether a single path segment is one this server refuses to resolve.
+///
+/// An allowlist. Enumerating the spellings that escape is open ended, because
+/// the escapes are whatever URL syntax permits, and the two that matter here
+/// are neither `..` nor dot-prefixed: a backslash is a directory separator to
+/// Windows and an ordinary path byte to the URI parser, and a colon makes a
+/// segment drive-qualified, which `PathBuf::push` honors by discarding the
+/// root it was joined onto. `/x\..\..\Cargo.toml` and `/C:/Windows/win.ini`
+/// both walk out of the web root there.
+///
+/// Enumerating what the asset tree contains is not open ended. Every one of
+/// the 367 names under `web/` is alphanumerics with a dot, underscore, or
+/// dash, so the rule is that a segment must be an ordinary filename on every
+/// platform this can be built for, and the allowlist costs no asset. It also
+/// refuses the trailing dot and trailing space that Win32 strips, which would
+/// otherwise name one file to the resolver and a different one to the disk.
+///
+/// Latent on the deployments that exist today, which are all Unix, where a
+/// backslash is an ordinary filename character. It stops being latent the
+/// moment a Windows build ships.
+///
+/// A leading dot covers `..` on its own, so there is no separate clause for
+/// it. An empty segment is permitted because it cannot name anything.
+fn is_refused_segment(part: &str) -> bool {
+    part.starts_with('.')
+        || part.ends_with('.')
+        || !part
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
 /// The resolved path together with the `stat` that resolved it. Handed back
 /// rather than thrown away because `static_response` needs the same metadata
 /// for
@@ -83,10 +114,7 @@ pub(crate) async fn static_file_meta(
     path: &str,
 ) -> Option<(PathBuf, std::fs::Metadata)> {
     let clean = path.trim_start_matches('/');
-    if clean
-        .split('/')
-        .any(|part| part == ".." || part.starts_with('.'))
-    {
+    if clean.split('/').any(is_refused_segment) {
         return None;
     }
     if !clean.is_empty() && Path::new(clean).extension().is_some() {
@@ -310,4 +338,41 @@ pub(crate) fn content_type(path: &Path) -> Option<HeaderValue> {
         _ => return None,
     };
     Some(HeaderValue::from_static(value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_refused_segment;
+
+    /// Asserts the refusal itself rather than a served request, because a
+    /// served request cannot distinguish the two on this platform: a backslash
+    /// and a colon are ordinary filename bytes to Unix, so every one of these
+    /// answers 404 for want of a file whether or not the resolver refused it.
+    /// The refusal is what a Windows build would depend on.
+    #[test]
+    fn a_segment_must_be_an_ordinary_filename() {
+        for refused in [
+            "..",
+            ".git",
+            ".env.local",
+            "x\\..\\..\\Cargo.toml",
+            "\\..\\Cargo.toml",
+            "C:",
+            "index.html:$DATA",
+            "index.html.",
+            "with space",
+        ] {
+            assert!(is_refused_segment(refused), "{refused} should be refused");
+        }
+
+        for allowed in [
+            "",
+            "index.html",
+            "three-vrm.js",
+            "face_detection.js",
+            "jim.vrm",
+        ] {
+            assert!(!is_refused_segment(allowed), "{allowed} should resolve");
+        }
+    }
 }
