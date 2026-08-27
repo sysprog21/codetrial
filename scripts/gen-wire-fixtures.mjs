@@ -167,21 +167,32 @@ const INTEGRITY_INPUTS = [
   },
   // A real detector failure, which is the one event whose detail is an
   // arbitrary runtime error string: `web/face-worker.js` fills it from
-  // `error.message`. Parentheses and quotes are ordinary there, and the agent
-  // drops a detail carrying any character outside its allowlist, so this is the
-  // case where the producer and the verifier hash different bytes.
+  // `error.message`. Parentheses and quotes are ordinary there, and an agent
+  // that drops a detail carrying them hashes different bytes from the producer.
   {
     type: "FACE_DETECTOR_UNAVAILABLE", source: "media", severity: "warning",
     at: "2026-08-18T06:39:02.114Z",
     detail: "face detection unavailable: Cannot read properties of undefined (reading 'a')",
   },
-  // The mirror case: every character the agent's allowlist permits, so a browser
-  // that starts stripping something the agent would have accepted fails here
-  // too. One fixture cannot catch a divergence in a direction it never exercises.
+  // The mirror case: characters both sides keep, so a browser that starts
+  // stripping something the agent would have accepted fails here too. One
+  // fixture cannot catch a divergence in a direction it never exercises.
   {
     type: "INTEGRITY_HEARTBEAT", source: "media", severity: "info",
     at: "2026-08-18T06:39:44.702Z",
     detail: "az AZ 09 _-=/;:,.",
+  },
+  // A camera label, which is the candidate's to name and is printed in the
+  // interviewer's report. Localized text stays, because stripping it would leave
+  // the evidence unreadable for the people most likely to need it. The
+  // right-to-left override and the zero-width space do not: they reorder or hide
+  // what is printed around them, and this fixture is what proves the browser and
+  // the agent remove the identical set. If either side keeps one, the hashes
+  // disagree here rather than in somebody's interview.
+  {
+    type: "MEDIA_PREFLIGHT_PASSED", source: "preflight", severity: "info",
+    at: "2026-08-18T06:39:52.400Z",
+    detail: `camera=FaceTime HD \u30AB\u30E1\u30E9 \u0645\u06CC\u200C\u0631 \u202Egnitautis\u200B (05AC:8514)`,
   },
   // The only input carrying sourceEventIds, so the conditional key in
   // `integrityEventPayload` (`if (event.sourceEventIds.length)`) and its mirror

@@ -12,11 +12,15 @@ import {
   createTranscriptView,
   feedbackMarkup,
   finalRunnerStatus,
+  chainSentence,
   reportMarkdown,
   reportMarkup,
   resultsMarkup,
   runnerStatusMarkup,
 } from "../../web/render.js";
+import { sanitizeReport } from "../../web/lib.js";
+
+const events = [{ type: "CAMERA_STOPPED", at: "00:01", severity: "high", source: "camera", detail: null, sourceEventIds: [] }];
 
 // --- smallest document that satisfies the view -----------------------------
 class StubElement {
@@ -660,4 +664,58 @@ test("markdown export handles an empty session", () => {
   assert.match(markdown, /^\(none\)$/m, "missing summary falls back");
   assert.match(markdown, /^\(editor was empty\)$/m);
   assert.match(markdown, /^\(no speech captured\)$/m);
+});
+
+test("the report says the event list is a subsequence, or says it cannot tell", () => {
+  // Retention makes the list a subsequence with holes, so a reader who is not
+  // told cannot distinguish "the agent dropped 380 for space" from "rows were
+  // deleted from the stored report". That distinction is what the chain is for.
+
+  const dropped = reportMarkup({ report: sanitizeReport({
+    decision: "HIRE", integrityEvents: events, integrityChainSeq: 412, integrityDropped: 380,
+  }), problemTitle: "Two Sum", language: "python", code: "" });
+  assert.match(dropped, /Chain verified through event 412/);
+  assert.match(dropped, /380 more were verified and not kept/);
+
+  const complete = reportMarkup({ report: sanitizeReport({
+    decision: "HIRE", integrityEvents: events, integrityChainSeq: 1, integrityDropped: 0,
+  }), problemTitle: "Two Sum", language: "python", code: "" });
+  assert.match(complete, /every event it verified is listed above/);
+
+  // A report with no checkpoint must not read as "nothing was dropped", which is
+  // the one answer it cannot support. Both shapes reach this: a report stored
+  // before the field existed carries nothing, and the agent sends an explicit
+  // null when the chain never advanced. `Number(null)` is 0, so the second one
+  // used to render as "verified through event 0, every event is listed above".
+  for (const absent of [{}, { integrityChainSeq: null, integrityDropped: null }]) {
+    const legacy = reportMarkup({
+      report: sanitizeReport({ decision: "HIRE", integrityEvents: events, ...absent }),
+      problemTitle: "Two Sum", language: "python", code: "",
+    });
+    assert.match(legacy, /predates chain reporting/, JSON.stringify(absent));
+    assert.doesNotMatch(legacy, /every event it verified is listed above/, JSON.stringify(absent));
+  }
+});
+
+test("the page and the exported markdown tell the same chain story", () => {
+  // They were two copies of the same three branches and already worded
+  // differently. The export is the copy that gets forwarded, so a reader
+  // comparing it against the page must not find a different claim.
+  const shapes = [
+    { integrityChainSeq: 412, integrityDropped: 380 },
+    { integrityChainSeq: 7, integrityDropped: 0 },
+    {},
+  ];
+  // Both list shapes. Nothing retained is not a rare case: it is what a report
+  // looks like when everything the chain verified was dropped for space, and it
+  // is the case where the page used to stay silent while the export spoke.
+  for (const [report, list] of shapes.flatMap((r) => [[r, events], [r, []]])) {
+    const sentence = chainSentence(sanitizeReport({ decision: "HIRE", ...report }));
+    const session = {
+      report: sanitizeReport({ decision: "HIRE", integrityEvents: list, ...report }),
+      problemTitle: "Two Sum", language: "python", code: "",
+    };
+    assert.ok(reportMarkup(session).includes(sentence), sentence);
+    assert.ok(reportMarkdown({ ...session, transcript: [] }).includes(sentence), sentence);
+  }
 });

@@ -20,7 +20,7 @@ pub use prompts::{
 use crate::config::{DEFAULT_DURATION_MIN, MAX_DURATION_MIN, MIN_DURATION_MIN};
 use crate::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
 
-const MAX_INTEGRITY_EVENTS: usize = 25;
+pub const MAX_INTEGRITY_EVENTS: usize = 25;
 /// The `detail` bound, and half of a wire contract: `INTEGRITY_DETAIL_MAX` in
 /// `web/lib.js` has to be the same number. The agent truncates to this before
 /// it recomputes the hash, so a producer emitting anything longer builds a hash
@@ -213,6 +213,27 @@ pub struct RuntimeState {
     pub test_runs: u32,
     pub hints_used: u32,
     pub integrity_events: Vec<serde_json::Value>,
+    /// The chain cursor, held apart from the evidence above.
+    ///
+    /// Verification is the producer's contract and eviction is this process's
+    /// housekeeping, and they used to share one vector. Dropping an event to
+    /// stay under `MAX_INTEGRITY_EVENTS` therefore moved the sequence the next
+    /// event had to match, so the chain died on the retention policy rather
+    /// than on anything the browser did.
+    pub integrity_chain: Option<(u64, String)>,
+    /// The ends of the heartbeat run, kept out of the evidence above.
+    ///
+    /// A heartbeat is the only periodic record of analyzer state, so it is not
+    /// disposable, but one arrives every five seconds and evidence does not.
+    /// Sharing one capped vector meant either heartbeats crowded the evidence
+    /// out or the eviction had to keep pushing them back out again. Two samples
+    /// say what the whole run said: what the devices and the analyzer looked
+    /// like when the interview started, and when it ended.
+    ///
+    /// Two fields rather than a pair, so that one heartbeat is one `Some` and
+    /// nobody has to ask whether the two ends are the same event.
+    pub integrity_first_heartbeat: Option<serde_json::Value>,
+    pub integrity_last_heartbeat: Option<serde_json::Value>,
     pub ended: bool,
 }
 
@@ -226,6 +247,9 @@ impl Default for RuntimeState {
             test_runs: 0,
             hints_used: 0,
             integrity_events: Vec::new(),
+            integrity_chain: None,
+            integrity_first_heartbeat: None,
+            integrity_last_heartbeat: None,
             ended: false,
         }
     }
@@ -627,18 +651,14 @@ fn apply_integrity(state: &mut RuntimeState, payload: &serde_json::Value) -> Dat
     };
     let seq = event.get("seq").and_then(serde_json::Value::as_u64);
     let prev_hash = event.get("prevHash").and_then(serde_json::Value::as_str);
-    let expected_seq = state
-        .integrity_events
-        .last()
-        .and_then(|event| event.get("seq"))
-        .and_then(serde_json::Value::as_u64)
-        .map_or(1, |seq| seq.saturating_add(1));
-    let expected_prev_hash = state
-        .integrity_events
-        .last()
-        .and_then(|event| event.get("hash"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
+    let (expected_seq, expected_prev_hash) = state
+        .integrity_chain
+        .as_ref()
+        .map_or((1, ""), |(seq, hash)| {
+            (seq.saturating_add(1), hash.as_str())
+        });
+
+    let computed_hash = integrity_hash(&event);
 
     // Named, because a rejection here is permanent. Sequence continuity is
     // required, so `expected_seq` never advances past a refused event and every
@@ -646,16 +666,17 @@ fn apply_integrity(state: &mut RuntimeState, payload: &serde_json::Value) -> Dat
     // to return the same silent default, and a hash mismatch caused by this
     // process normalizing `detail` before rehashing it emptied the evidence
     // section of every camera interview without a line anywhere saying so.
+    //
+    // Only tampering belongs here. A retention decision is handled below, after
+    // the cursor has moved, because punishing the producer for this process
+    // running out of room is how a full buffer used to end the chain.
     let refusal = if seq != Some(expected_seq) {
         Some(format!("sequence expected {expected_seq}, got {seq:?}"))
     } else if prev_hash != Some(expected_prev_hash) {
         Some("previous hash does not match the last accepted event".to_string())
-    } else if event.get("hash").and_then(serde_json::Value::as_str)
-        != Some(integrity_hash(&event).as_str())
+    } else if event.get("hash").and_then(serde_json::Value::as_str) != Some(computed_hash.as_str())
     {
         Some("hash mismatch; the producer and this verifier disagree".to_string())
-    } else if !valid_review_sources(state, &event) {
-        Some("review event references an event no longer retained".to_string())
     } else {
         None
     };
@@ -669,12 +690,53 @@ fn apply_integrity(state: &mut RuntimeState, payload: &serde_json::Value) -> Dat
         );
         return DataEventResult::default();
     }
+
+    // The chain is satisfied, so the cursor moves whatever happens to the event
+    // itself. Everything past this line is about what is worth keeping, and
+    // none of it can refuse the next event.
+    //
+    // Built from the values the checks above already proved equal, rather than
+    // re-read from the event. A conditional here would have a branch that
+    // silently leaves the cursor behind, which is the failure this separation
+    // exists to remove.
+    state.integrity_chain = Some((expected_seq, computed_hash));
+
+    // Liveness, not evidence, and now stored as such. Keeping only the ends of
+    // the run is what lets the evidence buffer be a plain queue again.
+    if is_heartbeat(&event) {
+        if state.integrity_first_heartbeat.is_none() {
+            state.integrity_first_heartbeat = Some(event);
+        } else {
+            state.integrity_last_heartbeat = Some(event);
+        }
+        return DataEventResult::default();
+    }
+
+    if !valid_review_sources(state, &event) {
+        eprintln!(
+            "WARNING: integrity event dropped from the evidence, chain continues: review event \
+             references an event no longer retained (seq={seq:?})"
+        );
+        return DataEventResult::default();
+    }
+
     state.integrity_events.push(event);
+
+    // Plain oldest-out, because nothing periodic lands here any more. This used
+    // to hold heartbeats too, and at one every five seconds they filled all 25
+    // slots in about two minutes: a camera that stopped at minute three was
+    // gone from a thirty minute report by minute five.
     if state.integrity_events.len() > MAX_INTEGRITY_EVENTS {
         let excess = state.integrity_events.len() - MAX_INTEGRITY_EVENTS;
         state.integrity_events.drain(0..excess);
     }
     DataEventResult::default()
+}
+
+/// Liveness rather than evidence, which is what sends it to its own field
+/// instead of competing for a slot in the buffer.
+fn is_heartbeat(event: &serde_json::Value) -> bool {
+    event.get("type").and_then(serde_json::Value::as_str) == Some("INTEGRITY_HEARTBEAT")
 }
 
 pub(crate) fn valid_review_sources(state: &RuntimeState, event: &serde_json::Value) -> bool {

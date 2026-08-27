@@ -15,6 +15,17 @@ re-vendored, or before relying on the mode for a real interview.
   participant on the receiving end.
 - Headphones on the candidate machine. Without them the candidate microphone
   re-captures Jim from the speakers, and the interviewer hears him twice.
+- No virtual camera selected as the system default. The preflight asks for
+  `video: true` with no device id, so Chrome opens whatever is default, and
+  nothing in the media path judges the device it gets. The label is recorded,
+  as the `detail` of the `MEDIA_PREFLIGHT_PASSED` integrity event, so a reader
+  can see which camera was opened; nothing blocks it. That name is not always
+  neutral: Continuity Camera reports `<FirstName>'s iPhone`, so the report, the
+  stored row and the exported markdown can carry a candidate's own name. The
+  preflight says so on the page. If blind review is ever a goal, this is the
+  line that ends it. A virtual camera can
+  therefore still satisfy the camera step with a composited feed CodeTrial
+  never captured. Untested: no results row below covers it.
 
 ## Procedure
 

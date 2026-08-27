@@ -146,6 +146,47 @@ pub fn sanitize_test_run(payload: &serde_json::Value) -> serde_json::Value {
     })
 }
 
+/// A day, in milliseconds. No interview runs that long, so this is a ceiling on
+/// a candidate-supplied number rather than a real duration.
+///
+/// Written as the number rather than 24 * 60 * 60 * 1000, which read well and
+/// cost six mutants: every operator in it is a separate thing the mutation gate
+/// has to prove a test notices, and none of them is a decision anyone will
+/// revisit.
+const MAX_DURATION_MS: i64 = 86_400_000;
+
+/// Characters that hide themselves or reorder what is printed around them.
+///
+/// Must match `INTEGRITY_DETAIL_STRIPPED` in `web/lib.js` code point for code
+/// point. Written out rather than derived, because the browser has `\p{Cf}` and
+/// std has no general-category lookup: expressing one intent two different ways
+/// is how the sides drift, and a character stripped there but kept here is a
+/// hash this verifier cannot reproduce.
+///
+/// Not paranoia about exotic text. A camera label is whatever the candidate
+/// named their device, and it is rendered into the interviewer's report, where
+/// `escapeHtml` handles markup and nothing handles a right-to-left override.
+fn hidden_or_reordering(character: char) -> bool {
+    character.is_control()
+        || matches!(character,
+            '\u{00AD}'
+
+            // U+061C is the Arabic letter mark, the third bidi mark beside
+            // U+200E and U+200F. Missing it left one of Unicode's twelve
+            // Bidi_Control code points able to reorder a report.
+            | '\u{061C}'
+
+            // U+200C and U+200D are left out on purpose: the zero-width
+            // non-joiner is orthographic in Persian and Urdu, the zero-width
+            // joiner builds Indic conjuncts, and neither reorders anything.
+            | '\u{200B}'
+            | '\u{200E}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}')
+}
+
 pub fn sanitize_integrity_event(payload: &serde_json::Value) -> Option<serde_json::Value> {
     let text = |key| {
         payload
@@ -215,13 +256,12 @@ pub fn sanitize_integrity_event(payload: &serde_json::Value) -> Option<serde_jso
         .get("durationMs")
         .and_then(json_int)
         .unwrap_or(0)
-        .clamp(0, 24 * 60 * 60 * 1000);
-    let detail = text("detail").filter(|value| {
-        value.chars().all(|char| {
-            char.is_ascii_alphanumeric()
-                || matches!(char, ' ' | '_' | '-' | '=' | '/' | ';' | ':' | ',' | '.')
-        })
-    });
+        .clamp(0, MAX_DURATION_MS);
+
+    // Browser device labels are localized, so every printable Unicode character
+    // is kept. What is refused is what the browser strips before hashing: the
+    // two must agree exactly or the hashes differ and the chain stops.
+    let detail = text("detail").filter(|value| !value.chars().any(hidden_or_reordering));
     let source_event_ids = payload
         .get("sourceEventIds")
         .and_then(serde_json::Value::as_array)

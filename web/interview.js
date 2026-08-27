@@ -1058,7 +1058,19 @@ async function connectLiveKit(connection, preflight, presenting = false) {
   updateAgentState();
   monitorIntegrityTracks();
   await publishIntegrityEvent({ type: "SESSION_START", source: "media", severity: "info" });
-  await publishIntegrityEvent({ type: "MEDIA_PREFLIGHT_PASSED", source: "preflight", severity: "info" });
+  // The camera is named, not judged. Nothing here can tell a virtual camera
+  // from a real one: `devices.js` asks for `video: true` with no device id, so
+  // Chrome opens whatever is default, and a virtual camera satisfies the face
+  // check with a composited feed this page never captured. Blocking on a list
+  // of vendor names would be a list to maintain and a way to lock out a working
+  // setup, so the label goes in the signed trail and a reader decides. Same
+  // rule as the test counts: safe to narrate, unsafe to score.
+  await publishIntegrityEvent({
+    type: "MEDIA_PREFLIGHT_PASSED",
+    source: "preflight",
+    severity: "info",
+    detail: `camera=${preflight.userStream?.getVideoTracks?.()[0]?.label || "none"}`,
+  });
   startIntegrityHeartbeat();
   // Keyed on what the candidate chose, not on whether a camera happens to be
   // in the stream. A camera that died between the preflight and here leaves an

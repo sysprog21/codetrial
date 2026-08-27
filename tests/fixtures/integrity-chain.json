@@ -79,13 +79,13 @@
     "severity": "warning",
     "source": "media",
     "durationMs": 0,
-    "detail": "face detection unavailable: Cannot read properties of undefined reading a",
+    "detail": "face detection unavailable: Cannot read properties of undefined (reading 'a')",
     "sourceEventIds": [],
-    "hash": "9421728e0ad0d1e5cb95d4a50f2c448b7f37954110d47a3d09e3f052b5c6e4a9"
+    "hash": "834040f7408ec077f540c5af5e8eedaff7c254ab266388ecd1d2709b4f20036b"
   },
   {
     "seq": 8,
-    "prevHash": "9421728e0ad0d1e5cb95d4a50f2c448b7f37954110d47a3d09e3f052b5c6e4a9",
+    "prevHash": "834040f7408ec077f540c5af5e8eedaff7c254ab266388ecd1d2709b4f20036b",
     "type": "INTEGRITY_HEARTBEAT",
     "at": "2026-08-18T06:39:44.702Z",
     "severity": "info",
@@ -93,11 +93,23 @@
     "durationMs": 0,
     "detail": "az AZ 09 _-=/;:,.",
     "sourceEventIds": [],
-    "hash": "25c8d8c3a25ace7c0963d9fdab1fe688c3999a3c4cc7bc8a7f463da5b1e87d1c"
+    "hash": "82ce6734eeb29a48d8b362c9a3cbe5b6f59178b85b96aad7f86dbb84aab77cd1"
   },
   {
     "seq": 9,
-    "prevHash": "25c8d8c3a25ace7c0963d9fdab1fe688c3999a3c4cc7bc8a7f463da5b1e87d1c",
+    "prevHash": "82ce6734eeb29a48d8b362c9a3cbe5b6f59178b85b96aad7f86dbb84aab77cd1",
+    "type": "MEDIA_PREFLIGHT_PASSED",
+    "at": "2026-08-18T06:39:52.400Z",
+    "severity": "info",
+    "source": "preflight",
+    "durationMs": 0,
+    "detail": "camera=FaceTime HD カメラ می‌ر gnitautis (05AC:8514)",
+    "sourceEventIds": [],
+    "hash": "177213497b39eb1584e86b70c09ff614eb531ddf44622adfecb1d605bd949b18"
+  },
+  {
+    "seq": 10,
+    "prevHash": "177213497b39eb1584e86b70c09ff614eb531ddf44622adfecb1d605bd949b18",
     "type": "MULTIPLE_FACES",
     "at": "2026-08-18T06:40:11.006Z",
     "severity": "critical",
@@ -110,6 +122,6 @@
       "333333333333",
       "444444444444"
     ],
-    "hash": "55d40f02aba778f0753ecf2bcd43f7f5c011c66a0f511cd0305f06d5b395d304"
+    "hash": "e7d0832bf0943d5f5ccf2244480e184237f4362b9397b0bd0b027ad82abe5614"
   }
 ]
