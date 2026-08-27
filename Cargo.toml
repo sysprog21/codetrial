@@ -13,6 +13,7 @@ livekit = "0.8.3"
 ring = "0.17"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+rust-embed = { version = "8", features = ["include-exclude"] }
 serde_json = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "sync", "time"] }
@@ -52,3 +53,23 @@ overflow-checks = false
 opt-level = 2
 debug-assertions = false
 overflow-checks = false
+
+# Exempted from the two overrides above, which are about codec speed and have
+# nothing to say about a crate that only reads files. `rust-embed` splits on
+# `debug_assertions` to decide whether assets live in `.rodata` or are read from
+# disk, and it splits twice: once in the derived code, which sees this crate's
+# setting, and once in the library, which sees its own. Turning it off for
+# dependencies alone makes the two disagree, and the build fails on a
+# `Filenames::Dynamic` the library compiled away.
+#
+# Forcing agreement here rather than with the `debug-embed` feature, which is
+# the other way to make both sides pick the same branch. That way costs 38 MB of
+# `__const` in every one of the eleven test binaries, measured, and again on
+# every cargo-mutants rebuild, which is the exact link time the profile settings
+# above exist to buy back. Release builds embed either way: `debug_assertions`
+# is off there, and no feature is involved.
+[profile.dev.package.rust-embed]
+debug-assertions = true
+
+[profile.test.package.rust-embed]
+debug-assertions = true

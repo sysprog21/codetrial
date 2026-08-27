@@ -1,0 +1,9 @@
+# The Windows release runner runs `scripts/fetch-vendor.sh` under Git Bash. A
+# CRLF checkout turns the shebang into `/bin/sh\r` and, past that, leaves a
+# carriage return on every name the FETCH manifest loop reads, so the SHA256SUMS
+# lookup matches nothing.
+*.sh text eol=lf
+
+# Vendored bytes are hashed. Any end-of-line rewriting changes them and
+# scripts/verify-vendor.sh is right to fail, so keep git out of them entirely.
+web/vendor/** -text

@@ -46,7 +46,9 @@ pub fn verify_hs256(secret: &str, value: &str, signature: &str) -> bool {
 
 pub const TOKEN_TTL_SECONDS: u64 = 2 * 60 * 60;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// No `Debug`: `api_secret` is the key every token in this file is signed
+/// with, so printing one instance of this leaks more than any single token.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct LivekitTokenInput<'a> {
     pub api_key: &'a str,
     pub api_secret: &'a str,

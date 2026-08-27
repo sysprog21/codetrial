@@ -15,6 +15,14 @@
 # need a live API key and would fail on a machine without one. What this mode
 # actually proves is checked by running it, which is why `make check` does.
 #
+# `web_router` is a different case: its mutants die immediately rather than
+# surviving. Replacing the constructor with an empty router answers 404 for
+# every route, so whichever web test runs first catches it. It is here because
+# the gate rebuilds and relinks a crate that statically links libwebrtc once
+# per mutant, and this is the most expensive one in the tree to learn nothing
+# from. It appears whenever a single line inside that hundred-line constructor
+# changes.
+#
 # Keep this list short and each entry justified. An entry that is really "we
 # never got around to testing this" belongs in a test, not here.
-exclude_re = ["run_room", "run_gemini_check"]
+exclude_re = ["run_room", "run_gemini_check", "replace web_router"]

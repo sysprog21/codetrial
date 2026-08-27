@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
@@ -34,7 +35,7 @@ pub(crate) use {
 // The whole of this module's public surface, named rather than left to fall out
 // of whichever items happen to carry `pub`. A glob would re-export a future
 // `pub fn` here silently; this way adding one is a deliberate line.
-pub use assets::static_file;
+pub use assets::static_file_meta;
 pub use auth::login_config;
 use pool::{ProviderQuota, QuotaRefresher, spawn_provider_quota_refresher};
 pub use token::{TOKEN_RATE_LIMIT, TokenConfig, TokenResponse, token_response};
@@ -51,7 +52,7 @@ pub const MAX_REPORT_BYTES: usize = 64 * 1024;
 /// retried forever rather than applied.
 pub const MAX_WEBHOOK_BODY_BYTES: usize = 64 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct WebServerConfig {
     pub web_dir: PathBuf,
     pub github_client_id: Option<String>,
@@ -91,11 +92,77 @@ pub struct WebServerConfig {
     pub probe_provider_quota: bool,
 }
 
+/// Redacting by hand, because the derive printed `session_secret` and
+/// `github_client_secret` in full. `Provider` and `RecordingConfig` already
+/// redact for exactly this reason, and their comments name this struct as the
+/// thing whose `Debug` they are defending against: the two fields it holds
+/// itself were the ones nobody checked.
+///
+/// `session_secret` is the sharper of the two. It signs the session cookie, so
+/// a copy in a log is not a credential to steal but the ability to mint any
+/// user's session.
+///
+/// Destructured rather than read through `self`, and written as a full field
+/// list rather than a `finish_non_exhaustive`. A `debug_struct` call chain
+/// compiles happily whatever it omits, so a field added later would silently
+/// stop being printed; the binding below fails to compile until someone decides
+/// in this function whether the new field is a secret.
+impl fmt::Debug for WebServerConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            web_dir,
+            github_client_id,
+            github_client_secret,
+            session_secret,
+            db_path,
+            github_oauth_base_url,
+            github_api_base_url,
+            room_prefix,
+            fixed_room_name,
+            production,
+            compiler_explorer_enabled,
+            trusted_proxy_hops,
+            recording,
+            pool,
+            probe_provider_quota,
+        } = self;
+        formatter
+            .debug_struct("WebServerConfig")
+            .field("web_dir", web_dir)
+            .field("github_client_id", github_client_id)
+            .field(
+                "github_client_secret",
+                &github_client_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "session_secret",
+                &session_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field("db_path", db_path)
+            .field("github_oauth_base_url", github_oauth_base_url)
+            .field("github_api_base_url", github_api_base_url)
+            .field("room_prefix", room_prefix)
+            .field("fixed_room_name", fixed_room_name)
+            .field("production", production)
+            .field("compiler_explorer_enabled", compiler_explorer_enabled)
+            .field("trusted_proxy_hops", trusted_proxy_hops)
+            .field("recording", recording)
+            .field("pool", pool)
+            .field("probe_provider_quota", probe_provider_quota)
+            .finish()
+    }
+}
+
 /// Cloned per request by axum, so the config sits behind an `Arc`: otherwise
 /// every asset fetch deep-copies the LiveKit secret and the web root path.
 #[derive(Clone)]
 pub(crate) struct AppState {
     config: Arc<WebServerConfig>,
+    /// Resolved once here rather than per request. `config.web_dir` is a
+    /// relative default, so the shipped binary usually has no such directory
+    /// and every asset would otherwise pay a blocking-pool `stat` that cannot
+    /// succeed before the embedded store is consulted.
+    web_dir_exists: bool,
     /// `None` when this server has no cookie secret and no database, and also
     /// when it has both but the database would not open. Those are different
     /// problems, so `accounts_required` separates them.
@@ -292,6 +359,7 @@ pub(crate) fn web_router(
             )
         })
         .with_state(AppState {
+            web_dir_exists: config.web_dir.is_dir(),
             config: Arc::new(config),
             accounts,
             accounts_required,
