@@ -35,7 +35,7 @@ pub(crate) use {
 // The whole of this module's public surface, named rather than left to fall out
 // of whichever items happen to carry `pub`. A glob would re-export a future
 // `pub fn` here silently; this way adding one is a deliberate line.
-pub use assets::static_file;
+pub use assets::static_file_meta;
 pub use auth::login_config;
 use pool::{ProviderQuota, QuotaRefresher, spawn_provider_quota_refresher};
 pub use token::{TOKEN_RATE_LIMIT, TokenConfig, TokenResponse, token_response};
@@ -158,6 +158,11 @@ impl fmt::Debug for WebServerConfig {
 #[derive(Clone)]
 pub(crate) struct AppState {
     config: Arc<WebServerConfig>,
+    /// Resolved once here rather than per request. `config.web_dir` is a
+    /// relative default, so the shipped binary usually has no such directory
+    /// and every asset would otherwise pay a blocking-pool `stat` that cannot
+    /// succeed before the embedded store is consulted.
+    web_dir_exists: bool,
     /// `None` when this server has no cookie secret and no database, and also
     /// when it has both but the database would not open. Those are different
     /// problems, so `accounts_required` separates them.
@@ -354,6 +359,7 @@ pub(crate) fn web_router(
             )
         })
         .with_state(AppState {
+            web_dir_exists: config.web_dir.is_dir(),
             config: Arc::new(config),
             accounts,
             accounts_required,

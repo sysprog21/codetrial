@@ -23,7 +23,7 @@ use codetrial::token::{
 };
 use codetrial::web::{
     MAX_BODY_BYTES, MAX_REPORT_BYTES, RoomDispatcher, TOKEN_RATE_LIMIT, TokenConfig,
-    WebServerConfig, initialize_account_database, login_config, static_file, token_response,
+    WebServerConfig, initialize_account_database, login_config, static_file_meta, token_response,
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -393,15 +393,21 @@ async fn production_policy_names_no_loopback_origins() {
     server.abort();
 }
 
+/// The resolved path alone. The resolver hands back the matched key and the
+/// metadata beside it, and these tests care about neither.
+async fn resolved(root: &Path, path: &str) -> Option<std::path::PathBuf> {
+    static_file_meta(root, path).await.map(|(_, path, _)| path)
+}
+
 #[tokio::test]
 async fn static_file_rejects_traversal_and_dotfiles() {
     assert!(
-        static_file(Path::new("src/web"), "/../agent/.env")
+        resolved(Path::new("src/web"), "/../agent/.env")
             .await
             .is_none()
     );
     assert!(
-        static_file(Path::new("src/web"), "/.env.local")
+        resolved(Path::new("src/web"), "/.env.local")
             .await
             .is_none()
     );
@@ -414,17 +420,143 @@ async fn static_file_falls_back_to_index_for_web_routes() {
     fs::write(root.join("index.html"), "").unwrap();
 
     assert_eq!(
-        static_file(&root, "/interview").await,
+        resolved(&root, "/interview").await,
         Some(root.join("index.html"))
     );
 
     fs::remove_dir_all(root).unwrap();
 }
 
+/// A path no directory occupies, so the handler has nothing on disk to find.
+fn absent_web_dir(label: &str) -> std::path::PathBuf {
+    unique_temp_path(label, "")
+}
+
+/// Process id and nanoseconds, so two tests in one binary and two binaries in
+/// one suite cannot collide on it.
+fn unique_temp_path(label: &str, suffix: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "codetrial-{label}-{}-{}{suffix}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ))
+}
+
+/// The shipped binary has no `web/` beside it, so every asset a released
+/// install serves takes this path. A 200 on `/` only proves resolution; what
+/// the assertions below are for is the caching, which is the whole reason the
+/// disk path grew a validator and a separate vendor policy. Serving 37 MB of
+/// pinned wasm as `no-cache` with nothing to revalidate against would re-send
+/// the tree on every navigation, and no status code would say so.
+#[tokio::test]
+async fn embedded_web_assets_serve_without_a_web_directory() {
+    let mut config = web_config();
+    config.web_dir = absent_web_dir("no-web");
+    let (base, server) = spawn_web_server(config).await;
+
+    let response = reqwest::get(&base).await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "text/html; charset=utf-8"
+    );
+
+    // `no-cache` revalidates, which is only affordable because the ETag below
+    // turns the revalidation into a 304 rather than a resend.
+    assert_eq!(response.headers().get("cache-control").unwrap(), "no-cache");
+    assert!(response.headers().get("etag").is_some());
+    assert!(response.text().await.unwrap().contains("CodeTrial"));
+
+    // Committed rather than fetched by `scripts/fetch-vendor.sh`, so the
+    // assertion does not depend on whether the fetch has run here.
+    let vendor = format!("{base}/vendor/avatar/three-vrm.js");
+    let response = reqwest::get(&vendor).await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.headers().get("cache-control").unwrap(),
+        "public, max-age=86400"
+    );
+    let etag = response.headers().get("etag").unwrap().clone();
+
+    let client = reqwest::Client::new();
+    let revalidated = client
+        .get(&vendor)
+        .header("if-none-match", etag.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revalidated.status(), 304);
+
+    // A 304 replaces the stored headers, so dropping either of these downgrades
+    // the copy the browser already holds.
+    assert_eq!(
+        revalidated.headers().get("cache-control").unwrap(),
+        "public, max-age=86400"
+    );
+    assert_eq!(revalidated.headers().get("etag").unwrap(), &etag);
+
+    // Answered from the embedded length, never by reading out a body.
+    let head = client.head(&vendor).send().await.unwrap();
+    assert_eq!(head.status(), 200);
+    assert!(head.headers().get("content-length").is_some());
+    assert!(head.bytes().await.unwrap().is_empty());
+
+    for route in ["/interview", "/interview/"] {
+        let response = reqwest::get(&format!("{base}{route}")).await.unwrap();
+        assert_eq!(response.status(), 200, "{route}");
+        assert!(response.text().await.unwrap().contains("CodeTrial"));
+    }
+
+    // No separator or traversal spellings here. `url` collapses `..` before the
+    // request leaves the client, and a debug build resolves the embed through
+    // the filesystem, where the kernel collapses repeated separators whatever
+    // the resolver does. Both would pass with the rules deleted.
+    // `normalization_cannot_launder_a_refused_path` owns those cases against
+    // the rule itself, and the release smoke step owns them against a binary
+    // that really does match keys exactly.
+    let response = reqwest::get(&format!("{base}/.git/config")).await.unwrap();
+    assert_ne!(response.status(), 200);
+
+    server.abort();
+}
+
+/// The fallback is per file, not per tree. Gating it on whether the web root
+/// exists at all meant that anyone running the binary from a directory that
+/// merely happens to contain a `web/` got a 404 for assets the executable was
+/// carrying, which is the common shape: a checkout where `fetch-vendor.sh`
+/// never ran.
+#[tokio::test]
+async fn embedded_assets_fill_gaps_in_a_partial_web_directory() {
+    let root = absent_web_dir("partial-web");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("index.html"), "<!doctype html>disk wins").unwrap();
+
+    let mut config = web_config();
+    config.web_dir = root.clone();
+    let (base, server) = spawn_web_server(config).await;
+
+    // Present on disk, so disk answers even though the embed also has it.
+    let response = reqwest::get(&base).await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.text().await.unwrap(), "<!doctype html>disk wins");
+
+    // Absent from this tree, so the embedded copy fills the gap.
+    let response = reqwest::get(&format!("{base}/vendor/avatar/three-vrm.js"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    server.abort();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// A 200 here proves the file resolved, so there is no separate resolve-only
 /// test restating the same names. These two headers are what decide whether the
 /// detector loads at all and how long a stale copy survives an upgrade, and
-/// neither is visible from `static_file`.
+/// neither is visible from the resolver.
 #[tokio::test]
 async fn vendored_assets_are_served_typed_and_cached() {
     let mut config = web_config();
@@ -3044,14 +3176,7 @@ fn remove_database(path: impl AsRef<std::path::Path>) {
 }
 
 fn account_db_path(label: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!(
-        "codetrial-{label}-{}-{}.db",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ))
+    unique_temp_path(label, ".db")
 }
 
 /// A server with accounts enabled and nobody signed in yet, which is where
@@ -5927,4 +6052,64 @@ fn web_server_config_debug_redacts_its_own_secrets() {
         printed.contains("public-client-id"),
         "the client id is public and should stay readable: {printed}"
     );
+}
+
+/// The two stores must answer the same URL the same way.
+///
+/// What this catches is a re-split: both stores now resolve through one
+/// candidate list, and if somebody gives either of them its own rules again,
+/// this fails. Verified by doing exactly that, not assumed.
+///
+/// What it cannot catch is a wrong rule, because a shared mistake stays
+/// symmetric and parity still holds. Behavior of the rules themselves belongs
+/// in the per-store tests above; this one owns the contract between them.
+///
+/// Status, content type, and cache policy only. ETags are deliberately
+/// different: the disk side is a modification-time heuristic and the embedded
+/// side is a digest of bytes that cannot change without a rebuild.
+#[tokio::test]
+async fn disk_and_embedded_stores_resolve_urls_identically() {
+    let mut disk = web_config();
+    disk.web_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("web");
+    let (disk_base, disk_server) = spawn_web_server(disk).await;
+
+    let mut embedded = web_config();
+    embedded.web_dir = absent_web_dir("resolver-parity");
+    let (embedded_base, embedded_server) = spawn_web_server(embedded).await;
+
+    for route in [
+        "/",
+        "/interview",
+        "/interview/",
+        "/index.html",
+        "/vendor/avatar/three-vrm.js",
+        "/vendor/avatar/three-vrm.js/",
+        "/missing.js",
+        "/missing/deeper.css",
+        "/.git/config",
+        "/vendor/.hidden",
+    ] {
+        let from_disk = reqwest::get(&format!("{disk_base}{route}")).await.unwrap();
+        let from_embed = reqwest::get(&format!("{embedded_base}{route}"))
+            .await
+            .unwrap();
+        assert_eq!(
+            from_disk.status(),
+            from_embed.status(),
+            "status differs for {route}"
+        );
+        assert_eq!(
+            from_disk.headers().get("content-type"),
+            from_embed.headers().get("content-type"),
+            "content type differs for {route}"
+        );
+        assert_eq!(
+            from_disk.headers().get("cache-control"),
+            from_embed.headers().get("cache-control"),
+            "cache policy differs for {route}"
+        );
+    }
+
+    disk_server.abort();
+    embedded_server.abort();
 }
