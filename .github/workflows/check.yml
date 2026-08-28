@@ -475,7 +475,7 @@ jobs:
       # at all, and MSVC hands the flag to `link.exe`, which dies with LNK1117.
       # Release builds happen once per push rather than once per mutant, so the
       # linker that is present everywhere is the right trade.
-      RUSTFLAGS: ''
+      RUSTFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-C target-feature=+crt-static' || '' }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
