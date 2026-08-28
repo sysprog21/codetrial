@@ -156,6 +156,9 @@ fn run_web(options: CliOptions) -> Result<(), String> {
                 .to_string(),
         );
     }
+    for warning in relaxed_for_local_use(&values) {
+        eprintln!("{warning}");
+    }
     let listener = bind_web_listener(&values)?;
 
     // Built straight from the values rather than through `load_from_pairs`:
@@ -738,6 +741,42 @@ fn trusted_proxy_hops(values: &BTreeMap<String, String>) -> u32 {
         .unwrap_or(0)
 }
 
+/// What a `codetrial web` start without `NODE_ENV=production` is allowing, in
+/// the operator's words rather than the code's.
+///
+/// Every guard this reports on is keyed on `NODE_ENV`, so the one mistake none
+/// of them can catch is the deployment that sets every credential correctly and
+/// never sets `NODE_ENV` at all. The refusal in `run_web` fires only once the
+/// operator has already said this is production; a server that was meant to be
+/// production and does not say so gets the local defaults and no complaint.
+/// This is the only signal it ever gets.
+///
+/// `config::is_production` matches the exact string, so a `NODE_ENV=Production`
+/// typo lands here too, which is the other way a deployment ends up local
+/// without meaning to.
+///
+/// `run_serve` does not call this. That mode refuses `NODE_ENV=production`
+/// outright, so it is local by definition and has nothing to warn about.
+fn relaxed_for_local_use(values: &BTreeMap<String, String>) -> Vec<String> {
+    if is_production(values) {
+        return Vec::new();
+    }
+
+    let mut warnings = vec![
+        "NODE_ENV is not production: the page's CSP allows loopback origins and a \
+         plaintext ws:// LiveKit URL is accepted. Set NODE_ENV=production to deploy."
+            .to_string(),
+    ];
+    if nonempty(values, "SESSION_SECRET").is_none() {
+        warnings.push(format!(
+            "SESSION_SECRET is unset: signing session cookies with the built-in \
+                 {DEFAULT_SESSION_SECRET:?}, which is published in this repository and lets \
+                 anyone forge a session."
+        ));
+    }
+    warnings
+}
+
 fn compiler_explorer_enabled(values: &BTreeMap<String, String>) -> bool {
     codetrial::config::compiler_explorer_enabled(
         values
@@ -771,6 +810,86 @@ fn account_db_path(values: &BTreeMap<String, String>) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+
+    fn values(pairs: &[(&str, &str)]) -> super::BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    /// The deployment this whole warning exists for: every credential set, and
+    /// `NODE_ENV` forgotten. Nothing else in the startup path says a word about
+    /// it, so if this stops firing the misconfiguration goes back to silent.
+    #[test]
+    fn a_start_without_node_env_says_what_it_relaxed() {
+        let warnings = super::relaxed_for_local_use(&values(&[
+            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+            ("GITHUB_CLIENT_ID", "id"),
+        ]));
+
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(
+            warnings[0].contains("NODE_ENV is not production"),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[1].contains("SESSION_SECRET is unset"),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[1].contains(super::DEFAULT_SESSION_SECRET),
+            "the warning has to name the published value, or an operator cannot \
+             tell which key is in use: {warnings:?}"
+        );
+    }
+
+    /// A set secret drops that half and keeps the other. The relaxed CSP and
+    /// the plaintext LiveKit URL do not depend on the secret, so a local run
+    /// that sets one is still a local run.
+    #[test]
+    fn a_set_secret_leaves_only_the_mode_warning() {
+        let warnings =
+            super::relaxed_for_local_use(&values(&[("SESSION_SECRET", "a-real-secret")]));
+
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("NODE_ENV is not production"),
+            "{warnings:?}"
+        );
+    }
+
+    /// `is_production` matches the exact string, so a capitalized value is not
+    /// production and the server really is running local defaults. Warning is
+    /// the correct answer, and it is the only thing that catches the typo.
+    #[test]
+    fn a_misspelled_node_env_is_not_production_and_says_so() {
+        let warnings = super::relaxed_for_local_use(&values(&[
+            ("NODE_ENV", "Production"),
+            ("SESSION_SECRET", "a-real-secret"),
+        ]));
+
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("NODE_ENV is not production"),
+            "{warnings:?}"
+        );
+    }
+
+    /// Production is the configured case and says nothing. A warning on every
+    /// deployed start is a warning operators learn to scroll past, which is how
+    /// the one above stops working.
+    #[test]
+    fn production_warns_about_nothing() {
+        assert!(super::relaxed_for_local_use(&values(&[("NODE_ENV", "production")])).is_empty());
+        assert!(
+            super::relaxed_for_local_use(&values(&[
+                ("NODE_ENV", "production"),
+                ("SESSION_SECRET", "a-real-secret"),
+            ]))
+            .is_empty()
+        );
+    }
 
     /// The capacity slot is released by dropping, so an interview that panics
     /// gives its slot back like one that ends. Sixteen leaked slots would
