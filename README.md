@@ -48,7 +48,7 @@ license are recorded in that notice.
 
 | Phase | Required | Notes |
 |---|---|---|
-| Build time | Rust stable, `curl` or `wget`, and `shasum` | Cargo resolves application crates from `Cargo.lock`. `make build` fetches the checksum-pinned browser assets on the first build. |
+| Build time | Rust stable, `curl` or `wget`, and `sha256sum` or `shasum` | Cargo resolves application crates from `Cargo.lock`. `make build` fetches the checksum-pinned browser assets on the first build. |
 | Test time | Build-time tools, Node.js 18+, and Python 3 | Node runs browser and fixture checks; Python verifies generated problem-bank files. `npm ci` adds ESLint and Playwright for the full local browser gate. |
 | Runtime | The compiled `codetrial` binary and its `web/` assets | No Node.js, Python, or `node_modules` is required. Rust dependencies are compiled into the binary; browser dependencies are vendored and checksum-pinned. |
 

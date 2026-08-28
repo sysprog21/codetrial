@@ -25,9 +25,19 @@ download() {
   fi
 }
 
-sha256() {
-  shasum -a 256 "$1" | cut -d' ' -f1
-}
+# macOS ships shasum but not sha256sum; most Linux distros ship the reverse.
+# Bind one at startup rather than probing per file: a machine with neither
+# should say so before the first download, not hash an empty string afterwards
+# and blame the mirror. sha256sum is tried first because shasum is a Perl
+# script, so it is the slower of the two when both are present.
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256() { sha256sum "$1" | cut -d' ' -f1; }
+elif command -v shasum >/dev/null 2>&1; then
+  sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
+else
+  echo "fetch-vendor: need sha256sum or shasum" >&2
+  exit 1
+fi
 
 # An interrupted download leaves a `.part` file behind, and verify-vendor
 # rejects any file in the tree SHA256SUMS does not pin, so it would fail the
@@ -35,6 +45,8 @@ sha256() {
 # sweeping the directory would delete the in-flight temp of a concurrent run,
 # which is the race the per-process name below exists to avoid.
 tmp=
+# Invoked by the `trap` below, which shellcheck does not read as a call site.
+# shellcheck disable=SC2329
 cleanup() {
   [ -z "$tmp" ] || rm -f "$tmp"
 }
