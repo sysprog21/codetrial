@@ -44,13 +44,15 @@ fi
 # gate until someone deleted it by hand. Only this run's own temp is removed:
 # sweeping the directory would delete the in-flight temp of a concurrent run,
 # which is the race the per-process name below exists to avoid.
+#
+# Inline rather than a `cleanup` function the way the other scripts here write
+# it. A function only the trap calls looks unreachable to shellcheck, and the
+# two versions in play disagree about what to call that: 0.9.0, which is what
+# the CI runner has, reports SC2317 on the body, while 0.11.0 reports SC2329 on
+# the declaration. Suppressing both spellings is a note that goes stale on the
+# next release. Having no function to misread does not.
 tmp=
-# Invoked by the `trap` below, which shellcheck does not read as a call site.
-# shellcheck disable=SC2329
-cleanup() {
-  [ -z "$tmp" ] || rm -f "$tmp"
-}
-trap cleanup EXIT INT TERM HUP
+trap '[ -z "$tmp" ] || rm -f "$tmp"' EXIT INT TERM HUP
 
 fetch_manifest() {
   manifest=$1
