@@ -25,20 +25,34 @@ download() {
   fi
 }
 
-sha256() {
-  shasum -a 256 "$1" | cut -d' ' -f1
-}
+# macOS ships shasum but not sha256sum; most Linux distros ship the reverse.
+# Bind one at startup rather than probing per file: a machine with neither
+# should say so before the first download, not hash an empty string afterwards
+# and blame the mirror. sha256sum is tried first because shasum is a Perl
+# script, so it is the slower of the two when both are present.
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256() { sha256sum "$1" | cut -d' ' -f1; }
+elif command -v shasum >/dev/null 2>&1; then
+  sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
+else
+  echo "fetch-vendor: need sha256sum or shasum" >&2
+  exit 1
+fi
 
 # An interrupted download leaves a `.part` file behind, and verify-vendor
 # rejects any file in the tree SHA256SUMS does not pin, so it would fail the
 # gate until someone deleted it by hand. Only this run's own temp is removed:
 # sweeping the directory would delete the in-flight temp of a concurrent run,
 # which is the race the per-process name below exists to avoid.
+#
+# Inline rather than a `cleanup` function the way the other scripts here write
+# it. A function only the trap calls looks unreachable to shellcheck, and the
+# two versions in play disagree about what to call that: 0.9.0, which is what
+# the CI runner has, reports SC2317 on the body, while 0.11.0 reports SC2329 on
+# the declaration. Suppressing both spellings is a note that goes stale on the
+# next release. Having no function to misread does not.
 tmp=
-cleanup() {
-  [ -z "$tmp" ] || rm -f "$tmp"
-}
-trap cleanup EXIT INT TERM HUP
+trap '[ -z "$tmp" ] || rm -f "$tmp"' EXIT INT TERM HUP
 
 fetch_manifest() {
   manifest=$1

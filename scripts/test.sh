@@ -77,11 +77,25 @@ cargo_audit_gate() {
   cargo audit --file "$ROOT/Cargo.lock"
 }
 
+# `sh -n` says whether a script parses. shellcheck says whether it means what it
+# reads like, which matters here because these scripts include the supply-chain
+# gate. Repo-wide false positives are answered once in `.shellcheckrc`; the few
+# local ones carry a directive naming why, beside the code it is about.
+#
+# Optional the way cargo-audit is: CI installs it, and a contributor without it
+# gets a note rather than a failure they cannot act on.
 shell_syntax() {
   status=0
   for script in "$ROOT"/scripts/*.sh; do
     sh -n "$script" || status=1
   done
+
+  if command -v shellcheck >/dev/null 2>&1; then
+    (cd "$ROOT" && shellcheck scripts/*.sh) || status=1
+  else
+    echo "skipping shellcheck: install it to enable the rest of this gate locally" >&2
+  fi
+
   return "$status"
 }
 

@@ -1,3 +1,6 @@
+# Sourced, so no shebang: the dialect is stated for shellcheck instead.
+# shellcheck shell=sh
+
 # Sourced by the check scripts. Signs a candidate in through the same door the
 # browser uses, so no check needs sqlite3, the cookie secret, or its own copy of
 # the signing scheme, and every one of them works against a server it did not

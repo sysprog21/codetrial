@@ -94,8 +94,11 @@ jobs:
             "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}"
           df -h /
 
+      # shellcheck rides along on an apt call this job already makes. The runner
+      # image ships it today, but the shell gate skips itself when it is absent,
+      # and a gate that stops running quietly is the thing it guards against.
       - name: Install native build dependency
-        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev mold
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev mold shellcheck
 
       # The runner image ships a stable toolchain, but not necessarily one new
       # enough for edition 2024, and clippy and rustfmt are gates rather than
