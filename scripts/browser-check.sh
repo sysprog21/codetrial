@@ -166,6 +166,11 @@ if [ -z "$SESSION_COOKIE" ]; then
   SESSION_COOKIE=$(login_session_cookie "$BASE_URL" browser-check) || exit 2
 fi
 
+# `ROOT="$ROOT"` reads to shellcheck as a self-assignment whose value the
+# argument below will not see. Right about the mechanism, wrong about the
+# intent: the argument wants this shell's ROOT, and the prefix exists to hand
+# node the same value. Nothing here wants the forked one.
+# shellcheck disable=SC2097,SC2098
 BASE_URL="$BASE_URL" \
   BROWSER_CHECK_AGENT="$BROWSER_CHECK_AGENT" \
   BROWSER_CHECK_FLOW="$BROWSER_CHECK_FLOW" \

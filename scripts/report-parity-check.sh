@@ -32,6 +32,10 @@ run_capture() {
   output=$1
   attempt=1
   while [ "$attempt" -le 2 ]; do
+
+    # The `${...}` inside the single quotes is a JavaScript template literal
+    # that node expands, not a shell expansion this script wants back.
+    # shellcheck disable=SC2016
     if BROWSER_CHECK_AGENT=rust BROWSER_CHECK_FLOW=report BROWSER_CHECK_CAPTURE="$output" "$ROOT/scripts/browser-check.sh" &&
       CAPTURE="$output" node -e 'const c=JSON.parse(require("fs").readFileSync(process.env.CAPTURE,"utf8")); if (c.report?.error === true) { console.error(`rust report fallback: ${String(c.report.summary || "").slice(0, 240)}`); process.exit(1); }'; then
       return 0

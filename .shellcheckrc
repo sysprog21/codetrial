@@ -1,0 +1,14 @@
+# Two false positives that every script here would otherwise carry a directive
+# for. Both are about idioms this tree uses deliberately, so they are answered
+# once rather than eleven times.
+
+# `ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)` is how a script finds
+# the repo root without CDPATH making `cd` echo its destination. shellcheck
+# reads the space in `CDPATH= cd` as a typo for `CDPATH=cd`. It is not one:
+# dropping the space would run a command named `cd` with CDPATH set to "cd".
+disable=SC1007
+
+# Scripts source the operator's config file, whose path is a variable by
+# design. There is no literal for shellcheck to follow, and inventing one would
+# make the gate check a file no deployment uses.
+disable=SC1090

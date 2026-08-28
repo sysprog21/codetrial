@@ -122,7 +122,7 @@ case "${CODETRIAL_RECORDING_ROOM_SECONDS:-60}" in
     exit 2
     ;;
 esac
-export CODETRIAL_RECORDING_TIMEOUT_SECONDS=$timeout_seconds
+export CODETRIAL_RECORDING_TIMEOUT_SECONDS="$timeout_seconds"
 room_seconds=${CODETRIAL_RECORDING_ROOM_SECONDS:-60}
 acceptance=${CODETRIAL_RECORDING_ACCEPTANCE_JSON:-$ROOT/target/recording-acceptance.json}
 template_origin=${CODETRIAL_RECORDING_TEMPLATE_BASE_URL%/}
