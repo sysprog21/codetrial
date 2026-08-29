@@ -432,6 +432,76 @@ fn binary_web_refuses_a_public_listener_without_a_session_secret() {
     );
 }
 
+/// The built-in `SESSION_SECRET` is not a weak key, it is a published one, so a
+/// production start on it has to refuse rather than mint forgeable cookies.
+///
+/// `serve` carried the only integration test that ever set
+/// `NODE_ENV=production`, and deleting that mode took the coverage with it:
+/// this guard sits in `run_web` and is reachable only by starting the binary.
+/// The address guard below is a different path and does not stand in for it.
+#[test]
+fn binary_web_refuses_production_without_a_session_secret() {
+    let dir = temp_path("web-production-secret");
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("production.env");
+    std::fs::write(
+        &config,
+        "LIVEKIT_URL=wss://example\nLIVEKIT_API_KEY=key\nLIVEKIT_API_SECRET=secret\nGOOGLE_API_KEY=google\nNODE_ENV=production\n",
+    )
+    .unwrap();
+
+    // No free-port dance: the refusal comes before the bind, so no listener is
+    // ever created and there is no port to race for.
+    let (code, stdout, stderr) = run_cli_args(&[
+        "web",
+        "--web-addr",
+        "127.0.0.1:0",
+        "--config",
+        config.to_str().unwrap(),
+    ]);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty());
+    assert!(
+        stderr.contains("SESSION_SECRET must be set when NODE_ENV=production"),
+        "{stderr}"
+    );
+}
+
+/// And the other direction, so the guard cannot be inverted without a test
+/// noticing: production with a secret of the operator's own is the supported
+/// deployment and has to serve.
+#[test]
+fn binary_web_serves_in_production_with_a_session_secret() {
+    let dir = temp_path("web-production-serves");
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("production.env");
+    std::fs::write(
+        &config,
+        format!(
+            "LIVEKIT_URL=wss://example\nLIVEKIT_API_KEY=key\nLIVEKIT_API_SECRET=secret\nGOOGLE_API_KEY=google\nNODE_ENV=production\nSESSION_SECRET=a-real-secret\nCODETRIAL_DB_PATH={}/accounts.db\n",
+            dir.display()
+        ),
+    )
+    .unwrap();
+
+    let (addr, _server) = spawn_server(|addr| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_codetrial"));
+        command
+            .args(["web", "--web-addr", addr, "--config"])
+            .arg(config.to_str().unwrap());
+        command
+    });
+    let response = http_request(
+        &addr,
+        "GET /api/session HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+}
+
 /// `serve` used to read the proxy-hop count straight from the process
 /// environment, so a value set in the config file was silently a no-op and the
 /// rate limiter keyed on the proxy instead of the client. Asserted against the

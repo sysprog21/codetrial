@@ -263,13 +263,15 @@ the environment instead. The common ones are:
 | `CODETRIAL_COMPILER_EXPLORER_ENABLED` | `true` | Enable remote C, C++, and Java runs |
 | `CODETRIAL_MAX_CONCURRENT_INTERVIEWS` | `16` | Interviews one `web` process hosts agents for |
 
-Two more matter in production. `SESSION_SECRET` signs the session cookie and its
-built-in default is a published string, so the server refuses to start on it
-either with `NODE_ENV=production` or on any listen address that is not loopback:
-a server other machines can reach signs cookies anyone can forge, whether or not
-its operator remembered to say it was production. `CODETRIAL_TRUSTED_PROXY_HOPS`
-defaults to `0`, and `X-Forwarded-For` is read only once you set it to the number
-of proxies in front of the server.
+Two more matter in production. `SESSION_SECRET` signs the session cookie, and
+its built-in default is a string published in this repository, so the server
+refuses to start on it with `NODE_ENV=production`, on any listen address that is
+not loopback, or with `CODETRIAL_TRUSTED_PROXY_HOPS` above zero. A server other
+machines can reach signs cookies anyone can forge, whether or not its operator
+remembered to say it was production, and a loopback socket behind a proxy is
+reachable too. Naming the built-in value explicitly does not satisfy the check.
+`CODETRIAL_TRUSTED_PROXY_HOPS` defaults to `0`, and `X-Forwarded-For` is read
+only once you set it to the number of proxies in front of the server.
 
 Reports are stored in browser storage and, for signed-in users, in local SQLite.
 GitHub handles are self-declared unless OAuth is configured; they are not proof

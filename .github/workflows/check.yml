@@ -729,6 +729,32 @@ jobs:
           # with it, since a filter that stops matching fails open and a prune
           # that found nothing to do looks exactly like one with nothing to do.
           #
+          # Newest by publish time, not by `created_at`. A release's
+          # `created_at` is the date of the commit it was cut from, not the
+          # moment the release appeared: on this repository the `latest`
+          # release and the commit it pointed at both read 06:15:44Z while it
+          # actually published at 06:37:15Z. Sorting on it ranks a rerun of an
+          # older commit, or anything rebased, below releases that were
+          # published long before it, which is the wrong end of the list to
+          # delete from. Drafts have no `published_at`, so they fall back.
+          #
+          # This commit's own release is counted but never deleted. Excluding
+          # it from the set instead would keep it plus a further
+          # KEEP_PRERELEASES, one more than the number says; dropping it at the
+          # end keeps the arithmetic honest and still means a rerun that
+          # republishes a historical build cannot delete what it just uploaded.
+          #
+          # One case holds KEEP_PRERELEASES + 1, knowingly. A rerun of an old
+          # commit whose release is still published exits the publish step
+          # early, so its `published_at` stays old and it can rank outside the
+          # window; the exemption then spares it. That is the trade against
+          # deleting the release of the very commit being built, and the next
+          # push, where it is no longer `$current`, collects it.
+          #
+          # `// ""` on both reads of tag_name: a draft created by hand in the
+          # web UI can carry no tag at all, and `null | startswith` is a jq
+          # error, which `pipefail` turns into a red step rather than a prune.
+          #
           # Already on: `shell: bash` three lines up runs `bash -eo pipefail`,
           # unlike the mutation plan step, which declares no shell and so gets
           # the bare `bash -e` its own comment describes. Written down anyway
@@ -740,11 +766,13 @@ jobs:
           set -o pipefail
           gh api --paginate --slurp 'repos/{owner}/{repo}/releases?per_page=100' \
             | jq -r --arg prefix "$TAG_PREFIX" --argjson keep "$KEEP_PRERELEASES" \
+                    --arg current "${TAG_PREFIX}${GITHUB_SHA}" \
               '[.[][] | select(.prerelease
-                               and (.tag_name | startswith($prefix))
-                               and (.tag_name[($prefix | length):] | test("^[0-9a-f]{40}$")))]
-               | sort_by(.created_at) | reverse | .[$keep:]
-               | .[] | "\(.draft) \(.tag_name)"' \
+                               and ((.tag_name // "") | startswith($prefix))
+                               and ((.tag_name // "")[($prefix | length):]
+                                    | test("^[0-9a-f]{40}$")))]
+               | sort_by(.published_at // .created_at) | reverse | .[$keep:]
+               | .[] | select(.tag_name != $current) | "\(.draft) \(.tag_name)"' \
             | while read -r draft old; do
                 echo "removing superseded prerelease: $old"
                 # `--cleanup-tag` only where there is a tag. A draft holds a tag

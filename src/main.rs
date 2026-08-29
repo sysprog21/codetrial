@@ -219,7 +219,9 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     // The built-in default is a published string, so in production it is not a
     // weak signing key, it is a known one. Refuse rather than mint forgeable
     // session cookies.
-    if is_production(&values) && nonempty(&values, "SESSION_SECRET").is_none() {
+    if is_production(&values)
+        && value_or(&values, "SESSION_SECRET", DEFAULT_SESSION_SECRET) == DEFAULT_SESSION_SECRET
+    {
         return Err(
             "SESSION_SECRET must be set when NODE_ENV=production; the built-in \
                     default is a published value that would let anyone forge a session cookie"
@@ -324,12 +326,14 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     // reason and with the same consequence: the socket exists and its backlog
     // fills, nothing accepts from it, and the process exits non-zero.
     //
-    // Silent when the socket cannot name itself, which a just-bound listener
-    // does not do. Refusing on an address nothing could read would turn an
-    // impossible kernel answer into a server that will not start.
-    if let Ok(bound) = listener.local_addr()
-        && let Some(refusal) = published_secret_refusal(&values, bound)
-    {
+    // Fails closed when the socket cannot name itself, which a just-bound
+    // listener does not do. Skipping the check on an unreadable address would
+    // make an impossible kernel answer the one way past a security guard, and
+    // refusing to start is the cheaper half of that trade.
+    let bound = listener
+        .local_addr()
+        .map_err(|error| format!("bound listener has no address to check: {error}"))?;
+    if let Some(refusal) = published_secret_refusal(&values, bound) {
         return Err(refusal);
     }
 
@@ -731,13 +735,31 @@ fn published_secret_refusal(
     values: &BTreeMap<String, String>,
     bound: std::net::SocketAddr,
 ) -> Option<String> {
-    if nonempty(values, "SESSION_SECRET").is_some() || bound.ip().to_canonical().is_loopback() {
+    // What the cookie signer will actually use, not whether the key was
+    // mentioned. `value_or` trims, so `SESSION_SECRET=" codetrial-local-session "`
+    // is the published key spelled with whitespace rather than a secret of the
+    // operator's own, and a guard that only asked whether the variable was set
+    // would wave it through.
+    if value_or(values, "SESSION_SECRET", DEFAULT_SESSION_SECRET) != DEFAULT_SESSION_SECRET {
         return None;
     }
+
+    // Two ways to be reachable, and the second is the one a bind address cannot
+    // see: a server on loopback behind nginx or a tunnel is as public as one on
+    // `0.0.0.0`. `CODETRIAL_TRUSTED_PROXY_HOPS` is the operator saying requests
+    // arrive through something in front, which is the same admission.
+    let reason = if !bound.ip().to_canonical().is_loopback() {
+        format!("bind {bound}")
+    } else if trusted_proxy_hops(values) > 0 {
+        "serve from behind a declared proxy".to_string()
+    } else {
+        return None;
+    };
+
     Some(format!(
-        "SESSION_SECRET must be set to bind {bound}: the built-in default is a published \
-         value, so every session cookie this server signs would be forgeable by anyone who \
-         can reach it. Loopback is the only address it is allowed on"
+        "SESSION_SECRET must be set to {reason}: {DEFAULT_SESSION_SECRET:?} is published in \
+         this repository, so every session cookie this server signs would be forgeable by \
+         anyone who can reach it"
     ))
 }
 
@@ -840,6 +862,46 @@ mod tests {
                 addr("0.0.0.0:3000")
             ),
             None
+        );
+    }
+
+    /// Naming the published value is not setting a secret. A guard that asked
+    /// only whether `SESSION_SECRET` was present would take the string this
+    /// repository publishes as proof that it is not being used, and whitespace
+    /// around it changes nothing, because the signer trims before it signs.
+    #[test]
+    fn spelling_out_the_published_default_does_not_count_as_setting_one() {
+        for spelling in [super::DEFAULT_SESSION_SECRET, "  codetrial-local-session  "] {
+            assert!(
+                super::published_secret_refusal(
+                    &values(&[("SESSION_SECRET", spelling)]),
+                    addr("0.0.0.0:3000")
+                )
+                .is_some(),
+                "{spelling:?} is the published key, not a secret"
+            );
+        }
+    }
+
+    /// A bind address cannot see a reverse proxy. Declaring hops is the
+    /// operator saying requests reach this process from somewhere else, which
+    /// makes a loopback socket as public as the proxy in front of it.
+    #[test]
+    fn a_declared_proxy_makes_loopback_public_too() {
+        let refusal = super::published_secret_refusal(
+            &values(&[("CODETRIAL_TRUSTED_PROXY_HOPS", "1")]),
+            addr("127.0.0.1:3000"),
+        )
+        .expect("loopback behind a declared proxy must be refused");
+        assert!(refusal.contains("behind a declared proxy"), "{refusal}");
+
+        assert_eq!(
+            super::published_secret_refusal(
+                &values(&[("CODETRIAL_TRUSTED_PROXY_HOPS", "0")]),
+                addr("127.0.0.1:3000")
+            ),
+            None,
+            "no declared proxy is the local run the default exists for"
         );
     }
 
