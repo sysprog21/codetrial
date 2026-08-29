@@ -23,6 +23,8 @@ fn run_cli_args_with_env(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, 
         .env_remove("CODETRIAL_DURATION_MIN")
         .env_remove("CODETRIAL_WEB_DIR")
         .env_remove("CODETRIAL_WEB_ADDR")
+        .env_remove("NODE_ENV")
+        .env_remove("SESSION_SECRET")
         .envs(envs.iter().copied())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -387,9 +389,9 @@ fn binary_modes_that_read_configuration_require_a_primary_config_file() {
 }
 
 #[test]
-fn binary_serve_requires_a_primary_config_file() {
+fn binary_web_requires_a_primary_config_file() {
     let (code, stdout, stderr) = with_free_addr(|addr| {
-        let result = run_cli_args(&["serve", "--web-addr", addr]);
+        let result = run_cli_args(&["web", "--web-addr", addr]);
         (!result.2.contains("failed to bind")).then_some(result)
     });
 
@@ -398,25 +400,23 @@ fn binary_serve_requires_a_primary_config_file() {
     assert!(stderr.contains("required configuration file is missing"));
 }
 
-/// `serve` runs one agent in one room, and `/api/token` only hands that room
-/// out while `production` is false. Booting anyway would mint rooms with nobody
-/// listening in them, so the refusal has to come before the bind succeeds.
 #[test]
-fn binary_serve_refuses_production() {
-    let config_dir = temp_path("serve-production");
+fn binary_web_refuses_a_public_listener_without_a_session_secret() {
+    let config_dir = temp_path("serve-public-default-secret");
     std::fs::create_dir_all(&config_dir).unwrap();
-    let config = config_dir.join("production.env");
+    let config = config_dir.join("public.env");
     std::fs::write(
         &config,
-        "LIVEKIT_URL=wss://example\nLIVEKIT_API_KEY=key\nLIVEKIT_API_SECRET=secret\nGOOGLE_API_KEY=google\nNODE_ENV=production\n",
+        "LIVEKIT_URL=wss://example\nLIVEKIT_API_KEY=key\nLIVEKIT_API_SECRET=secret\nGOOGLE_API_KEY=google\n",
     )
     .unwrap();
 
     let (code, stdout, stderr) = with_free_addr(|addr| {
+        let port = addr.rsplit_once(':').unwrap().1;
         let result = run_cli_args(&[
-            "serve",
+            "web",
             "--web-addr",
-            addr,
+            &format!("0.0.0.0:{port}"),
             "--config",
             config.to_str().unwrap(),
         ]);
@@ -427,7 +427,7 @@ fn binary_serve_refuses_production() {
     assert_eq!(code, 1);
     assert!(stdout.is_empty());
     assert!(
-        stderr.contains("cannot run with NODE_ENV=production"),
+        stderr.contains("SESSION_SECRET must be set to bind 0.0.0.0"),
         "{stderr}"
     );
 }
@@ -436,20 +436,21 @@ fn binary_serve_refuses_production() {
 /// environment, so a value set in the config file was silently a no-op and the
 /// rate limiter keyed on the proxy instead of the client. Asserted against the
 /// source because reaching it behaviorally needs a running proxy;
-/// `binary_serve_refuses_production` covers the `NODE_ENV` half for real.
+/// `binary_web_refuses_a_public_listener_without_a_session_secret` covers a
+/// startup refusal read from the same values, for real.
 #[test]
-fn binary_serve_reads_deployment_keys_from_the_config_file() {
+fn binary_web_reads_deployment_keys_from_the_config_file() {
     let source = std::fs::read_to_string("src/main.rs").unwrap();
 
     // Ends at the closing brace in column zero rather than at whatever item
     // happens to follow. Keying on the next `async fn` meant deleting the
     // function that used to sit there silently emptied this test's haystack.
     let serve = source
-        .split_once("fn run_serve(")
-        .expect("run_serve should exist")
+        .split_once("fn run_web(")
+        .expect("run_web should exist")
         .1
         .split_once("\n}\n")
-        .expect("run_serve should end")
+        .expect("run_web should end")
         .0;
 
     assert!(serve.contains("trusted_proxy_hops(&values)"), "{serve}");
@@ -509,7 +510,7 @@ fn binary_web_does_not_require_github_oauth_config() {
 }
 
 #[test]
-fn binary_serve_reports_web_bind_failure_after_config_validation() {
+fn binary_web_reports_bind_failure_after_config_validation() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("occupied port should bind");
     let addr = listener.local_addr().unwrap().to_string();
     let dir = temp_path("occupied-port");
@@ -517,7 +518,7 @@ fn binary_serve_reports_web_bind_failure_after_config_validation() {
     let config = dir.join("codetrial.env.local");
     write_config(&config, &dir, "127.0.0.1:1");
     let (code, stdout, stderr) = run_cli_args(&[
-        "serve",
+        "web",
         "--web-addr",
         &addr,
         "--config",
@@ -527,7 +528,7 @@ fn binary_serve_reports_web_bind_failure_after_config_validation() {
 
     assert_eq!(code, 1);
     assert!(stdout.is_empty());
-    assert!(stderr.contains("web side failed to bind"));
+    assert!(stderr.contains("failed to bind"), "{stderr}");
 }
 
 #[test]
@@ -540,7 +541,6 @@ fn binary_agent_modes_reject_usage_errors_with_exit_two() {
         &["web", "--duration-min", "nope"],
         &["web", "--duration-min", "0"],
         &["run-livekit", "room", "extra"],
-        &["serve", "extra"],
         &["check-gemini", "extra"],
     ] {
         let (code, stdout, stderr) = run_cli_args(args);

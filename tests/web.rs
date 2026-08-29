@@ -3861,8 +3861,6 @@ fn recording_config() -> codetrial::config::RecordingConfig {
         bitrate: 2000,
         kill_switch: false,
         template_base_url: "https://recording.codetrial.example".to_string(),
-        timeout_seconds: 900,
-        integration: false,
     }
 }
 

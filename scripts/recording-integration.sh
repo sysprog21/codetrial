@@ -34,7 +34,6 @@ Environment, all required:
   LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET  the isolated project
 
 Optional:
-  CODETRIAL_RECORDING_TIMEOUT_SECONDS      default 900, the ceiling for one run
   CODETRIAL_RECORDING_ROOM_SECONDS         default 60, how long the room is up
   CODETRIAL_RECORDING_ACCEPTANCE_JSON      default target/recording-acceptance.json
 USAGE
@@ -105,24 +104,12 @@ done
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
-# Read so that a run declares its ceiling, and exported rather than spent here:
-# the phases that wait on a provider are 7b's, and the server this points at
-# reads the same variable. It is checked now so an operator finds out before an
-# interview, rather than after one, that the value is not a number.
-timeout_seconds=${CODETRIAL_RECORDING_TIMEOUT_SECONDS:-900}
-case "$timeout_seconds" in
-  '' | *[!0-9]*)
-    echo "CODETRIAL_RECORDING_TIMEOUT_SECONDS takes seconds" >&2
-    exit 2
-    ;;
-esac
 case "${CODETRIAL_RECORDING_ROOM_SECONDS:-60}" in
   '' | *[!0-9]*)
     echo "CODETRIAL_RECORDING_ROOM_SECONDS takes seconds" >&2
     exit 2
     ;;
 esac
-export CODETRIAL_RECORDING_TIMEOUT_SECONDS="$timeout_seconds"
 room_seconds=${CODETRIAL_RECORDING_ROOM_SECONDS:-60}
 acceptance=${CODETRIAL_RECORDING_ACCEPTANCE_JSON:-$ROOT/target/recording-acceptance.json}
 template_origin=${CODETRIAL_RECORDING_TEMPLATE_BASE_URL%/}

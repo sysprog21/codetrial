@@ -23,7 +23,7 @@ fi
 TMP=$(mktemp -d)
 SERVER_LOG="$TMP/web.log"
 BARGE_AUDIO_FILE=${BROWSER_CHECK_BARGE_AUDIO_FILE:-}
-USE_AGENT_SERVE=0
+FIXED_ROOM=0
 DISPATCH_MODE=0
 LOGIN_DB_PATH="$TMP/accounts.db"
 LOGIN_SESSION_SECRET=browser-check-session
@@ -151,10 +151,10 @@ else
     rust)
       INTERVIEW_ROOM_NAME=${INTERVIEW_ROOM_NAME:-interview-browser-$(date +%s)-$$}
       export INTERVIEW_ROOM_NAME
-      USE_AGENT_SERVE=1
+      FIXED_ROOM=1
       SESSION_SECRET="$LOGIN_SESSION_SECRET" \
       CODETRIAL_DB_PATH="$LOGIN_DB_PATH" \
-      cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- serve --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
+      cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- web --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
         >"$SERVER_LOG" 2>&1 &
       ;;
     *)
@@ -208,7 +208,7 @@ BASE_URL="$BASE_URL" \
   BROWSER_CHECK_BARGE_AUDIO_FILE="$BARGE_AUDIO_FILE" \
   BROWSER_CHECK_COMPILER_EXPLORER_BASE_URL="$COMPILER_EXPLORER_BASE_URL_ARG" \
   BROWSER_CHECK_SESSION_COOKIE="$SESSION_COOKIE" \
-  BROWSER_CHECK_USE_AGENT_SERVE="$USE_AGENT_SERVE" \
+  BROWSER_CHECK_FIXED_ROOM="$FIXED_ROOM" \
   BROWSER_CHECK_CONFIG_PATH="$CONFIG_PATH" \
   INTERVIEW_ROOM_NAME="${INTERVIEW_ROOM_NAME:-}" \
   PLAYWRIGHT_PATH="$PLAYWRIGHT_PATH" \

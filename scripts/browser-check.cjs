@@ -1102,8 +1102,8 @@ WordDictionary.prototype.search = function(word) {
 
     await page.context().grantPermissions(["microphone", "camera"], { origin: process.env.BASE_URL });
     if (credentialed) {
-      const useAgentServe = process.env.BROWSER_CHECK_USE_AGENT_SERVE === "1";
-      if (useAgentServe) {
+      const fixedRoom = process.env.BROWSER_CHECK_FIXED_ROOM === "1";
+      if (fixedRoom) {
         roomName = process.env.INTERVIEW_ROOM_NAME;
         rustAgentIdentity = `interviewer-${roomName}`;
         sawRustMetadataConfig = true;

@@ -13,6 +13,7 @@ import {
   feedbackMarkup,
   finalRunnerStatus,
   chainSentence,
+  problemMarkup,
   reportMarkdown,
   reportMarkup,
   resultsMarkup,
@@ -351,6 +352,39 @@ test("report markup marks a no-hire and an empty editor", () => {
 
   assert.match(body, /class="critical">NO HIRE</);
   assert.match(body, /\(editor was empty\)/);
+});
+
+test("problem markup escapes every field a problem carries", () => {
+  // Not all problem text is written in this repository: `leetcode-import.js`
+  // brings statements, examples and constraints in from outside, and all three
+  // land in the same panel.
+  const body = problemMarkup({
+    statement: ["<script>s</script>"],
+    examples: [
+      {
+        input: "<script>i</script>",
+        output: "<script>o</script>",
+        explanation: "<script>x</script>",
+      },
+    ],
+    constraints: ["<script>c</script>"],
+  });
+
+  assert.doesNotMatch(body, /<script>/, "no problem field may become live markup");
+  for (const marker of ["s", "i", "o", "x", "c"]) {
+    assert.match(body, new RegExp(`&lt;script&gt;${marker}&lt;/script&gt;`));
+  }
+});
+
+test("problem markup omits the explanation line rather than printing undefined", () => {
+  const body = problemMarkup({
+    statement: ["one"],
+    examples: [{ input: "a", output: "b" }],
+    constraints: ["c"],
+  });
+
+  assert.doesNotMatch(body, /Explanation/);
+  assert.doesNotMatch(body, /undefined/);
 });
 
 test("feedback markup escapes list items", () => {

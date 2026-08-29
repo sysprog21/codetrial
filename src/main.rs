@@ -26,7 +26,7 @@ struct CliOptions {
 /// per question, because a mode that exists in the dispatch but not in the
 /// arity
 /// check is a mode that silently ignores its extra arguments.
-const MODES: [(&str, usize, &str, ModeFn); 4] = [
+const MODES: [(&str, usize, &str, ModeFn); 3] = [
     ("web", 1, "codetrial web [OPTIONS]", |_, options| {
         run_web(options)
     }),
@@ -38,9 +38,6 @@ const MODES: [(&str, usize, &str, ModeFn); 4] = [
             load_agent_config(&options).and_then(|config| run_livekit(config, &positionals[1]))
         },
     ),
-    ("serve", 1, "codetrial serve [OPTIONS]", |_, options| {
-        run_serve(options)
-    }),
     (
         "check-gemini",
         1,
@@ -94,7 +91,18 @@ fn run_agent_command(args: &[String]) -> i32 {
         return 2;
     };
     let Some(&(_, arity, usage, run)) = MODES.iter().find(|(name, ..)| *name == mode) else {
-        eprintln!("unknown agent mode: {mode}");
+        // The names, not just the refusal. A mode that was removed reaches this
+        // line as an ordinary typo, and "unknown agent mode: serve" on its own
+        // leaves the reader to guess what replaced it. `MODES` is the list, so
+        // it cannot go stale the way a sentence naming one of them would.
+        eprintln!(
+            "unknown agent mode: {mode}\nmodes: {}",
+            MODES
+                .iter()
+                .map(|(name, ..)| *name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         return 2;
     };
     if positionals.len() != arity {
@@ -306,6 +314,25 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     initialize_accounts(&config)?;
     let listener = bind_web_listener(&value_or(&values, "CODETRIAL_WEB_ADDR", DEFAULT_WEB_ADDR))?;
 
+    // The other half of the `SESSION_SECRET` guard above, and the half that
+    // does not depend on the operator having said anything.
+    //
+    // After the bind rather than before it, because the address may be a
+    // hostname: `CODETRIAL_WEB_ADDR=interviews.example:3000` is resolved by
+    // `ToSocketAddrs` and only the socket knows what it landed on. That puts it
+    // beside `initialize_accounts`, which refuses after binding for the same
+    // reason and with the same consequence: the socket exists and its backlog
+    // fills, nothing accepts from it, and the process exits non-zero.
+    //
+    // Silent when the socket cannot name itself, which a just-bound listener
+    // does not do. Refusing on an address nothing could read would turn an
+    // impossible kernel answer into a server that will not start.
+    if let Ok(bound) = listener.local_addr()
+        && let Some(refusal) = published_secret_refusal(&values, bound)
+    {
+        return Err(refusal);
+    }
+
     // Whether this process also hosts interviewers. A full agent config, which
     // is a Gemini key on top of what the web side needs, means yes; without it
     // this is the web half of a split deployment and agents arrive from
@@ -344,117 +371,8 @@ fn run_web(options: CliOptions) -> Result<(), String> {
         .map_err(|error| format!("web server failed: {error}"))
 }
 
-fn run_serve(options: CliOptions) -> Result<(), String> {
-    let values = load_values(&options)?;
-
-    // `serve` runs one agent in one room, and `/api/token` only hands out that
-    // room while `production` is false. Refusing here beats booting a server
-    // that mints rooms nobody is listening in.
-    if is_production(&values) {
-        return Err(
-            "serve is a local mode and cannot run with NODE_ENV=production; \
-                    run `codetrial web`, which serves the same way and is the \
-                    mode meant to be deployed"
-                .to_string(),
-        );
-    }
-
-    let fixed_room_name = nonempty(&values, "INTERVIEW_ROOM_NAME");
-    let github_client_id = nonempty(&values, "GITHUB_CLIENT_ID");
-    let github_client_secret = nonempty(&values, "GITHUB_CLIENT_SECRET");
-
-    // `serve` refused to run in production above, so the built-in default is
-    // always allowed here.
-    let session_secret = Some(value_or(&values, "SESSION_SECRET", DEFAULT_SESSION_SECRET));
-    let db_path = Some(account_db_path(&values));
-    let trusted_proxy_hops = trusted_proxy_hops(&values);
-    let recording_values = values.clone();
-
-    // `serve` hosts one room, so this can only ever refuse a second. It is read
-    // anyway so the two modes cannot disagree about what the operator asked
-    // for.
-    let max_concurrent = read_max_concurrent(&values);
-    let provider_order = value_or(&values, codetrial::config::PROVIDER_ORDER_KEY, "");
-    let mut config =
-        codetrial::config::load_from_pairs(values).map_err(|error| error.to_string())?;
-    // `serve` refused to run in production above.
-    extend_pool(
-        &mut config.pool,
-        false,
-        &provider_dir(&options),
-        &provider_order,
-    );
-
-    // No `select_provider`. This process hosts an interviewer per room rather
-    // than one for a room named up front, so there is no single project to
-    // narrow the credentials to: the dispatcher is handed the provider the
-    // token was minted from, with the room.
-    //
-    // A recording URL naming a project outside the pool is refused here for the
-    // same reason it is refused in `run_web`.
-    let recording = codetrial::config::load_recording(
-        &recording_values,
-        &config.pool,
-        config.default_duration_min,
-        false,
-    )
-    .map_err(|error| error.to_string())?;
-    recording_needs_verified_identity(
-        recording.is_some(),
-        github_client_id.is_some() && github_client_secret.is_some(),
-    )?;
-    recording_can_deliver(recording.as_ref())?;
-    let web_config = WebServerConfig {
-        web_dir: PathBuf::from(config.web_dir.clone()),
-        github_client_id,
-        github_client_secret,
-        session_secret,
-        db_path,
-        github_oauth_base_url: None,
-        github_api_base_url: None,
-        room_prefix: config.room_prefix.clone(),
-
-        // Only when the operator names one. `serve` used to invent
-        // `<prefix>-local` and pin every interview to it, which meant the
-        // rotation was built on every start and consulted on none of them.
-        fixed_room_name,
-        production: false,
-        trusted_proxy_hops,
-        compiler_explorer_enabled: config.compiler_explorer_enabled,
-        recording,
-        pool: config.pool.clone(),
-        probe_provider_quota: true,
-    };
-
-    initialize_accounts(&web_config)?;
-    let listener =
-        bind_web_listener(&config.web_addr).map_err(|error| format!("web side {error}"))?;
-    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
-    runtime
-        .block_on(async {
-            let listener = tokio::net::TcpListener::from_std(listener)?;
-
-            // Built before the spawn for the same reason `run_web` does it:
-            // constructing the service opens the database, migrates it and
-            // sweeps it, all blocking, and doing that inside the serving task
-            // parks a worker while the bound listener backs up.
-            let dispatcher = Arc::new(codetrial::dispatch::LocalDispatcher {
-                config,
-                runtime: tokio::runtime::Handle::current(),
-                live: Arc::default(),
-                max_concurrent,
-            }) as Arc<dyn RoomDispatcher>;
-            axum::serve(
-                listener,
-                codetrial::web::web_service_with_dispatcher(web_config, Some(dispatcher)),
-            )
-            .await
-        })
-        .map_err(|error| format!("web server failed: {error}"))
-}
-
 fn run_livekit(config: AgentConfig, room_name: &str) -> Result<(), String> {
-    let config = select_provider(config, room_name, true)?;
+    let config = select_provider(config, room_name)?;
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
     runtime
         .block_on(codetrial::livekit::run_room(
@@ -473,7 +391,7 @@ fn run_livekit(config: AgentConfig, room_name: &str) -> Result<(), String> {
 /// `CODETRIAL_DURATION_MIN`, so a second path for it would only be a second
 /// place to disagree.
 fn run_gemini_check(config: AgentConfig, room_name: &str) -> Result<(), String> {
-    let config = select_provider(config, room_name, true)?;
+    let config = select_provider(config, room_name)?;
     let duration_min = config.default_duration_min;
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
     let result = runtime.block_on(async {
@@ -506,18 +424,8 @@ fn run_gemini_check(config: AgentConfig, room_name: &str) -> Result<(), String> 
 /// wrong: an agent that cannot see the config directory has a pool of one and
 /// an
 /// unresolvable id, which is exactly the case that has to fail loudly.
-///
-/// `strict` is off only for `serve`, where the room name is the operator's own
-/// `INTERVIEW_ROOM_NAME` and the web half of the same process resolves it from
-/// the same pool. Both sides fall back to the primary together there, so a
-/// hand-written name that happens to contain a dash cannot split them.
-fn select_provider(
-    mut config: AgentConfig,
-    room_name: &str,
-    strict: bool,
-) -> Result<AgentConfig, String> {
-    if strict
-        && let Some(id) = codetrial::config::provider_id_from_room(room_name, &config.room_prefix)
+fn select_provider(mut config: AgentConfig, room_name: &str) -> Result<AgentConfig, String> {
+    if let Some(id) = codetrial::config::provider_id_from_room(room_name, &config.room_prefix)
         && config.pool.get(id).is_none()
     {
         return Err(format!(
@@ -779,9 +687,6 @@ fn trusted_proxy_hops(values: &BTreeMap<String, String>) -> u32 {
 /// `config::is_production` matches the exact string, so a `NODE_ENV=Production`
 /// typo lands here too, which is the other way a deployment ends up local
 /// without meaning to.
-///
-/// `run_serve` does not call this. That mode refuses `NODE_ENV=production`
-/// outright, so it is local by definition and has nothing to warn about.
 fn relaxed_for_local_use(values: &BTreeMap<String, String>) -> Vec<String> {
     if is_production(values) {
         return Vec::new();
@@ -800,6 +705,40 @@ fn relaxed_for_local_use(values: &BTreeMap<String, String>) -> Vec<String> {
         ));
     }
     warnings
+}
+
+/// Why the built-in `SESSION_SECRET` may not sign cookies on `bound`, or `None`
+/// where it may.
+///
+/// Split out for the reason `relaxed_for_local_use` is: the caller can only
+/// return the string, and a refusal reachable solely by starting a process that
+/// otherwise never exits is a branch no test can assert on without hanging.
+///
+/// `NODE_ENV` is a claim; the address this process bound is a fact. A server
+/// other machines can reach is not the local run the published default exists
+/// for, whether or not anyone remembered to say so, which is the mistake the
+/// warning in `relaxed_for_local_use` can name but not prevent.
+///
+/// Unspecified addresses (`0.0.0.0`, `::`) are not loopback and must not be
+/// treated as such: binding every interface is how a container serves the
+/// world.
+///
+/// `to_canonical` before the test, because `Ipv6Addr::is_loopback` is true of
+/// `::1` and of nothing else: a dual-stack socket that landed on
+/// `::ffff:127.0.0.1`, which is a name for the same interface, would otherwise
+/// be refused an address only this machine can reach.
+fn published_secret_refusal(
+    values: &BTreeMap<String, String>,
+    bound: std::net::SocketAddr,
+) -> Option<String> {
+    if nonempty(values, "SESSION_SECRET").is_some() || bound.ip().to_canonical().is_loopback() {
+        return None;
+    }
+    Some(format!(
+        "SESSION_SECRET must be set to bind {bound}: the built-in default is a published \
+         value, so every session cookie this server signs would be forgeable by anyone who \
+         can reach it. Loopback is the only address it is allowed on"
+    ))
 }
 
 fn compiler_explorer_enabled(values: &BTreeMap<String, String>) -> bool {
@@ -839,6 +778,69 @@ mod tests {
             .iter()
             .map(|(key, value)| (key.to_string(), value.to_string()))
             .collect()
+    }
+
+    /// A hostname, not a literal socket address. `bind_web_listener` hands the
+    /// string to `ToSocketAddrs`, which resolves it, and `CODETRIAL_WEB_ADDR`
+    /// has always accepted one. This used to be guarded in `config`, where the
+    /// value was parsed into a field only `serve` read; with the field gone,
+    /// the guard belongs on the one function that still takes the string.
+    #[test]
+    fn a_hostname_web_address_binds() {
+        let listener =
+            super::bind_web_listener("localhost:0").expect("a hostname address should bind");
+        assert!(
+            listener
+                .local_addr()
+                .expect("a bound listener has an address")
+                .ip()
+                .is_loopback()
+        );
+    }
+
+    fn addr(text: &str) -> std::net::SocketAddr {
+        text.parse().expect("test address should parse")
+    }
+
+    /// The published default is tolerated on loopback and nowhere else, and the
+    /// two unspecified addresses are the ones a container binds: neither is
+    /// loopback, and reading them as local is how the guard would miss the
+    /// deployment it exists for.
+    #[test]
+    fn the_published_session_secret_is_confined_to_loopback() {
+        for local in [
+            "127.0.0.1:3000",
+            "127.0.0.53:3000",
+            "[::1]:3000",
+            // A dual-stack socket's spelling of the first one.
+            "[::ffff:127.0.0.1]:3000",
+        ] {
+            assert_eq!(
+                super::published_secret_refusal(&values(&[]), addr(local)),
+                None,
+                "{local} is loopback and needs no secret"
+            );
+        }
+
+        for public in ["0.0.0.0:3000", "[::]:3000", "192.168.1.10:3000"] {
+            let refusal = super::published_secret_refusal(&values(&[]), addr(public))
+                .unwrap_or_else(|| panic!("{public} must be refused"));
+            assert!(refusal.contains(public), "{refusal}");
+            assert!(refusal.contains("SESSION_SECRET must be set"), "{refusal}");
+        }
+    }
+
+    /// A secret of the operator's own is the whole point: setting it must lift
+    /// the restriction rather than merely change the message.
+    #[test]
+    fn a_real_session_secret_is_allowed_on_any_address() {
+        assert_eq!(
+            super::published_secret_refusal(
+                &values(&[("SESSION_SECRET", "a-real-secret")]),
+                addr("0.0.0.0:3000")
+            ),
+            None
+        );
     }
 
     /// The deployment this whole warning exists for: every credential set, and
@@ -948,17 +950,15 @@ mod tests {
             ],
         };
 
-        let config =
-            super::select_provider(agent_config(pool.clone()), "interview-eu-a1b2c3d4", true)
-                .expect("a configured provider should resolve");
+        let config = super::select_provider(agent_config(pool.clone()), "interview-eu-a1b2c3d4")
+            .expect("a configured provider should resolve");
         assert_eq!(config.livekit_url, "wss://eu.example");
         assert_eq!(config.livekit_api_secret, "eu-secret");
         assert_eq!(config.google_api_key, "eu-google");
 
         // No segment: what a single-provider deployment mints, and what a
         // hand-written INTERVIEW_ROOM_NAME usually looks like.
-        let config =
-            super::select_provider(agent_config(pool), "interview-a1b2c3d4", true).unwrap();
+        let config = super::select_provider(agent_config(pool), "interview-a1b2c3d4").unwrap();
         assert_eq!(config.livekit_url, "wss://primary.example");
     }
 
@@ -978,17 +978,11 @@ mod tests {
             let pool = codetrial::config::ProviderPool { providers };
             // Not `expect_err`: `AgentConfig` deliberately has no `Debug`.
             let Err(error) =
-                super::select_provider(agent_config(pool.clone()), "interview-eu-a1b2c3d4", true)
+                super::select_provider(agent_config(pool.clone()), "interview-eu-a1b2c3d4")
             else {
                 panic!("an unknown provider id should refuse");
             };
             assert!(error.contains("eu"), "{error}");
-
-            // `serve` runs both halves from one pool, so they fall back
-            // together and a dash in a fixed room name is not an error.
-            let config =
-                super::select_provider(agent_config(pool), "interview-eu-a1b2c3d4", false).unwrap();
-            assert_eq!(config.livekit_url, "wss://primary.example");
         }
     }
 
@@ -1023,8 +1017,6 @@ bm90IGEga2V5
             bitrate: 2000,
             kill_switch: false,
             template_base_url: "https://recording.example".to_string(),
-            timeout_seconds: 900,
-            integration: false,
         };
         let error = super::recording_can_deliver(Some(&recording)).unwrap_err();
         assert!(
