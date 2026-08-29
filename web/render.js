@@ -85,6 +85,34 @@ function sourceEventMarkup(event) {
   return `<ul>${event.sourceEventIds.map((id) => `<li>source event ${escapeHtml(id)}</li>`).join("")}</ul>`;
 }
 
+// The problem panel, here rather than inline in `interview.js` for the reason
+// every other builder in this file is here: a markup string assembled beside a
+// DOM lookup cannot be handed to `node --test`, so the one guarantee that
+// matters about it, that nothing a problem carries becomes live markup, had no
+// test while every sibling renderer did. Problem text is not all first-party:
+// `leetcode-import.js` brings statements in from outside.
+export function problemMarkup(problem) {
+  const example = (example, index) => `
+          <section>
+            <h2>Example ${index + 1}</h2>
+            <pre><span>Input: </span>${escapeHtml(example.input)}
+<span>Output: </span>${escapeHtml(example.output)}${example.explanation ? `
+<span>Explanation: </span>${escapeHtml(example.explanation)}` : ""}</pre>
+          </section>
+        `;
+  return `
+    <div class="problem-detail">
+      ${problem.statement.map((text) => `<p>${escapeHtml(text)}</p>`).join("")}
+      <div class="examples">
+        ${problem.examples.map(example).join("")}
+      </div>
+      <h2>Constraints</h2>
+      <ul>${problem.constraints.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+      <div class="hint-box"><strong>Think out loud.</strong> Jim is listening to your voice and reading your editor in real time - narrate your approach like you would with a human interviewer, and say "can I get a hint?" if you need one.</div>
+    </div>
+  `;
+}
+
 /// Only the verdict and the scores differ between an evaluated session and one
 /// that produced nothing. Forking the whole card duplicated the header, the
 /// evidence section, the code block and the actions row, including the

@@ -1,4 +1,4 @@
-.PHONY: all build clean indent check fetch-vendor verify-vendor serve web
+.PHONY: all build clean indent check fetch-vendor verify-vendor web
 
 all: build
 
@@ -62,9 +62,6 @@ fetch-vendor:
 # lives in one place because two copies had already drifted apart.
 verify-vendor:
 	@./scripts/verify-vendor.sh
-
-serve: fetch-vendor
-	cargo run -- serve
 
 web: fetch-vendor
 	cargo run -- web

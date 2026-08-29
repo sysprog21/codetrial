@@ -14,6 +14,7 @@ import { createFaceCheck } from "./face-check.js";
 import {
   createTranscriptView,
   finalRunnerStatus,
+  problemMarkup,
   reportMarkdown,
   reportMarkup,
   resultsMarkup,
@@ -25,7 +26,6 @@ import {
   codeUpdatePayload,
   countdown,
   endInterviewPayload,
-  escapeHtml,
   formatTime,
   integrityEventPayload,
   isAgent,
@@ -1053,24 +1053,7 @@ function renderProblem() {
   // happens in the lobby, before there is an interview to attach it to, which
   // is why `connect` sends it again once there is one.
   recordStage();
-  nodes.problemPanel.innerHTML = `
-    <div class="problem-detail">
-      ${problem.statement.map((text) => `<p>${escapeHtml(text)}</p>`).join("")}
-      <div class="examples">
-        ${problem.examples.map((example, index) => `
-          <section>
-            <h2>Example ${index + 1}</h2>
-            <pre><span>Input: </span>${escapeHtml(example.input)}
-<span>Output: </span>${escapeHtml(example.output)}${example.explanation ? `
-<span>Explanation: </span>${escapeHtml(example.explanation)}` : ""}</pre>
-          </section>
-        `).join("")}
-      </div>
-      <h2>Constraints</h2>
-      <ul>${problem.constraints.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
-      <div class="hint-box"><strong>Think out loud.</strong> Jim is listening to your voice and reading your editor in real time - narrate your approach like you would with a human interviewer, and say "can I get a hint?" if you need one.</div>
-    </div>
-  `;
+  nodes.problemPanel.innerHTML = problemMarkup(problem);
 }
 
 function selectTab(tab) {

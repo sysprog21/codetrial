@@ -606,7 +606,9 @@ jobs:
           name: codetrial-${{ matrix.target }}
           path: codetrial-${{ matrix.target }}.${{ matrix.archive }}
 
-  # A rolling prerelease keeps the current main build one direct download away.
+  # One immutable prerelease per main commit, tagged `<prefix><sha>`. No moving
+  # pointer: a tag that gets force-pushed is a tag nobody can trust, and every
+  # download link it ever handed out silently changes what it serves.
   release:
     needs: [check, build]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -614,21 +616,26 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
-    # `true`, unlike the workflow-level setting on main. That one keeps every
-    # run's verdict because the verdict is the record. This job's output is a
-    # single mutable pointer, so a publish that a newer commit has already
-    # superseded is work whose result must be thrown away regardless.
+    # Keyed on the commit, not on a shared name. The workflow-level group
+    # already queues one push behind another, so what is left for this to hold
+    # is a re-run of one job against a run still in flight: two jobs drafting
+    # and uploading to the same tag. Not cancelling, because with a tag per
+    # commit the older job is publishing its own release rather than racing for
+    # a pointer, and its build is worth having.
     concurrency:
-      group: release-latest
-      cancel-in-progress: true
+      group: release-${{ github.sha }}
+      cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      # The tag scheme and the retention, named once and read by both the
+      # publish and the prune. Spelled twice they were free to drift, and the
+      # drift is silent in the direction that matters: a prune whose filter
+      # matches nothing is indistinguishable from a prune with nothing to do,
+      # so releases and tags would accumulate with no failure anywhere.
+      TAG_PREFIX: main-
+      KEEP_PRERELEASES: 5
     steps:
-      # Shallow, and only for the tag push below: `gh release edit` cannot move
-      # a tag that already exists, and the GitHub API ignores `target_commitish`
-      # on a published release.
-      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           pattern: codetrial-*
@@ -646,79 +653,136 @@ jobs:
             [ -f "$asset" ] || { echo "missing release asset: $asset" >&2; exit 1; }
           done
 
-          # Build duration varies by runner and by cache hit, so two pushes in
-          # flight can reach this step out of commit order and leave `latest`
-          # pointing at the older binaries. Cancellation covers the queued case;
-          # this covers the one already running when the newer push lands.
-          git fetch --depth 1 origin main
-          if [ "$(git rev-parse FETCH_HEAD)" != "$GITHUB_SHA" ]; then
-            echo "superseded by a newer main; leaving latest alone"
-            exit 0
-          fi
+          # The commit, in the tag. `gh release create --target` cuts the tag
+          # itself, so nothing here needs a checkout, a `git tag -f` or a force
+          # push to a ref other people have already fetched.
+          tag="${TAG_PREFIX}${GITHUB_SHA}"
 
-          # Never `gh release delete` first. That destroys the only download
-          # for the length of the publish, and a create that fails afterwards
-          # leaves nothing at all.
+          # Drafted while the three assets upload. `gh release upload` writes
+          # one at a time, so a published release would serve a Linux binary
+          # from this commit beside nothing at all for Windows, and nothing on
+          # the page would say so. A draft serves no downloads, so the
+          # half-written state is unreachable rather than merely unlikely.
           #
-          # Drafted for the length of the replacement instead. `gh release
-          # upload` writes one asset at a time and three platforms are three
-          # chances to stop halfway, which on a published release means serving
-          # a Linux binary from this commit beside a Windows one from the last.
-          # Nothing tells a person downloading a pair that they do not match. A
-          # draft serves no downloads at all, so the half-written state is
-          # unreachable rather than merely unlikely, and the tag and the notes
-          # move only once the bytes are known to be there.
+          # Resume only an interrupted draft. A published release is immutable:
+          # reruns may produce different bytes, so never overwrite its assets.
           #
-          # The failure this leaves is a `latest` that 404s with a red build
-          # next to it. That is the trade: loudly absent beats quietly mixed,
-          # and the next push to main republishes it.
-          notes="Automated build of ${GITHUB_SHA:0:7}."
-          if gh release view latest >/dev/null 2>&1; then
-            gh release edit latest --draft
+          # Written as a branch rather than `create || edit`, because a create
+          # that failed on credentials or on the network would read as "already
+          # exists" and the job would go on to publish a release it never made.
+          #
+          # The state lands in a variable rather than inside the `[`, because a
+          # command substitution that failed there is not the test's status:
+          # `set -e` would not see it, the empty string would not equal `false`,
+          # and a network blip would send the job on to `--clobber` the assets
+          # of a published release. Assigned, the failure stops the job, and
+          # anything other than a literal `true` is read as published.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            draft=$(gh release view "$tag" --json isDraft --jq .isDraft)
+            if [ "$draft" != true ]; then
+              echo "$tag is already published; leaving it unchanged"
+              exit 0
+            fi
           else
-            # Only `--target` and `--draft` are create-specific. Title,
-            # prerelease and notes are set by the edit at the bottom, which
-            # runs on both branches, so the notes string has one home.
-            gh release create latest --draft --target "$GITHUB_SHA" --notes ""
+            gh release create "$tag" --draft --target "$GITHUB_SHA" \
+              --prerelease --title "$tag" \
+              --notes "Automated build of ${GITHUB_SHA:0:7}."
           fi
 
-          gh release upload latest "${assets[@]}" --clobber
+          gh release upload "$tag" "${assets[@]}" --clobber
 
           # Sizes, not just presence: an upload cut off partway still leaves a
           # named asset behind, and a truncated binary is the one outcome this
-          # whole dance exists to keep off the download page.
+          # whole dance exists to keep off the download page. One query for the
+          # whole set, because three assets asking the same endpoint the same
+          # question is three round trips for one answer.
+          sizes=$(gh release view "$tag" --json assets --jq '.assets[] | "\(.name) \(.size)"')
           for asset in "${assets[@]}"; do
             name=$(basename "$asset")
             want=$(stat -c%s "$asset")
-            got=$(gh release view latest --json assets \
-              --jq ".assets[] | select(.name == \"$name\") | .size")
+            got=$(printf '%s\n' "$sizes" | awk -v n="$name" '$1 == n { print $2 }')
             [ "$want" = "$got" ] || {
               echo "$name uploaded as ${got:-nothing}, expected $want bytes" >&2
-              echo "latest stays drafted rather than serving a mixed set" >&2
+              echo "$tag stays drafted rather than serving a mixed set" >&2
               exit 1
             }
           done
 
-          # Anything on `latest` that this build did not just upload came from
-          # an older naming scheme, and `--clobber` cannot touch it: it only
-          # overwrites names that match. The raw `codetrial-<target>` binaries
-          # these archives replaced are exactly that, and left alone they sit on
-          # the download page beside the current set with nothing saying which
-          # commit they are from. Removed inside the draft, where the page
-          # serves nobody, and before the tag moves.
-          wanted=$(for asset in "${assets[@]}"; do basename "$asset"; done)
-          gh release view latest --json assets --jq '.assets[].name' \
-            | while read -r name; do
-                printf '%s\n' "$wanted" | grep -qxF "$name" && continue
-                echo "removing stale release asset: $name"
-                gh release delete-asset latest "$name" --yes
-              done
-
           # Only now does anything point at this build.
-          git tag -f latest "$GITHUB_SHA"
-          git push -f origin refs/tags/latest
-          gh release edit latest \
-            --draft=false \
-            --prerelease \
-            --title latest \
-            --notes "$notes"
+          gh release edit "$tag" --draft=false
+
+      # Its own step, because retention is a property of the release namespace
+      # rather than of this build, and a step named for publishing should not
+      # delete things. `!cancelled()` is what makes the split mean anything: a
+      # plain step inherits `success()`, so welded onto the publish or merely
+      # placed after it, a failed upload would silently skip a commit's worth of
+      # pruning. A failed publish is exactly when there is a stray draft to
+      # collect.
+      - name: Prune superseded prereleases
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          # Matched on the shape this job produces, not merely on the prefix: a
+          # prerelease a person tagged `main-rc1` by hand is not something CI
+          # gets to delete. Forty hex characters because the publish step tags
+          # the whole `GITHUB_SHA`; if that ever shortens, this has to shorten
+          # with it, since a filter that stops matching fails open and a prune
+          # that found nothing to do looks exactly like one with nothing to do.
+          #
+          # Newest by publish time, not by `created_at`. A release's
+          # `created_at` is the date of the commit it was cut from, not the
+          # moment the release appeared: on this repository the `latest`
+          # release and the commit it pointed at both read 06:15:44Z while it
+          # actually published at 06:37:15Z. Sorting on it ranks a rerun of an
+          # older commit, or anything rebased, below releases that were
+          # published long before it, which is the wrong end of the list to
+          # delete from. Drafts have no `published_at`, so they fall back.
+          #
+          # This commit's own release is counted but never deleted. Excluding
+          # it from the set instead would keep it plus a further
+          # KEEP_PRERELEASES, one more than the number says; dropping it at the
+          # end keeps the arithmetic honest and still means a rerun that
+          # republishes a historical build cannot delete what it just uploaded.
+          #
+          # One case holds KEEP_PRERELEASES + 1, knowingly. A rerun of an old
+          # commit whose release is still published exits the publish step
+          # early, so its `published_at` stays old and it can rank outside the
+          # window; the exemption then spares it. That is the trade against
+          # deleting the release of the very commit being built, and the next
+          # push, where it is no longer `$current`, collects it.
+          #
+          # `// ""` on both reads of tag_name: a draft created by hand in the
+          # web UI can carry no tag at all, and `null | startswith` is a jq
+          # error, which `pipefail` turns into a red step rather than a prune.
+          #
+          # Already on: `shell: bash` three lines up runs `bash -eo pipefail`,
+          # unlike the mutation plan step, which declares no shell and so gets
+          # the bare `bash -e` its own comment describes. Written down anyway
+          # because this step's correctness rests on it. The status of the
+          # pipeline is the `while` loop's, so a `gh` that failed on rate
+          # limiting or a `jq` that errored would otherwise end the step green
+          # having pruned nothing, which is the exact failure the filter above
+          # is shaped to avoid.
+          set -o pipefail
+          gh api --paginate --slurp 'repos/{owner}/{repo}/releases?per_page=100' \
+            | jq -r --arg prefix "$TAG_PREFIX" --argjson keep "$KEEP_PRERELEASES" \
+                    --arg current "${TAG_PREFIX}${GITHUB_SHA}" \
+              '[.[][] | select(.prerelease
+                               and ((.tag_name // "") | startswith($prefix))
+                               and ((.tag_name // "")[($prefix | length):]
+                                    | test("^[0-9a-f]{40}$")))]
+               | sort_by(.published_at // .created_at) | reverse | .[$keep:]
+               | .[] | select(.tag_name != $current) | "\(.draft) \(.tag_name)"' \
+            | while read -r draft old; do
+                echo "removing superseded prerelease: $old"
+                # `--cleanup-tag` only where there is a tag. A draft holds a tag
+                # name but no ref: publishing is what cuts it, so a stray draft
+                # from a failed publish has none, and asking the API to delete
+                # that ref is a 422 that reddens this step and keeps reddening
+                # it until somebody deletes the draft by hand.
+                if [ "$draft" = true ]; then
+                  gh release delete "$old" --yes
+                else
+                  gh release delete "$old" --yes --cleanup-tag
+                fi
+              done

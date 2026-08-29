@@ -72,15 +72,15 @@ pub(crate) const DELIVERY_INTERVAL: Duration = Duration::from_secs(10);
 ///
 /// A deployment whose credentials do not build a delivery client gets a warning
 /// and no worker rather than a panic in a router constructor. The binary does
-/// not reach that case: `codetrial web` and `codetrial serve` parse the key
-/// before they listen and refuse to start without one. It is reachable from
+/// not reach that case: `codetrial web` parses the key before it listens and
+/// refuses to start without one. It is reachable from
 /// this function, which is public and is what the tests build, and there the
 /// warning is the right answer.
 /// The delivery client, or a warning and none.
 ///
 /// A `None` here is a deployment that records and never hands anything over,
-/// which the binary refuses to start in: `codetrial web` and `codetrial serve`
-/// parse the key before they listen. It is reachable from the public router
+/// which the binary refuses to start in: `codetrial web` parses the key before
+/// it listens. It is reachable from the public router
 /// constructors, which is what the tests build, and there a warning is the
 /// right answer rather than a panic inside a constructor.
 pub(crate) fn delivery_provider(

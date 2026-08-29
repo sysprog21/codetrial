@@ -33,9 +33,9 @@ struct EmbeddedWeb;
 /// Says out loud at startup which vendored assets were never downloaded.
 ///
 /// The megabytes under `web/vendor` are pinned but not committed:
-/// `scripts/fetch-vendor.sh` downloads them, and `make build`, `make serve` and
-/// `make web` all run it first. `cargo run -- serve` does not, and neither does
-/// a deployment that copies the tree without running the fetch. The failure
+/// `scripts/fetch-vendor.sh` downloads them, and `make build` and `make web`
+/// run it first. `cargo run -- web` does not, and neither does a deployment
+/// that copies the tree without running the fetch. The failure
 /// then lands on a candidate as a Python runtime that will not start or a face
 /// detector that never loads, which is a long way from the cause.
 ///

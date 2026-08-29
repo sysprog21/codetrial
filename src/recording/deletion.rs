@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::accounts::{Accounts, blocking};
 
-use super::store::{clear_handle, delivery_handles};
+use super::store::{Handle, clear_handle, delivery_handles};
 use super::*;
 
 /// Revokes, deletes, and tombstones, in that order.
@@ -21,12 +21,11 @@ use super::*;
 /// before it boxes anything. Deleting the file before the revoke landed is not
 /// a failure worth resting on that.
 struct Release<'a> {
-    // `'static`, not `'a`: the column name crosses into the blocking pool,
-    // which takes only what it can own, and these are literals from this file
-    // rather than anything a caller passed.
+    // `'static` and `Copy`: both cross into the blocking pool, which takes only
+    // what it can own, and neither is anything a caller passed.
     step: &'static str,
     clear_step: &'static str,
-    column: &'static str,
+    handle: Handle,
     call: Call<'a>,
 }
 
@@ -70,7 +69,7 @@ pub async fn delete_recording(
         releases.push(Release {
             step: "revoke",
             clear_step: "clear_permission",
-            column: "drive_permission_id",
+            handle: Handle::DrivePermission,
             call: Call::Revoke {
                 drive_file_id: file_id,
                 permission_id,
@@ -81,7 +80,7 @@ pub async fn delete_recording(
         releases.push(Release {
             step: "delete_file",
             clear_step: "clear_file",
-            column: "drive_file_id",
+            handle: Handle::DriveFile,
             call: Call::DeleteFile(file_id),
         });
     }
@@ -89,7 +88,7 @@ pub async fn delete_recording(
         releases.push(Release {
             step: "delete_object",
             clear_step: "clear_object",
-            column: "gcs_object",
+            handle: Handle::GcsObject,
             call: Call::DeleteObject(object),
         });
     }
@@ -98,7 +97,7 @@ pub async fn delete_recording(
     for Release {
         step,
         clear_step,
-        column,
+        handle,
         call,
     } in releases
     {
@@ -116,7 +115,7 @@ pub async fn delete_recording(
         }
         let accounts = accounts.clone();
         let id = recording.id.clone();
-        if let Err(error) = blocking(move || clear_handle(&accounts, &id, column)).await {
+        if let Err(error) = blocking(move || clear_handle(&accounts, &id, handle)).await {
             // The handle is gone from the provider and the row still names it.
             // Reported rather than swallowed: the next pass repeats a call that
             // will `404`, which is harmless, and an operator reading

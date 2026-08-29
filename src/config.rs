@@ -468,9 +468,6 @@ pub struct AgentConfig {
     pub gemini_start_sensitivity: String,
     pub room_prefix: String,
     pub default_duration_min: u32,
-    pub web_dir: String,
-    pub web_addr: String,
-    pub compiler_explorer_enabled: bool,
     pub gemini_candidate_video_enabled: bool,
     pub pool: ProviderPool,
 }
@@ -559,11 +556,6 @@ pub fn load_from_pairs(
     let livekit_url = optional(&values, "LIVEKIT_URL", "");
     let production = is_production(&values);
 
-    // `CODETRIAL_WEB_ADDR` is deliberately not validated here.
-    // `bind_web_listener` resolves it through `ToSocketAddrs`, which accepts
-    // hostnames, and it is the only place the value is used: a check that only
-    // accepts a literal `SocketAddr` would reject `localhost:3000` and would
-    // fire in the two modes that never bind a listener at all.
     let mut invalid_entries = Vec::new();
     if !livekit_url.is_empty()
         && let Err(message) = validate_livekit_url(&livekit_url, production)
@@ -612,13 +604,6 @@ pub fn load_from_pairs(
         gemini_start_sensitivity: start_sensitivity_or_default(&values),
         room_prefix: optional(&values, "CODETRIAL_ROOM_PREFIX", DEFAULT_ROOM_PREFIX),
         default_duration_min: optional_u32(&values, "CODETRIAL_DURATION_MIN", DEFAULT_DURATION_MIN),
-        web_dir: optional(&values, "CODETRIAL_WEB_DIR", DEFAULT_WEB_DIR),
-        web_addr: optional(&values, "CODETRIAL_WEB_ADDR", DEFAULT_WEB_ADDR),
-        compiler_explorer_enabled: compiler_explorer_enabled(
-            values
-                .get("CODETRIAL_COMPILER_EXPLORER_ENABLED")
-                .map(String::as_str),
-        ),
         gemini_candidate_video_enabled: gemini_candidate_video_enabled(
             values
                 .get("CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED")
@@ -785,8 +770,6 @@ pub struct RecordingConfig {
     pub bitrate: u32,
     pub kill_switch: bool,
     pub template_base_url: String,
-    pub timeout_seconds: u64,
-    pub integration: bool,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -813,8 +796,6 @@ impl fmt::Debug for RecordingConfig {
             .field("bitrate", &self.bitrate)
             .field("kill_switch", &self.kill_switch)
             .field("template_base_url", &self.template_base_url)
-            .field("timeout_seconds", &self.timeout_seconds)
-            .field("integration", &self.integration)
             .finish()
     }
 }
@@ -860,7 +841,6 @@ pub const DEFAULT_RECORDING_BITRATE: u32 = crate::recording::OUTPUT_VIDEO_BITRAT
 pub const MIN_RECORDING_BITRATE: u32 = 200;
 pub const MAX_RECORDING_BITRATE: u32 = 8_000;
 pub const DEFAULT_RECORDING_GCS_PREFIX: &str = "codetrial";
-pub const DEFAULT_RECORDING_TIMEOUT_SECONDS: u64 = 900;
 
 /// The credentials that only make sense together. Naming them as a group is
 /// what makes a half-configured deployment fail at startup instead of at the
@@ -882,10 +862,10 @@ const RECORDING_LIVEKIT_KEYS: [&str; 3] = [
 
 /// Reads the recording block, or reports every reason it cannot be used.
 ///
-/// Separate from [`load_from_pairs`] because the two callers disagree about
-/// what else must be present: `codetrial serve` insists on a Gemini key, and
-/// `codetrial web` deliberately does not. Both need this, and neither should
-/// have to reimplement it.
+/// Separate from [`load_from_pairs`], which insists on a Gemini key that a
+/// web-only deployment has no use for. The recording block is needed either
+/// way, so it is read on its own rather than tied to a config the caller may
+/// not be able to build.
 ///
 /// Errors carry key names and reasons, never values. A validation message is a
 /// log line, and a log line holding a service-account key is the same incident
@@ -919,11 +899,6 @@ pub fn load_recording(
     let kill_switch = recording_flag(
         values,
         "CODETRIAL_RECORDING_KILL_SWITCH",
-        &mut invalid_entries,
-    );
-    let integration = recording_flag(
-        values,
-        "CODETRIAL_RECORDING_INTEGRATION",
         &mut invalid_entries,
     );
 
@@ -986,17 +961,6 @@ pub fn load_recording(
         ));
     }
 
-    let timeout_seconds = recording_number(
-        values,
-        "CODETRIAL_RECORDING_TIMEOUT_SECONDS",
-        DEFAULT_RECORDING_TIMEOUT_SECONDS,
-        &mut invalid_entries,
-    );
-    if timeout_seconds == 0 {
-        invalid_entries
-            .push("CODETRIAL_RECORDING_TIMEOUT_SECONDS must be at least one second".to_string());
-    }
-
     if !missing_keys.is_empty() || !invalid_entries.is_empty() {
         return Err(ConfigError {
             missing_keys,
@@ -1027,8 +991,6 @@ pub fn load_recording(
             .unwrap_or_default()
             .trim_end_matches('/')
             .to_string(),
-        timeout_seconds,
-        integration,
     }))
 }
 
@@ -1102,12 +1064,12 @@ fn recording_livekit(
 /// and wrong here: an operator who wrote `CODETRIAL_RECORDING_BITRATE=2 Mbps`
 /// would get a server that started, recorded, and billed at whatever the
 /// default happened to be.
-fn recording_number<T: std::str::FromStr>(
+fn recording_number(
     values: &BTreeMap<String, String>,
     key: &'static str,
-    default: T,
+    default: u32,
     invalid_entries: &mut Vec<String>,
-) -> T {
+) -> u32 {
     let Some(value) = values
         .get(key)
         .map(|value| value.trim())

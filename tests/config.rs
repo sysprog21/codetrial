@@ -2,8 +2,8 @@ use codetrial::config::{
     DEFAULT_COMPILER_EXPLORER_ENABLED, DEFAULT_DURATION_MIN,
     DEFAULT_GEMINI_CANDIDATE_VIDEO_ENABLED, DEFAULT_GEMINI_LIVE_MODEL, DEFAULT_GEMINI_REPORT_MODEL,
     DEFAULT_GEMINI_SILENCE_MS, DEFAULT_GEMINI_START_SENSITIVITY, DEFAULT_GEMINI_VOICE,
-    DEFAULT_MAX_CONCURRENT_INTERVIEWS, DEFAULT_ROOM_PREFIX, DEFAULT_WEB_ADDR, DEFAULT_WEB_DIR,
-    MAX_GEMINI_SILENCE_MS, load_from_pairs, max_concurrent_interviews,
+    DEFAULT_MAX_CONCURRENT_INTERVIEWS, DEFAULT_ROOM_PREFIX, MAX_GEMINI_SILENCE_MS, load_from_pairs,
+    max_concurrent_interviews,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -37,9 +37,6 @@ fn config_accepts_current_env_names() {
     assert_eq!(config.gemini_silence_ms, DEFAULT_GEMINI_SILENCE_MS);
     assert_eq!(config.room_prefix, "room");
     assert_eq!(config.default_duration_min, 30);
-    assert_eq!(config.web_dir, "public");
-    assert_eq!(config.web_addr, "0.0.0.0:8080");
-    assert!(!config.compiler_explorer_enabled);
     assert!(config.gemini_candidate_video_enabled);
 }
 
@@ -83,12 +80,6 @@ fn config_defaults_optional_names_and_web_runtime_fields() {
     assert_eq!(config.gemini_start_sensitivity, "START_SENSITIVITY_LOW");
     assert_eq!(config.room_prefix, DEFAULT_ROOM_PREFIX);
     assert_eq!(config.default_duration_min, DEFAULT_DURATION_MIN);
-    assert_eq!(config.web_dir, DEFAULT_WEB_DIR);
-    assert_eq!(config.web_addr, DEFAULT_WEB_ADDR);
-    assert_eq!(
-        config.compiler_explorer_enabled,
-        DEFAULT_COMPILER_EXPLORER_ENABLED
-    );
     assert_eq!(
         config.gemini_candidate_video_enabled,
         DEFAULT_GEMINI_CANDIDATE_VIDEO_ENABLED
@@ -119,30 +110,40 @@ fn config_uses_defaults_for_blank_optional_web_runtime_fields() {
 
     assert_eq!(config.room_prefix, DEFAULT_ROOM_PREFIX);
     assert_eq!(config.default_duration_min, DEFAULT_DURATION_MIN);
-    assert_eq!(config.web_dir, DEFAULT_WEB_DIR);
-    assert_eq!(config.web_addr, DEFAULT_WEB_ADDR);
-    assert_eq!(
-        config.compiler_explorer_enabled,
-        DEFAULT_COMPILER_EXPLORER_ENABLED
-    );
     assert_eq!(
         config.gemini_candidate_video_enabled,
         DEFAULT_GEMINI_CANDIDATE_VIDEO_ENABLED
     );
 }
 
+/// Asserted on the parser rather than through a config struct, because the
+/// struct field it used to be read through was only ever consumed by `serve`.
+///
+/// The distinction worth pinning is blank against unreadable. This switch sends
+/// candidate code to a third party, so a value nobody can read has to mean off,
+/// while a blank one is an operator who said nothing and gets the default. A
+/// parser that collapsed the two would either turn the feature off for an empty
+/// line in a config file or leave it on for a typo.
 #[test]
 fn config_fails_closed_for_invalid_compiler_explorer_switch() {
-    let config = load_from_pairs([
-        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
-        ("LIVEKIT_API_KEY", "key"),
-        ("LIVEKIT_API_SECRET", "secret"),
-        ("GOOGLE_API_KEY", "google"),
-        ("CODETRIAL_COMPILER_EXPLORER_ENABLED", "flase"),
-    ])
-    .expect("invalid privacy switch should still load");
+    let enabled = codetrial::config::compiler_explorer_enabled;
 
-    assert!(!config.compiler_explorer_enabled);
+    for unreadable in ["flase", "maybe", "2"] {
+        assert!(!enabled(Some(unreadable)), "{unreadable} should mean off");
+    }
+    for said_nothing in [Some(""), Some("   "), None] {
+        assert_eq!(
+            enabled(said_nothing),
+            DEFAULT_COMPILER_EXPLORER_ENABLED,
+            "{said_nothing:?} should mean the default"
+        );
+    }
+    for on in ["true", "TRUE", "1", "yes", "on"] {
+        assert!(enabled(Some(on)), "{on} should mean on");
+    }
+    for off in ["false", "0", "no", "off"] {
+        assert!(!enabled(Some(off)), "{off} should mean off");
+    }
 }
 
 #[test]
@@ -815,23 +816,6 @@ fn loading_config_does_not_depend_on_the_current_directory() {
     assert_eq!(config.pool.providers[0].google_api_key, "google");
 }
 
-#[test]
-fn a_hostname_web_address_still_loads() {
-    // `ToSocketAddrs` resolves this and `bind_web_listener` accepts it, so a
-    // config-time check that only takes a literal socket address would refuse a
-    // setting that has always worked.
-    let config = load_from_pairs([
-        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
-        ("LIVEKIT_API_KEY", "key"),
-        ("LIVEKIT_API_SECRET", "secret"),
-        ("GOOGLE_API_KEY", "google"),
-        ("CODETRIAL_WEB_ADDR", "localhost:3000"),
-    ])
-    .expect("a hostname web address should load");
-
-    assert_eq!(config.web_addr, "localhost:3000");
-}
-
 /// The recording block, which is off in every deployment until an operator
 /// provisions the resources in `docs/recording-contract.md`. These read the
 /// parser directly rather than through `load_from_pairs`, because
@@ -841,8 +825,7 @@ mod recording {
 
     use codetrial::config::{
         DEFAULT_RECORDING_BITRATE, DEFAULT_RECORDING_GCS_PREFIX, DEFAULT_RECORDING_MAX_MINUTES,
-        DEFAULT_RECORDING_TIMEOUT_SECONDS, PRIMARY_PROVIDER_ID, Provider, ProviderPool,
-        load_recording,
+        PRIMARY_PROVIDER_ID, Provider, ProviderPool, load_recording,
     };
 
     const SERVICE_ACCOUNT: &str = r#"{"type":"service_account","client_email":"codetrial@example.iam.gserviceaccount.com","private_key":"KEYMATERIAL-4bd2"}"#;
@@ -907,9 +890,7 @@ mod recording {
         assert_eq!(config.gcs_prefix, DEFAULT_RECORDING_GCS_PREFIX);
         assert_eq!(config.max_minutes, DEFAULT_RECORDING_MAX_MINUTES);
         assert_eq!(config.bitrate, DEFAULT_RECORDING_BITRATE);
-        assert_eq!(config.timeout_seconds, DEFAULT_RECORDING_TIMEOUT_SECONDS);
         assert!(!config.kill_switch);
-        assert!(!config.integration);
         assert!(
             config.livekit.is_none(),
             "with no override, recording follows the project that owns the room"
@@ -1040,7 +1021,6 @@ mod recording {
         for (key, value) in [
             ("CODETRIAL_RECORDING_BITRATE", "2 Mbps"),
             ("CODETRIAL_RECORDING_MAX_MINUTES", "forty-five"),
-            ("CODETRIAL_RECORDING_TIMEOUT_SECONDS", "15m"),
         ] {
             let error = load_recording(&values([(key, value)]), &pool(), 45, false)
                 .unwrap_err()
@@ -1054,7 +1034,6 @@ mod recording {
         for key in [
             "CODETRIAL_RECORDING_ENABLED",
             "CODETRIAL_RECORDING_KILL_SWITCH",
-            "CODETRIAL_RECORDING_INTEGRATION",
         ] {
             let error = load_recording(&values([(key, "ture")]), &pool(), 45, false)
                 .unwrap_err()

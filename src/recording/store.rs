@@ -467,25 +467,45 @@ pub(super) fn delivery_handles(
     })
 }
 
-/// Give up one handle, now that what it named is gone.
+/// Which of the three handles a row can hold, and the one statement that
+/// clears it.
 ///
-/// The column name arrives as a literal from `deletion`, which holds all three
-/// call sites, rather than as a value from anywhere else. The `unreachable!`
-/// is what keeps that true: a caller cannot name a column this function was not
-/// written for without failing loudly.
+/// An enum rather than the column name as a `&str`, because the set is closed
+/// and `deletion` holds every call site. Spelled as a string this needed a
+/// fourth match arm for a column nobody passes, so a typo compiled and aborted
+/// the deletion pass at runtime; spelled this way the fourth case cannot be
+/// written down. `Copy`, so it crosses into the blocking pool the way the
+/// literal did.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Handle {
+    DrivePermission,
+    DriveFile,
+    GcsObject,
+}
+
+impl Handle {
+    /// Every column name in this file is a literal that reaches SQL only from
+    /// here, which is what keeps the statement a constant rather than something
+    /// assembled around a value.
+    fn clear_statement(self) -> &'static str {
+        match self {
+            Self::DrivePermission => {
+                "UPDATE recordings SET drive_permission_id = NULL WHERE id = ?1"
+            }
+            Self::DriveFile => "UPDATE recordings SET drive_file_id = NULL WHERE id = ?1",
+            Self::GcsObject => "UPDATE recordings SET gcs_object = NULL WHERE id = ?1",
+        }
+    }
+}
+
+/// Give up one handle, now that what it named is gone.
 pub(super) fn clear_handle(
     accounts: &Accounts,
     recording_id: &str,
-    column: &str,
+    handle: Handle,
 ) -> rusqlite::Result<()> {
-    let statement = match column {
-        "drive_permission_id" => "UPDATE recordings SET drive_permission_id = NULL WHERE id = ?1",
-        "drive_file_id" => "UPDATE recordings SET drive_file_id = NULL WHERE id = ?1",
-        "gcs_object" => "UPDATE recordings SET gcs_object = NULL WHERE id = ?1",
-        other => unreachable!("no handle called {other}"),
-    };
     accounts.with(|connection| {
-        connection.execute(statement, [recording_id])?;
+        connection.execute(handle.clear_statement(), [recording_id])?;
         Ok(())
     })
 }

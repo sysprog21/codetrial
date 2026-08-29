@@ -30,6 +30,19 @@
 # from. It appears whenever a single line inside that hundred-line constructor
 # changes.
 #
+# `run_livekit` is the `run-livekit` mode: it resolves the provider for a room
+# name and then hands the whole interview to `run_room`. Replacing its body with
+# `Ok(())` survives for the reason `run_room`'s mutants do, because reaching a
+# single line of it needs a LiveKit server that `cargo test` never starts. It
+# entered the diff when `select_provider` lost its `strict` argument, which is
+# how a function nothing can test came to be scored.
+#
 # Keep this list short and each entry justified. An entry that is really "we
 # never got around to testing this" belongs in a test, not here.
-exclude_re = ["run_room", "open_session", "run_gemini_check", "replace web_router"]
+exclude_re = [
+    "run_room",
+    "open_session",
+    "run_gemini_check",
+    "run_livekit",
+    "replace web_router",
+]

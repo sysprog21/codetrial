@@ -76,11 +76,16 @@ for pooling.
 
 ## Prebuilt binaries
 
-Every push to `main` republishes the `latest` prerelease at
-<https://github.com/sysprog21/codetrial/releases/latest>. Nothing is required at
-runtime beyond the binary itself: the browser application, its vendored assets,
-and the WASM are compiled in, so there is no Node.js, no `node_modules`, and no
-`web/` directory to unpack alongside it.
+Every push to `main` publishes a prerelease tagged `main-<commit sha>` under
+<https://github.com/sysprog21/codetrial/releases>, newest first. The tag names
+the commit and never moves, and a release that has already published is left
+alone rather than rebuilt over, so a download link keeps serving the bytes it
+served the first time. Only the most recent few are kept: the `release` job in
+`.github/workflows/check.yml` names the retention, and older prereleases are
+deleted with their tags. Nothing is required at runtime beyond the binary
+itself: the browser application, its vendored assets, and the WASM are compiled
+in, so there is no Node.js, no `node_modules`, and no `web/` directory to
+unpack alongside it.
 
 ```bash
 # Linux
@@ -133,7 +138,7 @@ Platform notes:
 Building from a checkout instead:
 
 ```bash
-INTERVIEW_ROOM_NAME=interview-local make serve
+INTERVIEW_ROOM_NAME=interview-local make web
 ```
 
 Open <http://localhost:3000>, choose a problem and duration, then complete the
@@ -145,15 +150,14 @@ URL rather than the interview. See [docs/providers.md](docs/providers.md).
 
 | Command | Use |
 |---|---|
-| `cargo run -- serve` | Local web server and interviewer in one process |
-| `cargo run -- web` | Web server that dispatches an interviewer for each room |
-| `cargo run -- run-livekit ROOM` | Interviewer only |
+| `cargo run -- web` | The server; hosts interviewers too when `GOOGLE_API_KEY` is set |
+| `cargo run -- run-livekit ROOM` | Interviewer only, for one named room |
 | `cargo run -- check-gemini` | Verify Gemini credentials |
 
-`serve` is for local work and refuses `NODE_ENV=production`; use `web` in
-production. A `web` process hosts agents for at most
-`CODETRIAL_MAX_CONCURRENT_INTERVIEWS` interviews at once, 16 by default; past
-that, dispatch is refused and the candidate waits.
+`web` is the only serving mode, local and deployed alike: the difference between
+the two is the configuration, not the command. A `web` process hosts agents for
+at most `CODETRIAL_MAX_CONCURRENT_INTERVIEWS` interviews at once, 16 by default;
+past that, dispatch is refused and the candidate waits.
 
 Set `CODETRIAL_COMPILER_EXPLORER_ENABLED=false` to leave C, C++, and Java
 editors available while disabling their remote test runs.
@@ -174,8 +178,7 @@ face-presence analysis is disabled for the session. See the
 
 ```bash
 make build           # release build
-make serve           # local server and interviewer
-make web             # web server only
+make web             # run the server
 make indent          # format Rust; the gate runs cargo fmt --check
 make clean           # remove build output
 make fetch-vendor    # fetch pinned browser assets
@@ -260,11 +263,15 @@ the environment instead. The common ones are:
 | `CODETRIAL_COMPILER_EXPLORER_ENABLED` | `true` | Enable remote C, C++, and Java runs |
 | `CODETRIAL_MAX_CONCURRENT_INTERVIEWS` | `16` | Interviews one `web` process hosts agents for |
 
-Two more matter in production. `SESSION_SECRET` signs the session cookie and its
-built-in default is a published string, so with `NODE_ENV=production` the server
-refuses to start until you set a real one. `CODETRIAL_TRUSTED_PROXY_HOPS`
-defaults to `0`, and `X-Forwarded-For` is read only once you set it to the number
-of proxies in front of the server.
+Two more matter in production. `SESSION_SECRET` signs the session cookie, and
+its built-in default is a string published in this repository, so the server
+refuses to start on it with `NODE_ENV=production`, on any listen address that is
+not loopback, or with `CODETRIAL_TRUSTED_PROXY_HOPS` above zero. A server other
+machines can reach signs cookies anyone can forge, whether or not its operator
+remembered to say it was production, and a loopback socket behind a proxy is
+reachable too. Naming the built-in value explicitly does not satisfy the check.
+`CODETRIAL_TRUSTED_PROXY_HOPS` defaults to `0`, and `X-Forwarded-For` is read
+only once you set it to the number of proxies in front of the server.
 
 Reports are stored in browser storage and, for signed-in users, in local SQLite.
 GitHub handles are self-declared unless OAuth is configured; they are not proof
