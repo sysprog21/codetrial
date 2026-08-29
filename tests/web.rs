@@ -549,6 +549,28 @@ async fn embedded_assets_fill_gaps_in_a_partial_web_directory() {
         .unwrap();
     assert_eq!(response.status(), 200);
 
+    // The same for a route with no extension, which is the harder half. Those
+    // expand to four candidates ending in `index.html`, the single-page
+    // fallback, so a disk store searched to exhaustion first would answer with
+    // the one file it has and hand back the wrong page with a 200. Candidate
+    // order has to beat store order.
+    let interview = reqwest::get(&format!("{base}/interview"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        !interview.contains("disk wins"),
+        "an extensionless route must not fall back to a stale disk index: {}",
+        &interview[..interview.len().min(200)]
+    );
+    assert!(
+        interview.contains("<title>CodeTrial"),
+        "it must be the real interview page: {}",
+        &interview[..interview.len().min(200)]
+    );
+
     server.abort();
     fs::remove_dir_all(root).unwrap();
 }
