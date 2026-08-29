@@ -240,6 +240,18 @@ pub(crate) async fn security_headers(
         header::REFERRER_POLICY,
         HeaderValue::from_static("same-origin"),
     );
+
+    // Only geolocation, because only geolocation changes anything. Permissions
+    // Policy already defaults camera, microphone and geolocation to `self`, so
+    // naming the first two would restate the default and buy nothing: a
+    // same-origin frame inherits them either way, and a cross-origin one gets
+    // them under neither. Nothing here asks for a location, so nothing this
+    // page ever embeds should be able to, and `script-src` keeping
+    // `'unsafe-eval'` is the reason that is worth stating rather than assuming.
+    headers.insert(
+        "permissions-policy",
+        HeaderValue::from_static("geolocation=()"),
+    );
     headers.insert(header::CONTENT_SECURITY_POLICY, policy);
     response
 }

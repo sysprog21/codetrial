@@ -307,6 +307,14 @@ async fn responses_carry_baseline_security_headers() {
         "same-origin"
     );
 
+    // Asserted rather than trusted to stay: a header that grants nothing
+    // visible is the kind that disappears in a refactor with nobody noticing,
+    // because no page stops working when it does.
+    assert_eq!(
+        home.headers().get("permissions-policy").unwrap(),
+        "geolocation=()"
+    );
+
     let policy = home
         .headers()
         .get("content-security-policy")
