@@ -11,13 +11,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { firstPartyScripts as webScripts, root } from "./source.js";
+import { firstPartyScripts as webScripts, interviewSource, root } from "./source.js";
 import { outputAfterRouting, outputOptions } from "../../web/meet-audio.js";
 
 const web = join(root, "web");
 const read = (name) => readFileSync(join(web, name), "utf8");
 const page = read("interview.html");
-const script = read("interview.js");
+const script = interviewSource();
 
 // vendor/ is third-party and legitimately contains these strings, so the shared
 // helper excludes it by path. Recursive, so a bridge added under web/avatar/ or

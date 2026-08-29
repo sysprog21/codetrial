@@ -7,9 +7,17 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { captures as matchAll, functionBody, root } from "./source.js";
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import {
+  firstPartyScripts,
+  INTERVIEW_SOURCES,
+  captures as matchAll,
+  functionBody,
+  initialisedModules,
+  interviewSource,
+  root,
+} from "./source.js";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 
 const web = join(root, "web");
 const read = (name) => readFileSync(join(web, name), "utf8");
@@ -229,7 +237,7 @@ test("the interview page keeps the structure the script drives", () => {
   );
   assert.match(page, /data-language="python"/, "the language tabs drive setLanguage");
   assert.match(page, /C, C\+\+ and Java runs are sent to Compiler Explorer/, "compiled language runs need third-party disclosure");
-  const script = read("interview.js");
+  const script = interviewSource();
   assert.match(script, /CODETRIAL_COMPILER_EXPLORER_ENABLED !== false/);
   assert.match(script, /C, C\+\+ and Java test runs are disabled by this server/);
   assert.match(page, /id="audio-step-camera"/, "preflight must expose camera readiness");
@@ -251,7 +259,7 @@ test("the interview page keeps the structure the script drives", () => {
 });
 
 test("output confirmation is required but not blocked by tone timing", () => {
-  const script = read("interview.js");
+  const script = interviewSource();
   const heardHandler = script.slice(
     script.indexOf("const confirmOutput ="),
     script.indexOf("nodes.audioJoin.addEventListener"),
@@ -300,7 +308,7 @@ test("a replacement preflight camera gets a fresh face check", () => {
 // than an error, so nothing asked the pool to look again and the media gate,
 // which has no bypass, stayed shut for the rest of the preflight.
 test("a preflight microphone that goes away is asked for again", () => {
-  const script = read("interview.js");
+  const script = interviewSource();
   // One loop covers both kinds, so the microphone is no longer the case that
   // can be forgotten: naming a kind here is what asks the pool to look again.
   assert.match(script,
@@ -344,7 +352,7 @@ test("runtime config can withdraw compiled language test runs", async () => {
 // microphone and camera live and the integrity heartbeat still sampling while
 // the candidate read their result.
 test("every report path releases the camera and microphone", () => {
-  const script = read("interview.js");
+  const script = interviewSource();
   const body = functionBody(script, "renderReport");
 
   assert.match(body, /stopLocalMedia\(\);/, "renderReport must release the devices");
@@ -361,7 +369,7 @@ test("every report path releases the camera and microphone", () => {
 // stayed true, the UI said nothing, and `publish` silently discarded every code
 // update, test result and integrity event for the rest of the session.
 test("a dropped connection is visible and recovers its state", () => {
-  const script = read("interview.js");
+  const script = interviewSource();
   const connect = functionBody(script, "connectLiveKit");
 
   for (const event of ["Reconnecting", "Reconnected", "Disconnected"]) {
@@ -379,7 +387,7 @@ test("a dropped connection is visible and recovers its state", () => {
 // writes candidate-facing text for exactly this; dropping it on the floor is
 // what makes a refusal indistinguishable from the product working.
 test("a refused interview says why instead of silently practising", () => {
-  const script = read("interview.js");
+  const script = interviewSource();
   const connect = functionBody(script, "connect");
 
   assert.match(connect, /setBanner\("connection", `\$\{error\?\.message/);
@@ -393,7 +401,7 @@ test("a refused interview says why instead of silently practising", () => {
 // One banner element with several owners, ranked, so a new owner is a row here
 // rather than another boolean lock and another branch.
 test("the presence banner ranks its owners instead of racing them", () => {
-  const script = read("interview.js");
+  const script = interviewSource();
   assert.match(script, /const BANNER_RANK = \{[^}]*session[^}]*connection[^}]*interviewer[^}]*face[^}]*\}/);
   // Every owner keeps a slot, so a warning raised behind a higher-ranked one is
   // deferred rather than discarded.
@@ -430,6 +438,26 @@ test("no test runner executes candidate code on the main thread", () => {
   assert.doesNotMatch(script, /cdn\.jsdelivr\.net/);
 });
 
+
+/// The whole-path assertions in this file and four others read
+/// `INTERVIEW_SOURCES`. A cluster split out of `interview.js` and not added to
+/// it is not a failing test: it is five tests that quietly stop covering the
+/// code that moved, which is the fail-open `source.js` was written to warn
+/// about. So the list is checked against the source rather than trusted.
+test("the interview path is read whole", () => {
+  const derived = initialisedModules().sort();
+  const listed = INTERVIEW_SOURCES.filter((name) => name !== "web/interview.js").sort();
+  assert.deepEqual(
+    derived,
+    listed,
+    "every module interview.js hands its bindings to must be in INTERVIEW_SOURCES, and nothing else",
+  );
+  assert.ok(
+    INTERVIEW_SOURCES.includes("web/interview.js"),
+    "the page script itself is part of the path",
+  );
+});
+
 test("runner progress statuses stay wired to each execution path", () => {
   const script = read("runners.js");
 
@@ -437,4 +465,28 @@ test("runner progress statuses stay wired to each execution path", () => {
   assert.match(script, /reportStatus\??\.\("booting"\)|reportStatus\("booting"\)/);
   assert.match(script, /reportStatus\??\.\("compiling"\)|reportStatus\("compiling"\)/);
   assert.match(script, /reportStatus\??\.\("running"\)|reportStatus\("running"\)/);
+});
+
+/// Every relative import in every first-party script resolves to a file.
+///
+/// A specifier is relative to the file holding it, so moving code between
+/// directories silently breaks one: the avatar stage carried
+/// `import("./avatar/vrm.js")` out of `web/interview.js` into `web/avatar/`,
+/// where it named `web/avatar/avatar/vrm.js`. Nothing caught it, because a
+/// source-text assertion matches the string and the dynamic import only runs
+/// after the model HEAD succeeds, which needs a published model.
+test("relative imports resolve to files that exist", () => {
+  const missing = [];
+  for (const name of firstPartyScripts()) {
+    const source = read(name);
+    const dir = dirname(join(root, "web", name));
+    const specifiers = [
+      ...matchAll(source, /(?:^|[^\w])import\s+[^;]*?from\s+"(\.[^"]+)"/g),
+      ...matchAll(source, /import\("(\.[^"]+)"\)/g),
+    ];
+    for (const specifier of specifiers) {
+      if (!existsSync(resolve(dir, specifier))) missing.push(`web/${name} -> ${specifier}`);
+    }
+  }
+  assert.deepEqual(missing, [], "these specifiers name nothing on disk");
 });

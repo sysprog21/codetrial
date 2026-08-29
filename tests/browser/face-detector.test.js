@@ -11,6 +11,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createServer } from "node:net";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -25,10 +27,22 @@ try {
   chromium = null;
 }
 
-const PORT = 38431;
-const BASE = `http://127.0.0.1:${PORT}/`;
+/// Asked for rather than picked. A fixed port collides with a second copy of
+/// this suite and with whatever else on the machine happened to want it, and
+/// the failure reads as a broken server rather than a busy port.
+async function freePort() {
+  const probe = createServer();
+  await new Promise((ready) => probe.listen(0, "127.0.0.1", ready));
+  const { port } = probe.address();
+  await new Promise((closed) => probe.close(closed));
+  return port;
+}
+
+let PORT = 0;
+let BASE = "";
 let server = null;
 let browser = null;
+const configPath = resolve(root, "target/face-detector-test.env");
 
 async function reachable() {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -45,6 +59,8 @@ async function reachable() {
 
 before(async () => {
   if (!chromium) return;
+  PORT = await freePort();
+  BASE = `http://127.0.0.1:${PORT}/`;
   try {
     browser = await chromium.launch();
   } catch {
@@ -52,13 +68,18 @@ before(async () => {
     browser = null;
     return;
   }
+  // `target/` is missing on a clean checkout. Creating it keeps a missing
+  // build a skipped suite, which is what the chromium guard above already
+  // does, rather than an ENOENT thrown out of `before`.
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, "LIVEKIT_URL=wss://example.livekit.cloud\nLIVEKIT_API_KEY=face-detector-key\nLIVEKIT_API_SECRET=face-detector-secret\n");
   server = spawn(
     resolve(root, "target/debug/codetrial"),
-    ["web", "--web-addr", `127.0.0.1:${PORT}`, "--web-dir", resolve(root, "web")],
+    ["web", "--config", configPath, "--web-addr", `127.0.0.1:${PORT}`, "--web-dir", resolve(root, "web")],
     {
       cwd: root,
       stdio: "ignore",
-      env: { ...process.env, CODETRIAL_SKIP_CONFIG: "1", CODETRIAL_DB_PATH: resolve(root, "target/face-detector-test.db") },
+      env: { ...process.env, CODETRIAL_DB_PATH: resolve(root, "target/face-detector-test.db") },
     },
   );
   if (!(await reachable())) {
@@ -70,6 +91,7 @@ before(async () => {
 after(async () => {
   await browser?.close();
   server?.kill();
+  rmSync(configPath, { force: true });
 });
 
 /// Draws something BlazeFace recognises without needing a photograph checked

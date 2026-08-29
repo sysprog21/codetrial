@@ -12,9 +12,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { functionBody, read } from "./source.js";
+import { functionBody, read, interviewSource } from "./source.js";
 
-const interview = withoutInterviewComments(read("web/interview.js"));
+const interview = withoutInterviewComments(interviewSource());
 const page = read("web/recording/index.html");
 const script = read("web/recording/recording.js");
 const styles = read("web/recording/recording.css");
@@ -396,10 +396,15 @@ test("replay-producer stage", () => {
 
   const timer = withoutComments(functionBody(interview, "tickTimer"));
   assert.ok(
-    timer.includes("if (Date.now() - replayStageAt >= REPLAY_STAGE_MS) {"),
+    timer.includes("recordStageTick(tick.remaining);"),
     "the clock is restated on an interval, not on every tick",
   );
-  assert.ok(timer.includes('recordReplay("stage", { remainingSeconds: tick.remaining });'));
+  const stageTick = withoutComments(functionBody(interview, "recordStageTick"));
+  assert.ok(
+    stageTick.includes("Date.now() - replayStageAt < REPLAY_STAGE_MS"),
+    "the stage repeat must still be throttled, wherever the guard lives",
+  );
+  assert.ok(stageTick.includes('recordReplay("stage", { remainingSeconds });'));
   assert.ok(
     /const REPLAY_STAGE_MS = 15000;/.test(interview),
     "a second-by-second clock would be most of the per-interview budget",
@@ -408,11 +413,15 @@ test("replay-producer stage", () => {
 
 test("replay-producer avatar", () => {
   assert.ok(
-    interview.includes('recordReplay("avatar", { state: value });'),
+    withoutComments(functionBody(interview, "recordAvatarState")).includes(
+      'recordReplay("avatar", { state: value });',
+    ),
     "the interviewer's state is recorded",
   );
   assert.ok(
-    interview.includes("if (value !== replayAvatarState) {"),
+    withoutComments(functionBody(interview, "recordAvatarState")).includes(
+      "if (value === replayAvatarState) return;",
+    ),
     "on the change, not on the participant event that happened to carry it",
   );
 });

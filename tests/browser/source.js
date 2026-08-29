@@ -18,6 +18,54 @@ export function read(name) {
   return readFileSync(join(root, name), "utf8");
 }
 
+/// `web/interview.js` and the modules it hands its bindings to.
+///
+/// One list, in one place, because every assertion that reads it is a
+/// whole-path one. "setSinkId targets Jim and nothing else" and "the avatar
+/// never reads the candidate's microphone" are properties of the interview
+/// path, not of a filename, and a per-test subset of that path quietly stops
+/// covering whatever moves outside it. Five copies of this list would mean a
+/// seventh module is covered by none of them until all five are edited, which
+/// is the fail-open this file exists to warn about.
+///
+/// `interview_path_is_read_whole` in dom-contract.test.js keeps it honest: it
+/// derives the same set from the source and fails when the two disagree.
+export const INTERVIEW_SOURCES = [
+  "web/interview.js",
+  "web/audio-output.js",
+  "web/captions.js",
+  "web/integrity.js",
+  "web/recording-state.js",
+  "web/replay-feed.js",
+  "web/avatar/stage.js",
+];
+
+/// The interview path as one text.
+///
+/// The whole-file checks that read this are the kind a split defeats:
+/// `doesNotMatch` over one file says nothing about the sibling the code moved
+/// into, and an allowlist counted per file stops counting the call sites that
+/// left. Read together, the property the assertion was written for survives the
+/// move, because it was a property of the path and not of a filename.
+export function interviewSource() {
+  return INTERVIEW_SOURCES.map(read).join("\n");
+}
+
+/// The modules `interview.js` initialises, read back out of the source rather
+/// than listed a second time. A cluster split out of the page script announces
+/// itself with an `init*` export and an `init*(...)` call, so this finds the
+/// ones a hand-written list would have missed.
+export function initialisedModules() {
+  const page = read("web/interview.js");
+  const called = new Set(captures(page, /^(init[A-Z]\w*)\(/gm));
+  return firstPartyScripts()
+    .map((name) => `web/${name}`)
+    .filter((path) => {
+      const exported = captures(read(path), /^export function (init[A-Z]\w*)\(/gm);
+      return exported.some((name) => called.has(name));
+    });
+}
+
 /// Every first-party browser script, `web/vendor/` excluded by path. Recursive,
 /// so a bridge added under `web/avatar/` or `web/recording/` is covered too.
 export function firstPartyScripts() {
