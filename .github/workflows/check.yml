@@ -490,6 +490,14 @@ jobs:
       - name: Install Linux build dependency
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev
+      # The same entry the check job saves, on the same key. Without it all
+      # three platform legs re-download 24 MB that one job already fetched and
+      # stored on this commit, and the fetch script no-ops on a hit.
+      - name: Restore vendored bytes
+        uses: actions/cache/restore@v6
+        with:
+          path: web/vendor
+          key: vendor-${{ hashFiles('web/vendor/**') }}
       - name: Fetch browser assets
         run: ./scripts/fetch-vendor.sh
         shell: bash
