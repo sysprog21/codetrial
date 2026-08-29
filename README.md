@@ -93,7 +93,9 @@ URL rather than the interview. See [docs/providers.md](docs/providers.md).
 | `cargo run -- check-gemini` | Verify Gemini credentials |
 
 `serve` is for local work and refuses `NODE_ENV=production`; use `web` in
-production. A `web` process handles at most 16 concurrent interviews.
+production. A `web` process hosts agents for at most
+`CODETRIAL_MAX_CONCURRENT_INTERVIEWS` interviews at once, 16 by default; past
+that, dispatch is refused and the candidate waits.
 
 Set `CODETRIAL_COMPILER_EXPLORER_ENABLED=false` to leave C, C++, and Java
 editors available while disabling their remote test runs.
@@ -201,6 +203,7 @@ the environment instead. The common ones are:
 | `GEMINI_REPORT_MODEL` | `gemini-3.1-flash-lite` | Report model |
 | `CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED` | `false` | Forward candidate video to Gemini |
 | `CODETRIAL_COMPILER_EXPLORER_ENABLED` | `true` | Enable remote C, C++, and Java runs |
+| `CODETRIAL_MAX_CONCURRENT_INTERVIEWS` | `16` | Interviews one `web` process hosts agents for |
 
 Two more matter in production. `SESSION_SECRET` signs the session cookie and its
 built-in default is a published string, so with `NODE_ENV=production` the server

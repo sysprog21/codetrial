@@ -1,6 +1,6 @@
 //! Running interviewers for the rooms this process named.
 //!
-//! Separate from main because none of it is startup: the cap, the slot
+//! Separate from `main` because none of it is startup: the cap, the slot
 //! accounting and the spawn all happen on the request path, for the length of
 //! an interview, long after the binary finished deciding what it is. Here it
 //! also gets tests that do not need a process.
@@ -10,12 +10,6 @@ use std::sync::{Arc, Mutex};
 
 use crate::config::{AgentConfig, Provider};
 use crate::web::RoomDispatcher;
-
-/// How many interviews one `codetrial web` process will host agents for at
-/// once. Each is a LiveKit room plus a metered Gemini Live session, so an
-/// unbounded count is an unbounded bill; a refused dispatch leaves the
-/// candidate on the "Waiting" pill, which is bad, but recoverable and visible.
-const MAX_CONCURRENT_INTERVIEWS: usize = 16;
 
 /// Runs the interviewer for rooms this process just named, in this process.
 ///
@@ -30,6 +24,9 @@ pub struct LocalDispatcher {
     pub config: AgentConfig,
     pub runtime: tokio::runtime::Handle,
     pub live: Arc<Mutex<HashSet<String>>>,
+    /// From `config::max_concurrent_interviews`, so the ceiling an operator set
+    /// is the ceiling this enforces.
+    pub max_concurrent: usize,
 }
 
 impl RoomDispatcher for LocalDispatcher {
@@ -42,9 +39,10 @@ impl RoomDispatcher for LocalDispatcher {
             if live.contains(room_name) {
                 return true;
             }
-            if live.len() >= MAX_CONCURRENT_INTERVIEWS {
+            if live.len() >= self.max_concurrent {
                 eprintln!(
-                    "codetrial dispatch_refused room={room_name} reason=at_capacity limit={MAX_CONCURRENT_INTERVIEWS}"
+                    "codetrial dispatch_refused room={room_name} reason=at_capacity limit={}",
+                    self.max_concurrent
                 );
                 return false;
             }
@@ -54,8 +52,8 @@ impl RoomDispatcher for LocalDispatcher {
 
         // Released by dropping, not by a line at the end of the task: a panic
         // in the interview would otherwise skip that line and burn the slot for
-        // the life of the process, and sixteen of those refuse every interview
-        // after them.
+        // the life of the process, and a cap's worth of those refuse every
+        // interview after them.
         let slot = Slot {
             live: Arc::clone(&self.live),
             room_name: room_name.to_string(),
@@ -95,7 +93,7 @@ impl Drop for Slot {
     }
 }
 
-/// The credential half of [`select_provider`], without the pool lookup, for the
+/// The credential half of provider selection, without the pool lookup, for the
 /// caller that was already handed the provider.
 pub fn agent_config_for(base: &AgentConfig, provider: &Provider) -> AgentConfig {
     let mut config = base.clone();
@@ -134,6 +132,42 @@ mod tests {
             live.lock().unwrap().is_empty(),
             "a panicking interview must not keep its slot"
         );
+    }
+
+    /// The cap is the configured one, not a constant. An operator who set it to
+    /// one gets one, and the refusal names the number they chose.
+    #[tokio::test]
+    async fn the_configured_cap_is_the_one_enforced() {
+        let live = Arc::new(Mutex::new(HashSet::new()));
+        live.lock().unwrap().insert("interview-first".to_string());
+        let dispatcher = LocalDispatcher {
+            config: crate::config::load_from_pairs([
+                ("LIVEKIT_URL", "wss://primary.example"),
+                ("LIVEKIT_API_KEY", "primary-key"),
+                ("LIVEKIT_API_SECRET", "primary-secret"),
+                ("GOOGLE_API_KEY", "primary-google"),
+            ])
+            .unwrap(),
+            runtime: tokio::runtime::Handle::current(),
+            live: Arc::clone(&live),
+            max_concurrent: 1,
+        };
+        let provider = Provider {
+            id: crate::config::PRIMARY_PROVIDER_ID.to_string(),
+            url: "wss://primary.example".to_string(),
+            api_key: "primary-key".to_string(),
+            api_secret: "primary-secret".to_string(),
+            google_api_key: String::new(),
+        };
+
+        assert!(
+            !dispatcher.ensure_agent("interview-second", &provider),
+            "a second room must be refused at a cap of one"
+        );
+
+        // The room already running is still admitted, because a reload asks for
+        // the same room and refusing it would break the page that is open.
+        assert!(dispatcher.ensure_agent("interview-first", &provider));
     }
 
     /// A provider's own Google key wins, and an empty one leaves the base key

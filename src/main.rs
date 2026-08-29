@@ -236,6 +236,7 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     // purpose. The dispatcher never looks a provider up: it is handed the one
     // the token was minted from, so a second scan could only introduce a pool
     // that disagrees with the web side's.
+    let max_concurrent = read_max_concurrent(&values);
     let agent_config = codetrial::config::load_from_pairs(values).ok();
     if agent_config.is_none() {
         eprintln!(
@@ -253,6 +254,7 @@ fn run_web(options: CliOptions) -> Result<(), String> {
                     config,
                     runtime: tokio::runtime::Handle::current(),
                     live: Arc::default(),
+                    max_concurrent,
                 }) as Arc<dyn RoomDispatcher>
             });
             axum::serve(
@@ -290,6 +292,11 @@ fn run_serve(options: CliOptions) -> Result<(), String> {
     let db_path = Some(account_db_path(&values));
     let trusted_proxy_hops = trusted_proxy_hops(&values);
     let recording_values = values.clone();
+
+    // serve hosts one room, so this can only ever refuse a second. It is read
+    // anyway so the two modes cannot disagree about what the operator asked
+    // for.
+    let max_concurrent = read_max_concurrent(&values);
     let provider_order = value_or(&values, codetrial::config::PROVIDER_ORDER_KEY, "");
     let mut config =
         codetrial::config::load_from_pairs(values).map_err(|error| error.to_string())?;
@@ -357,6 +364,7 @@ fn run_serve(options: CliOptions) -> Result<(), String> {
                 config,
                 runtime: tokio::runtime::Handle::current(),
                 live: Arc::default(),
+                max_concurrent,
             }) as Arc<dyn RoomDispatcher>;
             axum::serve(
                 listener,
@@ -575,6 +583,19 @@ fn initialize_accounts(config: &WebServerConfig) -> Result<(), String> {
     codetrial::web::initialize_account_database(&login.db_path)
         .map_err(|error| format!("account database {}: {error}", login.db_path.display()))?;
     Ok(())
+}
+
+/// The dispatcher cap, with anything unusable about it said out loud.
+///
+/// One helper for both modes: a warning printed by web and swallowed by serve
+/// would be the same misconfiguration reported twice differently.
+fn read_max_concurrent(values: &BTreeMap<String, String>) -> usize {
+    let mut warnings = Vec::new();
+    let max_concurrent = codetrial::config::max_concurrent_interviews(values, &mut warnings);
+    for warning in &warnings {
+        eprintln!("{warning}");
+    }
+    max_concurrent
 }
 
 fn is_production(values: &BTreeMap<String, String>) -> bool {
