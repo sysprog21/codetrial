@@ -307,6 +307,14 @@ async fn responses_carry_baseline_security_headers() {
         "same-origin"
     );
 
+    // Asserted rather than trusted to stay: a header that grants nothing
+    // visible is the kind that disappears in a refactor with nobody noticing,
+    // because no page stops working when it does.
+    assert_eq!(
+        home.headers().get("permissions-policy").unwrap(),
+        "geolocation=()"
+    );
+
     let policy = home
         .headers()
         .get("content-security-policy")
@@ -619,10 +627,9 @@ async fn vendored_assets_are_served_typed_and_cached() {
         .unwrap();
     assert_eq!(response.headers()["cache-control"], "no-cache");
 
-    // The avatar asks whether a model is published with a HEAD before it
-    // imports 730 KB of renderer, so HEAD has to answer from metadata. Axum
-    // routes it to the same handler, which would otherwise read the whole 15 MB
-    // model into memory once per interview and discard the body.
+    // HEAD has to answer from metadata rather than by producing a body and
+    // throwing it away. Axum routes HEAD to the same handler, so without this
+    // the largest vendored file is read into memory once per probe.
     let head = client
         .head(format!("{base}/vendor/face-detection/face_detection.js"))
         .send()
@@ -631,44 +638,20 @@ async fn vendored_assets_are_served_typed_and_cached() {
     assert_eq!(head.status(), 200);
     assert!(head.headers().contains_key("content-length"));
     assert!(head.headers().contains_key("etag"));
+    let etag = head.headers()["etag"].clone();
     assert_eq!(head.bytes().await.unwrap().len(), 0);
-
-    // The probe's real target. A published model answers HEAD with its type and
-    // length and no body at all.
-    let model = client
-        .head(format!("{base}/vendor/avatar/jim.vrm"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(model.status(), 200);
-    assert_eq!(model.headers()["content-type"], "model/gltf-binary");
-
-    // Compared against the file, not against a number copied out of it once.
-    // The model is a swappable art asset, and a literal here turns "somebody
-    // re-exported jim.vrm" into a failing HTTP header test that names neither.
-    let model_bytes = std::fs::metadata(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/web/vendor/avatar/jim.vrm"
-    ))
-    .unwrap()
-    .len();
-    assert_eq!(model.headers()["content-length"], model_bytes.to_string());
-    let model_etag = model.headers()["etag"].clone();
-    assert_eq!(model.bytes().await.unwrap().len(), 0);
 
     // A conditional HEAD is a revalidation, so it answers 304 rather than
     // claiming the cached copy was replaced.
     let revalidated = client
-        .head(format!("{base}/vendor/avatar/jim.vrm"))
-        .header("if-none-match", model_etag)
+        .head(format!("{base}/vendor/face-detection/face_detection.js"))
+        .header("if-none-match", etag)
         .send()
         .await
         .unwrap();
     assert_eq!(revalidated.status(), 304);
 
-    // And a HEAD for something absent is still a 404, or the probe would treat
-    // every missing model as published and import 730 KB of renderer to find
-    // out otherwise.
+    // And a HEAD for something absent is still a 404 rather than an empty 200.
     let missing = client
         .head(format!("{base}/vendor/avatar/no-such-model.vrm"))
         .send()
@@ -676,28 +659,24 @@ async fn vendored_assets_are_served_typed_and_cached() {
         .unwrap();
     assert_eq!(missing.status(), 404);
 
-    // The one asset the compression layer must leave alone. A .vrm is a GLB,
-    // whose textures are already PNG or JPEG, so gzip spends seconds of CPU per
-    // request for a few percent, and that is most of the delay before Jim has a
-    // face. The exclusion keys off the exact content type above, which is why
-    // it is asserted here and not in a comment: retyping the extension would
-    // put the stall back with nothing failing.
-    let verbatim = client
+    // The retired model URL, over HTTP. `static_candidates` refuses it outright
+    // and `retired_avatar_model_is_never_served_from_disk` pins that refusal
+    // directly, so this is the end-to-end half: the refusal survives routing,
+    // the disk-first override, and the embedded fallback. It is deliberately
+    // not the proof that the model is unembedded, because it cannot be, and
+    // `no_model_is_embedded_in_the_binary` is where that lives.
+    let unserved = client
         .get(format!("{base}/vendor/avatar/jim.vrm"))
-        .header("accept-encoding", "gzip")
         .send()
         .await
         .unwrap();
-    assert_eq!(verbatim.status(), 200);
     assert_eq!(
-        verbatim.headers().get("content-encoding"),
-        None,
-        "jim.vrm must be served verbatim"
+        unserved.status(),
+        404,
+        "the avatar model must not be served from this tree"
     );
 
-    // And the rest of the tree still compresses, or the exclusion would have
-    // taken the whole layer with it: the wasm is 11 MB and the ratio there is
-    // real.
+    // The tree compresses: the wasm is 11 MB and the ratio there is real.
     let compressed = client
         .get(format!("{base}/vendor/face-detection/face_detection.js"))
         .header("accept-encoding", "gzip")

@@ -10,14 +10,15 @@ sources.
 
 ## Status
 
-Shipping. The renderer, behavior mapping, fallback, and vendored model are all
-in the repo.
+Shipping. The renderer, behavior mapping, and fallback are in the repo. The
+model is not: it is fetched by the browser from a pinned upstream URL and the
+repo carries only its hash and its license record.
 
 ## Model
 
 | Field | Value |
 |---|---|
-| File | `web/vendor/avatar/jim.vrm` |
+| Source | Fetched by the browser from the pinned URL in `web/avatar/model.js` |
 | Size | 10,917,800 bytes (10.92 MB) |
 | SHA-256 | `624d0d554bc205bbdc33e22a68a2c3c20edebb3e573011ead8878a65e5329b23` |
 | Spec version | VRM 1.0 |
@@ -89,12 +90,68 @@ builds it: import the same vendored bundle, do not add an import map.
 Only `ready` hides the neutral panel, so a state nobody has invented yet
 degrades to the panel rather than to an empty box.
 
-Every failure lands on `unavailable`: a missing `jim.vrm`, a browser with no
-WebGL, a corrupt model, and a model server that accepts the connection and then
-hangs are one path, not four. The load timeout is `LOAD_TIMEOUT_MS`, 30000 ms.
+Every failure lands on `unavailable`: an unreachable model, a browser with no
+WebGL, bytes that miss the pin, a corrupt model, and a host that accepts the
+connection and then hangs are one path, not five. The load timeout is
+`LOAD_TIMEOUT_MS`, 60000 ms, and it covers the download as well as the parse.
 
-The renderer is imported only after a `HEAD` on the model URL succeeds, so a
-checkout with no `jim.vrm` never downloads the 730 KB bundle.
+## How the model gets there
+
+`web/avatar/model.js` owns both halves of the pin, the URL and the hash, and
+downloads it only when a visible avatar starts.
+That is a separate file from the renderer on purpose: none of it touches
+Three.js, `web/avatar/vrm.js` is the one file that does, and the split is what
+lets `node --test` drive the cache branches and the pin without a browser.
+
+Every byte handed to the loader is checked against `MODEL_SHA256` there first,
+on the cache path as much as the network path: a cached entry is only as
+trustworthy as whatever last wrote to the origin's storage, and re-hashing
+11 MB costs tens of milliseconds against a download that costs seconds. Bytes
+that miss the pin are never rendered, and a cached entry that misses it is
+deleted and re-fetched. The renderer is handed the verified `ArrayBuffer`
+through `GLTFLoader.parseAsync`, so no URL it could re-fetch ever reaches it.
+
+The bytes come first, before the renderer bundle and before the WebGL context.
+
+Before the bundle, because both orders are serial and cost the same when the
+model is reachable, while only this one avoids paying 730 KB of Three.js for an
+avatar that was never going to render. `stage.js` and `recording.js` import
+`model.js`, which is 3 KB from this origin, and only reach for `vrm.js` once
+they are holding verified bytes.
+
+Before the context, because `createAvatar` can time out a stalled fetch but
+cannot cancel it. A context allocated in front of that await is one of the
+browser's ~16 held for the rest of the interview, under a neutral panel whose
+whole claim is that no canvas exists. A load that completes late is disposed by
+`createAvatar`; one that never completes is not. `loadVrm` takes bytes rather
+than a URL, so this ordering is a property of its signature and not of the
+order somebody wrote two statements in.
+
+The tempting objection is that a browser with no WebGL now pays for the
+download before finding out in milliseconds that it cannot render. That is the
+trade: an unreachable model is the common failure and a missing WebGL context
+is the rare one.
+
+Verification has no fallback. A browser with no `crypto.subtle`, which means an
+insecure context, gets the neutral panel rather than 11 MB of unverified
+third-party geometry. Storage does have one: `caches.open` rejects in Firefox
+private browsing and `cache.put` rejects once 11 MB will not fit, and both of
+those describe a browser that can still download and render the model
+perfectly. Those failures are swallowed and cost a download next time. The
+cache is named after the hash, so a model swap can never read a stale entry,
+and opening it deletes any superseded cache under the same prefix.
+
+The pinned URL is `raw.githubusercontent.com`, which is a git host and not a
+CDN. It is rate limited, it answers `cache-control: max-age=300`, and a
+commit-pinned path survives a force-push but not a repo rename or deletion. In
+exchange the release binary is 11 MB smaller and the bytes are never
+redistributed by this project. A deployment that cannot accept a third-party
+runtime dependency during an interview should serve the model from its own
+origin and change `MODEL_URL` and `MODEL_SHA256` in `web/avatar/model.js` and
+`AVATAR_MODEL_ORIGIN` in `src/web/policy.rs` together. A test asserts the URL
+sits under the origin the CSP permits, because that drift is otherwise
+invisible: the download is blocked and the avatar shows the same neutral panel
+every other failure shows.
 
 ## Behavior
 

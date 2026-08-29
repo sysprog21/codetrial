@@ -15,7 +15,6 @@ import { peakLevel } from "../audio-check.js";
 import {
   ANALYSER_FFT_SIZE,
   ANALYSER_WINDOW,
-  MODEL_URL,
   createAvatar,
   mouthFromAmplitude,
 } from "./avatar.js";
@@ -66,13 +65,8 @@ export function startAvatar() {
       nodes.jimAvatarNote.textContent = "Jim is here by voice; his avatar is unavailable in this browser.";
     },
     loadModel: async () => {
-      // Ask whether the model is published before importing the renderer.
-      // Without this every candidate downloads 730 KB of Three.js only to
-      // discover a 404, which is exactly the state of the repo today.
-      const published = await fetch(MODEL_URL, { method: "HEAD" });
-      if (!published.ok) throw new Error(`${MODEL_URL} is not published`);
-      const renderer = await import("./vrm.js");
-      return renderer.loadVrm({ mount: nodes.jimAvatar });
+      const { loadAvatarModel } = await import("./model.js");
+      return loadAvatarModel(nodes.jimAvatar);
     },
   });
   // Started only once something can actually render. Pumping regardless meant

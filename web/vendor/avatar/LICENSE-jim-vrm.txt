@@ -1,6 +1,7 @@
-web/vendor/avatar/jim.vrm
-
 Seed-san, by VirtualCast, Inc.
+
+Fetched by the candidate's browser at runtime. CodeTrial does not redistribute
+these bytes; the record below is the grant they arrive under.
 
 Source:    https://github.com/vrm-c/vrm-specification
 Path:      samples/Seed-san/vrm/Seed-san.vrm
@@ -14,7 +15,8 @@ VirtualCast's, not CodeTrial's, and is used under the grant below.
 
 The grant travels inside the file. VRM Public License 1.0 takes its terms from
 the VRMC_vrm.meta block of the model itself rather than from any web page, so
-what follows is that block, read verbatim out of the bytes committed here:
+what follows is that block, read verbatim out of the bytes the SHA-256 above
+pins:
 
   "name":              "Seed-san"
   "authors":           ["VirtualCast, Inc."]
@@ -33,14 +35,14 @@ beneath the avatar during the interview and was moved out because it crowded
 the workspace. Moving it is fine; dropping it is not, and
 tests/browser/avatar.test.js asserts a visible credit still exists in the UI.
 
-Reproduce this file:
+Fetch the model by hand, as web/avatar/model.js does at runtime:
 
-  curl -L -o jim.vrm \
-    https://raw.githubusercontent.com/vrm-c/vrm-specification/master/samples/Seed-san/vrm/Seed-san.vrm
-  shasum -a 256 jim.vrm
+  curl -L -o Seed-san.vrm \
+    https://raw.githubusercontent.com/vrm-c/vrm-specification/837f156dbce43ad69183ce1bdab549961ae1c1ee/samples/Seed-san/vrm/Seed-san.vrm
+  shasum -a 256 Seed-san.vrm
 
 Re-read the embedded grant at any time:
 
-  node -e 'const b=require("fs").readFileSync("jim.vrm");
+  node -e 'const b=require("fs").readFileSync("Seed-san.vrm");
     const j=JSON.parse(b.slice(20,20+b.readUInt32LE(12)).toString("utf8"));
     console.log(JSON.stringify(j.extensions.VRMC_vrm.meta,null,2))'

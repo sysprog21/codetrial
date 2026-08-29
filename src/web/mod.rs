@@ -344,20 +344,14 @@ pub(crate) fn web_router(
         // `web/` is 13 MB, over 11 MB of that wasm, and shipping it verbatim is
         // the one cost a candidate pays before the timer is useful to them.
         //
-        // Everything except the avatar model. A .vrm is a GLB, and a GLB is a
-        // container around textures that are already PNG or JPEG, so gzipping
-        // jim.vrm spends 2.3 seconds of CPU per request to take 10.9 MB down to
-        // 8.1 MB. Measured on loopback: 8 ms served verbatim against 2348 ms
-        // served gzipped, which is most of the delay before Jim has a face. The
-        // wasm keeps its compression, where the ratio is real.
-        .layer({
-            use tower_http::compression::predicate::{
-                DefaultPredicate, NotForContentType, Predicate,
-            };
-            tower_http::compression::CompressionLayer::new().compress_when(
-                DefaultPredicate::new().and(NotForContentType::const_new("model/gltf-binary")),
-            )
-        })
+        // This used to carve out `model/gltf-binary`, because gzipping the
+        // avatar model spent 2.3 seconds of CPU per request to take 10.9 MB
+        // down to 8.1 MB, and that was most of the delay before Jim had a face.
+        // Nothing here serves a .vrm any more: the model comes from its pinned
+        // upstream host straight to the browser, so the exception guarded a URL
+        // that no longer exists. Bring it back with a measurement if a model is
+        // ever served from this tree again.
+        .layer(tower_http::compression::CompressionLayer::new())
         .with_state(AppState {
             web_dir_exists: config.web_dir.is_dir(),
             config: Arc::new(config),

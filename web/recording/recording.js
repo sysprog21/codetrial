@@ -9,7 +9,6 @@ import { isAgent } from "/lib.js";
 import {
   ANALYSER_FFT_SIZE,
   ANALYSER_WINDOW,
-  MODEL_URL,
   createAvatar,
   mouthFromAmplitude,
 } from "/avatar/avatar.js";
@@ -411,12 +410,8 @@ function startAvatar() {
   avatar = createAvatar({
     mount: nodes.jimAvatar,
     loadModel: async () => {
-      // The model is a 404 in this repo today, and asking first is what keeps
-      // every recording from downloading a renderer to discover that.
-      const published = await fetch(MODEL_URL, { method: "HEAD" });
-      if (!published.ok) throw new Error(`${MODEL_URL} is not published`);
-      const renderer = await import("/avatar/vrm.js");
-      return renderer.loadVrm({ mount: nodes.jimAvatar });
+      const { loadAvatarModel } = await import("/avatar/model.js");
+      return loadAvatarModel(nodes.jimAvatar);
     },
   });
   void avatar.ready.then((rendered) => {

@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import {
   INTERVIEW_SOURCES,
   captures as matchAll,
+  failFetchWith,
   functionBody,
   initialisedModules,
   interviewSource,
@@ -42,14 +43,6 @@ function serveWebFromDisk(served = []) {
   };
 }
 
-/// Same shape, for the paths where the bank cannot be reached at all.
-function failFetchWith(handler) {
-  const previous = globalThis.fetch;
-  globalThis.fetch = handler;
-  return () => {
-    globalThis.fetch = previous;
-  };
-}
 const scripts = readdirSync(web).filter((name) => name.endsWith(".js"));
 const pages = readdirSync(web).filter((name) => name.endsWith(".html"));
 

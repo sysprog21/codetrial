@@ -15,6 +15,12 @@ use super::WebServerConfig;
 /// origin the page will actually reach for.
 pub(crate) const COMPILER_EXPLORER_ORIGIN: &str = "https://godbolt.org";
 
+/// Where the avatar model is fetched from. Kept in step with `MODEL_URL` in
+/// `web/avatar/model.js`, which a browser test asserts: the model is not served
+/// from this origin any more, so a page that cannot reach this host renders the
+/// neutral panel instead of Jim.
+const AVATAR_MODEL_ORIGIN: &str = "https://raw.githubusercontent.com";
+
 /// Built once, at startup. Parsing the policy per response was both wasted
 /// work and a silent fail-open: a header value that would not parse dropped
 /// the whole policy from every response with nothing said about it.
@@ -37,10 +43,20 @@ pub(crate) fn content_security_policy_header(config: &WebServerConfig) -> Header
 /// instead of all of them.
 ///
 /// Pyodide used to add `https://cdn.jsdelivr.net` to both `script-src` and
-/// `connect-src`. It is served from `web/vendor/pyodide/` now, so a page with
-/// compiled runs withdrawn names no third-party origin at all.
+/// `connect-src`. It is served from `web/vendor/pyodide/` now.
+///
+/// The avatar model origin is the one third-party name a page carries
+/// unconditionally, including a page with compiled runs withdrawn. It is not
+/// gated because there is no switch to gate it on: the avatar is not
+/// configurable, and inventing a knob to narrow one CSP entry would be a
+/// deployment concept nobody asked for. Two things are true and worth being
+/// honest about. `connect-src` matches origins, not paths, so naming the
+/// model's host grants every public file on it; and `script-src` already keeps
+/// `'unsafe-eval'` for the reason above, so this policy was never the thing
+/// standing between injected script and the network. It buys the same thing it
+/// bought before: a list a reviewer can read, rather than `*`.
 pub(crate) fn content_security_policy(config: &WebServerConfig) -> String {
-    let mut connect = vec!["'self'".to_string()];
+    let mut connect = vec!["'self'".to_string(), AVATAR_MODEL_ORIGIN.to_string()];
     if config.compiler_explorer_enabled {
         connect.push(COMPILER_EXPLORER_ORIGIN.to_string());
     }
@@ -224,6 +240,18 @@ pub(crate) async fn security_headers(
         header::REFERRER_POLICY,
         HeaderValue::from_static("same-origin"),
     );
+
+    // Only geolocation, because only geolocation changes anything. Permissions
+    // Policy already defaults camera, microphone and geolocation to `self`, so
+    // naming the first two would restate the default and buy nothing: a
+    // same-origin frame inherits them either way, and a cross-origin one gets
+    // them under neither. Nothing here asks for a location, so nothing this
+    // page ever embeds should be able to, and `script-src` keeping
+    // `'unsafe-eval'` is the reason that is worth stating rather than assuming.
+    headers.insert(
+        "permissions-policy",
+        HeaderValue::from_static("geolocation=()"),
+    );
     headers.insert(header::CONTENT_SECURITY_POLICY, policy);
     response
 }
@@ -265,6 +293,25 @@ mod tests {
     }
 
     /// The SDK gates region lookup on `.livekit.cloud` or `.livekit.run`, so
+    /// The model is fetched by the browser, so the policy has to name its host
+    /// or the download is blocked. Asserted because that failure is silent: a
+    /// blocked fetch reaches the page as the same neutral panel every other
+    /// avatar failure shows, so dropping this origin breaks the avatar with the
+    /// whole suite still green.
+    #[test]
+    fn the_policy_names_the_host_the_avatar_model_is_fetched_from() {
+        let policy = policy_for("wss://example.livekit.cloud");
+        assert!(policy.contains(AVATAR_MODEL_ORIGIN), "{policy}");
+
+        // In connect-src and not somewhere else in the string: it is fetched,
+        // not executed, so script-src naming it would be both wrong and wider.
+        let connect = policy
+            .split("; ")
+            .find(|directive| directive.starts_with("connect-src "))
+            .unwrap_or_default();
+        assert!(connect.contains(AVATAR_MODEL_ORIGIN), "{connect}");
+    }
+
     /// both fail over to a regional host and both need the wildcard. Each gets
     /// its own: a deployment on one has no reason to reach the other.
     #[test]

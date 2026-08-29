@@ -996,7 +996,7 @@ function dropRemoteAudio(track) {
 
 /// Presentation only. The renderer is imported here and nowhere else, so a
 /// session that never reaches this point never downloads Three.js, and a
-/// browser without WebGL, or a checkout without a licensed jim.vrm, lands on
+/// browser without WebGL, or a model that cannot be fetched or verified, lands on
 /// the neutral panel that web/interview.html already carries.
 async function consumeTranscript(room, reader, participant) {
   const attrs = reader.info?.attributes || {};

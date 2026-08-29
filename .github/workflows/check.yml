@@ -398,8 +398,8 @@ jobs:
           key: cargo-${{ runner.os }}-${{ steps.rust.outputs.id }}-${{ hashFiles('Cargo.lock', '.github/workflows/check.yml') }}
           restore-keys: cargo-${{ runner.os }}-${{ steps.rust.outputs.id }}-
 
-      # Needed even though no browser runs here: a Rust test reads
-      # web/vendor/avatar/jim.vrm to assert a content-length header, and
+      # Needed even though no browser runs here: a Rust test serves the
+      # fetched MediaPipe binaries and asserts their content types, and
       # cargo-mutants runs the real suite once per mutant.
       - name: Restore vendored bytes
         uses: actions/cache/restore@v6
@@ -596,7 +596,7 @@ jobs:
       - name: Compress macOS release asset
         if: runner.os == 'macOS'
         shell: bash
-        run: zip -q codetrial-${{ matrix.target }}.zip codetrial-${{ matrix.target }}
+        run: zip -q -9 codetrial-${{ matrix.target }}.zip codetrial-${{ matrix.target }}
       - name: Compress Windows release asset
         if: runner.os == 'Windows'
         shell: pwsh

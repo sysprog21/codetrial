@@ -7,10 +7,6 @@
 // frame, plus `dispose()`. A pose object beats eight setters because the whole
 // frame arrives at the renderer atomically and a test can assert it by value.
 
-// Declared here rather than in vrm.js so a caller can find out whether a model
-// exists without importing the renderer to ask.
-export const MODEL_URL = "/vendor/avatar/jim.vrm";
-
 // Bounds how long a load may stay adoptable, not how long the candidate waits:
 // the neutral panel is on screen for every state except `ready`, so nothing is
 // staring at a spinner. That is why this is generous. An 11 MB model needs
@@ -18,7 +14,13 @@ export const MODEL_URL = "/vendor/avatar/jim.vrm";
 // delivers it needs about 30, so a shorter deadline sent every such candidate
 // to the neutral panel while the download ran to completion anyway and was
 // then thrown away.
-export const LOAD_TIMEOUT_MS = 30000;
+//
+// 60 and not 30 because the download is no longer local. The deadline now has
+// to cover a round trip to the model's upstream host, the SHA-256 of 11 MB,
+// and the parse, and 30 was the download alone at the connection speed above.
+// Getting this wrong is close to invisible: the cache makes the second attempt
+// succeed, so whoever tests it twice never sees the first one fail.
+export const LOAD_TIMEOUT_MS = 60000;
 
 // Analyser. 512 bins at 48 kHz is ~10.7 ms of audio, and averaging 5 frames
 // smooths the per-syllable gaps without lagging behind speech.
@@ -127,7 +129,7 @@ function approach(current, target, dt, durationMs) {
 
 /// `loadModel` resolves to `{ apply(pose), dispose() }` or rejects. Rejecting,
 /// timing out, and never being called all land on the same neutral panel, so a
-/// browser without WebGL and a missing jim.vrm degrade identically.
+/// browser without WebGL and an unreachable model degrade identically.
 export function createAvatar({
   mount,
   loadModel,
