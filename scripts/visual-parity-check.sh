@@ -10,6 +10,11 @@ TMP=$(mktemp -d)
 SERVER_LOG="$TMP/server.log"
 LOGIN_DB_PATH="$TMP/accounts.db"
 LOGIN_SESSION_SECRET=visual-parity-session
+CONFIG_PATH="$TMP/codetrial.env.local"
+printf '%s\n' \
+  'LIVEKIT_URL=wss://example.livekit.cloud' \
+  'LIVEKIT_API_KEY=visual-parity-key' \
+  'LIVEKIT_API_SECRET=visual-parity-secret' >"$CONFIG_PATH"
 
 cleanup() {
   if [ "${SERVER_PID:-}" ]; then
@@ -47,10 +52,9 @@ fi
 mkdir -p "$GOLDEN_DIR" "$ARTIFACT_DIR"
 
 env -u LIVEKIT_URL -u LIVEKIT_API_KEY -u LIVEKIT_API_SECRET -u GOOGLE_API_KEY \
-  CODETRIAL_SKIP_CONFIG=1 \
   SESSION_SECRET="$LOGIN_SESSION_SECRET" \
   CODETRIAL_DB_PATH="$LOGIN_DB_PATH" \
-  cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- web --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
+  cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- web --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
   >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 

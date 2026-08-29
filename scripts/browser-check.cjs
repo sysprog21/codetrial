@@ -256,12 +256,17 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
     let rustAgentIdentity;
     let rustAgentParticipants = [];
     function startRustAgent(room) {
+      // The same `--config` the server was started with. `provider_dir` is
+      // the config file's directory, so an agent left to find its own would
+      // route against a different pool than the server it is answering for.
       rustAgent = spawn("cargo", [
         "run",
         "--quiet",
         "--",
         "run-livekit",
         room,
+        "--config",
+        process.env.BROWSER_CHECK_CONFIG_PATH,
       ], {
         cwd: process.env.ROOT,
         detached: true,

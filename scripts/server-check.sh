@@ -5,6 +5,11 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$ROOT/scripts/session-cookie.sh"
 TMP=$(mktemp -d)
 SERVER_LOG="$TMP/web.log"
+CONFIG_PATH="$TMP/codetrial.env.local"
+printf '%s\n' \
+  'LIVEKIT_URL=wss://example.livekit.cloud' \
+  'LIVEKIT_API_KEY=server-check-key' \
+  'LIVEKIT_API_SECRET=server-check-secret' >"$CONFIG_PATH"
 
 cleanup() {
   if [ "${SERVER_PID:-}" ]; then
@@ -38,10 +43,9 @@ else
   fi
 
   env -u LIVEKIT_URL -u LIVEKIT_API_KEY -u LIVEKIT_API_SECRET -u GOOGLE_API_KEY \
-    CODETRIAL_SKIP_CONFIG=1 \
     SESSION_SECRET=browser-check-session \
     CODETRIAL_DB_PATH="$TMP/accounts.db" \
-    cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- web --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
+    cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- web --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
     >"$SERVER_LOG" 2>&1 &
   SERVER_PID=$!
 fi
@@ -87,5 +91,5 @@ status=$(curl -sS \
   -w "%{http_code}" \
   "$BASE_URL/api/token")
 
-test "$status" = "500"
-grep -F "missing LiveKit credentials" "$TMP/signed-token.json" >/dev/null
+test "$status" = "200"
+grep -F '"token"' "$TMP/signed-token.json" >/dev/null

@@ -235,25 +235,159 @@ fn binary_livekit_runner_requires_room_name() {
 }
 
 #[test]
-fn binary_livekit_runner_fails_closed_on_missing_config() {
-    let (code, stdout, stderr) = run_cli_args(&["run-livekit", "interview-fixed"]);
+fn binary_help_exits_without_loading_config() {
+    for (args, usage) in [
+        (&["--help"][..], "usage: codetrial MODE [OPTIONS]"),
+        (&["web", "-h"][..], "usage: codetrial web [OPTIONS]"),
+        // Help beats parsing. Both of these are a flag missing its value, and
+        // answering a request for help with a parse error is the wrong answer
+        // to the question that was asked.
+        (
+            &["web", "--config", "--help"][..],
+            "usage: codetrial web [OPTIONS]",
+        ),
+        (
+            &["--help", "--config"][..],
+            "usage: codetrial MODE [OPTIONS]",
+        ),
+    ] {
+        let (code, stdout, stderr) = run_cli_args(args);
 
-    assert_eq!(code, 1);
+        assert_eq!(code, 0, "{args:?}");
+        assert!(stdout.contains(usage), "{args:?}: {stdout}");
+        assert!(stderr.is_empty(), "{args:?}: {stderr}");
+
+        // The options, not just the usage line. Help that names the modes and
+        // stops is help that does not answer "how do I point it at my config".
+        for flag in ["--config PATH", "--web-addr ADDR", "-h, --help"] {
+            assert!(
+                stdout.contains(flag),
+                "{args:?} must document {flag}: {stdout}"
+            );
+        }
+        assert!(
+            stdout.contains("--flag=value"),
+            "{args:?} must say how to pass a dash-prefixed value: {stdout}"
+        );
+    }
+}
+
+/// `--flag=value` is the only way to pass a value that starts with a dash, and
+/// `--` is the only way to pass a positional that does. Without both, the guard
+/// that stops `--config --help` from naming a file `--help` also makes a real
+/// path like `-dashfile.env` unreachable.
+#[test]
+fn binary_accepts_dash_prefixed_values_through_the_attached_form() {
+    let dir = temp_path("dash-values");
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("-dashfile.env");
+    write_config(&config, &dir, "127.0.0.1:1");
+    let (code, _, stderr) = run_cli_args(&[
+        "web",
+        &format!("--config={}", config.to_str().unwrap()),
+        "--web-addr=127.0.0.1:1",
+    ]);
+    let _ = std::fs::remove_dir_all(dir);
+
+    // It read the file: the only complaint left is the port it cannot bind.
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("failed to bind"), "{stderr}");
+    assert!(
+        !stderr.contains("required configuration file is missing"),
+        "the attached form must reach a dash-prefixed path: {stderr}"
+    );
+}
+
+/// A flag in the value slot is a missing value, not the value. Without that,
+/// `--config` followed by another flag reports a configuration file named
+/// `--web-addr`, and the operator goes looking for a path that never existed.
+#[test]
+fn binary_rejects_a_flag_standing_in_for_a_flag_value() {
+    let (code, stdout, stderr) = run_cli_args(&["web", "--config", "--web-addr"]);
+
+    assert_eq!(code, 2);
     assert!(stdout.is_empty());
-    assert!(stderr.contains("missing required config keys: LIVEKIT_URL"));
+    assert!(stderr.contains("--config requires a value"), "{stderr}");
+}
+
+/// The message names the file that was read, not a fixed `config/` path. A
+/// server started with `--config` elsewhere would otherwise send whoever runs
+/// it to edit a file it never opened.
+/// `--` ends the options, so what follows is a positional whatever it looks
+/// like, and the separator itself is not one of them.
+///
+/// `run-livekit` takes a room name, which is what makes the count observable
+/// from outside: exactly one positional after the mode word gets past the arity
+/// check and on to loading a config, and a separator left in the list, or a
+/// value dropped from it, stops there with a usage line instead.
+#[test]
+fn binary_treats_everything_after_a_double_dash_as_positional() {
+    let (code, stdout, stderr) = run_cli_args(&["run-livekit", "--", "-interview-dash"]);
+
+    assert_eq!(
+        code, 1,
+        "the room name must have been the only positional: {stderr}"
+    );
+    assert!(stdout.is_empty());
+    assert!(
+        stderr.contains("required configuration file is missing"),
+        "it got past the arity check and on to the config: {stderr}"
+    );
+    assert!(!stderr.contains("unknown flag"), "{stderr}");
+
+    // `web` takes no positional at all, so the same separator is refused there.
+    // Together the two pin the count rather than just the parse.
+    let (code, _, stderr) = run_cli_args(&["web", "--", "--web-addr"]);
+    assert_eq!(code, 2, "{stderr}");
+    assert!(stderr.contains("usage: codetrial web"), "{stderr}");
+    assert!(!stderr.contains("unknown flag"), "{stderr}");
 }
 
 #[test]
-fn binary_gemini_check_fails_closed_on_missing_config() {
-    let (code, stdout, stderr) = run_cli_args(&["check-gemini"]);
+fn binary_web_names_the_config_it_read_when_credentials_are_missing() {
+    let dir = temp_path("credential-less");
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("codetrial.env.local");
+    std::fs::write(&config, "CODETRIAL_WEB_ADDR=127.0.0.1:1\n").unwrap();
+    let (code, stdout, stderr) = run_cli_args(&["web", "--config", config.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(dir);
 
     assert_eq!(code, 1);
     assert!(stdout.is_empty());
-    assert!(stderr.contains("missing required config keys: LIVEKIT_URL"));
+    assert!(
+        stderr.contains("missing required LiveKit credentials"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(config.to_str().unwrap()), "{stderr}");
+}
+
+/// Every mode that reads configuration refuses without a file, and says which
+/// file it wanted. One test over the modes rather than one test each: the
+/// assertion is the same sentence three times, and a mode added to MODES that
+/// forgets this belongs in this list rather than in a fourth copy.
+///
+/// `serve` is not here. It needs a free address to reach the same refusal, so
+/// it carries its own test below.
+#[test]
+fn binary_modes_that_read_configuration_require_a_primary_config_file() {
+    for args in [
+        &["run-livekit", "interview-fixed"][..],
+        &["check-gemini"][..],
+        &["web"][..],
+    ] {
+        let (code, stdout, stderr) = run_cli_args(args);
+
+        assert_eq!(code, 1, "{args:?}: {stderr}");
+        assert!(stdout.is_empty(), "{args:?}: {stdout}");
+        assert!(
+            stderr.contains("required configuration file is missing"),
+            "{args:?}: {stderr}"
+        );
+    }
 }
 
 #[test]
-fn binary_serve_fails_closed_on_missing_config_after_web_bind() {
+fn binary_serve_requires_a_primary_config_file() {
     let (code, stdout, stderr) = with_free_addr(|addr| {
         let result = run_cli_args(&["serve", "--web-addr", addr]);
         (!result.2.contains("failed to bind")).then_some(result)
@@ -261,7 +395,7 @@ fn binary_serve_fails_closed_on_missing_config_after_web_bind() {
 
     assert_eq!(code, 1);
     assert!(stdout.is_empty());
-    assert!(stderr.contains("missing required config keys: LIVEKIT_URL"));
+    assert!(stderr.contains("required configuration file is missing"));
 }
 
 /// `serve` runs one agent in one room, and `/api/token` only hands that room
@@ -375,15 +509,25 @@ fn binary_web_does_not_require_github_oauth_config() {
 }
 
 #[test]
-fn binary_serve_reports_web_bind_failure_without_requiring_credentials() {
+fn binary_serve_reports_web_bind_failure_after_config_validation() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("occupied port should bind");
     let addr = listener.local_addr().unwrap().to_string();
-    let (code, stdout, stderr) = run_cli_args(&["serve", "--web-addr", &addr]);
+    let dir = temp_path("occupied-port");
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("codetrial.env.local");
+    write_config(&config, &dir, "127.0.0.1:1");
+    let (code, stdout, stderr) = run_cli_args(&[
+        "serve",
+        "--web-addr",
+        &addr,
+        "--config",
+        config.to_str().unwrap(),
+    ]);
+    let _ = std::fs::remove_dir_all(dir);
 
     assert_eq!(code, 1);
     assert!(stdout.is_empty());
     assert!(stderr.contains("web side failed to bind"));
-    assert!(!stderr.contains("missing required config keys"));
 }
 
 #[test]
@@ -467,18 +611,12 @@ fn binary_agent_web_uses_config_and_cli_override_precedence() {
 }
 
 #[test]
-fn binary_agent_web_auto_loads_local_config_file() {
+fn binary_agent_web_loads_primary_config_from_the_current_directory() {
     let cwd = temp_path("cwd");
     let web_dir = cwd.join("site");
-    let config_dir = cwd.join("config");
     std::fs::create_dir_all(&web_dir).expect("web dir should create");
-    std::fs::create_dir_all(&config_dir).expect("config dir should create");
     std::fs::write(web_dir.join("index.html"), "from local config").expect("index should write");
-    write_config(
-        &config_dir.join("codetrial.env.local"),
-        &web_dir,
-        "127.0.0.1:1",
-    );
+    write_config(&cwd.join("codetrial.env.local"), &web_dir, "127.0.0.1:1");
 
     let (cli_addr, mut child) = spawn_server(|addr| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_codetrial"));
@@ -516,112 +654,4 @@ fn binary_agent_web_auto_loads_local_config_file() {
 
     stop_child(&mut child);
     let _ = std::fs::remove_dir_all(cwd);
-}
-
-#[test]
-fn binary_agent_can_skip_auto_local_config_file() {
-    let cwd = temp_path("cwd");
-    let web_dir = cwd.join("site");
-    let config_dir = cwd.join("config");
-    std::fs::create_dir_all(&web_dir).expect("web dir should create");
-    std::fs::create_dir_all(&config_dir).expect("config dir should create");
-    write_config(
-        &config_dir.join("codetrial.env.local"),
-        &web_dir,
-        "127.0.0.1:1",
-    );
-
-    let output = Command::new(env!("CARGO_BIN_EXE_codetrial"))
-        .arg("check-gemini")
-        .current_dir(&cwd)
-        .env("CODETRIAL_SKIP_CONFIG", "1")
-        .env_remove("LIVEKIT_URL")
-        .env_remove("LIVEKIT_API_KEY")
-        .env_remove("LIVEKIT_API_SECRET")
-        .env_remove("GOOGLE_API_KEY")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .expect("codetrial should exit");
-
-    let _ = std::fs::remove_dir_all(cwd);
-
-    assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("missing required config keys"));
-}
-
-#[test]
-fn binary_help_exits_without_loading_config() {
-    for (args, usage) in [
-        (&["--help"][..], "usage: codetrial MODE [OPTIONS]"),
-        (&["web", "-h"][..], "usage: codetrial web [OPTIONS]"),
-        // Help beats parsing. Both of these are a flag missing its value, and
-        // answering a request for help with a parse error is the wrong answer
-        // to the question that was asked.
-        (
-            &["web", "--config", "--help"][..],
-            "usage: codetrial web [OPTIONS]",
-        ),
-        (
-            &["--help", "--config"][..],
-            "usage: codetrial MODE [OPTIONS]",
-        ),
-    ] {
-        let (code, stdout, stderr) = run_cli_args(args);
-
-        assert_eq!(code, 0, "{args:?}");
-        assert!(stdout.contains(usage), "{args:?}: {stdout}");
-        assert!(stderr.is_empty(), "{args:?}: {stderr}");
-
-        // The options, not just the usage line. Help that names the modes and
-        // stops is help that does not answer "how do I point it at my config".
-        for flag in ["--config PATH", "--web-addr ADDR", "-h, --help"] {
-            assert!(
-                stdout.contains(flag),
-                "{args:?} must document {flag}: {stdout}"
-            );
-        }
-        assert!(
-            stdout.contains("--flag=value"),
-            "{args:?} must say how to pass a dash-prefixed value: {stdout}"
-        );
-    }
-}
-
-/// `--flag=value` is the only way to pass a value that starts with a dash, and
-/// `--` is the only way to pass a positional that does. Without both, the guard
-/// that stops `--config --help` from naming a file `--help` also makes a real
-/// path like `-dashfile.env` unreachable.
-#[test]
-fn binary_accepts_dash_prefixed_values_through_the_attached_form() {
-    let dir = temp_path("dash-values");
-    std::fs::create_dir_all(&dir).unwrap();
-    let config = dir.join("-dashfile.env");
-    write_config(&config, &dir, "127.0.0.1:1");
-    let (code, _, stderr) = run_cli_args(&[
-        "web",
-        &format!("--config={}", config.to_str().unwrap()),
-        "--web-addr=127.0.0.1:1",
-    ]);
-    let _ = std::fs::remove_dir_all(dir);
-
-    // It read the file: the only complaint left is the port it cannot bind.
-    assert_eq!(code, 1, "{stderr}");
-    assert!(stderr.contains("failed to bind"), "{stderr}");
-    assert!(
-        !stderr.contains("required configuration file is missing"),
-        "the attached form must reach a dash-prefixed path: {stderr}"
-    );
-}
-
-/// A flag in the value slot is a missing value, not the value. Without that,
-/// `--config` followed by another flag reports a configuration file named
-/// `--web-addr`, and the operator goes looking for a path that never existed.
-#[test]
-fn binary_rejects_a_flag_standing_in_for_a_flag_value() {
-    let (code, stdout, stderr) = run_cli_args(&["web", "--config", "--web-addr"]);
-
-    assert_eq!(code, 2);
-    assert!(stdout.is_empty());
-    assert!(stderr.contains("--config requires a value"), "{stderr}");
 }

@@ -7,7 +7,6 @@ use codetrial::config::{
 };
 use codetrial::web::{RoomDispatcher, WebServerConfig};
 
-const DEFAULT_CONFIG_DIR: &str = "config";
 const DEFAULT_CONFIG_PATH: &str = "config/codetrial.env.local";
 const DEFAULT_ACCOUNT_DB_PATH: &str = "codetrial.db";
 const DEFAULT_SESSION_SECRET: &str = "codetrial-local-session";
@@ -197,9 +196,8 @@ fn print_help(usage: Option<&str>) {
     );
 }
 
-fn bind_web_listener(values: &BTreeMap<String, String>) -> Result<std::net::TcpListener, String> {
-    let addr = value_or(values, "CODETRIAL_WEB_ADDR", DEFAULT_WEB_ADDR);
-    let listener = std::net::TcpListener::bind(&addr)
+fn bind_web_listener(addr: &str) -> Result<std::net::TcpListener, String> {
+    let listener = std::net::TcpListener::bind(addr)
         .map_err(|error| format!("failed to bind {addr}: {error}"))?;
     listener
         .set_nonblocking(true)
@@ -223,7 +221,13 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     for warning in relaxed_for_local_use(&values) {
         eprintln!("{warning}");
     }
-    let listener = bind_web_listener(&values)?;
+
+    // Beside the other startup warnings and not next to the dispatcher that
+    // consumes it. A cap the operator wrote and this cannot honor is worth
+    // saying before the first thing that can fail: read late, a bad bind or a
+    // half-configured pool ends the process first and the operator never learns
+    // the number in their config file was ignored.
+    let max_concurrent = read_max_concurrent(&values);
 
     // Built straight from the values rather than through `load_from_pairs`:
     // this mode serves HTTP and mints LiveKit tokens, and has no use for the
@@ -231,25 +235,35 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     // a web-only deployment into an empty pool, silently.
     let production = is_production(&values);
     let mut pool = codetrial::config::ProviderPool::default();
-    if let (Some(url), Some(api_key), Some(api_secret)) = (
+    let (url, api_key, api_secret) = match (
         nonempty(&values, "LIVEKIT_URL"),
         nonempty(&values, "LIVEKIT_API_KEY"),
         nonempty(&values, "LIVEKIT_API_SECRET"),
     ) {
-        codetrial::config::validate_livekit_url(&url, production)?;
-        pool.providers.push(codetrial::config::Provider {
-            id: codetrial::config::PRIMARY_PROVIDER_ID.to_string(),
-            url,
-            api_key,
-            api_secret,
-            google_api_key: value_or(&values, "GOOGLE_API_KEY", ""),
-        });
-    }
+        (Some(url), Some(api_key), Some(api_secret)) => (url, api_key, api_secret),
+
+        // Names the file that was actually read. A fixed `config/` in this
+        // message sends anyone running with `--config` or a bare
+        // `./codetrial.env.local` to edit a file the server never opened.
+        _ => {
+            return Err(format!(
+                "missing required LiveKit credentials: set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET in {}",
+                primary_config_path(&options)?.display()
+            ));
+        }
+    };
+    codetrial::config::validate_livekit_url(&url, production)?;
+    pool.providers.push(codetrial::config::Provider {
+        id: codetrial::config::PRIMARY_PROVIDER_ID.to_string(),
+        url,
+        api_key,
+        api_secret,
+        google_api_key: value_or(&values, "GOOGLE_API_KEY", ""),
+    });
     extend_pool(
         &mut pool,
         production,
         &provider_dir(&options),
-        should_discover_providers(&options),
         &value_or(&values, codetrial::config::PROVIDER_ORDER_KEY, ""),
     );
 
@@ -290,6 +304,7 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     };
 
     initialize_accounts(&config)?;
+    let listener = bind_web_listener(&value_or(&values, "CODETRIAL_WEB_ADDR", DEFAULT_WEB_ADDR))?;
 
     // Whether this process also hosts interviewers. A full agent config, which
     // is a Gemini key on top of what the web side needs, means yes; without it
@@ -300,7 +315,6 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     // purpose. The dispatcher never looks a provider up: it is handed the one
     // the token was minted from, so a second scan could only introduce a pool
     // that disagrees with the web side's.
-    let max_concurrent = read_max_concurrent(&values);
     let agent_config = codetrial::config::load_from_pairs(values).ok();
     if agent_config.is_none() {
         eprintln!(
@@ -332,7 +346,6 @@ fn run_web(options: CliOptions) -> Result<(), String> {
 
 fn run_serve(options: CliOptions) -> Result<(), String> {
     let values = load_values(&options)?;
-    let listener = bind_web_listener(&values).map_err(|error| format!("web side {error}"))?;
 
     // `serve` runs one agent in one room, and `/api/token` only hands out that
     // room while `production` is false. Refusing here beats booting a server
@@ -357,7 +370,7 @@ fn run_serve(options: CliOptions) -> Result<(), String> {
     let trusted_proxy_hops = trusted_proxy_hops(&values);
     let recording_values = values.clone();
 
-    // serve hosts one room, so this can only ever refuse a second. It is read
+    // `serve` hosts one room, so this can only ever refuse a second. It is read
     // anyway so the two modes cannot disagree about what the operator asked
     // for.
     let max_concurrent = read_max_concurrent(&values);
@@ -369,7 +382,6 @@ fn run_serve(options: CliOptions) -> Result<(), String> {
         &mut config.pool,
         false,
         &provider_dir(&options),
-        should_discover_providers(&options),
         &provider_order,
     );
 
@@ -415,6 +427,8 @@ fn run_serve(options: CliOptions) -> Result<(), String> {
     };
 
     initialize_accounts(&web_config)?;
+    let listener =
+        bind_web_listener(&config.web_addr).map_err(|error| format!("web side {error}"))?;
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
     runtime
         .block_on(async {
@@ -532,7 +546,6 @@ fn load_agent_config(options: &CliOptions) -> Result<AgentConfig, String> {
         &mut config.pool,
         production,
         &provider_dir(options),
-        should_discover_providers(options),
         &provider_order,
     );
     Ok(config)
@@ -540,17 +553,9 @@ fn load_agent_config(options: &CliOptions) -> Result<AgentConfig, String> {
 
 fn load_values(options: &CliOptions) -> Result<BTreeMap<String, String>, String> {
     let mut values = std::env::vars().collect::<BTreeMap<_, _>>();
-    if std::env::var("CODETRIAL_SKIP_CONFIG").is_err()
-        && std::path::Path::new(DEFAULT_CONFIG_PATH).is_file()
-    {
-        for (key, value) in read_config_file(DEFAULT_CONFIG_PATH)? {
-            values.insert(key, value);
-        }
-    }
-    if let Some(path) = &options.config_path {
-        for (key, value) in read_config_file(path)? {
-            values.insert(key, value);
-        }
+    let path = primary_config_path(options)?;
+    for (key, value) in codetrial::config::read_config_file(&path)? {
+        values.insert(key, value);
     }
     if let Some(value) = &options.web_addr {
         values.insert("CODETRIAL_WEB_ADDR".to_string(), value.clone());
@@ -567,8 +572,26 @@ fn load_values(options: &CliOptions) -> Result<BTreeMap<String, String>, String>
     Ok(values)
 }
 
-fn read_config_file(path: &str) -> Result<Vec<(String, String)>, String> {
-    codetrial::config::read_config_file(std::path::Path::new(path))
+fn primary_config_path(options: &CliOptions) -> Result<PathBuf, String> {
+    if let Some(path) = &options.config_path {
+        let path = PathBuf::from(path);
+        if !path.is_file() {
+            return Err(format!(
+                "required configuration file is missing: {}",
+                path.display()
+            ));
+        }
+        return Ok(path);
+    }
+    for path in [
+        PathBuf::from(DEFAULT_CONFIG_PATH),
+        PathBuf::from("codetrial.env.local"),
+    ] {
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    Err("required configuration file is missing: ./config/codetrial.env.local or ./codetrial.env.local; copy config/codetrial.env.example to one of these paths".to_string())
 }
 
 /// Providers live beside the config file the operator named, so
@@ -578,19 +601,27 @@ fn read_config_file(path: &str) -> Result<Vec<(String, String)>, String> {
 /// halves of a deployment are launched with the same `--config`, and that is
 /// what makes them agree on the pool.
 fn provider_dir(options: &CliOptions) -> PathBuf {
-    let Some(path) = options.config_path.as_deref() else {
-        return PathBuf::from(DEFAULT_CONFIG_DIR);
-    };
-    match std::path::Path::new(path).parent() {
+    // The search order comes from primary_config_path rather than being written
+    // out again here. Spelled twice, it was free to drift, and the drift is
+    // silent: the server keeps reading its own config while the pool quietly
+    // collapses to the primary project.
+    //
+    // A named file still decides, even when it is missing. The operator said
+    // where the config lives, and load_values is what refuses a path that is
+    // not there; answering with a different directory would be this function
+    // second-guessing that.
+    let path = options
+        .config_path
+        .as_deref()
+        .map(PathBuf::from)
+        .or_else(|| primary_config_path(options).ok())
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+    match path.parent() {
         // A bare filename has an empty parent, and its siblings are in the
         // working directory, not in `config/`.
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
         _ => PathBuf::from("."),
     }
-}
-
-fn should_discover_providers(options: &CliOptions) -> bool {
-    options.config_path.is_some() || std::env::var("CODETRIAL_SKIP_CONFIG").is_err()
 }
 
 /// The pool this process routes with. Discovery happens here, once, and never
@@ -601,16 +632,13 @@ fn extend_pool(
     pool: &mut codetrial::config::ProviderPool,
     production: bool,
     config_dir: &std::path::Path,
-    discover: bool,
     order: &str,
 ) {
-    if discover {
-        let (providers, warnings) = codetrial::config::discover_providers(config_dir, production);
-        for warning in warnings {
-            eprintln!("{warning}");
-        }
-        pool.providers.extend(providers);
+    let (providers, warnings) = codetrial::config::discover_providers(config_dir, production);
+    for warning in warnings {
+        eprintln!("{warning}");
     }
+    pool.providers.extend(providers);
 
     // Outside the `discover` guard: an order naming the environment provider is
     // still an order, and a deployment with discovery off should not silently
@@ -797,7 +825,6 @@ fn account_db_path(values: &BTreeMap<String, String>) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-
     fn values(pairs: &[(&str, &str)]) -> super::BTreeMap<String, String> {
         pairs
             .iter()
@@ -963,15 +990,6 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(super::provider_dir(&options), std::path::PathBuf::from("."));
-    }
-
-    #[test]
-    fn explicit_config_keeps_provider_discovery_when_auto_config_is_skipped() {
-        let options = super::CliOptions {
-            config_path: Some("/etc/codetrial/prod.env".to_string()),
-            ..Default::default()
-        };
-        assert!(super::should_discover_providers(&options));
     }
 
     /// The pair, not the id. `login_config` enables OAuth only when it has

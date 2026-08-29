@@ -512,6 +512,13 @@ jobs:
         run: |
           empty=$(mktemp -d)
           cp target/${{ matrix.target }}/release/codetrial "$empty/"
+          # `web` refuses to start without a primary config file, so the empty
+          # directory gets one. It is still empty of a web tree, which is the
+          # only emptiness this step is about.
+          printf '%s\n' \
+            'LIVEKIT_URL=wss://example.livekit.cloud' \
+            'LIVEKIT_API_KEY=embed-check-key' \
+            'LIVEKIT_API_SECRET=embed-check-secret' >"$empty/codetrial.env.local"
           # Killed from a trap rather than only on the happy path, and with its
           # output redirected: a server left running past a failed probe holds
           # the step's stdout open, which turns a one-line failure into a job

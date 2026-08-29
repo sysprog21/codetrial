@@ -1487,7 +1487,15 @@ fn rust_problem_bank_matches_the_browser_problem_bank() {
 async fn server_check_accepts_running_rust_server() {
     let (mut config, cookie, db_path) = signed_in_web_config("server-check");
     config.web_dir = Path::new("web").to_path_buf();
-    config.pool = Default::default();
+
+    // A credentialled pool, because an empty one is no longer a server that can
+    // exist: `run_web` refuses to start without LiveKit credentials, so the
+    // check asserts `/api/token` mints rather than 500s.
+    config.pool = primary_pool(
+        "wss://example.livekit.cloud",
+        "server-check-key",
+        "server-check-secret",
+    );
     let (base, server) = spawn_web_server(config).await;
     let output = tokio::task::spawn_blocking(move || {
         Command::new("scripts/server-check.sh")
@@ -1515,7 +1523,11 @@ async fn server_check_accepts_running_rust_server() {
 async fn server_check_signs_itself_in_against_an_external_server() {
     let (mut config, _, db_path) = signed_in_web_config("server-check-cookie");
     config.web_dir = Path::new("web").to_path_buf();
-    config.pool = Default::default();
+    config.pool = primary_pool(
+        "wss://example.livekit.cloud",
+        "server-check-key",
+        "server-check-secret",
+    );
     let (base, server) = spawn_web_server(config).await;
     let output = tokio::task::spawn_blocking(move || {
         Command::new("scripts/server-check.sh")

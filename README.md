@@ -69,8 +69,10 @@ Explorer service.
 3. Set `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, and
    `GOOGLE_API_KEY` in that file.
 
-The binary loads `config/codetrial.env.local` automatically. Use `--config PATH`
-for another file, or `CODETRIAL_SKIP_CONFIG=1` to disable that behavior.
+The binary requires `codetrial.env.local`, searching `./config/` before the
+current directory. Use `--config PATH` for an alternate primary config file.
+Extra `codetrial.env.*` files in the same directory are optional providers used
+for pooling.
 
 ## Run
 
@@ -192,7 +194,7 @@ run on their own: `scripts/server-check.sh`, `gemini-check.sh`,
 ## Configuration
 
 `config/codetrial.env.example` documents the variables that belong in a config
-file. `NODE_ENV`, `CODETRIAL_SKIP_CONFIG`, and `INTERVIEW_ROOM_NAME` are set in
+file. `NODE_ENV` and `INTERVIEW_ROOM_NAME` are set in
 the environment instead. The common ones are:
 
 | Variable | Default | Purpose |
