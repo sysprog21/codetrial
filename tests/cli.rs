@@ -3,7 +3,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn run_cli_args(args: &[&str]) -> (i32, String, String) {
     run_cli_args_with_env(args, &[])
@@ -12,9 +12,91 @@ fn run_cli_args(args: &[&str]) -> (i32, String, String) {
 fn run_cli_args_with_env(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, String) {
     let cwd = temp_path("empty-cwd");
     std::fs::create_dir_all(&cwd).expect("empty cwd should create");
-    let output = Command::new(env!("CARGO_BIN_EXE_codetrial"))
+    let output = cli_command(args, envs, &cwd)
+        .output()
+        .expect("codetrial should exit");
+    let _ = std::fs::remove_dir_all(cwd);
+
+    (
+        output.status.code().unwrap_or_default(),
+        String::from_utf8(output.stdout).expect("stdout should be UTF-8"),
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+    )
+}
+
+/// The same invocation, but the process is required to stop by itself.
+///
+/// `run_cli_args` waits forever, which is right for a mode that always exits.
+/// A refusal test is not that: what it asserts is that the binary *stops*, so a
+/// regression letting it serve instead hangs the suite rather than failing it,
+/// and `cargo mutants` scores that as a timeout instead of a caught mutant.
+/// That is not hypothetical; it is how `replace == with != in run_web` reached
+/// CI as a 33-second timeout. Bounded, so a guard that stopped guarding is a
+/// red test.
+fn run_cli_until_exit(args: &[&str]) -> (i32, String, String) {
+    // Generous for a loaded runner, and well inside the timeout `cargo mutants`
+    // derives from the baseline (33s when this was written). A bound above that
+    // would score a caught mutant as a timeout again, which is the failure this
+    // whole helper exists to remove.
+    const LIMIT: Duration = Duration::from_secs(10);
+
+    let cwd = temp_path("empty-cwd");
+    std::fs::create_dir_all(&cwd).expect("empty cwd should create");
+    let mut child = cli_command(args, &[], &cwd)
+        .spawn()
+        .expect("codetrial should start");
+
+    // Drained while the child runs, not after it exits. A pipe holds about
+    // 64KB; a child that filled one would block in `write` and never reach the
+    // exit this loop is watching for, so the helper would report a refusal that
+    // did not happen as a timeout that did not either. These paths print a few
+    // lines, but the trap belongs to whoever reuses this next.
+    let mut out = child.stdout.take().expect("stdout is piped");
+    let mut err = child.stderr.take().expect("stderr is piped");
+    let out = thread::spawn(move || {
+        let mut text = String::new();
+        out.read_to_string(&mut text)
+            .expect("stdout should be UTF-8");
+        text
+    });
+    let err = thread::spawn(move || {
+        let mut text = String::new();
+        err.read_to_string(&mut text)
+            .expect("stderr should be UTF-8");
+        text
+    });
+
+    let deadline = Instant::now() + LIMIT;
+    let status = loop {
+        match child.try_wait().expect("child status should be readable") {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                // Kills and reaps, which also closes the pipes and lets the two
+                // readers finish rather than parking this thread on `join`.
+                stop_child(&mut child);
+                let _ = std::fs::remove_dir_all(&cwd);
+                panic!("codetrial {args:?} was still running after {LIMIT:?}; it had to refuse");
+            }
+            None => thread::sleep(Duration::from_millis(25)),
+        }
+    };
+
+    let stdout = out.join().expect("stdout reader should finish");
+    let stderr = err.join().expect("stderr reader should finish");
+    let _ = std::fs::remove_dir_all(&cwd);
+
+    (status.code().unwrap_or_default(), stdout, stderr)
+}
+
+/// One place builds the invocation, so the two runners cannot drift about which
+/// environment the child inherits. The removals matter: a developer with
+/// `NODE_ENV` or `SESSION_SECRET` exported would otherwise change what these
+/// tests are testing.
+fn cli_command(args: &[&str], envs: &[(&str, &str)], cwd: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_codetrial"));
+    command
         .args(args)
-        .current_dir(&cwd)
+        .current_dir(cwd)
         .env_remove("LIVEKIT_URL")
         .env_remove("LIVEKIT_API_KEY")
         .env_remove("LIVEKIT_API_SECRET")
@@ -27,16 +109,8 @@ fn run_cli_args_with_env(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, 
         .env_remove("SESSION_SECRET")
         .envs(envs.iter().copied())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .expect("codetrial should exit");
-    let _ = std::fs::remove_dir_all(cwd);
-
-    (
-        output.status.code().unwrap_or_default(),
-        String::from_utf8(output.stdout).expect("stdout should be UTF-8"),
-        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
-    )
+        .stderr(Stdio::piped());
+    command
 }
 
 /// Binding then dropping is inherently racy: the child re-binds the port a
@@ -413,7 +487,7 @@ fn binary_web_refuses_a_public_listener_without_a_session_secret() {
 
     let (code, stdout, stderr) = with_free_addr(|addr| {
         let port = addr.rsplit_once(':').unwrap().1;
-        let result = run_cli_args(&[
+        let result = run_cli_until_exit(&[
             "web",
             "--web-addr",
             &format!("0.0.0.0:{port}"),
@@ -452,7 +526,7 @@ fn binary_web_refuses_production_without_a_session_secret() {
 
     // No free-port dance: the refusal comes before the bind, so no listener is
     // ever created and there is no port to race for.
-    let (code, stdout, stderr) = run_cli_args(&[
+    let (code, stdout, stderr) = run_cli_until_exit(&[
         "web",
         "--web-addr",
         "127.0.0.1:0",
