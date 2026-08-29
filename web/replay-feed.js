@@ -72,9 +72,24 @@ export function closeReplay() {
 /// interview that is still happening, and a queue that grew through an outage
 /// would deliver a burst of stale state after it, on top of the newer state
 /// that had already arrived.
-export async function flushReplay() {
+/// One flush at a time, in the order they were asked for.
+///
+/// `recordReplay` starts one whenever the queue fills, and the interview's last
+/// act awaits one. Left unserialized, a batch posted while another was still
+/// awaiting `fetch` could commit first, and the replay would be ordered by
+/// whichever request the server happened to finish rather than by what the
+/// candidate did. Chained rather than skipped, because a caller that is told
+/// "already flushing" and returns has silently dropped its own batch.
+let flushChain = Promise.resolve();
+
+export function flushReplay() {
   clearTimeout(replayTimer);
   replayTimer = null;
+  flushChain = flushChain.then(sendQueuedBatch);
+  return flushChain;
+}
+
+async function sendQueuedBatch() {
   if (!replayQueue.length || replayClosed) return;
   const batch = replayQueue.splice(0, REPLAY_MAX_BATCH);
   try {
@@ -83,10 +98,27 @@ export async function flushReplay() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ events: batch }),
     });
-    // Over quota, or an interview whose consent has been withdrawn. Both mean
-    // the server will refuse everything after this, and a producer that kept
-    // posting would spend the rest of the interview being told so.
-    if (response.status === 413 || response.status === 404) closeReplay();
+    // 404 is an interview whose consent has been withdrawn, and quota is an
+    // interview that has recorded all it may. Both mean the server will refuse
+    // everything after this, and a producer that kept posting would spend the
+    // rest of the interview being told so.
+    //
+    // The other 413 is `replay_batch_too_large`, which is about this batch and
+    // not about the interview: one oversized editor payload used to close the
+    // feed for good, so a candidate who pasted a large file lost the rest of
+    // their replay. That batch is already gone from the queue, and the smaller
+    // events behind it are still worth sending.
+    if (response.status === 404) {
+      closeReplay();
+      return;
+    }
+    if (response.status === 413) {
+      const code = await response
+        .json()
+        .then((body) => body?.code)
+        .catch(() => null);
+      if (code === "replay_quota_exceeded") closeReplay();
+    }
   } catch {
     // Offline. The interview is what matters and it is still running.
   }
@@ -94,8 +126,18 @@ export async function flushReplay() {
 }
 
 /// The problem heading, as the recording shows it.
+///
+/// Every stage event carries it, not just the first. `Stage` is a snapshot kind
+/// on the server, so the newest one supersedes every earlier one when a replay
+/// is assembled: a clock tick carrying only the seconds would replace the
+/// heading with nothing, and a reader who joined late would find the problem
+/// title blank.
+function stagePayload(extra) {
+  return { title: problem.title, meta: nodes.meta.textContent, ...extra };
+}
+
 export function recordStage() {
-  recordReplay("stage", { title: problem.title, meta: nodes.meta.textContent });
+  recordReplay("stage", stagePayload());
 }
 
 /// Writes down what the candidate agreed to, and returns the interview id the
@@ -130,7 +172,7 @@ export async function recordConsent() {
 export function recordStageTick(remainingSeconds) {
   if (Date.now() - replayStageAt < REPLAY_STAGE_MS) return;
   replayStageAt = Date.now();
-  recordReplay("stage", { remainingSeconds });
+  recordReplay("stage", stagePayload({ remainingSeconds }));
 }
 
 /// On the change, not on the tick. `updateAgentState` runs for every

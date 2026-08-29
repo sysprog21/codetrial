@@ -8,13 +8,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  firstPartyScripts,
   INTERVIEW_SOURCES,
   captures as matchAll,
   functionBody,
   initialisedModules,
   interviewSource,
   root,
+  firstPartyScripts,
 } from "./source.js";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -458,14 +458,6 @@ test("the interview path is read whole", () => {
   );
 });
 
-test("runner progress statuses stay wired to each execution path", () => {
-  const script = read("runners.js");
-
-  assert.match(script, /onStatus = null/);
-  assert.match(script, /reportStatus\??\.\("booting"\)|reportStatus\("booting"\)/);
-  assert.match(script, /reportStatus\??\.\("compiling"\)|reportStatus\("compiling"\)/);
-  assert.match(script, /reportStatus\??\.\("running"\)|reportStatus\("running"\)/);
-});
 
 /// Every relative import in every first-party script resolves to a file.
 ///
@@ -489,4 +481,13 @@ test("relative imports resolve to files that exist", () => {
     }
   }
   assert.deepEqual(missing, [], "these specifiers name nothing on disk");
+});
+
+test("runner progress statuses stay wired to each execution path", () => {
+  const script = read("runners.js");
+
+  assert.match(script, /onStatus = null/);
+  assert.match(script, /reportStatus\??\.\("booting"\)|reportStatus\("booting"\)/);
+  assert.match(script, /reportStatus\??\.\("compiling"\)|reportStatus\("compiling"\)/);
+  assert.match(script, /reportStatus\??\.\("running"\)|reportStatus\("running"\)/);
 });

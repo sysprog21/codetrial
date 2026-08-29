@@ -82,10 +82,17 @@ export async function pollRecordingState() {
     // for the rest of the page's life.
     if ([401, 403, 404].includes(response.status)) {
       stopRecordingPoll();
-      if (response.status === 401) {
-        nodes.recordingState.hidden = false;
-        nodes.recordingState.textContent = "Sign in again to see the recording status.";
-      }
+      nodes.recordingState.hidden = false;
+      // Every one of these is terminal, so every one of them replaces the
+      // label. Stopping the poll and leaving "Checking whether the recording
+      // started." on screen is the worst reading available: the candidate
+      // agreed to be recorded and is left believing the answer is still
+      // coming, forever, when the server has already said there is nothing.
+      nodes.recordingState.textContent =
+        response.status === 401
+          ? "Sign in again to see the recording status."
+          : "The recording did not start. The interview is not being recorded.";
+      nodes.recordingState.dataset.settled = "1";
     }
   } catch (error) {
     // The interview is the thing that matters; a status that cannot be read is

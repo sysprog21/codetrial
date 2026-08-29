@@ -1111,7 +1111,6 @@ function setLanguage(language) {
 /// another branch. The two-owner version this replaces needed a boolean lock, a
 /// deferred-text field that only one of the two owners got, and a lock-breaking
 /// special case for session-ending events.
-
 const BANNER_RANK = { session: 4, connection: 3, interviewer: 2, face: 1 };
 const banners = { session: "", connection: "", interviewer: "", face: "" };
 

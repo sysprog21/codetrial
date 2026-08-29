@@ -592,3 +592,19 @@ test("avatar analyser reads Jim and never the candidate", () => {
   // A context built outside a user gesture starts suspended and reads silence.
   assert.match(script, /jimAnalyserContext\.state === "suspended"/);
 });
+
+test("avatar teardown cancels a deferred width retry", () => {
+  const release = functionBody(script, "stopWatchingStageWidth");
+  assert.match(release, /window\.removeEventListener\("resize", stageWidthWatch\);/);
+  assert.match(release, /stageWidthWatch = null;/);
+  // Both ends: teardown drops it, and so does a start that succeeds. Waiting
+  // for the next resize to notice would hold the handler for a session that
+  // never resizes again.
+  for (const caller of ["stopAvatar", "startAvatar"]) {
+    assert.match(
+      functionBody(script, caller),
+      /stopWatchingStageWidth\(\)/,
+      `${caller} must release the width watch`,
+    );
+  }
+});

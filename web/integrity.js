@@ -219,19 +219,29 @@ export async function postIntegrityFrame(source, track, video) {
   // unavailable. A transport the consumer cannot read is not an optimisation.
   // `createImageBitmap` decodes off the main thread, so this costs the editor
   // nothing.
+  //
+  // Either way of failing to get pixels says so in `analyzer=`. A
+  // metadata-only sample still counts frames, so without this the heartbeat
+  // reads exactly like one where the detector is running and simply never sees
+  // a face: the strongest possible statement about a candidate, made by a
+  // browser that never looked at them.
   let frame = null;
-  try {
-    if (typeof createImageBitmap === "function") {
+  if (typeof createImageBitmap === "function") {
+    try {
       frame = await createImageBitmap(video);
       message.frame = frame;
       message.transport = "ImageBitmap";
       worker.postMessage(message, [frame]);
       return;
+    } catch {
+      frame?.close?.();
+      delete message.frame;
+      state.integrityAnalysisDetail = "capture_failed";
     }
-  } catch {
-    frame?.close?.();
-    delete message.frame;
-    message.transport = "metadata";
+  } else {
+    state.integrityAnalysisDetail = "capture_unavailable";
   }
+  // Built with `transport: "metadata"`, so falling through here needs no
+  // assignment: the message already says the detector got no pixels.
   worker.postMessage(message);
 }

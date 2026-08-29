@@ -41,6 +41,13 @@ const jimAnalyserPeaks = [];
 
 export function startAvatar() {
   if (avatar) return;
+  // Below the breakpoint the stage is hidden and nothing is built, but the
+  // candidate can cross it at any time by widening the window or undocking
+  // devtools. Without a retry, an interview that started narrow never gets an
+  // avatar however wide it gets. Registered once and only while there is
+  // nothing to render, so a session that starts wide adds no listener and a
+  // session that starts narrow drops it as soon as one is built.
+  watchForStageWidth();
   // Below the stylesheet's breakpoint the avatar is `display: none`, and a
   // hidden element is not worth 11 MB of model, 730 KB of renderer, one of the
   // page's ~16 WebGL contexts and a 60 Hz loop drawing into a 1x1 canvas. The
@@ -48,6 +55,7 @@ export function startAvatar() {
   // stays the only place that decides where the avatar is shown.
   if (!nodes.jimAvatar || window.getComputedStyle(nodes.jimAvatar).display === "none") return;
   const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+  stopWatchingStageWidth();
   avatar = createAvatar({
     mount: nodes.jimAvatar,
     reducedMotion,
@@ -127,6 +135,28 @@ export function resumeAvatar() {
 }
 
 document.addEventListener("visibilitychange", resumeAvatar);
+
+/// Retries `startAvatar` when the stage becomes visible.
+///
+/// `resize` rather than a media query, because the stylesheet owns the
+/// breakpoint and `startAvatar` already asks the computed style rather than
+/// restating it. One listener at a time.
+let stageWidthWatch = null;
+
+function watchForStageWidth() {
+  if (avatar || stageWidthWatch) return;
+  stageWidthWatch = () => startAvatar();
+  window.addEventListener("resize", stageWidthWatch);
+}
+
+/// Dropped as soon as there is something to render, not on the next resize
+/// after that. A session that never resizes again would otherwise hold the
+/// handler, and the scope it closes over, for the length of the interview.
+function stopWatchingStageWidth() {
+  if (!stageWidthWatch) return;
+  window.removeEventListener("resize", stageWidthWatch);
+  stageWidthWatch = null;
+}
 
 /// Jim's own track, never the candidate's. `createMediaElementSource` would be
 /// the obvious call and is the wrong one: it returns silence for a
@@ -225,6 +255,7 @@ export function jimAmplitude() {
 }
 
 export function stopAvatar() {
+  stopWatchingStageWidth();
   if (avatarFrame !== null) cancelAnimationFrame(avatarFrame);
   avatarFrame = null;
   avatar?.destroy();

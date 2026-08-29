@@ -113,6 +113,13 @@ test("sink routing keeps the preference and the real sink in agreement", () => {
   // Refused with nothing to fall back to: no preference at all, so the caller
   // clears the key rather than persisting the device that just failed.
   assert.equal(outputAfterRouting(null, "new", false), null);
+  // Reapplying a stored preference passes the same id as both, so there is no
+  // earlier device to fall back to. Returning it would write the refused id
+  // back and retry it on every reload.
+  assert.equal(outputAfterRouting("same", "same", false), "",
+    "a refused reapply must clear the preference, not re-store it");
+  assert.equal(outputAfterRouting("same", "same", true), "same",
+    "and a reapply that works keeps it");
 });
 
 // What the executable tests above cannot see: that interview.js actually wires
@@ -126,10 +133,24 @@ test("sink routing", () => {
   assert.match(script, /outputOptions\(devices, readStored\(AUDIO_OUTPUT_KEY\)\)/, "the selector is built from the shared decision");
   // Persist before routing. A choice made during the preflight, before Jim's
   // track exists, is dropped if it only survives a successful setSinkId.
-  const apply = script.slice(script.indexOf("async function applyAudioOutput"));
+  // `applyAudioOutput` is the queue in front of this; the routing itself is
+  // what has to get the order right.
+  const apply = script.slice(script.indexOf("async function routeAudioOutput"));
   assert.ok(
     apply.indexOf("writeStored(AUDIO_OUTPUT_KEY") < apply.indexOf(".setSinkId("),
-    "applyAudioOutput must persist before it routes",
+    "routing must persist before it routes",
+  );
+  // Serialized and stamped. Two picks in flight can settle in either order, and
+  // the older one must not write its device over the newer one's.
+  assert.match(
+    script,
+    /routingChain = routingChain\.then\(\(\) => routeAudioOutput\(deviceId, \+\+routingRequest\)\)/,
+    "routing requests are serialized",
+  );
+  assert.match(
+    apply,
+    /if \(request !== routingRequest\) return;/,
+    "and a superseded request does not get the last word on the preference",
   );
   assert.match(apply, /outputAfterRouting\(previous, deviceId, routed\)/, "rollback comes from the tested decision");
   // One element for the session, and it is released on unsubscribe.

@@ -53,7 +53,24 @@ export async function refreshAudioOutputs() {
   showOutputNote(options.length ? "" : OUTPUT_NOTES.empty);
 }
 
-export async function applyAudioOutput(deviceId) {
+/// The routing request this one has to finish behind, and the number that says
+/// which request is the newest.
+///
+/// `setSinkId` is asynchronous and the candidate can pick again before it
+/// settles. Two in flight can resolve in either order, and the older one would
+/// then write its device into the preference and the select, undoing a choice
+/// the candidate made after it. Serialized so they resolve in the order they
+/// were asked for, and stamped so a request that is no longer the newest
+/// routes but does not get the last word on what is stored or shown.
+let routingChain = Promise.resolve();
+let routingRequest = 0;
+
+export function applyAudioOutput(deviceId) {
+  routingChain = routingChain.then(() => routeAudioOutput(deviceId, ++routingRequest));
+  return routingChain;
+}
+
+async function routeAudioOutput(deviceId, request) {
   if (!deviceId) return;
   const previous = readStored(AUDIO_OUTPUT_KEY);
   writeStored(AUDIO_OUTPUT_KEY, deviceId);
@@ -67,6 +84,10 @@ export async function applyAudioOutput(deviceId) {
   // refused id was written before routing was attempted, so leaving it would
   // persist a device Jim never played through: the next reload would pre-select
   // it and retry the same refusal.
+  // A newer pick arrived while this one was routing. It has already routed, so
+  // Jim plays through whatever the last `setSinkId` chose, and the newest
+  // request is the one entitled to say so in the preference and the select.
+  if (request !== routingRequest) return;
   const stored = outputAfterRouting(previous, deviceId, routed);
   writeStored(AUDIO_OUTPUT_KEY, stored);
   nodes.meetOutputSelect.value = stored || "";
