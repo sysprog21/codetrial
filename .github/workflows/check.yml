@@ -459,14 +459,17 @@ jobs:
             os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             extension: ''
+            archive: tar.gz
           - name: macOS arm64
             os: macos-15
             target: aarch64-apple-darwin
             extension: ''
+            archive: zip
           - name: Windows x86_64
             os: windows-2025
             target: x86_64-pc-windows-msvc
             extension: .exe
+            archive: zip
     runs-on: ${{ matrix.os }}
     env:
       # Cleared for the same reason `plan-mutants` clears it: the workflow-wide
@@ -568,10 +571,32 @@ jobs:
           cp target/${{ matrix.target }}/release/codetrial${{ matrix.extension }}
           codetrial-${{ matrix.target }}${{ matrix.extension }}
         shell: bash
+      - name: Compress Linux release asset
+        if: runner.os == 'Linux'
+        shell: bash
+        run: tar -czf codetrial-${{ matrix.target }}.tar.gz codetrial-${{ matrix.target }}
+      # `zip`, not `ditto`. `--keepParent` keeps the parent *directory* of what
+      # it is given, and what it is given here is a file, so the archive carried
+      # `codetrial/codetrial-aarch64-apple-darwin`: the runner's checkout
+      # directory name, leaked into a download, with the binary a level deeper
+      # than the other two platforms put it. ditto also writes an AppleDouble
+      # `._` sidecar that is noise everywhere it is unpacked.
+      #
+      # Nothing is lost by dropping it: the ad-hoc signature the linker applies
+      # lives inside the Mach-O, not in the extended attributes ditto exists to
+      # preserve, and it survives a zip round trip along with the mode bits.
+      - name: Compress macOS release asset
+        if: runner.os == 'macOS'
+        shell: bash
+        run: zip -q codetrial-${{ matrix.target }}.zip codetrial-${{ matrix.target }}
+      - name: Compress Windows release asset
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -LiteralPath codetrial-${{ matrix.target }}.exe -DestinationPath codetrial-${{ matrix.target }}.zip
       - uses: actions/upload-artifact@v7
         with:
           name: codetrial-${{ matrix.target }}
-          path: codetrial-${{ matrix.target }}${{ matrix.extension }}
+          path: codetrial-${{ matrix.target }}.${{ matrix.archive }}
 
   # A rolling prerelease keeps the current main build one direct download away.
   release:
@@ -605,9 +630,9 @@ jobs:
         shell: bash
         run: |
           assets=(
-            dist/codetrial-x86_64-unknown-linux-gnu
-            dist/codetrial-aarch64-apple-darwin
-            dist/codetrial-x86_64-pc-windows-msvc.exe
+            dist/codetrial-x86_64-unknown-linux-gnu.tar.gz
+            dist/codetrial-aarch64-apple-darwin.zip
+            dist/codetrial-x86_64-pc-windows-msvc.zip
           )
           for asset in "${assets[@]}"; do
             [ -f "$asset" ] || { echo "missing release asset: $asset" >&2; exit 1; }
@@ -665,6 +690,21 @@ jobs:
               exit 1
             }
           done
+
+          # Anything on `latest` that this build did not just upload came from
+          # an older naming scheme, and `--clobber` cannot touch it: it only
+          # overwrites names that match. The raw `codetrial-<target>` binaries
+          # these archives replaced are exactly that, and left alone they sit on
+          # the download page beside the current set with nothing saying which
+          # commit they are from. Removed inside the draft, where the page
+          # serves nobody, and before the tag moves.
+          wanted=$(for asset in "${assets[@]}"; do basename "$asset"; done)
+          gh release view latest --json assets --jq '.assets[].name' \
+            | while read -r name; do
+                printf '%s\n' "$wanted" | grep -qxF "$name" && continue
+                echo "removing stale release asset: $name"
+                gh release delete-asset latest "$name" --yes
+              done
 
           # Only now does anything point at this build.
           git tag -f latest "$GITHUB_SHA"

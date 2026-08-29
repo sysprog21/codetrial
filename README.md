@@ -50,7 +50,7 @@ license are recorded in that notice.
 |---|---|---|
 | Build time | Rust stable, `curl` or `wget`, and `sha256sum` or `shasum` | Cargo resolves application crates from `Cargo.lock`. `make build` fetches the checksum-pinned browser assets on the first build. |
 | Test time | Build-time tools, Node.js 18+, and Python 3 | Node runs browser and fixture checks; Python verifies generated problem-bank files. `npm ci` adds ESLint and Playwright for the full local browser gate. `shellcheck`, `actionlint`, and `cargo-audit` are optional: each gate reports that it skipped rather than failing without them. |
-| Runtime | The compiled `codetrial` binary and its `web/` assets | No Node.js, Python, or `node_modules` is required. Rust dependencies are compiled into the binary; browser dependencies are vendored and checksum-pinned. |
+| Runtime | The compiled `codetrial` binary and a config file | No Node.js, Python, or `node_modules` is required. Rust dependencies are compiled into the binary; browser dependencies are vendored, checksum-pinned, and embedded, so a `web/` directory is optional and only overrides what is already inside. |
 
 Running an interview also requires a LiveKit Cloud project and a Google AI Studio
 API key. C, C++, and Java test runs additionally use the remote Compiler
@@ -74,7 +74,63 @@ current directory. Use `--config PATH` for an alternate primary config file.
 Extra `codetrial.env.*` files in the same directory are optional providers used
 for pooling.
 
+## Prebuilt binaries
+
+Every push to `main` republishes the `latest` prerelease at
+<https://github.com/sysprog21/codetrial/releases/latest>. Nothing is required at
+runtime beyond the binary itself: the browser application, its vendored assets,
+and the WASM are compiled in, so there is no Node.js, no `node_modules`, and no
+`web/` directory to unpack alongside it.
+
+```bash
+# Linux
+tar -xzf codetrial-x86_64-unknown-linux-gnu.tar.gz
+mv codetrial-x86_64-unknown-linux-gnu codetrial
+
+# macOS
+unzip codetrial-aarch64-apple-darwin.zip
+xattr -d com.apple.quarantine codetrial-aarch64-apple-darwin
+mv codetrial-aarch64-apple-darwin codetrial
+```
+
+A config file has to sit beside it. The binary will not run on environment
+variables alone, and it refuses to start without LiveKit credentials rather than
+booting a server that cannot mint a token. There is no `config/codetrial.env.example`
+to copy outside a checkout, so write the three required keys yourself:
+
+```bash
+cat >codetrial.env.local <<'EOF'
+LIVEKIT_URL=wss://YOUR-PROJECT.livekit.cloud
+LIVEKIT_API_KEY=...
+LIVEKIT_API_SECRET=...
+GOOGLE_API_KEY=...
+EOF
+./codetrial web   # http://127.0.0.1:3000
+```
+
+`GOOGLE_API_KEY` is the optional one, and it decides which of two things this
+process is. With it, the server hosts interviewers itself. Without it, it serves
+the web side only and every room waits for an agent to join from elsewhere, and
+it says so on startup. There is no matching line for the hosting case, so a
+silent start is the one that hosts interviewers. `--config PATH` names the file
+if you would rather keep it somewhere else; see
+[Configuration](#configuration) for the rest.
+
+Platform notes:
+
+- macOS binaries carry only the ad-hoc signature the linker applies, which is
+  what lets an arm64 binary run at all. They are not Developer ID signed and not
+  notarized, because that needs a paid Apple Developer Program membership this
+  project does not have. A downloaded `.zip` carries the quarantine attribute
+  and Gatekeeper refuses it, so clear the attribute as above or build from
+  source.
+- Windows binaries are unsigned. SmartScreen warns on first run.
+- Only `x86_64` Linux, `arm64` macOS, and `x86_64` Windows are published. Build
+  from source for anything else.
+
 ## Run
+
+Building from a checkout instead:
 
 ```bash
 INTERVIEW_ROOM_NAME=interview-local make serve
@@ -128,21 +184,18 @@ make check           # test gate plus live Gemini credential check
 ./scripts/test.sh    # credential-free CI gate
 ```
 
-Every update to `main` publishes a `latest` prerelease with one self-contained
-`codetrial` executable for Linux, macOS, and Windows. It serves the browser
-application from inside the binary, and falls back to those built-in assets per
-file, so a partially populated web tree is filled in rather than 404ing.
+The [prerelease](#prebuilt-binaries) is published by the `build` and `release`
+jobs in `.github/workflows/check.yml`, which run only on a push to `main`. No
+repository secrets are involved: the macOS binary ships with the linker's ad-hoc
+signature and nothing else, so a fork builds the same artifacts this repository
+does. Developer ID signing and notarization would need a paid Apple Developer
+Program membership, and the download instructions clear quarantine instead.
 
-Assets on disk win where they exist. That root is `web/` relative to the working
-directory unless `CODETRIAL_WEB_DIR` names another, so running the binary from a
-checkout picks up edits with no environment variable set.
-
-The macOS build is unsigned. A downloaded copy carries the quarantine attribute
-and refuses to open until you clear it:
-
-```shell
-xattr -d com.apple.quarantine codetrial-aarch64-apple-darwin
-```
+The embed falls back per file rather than wholesale, so a partially populated
+web tree is filled in from the built-in copy rather than 404ing. Assets on disk
+win where they exist. That root is `web/` relative to the working directory
+unless `CODETRIAL_WEB_DIR` names another, so running the binary from a checkout
+picks up edits with no environment variable set.
 
 `web/problems/`, `web/judges/`, and the problem cards in `web/index.html` are
 generated from `problem-bank/`. Regenerate them after editing that source, or
