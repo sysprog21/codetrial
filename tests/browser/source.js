@@ -85,6 +85,17 @@ export function functionBody(source, name) {
   return source.slice(start, end === -1 ? source.length : end);
 }
 
+/// Installs a `globalThis.fetch` stub and returns its undo. Shared rather than
+/// re-written per file: two copies had already appeared, and a restore that one
+/// of them forgets leaks a stub into every test that runs after it.
+export function failFetchWith(handler) {
+  const previous = globalThis.fetch;
+  globalThis.fetch = handler;
+  return () => {
+    globalThis.fetch = previous;
+  };
+}
+
 export function captures(source, pattern) {
   return [...source.matchAll(pattern)].map((match) => match[1]);
 }

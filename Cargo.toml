@@ -21,6 +21,17 @@ tokio-tungstenite = { version = "0.29", default-features = false, features = ["c
 tokio-util = "0.7"
 tower-http = { version = "0.6", default-features = false, features = ["compression-gzip"] }
 
+# Release archives distribute the executable, not a debugging target. Cargo
+# already omits debug information in this profile; omit linker symbols too.
+#
+# The trade is deliberate and worth stating, because it is not free: a panic
+# backtrace out of a release archive is now hex addresses with no function
+# names. `strip = "debuginfo"` would keep the symbol table, but debuginfo is
+# already absent here, so it would buy nothing. Anyone chasing a crash builds
+# without this or reproduces against a debug build.
+[profile.release]
+strip = "symbols"
+
 # Dependencies are optimized even in a dev build, because `make serve` runs one
 # and the agent's realtime path goes through them: the JPEG codec, the LiveKit
 # SDK, TLS, protobuf. Unoptimized, one 720p frame took 138ms to encode against

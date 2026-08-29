@@ -24,10 +24,19 @@ use super::policy::COMPILER_EXPLORER_ORIGIN;
 /// segment starting with `.`, so embedding them is weight nobody can fetch. A
 /// killed `scripts/fetch-vendor.sh` leaves multi-megabyte `.part` files, and
 /// without this they land in `.rodata`.
+///
+/// Models are excluded for the same reason and one more. Nothing fetches one
+/// into this tree any more, and no page requests one: the browser gets the
+/// avatar from the pinned upstream URL in `web/avatar/model.js`. The rule stays
+/// anyway, because it is what makes the binary's size independent of whoever
+/// still has a 10.9 MB copy left over from before the change. Keyed by
+/// extension rather than by that one filename, so it states the property
+/// `no_model_is_embedded_in_the_binary` actually asserts.
 #[derive(RustEmbed)]
 #[folder = "web/"]
 #[exclude = ".*"]
 #[exclude = "**/.*"]
+#[exclude = "**/*.vrm"]
 struct EmbeddedWeb;
 
 /// Says out loud at startup which vendored assets were never downloaded.
@@ -183,6 +192,19 @@ fn static_candidates(path: &str) -> Option<Vec<String>> {
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>()
         .join("/");
+
+    // `jim.vrm` used to be fetched into checkouts and disk assets override the
+    // embedded store. It is now browser-cached from its pinned source, so
+    // refuse the retired URL even when an old ignored file remains on disk.
+    //
+    // Case-insensitively, because the comparison has to be at least as
+    // forgiving as the filesystem underneath it. macOS and Windows both resolve
+    // `JIM.VRM` to the leftover file, so an exact match refused one spelling
+    // and served 10.9 MB for every other. ASCII is the whole alphabet a
+    // vendored filename may use, which `is_refused_segment` already enforces.
+    if clean.eq_ignore_ascii_case("vendor/avatar/jim.vrm") {
+        return None;
+    }
     if clean.is_empty() {
         return Some(vec!["index.html".to_string()]);
     }
@@ -536,6 +558,60 @@ mod tests {
         }
     }
 
+    /// The 10.9 MB model is the largest single thing that could land in the
+    /// binary, and the `#[exclude]` on `EmbeddedWeb` is the only thing keeping
+    /// it out. That cannot be shown over HTTP any more: `static_candidates`
+    /// refuses the retired URL outright, so a 404 there is the refusal talking
+    /// and says nothing about what was embedded. Ask the store directly.
+    ///
+    /// Silent on a machine that has no leftover copy, which is most of them.
+    /// It earns its place on the one that does, and on the day someone drops a
+    /// replacement model into `web/` without reading why the exclusion exists.
+    ///
+    /// What it checks in a debug build is the filter, not the bytes. Without
+    /// `debug-embed`, `rust-embed` resolves from disk here, and its dynamic
+    /// implementation applies the same `#[exclude]`, so an excluded path is
+    /// absent either way. The filter is what can actually break: a glob that
+    /// stops matching puts 10.9 MB back into release with nothing else failing.
+    /// Confirmed by deleting the exclusion with the model present, which fails
+    /// this. Gating it to release would leave the glob untested in the build
+    /// everybody runs.
+    #[test]
+    fn no_model_is_embedded_in_the_binary() {
+        assert!(
+            EmbeddedWeb::get("vendor/avatar/jim.vrm").is_none(),
+            "the release binary must not carry the avatar model"
+        );
+        let embedded: Vec<String> = EmbeddedWeb::iter()
+            .filter(|path| path.ends_with(".vrm"))
+            .map(|path| path.to_string())
+            .collect();
+        assert!(
+            embedded.is_empty(),
+            "the browser fetches the model from its pinned source, so none belongs here: {embedded:?}"
+        );
+    }
+
+    #[test]
+    fn retired_avatar_model_is_never_served_from_disk() {
+        for path in [
+            "/vendor/avatar/jim.vrm",
+            "/vendor//avatar/jim.vrm",
+            "//vendor/avatar/jim.vrm",
+            // Each of these served the whole 10.9 MB on macOS and Windows
+            // before the comparison was made case-insensitive: the filesystem
+            // resolved what the string compare had just declined to match.
+            "/vendor/avatar/JIM.VRM",
+            "/vendor/avatar/Jim.Vrm",
+            "/VENDOR/AVATAR/JIM.VRM",
+        ] {
+            assert!(
+                static_candidates(path).is_none(),
+                "{path} should be refused"
+            );
+        }
+    }
+
     /// Asserts the refusal itself rather than a served request, because a
     /// served request cannot distinguish the two on this platform: a backslash
     /// and a colon are ordinary filename bytes to Unix, so every one of these
@@ -562,7 +638,7 @@ mod tests {
             "index.html",
             "three-vrm.js",
             "face_detection.js",
-            "jim.vrm",
+            "model.vrm",
         ] {
             assert!(!is_refused_segment(allowed), "{allowed} should resolve");
         }

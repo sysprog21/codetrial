@@ -85,7 +85,10 @@ served the first time. Only the most recent few are kept: the `release` job in
 deleted with their tags. Nothing is required at runtime beyond the binary
 itself: the browser application, its vendored assets, and the WASM are compiled
 in, so there is no Node.js, no `node_modules`, and no `web/` directory to
-unpack alongside it.
+unpack alongside it. The avatar model is not in there either: the browser
+downloads it once from a pinned upstream URL, checks it against a pinned
+SHA-256, and keeps it in its own cache. Without that reachable, the interview
+falls back to Jim's voice-only panel and nothing else changes.
 
 ```bash
 # Linux

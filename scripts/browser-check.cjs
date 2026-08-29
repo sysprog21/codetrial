@@ -158,11 +158,25 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
     page.setDefaultTimeout(120000);
     page.setDefaultNavigationTimeout(120000);
     // One boolean, not every URL of the run. The avatar flow only asks whether
-    // the renderer was fetched, and accumulating thousands of request strings
-    // to answer that grew unboundedly for no gain.
-    let rendererRequested = false;
-    page.on("request", (request) => {
-      if (request.url().includes("/vendor/avatar/three-vrm.js")) rendererRequested = true;
+    // the pinned model actually arrived, and accumulating thousands of request
+    // strings to answer that grew unboundedly for no gain.
+    //
+    // Read off the response and not the request, because that is the whole
+    // distinction the assertion below rests on: a request that never got a 200
+    // is an offline runner, which is allowed to fall back, while a 200 means
+    // the bytes were in the browser's hands and a neutral panel is a bug.
+    // 304 counts: a revalidated response is the browser being handed the model
+    // out of its own HTTP cache, which is delivery. Anything else, including a
+    // 4xx and a request that never got an answer, leaves this false.
+    let modelDelivered = false;
+    // Imported, not scraped. `model.js` owns the pinned URL and has no imports
+    // of its own, so a dynamic import reads the real value; matching a regex
+    // against the source would pin its formatting instead, and break on a
+    // reflow with an error about a missing export.
+    const { MODEL_URL } = await import("../web/avatar/model.js");
+    page.on("response", (response) => {
+      const delivered = response.status() === 200 || response.status() === 304;
+      if (response.url() === MODEL_URL && delivered) modelDelivered = true;
     });
     // The avatar degrades to a neutral panel on every failure, by design, which
     // means a broken model and an absent one look identical from the DOM. The
@@ -306,10 +320,9 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
         throw new Error(`expected ${expected}/${expected} test results, got ${label}\n${body}`);
       }
     }
-    // Flow-first, before the mode dispatch: what the avatar does depends on
-    // whether a licensed jim.vrm is published, not on whether an interviewer is
-    // connected. This is the only check that can see WebGL at all; the node
-    // tests drive the same module with an injected loader and no renderer.
+    // Flow-first, before the mode dispatch. This is the only check that can see
+    // WebGL at all; the node tests drive the same module with an injected
+    // loader and no renderer.
     if (flow === "avatar") {
       // Explicit, because the avatar is hidden below a CSS breakpoint and
       // Playwright's default 1280x720 sits close enough to it that the check
@@ -351,14 +364,17 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
         if (canvases !== 0) throw new Error("an unavailable avatar must not leave a canvas behind");
         if (!fallbackVisible) throw new Error("the neutral panel must be visible when the avatar is unavailable");
         if (!/avatar is unavailable/.test(note)) throw new Error(`the neutral panel must say why, got: ${note}`);
-        if (rendererRequested) {
-          // The renderer is only imported after the model URL answers, so this
-          // means a model IS published and failed to render. That is a broken
-          // avatar wearing the same neutral panel as a missing one.
+        if (modelDelivered) {
+          // The model is fetched from a third-party host now, so an offline or
+          // firewalled runner reaching the neutral panel is correct behavior
+          // and not a failure. A 200 for the pinned URL removes that excuse:
+          // the bytes arrived, and everything after that is this repo's, which
+          // is a broken avatar wearing the same panel as an unreachable one.
           throw new Error(
-            `a model is published but did not render:\n${consoleErrors.join("\n") || "(no console errors captured)"}`,
+            `the pinned model was delivered but did not render:\n${consoleErrors.join("\n") || "(no console errors captured)"}`,
           );
         }
+        console.log("avatar: the pinned model was never delivered, so the neutral panel is the correct result");
       } else {
         throw new Error(`unexpected avatar state: ${avatarState}`);
       }

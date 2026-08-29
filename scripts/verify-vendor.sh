@@ -36,7 +36,8 @@ status=0
 # Every vendored file needs a line in the SHA256SUMS beside it. `basename` is
 # what the sums files record, matching the `cd && sha256sum -c` convention.
 # README and LICENSE are provenance, not bytes the browser runs, so they are the
-# only things allowed to be unpinned.
+# only things allowed to be unpinned. The ignored legacy model is no longer
+# shipped or served, but can remain in pre-migration worktrees.
 #
 # Collected rather than piped into the loop, for two reasons. A pipeline reports
 # the status of its last command, so `find | while` skips a subtree it cannot
@@ -47,7 +48,7 @@ status=0
 # The `||` has to stay out here rather than move into a helper the two walks
 # share: `exit` inside `$(...)` leaves the substitution, not the script, and the
 # silent pass is back.
-files=$(find "$VENDOR" -type f ! -name SHA256SUMS ! -name FETCH ! -name 'README*' ! -name 'LICENSE*') ||
+files=$(find "$VENDOR" -type f ! -path "$VENDOR/avatar/jim.vrm" ! -name SHA256SUMS ! -name FETCH ! -name 'README*' ! -name 'LICENSE*') ||
   { echo "verify-vendor: cannot scan ${VENDOR#"$ROOT"/}" >&2; exit 1; }
 
 while read -r file; do

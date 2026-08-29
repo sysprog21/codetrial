@@ -63,10 +63,12 @@ test("avatar vendor manifest pins every redistributed file", () => {
   // licenses are actually present rather than merely cited.
   const vendored = readdirSync(join(root, "web/vendor/avatar"));
   const hashed = new Set(captures(sums, / {2}(\S+)$/gm));
-  // FETCH says where bytes come from, SHA256SUMS says which bytes are correct.
-  // Only the second is a pin, so the manifest is exempt here for the same
-  // reason scripts/verify-vendor.sh skips it.
-  const exempt = new Set(["SHA256SUMS", "FETCH", "README.md", "LICENSE-three.txt", "LICENSE-three-vrm.txt", "LICENSE-jim-vrm.txt"]);
+  // SHA256SUMS cannot pin itself, and licenses are provenance rather than bytes
+  // the browser runs, which is the same carve-out scripts/verify-vendor.sh
+  // makes. Nothing in this directory is fetched any more, so there is no FETCH.
+  // Old checkouts can retain the once-fetched model. It is neither served nor
+  // embedded now, and verify-vendor likewise ignores that retired local path.
+  const exempt = new Set(["SHA256SUMS", "README.md", "LICENSE-three.txt", "LICENSE-three-vrm.txt", "LICENSE-jim-vrm.txt", "jim.vrm"]);
   assert.deepEqual(vendored.filter((name) => !hashed.has(name) && !exempt.has(name)), []);
   for (const license of ["LICENSE-three.txt", "LICENSE-three-vrm.txt"]) {
     assert.match(read(`web/vendor/avatar/${license}`), /MIT/, `${license} must carry its terms`);
@@ -107,6 +109,7 @@ test("avatar vendor manifest pins every redistributed file", () => {
   // And the checker must find directories by glob, not by name, or a new
   // vendor directory is unpinned and silent about it.
   assert.match(read("scripts/verify-vendor.sh"), /find "\$VENDOR" -name SHA256SUMS/);
+  assert.match(read("scripts/verify-vendor.sh"), /! -path "\$VENDOR\/avatar\/jim\.vrm"/);
   assert.doesNotMatch(read("scripts/verify-vendor.sh"), /face-detection/);
 });
 
@@ -132,7 +135,18 @@ test("avatar dom contract", () => {
   // one: it followed the loader out of interview.js into web/avatar/, where the
   // spelling that had been correct named a file one directory too deep.
   const lazy = captures(read("web/avatar/stage.js"), /import\("(\.[^"]+)"\)/g);
-  assert.deepEqual(lazy, ["./vrm.js"], "the renderer is imported lazily, from beside the stage");
+  assert.deepEqual(lazy, ["./model.js"], "the stage reaches for the model module and nothing heavier");
+
+  // Bytes before the bundle, asserted where the order actually lives. Both
+  // orders are serial, so fetching the model first costs nothing when it is
+  // reachable and saves the 730 KB renderer when it is not. Reading model.js
+  // rather than each caller is what makes this cover the recording page too:
+  // the rule used to be copied into both entry points and pinned in one.
+  const loader = functionBody(read("web/avatar/model.js"), "loadAvatarModel");
+  assert.ok(
+    loader.indexOf("loadModelBytes()") < loader.indexOf('import("./vrm.js")'),
+    "the model must be fetched before the renderer bundle is imported",
+  );
   assert.doesNotMatch(script, /^import .*avatar\/vrm\.js/m);
 });
 

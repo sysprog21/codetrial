@@ -12,9 +12,13 @@ Jim's VRM renderer can load without a CDN, a lockfile, or an import map.
   pixiv Inc.
 - `SHA256SUMS`: bare filenames, checked by `scripts/verify-vendor.sh`.
 
-The VRM model is not committed. `make fetch-vendor` downloads it here and
-`SHA256SUMS` pins it; `docs/avatar-contract.md` records why, and
-`web/avatar/avatar.js` shows the neutral panel when it is absent.
+- `LICENSE-jim-vrm.txt`: the interviewer model's grant, read out of its own
+  `VRMC_vrm.meta`.
+
+The VRM model is not here at all, and is not fetched here. The browser
+downloads it from the pinned URL in `web/avatar/model.js` and checks it
+against the SHA-256 beside it; `docs/avatar-contract.md` records
+why, and the neutral panel is what a candidate sees when it cannot be had.
 
 ## Sources
 

@@ -14,6 +14,10 @@ VENDOR="$ROOT/web/vendor"
 
 [ -d "$VENDOR" ] || exit 0
 
+# Releases no longer embed or serve this model; browser Cache API owns it now.
+# Remove the ignored file left by pre-migration checkouts on their next build.
+rm -f "$VENDOR/avatar/jim.vrm"
+
 download() {
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL -o "$2" "$1"
@@ -75,29 +79,24 @@ fetch_manifest() {
       continue
     fi
 
-    # Two fields mean the upstream name differs from the one this tree serves:
-    # the avatar is Seed-san.vrm at its source and jim.vrm here, and renaming it
-    # locally would be a rename in every reference to it. One field, which is
-    # every other line in every manifest, means the two names are the same.
-    name=${line%% *}
-    remote=${line#"$name"}
-    remote=${remote# }
-    [ -n "$remote" ] || remote=$name
-
-    # Both halves are used as a URL suffix and as a path under the vendor
-    # directory, so each takes only what a vendored filename can be. This
-    # rejects a stray carriage return from a CRLF checkout, which would
-    # otherwise 404 against a URL that looks correct in the error message, and
-    # it rejects a `/` before one can write outside `web/vendor/`. Checking both
-    # also rejects a third field, which arrives here glued to the second.
-    for field in "$name" "$remote"; do
-      case "$field" in
-        *[!A-Za-z0-9._-]* | .*)
-          echo "fetch-vendor: ${manifest#"$ROOT"/} names an unusable file: $line" >&2
-          return 1
-          ;;
-      esac
-    done
+    # One filename per line, serving as both the URL suffix and the path under
+    # the vendor directory, so it takes only what a vendored filename can be.
+    # This rejects a stray carriage return from a CRLF checkout, which would
+    # otherwise 404 against a URL that looks correct in the error message; it
+    # rejects a `/` before one can write outside `web/vendor/`; and it rejects a
+    # second field, since the space comes through in the match.
+    #
+    # There used to be a two-field form here, for the one asset whose upstream
+    # name differed from the one this tree served. That was the avatar model,
+    # which the browser now fetches for itself, and no manifest has used a
+    # second field since.
+    name=$line
+    case "$name" in
+      *[!A-Za-z0-9._-]* | .*)
+        echo "fetch-vendor: ${manifest#"$ROOT"/} names an unusable file: $line" >&2
+        return 1
+        ;;
+    esac
 
     want=$(awk -v name="$name" '$2 == name { print $1 }' "$sums")
     if [ -z "$want" ]; then
@@ -114,7 +113,7 @@ fetch_manifest() {
     # Per-process, because `make -j` can run the fetch-vendor prerequisite of
     # build, serve, and web concurrently and a fixed name is a race.
     tmp="$dir/.$name.$$.part"
-    download "$base$remote" "$tmp" || {
+    download "$base$name" "$tmp" || {
       rm -f "$tmp"
       return 1
     }

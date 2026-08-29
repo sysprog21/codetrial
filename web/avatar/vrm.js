@@ -3,8 +3,8 @@
 // `loadModel`, and nothing imports this module until an interview is running.
 //
 // The contract back to avatar.js is two methods, `apply(pose)` and `dispose()`.
-// Any failure here -- no WebGL, no jim.vrm, a corrupt file -- throws, and
-// avatar.js renders the neutral panel instead.
+// Any failure here -- no WebGL, no reachable model, bytes that miss the pin, a
+// corrupt file -- throws, and avatar.js renders the neutral panel instead.
 
 import {
   AmbientLight,
@@ -19,7 +19,7 @@ import {
   VRMUtils,
   WebGLRenderer,
 } from "../vendor/avatar/three-vrm.js";
-import { EXPRESSION_NAMES, MODEL_URL } from "./avatar.js";
+import { EXPRESSION_NAMES } from "./avatar.js";
 
 // Upper body only: the camera sits close enough that hips and legs are out of
 // frame, which is also why the model budget in docs/avatar-contract.md never
@@ -48,7 +48,13 @@ const GAZE_TARGET_DISTANCE_M = 1.5;
 // at a desk, and it applies to any model rather than being tuned to one.
 const ARM_REST_ROTATION_Z = 1.2;
 
-export async function loadVrm({ mount, url = MODEL_URL }) {
+/// Takes bytes, not a URL. The caller has already matched them against the pin,
+/// which is what keeps this file out of the business of deciding what is
+/// trustworthy, and it is also why no WebGL context can be allocated before
+/// they arrive: `createAvatar` can time out a stalled fetch but cannot cancel
+/// it, and a context allocated in front of that await would be held for the
+/// rest of the interview.
+export async function loadVrm({ mount, bytes }) {
   const canvas = mount.ownerDocument.createElement("canvas");
   canvas.className = "jim-avatar-canvas";
   // A canvas is a graphic with no text alternative, so it gets one. `img` and
@@ -59,6 +65,9 @@ export async function loadVrm({ mount, url = MODEL_URL }) {
   canvas.setAttribute("role", "img");
   canvas.setAttribute("aria-label", "Jim, the AI interviewer");
 
+  // No cleanup path around this. A constructor that throws leaves nothing to
+  // dispose, and the canvas is not in the document until further down, so the
+  // catch that used to sit here could only ever rethrow.
   const renderer = new WebGLRenderer({ canvas, alpha: true, antialias: true });
   renderer.setPixelRatio(Math.min(mount.ownerDocument.defaultView?.devicePixelRatio || 1, 2));
 
@@ -82,9 +91,20 @@ export async function loadVrm({ mount, url = MODEL_URL }) {
   let frames = 0;
   let resizeObserver = null;
   try {
-    const gltf = await loader.loadAsync(url);
+    // `parseAsync` and not `loadAsync`, because the bytes are already here.
+    // Handing the loader a URL would mean either giving it the remote one,
+    // which is the loader deciding what is trustworthy, or wrapping these bytes
+    // back up in a blob URL and owning its lifetime for no gain. The empty path
+    // is the resource base, and a VRM is a self-contained GLB with no external
+    // URIs to resolve against it.
+    const gltf = await loader.parseAsync(bytes, "");
+    // Dropped as soon as the parse is done. `apply` and `dispose` outlive this
+    // function and share its scope, and the parse has already copied every
+    // bufferView it needs, so holding the source would keep 11 MB alive for the
+    // rest of the interview to no purpose.
+    bytes = null;
     const vrm = gltf.userData.vrm;
-    if (!vrm) throw new Error(`${url} is not a VRM`);
+    if (!vrm) throw new Error("the pinned bytes are not a VRM");
 
     // Both are pure wins for a head-and-shoulders shot: unused vertices are the
     // lower body the camera never sees, and one skeleton is one draw call.

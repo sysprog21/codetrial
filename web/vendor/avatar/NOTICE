@@ -1,12 +1,18 @@
 CodeTrial redistributes the following third-party assets from this directory.
 
-Seed-san (web/vendor/avatar/jim.vrm)
-  Copyright VirtualCast, Inc.
-  VRM Public License 1.0, https://vrm.dev/licenses/1.0/
-  Credit is required by the model's own metadata. See LICENSE-jim-vrm.txt.
-
 Three.js 0.185.1 (bundled into web/vendor/avatar/three-vrm.js)
   Copyright three.js authors, MIT. See LICENSE-three.txt.
 
 @pixiv/three-vrm 3.5.5 (bundled into web/vendor/avatar/three-vrm.js)
   Copyright pixiv Inc., MIT. See LICENSE-three-vrm.txt.
+
+The interviewer model is not among them. It is fetched by the candidate's
+browser from the pinned upstream URL in web/avatar/model.js, checked against
+the SHA-256 beside it, and never shipped inside the release binary.
+
+Seed-san (fetched at runtime, not redistributed)
+  Copyright VirtualCast, Inc.
+  VRM Public License 1.0, https://vrm.dev/licenses/1.0/
+  Credit is required by the model's own metadata and is displayed in the lobby
+  footer of web/index.html. See LICENSE-jim-vrm.txt for the grant, read out of
+  the model's own VRMC_vrm.meta.
