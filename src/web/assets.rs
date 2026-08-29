@@ -87,11 +87,15 @@ pub(crate) fn warn_about_unfetched_vendor(web_dir: &Path) {
     }
 }
 
-/// The resolved path together with the `stat` that resolved it. Handed back
-/// rather than thrown away because `static_response` needs the same metadata
-/// for
-/// the ETag and the content length, and asking the kernel twice for an answer
-/// this walk already has is one syscall per request for nothing.
+/// The first candidate that exists on disk, with the `stat` that found it.
+///
+/// The handler resolves one candidate at a time now, because candidate order
+/// has to beat store order, so nothing on the request path walks the whole list
+/// against a single store any more. What is left is the shape the resolution
+/// tests want: a question about which file a URL names, answered without a
+/// server. It shares `static_candidates` with the handler, so the rule that
+/// decides what a URL may name still has one owner and these tests still ask
+/// the real one.
 pub async fn static_file_meta(
     root: &Path,
     path: &str,
