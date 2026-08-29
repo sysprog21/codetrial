@@ -243,11 +243,40 @@ async fn resume_after_close(
     Ok(ControlFlow::Continue(()))
 }
 
-pub async fn run_room(
-    config: &AgentConfig,
-    room_name: &str,
+/// Everything the interview loop needs, owned, once the candidate has joined
+/// and both sides are talking.
+///
+/// Owned and not a set of borrows: the loop builds `InterviewContext` and
+/// `RoomIdentities` out of these fields, and a struct that held those views
+/// alongside the values they point at would be borrowing itself. `'a` is the
+/// caller's, carried only by `boot`.
+struct OpenSession<'a> {
+    room: Room,
+    events: tokio::sync::mpsc::UnboundedReceiver<RoomEvent>,
+    agent_identity: String,
+    candidate_identity: String,
+    boot: RuntimeBootstrap<'a>,
+    output_audio: OutputAudio,
+    gemini: crate::gemini::GeminiLiveSession,
+    media: CandidateMedia,
+    turn: TurnState,
+    started_at: Instant,
+}
+
+/// Joins, waits for a candidate, brings up audio and Gemini, and greets.
+///
+/// Split from [`run_room`] because none of it repeats: it runs once, in order,
+/// and every line of it is a step that either succeeds or ends the interview
+/// before it starts. What is left in `run_room` is the part that runs many
+/// times, which is the part worth reading as a loop.
+///
+/// `Ok(None)` is nobody joined. That is not an error: the room was named, the
+/// candidate never arrived, and there is nothing to run or report.
+async fn open_session<'a>(
+    config: &'a AgentConfig,
+    room_name: &'a str,
     now_seconds: u64,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Option<OpenSession<'a>>, Box<dyn std::error::Error + Send + Sync>> {
     let agent_identity = agent_identity(room_name);
     let (room, mut events) = join_room(config, room_name, &agent_identity, now_seconds).await?;
     let mut agent_state = String::new();
@@ -260,7 +289,7 @@ pub async fn run_room(
         candidate_metadata(&room, &mut events, &mut deferred_events).await?
     else {
         eprintln!("no candidate joined room={room_name}; leaving it");
-        return Ok(());
+        return Ok(None);
     };
     let boot = candidate_bootstrap(config, room_name, Some(&candidate_metadata));
     eprintln!(
@@ -278,7 +307,7 @@ pub async fn run_room(
     // "Neither needs the other's return value" was the wrong test. The
     // dependency is on room state, not on data.
     let setup_began = Instant::now();
-    let (mut output_audio, mut gemini) = tokio::try_join!(
+    let (output_audio, mut gemini) = tokio::try_join!(
         async {
             isolate_local_agent(config, room_name, &agent_identity, now_seconds).await?;
             publish_output_audio(&room, GEMINI_OUTPUT_AUDIO_SAMPLE_RATE).await
@@ -290,17 +319,6 @@ pub async fn run_room(
         setup_began.elapsed().as_secs_f64()
     );
     let started_at = Instant::now();
-    let interview = InterviewContext {
-        config,
-        boot: &boot,
-        started_at,
-    };
-    let ids = RoomIdentities {
-        room_name,
-        agent: &agent_identity,
-        candidate: &candidate_identity,
-        now_seconds,
-    };
 
     let mut turn = TurnState {
         state: RuntimeState::default(),
@@ -327,6 +345,53 @@ pub async fn run_room(
 
     gemini.send_text(&boot.greeting).await?;
     turn.activity.mark_speaking();
+
+    Ok(Some(OpenSession {
+        room,
+        events,
+        agent_identity,
+        candidate_identity,
+        boot,
+        output_audio,
+        gemini,
+        media,
+        turn,
+        started_at,
+    }))
+}
+
+pub async fn run_room(
+    config: &AgentConfig,
+    room_name: &str,
+    now_seconds: u64,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let Some(OpenSession {
+        room,
+        mut events,
+        agent_identity,
+        candidate_identity,
+        boot,
+        mut output_audio,
+        mut gemini,
+        mut media,
+        mut turn,
+        started_at,
+    }) = open_session(config, room_name, now_seconds).await?
+    else {
+        return Ok(());
+    };
+
+    let interview = InterviewContext {
+        config,
+        boot: &boot,
+        started_at,
+    };
+    let ids = RoomIdentities {
+        room_name,
+        agent: &agent_identity,
+        candidate: &candidate_identity,
+        now_seconds,
+    };
 
     let mut resumed = 0usize;
 

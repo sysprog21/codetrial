@@ -87,11 +87,15 @@ pub(crate) fn warn_about_unfetched_vendor(web_dir: &Path) {
     }
 }
 
-/// The resolved path together with the `stat` that resolved it. Handed back
-/// rather than thrown away because `static_response` needs the same metadata
-/// for
-/// the ETag and the content length, and asking the kernel twice for an answer
-/// this walk already has is one syscall per request for nothing.
+/// The first candidate that exists on disk, with the `stat` that found it.
+///
+/// The handler resolves one candidate at a time now, because candidate order
+/// has to beat store order, so nothing on the request path walks the whole list
+/// against a single store any more. What is left is the shape the resolution
+/// tests want: a question about which file a URL names, answered without a
+/// server. It shares `static_candidates` with the handler, so the rule that
+/// decides what a URL may name still has one owner and these tests still ask
+/// the real one.
 pub async fn static_file_meta(
     root: &Path,
     path: &str,
@@ -229,15 +233,33 @@ pub(crate) async fn web_static_handler(
     // store never answers and the probe is pure waste. Once at startup keeps
     // the per-file fallback wherever the directory does exist. The cost is that
     // creating `web/` under a running server needs a restart to take, which is
-    // the more predictable behavior anyway.
-    let from_disk = if state.web_dir_exists {
-        static_response(&state.config.web_dir, uri.path(), if_none_match, head_only).await
-    } else {
-        None
+    // the more predictable behavior anyway. Candidate order beats store order.
+    // Exhausting the disk tree first let its single-page fallback,
+    // `index.html`, answer for a candidate the embed could have matched
+    // exactly: a directory holding one stale `index.html` served it for
+    // `/interview` with a 200, because the disk's fourth candidate was tried
+    // before the embed's third. That is the wrong page rather than a missing
+    // one, which is the failure this resolver argues everywhere else that it
+    // exists to avoid.
+    //
+    // Nothing changes for the two shapes that are not half-populated. A
+    // checkout answers from disk on the same candidate it always did, and a
+    // released binary has no `web/` at all, so the disk store is never asked.
+    let Some(candidates) = static_candidates(uri.path()) else {
+        return StatusCode::NOT_FOUND.into_response();
     };
-    from_disk
-        .or_else(|| embedded_static_response(uri.path(), if_none_match, head_only))
-        .unwrap_or_else(|| StatusCode::NOT_FOUND.into_response())
+    for candidate in candidates {
+        if state.web_dir_exists
+            && let Some(response) =
+                disk_candidate(&state.config.web_dir, &candidate, if_none_match, head_only).await
+        {
+            return response;
+        }
+        if let Some(response) = embedded_candidate(&candidate, if_none_match, head_only) {
+            return response;
+        }
+    }
+    StatusCode::NOT_FOUND.into_response()
 }
 
 pub(crate) async fn runtime_config_handler(State(state): State<AppState>) -> Response {
@@ -386,18 +408,21 @@ impl AssetHeaders {
         response
     }
 }
-
-/// `None` where the disk tree cannot answer, which is what lets the caller
-/// fall through to the embedded store by composition rather than by reading a
-/// status code back off a response it just built.
-pub(crate) async fn static_response(
+/// One already-resolved candidate against the disk tree.
+///
+/// The candidate arrives resolved because `static_candidates` runs once for
+/// both stores: expanding it again here would be a second copy of the rule that
+/// decides what a URL may name, which is the one rule in this file that must
+/// not have two.
+async fn disk_candidate(
     root: &Path,
-    path: &str,
+    candidate: &str,
     if_none_match: Option<&HeaderValue>,
     head_only: bool,
 ) -> Option<Response> {
-    let (key, path, metadata) = static_file_meta(root, path).await?;
-    let headers = AssetHeaders::new(&key, file_etag(&metadata), metadata.len());
+    let path = root.join(candidate);
+    let metadata = file_metadata(&path).await?;
+    let headers = AssetHeaders::new(candidate, file_etag(&metadata), metadata.len());
     if let Some(not_modified) = headers.not_modified(if_none_match) {
         return Some(not_modified);
     }
@@ -409,25 +434,22 @@ pub(crate) async fn static_response(
     Some(headers.respond(Some(Body::from(bytes))))
 }
 
-/// The same rules against the web tree compiled into the executable.
-///
-/// The shipped binary has no `web/` at all, so this is the only path a
-/// released install takes. That is why it carries the disk path's caching
-/// rather than a simpler set: answering 37 MB of pinned wasm with a bare
-/// `no-cache` and no validator would re-send the tree on every navigation.
-fn embedded_static_response(
-    path: &str,
+/// One already-resolved candidate against the embedded tree.
+fn embedded_candidate(
+    candidate: &str,
     if_none_match: Option<&HeaderValue>,
     head_only: bool,
 ) -> Option<Response> {
-    let (key, file) = static_candidates(path)?
-        .into_iter()
-        .find_map(|candidate| EmbeddedWeb::get(&candidate).map(|file| (candidate, file)))?;
+    let file = EmbeddedWeb::get(candidate)?;
 
     // Strong, unlike the disk path's modification-time heuristic: these bytes
     // cannot change without a rebuild, and `rust-embed` already carries their
     // SHA-256, so nothing is hashed per request.
-    let headers = AssetHeaders::new(&key, Some(embedded_etag(&file)), file.data.len() as u64);
+    let headers = AssetHeaders::new(
+        candidate,
+        Some(embedded_etag(&file)),
+        file.data.len() as u64,
+    );
     if let Some(not_modified) = headers.not_modified(if_none_match) {
         return Some(not_modified);
     }

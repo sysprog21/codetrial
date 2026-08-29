@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod agent;
 pub mod config;
 pub mod delivery;
+pub mod dispatch;
 pub mod gemini;
 pub mod livekit;
 pub mod recording;

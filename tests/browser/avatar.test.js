@@ -9,7 +9,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { captures, firstPartyScripts, functionBody, read, root } from "./source.js";
+import { captures, firstPartyScripts, functionBody, interviewSource, read, root } from "./source.js";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -33,7 +33,7 @@ import {
 } from "../../web/avatar/avatar.js";
 
 const page = read("web/interview.html");
-const script = read("web/interview.js");
+const script = interviewSource();
 
 // A mount is a dataset and nothing else, which is the whole reason avatar.js
 // may not reach for anything richer.
@@ -127,8 +127,12 @@ test("avatar dom contract", () => {
   assert.deepEqual(importers, ["avatar/vrm.js"]);
 
   // And it is loaded lazily, so a candidate who never starts an interview never
-  // downloads 730 KB of renderer.
-  assert.match(script, /import\("\.\/avatar\/vrm\.js"\)/);
+  // downloads 730 KB of renderer. The specifier is relative to the file that
+  // holds it, which is why this names the resolved path rather than the literal
+  // one: it followed the loader out of interview.js into web/avatar/, where the
+  // spelling that had been correct named a file one directory too deep.
+  const lazy = captures(read("web/avatar/stage.js"), /import\("(\.[^"]+)"\)/g);
+  assert.deepEqual(lazy, ["./vrm.js"], "the renderer is imported lazily, from beside the stage");
   assert.doesNotMatch(script, /^import .*avatar\/vrm\.js/m);
 });
 
@@ -429,7 +433,7 @@ test("avatar canvas has an accessible name", () => {
 });
 
 test("avatar stops rendering while the page is hidden", () => {
-  const script = read("web/interview.js");
+  const script = interviewSource();
   const pump = functionBody(script, "pumpAvatar");
   assert.match(
     pump,
@@ -530,6 +534,15 @@ test("captions size to the turn and retire when nobody is speaking", () => {
   assert.match(show, /setTimeout\([\s\S]*?nodes\.captionsBar\.hidden = true;[\s\S]*?CAPTION_IDLE_HIDE_MS\)/);
   assert.match(script, /nodes\.captionsText\.textContent = `\[\$\{speaker[^`]*`;\n\s*showCaptions\(\);/,
     "every caption update must un-hide the bar");
+
+  // The reveal has to keep asking for the next tick while there is more of the
+  // turn to show. Dropping the re-arm leaves Jim's line frozen part-way through
+  // a sentence, which reads as a stall rather than as a bug.
+  const pace = functionBody(script, "paceInterviewerCaption");
+  assert.match(pace, /caption\.timer = setTimeout\(paceInterviewerCaption, CAPTION_TICK_MS\);/,
+    "an unfinished turn must schedule its next tick");
+  assert.match(pace, /caption\.shown < caption\.text\.length/,
+    "and stop scheduling once the whole turn is on screen");
 });
 
 test("avatar analyser reads Jim and never the candidate", () => {
@@ -548,7 +561,7 @@ test("avatar analyser reads Jim and never the candidate", () => {
   assert.match(functionBody(script, "attachAvatarAnalyser"), /if \(!isAgent\(participant\)\) return;/);
   // And the teardown is gated on the analyser's own track, or a second
   // participant leaving killed lip sync for the rest of the session.
-  assert.match(script, /if \(track !== jimAnalyserTrack\) return;/);
+  assert.match(script, /if \(!isAvatarAnalyserTrack\(track\)\) return;/);
   // Never the microphone, checked across the whole file rather than inside one
   // function slice: wiring the candidate's stream in from anywhere else would
   // have passed a slice-scoped assertion while the avatar watched the candidate.
@@ -567,7 +580,7 @@ test("avatar analyser reads Jim and never the candidate", () => {
   // case the audio-driven mouth exists to survive, and a review caught it after
   // it had already been written back in once.
   const branch = functionBody(script, "updateAgentState").split("state.sawAgent = true")[0];
-  assert.doesNotMatch(branch, /setSpeaking\(/,
+  assert.doesNotMatch(branch, /setAvatarSpeaking\(/,
     "the no-agent branch must not mute the mouth; silence closes it on its own");
 
   // The source node is released, not just dropped. LiveKit re-subscribes Jim on
@@ -578,4 +591,20 @@ test("avatar analyser reads Jim and never the candidate", () => {
   }
   // A context built outside a user gesture starts suspended and reads silence.
   assert.match(script, /jimAnalyserContext\.state === "suspended"/);
+});
+
+test("avatar teardown cancels a deferred width retry", () => {
+  const release = functionBody(script, "stopWatchingStageWidth");
+  assert.match(release, /window\.removeEventListener\("resize", stageWidthWatch\);/);
+  assert.match(release, /stageWidthWatch = null;/);
+  // Both ends: teardown drops it, and so does a start that succeeds. Waiting
+  // for the next resize to notice would hold the handler for a session that
+  // never resizes again.
+  for (const caller of ["stopAvatar", "startAvatar"]) {
+    assert.match(
+      functionBody(script, caller),
+      /stopWatchingStageWidth\(\)/,
+      `${caller} must release the width watch`,
+    );
+  }
 });

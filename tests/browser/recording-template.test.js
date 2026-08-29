@@ -12,9 +12,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { functionBody, read } from "./source.js";
+import { functionBody, read, interviewSource } from "./source.js";
 
-const interview = withoutInterviewComments(read("web/interview.js"));
+const interview = withoutInterviewComments(interviewSource());
 const page = read("web/recording/index.html");
 const script = read("web/recording/recording.js");
 const styles = read("web/recording/recording.css");
@@ -306,14 +306,29 @@ test("replay-producer envelope", () => {
     "the version comes from the server, because a second spelling of it refuses every event",
   );
 
-  const flush = withoutComments(functionBody(interview, "flushReplay"));
+  // The batch send lives in `sendQueuedBatch`; `flushReplay` is the queue in
+  // front of it that keeps two POSTs from committing out of order.
+  const flush = withoutComments(functionBody(interview, "sendQueuedBatch"));
   assert.ok(
     flush.includes("replayQueue.splice(0, REPLAY_MAX_BATCH)"),
     "batched to the server's own limit",
   );
+  const chain = withoutComments(functionBody(interview, "flushReplay"));
   assert.ok(
-    flush.includes("if (response.status === 413 || response.status === 404) closeReplay();"),
-    "over quota or consent withdrawn: the server will refuse everything after this",
+    chain.includes("flushChain = flushChain.then(sendQueuedBatch);"),
+    "flushes are serialized, or the replay is ordered by whichever request finished first",
+  );
+  assert.ok(
+    flush.includes("if (response.status === 404) {") && flush.includes("closeReplay();"),
+    "consent withdrawn: the server will refuse everything after this",
+  );
+  assert.ok(
+    flush.includes('if (code === "replay_quota_exceeded") closeReplay();'),
+    "and quota, which is the only 413 that is about the interview rather than the batch",
+  );
+  assert.ok(
+    !/status === 413\s*\|\|/.test(flush) && !/\|\|\s*response\.status === 413/.test(flush),
+    "a `replay_batch_too_large` must not close the feed: one oversized paste would end the replay",
   );
   const close = withoutComments(functionBody(interview, "closeReplay"));
   assert.ok(close.includes("replayClosed = true;"));
@@ -377,9 +392,14 @@ test("replay-producer tests", () => {
 });
 
 test("replay-producer stage", () => {
+  const payload = withoutComments(functionBody(interview, "stagePayload"));
+  assert.ok(
+    payload.includes("title: problem.title, meta: nodes.meta.textContent"),
+    "the problem heading is assembled in one place",
+  );
   const stage = withoutComments(functionBody(interview, "recordStage"));
   assert.ok(
-    stage.includes('recordReplay("stage", { title: problem.title, meta: nodes.meta.textContent });'),
+    stage.includes('recordReplay("stage", stagePayload());'),
     "the problem heading is sent, not assembled twice",
   );
   const problem = withoutComments(functionBody(interview, "renderProblem"));
@@ -396,10 +416,21 @@ test("replay-producer stage", () => {
 
   const timer = withoutComments(functionBody(interview, "tickTimer"));
   assert.ok(
-    timer.includes("if (Date.now() - replayStageAt >= REPLAY_STAGE_MS) {"),
+    timer.includes("recordStageTick(tick.remaining);"),
     "the clock is restated on an interval, not on every tick",
   );
-  assert.ok(timer.includes('recordReplay("stage", { remainingSeconds: tick.remaining });'));
+  const stageTick = withoutComments(functionBody(interview, "recordStageTick"));
+  assert.ok(
+    stageTick.includes("Date.now() - replayStageAt < REPLAY_STAGE_MS"),
+    "the stage repeat must still be throttled, wherever the guard lives",
+  );
+  // Through `stagePayload`, so the tick carries the heading too. `stage` is a
+  // snapshot kind: the newest one supersedes the rest, so a tick that sent only
+  // the seconds would blank the problem title for a late replay reader.
+  assert.ok(
+    stageTick.includes('recordReplay("stage", stagePayload({ remainingSeconds }));'),
+    "every stage event carries the heading, or the newest one erases it",
+  );
   assert.ok(
     /const REPLAY_STAGE_MS = 15000;/.test(interview),
     "a second-by-second clock would be most of the per-interview budget",
@@ -408,11 +439,15 @@ test("replay-producer stage", () => {
 
 test("replay-producer avatar", () => {
   assert.ok(
-    interview.includes('recordReplay("avatar", { state: value });'),
+    withoutComments(functionBody(interview, "recordAvatarState")).includes(
+      'recordReplay("avatar", { state: value });',
+    ),
     "the interviewer's state is recorded",
   );
   assert.ok(
-    interview.includes("if (value !== replayAvatarState) {"),
+    withoutComments(functionBody(interview, "recordAvatarState")).includes(
+      "if (value === replayAvatarState) return;",
+    ),
     "on the change, not on the participant event that happened to carry it",
   );
 });

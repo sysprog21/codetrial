@@ -44,5 +44,12 @@ export function outputOptions(devices, savedId) {
 /// A refusal therefore has to roll the stored value back, or the select and the
 /// real sink disagree until the next reload.
 export function outputAfterRouting(previous, requested, routed) {
-  return routed ? requested : previous;
+  if (routed) return requested;
+  // A refusal falls back to the device that was working before, except when
+  // that is the same device: reapplying a stored preference on reload passes
+  // the same id as both, so returning `previous` would write the refused id
+  // straight back and retry it on every reload for the life of the browser
+  // profile. There is no earlier device to fall back to, so the preference
+  // clears and the next load uses the system default.
+  return previous === requested ? "" : previous;
 }

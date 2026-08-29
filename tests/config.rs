@@ -2,9 +2,11 @@ use codetrial::config::{
     DEFAULT_COMPILER_EXPLORER_ENABLED, DEFAULT_DURATION_MIN,
     DEFAULT_GEMINI_CANDIDATE_VIDEO_ENABLED, DEFAULT_GEMINI_LIVE_MODEL, DEFAULT_GEMINI_REPORT_MODEL,
     DEFAULT_GEMINI_SILENCE_MS, DEFAULT_GEMINI_START_SENSITIVITY, DEFAULT_GEMINI_VOICE,
-    DEFAULT_ROOM_PREFIX, DEFAULT_WEB_ADDR, DEFAULT_WEB_DIR, MAX_GEMINI_SILENCE_MS, load_from_pairs,
+    DEFAULT_MAX_CONCURRENT_INTERVIEWS, DEFAULT_ROOM_PREFIX, DEFAULT_WEB_ADDR, DEFAULT_WEB_DIR,
+    MAX_GEMINI_SILENCE_MS, load_from_pairs, max_concurrent_interviews,
 };
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 #[test]
 fn config_accepts_current_env_names() {
@@ -1342,4 +1344,59 @@ mod recording {
             );
         }
     }
+}
+
+/// A cap the operator set and the server cannot honor is said out loud.
+///
+/// Falling back silently gives a node that was meant to be draining sixteen
+/// fresh interviews, with nothing in the log to explain why the number in the
+/// config file had no effect.
+#[test]
+fn an_unusable_interview_cap_falls_back_and_says_so() {
+    let cap = |value: &str| {
+        let mut warnings = Vec::new();
+        let values: BTreeMap<String, String> = std::iter::once((
+            "CODETRIAL_MAX_CONCURRENT_INTERVIEWS".to_string(),
+            value.to_string(),
+        ))
+        .collect();
+        let resolved = max_concurrent_interviews(&values, &mut warnings);
+        (resolved, warnings)
+    };
+    let default = DEFAULT_MAX_CONCURRENT_INTERVIEWS;
+
+    assert_eq!(
+        cap("4"),
+        (4, Vec::new()),
+        "a usable cap is taken and not remarked on"
+    );
+
+    let (zero, warnings) = cap("0");
+    assert_eq!(zero, default);
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("refuse every interview")),
+        "zero must say what it would have done: {warnings:?}"
+    );
+
+    let (typo, warnings) = cap("sixteeen");
+    assert_eq!(typo, default);
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("not a positive whole number")),
+        "an unreadable cap must name itself: {warnings:?}"
+    );
+
+    // Unset is the default, and the default is not worth a word.
+    let mut warnings = Vec::new();
+    assert_eq!(
+        max_concurrent_interviews(&BTreeMap::new(), &mut warnings),
+        default
+    );
+    assert!(
+        warnings.is_empty(),
+        "an unset cap is not a warning: {warnings:?}"
+    );
 }

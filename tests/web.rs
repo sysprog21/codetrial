@@ -549,6 +549,28 @@ async fn embedded_assets_fill_gaps_in_a_partial_web_directory() {
         .unwrap();
     assert_eq!(response.status(), 200);
 
+    // The same for a route with no extension, which is the harder half. Those
+    // expand to four candidates ending in `index.html`, the single-page
+    // fallback, so a disk store searched to exhaustion first would answer with
+    // the one file it has and hand back the wrong page with a 200. Candidate
+    // order has to beat store order.
+    let interview = reqwest::get(&format!("{base}/interview"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        !interview.contains("disk wins"),
+        "an extensionless route must not fall back to a stale disk index: {}",
+        &interview[..interview.len().min(200)]
+    );
+    assert!(
+        interview.contains("<title>CodeTrial"),
+        "it must be the real interview page: {}",
+        &interview[..interview.len().min(200)]
+    );
+
     server.abort();
     fs::remove_dir_all(root).unwrap();
 }
@@ -1487,7 +1509,15 @@ fn rust_problem_bank_matches_the_browser_problem_bank() {
 async fn server_check_accepts_running_rust_server() {
     let (mut config, cookie, db_path) = signed_in_web_config("server-check");
     config.web_dir = Path::new("web").to_path_buf();
-    config.pool = Default::default();
+
+    // A credentialled pool, because an empty one is no longer a server that can
+    // exist: `run_web` refuses to start without LiveKit credentials, so the
+    // check asserts `/api/token` mints rather than 500s.
+    config.pool = primary_pool(
+        "wss://example.livekit.cloud",
+        "server-check-key",
+        "server-check-secret",
+    );
     let (base, server) = spawn_web_server(config).await;
     let output = tokio::task::spawn_blocking(move || {
         Command::new("scripts/server-check.sh")
@@ -1515,7 +1545,11 @@ async fn server_check_accepts_running_rust_server() {
 async fn server_check_signs_itself_in_against_an_external_server() {
     let (mut config, _, db_path) = signed_in_web_config("server-check-cookie");
     config.web_dir = Path::new("web").to_path_buf();
-    config.pool = Default::default();
+    config.pool = primary_pool(
+        "wss://example.livekit.cloud",
+        "server-check-key",
+        "server-check-secret",
+    );
     let (base, server) = spawn_web_server(config).await;
     let output = tokio::task::spawn_blocking(move || {
         Command::new("scripts/server-check.sh")

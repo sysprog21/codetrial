@@ -59,6 +59,15 @@ pub const DEFAULT_WEB_ADDR: &str = "127.0.0.1:3000";
 pub const DEFAULT_COMPILER_EXPLORER_ENABLED: bool = true;
 pub const DEFAULT_GEMINI_CANDIDATE_VIDEO_ENABLED: bool = false;
 
+/// How many interviews one `codetrial web` process will host agents for at
+/// once. Each is a LiveKit room plus a metered Gemini Live session, so an
+/// unbounded count is an unbounded bill; a refused dispatch leaves the
+/// candidate on the "Waiting" pill, which is bad, but recoverable and visible.
+///
+/// Configurable because it is the one number that tracks the operator's budget
+/// and hardware rather than anything this code knows.
+pub const DEFAULT_MAX_CONCURRENT_INTERVIEWS: usize = 16;
+
 const REQUIRED_KEYS: &[&str] = &[
     "LIVEKIT_URL",
     "LIVEKIT_API_KEY",
@@ -677,6 +686,54 @@ fn report_model_or_default(values: &BTreeMap<String, String>) -> String {
             DEFAULT_GEMINI_REPORT_MODEL.to_string()
         }
         model => model.to_string(),
+    }
+}
+
+/// `CODETRIAL_MAX_CONCURRENT_INTERVIEWS`, or the default, and a word about it
+/// when the operator asked for something this cannot do.
+///
+/// The fallback does not fail the load: the cap is a throttle, and refusing to
+/// start over a typo in it would trade a slow server for no server. It does not
+/// happen quietly either. Zero and `sixteeen` both land on the default, and an
+/// operator who set one of them deliberately, to drain a node before a deploy,
+/// would otherwise get sixteen interviews and no hint that the number they
+/// wrote was never read.
+pub fn max_concurrent_interviews(
+    values: &BTreeMap<String, String>,
+    warnings: &mut Vec<String>,
+) -> usize {
+    const KEY: &str = "CODETRIAL_MAX_CONCURRENT_INTERVIEWS";
+    let Some(configured) = values
+        .get(KEY)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return DEFAULT_MAX_CONCURRENT_INTERVIEWS;
+    };
+
+    // Matched on the literal rather than guarded on `parsed > 0`. The guard
+    // says the same thing through a comparison, and a comparison is four more
+    // ways for the mutation gate to ask whether anything checks it.
+    match configured.parse::<usize>() {
+        // Zero is spelled out separately. "must be a positive whole number" is
+        // true of it too, but an operator who typed 0 meant "stop taking
+        // interviews", and being told their number was unreadable would send
+        // them looking for a typo that is not there.
+        Ok(0) => {
+            warnings.push(format!(
+                "{KEY}=0 would refuse every interview; using {DEFAULT_MAX_CONCURRENT_INTERVIEWS}. \
+                 Stop the process to drain it."
+            ));
+            DEFAULT_MAX_CONCURRENT_INTERVIEWS
+        }
+        Ok(parsed) => parsed,
+        Err(_) => {
+            warnings.push(format!(
+                "{KEY}={configured} is not a positive whole number; using \
+                 {DEFAULT_MAX_CONCURRENT_INTERVIEWS}."
+            ));
+            DEFAULT_MAX_CONCURRENT_INTERVIEWS
+        }
     }
 }
 

@@ -27,6 +27,7 @@ USE_AGENT_SERVE=0
 DISPATCH_MODE=0
 LOGIN_DB_PATH="$TMP/accounts.db"
 LOGIN_SESSION_SECRET=browser-check-session
+CONFIG_PATH="$TMP/codetrial.env.local"
 
 cleanup() {
   if [ "${SERVER_PID:-}" ]; then
@@ -38,8 +39,13 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if [ "$BROWSER_CHECK_AGENT" = "rust" ] || [ "$BROWSER_CHECK_AGENT" = "dispatch" ]; then
-  CONFIG_ENV=${CODETRIAL_CONFIG_ENV:-$ROOT/config/codetrial.env.local}
-  if [ -f "$CONFIG_ENV" ]; then
+  CONFIG_ENV=${CODETRIAL_CONFIG_ENV:-}
+  if [ -z "$CONFIG_ENV" ]; then
+    for candidate in "$ROOT/config/codetrial.env.local" "$ROOT/codetrial.env.local"; do
+      [ -f "$candidate" ] && { CONFIG_ENV=$candidate; break; }
+    done
+  fi
+  if [ -f "${CONFIG_ENV:-}" ]; then
     set -a
     . "$CONFIG_ENV"
     set +a
@@ -49,6 +55,33 @@ if [ "$BROWSER_CHECK_AGENT" = "rust" ] || [ "$BROWSER_CHECK_AGENT" = "dispatch" 
   : "${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET for credentialed browser check}"
   : "${GOOGLE_API_KEY:?set GOOGLE_API_KEY for credentialed browser check}"
 fi
+
+case $BROWSER_CHECK_AGENT in
+  home | offline)
+    printf '%s\n' \
+      'LIVEKIT_URL=wss://example.livekit.cloud' \
+      'LIVEKIT_API_KEY=browser-check-key' \
+      'LIVEKIT_API_SECRET=browser-check-secret' >"$CONFIG_PATH"
+    ;;
+  rust | dispatch)
+
+    # The operator's own file, named rather than copied. `provider_dir` is the
+    # config file's directory, so a copy in $TMP has no `codetrial.env.<id>`
+    # siblings beside it and the pool collapses to the primary project. The
+    # credentialed check is the only one that can exercise pooling at all, and a
+    # copy is exactly what stops it: an external server minting a pooled room
+    # would hand it to an agent that has never heard of that provider.
+    #
+    # A config assembled from the environment is the fallback, for the runner
+    # that has the four variables and no file to point at.
+    if [ -f "${CONFIG_ENV:-}" ]; then
+      CONFIG_PATH=$CONFIG_ENV
+    else
+      printf 'LIVEKIT_URL=%s\nLIVEKIT_API_KEY=%s\nLIVEKIT_API_SECRET=%s\nGOOGLE_API_KEY=%s\n' \
+        "$LIVEKIT_URL" "$LIVEKIT_API_KEY" "$LIVEKIT_API_SECRET" "$GOOGLE_API_KEY" >"$CONFIG_PATH"
+    fi
+    ;;
+esac
 
 if [ "${BROWSER_CHECK_VALIDATE_ENV_ONLY:-}" ]; then
   exit 0
@@ -98,10 +131,9 @@ else
   case $BROWSER_CHECK_AGENT in
     home | offline)
       env -u LIVEKIT_URL -u LIVEKIT_API_KEY -u LIVEKIT_API_SECRET -u GOOGLE_API_KEY \
-        CODETRIAL_SKIP_CONFIG=1 \
         SESSION_SECRET="$LOGIN_SESSION_SECRET" \
         CODETRIAL_DB_PATH="$LOGIN_DB_PATH" \
-        cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- web --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
+        cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- web --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
         >"$SERVER_LOG" 2>&1 &
       ;;
     dispatch)
@@ -111,20 +143,18 @@ else
       # that a missing dispatch breaks, and nothing else covers it.
       unset INTERVIEW_ROOM_NAME
       DISPATCH_MODE=1
-      CODETRIAL_SKIP_CONFIG=1 \
-        SESSION_SECRET="$LOGIN_SESSION_SECRET" \
-        CODETRIAL_DB_PATH="$LOGIN_DB_PATH" \
-        cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- web --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
+      SESSION_SECRET="$LOGIN_SESSION_SECRET" \
+      CODETRIAL_DB_PATH="$LOGIN_DB_PATH" \
+      cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- web --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
         >"$SERVER_LOG" 2>&1 &
       ;;
     rust)
       INTERVIEW_ROOM_NAME=${INTERVIEW_ROOM_NAME:-interview-browser-$(date +%s)-$$}
       export INTERVIEW_ROOM_NAME
       USE_AGENT_SERVE=1
-      CODETRIAL_SKIP_CONFIG=1 \
-        SESSION_SECRET="$LOGIN_SESSION_SECRET" \
-        CODETRIAL_DB_PATH="$LOGIN_DB_PATH" \
-        cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- serve --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
+      SESSION_SECRET="$LOGIN_SESSION_SECRET" \
+      CODETRIAL_DB_PATH="$LOGIN_DB_PATH" \
+      cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- serve --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
         >"$SERVER_LOG" 2>&1 &
       ;;
     *)
@@ -179,6 +209,7 @@ BASE_URL="$BASE_URL" \
   BROWSER_CHECK_COMPILER_EXPLORER_BASE_URL="$COMPILER_EXPLORER_BASE_URL_ARG" \
   BROWSER_CHECK_SESSION_COOKIE="$SESSION_COOKIE" \
   BROWSER_CHECK_USE_AGENT_SERVE="$USE_AGENT_SERVE" \
+  BROWSER_CHECK_CONFIG_PATH="$CONFIG_PATH" \
   INTERVIEW_ROOM_NAME="${INTERVIEW_ROOM_NAME:-}" \
   PLAYWRIGHT_PATH="$PLAYWRIGHT_PATH" \
   ROOT="$ROOT" \

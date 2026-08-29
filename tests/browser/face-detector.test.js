@@ -11,9 +11,11 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createServer } from "node:net";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const require = createRequire(import.meta.url);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -25,10 +27,39 @@ try {
   chromium = null;
 }
 
-const PORT = 38431;
-const BASE = `http://127.0.0.1:${PORT}/`;
+/// Asked for rather than picked. A fixed port collides with a second copy of
+/// this suite and with whatever else on the machine happened to want it.
+///
+/// The probe frees the port before the server binds it, so this is a hint and
+/// not a reservation: two concurrent runs can be handed the same just-freed
+/// number. `startServer` retries on that rather than pretending it cannot
+/// happen, and a server that still will not come up fails the suite instead of
+/// skipping, because a skip here reads as "nothing to test" when what happened
+/// is "the test never ran".
+async function freePort() {
+  const probe = createServer();
+  await new Promise((ready) => probe.listen(0, "127.0.0.1", ready));
+  const { port } = probe.address();
+  await new Promise((closed) => probe.close(closed));
+  return port;
+}
+
+let PORT = 0;
+let BASE = "";
+const binary = resolve(root, "target/debug/codetrial");
 let server = null;
 let browser = null;
+
+/// The config file and the account database, in a directory this run owns.
+///
+/// Fixed paths under `target/` were the other half of the port collision. Two
+/// copies of this suite wrote the same config, and whichever finished first
+/// removed it in `after` while the other was still starting its server, which
+/// the binary answers by refusing to boot: a missing primary config is a
+/// refusal now, not a fall back to the environment. They shared one SQLite file
+/// on top of that. Made per run rather than reference-counted, because a
+/// directory is the smallest thing that makes the question not arise.
+let workDir = null;
 
 async function reachable() {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -52,24 +83,48 @@ before(async () => {
     browser = null;
     return;
   }
-  server = spawn(
-    resolve(root, "target/debug/codetrial"),
-    ["web", "--web-addr", `127.0.0.1:${PORT}`, "--web-dir", resolve(root, "web")],
-    {
-      cwd: root,
-      stdio: "ignore",
-      env: { ...process.env, CODETRIAL_SKIP_CONFIG: "1", CODETRIAL_DB_PATH: resolve(root, "target/face-detector-test.db") },
-    },
-  );
-  if (!(await reachable())) {
+  // An unbuilt checkout is the one honest reason to skip, so it is the only
+  // one: everything past this point either serves or fails.
+  if (!existsSync(binary)) {
+    server = null;
+    return;
+  }
+  // `target/` is missing on a clean checkout, and `mkdtemp` needs its parent.
+  // Creating it keeps a missing build a skipped suite, which is what the
+  // chromium guard above already does, rather than an ENOENT thrown out of
+  // `before`.
+  mkdirSync(resolve(root, "target"), { recursive: true });
+  workDir = mkdtempSync(join(root, "target", "face-detector-"));
+  const configPath = join(workDir, "codetrial.env.local");
+  writeFileSync(configPath, "LIVEKIT_URL=wss://example.livekit.cloud\nLIVEKIT_API_KEY=face-detector-key\nLIVEKIT_API_SECRET=face-detector-secret\n");
+
+  // Three ports before giving up. A lost race is a fresh number and another
+  // try; three lost in a row is not a race any more.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    PORT = await freePort();
+    BASE = `http://127.0.0.1:${PORT}/`;
+    server = spawn(
+      binary,
+      ["web", "--config", configPath, "--web-addr", `127.0.0.1:${PORT}`, "--web-dir", resolve(root, "web")],
+      {
+        cwd: root,
+        stdio: "ignore",
+        env: { ...process.env, CODETRIAL_DB_PATH: join(workDir, "accounts.db") },
+      },
+    );
+    if (await reachable()) return;
     server.kill();
     server = null;
   }
+  // Built, launched, and never answered. Skipping here would report the same
+  // thing as an unbuilt checkout, and the two are not the same thing at all.
+  throw new Error(`the server never answered on 127.0.0.1:${PORT} after three ports`);
 });
 
 after(async () => {
   await browser?.close();
   server?.kill();
+  if (workDir) rmSync(workDir, { recursive: true, force: true });
 });
 
 /// Draws something BlazeFace recognises without needing a photograph checked

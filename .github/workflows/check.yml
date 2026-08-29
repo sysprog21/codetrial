@@ -459,14 +459,17 @@ jobs:
             os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             extension: ''
+            archive: tar.gz
           - name: macOS arm64
             os: macos-15
             target: aarch64-apple-darwin
             extension: ''
+            archive: zip
           - name: Windows x86_64
             os: windows-2025
             target: x86_64-pc-windows-msvc
             extension: .exe
+            archive: zip
     runs-on: ${{ matrix.os }}
     env:
       # Cleared for the same reason `plan-mutants` clears it: the workflow-wide
@@ -487,6 +490,14 @@ jobs:
       - name: Install Linux build dependency
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev
+      # The same entry the check job saves, on the same key. Without it all
+      # three platform legs re-download 24 MB that one job already fetched and
+      # stored on this commit, and the fetch script no-ops on a hit.
+      - name: Restore vendored bytes
+        uses: actions/cache/restore@v6
+        with:
+          path: web/vendor
+          key: vendor-${{ hashFiles('web/vendor/**') }}
       - name: Fetch browser assets
         run: ./scripts/fetch-vendor.sh
         shell: bash
@@ -512,6 +523,13 @@ jobs:
         run: |
           empty=$(mktemp -d)
           cp target/${{ matrix.target }}/release/codetrial "$empty/"
+          # `web` refuses to start without a primary config file, so the empty
+          # directory gets one. It is still empty of a web tree, which is the
+          # only emptiness this step is about.
+          printf '%s\n' \
+            'LIVEKIT_URL=wss://example.livekit.cloud' \
+            'LIVEKIT_API_KEY=embed-check-key' \
+            'LIVEKIT_API_SECRET=embed-check-secret' >"$empty/codetrial.env.local"
           # Killed from a trap rather than only on the happy path, and with its
           # output redirected: a server left running past a failed probe holds
           # the step's stdout open, which turns a one-line failure into a job
@@ -561,10 +579,32 @@ jobs:
           cp target/${{ matrix.target }}/release/codetrial${{ matrix.extension }}
           codetrial-${{ matrix.target }}${{ matrix.extension }}
         shell: bash
+      - name: Compress Linux release asset
+        if: runner.os == 'Linux'
+        shell: bash
+        run: tar -czf codetrial-${{ matrix.target }}.tar.gz codetrial-${{ matrix.target }}
+      # `zip`, not `ditto`. `--keepParent` keeps the parent *directory* of what
+      # it is given, and what it is given here is a file, so the archive carried
+      # `codetrial/codetrial-aarch64-apple-darwin`: the runner's checkout
+      # directory name, leaked into a download, with the binary a level deeper
+      # than the other two platforms put it. ditto also writes an AppleDouble
+      # `._` sidecar that is noise everywhere it is unpacked.
+      #
+      # Nothing is lost by dropping it: the ad-hoc signature the linker applies
+      # lives inside the Mach-O, not in the extended attributes ditto exists to
+      # preserve, and it survives a zip round trip along with the mode bits.
+      - name: Compress macOS release asset
+        if: runner.os == 'macOS'
+        shell: bash
+        run: zip -q codetrial-${{ matrix.target }}.zip codetrial-${{ matrix.target }}
+      - name: Compress Windows release asset
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -LiteralPath codetrial-${{ matrix.target }}.exe -DestinationPath codetrial-${{ matrix.target }}.zip
       - uses: actions/upload-artifact@v7
         with:
           name: codetrial-${{ matrix.target }}
-          path: codetrial-${{ matrix.target }}${{ matrix.extension }}
+          path: codetrial-${{ matrix.target }}.${{ matrix.archive }}
 
   # A rolling prerelease keeps the current main build one direct download away.
   release:
@@ -598,9 +638,9 @@ jobs:
         shell: bash
         run: |
           assets=(
-            dist/codetrial-x86_64-unknown-linux-gnu
-            dist/codetrial-aarch64-apple-darwin
-            dist/codetrial-x86_64-pc-windows-msvc.exe
+            dist/codetrial-x86_64-unknown-linux-gnu.tar.gz
+            dist/codetrial-aarch64-apple-darwin.zip
+            dist/codetrial-x86_64-pc-windows-msvc.zip
           )
           for asset in "${assets[@]}"; do
             [ -f "$asset" ] || { echo "missing release asset: $asset" >&2; exit 1; }
@@ -658,6 +698,21 @@ jobs:
               exit 1
             }
           done
+
+          # Anything on `latest` that this build did not just upload came from
+          # an older naming scheme, and `--clobber` cannot touch it: it only
+          # overwrites names that match. The raw `codetrial-<target>` binaries
+          # these archives replaced are exactly that, and left alone they sit on
+          # the download page beside the current set with nothing saying which
+          # commit they are from. Removed inside the draft, where the page
+          # serves nobody, and before the tag moves.
+          wanted=$(for asset in "${assets[@]}"; do basename "$asset"; done)
+          gh release view latest --json assets --jq '.assets[].name' \
+            | while read -r name; do
+                printf '%s\n' "$wanted" | grep -qxF "$name" && continue
+                echo "removing stale release asset: $name"
+                gh release delete-asset latest "$name" --yes
+              done
 
           # Only now does anything point at this build.
           git tag -f latest "$GITHUB_SHA"

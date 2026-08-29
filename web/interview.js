@@ -21,7 +21,6 @@ import {
 } from "./render.js";
 import {
   acceptsReport,
-  captionWindow,
   clamp,
   codeUpdatePayload,
   countdown,
@@ -36,30 +35,59 @@ import {
   timeWarningPayload,
   topics,
 } from "./lib.js";
-import { OUTPUT_NOTES, outputAfterRouting, outputOptions } from "./meet-audio.js";
 import {
-  ANALYSER_FFT_SIZE,
-  ANALYSER_WINDOW,
-  MODEL_URL,
-  createAvatar,
-  mouthFromAmplitude,
-} from "./avatar/avatar.js";
+  attachAvatarAnalyser,
+  initAvatarStage,
+  isAvatarAnalyserTrack,
+  releaseAvatarAnalyser,
+  setAvatarExpression,
+  setAvatarSpeaking,
+  startAvatar,
+  stopAvatar,
+} from "./avatar/stage.js";
+import {
+  flushReplay,
+  initReplay,
+  recordAvatarState,
+  recordConsent,
+  recordReplay,
+  recordStage,
+  recordStageTick,
+} from "./replay-feed.js";
+import {
+  AUDIO_OUTPUT_KEY,
+  MEET_PRESENTATION_KEY,
+  applyAudioOutput,
+  initAudioOutput,
+  readStored,
+  refreshAudioOutputs,
+  writeStored,
+} from "./audio-output.js";
+import {
+  PRESENCE_EVENTS,
+  initIntegrity,
+  monitorIntegrityTracks,
+  startIntegrityHeartbeat,
+  startIntegrityWorker,
+  stopIntegrityWorker,
+} from "./integrity.js";
+import { initCaptions, showCaptions, updateCaptions } from "./captions.js";
+import {
+  consentGiven,
+  initRecording,
+  startRecording,
+  withdrawRecordingConsent,
+} from "./recording-state.js";
 import { saveReportHistory } from "./history.js";
-import { TRACKING_INTERVAL_MS } from "./integrity-worker.js";
 import { createFacePresenceDetector, facePresenceVerdict } from "./face-presence.js";
 import { runBrowserTests } from "./runners.js";
 
 const languages = ["python", "javascript", "c", "cpp", "java"];
 let editorInitialized = false;
 let codePublishTimer = null;
-let recordingPoll = null;
 // The agent reads the editor once per 2s watch tick, so publishing every
 // keystroke sends ~10x more full-buffer packets than anyone consumes.
 const CODE_PUBLISH_DEBOUNCE_MS = 300;
-const CAPTION_TICK_MS = 300;
-const CAPTION_CHARS_PER_TICK = 8;
-const AUDIO_OUTPUT_KEY = "codetrial:audioOutputId";
-const MEET_PRESENTATION_KEY = "codetrial:meetPresentation";
 
 // From /runtime-config.js, which is the only thing allowed to name what the
 // server does. A literal here would be a second answer to "does this server
@@ -72,15 +100,6 @@ const consentVersion = globalThis.CODETRIAL_CONSENT_VERSION || "";
 /// every event is refused.
 const replayVersion = globalThis.CODETRIAL_REPLAY_VERSION || 1;
 
-/// Whether the recording notice has been agreed to, or does not apply.
-function consentGiven() {
-  return !recordingEnabled || nodes.recordingConsent.checked;
-}
-const INTEGRITY_HEARTBEAT_MS = 5000;
-/// Slower than the timer on purpose: the states a recording moves through are
-/// minutes apart, and a poll per second would be a request per second for a
-/// word that does not change.
-const RECORDING_POLL_MS = 15000;
 const params = new URLSearchParams(window.location.search);
 // Start this independent request while the problem data is loading. It has to
 // settle rather than reject: nothing awaits it until init() reaches the sign-in
@@ -201,17 +220,21 @@ const nodes = {
 // with a handle.
 let jimAudio = null;
 
-// Jim's face and the analyser that drives its mouth. Presentation only: no
-// frame this renders is published, recorded, or sent anywhere, and the analyser
-// reads Jim's own track, never the candidate's microphone.
-let avatar = null;
-let avatarFrame = null;
-let jimAnalyser = null;
-let jimAnalyserSource = null;
-let jimAnalyserSamples = null;
-let jimAnalyserTrack = null;
-let jimAnalyserContext = null;
-const jimAnalyserPeaks = [];
+
+// Before `init`, because the queue's first producer is inside it. The bindings
+// are handed over rather than re-derived: one `state` object, one `nodes` map.
+initReplay({ state, nodes, problem, recordingEnabled, consentVersion, replayVersion });
+initCaptions({ nodes });
+initAvatarStage({ nodes });
+initAudioOutput({ nodes, jimAudioElement: () => jimAudio });
+initRecording({ state, nodes, recordingEnabled, addTranscript, setBanner });
+initIntegrity({
+  state,
+  nodes,
+  updatePresenceBanner,
+  publishIntegrityEvent,
+  endInterview,
+});
 
 init();
 
@@ -730,144 +753,6 @@ async function connect(preflight, presenting = false) {
 }
 
 
-/// Asks the server to start recording, and then to keep saying whether it is.
-///
-/// The candidate agreed to be recorded and is owed the answer to "is it". A
-/// silent failure here is the worst outcome available: they believe the
-/// interview is being kept and it is not.
-async function startRecording() {
-  try {
-    const response = await fetch(`/api/interviews/${encodeURIComponent(state.interviewId)}/recording`, {
-      method: "POST",
-    });
-    if (!response.ok) throw new Error((await response.json())?.error || "The recording could not be started.");
-    showRecordingState(await response.json());
-  } catch (error) {
-    // Still polls. A refused start and a start that succeeded and could not be
-    // read back look the same from here, and the status route is the thing that
-    // can tell them apart: it answers 404 when there is nothing, and polling
-    // stops on that.
-    // Neutral, not a verdict. This call cannot tell a refused start from one
-    // that worked and could not be read back, and the status route can.
-    console.warn("codetrial recording_start_failed", error);
-    nodes.recordingState.hidden = false;
-    nodes.recordingState.textContent = "Checking whether the recording started.";
-  }
-  // One timer, cleared first. `connect` runs again on a reconnect, and an
-  // interval per attempt is a request per attempt per period forever. Armed
-  // only when the first answer was not already terminal, because
-  // `showRecordingState` clears it and an interval created afterwards would
-  // survive one pointless request.
-  clearInterval(recordingPoll);
-  if (!nodes.recordingState.dataset.settled) {
-    recordingPoll = setInterval(pollRecordingState, RECORDING_POLL_MS);
-  }
-}
-
-async function pollRecordingState() {
-  if (!state.interviewId) return;
-  try {
-    const response = await fetch(`/api/interviews/${encodeURIComponent(state.interviewId)}/recording`);
-    if (response.ok) {
-      showRecordingState(await response.json());
-      return;
-    }
-    // Gone, not ours, or signed out. None of these change by asking again, and
-    // a session that expired would otherwise be a request every fifteen seconds
-    // for the rest of the page's life.
-    if ([401, 403, 404].includes(response.status)) {
-      stopRecordingPoll();
-      if (response.status === 401) {
-        nodes.recordingState.hidden = false;
-        nodes.recordingState.textContent = "Sign in again to see the recording status.";
-      }
-    }
-  } catch (error) {
-    // The interview is the thing that matters; a status that cannot be read is
-    // left showing whatever it last said rather than blanked.
-    console.warn("codetrial recording_status_failed", error);
-  }
-}
-
-/// The state in words a candidate can act on. "failed" is not an instruction,
-/// so the recovery the server returns is what picks the sentence.
-function showRecordingState(status) {
-  const words = {
-    starting: "Recording is starting.",
-    recording: "Recording.",
-    finalizing: "Recording is finishing.",
-    transferring: "Recording is being saved.",
-    ready: "Recording saved. The link goes to your verified GitHub email.",
-    deleted: "Recording deleted.",
-  };
-  const recovery = {
-    start_again: "Recording stopped and was not kept.",
-    retry_delivery: "Recording was kept and has not been delivered yet.",
-    none: "Recording stopped at your request.",
-    wait_for_operator: "Recording is turned off on this server.",
-    // Neither of these means the recording is gone, and saying it was not kept
-    // would be the opposite of true: the media may still exist.
-    delete_by_hand: "Recording deletion needs an operator. It has not been deleted yet.",
-    clear_the_row_by_hand: "Recording was deleted. Its record needs an operator.",
-  };
-  nodes.recordingState.hidden = false;
-  // The recovery wins where there is one. A recording that is `transferring`
-  // with `drive_failed` is being saved and is also not delivered, and the
-  // second half is the half worth saying.
-  nodes.recordingState.textContent =
-    recovery[status?.recovery] || words[status?.state] || "Recording stopped and was not kept.";
-
-  // Nothing changes after a terminal state, so nothing keeps asking. Ending the
-  // interview is not the end of the recording: `transferring` and `ready` both
-  // happen afterwards, which is exactly when a candidate wants to know.
-  // A `failed` recording whose recovery is another delivery attempt is not
-  // finished: the transfer queue can still deliver it, and the candidate is the
-  // person who wants to know when it does.
-  const settled = ["ready", "deleted", "cleanup_failed"].includes(status?.state)
-    || (status?.state === "failed" && status?.recovery !== "retry_delivery");
-  // Recorded on the element rather than in a variable, because `startRecording`
-  // reads it after this runs and the two are not in the same call.
-  if (settled) {
-    nodes.recordingState.dataset.settled = "1";
-    stopRecordingPoll();
-  } else {
-    delete nodes.recordingState.dataset.settled;
-  }
-}
-
-/// Takes consent back, mid-interview.
-///
-/// No confirmation step. Stopping a recording is the safe direction of a
-/// misclick, because the other one cannot be undone, and a candidate reaching
-/// for this button is not in a mood to be asked twice.
-///
-/// The button does not come back. Consent that was withdrawn stays withdrawn:
-/// re-agreeing would be a new interview, and this page is already in one.
-async function withdrawRecordingConsent() {
-  if (!state.interviewId) return;
-  nodes.withdrawConsent.disabled = true;
-  try {
-    const response = await fetch(`/api/interviews/${encodeURIComponent(state.interviewId)}/consent`, {
-      method: "DELETE",
-    });
-    if (!response.ok) throw new Error("The server did not accept the request.");
-    // The replay stops here, not at the next refusal. The server will refuse
-    // it, so this changes nothing it can see; what it changes is that a
-    // candidate who has just said stop does not keep sending their editor and
-    // their words for another second while the answer comes back.
-    closeReplay();
-    // "Requested", not "stopped". This route records the withdrawal; stopping
-    // the provider and scheduling the deletion is the recording lifecycle's
-    // work, and a button that reports a completed action it did not perform is
-    // the worst possible place to be optimistic.
-    nodes.withdrawConsent.textContent = "Recording stop requested";
-    addTranscript("interviewer", "Your withdrawal is recorded. Recording will stop and the file is scheduled for deletion. Copies anyone already downloaded cannot be recalled.", true);
-  } catch (error) {
-    console.warn("codetrial withdraw_consent_failed", error);
-    nodes.withdrawConsent.disabled = false;
-    setBanner("connection", "Could not stop the recording. Try again, or end the interview.");
-  }
-}
 
 // The replay: what the candidate was looking at, sent to the server so the
 // recording template can render it and the replay page can play it back. The
@@ -875,105 +760,6 @@ async function withdrawRecordingConsent() {
 //
 // Batched, because an event per keystroke is a request per keystroke. Thirty
 // two events and a second are both the server's limits, not guesses.
-const REPLAY_FLUSH_MS = 1000;
-const REPLAY_MAX_BATCH = 32;
-
-/// How often the clock and the problem heading are restated.
-///
-/// Every second would be twenty-seven hundred events in a forty-five minute
-/// interview, most of the per-interview budget spent on a number the viewer
-/// can read off the video anyway. Fifteen seconds is a clock that is never
-/// more than fifteen seconds stale in a replay nobody scrubs to the second.
-const REPLAY_STAGE_MS = 15000;
-
-let replayQueue = [];
-let replayTimer = null;
-let replayClosed = false;
-let replayStageAt = 0;
-let replayAvatarState = "";
-
-/// One event onto the queue.
-///
-/// Every producer goes through here, so there is one answer to "is this server
-/// recording", one place the envelope is written, and one place the replay
-/// stops when the server says it has heard enough.
-function recordReplay(kind, payload) {
-  if (!recordingEnabled || !state.interviewId || replayClosed) return;
-  replayQueue.push({ v: replayVersion, kind, at: Date.now(), payload });
-  if (replayQueue.length >= REPLAY_MAX_BATCH) {
-    void flushReplay();
-    return;
-  }
-  replayTimer ||= setTimeout(() => void flushReplay(), REPLAY_FLUSH_MS);
-}
-
-/// Stop producing, and forget what has not gone yet.
-///
-/// Called when the candidate withdraws consent and when the server says it has
-/// heard enough. The queue is dropped rather than flushed: these are events
-/// from before a decision that says they should not be stored.
-function closeReplay() {
-  replayClosed = true;
-  replayQueue = [];
-  clearTimeout(replayTimer);
-  replayTimer = null;
-}
-
-/// Send what is queued.
-///
-/// Dropped rather than retried on a failure. The events are a description of an
-/// interview that is still happening, and a queue that grew through an outage
-/// would deliver a burst of stale state after it, on top of the newer state
-/// that had already arrived.
-async function flushReplay() {
-  clearTimeout(replayTimer);
-  replayTimer = null;
-  if (!replayQueue.length || replayClosed) return;
-  const batch = replayQueue.splice(0, REPLAY_MAX_BATCH);
-  try {
-    const response = await fetch(`/api/interviews/${encodeURIComponent(state.interviewId)}/events`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ events: batch }),
-    });
-    // Over quota, or an interview whose consent has been withdrawn. Both mean
-    // the server will refuse everything after this, and a producer that kept
-    // posting would spend the rest of the interview being told so.
-    if (response.status === 413 || response.status === 404) closeReplay();
-  } catch {
-    // Offline. The interview is what matters and it is still running.
-  }
-  if (replayQueue.length) replayTimer ||= setTimeout(() => void flushReplay(), REPLAY_FLUSH_MS);
-}
-
-/// The problem heading, as the recording shows it.
-function recordStage() {
-  recordReplay("stage", { title: problem.title, meta: nodes.meta.textContent });
-}
-
-/// Writes down what the candidate agreed to, and returns the interview id the
-/// token request then has to carry.
-///
-/// `null` where the server records nothing: there is no consent to take, and
-/// the token endpoint ignores the field.
-///
-/// A failure throws into `connect`'s catch, which is the right place: an
-/// interview that cannot record consent must not start, and the candidate gets
-/// the server's own sentence plus the offline practice editor rather than a
-/// recording nobody agreed to.
-async function recordConsent() {
-  if (!recordingEnabled) return null;
-  const response = await fetch("/api/interviews", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ consentVersion }),
-  });
-  if (!response.ok) {
-    throw new Error((await response.json())?.error || "Could not record your recording consent.");
-  }
-  return (await response.json()).interviewId;
-}
-
 /// `presenting` is threaded through explicitly. It was read here while only
 /// `connect` had it in scope, so every single interview threw
 /// `ReferenceError: presenting is not defined` immediately after joining the
@@ -1135,14 +921,6 @@ function setLocalAudioEnabled(enabled) {
   }
 }
 
-/// Stops asking about a recording once the interview is over.
-///
-/// The interval outlives the room otherwise: an inert timer at best, and a
-/// request every fifteen seconds for a word that will not change at worst.
-function stopRecordingPoll() {
-  clearInterval(recordingPoll);
-  recordingPoll = null;
-}
 
 function stopLocalMedia() {
   stopIntegrityWorker();
@@ -1209,10 +987,10 @@ function dropRemoteAudio(track) {
   // second participant leaving killed lip sync for the rest of the session, and
   // on reconnect a late unsubscribe for the OLD publication tore down the
   // analyser that had just been built for the new one.
-  if (track !== jimAnalyserTrack) return;
+  if (!isAvatarAnalyserTrack(track)) return;
   // The mouth is driven by an analyser whose track just went away. Left alone
   // it would freeze mid-syllable on whatever the last window held.
-  avatar?.setSpeaking(false);
+  setAvatarSpeaking(false);
   releaseAvatarAnalyser();
 }
 
@@ -1220,279 +998,6 @@ function dropRemoteAudio(track) {
 /// session that never reaches this point never downloads Three.js, and a
 /// browser without WebGL, or a checkout without a licensed jim.vrm, lands on
 /// the neutral panel that web/interview.html already carries.
-function startAvatar() {
-  if (avatar) return;
-  // Below the stylesheet's breakpoint the avatar is `display: none`, and a
-  // hidden element is not worth 11 MB of model, 730 KB of renderer, one of the
-  // page's ~16 WebGL contexts and a 60 Hz loop drawing into a 1x1 canvas. The
-  // computed style is asked rather than the breakpoint restated, so the CSS
-  // stays the only place that decides where the avatar is shown.
-  if (!nodes.jimAvatar || window.getComputedStyle(nodes.jimAvatar).display === "none") return;
-  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
-  avatar = createAvatar({
-    mount: nodes.jimAvatar,
-    reducedMotion,
-    // The panel says which of the two things happened, because "Jim is here by
-    // voice" under a blank box is indistinguishable from a broken page.
-    onState: (next) => {
-      if (next !== "unavailable") return;
-      nodes.jimAvatarNote.textContent = "Jim is here by voice; his avatar is unavailable in this browser.";
-    },
-    loadModel: async () => {
-      // Ask whether the model is published before importing the renderer.
-      // Without this every candidate downloads 730 KB of Three.js only to
-      // discover a 404, which is exactly the state of the repo today.
-      const published = await fetch(MODEL_URL, { method: "HEAD" });
-      if (!published.ok) throw new Error(`${MODEL_URL} is not published`);
-      const renderer = await import("./avatar/vrm.js");
-      return renderer.loadVrm({ mount: nodes.jimAvatar });
-    },
-  });
-  // Started only once something can actually render. Pumping regardless meant
-  // every session without a model, which is all of them today, ran a 60 Hz
-  // loop that read the analyser and threw the result away.
-  void avatar.ready.then((rendered) => {
-    if (!rendered) return;
-    // Read by the avatar browser check, which has no other way to tell a
-    // running render loop from a canvas that was created once and abandoned.
-    window.__codetrialAvatarFrames = () => avatar?.frames() ?? 0;
-    // Through `resumeAvatar`, not straight into the loop. A tab that became
-    // visible while the model was still loading has already started one, and
-    // two loops is two analyser reads and two poses a frame.
-    resumeAvatar();
-  });
-}
-
-function pumpAvatar(at) {
-  if (!avatar) return;
-  // A hidden document stops asking for frames rather than asking and returning
-  // early. Browsers already throttle `requestAnimationFrame` in a background
-  // tab, so what this buys is small and it is not nothing: the analyser read
-  // and the humanoid update stop too, and `resumeAvatar` below is what starts
-  // them again. Written as "stop scheduling" rather than "skip a frame"
-  // because a loop that keeps scheduling is a loop that is still running.
-  if (document.hidden) {
-    avatarFrame = null;
-    return;
-  }
-  avatarFrame = requestAnimationFrame(pumpAvatar);
-  // Hidden by the CSS breakpoint, which the candidate can cross at any time by
-  // narrowing the window or docking devtools. startAvatar only samples this
-  // once, so without the check the humanoid rig, expressions and constraints
-  // kept running 60 times a second to produce no pixels.
-  //
-  // The preflight overlay is the same argument by a different route: it is
-  // opaque and covers the stage, so a model that finishes loading while the
-  // candidate is still granting a camera would otherwise render behind it,
-  // taking main-thread frames away from the level meter and the face detector.
-  // The width check cannot see this, because an element under an overlay still
-  // has its width. Loading early is the point; drawing early is not.
-  if (!nodes.jimAvatar.clientWidth || !nodes.audioCheck.hidden) return;
-  avatar.setMouth(mouthFromAmplitude(jimAmplitude()));
-  // The rAF timestamp is the frame's target time and is identical across every
-  // callback in that frame; performance.now() drifts by however long the loop
-  // took to reach us.
-  avatar.frame(at ?? performance.now());
-}
-
-/// Starts the render loop again after the tab comes back.
-///
-/// One listener for the life of the page, added beside the loop rather than
-/// inside it: a listener added per frame is sixty listeners a second.
-function resumeAvatar() {
-  // `state()` and not just `avatar`: `createAvatar` returns before the model
-  // has loaded, so a visibility change during the load would otherwise start a
-  // loop that poses nothing sixty times a second.
-  if (!avatar || avatar.state() !== "ready" || document.hidden || avatarFrame !== null) return;
-  pumpAvatar();
-}
-
-document.addEventListener("visibilitychange", resumeAvatar);
-
-/// Jim's own track, never the candidate's. `createMediaElementSource` would be
-/// the obvious call and is the wrong one: it returns silence for a
-/// MediaStream-backed element, so the mouth would never open.
-function attachAvatarAnalyser(track, participant) {
-  // Jim only. playRemoteAudio fires for every remote audio track, and this used
-  // to take whichever arrived first: a second participant, or a stray hosted
-  // agent of the kind scripts/browser-check.cjs already has to isolate, would
-  // have driven the mouth. Never the candidate, who is never subscribed here.
-  if (!isAgent(participant)) return;
-  if (!track?.mediaStreamTrack || track === jimAnalyserTrack) return;
-  // A new publication replaces the old analyser rather than being ignored.
-  // Bailing out on `jimAnalyser` alone left the analyser bound to the track
-  // that had just been replaced, and LiveKit does not promise the unsubscribe
-  // for the old publication arrives before the subscribe for the new one: when
-  // it arrived after, `dropRemoteAudio` tore down the only analyser there was
-  // and nothing rebuilt it, so lip sync died for the rest of the session.
-  if (jimAnalyser) releaseAvatarAnalyser();
-  try {
-    jimAnalyserContext ||= new (window.AudioContext || window.webkitAudioContext)();
-    // TrackSubscribed is not a user gesture, so a context first built here can
-    // arrive suspended and then read silence forever. The mouth would simply
-    // never open, with nothing anywhere saying why.
-    if (jimAnalyserContext.state === "suspended") void jimAnalyserContext.resume().catch(() => {});
-    jimAnalyserSource = jimAnalyserContext.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]));
-    jimAnalyser = jimAnalyserContext.createAnalyser();
-    jimAnalyser.fftSize = ANALYSER_FFT_SIZE;
-    // One buffer for the session. Allocating it per frame produced 512 bytes of
-    // garbage 60 times a second for the whole interview.
-    jimAnalyserSamples = new Uint8Array(jimAnalyser.fftSize);
-    jimAnalyserTrack = track;
-    // Not connected to the destination: the audio element is already playing
-    // this track, and a second path would play Jim twice.
-    jimAnalyserSource.connect(jimAnalyser);
-    resumeAnalyserOnGesture();
-  } catch {
-    // No analyser means no lip-sync. Everything else about the avatar, and all
-    // of the audio, still works.
-    releaseAvatarAnalyser();
-  }
-}
-
-/// LiveKit re-subscribes Jim on every reconnect, so this runs more than once
-/// per session. Without disconnecting the source node, each reconnect left a
-/// live MediaStreamAudioSourceNode attached to the same context.
-function releaseAvatarAnalyser() {
-  jimAnalyserSource?.disconnect();
-  jimAnalyserSource = null;
-  jimAnalyser = null;
-  jimAnalyserSamples = null;
-  jimAnalyserTrack = null;
-  jimAnalyserPeaks.length = 0;
-}
-
-/// Safari refuses `resume()` unless the call is inside a user gesture, and
-/// `TrackSubscribed` is not one, so a context first built there stays suspended
-/// for the rest of the interview. The analyser then reads silence forever: the
-/// avatar's mouth never opens, and the code above already predicted exactly
-/// that without being able to do anything about it. Chrome resumes from
-/// anywhere, which is why this survived.
-///
-/// The listeners are capturing and one-shot. A candidate who never touches the
-/// page again keeps a suspended context, which is the state it was already in.
-let gestureResumePending = false;
-
-function resumeAnalyserOnGesture() {
-  if (!jimAnalyserContext || jimAnalyserContext.state !== "suspended") return;
-  // LiveKit re-subscribes Jim on every reconnect, so this runs more than once.
-  // Without the guard a context that stays suspended across two subscribes
-  // collects two pairs of listeners; they do unregister themselves on the first
-  // gesture, but registering them at all was pointless.
-  if (gestureResumePending) return;
-  gestureResumePending = true;
-  function stop() {
-    gestureResumePending = false;
-    document.removeEventListener("pointerdown", resume, true);
-    document.removeEventListener("keydown", resume, true);
-  }
-  function resume() {
-    if (!jimAnalyserContext || jimAnalyserContext.state !== "suspended") {
-      stop();
-      return;
-    }
-    void jimAnalyserContext.resume().then(stop).catch(() => {});
-  }
-  document.addEventListener("pointerdown", resume, true);
-  document.addEventListener("keydown", resume, true);
-}
-
-function jimAmplitude() {
-  if (!jimAnalyser || !jimAnalyserSamples) return 0;
-  jimAnalyser.getByteTimeDomainData(jimAnalyserSamples);
-  jimAnalyserPeaks.push(peakLevel(jimAnalyserSamples));
-  if (jimAnalyserPeaks.length > ANALYSER_WINDOW) jimAnalyserPeaks.shift();
-  return jimAnalyserPeaks.reduce((total, peak) => total + peak, 0) / jimAnalyserPeaks.length;
-}
-
-function stopAvatar() {
-  if (avatarFrame !== null) cancelAnimationFrame(avatarFrame);
-  avatarFrame = null;
-  avatar?.destroy();
-  avatar = null;
-  releaseAvatarAnalyser();
-  void jimAnalyserContext?.close?.().catch(() => {});
-  jimAnalyserContext = null;
-}
-
-/// Lists output devices so Jim can be routed away from the shared tab's
-/// default. No mixer and no synthetic microphone: Meet captures the tab, and
-/// CodeTrial only decides which speaker plays the tab's own audio.
-async function refreshAudioOutputs() {
-  const mediaDevices = navigator.mediaDevices;
-  if (!mediaDevices?.enumerateDevices || !("setSinkId" in HTMLMediaElement.prototype)) {
-    // Hide the row, not just the control: a label pointing at a hidden select
-    // renders as a heading with nothing under it.
-    nodes.meetOutputRow.hidden = true;
-    showOutputNote(OUTPUT_NOTES.unsupported);
-    return;
-  }
-  let devices = [];
-  try {
-    devices = await mediaDevices.enumerateDevices();
-  } catch {
-    showOutputNote(OUTPUT_NOTES.listFailed);
-    return;
-  }
-  const options = outputOptions(devices, readStored(AUDIO_OUTPUT_KEY));
-  nodes.meetOutputSelect.replaceChildren();
-  for (const option of options) {
-    const element = document.createElement("option");
-    element.value = option.deviceId;
-    element.textContent = option.label;
-    element.selected = option.selected;
-    nodes.meetOutputSelect.append(element);
-  }
-  showOutputNote(options.length ? "" : OUTPUT_NOTES.empty);
-}
-
-async function applyAudioOutput(deviceId) {
-  if (!deviceId) return;
-  const previous = readStored(AUDIO_OUTPUT_KEY);
-  writeStored(AUDIO_OUTPUT_KEY, deviceId);
-  if (!jimAudio || typeof jimAudio.setSinkId !== "function") return;
-  const routed = await jimAudio
-    .setSinkId(deviceId)
-    .then(() => true)
-    .catch(() => false);
-  // Cleared, not left alone, when there is no previous device to restore. The
-  // refused id was written before routing was attempted, so leaving it would
-  // persist a device Jim never played through: the next reload would pre-select
-  // it and retry the same refusal.
-  const stored = outputAfterRouting(previous, deviceId, routed);
-  writeStored(AUDIO_OUTPUT_KEY, stored);
-  nodes.meetOutputSelect.value = stored || "";
-  // An empty list keeps its explanation: routing succeeding says nothing about
-  // whether there was anything to choose from.
-  const note = routed ? "" : OUTPUT_NOTES.refused;
-  if (note || nodes.meetOutputSelect.length) showOutputNote(note);
-}
-
-function showOutputNote(text) {
-  nodes.meetOutputNote.textContent = text;
-  nodes.meetOutputNote.hidden = !text;
-}
-
-function readStored(key, storage = localStorage) {
-  try {
-    return storage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-/// An empty value clears the key: "no preference" and "the empty preference"
-/// are the same thing, and a separate clearStored existed only so one call site
-/// could pick between them.
-function writeStored(key, value, storage = localStorage) {
-  try {
-    if (value) storage.setItem(key, value);
-    else storage.removeItem(key);
-  } catch {
-    // Private browsing refuses writes; a preference is not worth failing on.
-  }
-}
-
 async function consumeTranscript(room, reader, participant) {
   const attrs = reader.info?.attributes || {};
   const id = attrs["lk.segment_id"] || reader.info?.id || randomId();
@@ -1519,66 +1024,6 @@ async function consumeTranscript(room, reader, participant) {
     // few words and a turn is a sentence, and the replay is read as sentences.
     recordReplay("transcript", { speaker, text: text.trim() });
   }
-}
-
-// One uninterrupted spoken turn is unbounded, and the caption line sits in the
-// header: rendered whole, a long answer pushes the timer and the controls off
-// the screen. The tail is the part being spoken.
-const CAPTION_MAX_CHARS = 160;
-// Long enough to finish reading a sentence that just landed, short enough that
-// a silent pause clears the editor's corner.
-const CAPTION_IDLE_HIDE_MS = 12000;
-let captionIdleTimer = null;
-let interviewerCaption = { id: null, text: "", shown: 0, timer: null };
-
-function updateCaptions(speaker, text, id = null) {
-  if (!nodes.captionsText) return;
-  if (speaker === "interviewer") {
-    if (interviewerCaption.id !== id) {
-      clearTimeout(interviewerCaption.timer);
-      interviewerCaption = { id, text: "", shown: 0, timer: null };
-    }
-    // The longest, not the latest. Every interim publish carries the whole turn
-    // so far on a stream of its own, so one that lands out of order is a
-    // shorter copy of what is already on screen, and taking it would rewind the
-    // reveal to a few characters and replay the line.
-    if (text.length > interviewerCaption.text.length) interviewerCaption.text = text;
-    if (!interviewerCaption.timer) paceInterviewerCaption();
-    return;
-  }
-  // Stop pacing Jim: the next tick would otherwise repaint his line over the
-  // candidate's. A later chunk of the same segment restarts it through the
-  // `!interviewerCaption.timer` check below.
-  clearTimeout(interviewerCaption.timer);
-  interviewerCaption.timer = null;
-  const clipped = captionWindow(text, CAPTION_MAX_CHARS);
-  nodes.captionsText.textContent = `[${speaker === "you" ? "You" : "Jim"}]: ${clipped}`;
-  showCaptions();
-}
-
-function paceInterviewerCaption() {
-  const caption = interviewerCaption;
-  caption.shown = Math.min(caption.text.length, caption.shown + CAPTION_CHARS_PER_TICK);
-  nodes.captionsText.textContent = `[Jim]: ${captionWindow(caption.text.slice(0, caption.shown), CAPTION_MAX_CHARS)}`;
-  showCaptions();
-  if (caption.shown < caption.text.length) {
-    caption.timer = setTimeout(paceInterviewerCaption, CAPTION_TICK_MS);
-  } else {
-    caption.timer = null;
-  }
-}
-
-/// Captions are a live subtitle, not a log: the transcript tab already keeps
-/// every turn. Leaving the last thing anyone said pinned over the editor for
-/// the rest of the interview is just an obstruction, so the bar retires once
-/// nobody has spoken for a while and comes back on the next word.
-function showCaptions() {
-  if (!nodes.captionsBar) return;
-  nodes.captionsBar.hidden = false;
-  clearTimeout(captionIdleTimer);
-  captionIdleTimer = setTimeout(() => {
-    nodes.captionsBar.hidden = true;
-  }, CAPTION_IDLE_HIDE_MS);
 }
 
 async function toggleMicrophone() {
@@ -1660,126 +1105,6 @@ function setLanguage(language) {
   }, CODE_PUBLISH_DEBOUNCE_MS);
 }
 
-function monitorIntegrityTracks() {
-  // A released camera is simply not in the stream, so this watches nothing and
-  // no CAMERA_STOPPED is invented out of our own teardown.
-  watchIntegrityTrack(state.localUserStream?.getVideoTracks?.()[0], "CAMERA_STOPPED", "camera");
-  watchIntegrityTrack(state.localUserStream?.getAudioTracks?.()[0], "MICROPHONE_STOPPED", "microphone");
-  startIntegrityTrackStateMonitor();
-}
-
-function watchIntegrityTrack(track, stoppedType, source) {
-  if (!track?.addEventListener) return;
-  track.addEventListener("ended", () => {
-    void publishIntegrityEvent({ type: stoppedType, source, severity: "high" });
-  });
-  track.addEventListener("mute", () => {
-    void publishIntegrityEvent({ type: `${source.toUpperCase()}_MUTED`, source, severity: "warning" });
-  });
-  track.addEventListener("unmute", () => {
-    void publishIntegrityEvent({ type: `${source.toUpperCase()}_UNMUTED`, source, severity: "info" });
-  });
-}
-
-function startIntegrityHeartbeat() {
-  clearInterval(state.integrityHeartbeatTimer);
-  state.integrityHeartbeatTimer = setInterval(() => {
-    void publishIntegrityEvent({
-      type: "INTEGRITY_HEARTBEAT",
-      source: "heartbeat",
-      severity: "info",
-      detail: integrityHeartbeatDetail(),
-    });
-  }, INTEGRITY_HEARTBEAT_MS);
-}
-
-function integrityHeartbeatDetail() {
-  const camera = state.localUserStream?.getVideoTracks?.()[0];
-  const mic = state.localUserStream?.getAudioTracks?.()[0];
-  const status = (track) => `${track?.readyState || "missing"}/${track?.enabled === false ? "off" : "on"}/${track?.muted ? "muted" : "unmuted"}`;
-  return `camera=${status(camera)};microphone=${status(mic)};analyzer=${state.integrityAnalysisDetail}`;
-}
-
-function startIntegrityTrackStateMonitor() {
-  clearInterval(state.integrityTrackStateTimer);
-  state.integrityTrackStates.clear();
-  const tracks = () => [
-    ["camera", state.localUserStream?.getVideoTracks?.()[0]],
-    ["microphone", state.localUserStream?.getAudioTracks?.()[0]],
-  ];
-  const poll = () => {
-    for (const [source, track] of tracks()) {
-      if (!track) continue;
-      const current = `${track.readyState || "missing"}/${track.enabled === false ? "off" : "on"}`;
-      const previous = state.integrityTrackStates.get(source);
-      state.integrityTrackStates.set(source, current);
-      if (previous && previous !== current) {
-        void publishIntegrityEvent({
-          type: `${source.toUpperCase()}_STATE_CHANGED`,
-          source,
-          severity: current.includes("ended") || current.includes("/off") ? "warning" : "info",
-          detail: current,
-        });
-      }
-    }
-  };
-  poll();
-  state.integrityTrackStateTimer = setInterval(poll, 1000);
-}
-
-function startIntegrityWorker() {
-  stopIntegrityWorker();
-  if (typeof Worker !== "function") {
-    state.integrityAnalysisDetail = "worker_unavailable";
-    return;
-  }
-  state.integrityAnalysisDetail = "worker_starting";
-  const worker = new Worker("/integrity-worker.js", { type: "module" });
-  state.integrityWorker = worker;
-  worker.onmessage = (event) => {
-    if (event.data?.type === "analysis") state.integrityAnalysisDetail = event.data.detail;
-    if (event.data?.type === "integrity-event") {
-      const eventType = event.data.eventType;
-      updatePresenceBanner(eventType);
-      const published = publishIntegrityEvent({
-        type: eventType,
-        source: event.data.source,
-        severity: event.data.severity,
-        durationMs: event.data.durationMs,
-        detail: event.data.detail,
-      });
-      // The event that caused the termination goes out before the end control
-      // does. The other order lets the agent start generating the report on the
-      // control message while the reason for it is still queued, and the report
-      // then omits why it exists.
-      if (PRESENCE_EVENTS[eventType]?.endsInterview) {
-        void published.then(() => endInterview("face_missing_severe"));
-      }
-    }
-  };
-
-  worker.onerror = () => {
-    state.integrityAnalysisDetail = "worker_error";
-  };
-  state.integrityFrameSamplers = [
-    startIntegrityFrameSampler("camera", state.localUserStream?.getVideoTracks?.()[0], nodes.cameraIntegrityVideo, TRACKING_INTERVAL_MS),
-  ].filter(Boolean);
-}
-
-// One row per presence event, so a new one is a row rather than another branch
-// on the same value in the worker message handler. `clears` empties the banner;
-// `endsInterview` is the only event allowed to close the session by itself.
-const PRESENCE_EVENTS = {
-  FACE_DETECTED: { clears: true },
-  FACE_MISSING: { banner: "Stay in front of the camera: no interviewee detected." },
-  MULTIPLE_FACES: { banner: "Take the interview alone: more than one face detected." },
-  FACE_DETECTOR_UNAVAILABLE: { banner: "Face detection is not running in this browser." },
-  FACE_MISSING_SEVERE: {
-    banner: "Interview ended automatically: away from the camera too long.",
-    endsInterview: true,
-  },
-};
-
 /// One banner element, several owners, ranked. Each owner keeps its own slot,
 /// so a warning raised while a higher-ranked one is showing is deferred rather
 /// than thrown away, and every owner is a row here instead of another flag and
@@ -1807,90 +1132,6 @@ function updatePresenceBanner(eventType) {
   setBanner(entry.endsInterview ? "session" : "face", entry.clears ? "" : entry.banner || "");
 }
 
-function stopIntegrityWorker() {
-  for (const stop of state.integrityFrameSamplers) stop();
-  state.integrityFrameSamplers = [];
-  state.integrityWorker?.terminate();
-  state.integrityWorker = null;
-  state.integrityAnalysisDetail = "not_configured";
-}
-
-function startIntegrityFrameSampler(source, track, video, intervalMs) {
-  if (!track || !video || !state.integrityWorker) return null;
-  const ownsVideo = !video.srcObject;
-  if (ownsVideo) {
-    video.muted = true;
-    video.playsInline = true;
-    video.srcObject = new MediaStream([track]);
-    void video.play?.().catch(() => {});
-  }
-  const timer = setInterval(() => {
-    void postIntegrityFrame(source, track, video);
-  }, intervalMs);
-  void postIntegrityFrame(source, track, video);
-  return () => {
-    clearInterval(timer);
-    if (ownsVideo) video.srcObject = null;
-  };
-}
-
-async function postIntegrityFrame(source, track, video) {
-  // `muted` as well as `readyState`. An ended track stops the sampler already,
-  // but a track another application has taken stays `live` and simply delivers
-  // nothing: the element keeps handing over its last frame, or a black one, and
-  // the detector charges every one of them as an absent candidate until the
-  // 15s severe threshold ends the interview. Opening the camera in Google Meet
-  // does exactly that. A camera that was taken away is a gap in sampling, and
-  // face-presence.js is explicit that a gap is not an observation. The `mute`
-  // listener still publishes CAMERA_MUTED, so the evidence survives for human
-  // review; it just no longer masquerades as the candidate walking off.
-  //
-  // The analyzer detail has to say so. The heartbeat publishes it every five
-  // seconds, and left at its last successful value it would keep reporting
-  // camera analyses while nothing has been sampled for minutes -- an integrity
-  // record claiming an observation that never happened.
-  if (track.muted) state.integrityAnalysisDetail = `${source}_muted`;
-  if (track.readyState !== "live" || track.muted || !state.integrityWorker) return;
-  const worker = state.integrityWorker;
-  const message = {
-    type: "frame",
-    source,
-    // Monotonic, not wall clock. A lid close, an OS suspend or an NTP step
-    // moves `Date.now()` forward by minutes between two frames, and the face
-    // tracker reads the difference as "absent for minutes" and ends the
-    // interview on the first frame after resume.
-    at: performance.now(),
-    width: video.videoWidth || 0,
-    height: video.videoHeight || 0,
-    transport: "metadata",
-  };
-  if (video.readyState < 2) {
-    worker.postMessage(message);
-    return;
-  }
-  // `ImageBitmap`, not the cheaper `VideoFrame` handle. The only consumer of
-  // these pixels is MediaPipe, which reads `image.width`: a `VideoFrame` carries
-  // `codedWidth`/`displayWidth` and no `width`, so it reached the detector as an
-  // undefined size and threw, and every interview reported face detection as
-  // unavailable. A transport the consumer cannot read is not an optimisation.
-  // `createImageBitmap` decodes off the main thread, so this costs the editor
-  // nothing.
-  let frame = null;
-  try {
-    if (typeof createImageBitmap === "function") {
-      frame = await createImageBitmap(video);
-      message.frame = frame;
-      message.transport = "ImageBitmap";
-      worker.postMessage(message, [frame]);
-      return;
-    }
-  } catch {
-    frame?.close?.();
-    delete message.frame;
-    message.transport = "metadata";
-  }
-  worker.postMessage(message);
-}
 
 /// A repaint, not a clock. `state.remaining` used to be decremented once per
 /// firing, so a hidden or minimised tab, which browsers throttle to roughly one
@@ -1905,10 +1146,7 @@ function tickTimer() {
   state.remaining = tick.remaining;
   nodes.timer.textContent = formatTime(tick.remaining);
   nodes.timer.classList.toggle("urgent", tick.urgent);
-  if (Date.now() - replayStageAt >= REPLAY_STAGE_MS) {
-    replayStageAt = Date.now();
-    recordReplay("stage", { remainingSeconds: tick.remaining });
-  }
+  recordStageTick(tick.remaining);
   if (tick.warn) publish(topics.control, timeWarningPayload(tick.remaining));
   if (tick.expired) endInterview("time_up");
 }
@@ -2199,19 +1437,16 @@ function updateAgentState() {
   // The same three states the pill shows. `questioning`, `encouraging`, and
   // `challenging` wait for src/agent.rs to publish lk.avatar.state; inventing
   // them here would be the avatar guessing at the interviewer's intent.
-  avatar?.setExpression(value);
+  setAvatarExpression(value);
   // On the change, not on the tick. This runs for every participant event, and
   // an interviewer who stays in one state for a minute is one event, not sixty.
-  if (value !== replayAvatarState) {
-    replayAvatarState = value;
-    recordReplay("avatar", { state: value });
-  }
+  recordAvatarState(value);
   // Only an agent that actually publishes its state may close the jaw. Muting
   // on the "listening" fallback is the same bug as muting on a missing agent
   // participant: an interviewer whose attribute never arrives, or arrives
   // stale, would talk through the whole interview with his mouth shut. Audio is
   // the signal that cannot lie, and silence closes the mouth on its own.
-  if (published) avatar?.setSpeaking(published === "speaking");
+  if (published) setAvatarSpeaking(published === "speaking");
 }
 
 function isCurrentAgent(participant) {

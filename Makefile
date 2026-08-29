@@ -64,12 +64,6 @@ verify-vendor:
 	@./scripts/verify-vendor.sh
 
 serve: fetch-vendor
-	@if [ "$${CODETRIAL_SKIP_CONFIG:-}" != 1 ] && \
-		[ -z "$${LIVEKIT_URL:-}" -o -z "$${LIVEKIT_API_KEY:-}" -o -z "$${LIVEKIT_API_SECRET:-}" ] && \
-		[ ! -f config/codetrial.env.local ]; then \
-		echo "Error: config/codetrial.env.local does not exist. Copy config/codetrial.env.example to config/codetrial.env.local before running 'make serve'."; \
-		exit 1; \
-	fi
 	cargo run -- serve
 
 web: fetch-vendor
