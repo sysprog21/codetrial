@@ -66,6 +66,23 @@ fn main() {
 }
 
 fn run_agent_command(args: &[String]) -> i32 {
+    // Answered before parsing, and from the raw arguments. `--help` beside a
+    // flag that is missing its value is still a request for help, and a parse
+    // error is not an answer to it. Resolving it here is also why `CliOptions`
+    // carries no help field: nothing downstream ever sees one.
+    if args
+        .iter()
+        .take_while(|arg| *arg != "--")
+        .any(|arg| arg == "--help" || arg == "-h")
+    {
+        print_help(args.iter().find_map(|arg| {
+            MODES
+                .iter()
+                .find(|(name, ..)| name == arg)
+                .map(|(_, _, usage, _)| *usage)
+        }));
+        return 0;
+    }
     let (positionals, options) = match parse_agent_args(args) {
         Ok(parsed) => parsed,
         Err(error) => {
@@ -98,25 +115,51 @@ fn run_agent_command(args: &[String]) -> i32 {
     }
 }
 
+/// Positionals and options, in one pass over the arguments.
+///
+/// Driven by an iterator rather than an index. The index form needed a manual
+/// `index += 1` or `+= 2` on every path, which is one edit away from a loop
+/// that never advances: mutation testing hangs it by turning that `+=` into
+/// `-=`. Nothing here can fail to make progress, because `next` is the only way
+/// forward and it is unconditional.
 fn parse_agent_args(args: &[String]) -> Result<(Vec<String>, CliOptions), String> {
     let mut positionals = Vec::new();
     let mut options = CliOptions::default();
-    let mut index = 0;
-    while index < args.len() {
-        let arg = &args[index];
+    let mut rest = args.iter().peekable();
+    while let Some(arg) = rest.next() {
+        // Everything after a bare `--` is a positional, whatever it looks like.
+        // The escape hatch the separated form below needs: without it there is
+        // no way to name a file whose own name starts with a dash.
+        if arg == "--" {
+            positionals.extend(rest.cloned());
+            break;
+        }
         if !arg.starts_with("--") {
             positionals.push(arg.clone());
-            index += 1;
             continue;
         }
-        let Some(value) = args.get(index + 1) else {
-            return Err(format!("{arg} requires a value"));
+
+        // `--flag=value` or `--flag value`. The attached form is what makes a
+        // dash-prefixed value expressible at all, because in the separated form
+        // a flag in the value slot is a missing value and not the value:
+        // without that rule `--config --help` reports a configuration file
+        // named `--help` instead of printing help. `next_if` is what leaves it
+        // where it is, to be read as the flag it is on the next turn.
+        let (flag, value) = match arg.split_once('=') {
+            Some((flag, value)) => (flag, Some(value.to_string())),
+            None => (
+                arg.as_str(),
+                rest.next_if(|next| !next.starts_with('-')).cloned(),
+            ),
         };
-        match arg.as_str() {
-            "--config" => options.config_path = Some(value.clone()),
-            "--web-addr" => options.web_addr = Some(value.clone()),
-            "--web-dir" => options.web_dir = Some(value.clone()),
-            "--room-prefix" => options.room_prefix = Some(value.clone()),
+        let Some(value) = value else {
+            return Err(format!("{flag} requires a value"));
+        };
+        match flag {
+            "--config" => options.config_path = Some(value),
+            "--web-addr" => options.web_addr = Some(value),
+            "--web-dir" => options.web_dir = Some(value),
+            "--room-prefix" => options.room_prefix = Some(value),
             "--duration-min" => {
                 let duration = value
                     .parse::<u32>()
@@ -126,11 +169,32 @@ fn parse_agent_args(args: &[String]) -> Result<(Vec<String>, CliOptions), String
                 }
                 options.duration_min = Some(duration);
             }
-            _ => return Err(format!("unknown flag: {arg}")),
+            _ => return Err(format!("unknown flag: {flag}")),
         }
-        index += 2;
     }
     Ok((positionals, options))
+}
+
+/// Help, for one mode or for the binary.
+///
+/// One printer rather than two. The mode-specific half was a `println!` beside
+/// a call to the general half, which is a shape that drifts: the options are
+/// the same options either way, and the only difference is whether the modes
+/// are listed above them.
+fn print_help(usage: Option<&str>) {
+    match usage {
+        Some(usage) => println!("usage: {usage}"),
+        None => {
+            println!("usage: codetrial MODE [OPTIONS]\n\nModes:");
+            for (_, _, usage, _) in MODES {
+                println!("  {usage}");
+            }
+            println!("\nRun `codetrial MODE --help` for mode-specific usage.");
+        }
+    }
+    println!(
+        "\nOptions:\n  --config PATH        Use PATH instead of config/codetrial.env.local\n  --web-addr ADDR      Listen on ADDR\n  --web-dir PATH       Serve files from PATH\n  --room-prefix PREFIX Prefix generated room names\n  --duration-min MIN   Set the interview duration\n  -h, --help           Show this help\n\nEvery option also takes `--flag=value`, which is the only way to pass a value\nthat starts with a dash. `--` ends the options."
+    );
 }
 
 fn bind_web_listener(values: &BTreeMap<String, String>) -> Result<std::net::TcpListener, String> {

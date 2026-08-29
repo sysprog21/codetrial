@@ -549,3 +549,79 @@ fn binary_agent_can_skip_auto_local_config_file() {
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("missing required config keys"));
 }
+
+#[test]
+fn binary_help_exits_without_loading_config() {
+    for (args, usage) in [
+        (&["--help"][..], "usage: codetrial MODE [OPTIONS]"),
+        (&["web", "-h"][..], "usage: codetrial web [OPTIONS]"),
+        // Help beats parsing. Both of these are a flag missing its value, and
+        // answering a request for help with a parse error is the wrong answer
+        // to the question that was asked.
+        (
+            &["web", "--config", "--help"][..],
+            "usage: codetrial web [OPTIONS]",
+        ),
+        (
+            &["--help", "--config"][..],
+            "usage: codetrial MODE [OPTIONS]",
+        ),
+    ] {
+        let (code, stdout, stderr) = run_cli_args(args);
+
+        assert_eq!(code, 0, "{args:?}");
+        assert!(stdout.contains(usage), "{args:?}: {stdout}");
+        assert!(stderr.is_empty(), "{args:?}: {stderr}");
+
+        // The options, not just the usage line. Help that names the modes and
+        // stops is help that does not answer "how do I point it at my config".
+        for flag in ["--config PATH", "--web-addr ADDR", "-h, --help"] {
+            assert!(
+                stdout.contains(flag),
+                "{args:?} must document {flag}: {stdout}"
+            );
+        }
+        assert!(
+            stdout.contains("--flag=value"),
+            "{args:?} must say how to pass a dash-prefixed value: {stdout}"
+        );
+    }
+}
+
+/// `--flag=value` is the only way to pass a value that starts with a dash, and
+/// `--` is the only way to pass a positional that does. Without both, the guard
+/// that stops `--config --help` from naming a file `--help` also makes a real
+/// path like `-dashfile.env` unreachable.
+#[test]
+fn binary_accepts_dash_prefixed_values_through_the_attached_form() {
+    let dir = temp_path("dash-values");
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("-dashfile.env");
+    write_config(&config, &dir, "127.0.0.1:1");
+    let (code, _, stderr) = run_cli_args(&[
+        "web",
+        &format!("--config={}", config.to_str().unwrap()),
+        "--web-addr=127.0.0.1:1",
+    ]);
+    let _ = std::fs::remove_dir_all(dir);
+
+    // It read the file: the only complaint left is the port it cannot bind.
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("failed to bind"), "{stderr}");
+    assert!(
+        !stderr.contains("required configuration file is missing"),
+        "the attached form must reach a dash-prefixed path: {stderr}"
+    );
+}
+
+/// A flag in the value slot is a missing value, not the value. Without that,
+/// `--config` followed by another flag reports a configuration file named
+/// `--web-addr`, and the operator goes looking for a path that never existed.
+#[test]
+fn binary_rejects_a_flag_standing_in_for_a_flag_value() {
+    let (code, stdout, stderr) = run_cli_args(&["web", "--config", "--web-addr"]);
+
+    assert_eq!(code, 2);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("--config requires a value"), "{stderr}");
+}
