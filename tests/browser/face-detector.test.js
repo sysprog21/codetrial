@@ -12,10 +12,10 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const require = createRequire(import.meta.url);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -49,7 +49,17 @@ let BASE = "";
 const binary = resolve(root, "target/debug/codetrial");
 let server = null;
 let browser = null;
-const configPath = resolve(root, "target/face-detector-test.env");
+
+/// The config file and the account database, in a directory this run owns.
+///
+/// Fixed paths under `target/` were the other half of the port collision. Two
+/// copies of this suite wrote the same config, and whichever finished first
+/// removed it in `after` while the other was still starting its server, which
+/// the binary answers by refusing to boot: a missing primary config is a
+/// refusal now, not a fall back to the environment. They shared one SQLite file
+/// on top of that. Made per run rather than reference-counted, because a
+/// directory is the smallest thing that makes the question not arise.
+let workDir = null;
 
 async function reachable() {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -79,10 +89,13 @@ before(async () => {
     server = null;
     return;
   }
-  // `target/` is missing on a clean checkout. Creating it keeps a missing
-  // build a skipped suite, which is what the chromium guard above already
-  // does, rather than an ENOENT thrown out of `before`.
-  mkdirSync(dirname(configPath), { recursive: true });
+  // `target/` is missing on a clean checkout, and `mkdtemp` needs its parent.
+  // Creating it keeps a missing build a skipped suite, which is what the
+  // chromium guard above already does, rather than an ENOENT thrown out of
+  // `before`.
+  mkdirSync(resolve(root, "target"), { recursive: true });
+  workDir = mkdtempSync(join(root, "target", "face-detector-"));
+  const configPath = join(workDir, "codetrial.env.local");
   writeFileSync(configPath, "LIVEKIT_URL=wss://example.livekit.cloud\nLIVEKIT_API_KEY=face-detector-key\nLIVEKIT_API_SECRET=face-detector-secret\n");
 
   // Three ports before giving up. A lost race is a fresh number and another
@@ -96,7 +109,7 @@ before(async () => {
       {
         cwd: root,
         stdio: "ignore",
-        env: { ...process.env, CODETRIAL_DB_PATH: resolve(root, "target/face-detector-test.db") },
+        env: { ...process.env, CODETRIAL_DB_PATH: join(workDir, "accounts.db") },
       },
     );
     if (await reachable()) return;
@@ -111,7 +124,7 @@ before(async () => {
 after(async () => {
   await browser?.close();
   server?.kill();
-  rmSync(configPath, { force: true });
+  if (workDir) rmSync(workDir, { recursive: true, force: true });
 });
 
 /// Draws something BlazeFace recognises without needing a photograph checked
