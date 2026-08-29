@@ -591,7 +591,16 @@ fn primary_config_path(options: &CliOptions) -> Result<PathBuf, String> {
             return Ok(path);
         }
     }
-    Err("required configuration file is missing: ./config/codetrial.env.local or ./codetrial.env.local; copy config/codetrial.env.example to one of these paths".to_string())
+    // The keys, not a file to copy. `config/codetrial.env.example` exists in a
+    // checkout and nowhere else: the release archives hold the executable and
+    // nothing beside it, so telling someone who just unpacked one to copy it
+    // sends them looking for a file they were never given. Naming what the file
+    // must contain is an instruction both audiences can act on.
+    Err(format!(
+        "required configuration file is missing: ./{DEFAULT_CONFIG_PATH} or ./codetrial.env.local; \
+         write one with LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET \
+         (config/codetrial.env.example lists the optional keys in a checkout)"
+    ))
 }
 
 /// Providers live beside the config file the operator named, so
