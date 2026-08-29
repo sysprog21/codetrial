@@ -1,6 +1,6 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use codetrial::config::{
     AgentConfig, DEFAULT_DURATION_MIN, DEFAULT_ROOM_PREFIX, DEFAULT_WEB_ADDR, DEFAULT_WEB_DIR,
@@ -249,7 +249,7 @@ fn run_web(options: CliOptions) -> Result<(), String> {
         .block_on(async {
             let listener = tokio::net::TcpListener::from_std(listener)?;
             let dispatcher = agent_config.map(|config| {
-                Arc::new(LocalDispatcher {
+                Arc::new(codetrial::dispatch::LocalDispatcher {
                     config,
                     runtime: tokio::runtime::Handle::current(),
                     live: Arc::default(),
@@ -262,103 +262,6 @@ fn run_web(options: CliOptions) -> Result<(), String> {
             .await
         })
         .map_err(|error| format!("web server failed: {error}"))
-}
-
-/// How many interviews one `codetrial web` process will host agents for at
-/// once. Each is a LiveKit room plus a metered Gemini Live session, so an
-/// unbounded count is an unbounded bill; a refused dispatch leaves the
-/// candidate on the "Waiting" pill, which is bad, but recoverable and visible.
-const MAX_CONCURRENT_INTERVIEWS: usize = 16;
-
-/// Runs the interviewer for rooms this process just named, in this process.
-///
-/// The alternative is a LiveKit agent worker registered against the project,
-/// which is the shape LiveKit intends and which survives this process
-/// restarting. This is the smaller thing that makes production work: the room
-/// name is invented in `/api/token` and never leaves this process, so the
-/// process that invented it is the one that can act on it.
-struct LocalDispatcher {
-    /// Everything an interview needs except which LiveKit project it is in:
-    /// that arrives with the room, from the same lookup that minted the token.
-    config: AgentConfig,
-    runtime: tokio::runtime::Handle,
-    live: Arc<Mutex<HashSet<String>>>,
-}
-
-impl RoomDispatcher for LocalDispatcher {
-    fn ensure_agent(&self, room_name: &str, provider: &codetrial::config::Provider) -> bool {
-        {
-            let mut live = self.live.lock().unwrap_or_else(|error| error.into_inner());
-
-            // A reload mints a token for the same fixed room in local mode, and
-            // two agents in one room evict each other.
-            if live.contains(room_name) {
-                return true;
-            }
-            if live.len() >= MAX_CONCURRENT_INTERVIEWS {
-                eprintln!(
-                    "codetrial dispatch_refused room={room_name} reason=at_capacity limit={MAX_CONCURRENT_INTERVIEWS}"
-                );
-                return false;
-            }
-            live.insert(room_name.to_string());
-        }
-        let config = agent_config_for(&self.config, provider);
-
-        // Released by dropping, not by a line at the end of the task: a panic
-        // in the interview would otherwise skip that line and burn the slot for
-        // the life of the process, and sixteen of those refuse every interview
-        // after them.
-        let slot = Slot {
-            live: Arc::clone(&self.live),
-            room_name: room_name.to_string(),
-        };
-
-        // Spawned, not awaited: this runs on the request path, and the task
-        // outlives the response by the length of the interview.
-        self.runtime.spawn(async move {
-            eprintln!("codetrial dispatch room={}", slot.room_name);
-            if let Err(error) = codetrial::livekit::run_room(
-                &config,
-                &slot.room_name,
-                codetrial::web::current_epoch_seconds(),
-            )
-            .await
-            {
-                eprintln!("codetrial agent_failed room={}: {error}", slot.room_name);
-            }
-        });
-        true
-    }
-}
-
-/// One interview's claim on this process's capacity, held for as long as the
-/// task that owns it.
-struct Slot {
-    live: Arc<Mutex<HashSet<String>>>,
-    room_name: String,
-}
-
-impl Drop for Slot {
-    fn drop(&mut self) {
-        self.live
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .remove(&self.room_name);
-    }
-}
-
-/// The credential half of [`select_provider`], without the pool lookup, for the
-/// caller that was already handed the provider.
-fn agent_config_for(base: &AgentConfig, provider: &codetrial::config::Provider) -> AgentConfig {
-    let mut config = base.clone();
-    config.livekit_url = provider.url.clone();
-    config.livekit_api_key = provider.api_key.clone();
-    config.livekit_api_secret = provider.api_secret.clone();
-    if !provider.google_api_key.is_empty() {
-        config.google_api_key = provider.google_api_key.clone();
-    }
-    config
 }
 
 fn run_serve(options: CliOptions) -> Result<(), String> {
@@ -450,7 +353,7 @@ fn run_serve(options: CliOptions) -> Result<(), String> {
             // constructing the service opens the database, migrates it and
             // sweeps it, all blocking, and doing that inside the serving task
             // parks a worker while the bound listener backs up.
-            let dispatcher = Arc::new(LocalDispatcher {
+            let dispatcher = Arc::new(codetrial::dispatch::LocalDispatcher {
                 config,
                 runtime: tokio::runtime::Handle::current(),
                 live: Arc::default(),
@@ -809,7 +712,6 @@ fn account_db_path(values: &BTreeMap<String, String>) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     fn values(pairs: &[(&str, &str)]) -> super::BTreeMap<String, String> {
         pairs
@@ -888,30 +790,6 @@ mod tests {
                 ("SESSION_SECRET", "a-real-secret"),
             ]))
             .is_empty()
-        );
-    }
-
-    /// The capacity slot is released by dropping, so an interview that panics
-    /// gives its slot back like one that ends. Sixteen leaked slots would
-    /// refuse every interview after them for the life of the process.
-    #[tokio::test]
-    async fn a_panicking_interview_gives_its_capacity_back() {
-        let live = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
-        live.lock().unwrap().insert("interview-boom".to_string());
-        let slot = super::Slot {
-            live: Arc::clone(&live),
-            room_name: "interview-boom".to_string(),
-        };
-
-        let task = tokio::spawn(async move {
-            let _held = slot;
-            panic!("the interview blew up");
-        });
-        assert!(task.await.is_err(), "the task must have panicked");
-
-        assert!(
-            live.lock().unwrap().is_empty(),
-            "a panicking interview must not keep its slot"
         );
     }
 
