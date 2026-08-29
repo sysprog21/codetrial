@@ -12,7 +12,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -28,8 +28,14 @@ try {
 }
 
 /// Asked for rather than picked. A fixed port collides with a second copy of
-/// this suite and with whatever else on the machine happened to want it, and
-/// the failure reads as a broken server rather than a busy port.
+/// this suite and with whatever else on the machine happened to want it.
+///
+/// The probe frees the port before the server binds it, so this is a hint and
+/// not a reservation: two concurrent runs can be handed the same just-freed
+/// number. `startServer` retries on that rather than pretending it cannot
+/// happen, and a server that still will not come up fails the suite instead of
+/// skipping, because a skip here reads as "nothing to test" when what happened
+/// is "the test never ran".
 async function freePort() {
   const probe = createServer();
   await new Promise((ready) => probe.listen(0, "127.0.0.1", ready));
@@ -40,6 +46,7 @@ async function freePort() {
 
 let PORT = 0;
 let BASE = "";
+const binary = resolve(root, "target/debug/codetrial");
 let server = null;
 let browser = null;
 const configPath = resolve(root, "target/face-detector-test.env");
@@ -59,8 +66,6 @@ async function reachable() {
 
 before(async () => {
   if (!chromium) return;
-  PORT = await freePort();
-  BASE = `http://127.0.0.1:${PORT}/`;
   try {
     browser = await chromium.launch();
   } catch {
@@ -68,24 +73,39 @@ before(async () => {
     browser = null;
     return;
   }
+  // An unbuilt checkout is the one honest reason to skip, so it is the only
+  // one: everything past this point either serves or fails.
+  if (!existsSync(binary)) {
+    server = null;
+    return;
+  }
   // `target/` is missing on a clean checkout. Creating it keeps a missing
   // build a skipped suite, which is what the chromium guard above already
   // does, rather than an ENOENT thrown out of `before`.
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, "LIVEKIT_URL=wss://example.livekit.cloud\nLIVEKIT_API_KEY=face-detector-key\nLIVEKIT_API_SECRET=face-detector-secret\n");
-  server = spawn(
-    resolve(root, "target/debug/codetrial"),
-    ["web", "--config", configPath, "--web-addr", `127.0.0.1:${PORT}`, "--web-dir", resolve(root, "web")],
-    {
-      cwd: root,
-      stdio: "ignore",
-      env: { ...process.env, CODETRIAL_DB_PATH: resolve(root, "target/face-detector-test.db") },
-    },
-  );
-  if (!(await reachable())) {
+
+  // Three ports before giving up. A lost race is a fresh number and another
+  // try; three lost in a row is not a race any more.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    PORT = await freePort();
+    BASE = `http://127.0.0.1:${PORT}/`;
+    server = spawn(
+      binary,
+      ["web", "--config", configPath, "--web-addr", `127.0.0.1:${PORT}`, "--web-dir", resolve(root, "web")],
+      {
+        cwd: root,
+        stdio: "ignore",
+        env: { ...process.env, CODETRIAL_DB_PATH: resolve(root, "target/face-detector-test.db") },
+      },
+    );
+    if (await reachable()) return;
     server.kill();
     server = null;
   }
+  // Built, launched, and never answered. Skipping here would report the same
+  // thing as an unbuilt checkout, and the two are not the same thing at all.
+  throw new Error(`the server never answered on 127.0.0.1:${PORT} after three ports`);
 });
 
 after(async () => {
