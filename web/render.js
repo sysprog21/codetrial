@@ -146,6 +146,9 @@ export function reportMarkup({ report, problemTitle, language, code }) {
         <ul>${item.selfReview.map((check) => `<li>${escapeHtml(check)}</li>`).join("")}</ul>
       </li>`).join("")}</ol></section>`;
   const frameworkTimeline = frameworkEvidenceMarkup(report.frameworkEvidence);
+  const frameworkCalibration = report.frameworkAssessment
+    ? `<p class="muted small">REACTO/STAR phase scores are formative coaching signals, not calibrated hiring evidence.</p>`
+    : "";
   const loopLabel = report.interviewLoop === "coding_only" ? "Coding only" : "Coding + behavioral";
   const rounds = report.rounds?.length ? `<section><h3>Interview rounds</h3><ul>${report.rounds.map((round) => `<li>${escapeHtml(round.kind)} · ${escapeHtml(round.budgetMin)} min · ${escapeHtml(round.status)}</li>`).join("")}</ul></section>` : "";
   const contract = report.interviewContract
@@ -162,6 +165,7 @@ export function reportMarkup({ report, problemTitle, language, code }) {
       ${feedback}
       ${practiceNext}
       ${rounds}
+      ${frameworkCalibration}
       ${frameworkTimeline}
       ${integrityEvidenceMarkup(report)}
       <details><summary>Your final code (${escapeHtml(language)})</summary><pre>${escapeHtml(code.trimEnd() || "(editor was empty)")}</pre></details>
@@ -300,6 +304,7 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
       ? `Contract: bundle ${report.interviewContract.bundleVersion}; live prompt ${report.interviewContract.livePromptVersion}; report prompt ${report.interviewContract.reportPromptVersion}; rubric ${report.interviewContract.rubricVersion}; report schema ${report.interviewContract.reportSchemaVersion}`
       : "Contract: legacy/unversioned",
     ...(report.rounds?.length ? ["Rounds: " + report.rounds.map((round) => `${round.kind} (${round.budgetMin} min, ${round.status})`).join("; ")] : []),
+    ...(report.frameworkAssessment ? ["REACTO/STAR phase scores are formative coaching signals, not calibrated hiring evidence."] : []),
     "",
     ...head,
     "",

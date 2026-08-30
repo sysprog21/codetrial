@@ -62,9 +62,9 @@ pub const REVIEW_INTERVAL_S: f64 = 30.0;
 pub const INTERJECTION_COOLDOWN_S: f64 = 45.0;
 pub const SPEECH_SETTLE_S: f64 = 4.0;
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 2;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 3;
 pub const LIVE_PROMPT_VERSION: u32 = 1;
-pub const REPORT_PROMPT_VERSION: u32 = 2;
+pub const REPORT_PROMPT_VERSION: u32 = 3;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 1;
 
@@ -748,6 +748,11 @@ pub fn framework_evidence_json(evidence: &FrameworkEvidence) -> serde_json::Valu
         "summary": evidence.summary,
         "frameworkVersion": evidence.framework_version,
     })
+}
+
+pub fn record_hint(state: &mut RuntimeState) -> String {
+    state.hints_used = state.hints_used.saturating_add(1);
+    log_hint_text(state.hints_used)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

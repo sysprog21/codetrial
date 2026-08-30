@@ -86,4 +86,6 @@ test("lobby progress surface is accessible and exposes all four filters", () => 
   assert.match(app, /Rubric v\$\{segment\.rubricVersion\}/);
   assert.match(app, /Not assessed in these attempts/);
   assert.match(app, /no zeroes are plotted/);
+  assert.match(app, /formative phase scores, not calibrated hiring evidence/);
+  assert.match(app, /Formative REACTO and STAR phase trends/);
 });

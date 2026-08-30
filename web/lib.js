@@ -323,7 +323,7 @@ export async function integrityEventPayload(input, previous = { seq: 0, hash: ""
 // The report arrives over a LiveKit data channel, so treat every field as
 // untrusted: scores are rendered into innerHTML and must not carry markup.
 export function sanitizeReport(raw) {
-  const activeContract = { bundleVersion: 2, livePromptVersion: 1, reportPromptVersion: 2, reportSchemaVersion: 1, rubricVersion: 1 };
+  const activeContract = { bundleVersion: 3, livePromptVersion: 1, reportPromptVersion: 3, reportSchemaVersion: 1, rubricVersion: 1 };
   const contractKeys = Object.keys(activeContract);
   const candidateContract = raw?.interviewContract;
   const contractValues = candidateContract && typeof candidateContract === "object" && !Array.isArray(candidateContract)

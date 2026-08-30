@@ -604,6 +604,8 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
             "90–100 = complete, precise, and independent",
             "A zero is observed performance, never a substitute for `null`",
             "Evidence confidence is not\nperformance",
+            "formative coaching signals",
+            "Never mechanically derive either top-level",
         ] {
             assert!(
                 prompt.contains(policy),
@@ -617,6 +619,316 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
             );
         }
     }
+}
+
+const FRAMEWORK_PHASE_NAMES: [&str; 10] = [
+    "Repeat",
+    "Example",
+    "Algorithm",
+    "Coding",
+    "Test",
+    "Optimizations",
+    "Situation",
+    "Task",
+    "Action",
+    "Result",
+];
+
+fn exact_fixture_keys(value: &Value, expected: &[&str], path: &str) {
+    let object = value
+        .as_object()
+        .unwrap_or_else(|| panic!("{path} must be an object"));
+    let actual = object
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected = expected
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(actual, expected, "{path} has schema drift");
+}
+
+fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
+    let reaction = &case["reaction"];
+    let code = reaction["code"].as_str().expect("reaction code is text");
+    if !code.is_empty() {
+        let result = apply_data_event(
+            state,
+            TOPIC_CODE_UPDATE,
+            &json!({"code": code, "language": "python"}),
+            99.0,
+        );
+        assert!(
+            result.update_last_code_change,
+            "scenario code did not reach production state"
+        );
+        assert_eq!(state.code, code);
+    }
+    match reaction["kind"].as_str().expect("reaction kind is text") {
+        "silence" => silence_nudge(&numbered(code)),
+        "proactive" => proactive_review(&numbered(code)),
+        "tests_failed" | "tests_passed" => {
+            let all_passed = reaction["kind"] == "tests_passed";
+            let before = state.test_runs;
+            let result = apply_data_event(
+                state,
+                TOPIC_TEST_RESULTS,
+                &json!({
+                    "language": "python", "passed": if all_passed { 3 } else { 1 },
+                    "total": 3, "cases": [], "setupError": null
+                }),
+                99.0,
+            );
+            assert_eq!(state.test_runs, before + 1);
+            assert!(state.last_test_run.is_some());
+            result
+                .generate_reply
+                .expect("test event produces a reaction")
+        }
+        "round_gate" => apply_data_event(
+            state,
+            TOPIC_CONTROL,
+            &json!({"type":"round_transition", "round":"behavioral", "remainingSeconds":480}),
+            99.0,
+        )
+        .generate_reply
+        .expect("round gate produces a reaction"),
+        "report" => report_prompt(ReportPromptInput {
+            problem: get_problem(Some("two-sum")),
+            transcript: case["transcript"].as_str().expect("transcript is text"),
+            final_code: code,
+            language: "python",
+            hints_used: case["hintsUsed"].as_u64().expect("hint count is integer") as u32,
+            duration_min: 45,
+            elapsed_min: 20.0,
+            test_summary: "No trusted server-side test was available.",
+        }),
+        other => panic!("unknown reaction kind {other}"),
+    }
+}
+
+fn record_evaluation_evidence(state: &mut RuntimeState, item: &Value, id: &str) -> String {
+    let recorded = record_framework_evidence(state, item)
+        .unwrap_or_else(|error| panic!("{id}: invalid evidence: {error}"));
+    let recorded_json = framework_evidence_json(&recorded);
+    for key in ["phase", "source", "kind", "confidence", "summary"] {
+        assert_eq!(
+            recorded_json[key], item[key],
+            "{id}: evidence drift at {key}"
+        );
+    }
+    recorded_json["phase"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn framework_evaluation_scenarios_exercise_reactions_evidence_and_reports() {
+    let corpus: Value =
+        serde_json::from_str(include_str!("fixtures/framework-evaluation-cases.json"))
+            .expect("framework evaluation corpus parses");
+    exact_fixture_keys(&corpus, &["version", "scenarios"], "$fixture");
+    assert_eq!(corpus["version"], 1);
+    let scenarios = corpus["scenarios"]
+        .as_array()
+        .expect("scenarios are an array");
+    assert_eq!(
+        scenarios.len(),
+        12,
+        "required coverage must not silently shrink"
+    );
+
+    let required_coverage = [
+        "ideal-reacto",
+        "coding-before-explaining",
+        "failed-test-recovery",
+        "alternative-optimal",
+        "explicit-hint-use",
+        "silence-empty",
+        "silence-code",
+        "transcript-loss",
+        "strong-star",
+        "weak-star-we",
+        "qualitative-result",
+        "skipped-star",
+    ];
+    let mut ids = std::collections::BTreeSet::new();
+    let mut coverage = std::collections::BTreeSet::new();
+    let mut exercised_phases = std::collections::BTreeSet::new();
+
+    for (index, case) in scenarios.iter().enumerate() {
+        let path = format!("$fixture.scenarios[{index}]");
+        exact_fixture_keys(
+            case,
+            &[
+                "id",
+                "coverage",
+                "reaction",
+                "transcript",
+                "evidence",
+                "hintsUsed",
+                "round",
+                "assessed",
+            ],
+            &path,
+        );
+        exact_fixture_keys(
+            &case["reaction"],
+            &["kind", "code", "required", "forbidden"],
+            &format!("{path}.reaction"),
+        );
+        let id = case["id"].as_str().expect("scenario id is text");
+        assert!(ids.insert(id), "duplicate framework scenario id {id}");
+        assert!(id.len() <= 64);
+        let transcript = case["transcript"].as_str().expect("transcript is text");
+        assert!(transcript.chars().count() <= MAX_TRANSCRIPT_CHARS);
+        for tag in case["coverage"].as_array().expect("coverage is an array") {
+            coverage.insert(tag.as_str().expect("coverage tag is text"));
+        }
+        let required = case["reaction"]["required"]
+            .as_array()
+            .expect("required phrases");
+        assert!(
+            !required.is_empty(),
+            "{id} does not check interviewer behavior"
+        );
+
+        let mut state = RuntimeState::default();
+        let evidence = case["evidence"].as_array().expect("evidence is an array");
+        assert!(evidence.len() <= MAX_FRAMEWORK_EVIDENCE);
+        let round_gate = case["reaction"]["kind"] == "round_gate";
+        for (evidence_index, item) in evidence.iter().enumerate() {
+            exact_fixture_keys(
+                item,
+                &["phase", "source", "kind", "confidence", "summary"],
+                &format!("{path}.evidence[{evidence_index}]"),
+            );
+            assert!(
+                item["summary"]
+                    .as_str()
+                    .expect("summary is text")
+                    .chars()
+                    .count()
+                    <= 240
+            );
+            let phase = item["phase"].as_str().expect("phase is text");
+            let behavioral = matches!(phase, "situation" | "task" | "action" | "result");
+            if !(round_gate && behavioral) {
+                exercised_phases.insert(record_evaluation_evidence(&mut state, item, id));
+            }
+        }
+
+        let reaction = evaluation_reaction(case, &mut state);
+        if round_gate {
+            for item in evidence.iter().filter(|item| {
+                matches!(
+                    item["phase"].as_str(),
+                    Some("situation" | "task" | "action" | "result")
+                )
+            }) {
+                exercised_phases.insert(record_evaluation_evidence(&mut state, item, id));
+            }
+        }
+        let unique_evidence = state.framework_evidence.len();
+        for item in evidence {
+            record_framework_evidence(&mut state, item).expect("duplicate remains valid");
+        }
+        assert_eq!(
+            state.framework_evidence.len(),
+            unique_evidence,
+            "{id}: duplicate evidence appended"
+        );
+        assert_eq!(
+            state
+                .framework_evidence
+                .iter()
+                .map(framework_evidence_json)
+                .map(|item| item["phase"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>(),
+            evidence
+                .iter()
+                .map(|item| item["phase"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>(),
+            "{id}: evidence order drift"
+        );
+        for phrase in required {
+            let phrase = phrase.as_str().expect("required phrase is text");
+            assert!(
+                reaction.contains(phrase),
+                "{id}: reaction lost required phrase {phrase:?}\n{reaction}"
+            );
+        }
+        for phrase in case["reaction"]["forbidden"]
+            .as_array()
+            .expect("forbidden phrases")
+        {
+            let phrase = phrase.as_str().expect("forbidden phrase is text");
+            assert!(
+                !reaction.contains(phrase),
+                "{id}: reaction contains forbidden phrase {phrase:?}\n{reaction}"
+            );
+        }
+
+        match case["round"].as_str().expect("round is text") {
+            "none" => assert!(!state.round_transition_seen),
+            "started" => assert!(state.round_transition_seen && state.behavioral_round_started),
+            "skipped" => assert!(state.round_transition_seen && !state.behavioral_round_started),
+            other => panic!("{id}: unknown round expectation {other}"),
+        }
+
+        let assessed = case["assessed"].as_array().expect("assessed phases");
+        for phase in assessed {
+            assert!(
+                FRAMEWORK_PHASE_NAMES.contains(&phase.as_str().expect("assessed phase is text")),
+                "{id}: unknown assessed phase"
+            );
+        }
+        let mut candidate_report = valid_strict_report();
+        for row in candidate_report["frameworkAssessment"]["phases"]
+            .as_array_mut()
+            .expect("valid report phases")
+        {
+            let phase = row["phase"].as_str().unwrap();
+            row["score"] = if assessed.iter().any(|value| value == phase) {
+                json!(80)
+            } else {
+                Value::Null
+            };
+            row["weaknessTags"] = json!([]);
+        }
+        let hints = u32::try_from(case["hintsUsed"].as_u64().expect("hints are integer"))
+            .expect("hint count fits production type");
+        for expected in 1..=hints {
+            assert_eq!(
+                record_hint(&mut state),
+                format!("Recorded. Total hints so far: {expected}.")
+            );
+        }
+        assert_eq!(state.hints_used, hints, "{id}: hint accounting drift");
+        let report = final_report(Some(&candidate_report), hints, None);
+        assert_ne!(
+            report["incomplete"], true,
+            "{id}: valid scenario report degraded"
+        );
+        assert_eq!(report["hintsUsed"], hints);
+        for row in report["frameworkAssessment"]["phases"].as_array().unwrap() {
+            let phase = row["phase"].as_str().unwrap();
+            let should_assess = assessed.iter().any(|value| value == phase);
+            assert_eq!(
+                row["score"].is_number(),
+                should_assess,
+                "{id}: fabricated or lost score for {phase}"
+            );
+        }
+    }
+
+    assert_eq!(coverage, required_coverage.into_iter().collect());
+    assert_eq!(
+        exercised_phases,
+        FRAMEWORK_PHASE_NAMES
+            .into_iter()
+            .map(str::to_ascii_lowercase)
+            .collect()
+    );
 }
 
 #[test]
@@ -3043,17 +3355,17 @@ fn generated_problem_metadata_exposes_no_private_rubric() {
 
 #[test]
 fn interview_contract_versions_are_one_closed_bundle() {
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 2);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 3);
     assert_eq!(LIVE_PROMPT_VERSION, 1);
-    assert_eq!(REPORT_PROMPT_VERSION, 2);
+    assert_eq!(REPORT_PROMPT_VERSION, 3);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 1);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 2,
+            "bundleVersion": 3,
             "livePromptVersion": 1,
-            "reportPromptVersion": 2,
+            "reportPromptVersion": 3,
             "rubricVersion": 1,
             "reportSchemaVersion": 1,
         })

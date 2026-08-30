@@ -1,0 +1,127 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "ideal-reacto",
+      "coverage": ["ideal-reacto"],
+      "reaction": {"kind": "tests_passed", "code": "def two_sum(nums, target): return [0, 1]", "required": ["move to Optimizations", "adversarial edge case", "not proof"], "forbidden": ["log_hint", "Begin STAR"]},
+      "transcript": "Candidate restated distinct indices, traced [2,7], explained a one-pass map, coded it, predicted the duplicate test, and justified O(n) time and space.",
+      "evidence": [
+        {"phase":"repeat","source":"candidate_speech","kind":"observed","confidence":95,"summary":"Restated inputs, outputs, and distinct-index constraint."},
+        {"phase":"example","source":"candidate_speech","kind":"observed","confidence":95,"summary":"Traced [2,7] with target 9."},
+        {"phase":"algorithm","source":"candidate_speech","kind":"observed","confidence":95,"summary":"Explained a one-pass complement map."},
+        {"phase":"coding","source":"editor_snapshot","kind":"observed","confidence":100,"summary":"Implemented the stated map approach."},
+        {"phase":"test","source":"test_event","kind":"observed","confidence":90,"summary":"Predicted and ran ordinary and duplicate cases."},
+        {"phase":"optimizations","source":"candidate_speech","kind":"observed","confidence":95,"summary":"Justified linear time and space as optimal."}
+      ],
+      "hintsUsed": 0,
+      "round": "none",
+      "assessed": ["Repeat","Example","Algorithm","Coding","Test","Optimizations"]
+    },
+    {
+      "id": "coding-before-explaining",
+      "coverage": ["coding-before-explaining"],
+      "reaction": {"kind":"proactive", "code":"def two_sum(nums, target):\n    seen = {}\n    for i, n in enumerate(nums):\n        seen[n] = i", "required":["reasoning behind a major change", "Never reset"], "forbidden":["Start with", "optimal approach"]},
+      "transcript": "Candidate began implementing before explaining and later narrated the map decision.",
+      "evidence": [
+        {"phase":"coding","source":"editor_snapshot","kind":"observed","confidence":100,"summary":"Substantial implementation appeared before narration."},
+        {"phase":"algorithm","source":"candidate_speech","kind":"observed","confidence":85,"summary":"Later explained the complement-map decision."}
+      ],
+      "hintsUsed": 0, "round":"none", "assessed":["Algorithm","Coding"]
+    },
+    {
+      "id": "failed-test-recovery",
+      "coverage": ["failed-test-recovery"],
+      "reaction": {"kind":"tests_failed", "code":"def two_sum(nums, target): return []", "required":["what the failures have in common", "diagnosis/Coding", "not proof"], "forbidden":["bug location", "the fix is", "log_hint"]},
+      "transcript": "Candidate diagnosed that insertion before lookup reused the same index, reversed the operations, and reran the duplicate case.",
+      "evidence": [
+        {"phase":"coding","source":"editor_snapshot","kind":"observed","confidence":100,"summary":"Revised the implementation after diagnosis."},
+        {"phase":"test","source":"test_event","kind":"observed","confidence":95,"summary":"Used a failed duplicate case to diagnose and rerun."}
+      ],
+      "hintsUsed":0, "round":"none", "assessed":["Coding","Test"]
+    },
+    {
+      "id": "alternative-optimal",
+      "coverage": ["alternative-optimal"],
+      "reaction": {"kind":"report", "code":"def two_sum(nums, target):\n    pairs = sorted((n, i) for i, n in enumerate(nums))\n    # two pointers preserve original indices", "required":["different solution with the same complexity and sound", "approach on its merits"], "forbidden":["penalize a different solution", "must use the expected"]},
+      "transcript":"Candidate proposed a direct-address table under a proven bounded-value constraint and justified O(n) time.",
+      "evidence":[{"phase":"algorithm","source":"candidate_speech","kind":"observed","confidence":90,"summary":"Justified a different optimal algorithm under stated constraints."}],
+      "hintsUsed":0, "round":"none", "assessed":["Algorithm"]
+    },
+    {
+      "id": "explicit-hint-use",
+      "coverage": ["explicit-hint-use"],
+      "reaction": {"kind":"report", "code":"def two_sum(nums, target): return []", "required":["each hint", "2 hint(s) were given"], "forbidden":["0 hint(s)"]},
+      "transcript":"Interviewer suggested tracking prior complements; candidate then described a map.",
+      "evidence":[{"phase":"algorithm","source":"candidate_speech","kind":"inferred","confidence":70,"summary":"Described the map after an explicit interviewer hint."}],
+      "hintsUsed":2, "round":"none", "assessed":["Algorithm"]
+    },
+    {
+      "id": "silence-empty-editor",
+      "coverage": ["silence-empty"],
+      "reaction": {"kind":"silence", "code":"", "required":["editor is empty", "understanding, example, or planned algorithm"], "forbidden":["use a hash map", "try [2,7]"]},
+      "transcript":"", "evidence":[], "hintsUsed":0, "round":"none", "assessed":[]
+    },
+    {
+      "id": "silence-with-code",
+      "coverage": ["silence-code"],
+      "reaction": {"kind":"silence", "code":"def two_sum(nums, target):\n    return []", "required":["code is present", "narrate or test"], "forbidden":["line 2 is wrong", "replace it with"]},
+      "transcript":"", "evidence":[{"phase":"coding","source":"editor_snapshot","kind":"observed","confidence":100,"summary":"Editor contains a concrete implementation attempt."}],
+      "hintsUsed":0, "round":"none", "assessed":["Coding"]
+    },
+    {
+      "id": "transcript-loss",
+      "coverage": ["transcript-loss"],
+      "reaction": {"kind":"report", "code":"def two_sum(nums, target): return [0, 1]", "required":["no speech was captured", "too quiet to judge"], "forbidden":["intended to", "confident"]},
+      "transcript":"", "evidence":[{"phase":"coding","source":"editor_snapshot","kind":"observed","confidence":100,"summary":"Final editor snapshot is available despite transcript loss."}],
+      "hintsUsed":0, "round":"none", "assessed":["Coding"]
+    },
+    {
+      "id": "strong-star",
+      "coverage": ["strong-star"],
+      "reaction": {"kind":"round_gate", "code":"", "required":["completion gate passed", "exactly one concise question"], "forbidden":["did not pass", "Return to Coding"]},
+      "transcript":"Candidate described a release incident, owned the rollback task, personally added a canary check, and said later releases completed without recurrence.",
+      "evidence":[
+        {"phase":"test","source":"candidate_speech","kind":"observed","confidence":90,"summary":"Explained high-value tests."},
+        {"phase":"optimizations","source":"candidate_speech","kind":"observed","confidence":90,"summary":"Justified final complexity."},
+        {"phase":"situation","source":"candidate_speech","kind":"observed","confidence":95,"summary":"Set the release incident context."},
+        {"phase":"task","source":"candidate_speech","kind":"observed","confidence":95,"summary":"Owned the rollback task."},
+        {"phase":"action","source":"candidate_speech","kind":"observed","confidence":95,"summary":"Personally added and tested a canary check."},
+        {"phase":"result","source":"candidate_speech","kind":"observed","confidence":90,"summary":"Later releases completed without recurrence."}
+      ],
+      "hintsUsed":0, "round":"started", "assessed":["Test","Optimizations","Situation","Task","Action","Result"]
+    },
+    {
+      "id": "we-without-personal-action",
+      "coverage": ["weak-star-we"],
+      "reaction": {"kind":"report", "code":"def two_sum(nums, target): return []", "required":["personal Action", "only if the interviewer actually"], "forbidden":["Candidate personally fixed", "Candidate was confident"]},
+      "transcript":"Interviewer: Tell me about an outage. Candidate: We had an outage and we fixed it quickly; the service recovered.",
+      "evidence":[
+        {"phase":"situation","source":"candidate_speech","kind":"observed","confidence":85,"summary":"Named an outage context."},
+        {"phase":"result","source":"candidate_speech","kind":"observed","confidence":75,"summary":"Said the service recovered."}
+      ],
+      "hintsUsed":0, "round":"none", "assessed":["Situation","Result"]
+    },
+    {
+      "id": "qualitative-result",
+      "coverage": ["qualitative-result"],
+      "reaction": {"kind":"report", "code":"def two_sum(nums, target): return []", "required":["truthful qualitative behavioral result", "Never invent a number"], "forbidden":["must quantify"]},
+      "transcript":"Candidate added a dry-run review; later migrations had a clear rollback owner and mistakes were caught before deployment.",
+      "evidence":[{"phase":"result","source":"candidate_speech","kind":"observed","confidence":90,"summary":"Reported a concrete qualitative improvement without a metric."}],
+      "hintsUsed":0, "round":"none", "assessed":["Result"]
+    },
+    {
+      "id": "skipped-behavioral-round",
+      "coverage": ["skipped-star"],
+      "reaction": {"kind":"round_gate", "code":"", "required":["did not pass", "Do not start STAR"], "forbidden":["completion gate passed"]},
+      "transcript":"Candidate was still implementing when the behavioral reserve began.",
+      "evidence":[
+        {"phase":"situation","source":"session_timing","kind":"skipped","confidence":100,"summary":"Behavioral round was skipped by the coding gate."},
+        {"phase":"task","source":"session_timing","kind":"skipped","confidence":100,"summary":"Behavioral round was skipped by the coding gate."},
+        {"phase":"action","source":"session_timing","kind":"skipped","confidence":100,"summary":"Behavioral round was skipped by the coding gate."},
+        {"phase":"result","source":"session_timing","kind":"skipped","confidence":100,"summary":"Behavioral round was skipped by the coding gate."}
+      ],
+      "hintsUsed":0, "round":"skipped", "assessed":[]
+    }
+  ]
+}

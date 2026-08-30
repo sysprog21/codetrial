@@ -45,7 +45,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::{
     ReportPromptInput, RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput,
     WATCH_TICK_S, apply_data_event, final_report, format_test_run, framework_evidence_json,
-    interview_contract_json, log_hint_text, numbered, parse_participant_metadata, proactive_review,
+    interview_contract_json, numbered, parse_participant_metadata, proactive_review,
     read_editor_text, record_framework_evidence, report_prompt, significant_change, silence_nudge,
     timing_decision, transcript_for_report, wrap_up,
 };
@@ -1916,8 +1916,7 @@ fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) -> ser
             )
         }),
         TOOL_LOG_HINT => {
-            state.hints_used += 1;
-            serde_json::json!({ "result": log_hint_text(state.hints_used) })
+            serde_json::json!({ "result": crate::agent::record_hint(state) })
         }
         TOOL_RECORD_FRAMEWORK_EVIDENCE => match record_framework_evidence(state, &call.args) {
             Ok(evidence) => serde_json::json!({ "result": framework_evidence_json(&evidence) }),

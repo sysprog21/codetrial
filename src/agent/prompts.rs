@@ -517,6 +517,9 @@ Score two independent dimensions from 0 to 100:
 Decision rule: "HIRE" only if the performance would clear a real mid-level SWE
 onsite bar — a working, reasonably optimal solution AND clear communication.
 Otherwise "NO_HIRE".
+The ten `frameworkAssessment` phase scores are formative coaching signals and
+are not calibrated for hiring use. Never mechanically derive either top-level
+score or the hiring decision from them; apply the evidence-based rules above.
 
 Grounding rules — a real debrief cites evidence:
 - Every claim must point at something in the code or the transcript above. If the

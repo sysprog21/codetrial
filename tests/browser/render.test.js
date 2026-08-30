@@ -358,6 +358,19 @@ test("practice-next drills render accessibly in HTML and Markdown", () => {
   assert.match(markdown, /Success: Cover four case classes/);
 });
 
+test("framework phase scores are labeled formative in HTML and Markdown", () => {
+  const report = {
+    codingScore: 70, communicationScore: 70, decision: "HIRE", summary: "Grounded",
+    codingFeedback: { strengths: [], improvements: [] },
+    communicationFeedback: { strengths: [], improvements: [] }, hintsUsed: 0,
+    frameworkAssessment: { rubricVersion: 1, phases: [] },
+  };
+  const session = { report, problemTitle: "Two Sum", language: "python", code: "pass", transcript: [], at: "now" };
+  for (const output of [reportMarkup(session), reportMarkdown(session)]) {
+    assert.match(output, /formative coaching signals, not calibrated hiring evidence/);
+  }
+});
+
 test("framework evidence timeline distinguishes observed inferred and skipped rows", () => {
   const report = {
     codingScore: 70, communicationScore: 70, decision: "HIRE", summary: "Grounded",
@@ -812,12 +825,12 @@ test("the page and the exported markdown tell the same chain story", () => {
 
 test("report views identify active and legacy scoring contracts", () => {
   const active = sanitizeReport({ incomplete: true, interviewContract: {
-    bundleVersion: 2, livePromptVersion: 1, reportPromptVersion: 2,
+    bundleVersion: 3, livePromptVersion: 1, reportPromptVersion: 3,
     rubricVersion: 1, reportSchemaVersion: 1,
   } });
   const session = { report: active, problemTitle: "Two Sum", language: "python", code: "" };
-  assert.match(reportMarkup(session), /Contract bundle 2 · rubric 1 · report schema 1/);
-  assert.match(reportMarkdown({ ...session, transcript: [] }), /Contract: bundle 2; live prompt 1; report prompt 2; rubric 1; report schema 1/);
+  assert.match(reportMarkup(session), /Contract bundle 3 · rubric 1 · report schema 1/);
+  assert.match(reportMarkdown({ ...session, transcript: [] }), /Contract: bundle 3; live prompt 1; report prompt 3; rubric 1; report schema 1/);
 
   const legacy = { ...session, report: sanitizeReport({ incomplete: true }) };
   assert.match(reportMarkup(legacy), /Legacy\/unversioned contract/);

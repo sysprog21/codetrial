@@ -609,10 +609,10 @@ function renderProgress() {
   const assessed = model.attempts.filter((attempt) => attempt.report.frameworkAssessment).length;
   nodes.progressSummary.textContent = assessed === 0
     ? `${model.attempts.length} of ${model.total} attempts shown · these legacy or unassessed reports have no versioned phase scores, so no zeroes are plotted · ${progressSuffix}.`
-    : `${model.attempts.length} of ${model.total} attempts shown · ${assessed} have comparable phase scores · ${progressSuffix}.`;
+    : `${model.attempts.length} of ${model.total} attempts shown · ${assessed} have comparable formative phase scores, not calibrated hiring evidence · ${progressSuffix}.`;
   const table = document.createElement("table");
   const caption = document.createElement("caption");
-  caption.textContent = "REACTO and STAR phase trends; rubric versions are separate series";
+  caption.textContent = "Formative REACTO and STAR phase trends; rubric versions are separate series";
   table.append(caption);
   const head = table.createTHead().insertRow();
   for (const label of ["Phase", "Assessed scores by rubric version"]) {

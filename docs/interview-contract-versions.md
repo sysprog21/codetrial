@@ -5,9 +5,11 @@ positive integer versions: the bundle, live prompt, report prompt, scoring rubri
 and public report schema. The server owns this value and stamps it after model
 generation; model or candidate output cannot select it.
 
-The active bundle is version 2: live prompt 1, report prompt 2, rubric 1, and
-report schema 1. Bundle 2 introduced provider-enforced structured report output
-and strict validation without changing rubric semantics or the public schema. A change to prompt behavior,
+The active bundle is version 3: live prompt 1, report prompt 3, rubric 1, and
+report schema 1. Bundle 3 explicitly keeps framework phase scores formative and
+prohibits using them mechanically for hiring decisions while calibration remains
+incomplete. Bundle 2 introduced provider-enforced structured report output and
+strict validation without changing rubric semantics or the public schema. A change to prompt behavior,
 score anchors, or report shape must update the relevant component and create a new
 bundle version in the same change. Update Rust and browser constants, prompt/report
 goldens, migration fixtures, and replay fixtures together. Never reuse a released
