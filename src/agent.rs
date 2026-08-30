@@ -12,10 +12,11 @@ use integrity::integrity_hash;
 pub use integrity::{sanitize_integrity_event, sanitize_test_run};
 pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, get_problem};
 pub use prompts::{
-    LanguageChoiceContext, ReportPromptInput, build_instructions, build_instructions_for_mode,
-    build_instructions_for_profile, format_test_run, greeting, language_choice, log_hint_text,
-    numbered, proactive_review, read_editor_text, report_prompt, significant_change, silence_nudge,
-    spoken_language, test_results_reaction, time_warning, wrap_up,
+    LanguageChoiceContext, ReportPromptInput, build_instructions, build_instructions_for_context,
+    build_instructions_for_mode, build_instructions_for_profile, format_test_run, greeting,
+    language_choice, log_hint_text, numbered, proactive_review, read_editor_text, report_prompt,
+    significant_change, silence_nudge, spoken_language, test_results_reaction, time_warning,
+    wrap_up,
 };
 
 use crate::config::{DEFAULT_DURATION_MIN, MAX_DURATION_MIN, MIN_DURATION_MIN};
@@ -101,6 +102,83 @@ pub struct InterviewProfile {
     pub role: String,
     pub seniority: Option<Seniority>,
     pub target_company: String,
+}
+
+pub const MAX_GROUNDING_TEXT_CHARS: usize = 240;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InterviewGrounding {
+    pub requirements: Vec<String>,
+    pub skills: Vec<String>,
+    pub anchors: Vec<String>,
+}
+
+impl InterviewGrounding {
+    pub fn is_empty(&self) -> bool {
+        self.requirements.is_empty() && self.skills.is_empty() && self.anchors.is_empty()
+    }
+}
+
+pub fn sanitize_interview_grounding(value: Option<&serde_json::Value>) -> InterviewGrounding {
+    let Some(object) = value.and_then(serde_json::Value::as_object) else {
+        return InterviewGrounding::default();
+    };
+    if object
+        .get("consentVersion")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+    {
+        return InterviewGrounding::default();
+    }
+    let Some(requirements) = grounding_array(object.get("requirements"), 8) else {
+        return InterviewGrounding::default();
+    };
+    let Some(skills) = grounding_array(object.get("skills"), 8) else {
+        return InterviewGrounding::default();
+    };
+    let Some(anchors) = grounding_array(object.get("anchors"), 6) else {
+        return InterviewGrounding::default();
+    };
+    InterviewGrounding {
+        requirements,
+        skills,
+        anchors,
+    }
+}
+
+fn grounding_array(value: Option<&serde_json::Value>, max: usize) -> Option<Vec<String>> {
+    let values = value?.as_array()?;
+    if values.len() > max {
+        return None;
+    }
+    let mut result = Vec::with_capacity(values.len());
+    for value in values {
+        let raw = value.as_str()?;
+        if raw.is_empty() || raw.chars().count() > MAX_GROUNDING_TEXT_CHARS {
+            return None;
+        }
+        let normalized = raw
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if normalized.is_empty() || result.contains(&normalized) {
+            return None;
+        }
+        result.push(normalized);
+    }
+    Some(result)
+}
+
+pub fn interview_grounding_json(grounding: &InterviewGrounding) -> serde_json::Value {
+    serde_json::json!({
+        "consentVersion": 1,
+        "requirements": grounding.requirements,
+        "skills": grounding.skills,
+        "anchors": grounding.anchors,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -535,6 +613,7 @@ pub struct MetadataConfig {
     pub duration_min: u32,
     pub mode: InterviewMode,
     pub profile: InterviewProfile,
+    pub grounding: InterviewGrounding,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -874,12 +953,14 @@ pub fn parse_participant_metadata(metadata: Option<&str>) -> MetadataConfig {
     let duration_min = duration_from_metadata(value.get("durationMin"));
     let mode = InterviewMode::parse(value.get("mode").and_then(serde_json::Value::as_str));
     let profile = sanitize_interview_profile(value.get("interviewProfile"));
+    let grounding = sanitize_interview_grounding(value.get("interviewGrounding"));
 
     MetadataConfig {
         problem,
         duration_min,
         mode,
         profile,
+        grounding,
     }
 }
 

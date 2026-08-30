@@ -1,6 +1,7 @@
 use crate::agent::{
-    InterviewMode, InterviewProfile, Problem, build_instructions_for_profile, get_problem,
-    greeting, interview_profile_json, sanitize_interview_profile,
+    InterviewGrounding, InterviewMode, InterviewProfile, Problem, build_instructions_for_context,
+    get_problem, greeting, interview_grounding_json, interview_profile_json,
+    sanitize_interview_grounding, sanitize_interview_profile,
 };
 use crate::config::{AgentConfig, MAX_DURATION_MIN, MIN_DURATION_MIN};
 
@@ -26,6 +27,7 @@ pub struct RuntimeBootstrap<'a> {
     pub duration_min: u32,
     pub mode: InterviewMode,
     pub profile: InterviewProfile,
+    pub grounding: InterviewGrounding,
     pub live_model: &'a str,
     pub report_model: &'a str,
     pub voice: &'a str,
@@ -75,17 +77,45 @@ pub fn bootstrap_with_profile<'a>(
     mode: InterviewMode,
     profile: InterviewProfile,
 ) -> RuntimeBootstrap<'a> {
+    bootstrap_with_context(
+        config,
+        room_name,
+        problem_id,
+        duration_min,
+        mode,
+        profile,
+        InterviewGrounding::default(),
+    )
+}
+
+pub fn bootstrap_with_context<'a>(
+    config: &'a AgentConfig,
+    room_name: &'a str,
+    problem_id: Option<&str>,
+    duration_min: u32,
+    mode: InterviewMode,
+    profile: InterviewProfile,
+    grounding: InterviewGrounding,
+) -> RuntimeBootstrap<'a> {
     let problem = get_problem(problem_id);
     let duration_min = duration_min.clamp(MIN_DURATION_MIN, MAX_DURATION_MIN);
     let profile = sanitize_interview_profile(Some(&interview_profile_json(&profile)));
+    let grounding = sanitize_interview_grounding(Some(&interview_grounding_json(&grounding)));
 
     RuntimeBootstrap {
         room_name,
         problem,
         duration_min,
         mode,
-        instructions: build_instructions_for_profile(problem, duration_min, mode, &profile),
+        instructions: build_instructions_for_context(
+            problem,
+            duration_min,
+            mode,
+            &profile,
+            &grounding,
+        ),
         profile,
+        grounding,
         live_model: &config.gemini_live_model,
         report_model: &config.gemini_report_model,
         voice: &config.gemini_voice,

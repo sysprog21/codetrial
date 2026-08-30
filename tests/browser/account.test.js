@@ -48,7 +48,7 @@ test("practice and scored modes stay explicit from lobby through artifacts", () 
   assert.match(app, /destination\.searchParams\.set\("mode", mode\)/);
   for (const id of ["practice-guide", "pause", "retry"]) assert.match(page, new RegExp(`id="${id}"`));
   assert.match(interview, /params\.get\("mode"\) === "practice" \? "practice" : "scored"/);
-  assert.match(interview, /JSON\.stringify\(\{ problemId: problem\.id, durationMin, interviewId, mode, interviewProfile \}\)/);
+  assert.match(interview, /JSON\.stringify\(\{ problemId: problem\.id, durationMin, interviewId, mode, interviewProfile, \.\.\.\(interviewGrounding/);
   assert.match(interview, /mode, report: state\.report/);
   assert.match(interview, /searchParams\.set\("retry", Date\.now\(\)\.toString\(\)\)/);
 });
@@ -71,6 +71,21 @@ test("optional interview profile is accessible, bounded, and omitted when blank"
   assert.match(app, /if \(profile\.seniority\) destination\.searchParams\.set\("seniority", profile\.seniority\)/);
   assert.match(app, /if \(profile\.targetCompany\) destination\.searchParams\.set\("company", profile\.targetCompany\)/);
   assert.match(interview, /const interviewProfile = \{/);
+});
+
+test("document grounding is explicit, clearable, ephemeral, and absent from saved artifacts", () => {
+  const lobby = read("index.html");
+  const app = read("app.js");
+  const interview = read("interview.js");
+  for (const id of ["grounding-jd", "grounding-resume", "grounding-choices", "grounding-consent", "grounding-clear", "grounding-error"]) {
+    assert.match(lobby, new RegExp(`id="${id}"`));
+  }
+  assert.match(lobby, /Send only my selected snippets to the AI interviewer\./);
+  assert.match(app, /nodes\.groundingClear\.addEventListener\("click", clearGrounding\)/);
+  assert.match(app, /storeGroundingPacket\(sessionStorage, packet\)/);
+  assert.match(interview, /consumeGroundingPacket\(sessionStorage\)/);
+  const savedArtifacts = [read("history.js"), read("replay-feed.js"), interview.slice(interview.indexOf("function saveHistory"))];
+  for (const source of savedArtifacts) assert.doesNotMatch(source, /interviewGrounding/);
 });
 
 test("report history writes local storage before account sync", async () => {

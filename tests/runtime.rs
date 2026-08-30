@@ -1,8 +1,10 @@
-use codetrial::agent::{InterviewMode, InterviewProfile, Seniority};
+use codetrial::agent::{InterviewGrounding, InterviewMode, InterviewProfile, Seniority};
 use codetrial::config::{
     DEFAULT_GEMINI_LIVE_MODEL, DEFAULT_GEMINI_REPORT_MODEL, DEFAULT_GEMINI_VOICE, load_from_pairs,
 };
-use codetrial::runtime::{agent_identity, bootstrap, bootstrap_with_mode, bootstrap_with_profile};
+use codetrial::runtime::{
+    agent_identity, bootstrap, bootstrap_with_context, bootstrap_with_mode, bootstrap_with_profile,
+};
 
 fn config() -> codetrial::config::AgentConfig {
     load_from_pairs([
@@ -82,6 +84,28 @@ fn bootstrap_carries_only_the_validated_optional_profile() {
             .role
             .is_empty()
     );
+}
+
+#[test]
+fn bootstrap_carries_ephemeral_grounding_without_changing_profile() {
+    let config = config();
+    let grounding = InterviewGrounding {
+        requirements: vec!["Own services".into()],
+        skills: vec![],
+        anchors: vec!["Led a migration".into()],
+    };
+    let boot = bootstrap_with_context(
+        &config,
+        "room",
+        None,
+        45,
+        InterviewMode::Scored,
+        InterviewProfile::default(),
+        grounding.clone(),
+    );
+    assert_eq!(boot.grounding, grounding);
+    assert_eq!(boot.profile, InterviewProfile::default());
+    assert!(boot.instructions.contains("Led a migration"));
 }
 
 #[test]

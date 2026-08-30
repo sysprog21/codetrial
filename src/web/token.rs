@@ -156,14 +156,24 @@ pub fn token_response(
     let duration_min = token_duration_min(request.get("durationMin"), config.recording_max_min);
     let mode = crate::agent::InterviewMode::parse(request.get("mode").and_then(Value::as_str));
     let profile = crate::agent::sanitize_interview_profile(request.get("interviewProfile"));
-    let metadata = json!({
+    let grounding = crate::agent::sanitize_interview_grounding(request.get("interviewGrounding"));
+    let mut metadata = json!({
         "problemId": problem_id,
         "durationMin": duration_min,
         "mode": mode.as_str(),
         "interviewProfile": crate::agent::interview_profile_json(&profile),
         "candidateIdentity": default_identity,
-    })
-    .to_string();
+    });
+    if !grounding.is_empty() {
+        metadata
+            .as_object_mut()
+            .expect("metadata is an object")
+            .insert(
+                "interviewGrounding".to_string(),
+                crate::agent::interview_grounding_json(&grounding),
+            );
+    }
+    let metadata = metadata.to_string();
 
     Ok(TokenResponse {
         token: livekit_token(LivekitTokenInput {

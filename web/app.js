@@ -1,6 +1,7 @@
 import { readLocalHistory } from "./history.js";
 import { pickProblem, suggestDifficulty } from "./problem-picker.js";
 import { buildProgressModel, progressPhases } from "./progress.js";
+import { parseGroundingFile, selectedGroundingPacket, storeGroundingPacket } from "./document-grounding.js";
 
 let problem;
 let duration;
@@ -47,6 +48,14 @@ const nodes = {
   profileRole: document.querySelector("#profile-role"),
   profileSeniority: document.querySelector("#profile-seniority"),
   profileCompany: document.querySelector("#profile-company"),
+  groundingJd: document.querySelector("#grounding-jd"),
+  groundingResume: document.querySelector("#grounding-resume"),
+  groundingJdStatus: document.querySelector("#grounding-jd-status"),
+  groundingResumeStatus: document.querySelector("#grounding-resume-status"),
+  groundingChoices: document.querySelector("#grounding-choices"),
+  groundingConsent: document.querySelector("#grounding-consent"),
+  groundingClear: document.querySelector("#grounding-clear"),
+  groundingError: document.querySelector("#grounding-error"),
 };
 
 // Every card carries the pressed state from the start, not only the one that
@@ -101,6 +110,12 @@ for (const input of levels) {
   });
 }
 
+let grounding = { requirements: [], skills: [], anchors: [] };
+
+nodes.groundingJd.addEventListener("change", () => loadGroundingFile("jd"));
+nodes.groundingResume.addEventListener("change", () => loadGroundingFile("resume"));
+nodes.groundingClear.addEventListener("click", clearGrounding);
+
 let progressEntries = [];
 let progressSuffix = "saved";
 
@@ -148,6 +163,7 @@ start.addEventListener("click", async () => {
   if (!chosen) return;
   starting = true;
   start.disabled = true;
+  nodes.groundingError.textContent = "";
   if (signInFirst) {
     start.textContent = "Recording GitHub...";
     if (!(await recordGitHubLogin(false))) {
@@ -172,8 +188,69 @@ start.addEventListener("click", async () => {
   if (profile.role) destination.searchParams.set("role", profile.role);
   if (profile.seniority) destination.searchParams.set("seniority", profile.seniority);
   if (profile.targetCompany) destination.searchParams.set("company", profile.targetCompany);
+  try {
+    const selected = { requirements: [], skills: [], anchors: [] };
+    for (const input of nodes.groundingChoices.querySelectorAll("input:checked")) selected[input.dataset.group].push(Number(input.value));
+    const packet = selectedGroundingPacket(grounding, selected, nodes.groundingConsent.checked);
+    storeGroundingPacket(sessionStorage, packet);
+  } catch (error) {
+    nodes.groundingError.textContent = error.message;
+    event.currentTarget.disabled = false;
+    setStartGate(signInFirst);
+    return;
+  }
   window.location.href = destination.toString();
 });
+
+async function loadGroundingFile(kind) {
+  const input = kind === "jd" ? nodes.groundingJd : nodes.groundingResume;
+  const status = kind === "jd" ? nodes.groundingJdStatus : nodes.groundingResumeStatus;
+  status.textContent = "Reading locally...";
+  try {
+    const parsed = await parseGroundingFile(input.files[0], kind);
+    if (kind === "jd") grounding.requirements = parsed.requirements;
+    else ({ skills: grounding.skills, anchors: grounding.anchors } = parsed);
+    status.textContent = "Parsed locally. Select only snippets you want to send.";
+  } catch (error) {
+    if (kind === "jd") grounding.requirements = [];
+    else { grounding.skills = []; grounding.anchors = []; }
+    status.textContent = error.message;
+  }
+  renderGroundingChoices();
+}
+
+function renderGroundingChoices() {
+  nodes.groundingChoices.replaceChildren();
+  for (const [group, label] of [["requirements", "JD requirements"], ["skills", "Resume skills"], ["anchors", "Resume experience/project anchors"]]) {
+    if (!grounding[group].length) continue;
+    const fieldset = document.createElement("fieldset");
+    const legend = document.createElement("legend");
+    legend.textContent = label;
+    fieldset.append(legend);
+    grounding[group].forEach((snippet, index) => {
+      const row = document.createElement("label");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.dataset.group = group;
+      checkbox.value = String(index);
+      row.append(checkbox, document.createTextNode(` ${snippet}`));
+      fieldset.append(row);
+    });
+    nodes.groundingChoices.append(fieldset);
+  }
+}
+
+function clearGrounding() {
+  grounding = { requirements: [], skills: [], anchors: [] };
+  nodes.groundingJd.value = "";
+  nodes.groundingResume.value = "";
+  nodes.groundingJdStatus.textContent = "";
+  nodes.groundingResumeStatus.textContent = "";
+  nodes.groundingConsent.checked = false;
+  nodes.groundingError.textContent = "";
+  nodes.groundingChoices.replaceChildren();
+  try { storeGroundingPacket(sessionStorage, null); } catch { /* clearing is best effort */ }
+}
 
 // Returning from the media preflight can restore this page from the browser's
 // back/forward cache after the start button was deliberately disabled.

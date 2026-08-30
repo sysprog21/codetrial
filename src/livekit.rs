@@ -1273,13 +1273,14 @@ fn candidate_bootstrap<'a>(
     metadata: Option<&str>,
 ) -> RuntimeBootstrap<'a> {
     let candidate = parse_participant_metadata(metadata);
-    crate::runtime::bootstrap_with_profile(
+    crate::runtime::bootstrap_with_context(
         config,
         room_name,
         Some(candidate.problem.id),
         candidate.duration_min,
         candidate.mode,
         candidate.profile,
+        candidate.grounding,
     )
 }
 

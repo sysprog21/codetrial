@@ -83,6 +83,7 @@ import { saveReportHistory } from "./history.js";
 import { createFacePresenceDetector, facePresenceVerdict } from "./face-presence.js";
 import { runBrowserTests } from "./runners.js";
 import { mountBehavioralReview } from "./behavioral-review.js";
+import { consumeGroundingPacket } from "./document-grounding.js";
 
 const languages = ["python", "javascript", "c", "cpp", "java"];
 let editorInitialized = false;
@@ -130,6 +131,7 @@ const interviewProfile = {
   seniority: params.get("seniority") || "",
   targetCompany: params.get("company") || "",
 };
+const interviewGrounding = consumeGroundingPacket(sessionStorage);
 const state = {
   mode,
   paused: false,
@@ -726,7 +728,7 @@ async function connect(preflight, presenting = false) {
     const response = await fetch("/api/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ problemId: problem.id, durationMin, interviewId, mode, interviewProfile }),
+      body: JSON.stringify({ problemId: problem.id, durationMin, interviewId, mode, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) }),
     });
     if (!response.ok) throw new Error((await response.json()).error || "Failed to create a session.");
     const connection = await response.json();

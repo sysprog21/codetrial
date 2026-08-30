@@ -227,6 +227,33 @@ fn token_profile_is_bounded_and_enum_validated_before_signed_metadata() {
 }
 
 #[test]
+fn token_grounding_is_signed_only_after_valid_consent_and_shape() {
+    let config = TokenConfig {
+        api_key: "key",
+        api_secret: "secret",
+        server_url: "wss://example.test",
+        recording_max_min: None,
+    };
+    let signed = token_response(&config, br#"{"interviewGrounding":{"consentVersion":1,"requirements":["Must know Rust"],"skills":["Rust"],"anchors":["Built a parser"]}}"#, "room", "candidate", 2_000).unwrap();
+    let metadata: Value =
+        serde_json::from_str(claims(&signed.token)["metadata"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        metadata["interviewGrounding"]["anchors"][0],
+        "Built a parser"
+    );
+
+    for body in [
+        br#"{"interviewGrounding":{"requirements":[],"skills":[],"anchors":[]}}"#.as_slice(),
+        br#"{"interviewGrounding":{"consentVersion":2,"requirements":[],"skills":[],"anchors":[]}}"#.as_slice(),
+        br#"{"interviewGrounding":{"consentVersion":1,"requirements":"bad","skills":[],"anchors":[]}}"#.as_slice(),
+    ] {
+        let response = token_response(&config, body, "room", "candidate", 2_000).unwrap();
+        let metadata: Value = serde_json::from_str(claims(&response.token)["metadata"].as_str().unwrap()).unwrap();
+        assert!(metadata.get("interviewGrounding").is_none());
+    }
+}
+
+#[test]
 fn token_response_mints_the_candidate_identity() {
     let response = token_response(
         &TokenConfig {
@@ -1227,7 +1254,7 @@ fn static_interview_script_leaves_candidate_identity_to_the_server() {
 
     assert!(
         source
-            .contains("JSON.stringify({ problemId: problem.id, durationMin, interviewId, mode, interviewProfile })")
+            .contains("JSON.stringify({ problemId: problem.id, durationMin, interviewId, mode, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) })")
     );
     assert!(!source.contains("candidateIdentity"));
 }

@@ -664,6 +664,18 @@
           </label>
           <label>Target company <input id="profile-company" type="text" maxlength="80" autocomplete="organization"></label>
         </fieldset>
+        <fieldset>
+          <legend>Ground questions in selected document snippets</legend>
+          <p class="muted small">Optional. Files stay in this browser. Nothing is selected or sent automatically.</p>
+          <label>Job description (.txt, up to 64 KiB) <input id="grounding-jd" type="file" accept=".txt,text/plain"></label>
+          <p id="grounding-jd-status" class="muted small" role="status"></p>
+          <label>Resume (.txt, up to 64 KiB) <input id="grounding-resume" type="file" accept=".txt,text/plain"></label>
+          <p id="grounding-resume-status" class="muted small" role="status"></p>
+          <div id="grounding-choices"></div>
+          <label><input id="grounding-consent" type="checkbox"> Send only my selected snippets to the AI interviewer.</label>
+          <button id="grounding-clear" type="button">Clear document grounding</button>
+          <p id="grounding-error" role="alert"></p>
+        </fieldset>
       </details>
 
       <section class="duration-row" aria-label="Duration">
