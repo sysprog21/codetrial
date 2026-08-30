@@ -82,6 +82,7 @@ import {
 import { saveReportHistory } from "./history.js";
 import { createFacePresenceDetector, facePresenceVerdict } from "./face-presence.js";
 import { runBrowserTests } from "./runners.js";
+import { mountBehavioralReview } from "./behavioral-review.js";
 
 const languages = ["python", "javascript", "c", "cpp", "java"];
 let editorInitialized = false;
@@ -1348,6 +1349,7 @@ function renderReport() {
     language: state.language,
     code: currentCode(),
   });
+  mountBehavioralReview(nodes.report, state.transcript.values());
 }
 
 function saveHistory() {
