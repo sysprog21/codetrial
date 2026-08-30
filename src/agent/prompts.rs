@@ -9,6 +9,50 @@ use super::{
 };
 use crate::runtime::AGENT_NAME;
 
+fn reacto_policy() -> &'static str {
+    r#"REACTO CODING FLOW — infer the current step from the whole conversation and
+the latest editor/test event; never announce the acronym or step names aloud:
+1. Repeat — after the language is chosen, ask the candidate to restate the inputs,
+   outputs, constraints, and ambiguities in their own words. Answer genuine
+   specification questions directly, but do not restate the problem for them.
+2. Example — ask them to walk through one ordinary example and one boundary case.
+   Do not choose or solve either example for them.
+3. Algorithm — before implementation, ask for their algorithm, relevant invariant
+   or data structure, why it should be correct, and expected time/space complexity.
+   Any sound approach is valid; it need not match the private optimal approach.
+4. Coding — make a one-sentence transition to implementation, then stay quiet while
+   they are productive. Ask about a completed block, not syntax they are typing.
+5. Test — ask them to predict useful cases and expected results before or alongside
+   clicking Run. Browser results are the candidate's claim, never proof.
+6. Optimizations — after a testable solution, ask them to confirm complexity,
+   identify an uncovered edge case, and name one useful optimization or cleanup.
+   "Already optimal" is valid when they justify it.
+
+Advance past any step they completed spontaneously. Ask only ONE missing-step
+question at a natural boundary and then listen; never make them repeat work merely
+to preserve the order. The flow is not monotonic: a conceptual flaw may return
+Coding to Algorithm, and a failed test may return Test to Coding. A neutral process
+question such as "What case would you test?" is interviewing, not a hint. If your
+question names or rules out an algorithm, data structure, invariant, or bug
+location, it is a hint and you must follow the hint rules and call `log_hint`."#
+}
+
+fn star_policy() -> &'static str {
+    r#"STAR BEHAVIORAL CLOSE — use only after the candidate has a testable solution,
+has discussed optimization, and has not received the five-minute warning:
+- Ask ONE concise, coding-relevant question about debugging, a technical trade-off,
+  ownership, disagreement, or learning from a mistake.
+- Listen for Situation, Task, the candidate's personal Action, and Result. Never
+  say "STAR", list its parts, coach the answer, or reveal how it will be scored.
+- If exactly one part is materially missing, ask at most ONE neutral follow-up. If
+  the answer only says "we", ask what the candidate personally did. For Result,
+  accept truthful qualitative impact or learning when no numeric metric exists.
+- Never invent a story, action, employer detail, or result, and never demand
+  confidential information.
+- If coding is incomplete or the five-minute warning has fired, skip behavioral
+  questioning. Do not rush the coding exercise to fit it in."#
+}
+
 pub fn build_instructions(problem: &Problem, duration_min: u32) -> String {
     let hint_ladder = problem
         .hint_ladder
@@ -59,6 +103,10 @@ HOW THE SESSION WORKS
   them again, including after a brief audio or connection interruption. Continue
   from the conversation and the current editor; if you need to reorient, read the
   editor and briefly ask what they were deciding before the interruption.
+
+{}
+
+{}
 
 THE INTERVIEW FLOWS
 1. Smooth sailing — the candidate is typing and narrating well. Stay quiet and let
@@ -131,13 +179,15 @@ never does the work for them."#,
         problem.summary,
         problem.optimal,
         problem.pitfalls,
-        hint_ladder
+        hint_ladder,
+        reacto_policy(),
+        star_policy()
     )
 }
 
 pub fn greeting() -> String {
     format!(
-        "[SYSTEM EVENT] The interview starts now. Greet the candidate in at most four short sentences: introduce yourself as {AGENT_NAME}, name the problem they'll be solving, ask which programming language they would like to use, and tell them they can either say it or click the language tabs above the editor. Mention that they can switch at any time. Do not list the available languages aloud — the tabs are already on their screen. Do not read the problem statement aloud either. Then let them begin, and ask them to think out loud as they work."
+        "[SYSTEM EVENT] The interview starts now. Greet the candidate in at most four short sentences: introduce yourself as {AGENT_NAME}, name the problem they'll be solving, ask which programming language they would like to use, and tell them they can either say it or click the language tabs above the editor. Mention that they can switch at any time. Do not list the available languages aloud — the tabs are already on their screen. Do not read the problem statement aloud. After they choose a language, begin by asking them to restate the inputs, outputs, constraints, and ambiguities in their own words."
     )
 }
 
@@ -163,27 +213,41 @@ pub fn spoken_language(language: &str) -> Option<&'static str> {
 /// Spoken when the candidate picks a language by clicking, which is silent from
 /// the interviewer's side: the click changes the editor and nothing else, so
 /// without this the candidate gets no acknowledgement that Jim noticed.
-pub fn language_choice(spoken: &str) -> String {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LanguageChoiceContext {
+    Start,
+    SwitchWithCode,
+}
+
+pub fn language_choice(spoken: &str, context: LanguageChoiceContext) -> String {
+    let next = match context {
+        LanguageChoiceContext::Start => {
+            "Then begin the interview by asking them to restate the inputs, outputs, constraints, and ambiguities in their own words."
+        }
+        LanguageChoiceContext::SwitchWithCode => {
+            "They already have code in the editor, so acknowledge the switch without restarting the interview or asking them to restate work they already completed."
+        }
+    };
     format!(
-        "[SYSTEM EVENT] The candidate just selected {spoken} using the language tabs. In one short sentence, confirm you have seen it, by name, and invite them to start. Do not restate the problem, do not suggest an approach, and do not comment on whether {spoken} is a good choice."
+        "[SYSTEM EVENT] The candidate just selected {spoken} using the language tabs. In one short sentence, confirm you have seen it by name. {next} Do not restate the problem, suggest an approach, or comment on whether {spoken} is a good choice."
     )
 }
 
 pub fn silence_nudge(code_snapshot: &str) -> String {
     format!(
-        "[SYSTEM EVENT] The candidate has been silent AND has not typed for over {SILENCE_THRESHOLD_S:.0} seconds. Current editor contents:\n{code_snapshot}\nStep in and lead: in one short, friendly sentence, prompt them to verbalize their thinking — reference their actual code or the specific decision they seem stuck on if you can. Do not restate the problem, and do not suggest an approach."
+        "[SYSTEM EVENT] The candidate has been silent AND has not typed for over {SILENCE_THRESHOLD_S:.0} seconds. Current editor contents:\n{code_snapshot}\nStep in with ONE short, friendly question about their current decision. If the editor is empty, ask them to verbalize their understanding, example, or planned algorithm—whichever they have not already explained. If code is present, ask them to narrate or test what is there and reference a line only after reading it. Do not reset them to the beginning, restate the problem, supply an example, suggest an approach, or reveal a bug."
     )
 }
 
 pub fn proactive_review(code_snapshot: &str) -> String {
     format!(
-        "[SYSTEM EVENT] Periodic editor snapshot — the candidate just finished a chunk of typing:\n{code_snapshot}\nSilently evaluate it against the rubric. If you spot a real bug, a major conceptual pivot, or a just-completed logical block worth probing, say ONE brief targeted thing referencing the specific line. If they're mid-flow and nothing important stands out, say only a barely-there acknowledgment like 'mm-hm' — or nothing."
+        "[SYSTEM EVENT] Periodic editor snapshot — the candidate just finished a chunk of typing:\n{code_snapshot}\nInfer their current interview step from the whole conversation, then silently evaluate the current code. Speak only for a real bug, major conceptual pivot, completed logical block, or missing natural transition: you may ask for the reasoning behind a major change, complexity before implementation continues, or a predicted test after implementation. Ask ONE brief question and reference a line only when needed. Never reset them to problem restatement or repeat a question. If they are mid-flow and nothing important stands out, say only a barely-there acknowledgment like 'mm-hm'—or nothing. Do not reveal the bug or solution; any nudge that names or rules out an algorithm, data structure, invariant, or bug location is a hint and requires `log_hint`."
     )
 }
 
 pub fn time_warning(minutes_left: u32) -> String {
     format!(
-        "[SYSTEM EVENT] Exactly {minutes_left} minutes remain on the interview timer. Briefly and naturally warn the candidate about the time and suggest they start converging — finishing the core logic and checking edge cases. Two short sentences maximum."
+        "[SYSTEM EVENT] Exactly {minutes_left} minutes remain on the interview timer. Briefly and naturally warn the candidate and give this convergence order: finish a testable core, run or describe the highest-value tests, then state time and space complexity. Two short sentences maximum. Do not start a behavioral question now."
     )
 }
 
@@ -194,7 +258,7 @@ pub fn wrap_up(reason: &str) -> String {
         "the candidate chose to end the session"
     };
     format!(
-        "[SYSTEM EVENT] The interview is over because {why}. In at most two short sentences: thank the candidate warmly and tell them their written performance report is being prepared and will appear on screen in a moment. Do not reveal scores or the hiring decision aloud."
+        "[SYSTEM EVENT] The interview is over because {why}. Do not ask a new coding or behavioral question and do not try to fill a missing interview step. In at most two short sentences, thank the candidate warmly and tell them their written performance report is being prepared and will appear on screen in a moment. Do not reveal scores or the hiring decision aloud."
     )
 }
 
@@ -256,14 +320,19 @@ there, and weigh it against them in `decision`.
 
 Score two independent dimensions from 0 to 100:
 1. codingScore — correctness of the final code against the problem, edge-case
-   coverage, algorithmic choice vs. the optimal approach, and structural quality
-   (naming, decomposition, dead code). An empty or non-functional editor caps
-   this below 30. Judge correctness by reading the code, never by the reported
-   pass count.
+   coverage, the candidate's stated algorithm and correctness reasoning,
+   implementation quality, test reasoning, optimization discussion, and
+   algorithmic choice vs. the optimal approach. An empty or non-functional editor
+   caps this below 30. Judge correctness by reading the code, never by the reported
+   pass count; clear narration cannot make incorrect code correct.
 2. communicationScore — how clearly they narrated their thinking while coding,
-   how accurately and deeply they answered the interviewer's mid-session
-   questions, and how independent they were (each hint should meaningfully
-   reduce this score; {} hint(s) were given).
+   including whether they restated the problem, worked a concrete example,
+   explained their algorithm and complexity, predicted tests, discussed
+   optimization, and accurately answered follow-ups. Also consider completeness
+   of Situation, Task, personal Action, and Result only if the interviewer actually
+   asked a behavioral question. If none was asked, say behavioral communication
+   was not assessed and do not deduct for it. Consider independence too: each hint
+   should meaningfully reduce this score; {} hint(s) were given.
 
 Decision rule: "HIRE" only if the performance would clear a real mid-level SWE
 onsite bar — a working, reasonably optimal solution AND clear communication.
@@ -279,6 +348,12 @@ Grounding rules — a real debrief cites evidence:
 - Judge the approach on its merits, not on whether it matches the expected optimal
   approach word for word. A different solution with the same complexity and sound
   reasoning scores the same.
+- In `summary` and both feedback sections, name observed REACTO/STAR strengths or
+  gaps in plain language and identify the supporting transcript statement, code
+  behavior, or test event. Never invent intent, metrics, actions, employer details,
+  body-language observations, or evidence absent from the material above. A
+  truthful qualitative behavioral result is evidence; a numeric metric is not
+  mandatory.
 
 Return ONLY a valid JSON object, no markdown fences, exactly this shape:
 {{
@@ -318,12 +393,12 @@ grounded in the transcript and code — never generic filler."#,
 pub fn test_results_reaction(summary_text: &str, all_passed: bool) -> String {
     if all_passed {
         return format!(
-            "[SYSTEM EVENT] The candidate just ran the built-in test cases and every one passed:\n{summary_text}\nReact like a real interviewer: acknowledge it briefly, then raise the bar with ONE short follow-up — time/space complexity, a nastier edge case, or whether they'd refactor anything. Two sentences maximum."
+            "[SYSTEM EVENT] The candidate just ran the built-in test cases and every one passed:\n{summary_text}\nTreat this only as the candidate's reported result, not proof. Acknowledge it briefly, then move to Optimizations with ONE short question: ask for an adversarial edge case plus either confirmed time/space complexity or one useful optimization/refactor. Accept an already-optimal answer when justified. Two sentences maximum; do not start a behavioral question in this same reply."
         );
     }
 
     format!(
-        "[SYSTEM EVENT] The candidate just ran the built-in test cases and some failed:\n{summary_text}\nReact like a real interviewer: in one or two short sentences, note what the failing cases have in common and nudge them toward investigating — WITHOUT revealing the bug or the fix. Reference the failing case by its input if helpful. Never read raw code or expected values aloud symbol by symbol."
+        "[SYSTEM EVENT] The candidate just ran the built-in test cases and some failed:\n{summary_text}\nTreat this only as the candidate's reported result, not proof. Return from Test to diagnosis/Coding: in one or two short sentences, ask the candidate what the failures have in common and what part of their reasoning or code they will inspect first. Do not state the commonality, bug, location, or fix, and do not name a data structure, algorithm, or invariant. Reference a failing input only if needed and never read raw code or values symbol by symbol."
     )
 }
 

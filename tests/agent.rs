@@ -191,8 +191,11 @@ fn prompt_samples() -> Value {
     json!({
         "instructions": build_instructions(problem, 45),
         "greeting": greeting(),
-        "languageChoice": language_choice("C++"),
-        "silence": silence_nudge("  1| def two_sum(nums, target):"),
+        "languageChoice": language_choice("C++", LanguageChoiceContext::Start),
+        "languageSwitch": language_choice("Java", LanguageChoiceContext::SwitchWithCode),
+        "silenceEmpty": silence_nudge("(the editor is currently empty)"),
+        "silencePlan": silence_nudge("  1| # scan once with a map"),
+        "silenceCode": silence_nudge("  1| def two_sum(nums, target):"),
         "review": proactive_review("  1| seen = {}"),
         "time": time_warning(5),
         "wrapCandidate": wrap_up("candidate_ended"),
@@ -270,6 +273,155 @@ fn prompts_match_frozen_fixture() {
         expected.as_object().expect("fixture is an object").len(),
         "{path} has keys no prompt builder produces"
     );
+}
+
+#[test]
+fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
+    let problem = get_problem(Some("two-sum"));
+    let prompt = build_instructions(problem, 45);
+
+    for stage in [
+        "Repeat",
+        "Example",
+        "Algorithm",
+        "Coding",
+        "Test",
+        "Optimizations",
+        "Situation",
+        "Task",
+        "Action",
+        "Result",
+    ] {
+        assert!(prompt.contains(stage), "missing {stage} policy: {prompt}");
+    }
+    for safeguard in [
+        "never announce the acronym or step names aloud",
+        "never make them repeat work",
+        "it is a hint",
+        "call `log_hint`",
+        "If coding is incomplete or the five-minute warning has fired",
+        "Never invent a story",
+    ] {
+        assert!(prompt.contains(safeguard), "missing safeguard: {safeguard}");
+    }
+
+    let public_reactions = [
+        greeting(),
+        language_choice("C++", LanguageChoiceContext::Start),
+        language_choice("Java", LanguageChoiceContext::SwitchWithCode),
+        silence_nudge("(the editor is currently empty)"),
+        proactive_review("  1| answer = []"),
+        time_warning(5),
+        wrap_up("time_up"),
+        test_results_reaction("2/3 passed", false),
+        test_results_reaction("3/3 passed", true),
+    ]
+    .join("\n");
+    assert!(
+        !public_reactions.contains(problem.optimal),
+        "a reaction exposed the private optimal approach"
+    );
+    for hint in problem.hint_ladder {
+        assert!(
+            !public_reactions.contains(hint),
+            "a reaction exposed a private hint: {hint}"
+        );
+    }
+}
+
+#[test]
+fn leetcode_reactions_preserve_stage_transitions() {
+    let empty = silence_nudge("(the editor is currently empty)");
+    assert!(empty.contains("understanding, example, or planned algorithm"));
+    assert!(empty.contains("Do not reset them"));
+
+    let code = proactive_review("  1| answer = []");
+    assert!(code.contains("predicted test after implementation"));
+    assert!(code.contains("requires `log_hint`"));
+
+    let failed = test_results_reaction("1/3 passed", false);
+    assert!(failed.contains("Return from Test to diagnosis/Coding"));
+    assert!(failed.contains("Do not state the commonality, bug, location, or fix"));
+
+    let passed = test_results_reaction("3/3 passed", true);
+    assert!(passed.contains("move to Optimizations"));
+    assert!(passed.contains("do not start a behavioral question"));
+
+    assert!(time_warning(5).contains("Do not start a behavioral question"));
+    assert!(wrap_up("candidate_ended").contains("Do not ask a new coding or behavioral question"));
+    assert!(
+        language_choice("Python", LanguageChoiceContext::Start).contains("begin the interview")
+    );
+    assert!(
+        language_choice("C++", LanguageChoiceContext::SwitchWithCode)
+            .contains("without restarting the interview")
+    );
+
+    for neutral in [
+        greeting(),
+        language_choice("Python", LanguageChoiceContext::Start),
+        silence_nudge("(the editor is currently empty)"),
+        time_warning(5),
+        wrap_up("time_up"),
+        test_results_reaction("1/3 passed", false),
+        test_results_reaction("3/3 passed", true),
+    ] {
+        assert!(
+            !neutral.contains("`log_hint`"),
+            "a neutral reaction was framed as a hint: {neutral}"
+        );
+    }
+}
+
+#[test]
+fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
+    let cases: Value = serde_json::from_str(include_str!("fixtures/framework-report-cases.json"))
+        .expect("framework report fixture parses");
+    let cases = cases
+        .as_array()
+        .expect("framework report cases are an array");
+    assert_eq!(cases.len(), 6);
+
+    for case in cases {
+        let name = case["name"].as_str().expect("case has a name");
+        let transcript = case["transcript"].as_str().expect("case has a transcript");
+        let final_code = case["finalCode"].as_str().expect("case has code");
+        let test_summary = case["testSummary"].as_str().expect("case has tests");
+        let prompt = report_prompt(ReportPromptInput {
+            problem: get_problem(Some("two-sum")),
+            transcript,
+            final_code,
+            language: "python",
+            hints_used: 0,
+            duration_min: 15,
+            elapsed_min: 15.0,
+            test_summary,
+        });
+
+        assert!(prompt.contains(transcript), "{name}: transcript was lost");
+        assert!(prompt.contains(final_code), "{name}: code was lost");
+        assert!(
+            prompt.contains(test_summary),
+            "{name}: test history was lost"
+        );
+        for key in [
+            "\"codingScore\"",
+            "\"communicationScore\"",
+            "\"decision\"",
+            "\"summary\"",
+            "\"codingFeedback\"",
+            "\"communicationFeedback\"",
+            "\"hintsUsed\"",
+        ] {
+            assert!(prompt.contains(key), "{name}: report contract lost {key}");
+        }
+        if !case["behavioralAsked"].as_bool().unwrap_or(false) {
+            assert!(
+                prompt.contains("If none was asked") && prompt.contains("do not deduct for it"),
+                "{name}: skipped STAR was not protected"
+            );
+        }
+    }
 }
 
 #[test]

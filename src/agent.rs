@@ -12,9 +12,10 @@ use integrity::integrity_hash;
 pub use integrity::{sanitize_integrity_event, sanitize_test_run};
 pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, get_problem};
 pub use prompts::{
-    ReportPromptInput, build_instructions, format_test_run, greeting, language_choice,
-    log_hint_text, numbered, proactive_review, read_editor_text, report_prompt, significant_change,
-    silence_nudge, spoken_language, test_results_reaction, time_warning, wrap_up,
+    LanguageChoiceContext, ReportPromptInput, build_instructions, format_test_run, greeting,
+    language_choice, log_hint_text, numbered, proactive_review, read_editor_text, report_prompt,
+    significant_change, silence_nudge, spoken_language, test_results_reaction, time_warning,
+    wrap_up,
 };
 
 use crate::config::{DEFAULT_DURATION_MIN, MAX_DURATION_MIN, MIN_DURATION_MIN};
@@ -522,7 +523,12 @@ fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> D
         .and_then(offered_language)
     {
         state.language = spoken.0.to_string();
-        language_changed = Some(language_choice(spoken.1));
+        let context = if state.code.trim().is_empty() {
+            LanguageChoiceContext::Start
+        } else {
+            LanguageChoiceContext::SwitchWithCode
+        };
+        language_changed = Some(language_choice(spoken.1, context));
     }
 
     DataEventResult {
