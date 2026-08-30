@@ -474,6 +474,7 @@ test("sanitizeReport preserves a well-formed agent report", () => {
   });
 
   assert.deepEqual(report, {
+    interviewContract: null,
     mode: "scored",
     interviewLoop: "coding_behavioral",
     rounds: [],
@@ -493,6 +494,33 @@ test("sanitizeReport preserves a well-formed agent report", () => {
     frameworkAssessment: null,
     frameworkEvidence: [],
   });
+});
+
+test("report contract migration preserves legacy and rejects unknown provenance", () => {
+  const legacy = sanitizeReport({ incomplete: true, summary: "old report" });
+  assert.equal(legacy.interviewContract, null);
+  assert.equal(legacy.summary, "old report");
+
+  const active = {
+    bundleVersion: 2,
+    livePromptVersion: 1,
+    reportPromptVersion: 2,
+    rubricVersion: 1,
+    reportSchemaVersion: 1,
+  };
+  assert.deepEqual(sanitizeReport({ incomplete: true, interviewContract: active }).interviewContract, active);
+
+  for (const interviewContract of [
+    { ...active, reportSchemaVersion: 2 },
+    { ...active, rubricVersion: "1" },
+    { ...active, extra: 1 },
+    null,
+  ]) {
+    const report = sanitizeReport({ codingScore: 99, decision: "HIRE", interviewContract });
+    assert.equal(report.incomplete, true);
+    assert.match(report.summary, /unsupported or malformed interview contract/);
+    assert.equal("codingScore" in report, false);
+  }
 });
 
 test("round summaries require plan-consistent kinds budgets and statuses", () => {

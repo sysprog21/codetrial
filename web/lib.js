@@ -323,6 +323,18 @@ export async function integrityEventPayload(input, previous = { seq: 0, hash: ""
 // The report arrives over a LiveKit data channel, so treat every field as
 // untrusted: scores are rendered into innerHTML and must not carry markup.
 export function sanitizeReport(raw) {
+  const activeContract = { bundleVersion: 2, livePromptVersion: 1, reportPromptVersion: 2, reportSchemaVersion: 1, rubricVersion: 1 };
+  const contractKeys = Object.keys(activeContract);
+  const candidateContract = raw?.interviewContract;
+  const contractValues = candidateContract && typeof candidateContract === "object" && !Array.isArray(candidateContract)
+    ? Object.keys(candidateContract).sort().join(",") === [...contractKeys].sort().join(",")
+      && contractKeys.every((key) => Number.isSafeInteger(candidateContract[key])
+        && candidateContract[key] >= 1 && candidateContract[key] <= 999)
+      ? Object.fromEntries(contractKeys.map((key) => [key, candidateContract[key]])) : null
+    : null;
+  const interviewContract = candidateContract === undefined ? null : contractValues;
+  const unsupportedContract = candidateContract !== undefined
+    && (interviewContract === null || contractKeys.some((key) => interviewContract[key] !== activeContract[key]));
   const mode = raw?.mode === "practice" ? "practice" : "scored";
   const interviewLoop = raw?.interviewLoop === "coding_only" ? "coding_only" : "coding_behavioral";
   const roundKinds = ["coding", "behavioral"];
@@ -418,7 +430,8 @@ export function sanitizeReport(raw) {
   const normalizedAssessment = new Map();
   const assessmentVersion = candidateAssessment?.rubricVersion;
   let assessmentValid = Number.isSafeInteger(assessmentVersion) && assessmentVersion >= 1
-    && assessmentRows.length === assessmentPhases.length;
+    && assessmentRows.length === assessmentPhases.length
+    && (!interviewContract || assessmentVersion === interviewContract.rubricVersion);
   for (const item of assessmentRows) {
     const phase = typeof item?.phase === "string" ? item.phase : "";
     const score = item?.score;
@@ -486,13 +499,16 @@ export function sanitizeReport(raw) {
   // numbers as 0 and coerce the missing decision to NO_HIRE, which is how a
   // candidate who never spoke got a rejection in the first place; doing it
   // again on the way out of storage would just move the fabrication later.
-  if (raw?.incomplete) {
+  if (raw?.incomplete || unsupportedContract) {
     return {
+      interviewContract,
       mode,
       interviewLoop,
       rounds: roundSummary,
       incomplete: true,
-      summary: typeof raw?.summary === "string" ? boundedText(raw.summary) : "",
+      summary: unsupportedContract
+        ? "This report uses an unsupported or malformed interview contract and cannot be scored by this version of CodeTrial."
+        : typeof raw?.summary === "string" ? boundedText(raw.summary) : "",
       integrityEvents: integrityEvents(raw?.integrityEvents),
       ...checkpoint(raw),
       hintsUsed: bounded(raw?.hintsUsed, 99),
@@ -502,6 +518,7 @@ export function sanitizeReport(raw) {
     };
   }
   return {
+    interviewContract,
     mode,
     interviewLoop,
     rounds: roundSummary,

@@ -977,7 +977,7 @@ function stopLocalMedia() {
 async function receiveReport(room, payload) {
   try {
     state.report = sanitizeReport(JSON.parse(new TextDecoder().decode(payload)));
-    recordReplay("lifecycle", { state: "rounds_final", interviewLoop, rounds: state.report.rounds });
+    recordReplay("lifecycle", { state: "rounds_final", interviewLoop, rounds: state.report.rounds, interviewContract: state.report.interviewContract });
     void flushReplay();
     state.phase = "report";
     setLocalAudioEnabled(false);

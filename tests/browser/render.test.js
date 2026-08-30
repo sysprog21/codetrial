@@ -809,3 +809,17 @@ test("the page and the exported markdown tell the same chain story", () => {
     assert.ok(reportMarkdown({ ...session, transcript: [] }).includes(sentence), sentence);
   }
 });
+
+test("report views identify active and legacy scoring contracts", () => {
+  const active = sanitizeReport({ incomplete: true, interviewContract: {
+    bundleVersion: 2, livePromptVersion: 1, reportPromptVersion: 2,
+    rubricVersion: 1, reportSchemaVersion: 1,
+  } });
+  const session = { report: active, problemTitle: "Two Sum", language: "python", code: "" };
+  assert.match(reportMarkup(session), /Contract bundle 2 · rubric 1 · report schema 1/);
+  assert.match(reportMarkdown({ ...session, transcript: [] }), /Contract: bundle 2; live prompt 1; report prompt 2; rubric 1; report schema 1/);
+
+  const legacy = { ...session, report: sanitizeReport({ incomplete: true }) };
+  assert.match(reportMarkup(legacy), /Legacy\/unversioned contract/);
+  assert.match(reportMarkdown({ ...legacy, transcript: [] }), /Contract: legacy\/unversioned/);
+});

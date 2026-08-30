@@ -62,6 +62,22 @@ pub const REVIEW_INTERVAL_S: f64 = 30.0;
 pub const INTERJECTION_COOLDOWN_S: f64 = 45.0;
 pub const SPEECH_SETTLE_S: f64 = 4.0;
 
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 2;
+pub const LIVE_PROMPT_VERSION: u32 = 1;
+pub const REPORT_PROMPT_VERSION: u32 = 2;
+pub const RUBRIC_VERSION: u32 = 1;
+pub const REPORT_SCHEMA_VERSION: u32 = 1;
+
+pub fn interview_contract_json() -> serde_json::Value {
+    serde_json::json!({
+        "bundleVersion": INTERVIEW_CONTRACT_BUNDLE_VERSION,
+        "livePromptVersion": LIVE_PROMPT_VERSION,
+        "reportPromptVersion": REPORT_PROMPT_VERSION,
+        "rubricVersion": RUBRIC_VERSION,
+        "reportSchemaVersion": REPORT_SCHEMA_VERSION,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Problem {
     pub id: &'static str,
@@ -578,7 +594,6 @@ impl Default for RuntimeState {
 }
 
 pub const FRAMEWORK_VERSION: u32 = 1;
-pub const REPORT_RUBRIC_VERSION: u32 = 1;
 pub const MAX_FRAMEWORK_EVIDENCE: usize = 64;
 const MAX_FRAMEWORK_SUMMARY_CHARS: usize = 240;
 
@@ -850,6 +865,7 @@ pub fn format_transcript(items: &[TranscriptItem<'_>]) -> String {
 /// that travelled beside it reached no consumer and was a second name for the
 /// same fact.
 pub fn fallback_report(hints_used: u32, note: &str) -> serde_json::Value {
+    let note = note.chars().take(240).collect::<String>();
     serde_json::json!({
         "incomplete": true,
         "summary": format!(
@@ -861,116 +877,477 @@ pub fn fallback_report(hints_used: u32, note: &str) -> serde_json::Value {
     })
 }
 
-pub fn sanitize_report(raw: &serde_json::Value, hints_used: u32) -> serde_json::Value {
-    let coding_feedback = feedback(raw.get("codingFeedback"));
-    let communication_feedback = feedback(raw.get("communicationFeedback"));
-    let weaknesses = coding_feedback["improvements"]
-        .as_array()
+pub fn report_response_schema() -> serde_json::Value {
+    // `responseSchema` accepts only Gemini's OpenAPI subset. Text bounds are
+    // therefore enforced by `validate_report_candidate`, while supported object
+    // closure and array/numeric bounds are also sent to the provider.
+    let text = || serde_json::json!({ "type": "STRING" });
+    let strings = |min: u32, max: u32| {
+        serde_json::json!({
+            "type": "ARRAY", "minItems": min, "maxItems": max,
+            "items": { "type": "STRING" }
+        })
+    };
+    let feedback = serde_json::json!({
+        "type": "OBJECT",
+        "propertyOrdering": ["strengths", "improvements"],
+        "properties": { "strengths": strings(2, 4), "improvements": strings(2, 4) },
+        "required": ["strengths", "improvements"]
+    });
+    let plan = serde_json::json!({
+        "type": "OBJECT",
+        "propertyOrdering": ["phase", "weakness", "impact", "frequency", "drill", "durationMin", "successCriterion", "selfReview"],
+        "properties": {
+            "phase": { "type": "STRING", "enum": IMPROVEMENT_PHASES },
+            "weakness": text(), "impact": { "type": "STRING", "enum": ["high", "medium", "low"] },
+            "frequency": { "type": "INTEGER", "minimum": 1, "maximum": 99 },
+            "drill": text(), "durationMin": { "type": "INTEGER", "minimum": 1, "maximum": 30 },
+            "successCriterion": text(), "selfReview": strings(1, 4)
+        },
+        "required": ["phase", "weakness", "impact", "frequency", "drill", "durationMin", "successCriterion", "selfReview"]
+    });
+    let assessment_row = serde_json::json!({
+        "type": "OBJECT", "propertyOrdering": ["phase", "score", "weaknessTags"],
+        "properties": {
+            "phase": { "type": "STRING", "enum": IMPROVEMENT_PHASES },
+            "score": { "type": "INTEGER", "minimum": 0, "maximum": 100, "nullable": true },
+            "weaknessTags": strings(0, 4)
+        },
+        "required": ["phase", "score", "weaknessTags"]
+    });
+    serde_json::json!({
+        "type": "OBJECT",
+        "propertyOrdering": ["codingScore", "communicationScore", "decision", "summary", "codingFeedback", "communicationFeedback", "improvementPlan", "frameworkAssessment"],
+        "properties": {
+            "codingScore": { "type": "INTEGER", "minimum": 0, "maximum": 100 },
+            "communicationScore": { "type": "INTEGER", "minimum": 0, "maximum": 100 },
+            "decision": { "type": "STRING", "enum": ["HIRE", "NO_HIRE"] },
+            "summary": text(), "codingFeedback": feedback.clone(), "communicationFeedback": feedback,
+            "improvementPlan": { "type": "ARRAY", "minItems": 0, "maxItems": 8, "items": plan },
+            "frameworkAssessment": {
+                "type": "OBJECT", "propertyOrdering": ["rubricVersion", "phases"],
+                "properties": {
+                    "rubricVersion": {
+                        "type": "INTEGER",
+                        "minimum": RUBRIC_VERSION,
+                        "maximum": RUBRIC_VERSION
+                    },
+                    "phases": { "type": "ARRAY", "minItems": 10, "maxItems": 10, "items": assessment_row }
+                },
+                "required": ["rubricVersion", "phases"]
+            }
+        },
+        "required": ["codingScore", "communicationScore", "decision", "summary", "codingFeedback", "communicationFeedback", "improvementPlan", "frameworkAssessment"]
+    })
+}
+
+pub fn validate_report(
+    raw: &serde_json::Value,
+    hints_used: u32,
+) -> Result<serde_json::Value, Vec<String>> {
+    let mut report = validate_report_candidate(raw)?;
+    report
+        .as_object_mut()
+        .expect("validated object")
+        .insert("hintsUsed".to_string(), serde_json::json!(hints_used));
+    Ok(report)
+}
+
+pub fn validate_report_candidate(
+    raw: &serde_json::Value,
+) -> Result<serde_json::Value, Vec<String>> {
+    let mut errors = Vec::new();
+    let Some(object) = raw.as_object() else {
+        return Err(vec!["$: expected object".to_string()]);
+    };
+    exact_keys(
+        object,
+        &[
+            "codingScore",
+            "communicationScore",
+            "decision",
+            "summary",
+            "codingFeedback",
+            "communicationFeedback",
+            "improvementPlan",
+            "frameworkAssessment",
+        ],
+        "$",
+        &mut errors,
+    );
+    strict_integer(
+        object.get("codingScore"),
+        0,
+        100,
+        "$.codingScore",
+        &mut errors,
+    );
+    strict_integer(
+        object.get("communicationScore"),
+        0,
+        100,
+        "$.communicationScore",
+        &mut errors,
+    );
+    strict_enum(
+        object.get("decision"),
+        &["HIRE", "NO_HIRE"],
+        "$.decision",
+        &mut errors,
+    );
+    strict_text(object.get("summary"), 1200, "$.summary", &mut errors);
+    for key in ["codingFeedback", "communicationFeedback"] {
+        validate_feedback(object.get(key), &format!("$.{key}"), &mut errors);
+    }
+    let improvements = object
+        .get("codingFeedback")
+        .and_then(|v| v.get("improvements"))
+        .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
         .chain(
-            communication_feedback["improvements"]
-                .as_array()
+            object
+                .get("communicationFeedback")
+                .and_then(|v| v.get("improvements"))
+                .and_then(serde_json::Value::as_array)
                 .into_iter()
                 .flatten(),
         )
         .filter_map(serde_json::Value::as_str)
         .collect::<Vec<_>>();
-    let improvement_plan = improvement_plan(raw.get("improvementPlan"), &weaknesses);
-    let framework_assessment =
-        framework_assessment(raw.get("frameworkAssessment"), &improvement_plan);
-    serde_json::json!({
-        "codingScore": clamp_score(raw.get("codingScore")),
-        "communicationScore": clamp_score(raw.get("communicationScore")),
-        "decision": if raw.get("decision").and_then(serde_json::Value::as_str) == Some("HIRE") {
-            "HIRE"
-        } else {
-            "NO_HIRE"
-        },
-        "summary": value_string(raw.get("summary")).unwrap_or_default(),
-        "codingFeedback": coding_feedback,
-        "communicationFeedback": communication_feedback,
-        "improvementPlan": improvement_plan,
-        "frameworkAssessment": framework_assessment,
-        "hintsUsed": hints_used,
-    })
+    validate_improvement_plan(object.get("improvementPlan"), &improvements, &mut errors);
+    validate_framework_assessment(
+        object.get("frameworkAssessment"),
+        object.get("improvementPlan"),
+        &mut errors,
+    );
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    Ok(raw.clone())
 }
 
-fn framework_assessment(
+fn exact_keys(
+    object: &serde_json::Map<String, serde_json::Value>,
+    expected: &[&str],
+    path: &str,
+    errors: &mut Vec<String>,
+) {
+    for key in expected {
+        if !object.contains_key(*key) {
+            errors.push(format!("{path}.{key}: required"));
+        }
+    }
+    for key in object.keys() {
+        if !expected.contains(&key.as_str()) {
+            errors.push(format!("{path}.{key}: unknown field"));
+        }
+    }
+}
+
+fn strict_integer(
     value: Option<&serde_json::Value>,
-    improvement_plan: &[serde_json::Value],
-) -> serde_json::Value {
-    let object = match value.and_then(serde_json::Value::as_object) {
-        Some(object)
-            if object.get("rubricVersion").and_then(json_int)
-                == Some(i64::from(REPORT_RUBRIC_VERSION)) =>
-        {
-            object
+    min: i64,
+    max: i64,
+    path: &str,
+    errors: &mut Vec<String>,
+) -> Option<i64> {
+    match value
+        .and_then(serde_json::Value::as_i64)
+        .filter(|v| (min..=max).contains(v))
+    {
+        Some(value) => Some(value),
+        None => {
+            errors.push(format!("{path}: expected integer {min}..={max}"));
+            None
         }
-        _ => return serde_json::Value::Null,
+    }
+}
+
+fn strict_enum<'a>(
+    value: Option<&'a serde_json::Value>,
+    allowed: &[&str],
+    path: &str,
+    errors: &mut Vec<String>,
+) -> Option<&'a str> {
+    match value
+        .and_then(serde_json::Value::as_str)
+        .filter(|v| allowed.contains(v))
+    {
+        Some(value) => Some(value),
+        None => {
+            errors.push(format!("{path}: invalid enum"));
+            None
+        }
+    }
+}
+
+fn strict_text(
+    value: Option<&serde_json::Value>,
+    max: usize,
+    path: &str,
+    errors: &mut Vec<String>,
+) -> Option<String> {
+    match value
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty() && value.chars().count() <= max)
+    {
+        Some(value) => Some(value.trim().to_string()),
+        None => {
+            errors.push(format!(
+                "{path}: expected non-empty string of at most {max} characters"
+            ));
+            None
+        }
+    }
+}
+
+fn validate_string_array(
+    value: Option<&serde_json::Value>,
+    min: usize,
+    max: usize,
+    text_max: usize,
+    path: &str,
+    errors: &mut Vec<String>,
+) {
+    let Some(items) = value.and_then(serde_json::Value::as_array) else {
+        errors.push(format!("{path}: expected array"));
+        return;
     };
-    let phases = match object.get("phases").and_then(serde_json::Value::as_array) {
-        Some(phases) if phases.len() == IMPROVEMENT_PHASES.len() => phases,
-        _ => return serde_json::Value::Null,
-    };
+    if !(min..=max).contains(&items.len()) {
+        errors.push(format!("{path}: expected {min}..={max} items"));
+    }
     let mut seen = std::collections::HashSet::new();
-    let mut normalized = std::collections::HashMap::new();
-    for item in phases {
-        let Some(item) = item.as_object() else {
-            return serde_json::Value::Null;
-        };
-        let Some(phase) = item.get("phase").and_then(serde_json::Value::as_str) else {
-            return serde_json::Value::Null;
-        };
-        if !IMPROVEMENT_PHASES.contains(&phase) || !seen.insert(phase) {
-            return serde_json::Value::Null;
+    for (index, item) in items.iter().take(max.saturating_add(1)).enumerate() {
+        if let Some(text) = strict_text(Some(item), text_max, &format!("{path}[{index}]"), errors)
+            && !seen.insert(text)
+        {
+            errors.push(format!("{path}[{index}]: duplicate"));
         }
-        let score = match item.get("score") {
-            Some(serde_json::Value::Null) => serde_json::Value::Null,
-            Some(value) => match json_int(value) {
-                Some(score @ 0..=100) => serde_json::json!(score),
-                _ => return serde_json::Value::Null,
-            },
-            None => return serde_json::Value::Null,
+    }
+}
+
+fn validate_feedback(value: Option<&serde_json::Value>, path: &str, errors: &mut Vec<String>) {
+    let Some(object) = value.and_then(serde_json::Value::as_object) else {
+        errors.push(format!("{path}: expected object"));
+        return;
+    };
+    exact_keys(object, &["strengths", "improvements"], path, errors);
+    validate_string_array(
+        object.get("strengths"),
+        2,
+        4,
+        400,
+        &format!("{path}.strengths"),
+        errors,
+    );
+    validate_string_array(
+        object.get("improvements"),
+        2,
+        4,
+        400,
+        &format!("{path}.improvements"),
+        errors,
+    );
+}
+
+fn validate_improvement_plan(
+    value: Option<&serde_json::Value>,
+    weaknesses: &[&str],
+    errors: &mut Vec<String>,
+) {
+    let Some(items) = value.and_then(serde_json::Value::as_array) else {
+        errors.push("$.improvementPlan: expected array".to_string());
+        return;
+    };
+    if items.len() > 8 {
+        errors.push("$.improvementPlan: expected at most 8 items".to_string());
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut previous_order = None;
+    for (index, item) in items.iter().take(9).enumerate() {
+        let path = format!("$.improvementPlan[{index}]");
+        let Some(object) = item.as_object() else {
+            errors.push(format!("{path}: expected object"));
+            continue;
         };
-        let allowed_tags = improvement_plan
-            .iter()
-            .filter(|plan| plan["phase"] == phase)
-            .filter_map(|plan| plan["weakness"].as_str())
-            .collect::<std::collections::HashSet<_>>();
-        let Some(raw_tags) = item
-            .get("weaknessTags")
-            .and_then(serde_json::Value::as_array)
-        else {
-            return serde_json::Value::Null;
-        };
-        let mut tags = Vec::new();
-        for tag in raw_tags {
-            let Some(tag) = bounded_report_text(Some(tag), 400) else {
-                continue;
+        exact_keys(
+            object,
+            &[
+                "phase",
+                "weakness",
+                "impact",
+                "frequency",
+                "drill",
+                "durationMin",
+                "successCriterion",
+                "selfReview",
+            ],
+            &path,
+            errors,
+        );
+        strict_enum(
+            object.get("phase"),
+            &IMPROVEMENT_PHASES,
+            &format!("{path}.phase"),
+            errors,
+        );
+        let weakness = strict_text(
+            object.get("weakness"),
+            400,
+            &format!("{path}.weakness"),
+            errors,
+        );
+        if let Some(weakness) = weakness {
+            if !weaknesses.contains(&weakness.as_str()) {
+                errors.push(format!(
+                    "{path}.weakness: must exactly reference a feedback improvement"
+                ));
+            }
+            if !seen.insert(weakness) {
+                errors.push(format!("{path}.weakness: duplicate"));
+            }
+        }
+        let impact = strict_enum(
+            object.get("impact"),
+            &["high", "medium", "low"],
+            &format!("{path}.impact"),
+            errors,
+        );
+        let frequency = strict_integer(
+            object.get("frequency"),
+            1,
+            99,
+            &format!("{path}.frequency"),
+            errors,
+        );
+        if let (Some(impact), Some(frequency)) = (impact, frequency) {
+            let rank = match impact {
+                "high" => 3,
+                "medium" => 2,
+                _ => 1,
             };
-            if allowed_tags.contains(tag.as_str()) && !tags.contains(&tag) {
-                tags.push(tag);
+            let order = (rank, frequency);
+            if previous_order.is_some_and(|previous| previous < order) {
+                errors.push(format!(
+                    "{path}: items must be sorted by impact then frequency descending"
+                ));
             }
-            if tags.len() == 4 {
-                break;
-            }
+            previous_order = Some(order);
         }
-        normalized.insert(
-            phase,
-            serde_json::json!({ "phase": phase, "score": score, "weaknessTags": tags }),
+        strict_text(object.get("drill"), 400, &format!("{path}.drill"), errors);
+        strict_integer(
+            object.get("durationMin"),
+            1,
+            30,
+            &format!("{path}.durationMin"),
+            errors,
+        );
+        strict_text(
+            object.get("successCriterion"),
+            400,
+            &format!("{path}.successCriterion"),
+            errors,
+        );
+        validate_string_array(
+            object.get("selfReview"),
+            1,
+            4,
+            240,
+            &format!("{path}.selfReview"),
+            errors,
         );
     }
-    if seen.len() != IMPROVEMENT_PHASES.len() {
-        return serde_json::Value::Null;
+    let expected = weaknesses
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let actual = seen
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    if actual != expected {
+        errors.push(
+            "$.improvementPlan: must contain exactly one item for every feedback improvement"
+                .to_string(),
+        );
     }
-    serde_json::json!({
-        "rubricVersion": REPORT_RUBRIC_VERSION,
-        "phases": IMPROVEMENT_PHASES
-            .iter()
-            .map(|phase| normalized.remove(phase).expect("all phases validated"))
-            .collect::<Vec<_>>()
-    })
+}
+
+fn validate_framework_assessment(
+    value: Option<&serde_json::Value>,
+    plan: Option<&serde_json::Value>,
+    errors: &mut Vec<String>,
+) {
+    let Some(object) = value.and_then(serde_json::Value::as_object) else {
+        errors.push("$.frameworkAssessment: expected object".to_string());
+        return;
+    };
+    exact_keys(
+        object,
+        &["rubricVersion", "phases"],
+        "$.frameworkAssessment",
+        errors,
+    );
+    strict_integer(
+        object.get("rubricVersion"),
+        i64::from(RUBRIC_VERSION),
+        i64::from(RUBRIC_VERSION),
+        "$.frameworkAssessment.rubricVersion",
+        errors,
+    );
+    let Some(rows) = object.get("phases").and_then(serde_json::Value::as_array) else {
+        errors.push("$.frameworkAssessment.phases: expected array".to_string());
+        return;
+    };
+    if rows.len() != IMPROVEMENT_PHASES.len() {
+        errors.push("$.frameworkAssessment.phases: expected exactly 10 ordered phases".to_string());
+    }
+    let plan = plan
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    for (index, expected_phase) in IMPROVEMENT_PHASES.iter().enumerate() {
+        let path = format!("$.frameworkAssessment.phases[{index}]");
+        let Some(row) = rows.get(index).and_then(serde_json::Value::as_object) else {
+            errors.push(format!("{path}: expected object"));
+            continue;
+        };
+        exact_keys(row, &["phase", "score", "weaknessTags"], &path, errors);
+        if row.get("phase").and_then(serde_json::Value::as_str) != Some(*expected_phase) {
+            errors.push(format!("{path}.phase: expected {expected_phase}"));
+        }
+        if row.get("score") != Some(&serde_json::Value::Null) {
+            strict_integer(row.get("score"), 0, 100, &format!("{path}.score"), errors);
+        }
+        validate_string_array(
+            row.get("weaknessTags"),
+            0,
+            4,
+            400,
+            &format!("{path}.weaknessTags"),
+            errors,
+        );
+        if let Some(tags) = row
+            .get("weaknessTags")
+            .and_then(serde_json::Value::as_array)
+        {
+            let allowed = plan
+                .iter()
+                .filter(|item| {
+                    item.get("phase").and_then(serde_json::Value::as_str) == Some(*expected_phase)
+                })
+                .filter_map(|item| item.get("weakness").and_then(serde_json::Value::as_str))
+                .collect::<std::collections::HashSet<_>>();
+            for tag in tags.iter().filter_map(serde_json::Value::as_str) {
+                if !allowed.contains(tag) {
+                    errors.push(format!(
+                        "{path}.weaknessTags: tag has no same-phase improvement"
+                    ));
+                }
+            }
+        }
+    }
 }
 
 const IMPROVEMENT_PHASES: [&str; 10] = [
@@ -985,90 +1362,6 @@ const IMPROVEMENT_PHASES: [&str; 10] = [
     "Action",
     "Result",
 ];
-
-fn bounded_report_text(value: Option<&serde_json::Value>, max: usize) -> Option<String> {
-    let text = value?.as_str()?.trim();
-    if text.is_empty() {
-        return None;
-    }
-    Some(text.chars().take(max).collect())
-}
-
-fn improvement_plan(
-    value: Option<&serde_json::Value>,
-    weaknesses: &[&str],
-) -> Vec<serde_json::Value> {
-    let mut planned_weaknesses = std::collections::HashSet::new();
-    let mut items = value
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .take(16)
-        .filter_map(|item| {
-            let item = item.as_object()?;
-            let phase = item.get("phase")?.as_str()?;
-            if !IMPROVEMENT_PHASES.contains(&phase) {
-                return None;
-            }
-            let weakness = bounded_report_text(item.get("weakness"), 400)?;
-            if !weaknesses.contains(&weakness.as_str()) {
-                return None;
-            }
-            if planned_weaknesses.contains(&weakness) {
-                return None;
-            }
-            let impact = item.get("impact")?.as_str()?;
-            let impact_rank = match impact {
-                "high" => 3,
-                "medium" => 2,
-                "low" => 1,
-                _ => return None,
-            };
-            let frequency = item.get("frequency").and_then(json_int)?.clamp(1, 99);
-            let duration_min = item.get("durationMin").and_then(json_int)?.clamp(1, 30);
-            let drill = bounded_report_text(item.get("drill"), 400)?;
-            let success = bounded_report_text(item.get("successCriterion"), 400)?;
-            let self_review = item
-                .get("selfReview")?
-                .as_array()?
-                .iter()
-                .filter_map(|value| bounded_report_text(Some(value), 240))
-                .take(4)
-                .collect::<Vec<_>>();
-            if self_review.is_empty() {
-                return None;
-            }
-            planned_weaknesses.insert(weakness.clone());
-            Some((
-                impact_rank,
-                frequency,
-                serde_json::json!({
-                    "phase": phase,
-                    "weakness": weakness,
-                    "impact": impact,
-                    "frequency": frequency,
-                    "drill": drill,
-                    "durationMin": duration_min,
-                    "successCriterion": success,
-                    "selfReview": self_review,
-                }),
-            ))
-        })
-        .collect::<Vec<_>>();
-    let required = weaknesses
-        .iter()
-        .copied()
-        .collect::<std::collections::HashSet<_>>();
-    if planned_weaknesses.len() != required.len()
-        || !required
-            .iter()
-            .all(|weakness| planned_weaknesses.contains(*weakness))
-    {
-        return Vec::new();
-    }
-    items.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
-    items.into_iter().take(8).map(|(_, _, item)| item).collect()
-}
 
 pub fn spoken_minutes_from_remaining_seconds(remaining_seconds: i64) -> i64 {
     ((remaining_seconds as f64) / 60.0)
@@ -1179,7 +1472,8 @@ pub fn final_report(
     error_note: Option<&str>,
 ) -> serde_json::Value {
     match (raw_report, error_note) {
-        (Some(raw_report), None) => sanitize_report(raw_report, hints_used),
+        (Some(raw_report), None) => validate_report(raw_report, hints_used)
+            .unwrap_or_else(|_| fallback_report(hints_used, "report schema validation failed")),
         _ => fallback_report(hints_used, error_note.unwrap_or("report generation failed")),
     }
 }
@@ -1554,25 +1848,6 @@ pub fn json_number(value: &serde_json::Value) -> Option<f64> {
 
 pub(crate) fn json_int(value: &serde_json::Value) -> Option<i64> {
     json_number(value).map(|number| number as i64)
-}
-
-pub(crate) fn feedback(value: Option<&serde_json::Value>) -> serde_json::Value {
-    let object = value.and_then(serde_json::Value::as_object);
-    serde_json::json!({
-        "strengths": string_list(object.and_then(|object| object.get("strengths"))),
-        "improvements": string_list(object.and_then(|object| object.get("improvements"))),
-    })
-}
-
-pub(crate) fn string_list(value: Option<&serde_json::Value>) -> Vec<String> {
-    value
-        .and_then(serde_json::Value::as_array)
-        .map(|items| items.iter().take(4).map(python_string).collect())
-        .unwrap_or_default()
-}
-
-pub(crate) fn clamp_score(value: Option<&serde_json::Value>) -> i64 {
-    value.and_then(json_int).unwrap_or(0).clamp(0, 100)
 }
 
 pub(crate) fn truthy_string(value: Option<&serde_json::Value>) -> Option<String> {

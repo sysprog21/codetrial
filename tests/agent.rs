@@ -246,6 +246,128 @@ fn prompt_samples() -> Value {
     })
 }
 
+fn valid_strict_report() -> Value {
+    let improvements = [
+        ("Algorithm", "Explain complexity"),
+        ("Test", "Test boundaries"),
+        ("Action", "Name your own action"),
+        ("Result", "State the result"),
+    ];
+    let phases = [
+        "Repeat",
+        "Example",
+        "Algorithm",
+        "Coding",
+        "Test",
+        "Optimizations",
+        "Situation",
+        "Task",
+        "Action",
+        "Result",
+    ];
+    json!({
+        "codingScore": 82,
+        "communicationScore": 74,
+        "decision": "HIRE",
+        "summary": "You produced a grounded solution and explained the main trade-offs.",
+        "codingFeedback": {"strengths": ["Correct core", "Clear implementation"], "improvements": ["Explain complexity", "Test boundaries"]},
+        "communicationFeedback": {"strengths": ["Clear narration", "Direct answers"], "improvements": ["Name your own action", "State the result"]},
+        "improvementPlan": improvements.iter().map(|(phase, weakness)| json!({
+            "phase": phase, "weakness": weakness, "impact": "medium", "frequency": 1,
+            "drill": "Practice the missing step", "durationMin": 5,
+            "successCriterion": "State it without prompting", "selfReview": ["Grounded in evidence"]
+        })).collect::<Vec<_>>(),
+        "frameworkAssessment": {"rubricVersion": 1, "phases": phases.iter().map(|phase| json!({
+            "phase": phase, "score": 75,
+            "weaknessTags": improvements.iter().filter(|(assigned, _)| assigned == phase).map(|(_, weakness)| *weakness).collect::<Vec<_>>()
+        })).collect::<Vec<_>>()}
+    })
+}
+
+#[test]
+fn strict_report_validation_is_atomic_and_server_owns_hints() {
+    let valid = valid_strict_report();
+    let report = validate_report(&valid, 3).expect("fixture is valid");
+    assert_eq!(report["hintsUsed"], 3);
+
+    let mut hostile = valid.clone();
+    hostile["codingScore"] = json!(120);
+    hostile["decision"] = json!("MAYBE");
+    hostile
+        .as_object_mut()
+        .unwrap()
+        .insert("extra".into(), json!(true));
+    let errors = validate_report_candidate(&hostile).unwrap_err().join("\n");
+    assert!(errors.contains("$.codingScore"));
+    assert!(errors.contains("$.decision"));
+    assert!(errors.contains("$.extra"));
+
+    let incomplete = final_report(Some(&hostile), 3, None);
+    assert_eq!(incomplete["incomplete"], true);
+    assert!(incomplete.get("codingScore").is_none());
+    assert!(incomplete.get("decision").is_none());
+}
+
+#[test]
+fn strict_report_validation_rejects_each_semantic_drift_class() {
+    type Mutation = Box<dyn Fn(&mut Value)>;
+    let cases: Vec<(&str, Mutation)> = vec![
+        (
+            "missing key",
+            Box::new(|report| {
+                report.as_object_mut().unwrap().remove("summary");
+            }),
+        ),
+        (
+            "extra key",
+            Box::new(|report| {
+                report
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("hintsUsed".into(), json!(999));
+            }),
+        ),
+        (
+            "wrong score type",
+            Box::new(|report| report["codingScore"] = json!("82")),
+        ),
+        (
+            "duplicate phase",
+            Box::new(|report| {
+                report["frameworkAssessment"]["phases"][9]["phase"] = json!("Action")
+            }),
+        ),
+        (
+            "unknown phase",
+            Box::new(|report| {
+                report["frameworkAssessment"]["phases"][0]["phase"] = json!("Warmup")
+            }),
+        ),
+        (
+            "bad rubric",
+            Box::new(|report| report["frameworkAssessment"]["rubricVersion"] = json!(2)),
+        ),
+        (
+            "missing weakness drill",
+            Box::new(|report| {
+                report["improvementPlan"].as_array_mut().unwrap().pop();
+            }),
+        ),
+        (
+            "oversize trimmed text",
+            Box::new(|report| report["summary"] = json!(format!("{}x", " ".repeat(1200)))),
+        ),
+    ];
+    for (name, mutate) in cases {
+        let mut report = valid_strict_report();
+        mutate(&mut report);
+        assert!(
+            validate_report_candidate(&report).is_err(),
+            "accepted {name}"
+        );
+    }
+}
+
 /// Prompt wording is a product decision, so it is frozen rather than asserted
 /// piecemeal. After a deliberate change, regenerate and read the diff:
 ///
@@ -466,7 +588,6 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
             "\"communicationFeedback\"",
             "\"improvementPlan\"",
             "\"frameworkAssessment\"",
-            "\"hintsUsed\"",
         ] {
             assert!(prompt.contains(key), "{name}: report contract lost {key}");
         }
@@ -639,137 +760,61 @@ fn runtime_helpers_match_frozen_fixture() {
 }
 
 #[test]
-fn report_helpers_match_frozen_fixture() {
-    let expected: Value = serde_json::from_str(include_str!("golden/report-samples.json"))
-        .expect("report sample fixture should parse");
-    let raw = json!({
-        "codingScore": 120,
-        "communicationScore": "88",
-        "decision": "MAYBE",
-        "summary": 42,
-        "codingFeedback": {
-            "strengths": ["clear", 7],
-            "improvements": ["slow"],
-        },
-        "communicationFeedback": {
-            "strengths": ["structured"],
-            "improvements": ["verbose"],
-        },
-    });
-
-    assert_eq!(sanitize_report(&raw, 3), expected["sanitized"]);
-    assert_eq!(fallback_report(3, "boom"), expected["fallback"]);
+fn report_schema_matches_frozen_fixture() {
+    let path = "tests/golden/report-schema.json";
+    let schema = report_response_schema();
+    if std::env::var_os("UPDATE_REPORT_SCHEMA_GOLDEN").is_some() {
+        let mut text = serde_json::to_string_pretty(&schema).unwrap();
+        text.push('\n');
+        std::fs::write(path, text).unwrap();
+    }
+    let expected: Value = serde_json::from_str(include_str!("golden/report-schema.json"))
+        .expect("report schema fixture should parse");
+    assert_eq!(schema, expected);
     assert_eq!(spoken_minutes_from_remaining_seconds(270), 4);
 }
 
 #[test]
 fn improvement_plans_are_linked_bounded_deduplicated_and_ranked() {
-    let raw = json!({
-        "codingFeedback": {"improvements": ["Explain complexity", "Test boundaries"]},
-        "communicationFeedback": {"improvements": ["Name your own action"]},
-        "improvementPlan": [
-            {"phase":"Test","weakness":"Test boundaries","impact":"low","frequency":2,"drill":"Build a test table","durationMin":45,"successCriterion":"Cover four classes","selfReview":["ordinary","boundary"]},
-            {"phase":"Algorithm","weakness":"Explain complexity","impact":"high","frequency":3,"drill":"Narrate complexity","durationMin":10,"successCriterion":"State and justify both bounds","selfReview":["time","space"]},
-            {"phase":"Action","weakness":"Name your own action","impact":"medium","frequency":1,"drill":"Rewrite with personal contribution","durationMin":5,"successCriterion":"Use I for owned work","selfReview":["Names my decision"]},
-            {"phase":"Algorithm","weakness":"Explain complexity","impact":"high","frequency":9,"drill":"duplicate weakness","durationMin":5,"successCriterion":"bad","selfReview":["bad"]},
-            {"phase":"Action","weakness":"unrelated advice","impact":"high","frequency":1,"drill":"invent work","durationMin":5,"successCriterion":"bad","selfReview":["bad"]},
-            {"phase":"Result","weakness":"Name your own action","impact":"urgent","frequency":1,"drill":"bad enum","durationMin":5,"successCriterion":"bad","selfReview":["bad"]}
-        ]
-    });
-    let report = sanitize_report(&raw, 0);
-    let plan = report["improvementPlan"].as_array().unwrap();
-    assert_eq!(plan.len(), 3);
-    assert_eq!(plan[0]["phase"], "Algorithm");
-    assert_eq!(plan[1]["phase"], "Action");
-    assert_eq!(plan[2]["phase"], "Test");
-    assert_eq!(plan[2]["durationMin"], 30);
+    let mut raw = valid_strict_report();
+    raw["improvementPlan"].as_array_mut().unwrap().swap(0, 3);
+    raw["improvementPlan"][0]["impact"] = json!("high");
+    raw["improvementPlan"][1]["impact"] = json!("low");
+    assert!(
+        validate_report_candidate(&raw).is_err(),
+        "unsorted plan was accepted"
+    );
 
-    let partial = json!({
-        "codingFeedback": {"improvements": ["Explain complexity", "Test boundaries"]},
-        "communicationFeedback": {"improvements": []},
-        "improvementPlan": [
-            {"phase":"Algorithm","weakness":"Explain complexity","impact":"high","frequency":1,"drill":"Narrate","durationMin":5,"successCriterion":"Justify bounds","selfReview":["time"]}
-        ]
-    });
-    assert_eq!(sanitize_report(&partial, 0)["improvementPlan"], json!([]));
-    assert_eq!(sanitize_report(&json!({}), 0)["improvementPlan"], json!([]));
+    let mut unrelated = valid_strict_report();
+    unrelated["improvementPlan"][0]["weakness"] = json!("unrelated advice");
+    let errors = validate_report_candidate(&unrelated)
+        .unwrap_err()
+        .join("\n");
+    assert!(errors.contains("exactly reference"));
+    assert!(errors.contains("exactly one item"));
 }
 
 #[test]
 fn framework_assessments_require_all_phases_and_preserve_unassessed_gaps() {
-    let phases = [
-        "Repeat",
-        "Example",
-        "Algorithm",
-        "Coding",
-        "Test",
-        "Optimizations",
-        "Situation",
-        "Task",
-        "Action",
-        "Result",
-    ];
-    let rows = phases
-        .iter()
-        .map(|phase| {
-            json!({
-                "phase": phase,
-                "score": if *phase == "Algorithm" { Some(72) } else { None },
-                "weaknessTags": if *phase == "Algorithm" { json!(["Explain complexity", "invented"]) } else { json!([]) }
-            })
-        })
-        .collect::<Vec<_>>();
-    let raw = json!({
-        "codingFeedback": {"improvements": ["Explain complexity"]},
-        "communicationFeedback": {"improvements": []},
-        "improvementPlan": [{
-            "phase":"Algorithm", "weakness":"Explain complexity", "impact":"high",
-            "frequency":1, "drill":"Narrate", "durationMin":5,
-            "successCriterion":"Justify bounds", "selfReview":["time"]
-        }],
-        "frameworkAssessment": {"rubricVersion": REPORT_RUBRIC_VERSION, "phases": rows}
-    });
-    let assessment = &sanitize_report(&raw, 0)["frameworkAssessment"];
-    assert_eq!(assessment["rubricVersion"], REPORT_RUBRIC_VERSION);
-    assert_eq!(assessment["phases"][2]["score"], 72);
-    assert_eq!(
-        assessment["phases"][2]["weaknessTags"],
-        json!(["Explain complexity"])
-    );
+    let mut raw = valid_strict_report();
     for index in 6..10 {
-        assert!(
-            assessment["phases"][index]["score"].is_null(),
-            "STAR must remain a gap"
-        );
-    }
-
-    let mut complete = raw.clone();
-    for row in complete["frameworkAssessment"]["phases"]
-        .as_array_mut()
-        .unwrap()
-    {
-        row["score"] = json!(85);
+        raw["frameworkAssessment"]["phases"][index]["score"] = Value::Null;
     }
     assert!(
-        sanitize_report(&complete, 0)["frameworkAssessment"]["phases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|row| row["score"] == 85)
+        validate_report_candidate(&raw).is_ok(),
+        "null STAR gaps must remain valid"
     );
-
     let mut duplicate = raw.clone();
     duplicate["frameworkAssessment"]["phases"][9]["phase"] = json!("Action");
-    assert!(sanitize_report(&duplicate, 0)["frameworkAssessment"].is_null());
-    let mut malformed = raw;
+    assert!(validate_report_candidate(&duplicate).is_err());
+    let mut malformed = raw.clone();
     malformed["frameworkAssessment"]["phases"][2]["score"] = json!(101);
-    assert!(sanitize_report(&malformed, 0)["frameworkAssessment"].is_null());
-    malformed["frameworkAssessment"]["phases"][2]["score"] = json!(72);
-    malformed["frameworkAssessment"]["phases"][2]
-        .as_object_mut()
-        .unwrap()
-        .remove("weaknessTags");
-    assert!(sanitize_report(&malformed, 0)["frameworkAssessment"].is_null());
+    assert!(validate_report_candidate(&malformed).is_err());
+    raw["frameworkAssessment"]["phases"][2]["weaknessTags"] = json!(["State the result"]);
+    assert!(
+        validate_report_candidate(&raw).is_err(),
+        "cross-phase tag accepted"
+    );
 }
 
 /// An outage is not a candidate. The fallback used to emit `NO_HIRE` with 0/100
@@ -1768,10 +1813,10 @@ fn final_report_matches_frontend_publish_contract() {
     let sanitized = final_report(Some(&raw), 2, None);
     let fallback = final_report(None, 1, Some("model unavailable"));
 
-    assert_eq!(sanitized, sanitize_report(&raw, 2));
+    assert_eq!(sanitized["incomplete"], true);
     assert_eq!(fallback, fallback_report(1, "model unavailable"));
-    assert_eq!(sanitized["codingScore"], 100);
-    assert_eq!(sanitized["decision"], "NO_HIRE");
+    assert!(sanitized.get("codingScore").is_none());
+    assert!(sanitized.get("decision").is_none());
     assert_eq!(sanitized["hintsUsed"], 2);
     assert_eq!(fallback["incomplete"], true);
     assert_eq!(fallback["hintsUsed"], 1);
@@ -2994,4 +3039,23 @@ fn generated_problem_metadata_exposes_no_private_rubric() {
             assert!(!text.contains(secret), "{} leaked private text", problem.id);
         }
     }
+}
+
+#[test]
+fn interview_contract_versions_are_one_closed_bundle() {
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 2);
+    assert_eq!(LIVE_PROMPT_VERSION, 1);
+    assert_eq!(REPORT_PROMPT_VERSION, 2);
+    assert_eq!(RUBRIC_VERSION, 1);
+    assert_eq!(REPORT_SCHEMA_VERSION, 1);
+    assert_eq!(
+        interview_contract_json(),
+        json!({
+            "bundleVersion": 2,
+            "livePromptVersion": 1,
+            "reportPromptVersion": 2,
+            "rubricVersion": 1,
+            "reportSchemaVersion": 1,
+        })
+    );
 }

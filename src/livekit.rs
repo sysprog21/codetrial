@@ -45,9 +45,9 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::{
     ReportPromptInput, RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput,
     WATCH_TICK_S, apply_data_event, final_report, format_test_run, framework_evidence_json,
-    log_hint_text, numbered, parse_participant_metadata, proactive_review, read_editor_text,
-    record_framework_evidence, report_prompt, significant_change, silence_nudge, timing_decision,
-    transcript_for_report, wrap_up,
+    interview_contract_json, log_hint_text, numbered, parse_participant_metadata, proactive_review,
+    read_editor_text, record_framework_evidence, report_prompt, significant_change, silence_nudge,
+    timing_decision, transcript_for_report, wrap_up,
 };
 use crate::config::AgentConfig;
 use crate::runtime::TOPIC_CONTROL;
@@ -102,9 +102,9 @@ const AGENT_STATE_LISTENING: &str = "listening";
 const AGENT_STATE_SPEAKING: &str = "speaking";
 const DUPLICATE_AGENT_ISOLATION_ATTEMPTS: usize = 20;
 const WRAP_UP_WAIT: Duration = Duration::from_secs(8);
-/// Covers `generate_report`'s three attempts and their backoff. The candidate
-/// is watching a spinner, so this is the point where waiting stops being worth
-/// more than a fallback report.
+/// Covers the normal report attempt, one schema repair, and bounded transient
+/// retries. The candidate is watching a spinner, so this is the point where
+/// waiting stops being worth more than an honest incomplete report.
 const REPORT_TIMEOUT: Duration = Duration::from_secs(45);
 /// A candidate who has just typed is still working, even if their speech has
 /// paused. Give them a beat before a periodic review tries to take the floor.
@@ -2193,6 +2193,7 @@ async fn report_packet(
             Some(&report_error_note(boot, state, reason, &error, api_key)),
         ),
     };
+    stamp_report_contract(&mut report);
     if let Some(object) = report.as_object_mut() {
         object.insert("mode".to_string(), serde_json::json!(boot.mode.as_str()));
         object.insert(
@@ -2203,6 +2204,12 @@ async fn report_packet(
     Ok(report_data_packet(report_with_integrity_events(
         report, state,
     ))?)
+}
+
+fn stamp_report_contract(report: &mut serde_json::Value) {
+    if let Some(object) = report.as_object_mut() {
+        object.insert("interviewContract".to_string(), interview_contract_json());
+    }
 }
 
 fn report_with_integrity_events(
@@ -2720,6 +2727,20 @@ mod tests {
         );
         assert_eq!(payload["hintsUsed"], 2);
         assert_eq!(report["integrityEvents"][0]["type"], "SESSION_START");
+    }
+
+    #[test]
+    fn the_server_overwrites_model_selected_contract_provenance() {
+        let mut report = serde_json::json!({
+            "decision": "HIRE",
+            "interviewContract": {"bundleVersion": 999}
+        });
+        stamp_report_contract(&mut report);
+        assert_eq!(report["interviewContract"], interview_contract_json());
+
+        let mut incomplete = serde_json::json!({"incomplete": true});
+        stamp_report_contract(&mut incomplete);
+        assert_eq!(incomplete["interviewContract"], interview_contract_json());
     }
 
     /// The liveness pair bookends the evidence, and the closing sample is the

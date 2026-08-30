@@ -6,7 +6,7 @@
 
 use super::{
     InterviewGrounding, InterviewLoop, InterviewMode, InterviewProfile, MAX_TEST_FAILURES, Problem,
-    SILENCE_THRESHOLD_S, python_truthy, truthy_string, value_string,
+    RUBRIC_VERSION, SILENCE_THRESHOLD_S, python_truthy, truthy_string, value_string,
 };
 use crate::runtime::AGENT_NAME;
 
@@ -449,6 +449,7 @@ pub struct ReportPromptInput<'a> {
 }
 
 pub fn report_prompt(input: ReportPromptInput<'_>) -> String {
+    let rubric_version = RUBRIC_VERSION;
     let metadata = input.problem.question_metadata();
     let competencies = metadata.competencies.join(", ");
     let [statement_point, optimal_point, pitfalls_point] = metadata.expected_discussion_points;
@@ -559,7 +560,7 @@ Return ONLY a valid JSON object, no markdown fences, exactly this shape:
     "selfReview": ["<check>", ...]
   }}, ...],
   "frameworkAssessment": {{
-    "rubricVersion": 1,
+    "rubricVersion": {rubric_version},
     "phases": [
       {{ "phase": "Repeat", "score": <integer 0-100 or null>, "weaknessTags": ["<exact improvement string>", ...] }},
       {{ "phase": "Example", "score": <integer 0-100 or null>, "weaknessTags": [] }},
@@ -572,8 +573,7 @@ Return ONLY a valid JSON object, no markdown fences, exactly this shape:
       {{ "phase": "Action", "score": <integer 0-100 or null>, "weaknessTags": [] }},
       {{ "phase": "Result", "score": <integer 0-100 or null>, "weaknessTags": [] }}
     ]
-  }},
-  "hintsUsed": {}
+  }}
 }}
 Each strengths/improvements list must contain 2 to 4 concrete, specific items
 grounded in the transcript and code — never generic filler.
@@ -593,7 +593,7 @@ For `frameworkAssessment`, include every phase exactly once in the displayed
 order. Score only what the transcript, final code, or test account actually lets
 you assess; use `null`, never zero, for an unasked, skipped, missing-transcript, or
 otherwise unassessable phase. In particular, every STAR score is `null` when no
-behavioral question was asked. Apply rubric version 1 consistently to every
+behavioral question was asked. Apply rubric version {rubric_version} consistently to every
 assessed phase: 90–100 = complete, precise, and independent; 75–89 = sound with a
 minor gap; 60–74 = partially demonstrated with a material gap; 40–59 = weak or
 substantially incomplete; 0–39 = directly observed incorrect or missing despite a
@@ -613,7 +613,6 @@ performance and must never become a phase score."#,
         transcript,
         input.hints_used,
         test_summary,
-        input.hints_used,
         input.hints_used
     )
 }
