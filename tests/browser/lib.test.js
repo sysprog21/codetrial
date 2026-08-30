@@ -487,7 +487,33 @@ test("sanitizeReport preserves a well-formed agent report", () => {
     integrityChainSeq: 412,
     integrityDropped: 380,
     hintsUsed: 2,
+    improvementPlan: [],
   });
+});
+
+test("improvement plan drops unrelated and hostile items and ranks valid drills", () => {
+  const report = sanitizeReport({
+    codingFeedback: { improvements: ["Explain complexity", "Test boundaries"] },
+    communicationFeedback: { improvements: ["Name your action"] },
+    improvementPlan: [
+      { phase: "Test", weakness: "Test boundaries", impact: "low", frequency: 2, drill: "Build a test table", durationMin: 99, successCriterion: "Cover four classes", selfReview: ["boundary"] },
+      { phase: "Algorithm", weakness: "Explain complexity", impact: "high", frequency: 3, drill: "Narrate complexity", durationMin: 10, successCriterion: "Justify both bounds", selfReview: ["time", "space"] },
+      { phase: "Action", weakness: "Name your action", impact: "medium", frequency: 1, drill: "Rewrite my contribution", durationMin: 5, successCriterion: "Name my decision", selfReview: ["Uses I"] },
+      { phase: "Action", weakness: "unrelated", impact: "high", frequency: 9, drill: "bad", durationMin: 5, successCriterion: "bad", selfReview: ["bad"] },
+      { phase: "<script>", weakness: "Name your action", impact: "high", frequency: 1, drill: "bad", durationMin: 5, successCriterion: "bad", selfReview: ["bad"] },
+    ],
+  });
+  assert.deepEqual(report.improvementPlan.map((item) => item.phase), ["Algorithm", "Action", "Test"]);
+  assert.equal(report.improvementPlan[2].durationMin, 30);
+});
+
+test("a partial improvement plan is rejected instead of hiding an emitted weakness", () => {
+  const report = sanitizeReport({
+    codingFeedback: { improvements: ["Explain complexity", "Test boundaries"] },
+    communicationFeedback: { improvements: [] },
+    improvementPlan: [{ phase: "Algorithm", weakness: "Explain complexity", impact: "high", frequency: 1, drill: "Narrate", durationMin: 5, successCriterion: "Justify bounds", selfReview: ["time"] }],
+  });
+  assert.deepEqual(report.improvementPlan, []);
 });
 
 test("timer, clamp, and placeholder helpers", () => {

@@ -412,9 +412,26 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
             "\"summary\"",
             "\"codingFeedback\"",
             "\"communicationFeedback\"",
+            "\"improvementPlan\"",
             "\"hintsUsed\"",
         ] {
             assert!(prompt.contains(key), "{name}: report contract lost {key}");
+        }
+        for policy in [
+            "problem restatement",
+            "edge-case enumeration",
+            "complexity narration",
+            "test-table construction",
+            "60-second STAR response",
+            "personal-contribution rewrite",
+            "truthful metric mining",
+            "[your verified result]",
+            "Never invent a number",
+        ] {
+            assert!(
+                prompt.contains(policy),
+                "{name}: drill policy lost {policy}"
+            );
         }
         if !case["behavioralAsked"].as_bool().unwrap_or(false) {
             assert!(
@@ -587,6 +604,39 @@ fn report_helpers_match_frozen_fixture() {
     assert_eq!(sanitize_report(&raw, 3), expected["sanitized"]);
     assert_eq!(fallback_report(3, "boom"), expected["fallback"]);
     assert_eq!(spoken_minutes_from_remaining_seconds(270), 4);
+}
+
+#[test]
+fn improvement_plans_are_linked_bounded_deduplicated_and_ranked() {
+    let raw = json!({
+        "codingFeedback": {"improvements": ["Explain complexity", "Test boundaries"]},
+        "communicationFeedback": {"improvements": ["Name your own action"]},
+        "improvementPlan": [
+            {"phase":"Test","weakness":"Test boundaries","impact":"low","frequency":2,"drill":"Build a test table","durationMin":45,"successCriterion":"Cover four classes","selfReview":["ordinary","boundary"]},
+            {"phase":"Algorithm","weakness":"Explain complexity","impact":"high","frequency":3,"drill":"Narrate complexity","durationMin":10,"successCriterion":"State and justify both bounds","selfReview":["time","space"]},
+            {"phase":"Action","weakness":"Name your own action","impact":"medium","frequency":1,"drill":"Rewrite with personal contribution","durationMin":5,"successCriterion":"Use I for owned work","selfReview":["Names my decision"]},
+            {"phase":"Algorithm","weakness":"Explain complexity","impact":"high","frequency":9,"drill":"duplicate weakness","durationMin":5,"successCriterion":"bad","selfReview":["bad"]},
+            {"phase":"Action","weakness":"unrelated advice","impact":"high","frequency":1,"drill":"invent work","durationMin":5,"successCriterion":"bad","selfReview":["bad"]},
+            {"phase":"Result","weakness":"Name your own action","impact":"urgent","frequency":1,"drill":"bad enum","durationMin":5,"successCriterion":"bad","selfReview":["bad"]}
+        ]
+    });
+    let report = sanitize_report(&raw, 0);
+    let plan = report["improvementPlan"].as_array().unwrap();
+    assert_eq!(plan.len(), 3);
+    assert_eq!(plan[0]["phase"], "Algorithm");
+    assert_eq!(plan[1]["phase"], "Action");
+    assert_eq!(plan[2]["phase"], "Test");
+    assert_eq!(plan[2]["durationMin"], 30);
+
+    let partial = json!({
+        "codingFeedback": {"improvements": ["Explain complexity", "Test boundaries"]},
+        "communicationFeedback": {"improvements": []},
+        "improvementPlan": [
+            {"phase":"Algorithm","weakness":"Explain complexity","impact":"high","frequency":1,"drill":"Narrate","durationMin":5,"successCriterion":"Justify bounds","selfReview":["time"]}
+        ]
+    });
+    assert_eq!(sanitize_report(&partial, 0)["improvementPlan"], json!([]));
+    assert_eq!(sanitize_report(&json!({}), 0)["improvementPlan"], json!([]));
 }
 
 /// An outage is not a candidate. The fallback used to emit `NO_HIRE` with 0/100

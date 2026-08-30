@@ -400,10 +400,31 @@ Return ONLY a valid JSON object, no markdown fences, exactly this shape:
     "strengths": ["<specific strength>", ...],
     "improvements": ["<specific, actionable improvement>", ...]
   }},
+  "improvementPlan": [{{
+    "phase": "Repeat|Example|Algorithm|Coding|Test|Optimizations|Situation|Task|Action|Result",
+    "weakness": "<exact copy of one improvement string above>",
+    "impact": "high|medium|low",
+    "frequency": <positive integer count of observations in this session>,
+    "drill": "<one executable drill>",
+    "durationMin": <integer 1-30>,
+    "successCriterion": "<observable completion criterion>",
+    "selfReview": ["<check>", ...]
+  }}, ...],
   "hintsUsed": {}
 }}
 Each strengths/improvements list must contain 2 to 4 concrete, specific items
-grounded in the transcript and code — never generic filler."#,
+grounded in the transcript and code — never generic filler.
+
+For `improvementPlan`, emit exactly one item for every distinct feedback improvement
+(0 to 8 items); never add unrelated advice or duplicate a weakness. Sort high
+impact before medium before low, then higher observed frequency first. Choose from
+these small drills where applicable: problem restatement, edge-case enumeration,
+complexity narration, test-table construction, a 60-second STAR response,
+personal-contribution rewrite, or truthful metric mining. Every drill needs a
+duration, observable success criterion, and 1 to 4 self-review checks. A behavioral
+metric may appear only when the transcript states it; otherwise ask the candidate
+to supply truthful evidence using a placeholder such as `[your verified result]`.
+Never invent a number, employer, action, or outcome."#,
         input.duration_min,
         input.elapsed_min,
         input.problem.title,

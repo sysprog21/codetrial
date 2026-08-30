@@ -137,6 +137,14 @@ export function reportMarkup({ report, problemTitle, language, code }) {
   const feedback = report.incomplete
     ? ""
     : `${feedbackMarkup("Coding", report.codingFeedback)}${feedbackMarkup("Communication", report.communicationFeedback)}`;
+  const practiceNext = report.incomplete || !report.improvementPlan?.length
+    ? ""
+    : `<section><h3>Practice next</h3><ol>${report.improvementPlan.map((item) => `
+      <li><strong>${escapeHtml(item.phase)} · ${escapeHtml(item.durationMin)} min · ${escapeHtml(item.impact)} impact</strong>
+        <p>${escapeHtml(item.drill)}</p>
+        <p><strong>Success:</strong> ${escapeHtml(item.successCriterion)}</p>
+        <ul>${item.selfReview.map((check) => `<li>${escapeHtml(check)}</li>`).join("")}</ul>
+      </li>`).join("")}</ol></section>`;
 
   return `
     <div class="report-card">
@@ -146,6 +154,7 @@ export function reportMarkup({ report, problemTitle, language, code }) {
       </div>${scores}
       <section><h3>${report.incomplete ? "What happened" : "Committee summary"}</h3><p>${escapeHtml(report.summary)}</p></section>
       ${feedback}
+      ${practiceNext}
       ${integrityEvidenceMarkup(report)}
       <details><summary>Your final code (${escapeHtml(language)})</summary><pre>${escapeHtml(code.trimEnd() || "(editor was empty)")}</pre></details>
       <div class="report-actions"><button id="download-report" type="button">Download report (.md)</button><button id="done" type="button">Done - back to lobby</button></div>
@@ -203,6 +212,19 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
     const sources = event.sourceEventIds?.length ? ` - sources: ${event.sourceEventIds.map(mdText).join(", ")}` : "";
     return `- ${mdText(event.at)} [${mdText(event.severity)}] ${mdText(event.type)}${event.detail ? ` - ${mdText(event.detail)}` : ""}${sources}`;
   }).join("\n") || "(none captured)";
+  const practiceNext = report.incomplete || !report.improvementPlan?.length
+    ? []
+    : [
+      "## Practice next",
+      "",
+      ...report.improvementPlan.flatMap((item, index) => [
+        `${index + 1}. **${mdText(item.phase)} · ${mdText(item.durationMin)} min · ${mdText(item.impact)} impact**`,
+        `   - Drill: ${mdText(item.drill)}`,
+        `   - Success: ${mdText(item.successCriterion)}`,
+        ...item.selfReview.map((check) => `   - Check: ${mdText(check)}`),
+      ]),
+      "",
+    ];
   const chainNote = mdText(chainSentence(report));
   const conversation = transcript
     .filter((segment) => segment.final || segment.text.trim())
@@ -259,6 +281,7 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
     "",
     ...head,
     "",
+    ...practiceNext,
     // A session with no evaluation can still be one that ended because the
     // camera saw something. Refusing to score it is not a reason to drop the
     // evidence, which `sanitizeReport` deliberately keeps.

@@ -334,6 +334,22 @@ test("report markup renders scores, verdict, and escaped feedback", () => {
   assert.match(body, /id="done"/);
 });
 
+test("practice-next drills render accessibly in HTML and Markdown", () => {
+  const report = {
+    codingScore: 70, communicationScore: 70, decision: "HIRE", summary: "Grounded",
+    codingFeedback: { strengths: [], improvements: ["Test boundaries"] },
+    communicationFeedback: { strengths: [], improvements: [] }, hintsUsed: 0,
+    improvementPlan: [{ phase: "Test", weakness: "Test boundaries", impact: "high", frequency: 2, drill: "Build a test table", durationMin: 10, successCriterion: "Cover four case classes", selfReview: ["Predicted outputs", "Included a boundary"] }],
+  };
+  const session = { report, problemTitle: "Two Sum", language: "python", code: "pass", transcript: [], at: "now" };
+  const html = reportMarkup(session);
+  const markdown = reportMarkdown(session);
+  assert.match(html, /<h3>Practice next<\/h3>/);
+  assert.match(html, /Test · 10 min · high impact/);
+  assert.match(markdown, /## Practice next/);
+  assert.match(markdown, /Success: Cover four case classes/);
+});
+
 test("report markup marks a no-hire and an empty editor", () => {
   const body = reportMarkup({
     report: {

@@ -349,6 +349,50 @@ export function sanitizeReport(raw) {
     strengths: stringList(section?.strengths),
     improvements: stringList(section?.improvements),
   });
+  const codingFeedback = feedback(raw?.codingFeedback);
+  const communicationFeedback = feedback(raw?.communicationFeedback);
+  const weaknesses = new Set([...codingFeedback.improvements, ...communicationFeedback.improvements]);
+  const phases = new Set(["Repeat", "Example", "Algorithm", "Coding", "Test", "Optimizations", "Situation", "Task", "Action", "Result"]);
+  const plannedWeaknesses = new Set();
+  const impactRank = { high: 3, medium: 2, low: 1 };
+  const candidatePlan = (Array.isArray(raw?.improvementPlan) ? raw.improvementPlan : [])
+    .slice(0, 16)
+    .map((item) => {
+      const phase = typeof item?.phase === "string" ? item.phase : "";
+      const weakness = typeof item?.weakness === "string" ? boundedText(item.weakness, 400).trim() : "";
+      const impact = typeof item?.impact === "string" ? item.impact : "";
+      const drill = typeof item?.drill === "string" ? boundedText(item.drill, 400).trim() : "";
+      const successCriterion = typeof item?.successCriterion === "string"
+        ? boundedText(item.successCriterion, 400).trim() : "";
+      const frequency = Math.trunc(Number(item?.frequency));
+      const durationMin = Math.trunc(Number(item?.durationMin));
+      const selfReview = Array.isArray(item?.selfReview)
+        ? item.selfReview.slice(0, 4).map((check) => boundedText(check, 240).trim()).filter(Boolean)
+        : [];
+      if (!phases.has(phase) || plannedWeaknesses.has(weakness) || !weaknesses.has(weakness)
+        || !impactRank[impact] || !Number.isFinite(frequency) || frequency < 1
+        || !Number.isFinite(durationMin) || durationMin < 1 || !drill
+        || !successCriterion || selfReview.length === 0) return null;
+      plannedWeaknesses.add(weakness);
+      return {
+        phase,
+        weakness,
+        impact,
+        frequency: clamp(frequency, 1, 99),
+        drill,
+        durationMin: clamp(durationMin, 1, 30),
+        successCriterion,
+        selfReview,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => impactRank[right.impact] - impactRank[left.impact]
+      || right.frequency - left.frequency)
+    .slice(0, 8);
+  const improvementPlan = plannedWeaknesses.size === weaknesses.size
+    && [...weaknesses].every((weakness) => plannedWeaknesses.has(weakness))
+    ? candidatePlan
+    : [];
   // A report with nothing in it must survive normalization as a report with
   // nothing in it. Falling through to the fields below would score the missing
   // numbers as 0 and coerce the missing decision to NO_HIRE, which is how a
@@ -362,6 +406,7 @@ export function sanitizeReport(raw) {
       integrityEvents: integrityEvents(raw?.integrityEvents),
       ...checkpoint(raw),
       hintsUsed: bounded(raw?.hintsUsed, 99),
+      improvementPlan: [],
     };
   }
   return {
@@ -370,8 +415,9 @@ export function sanitizeReport(raw) {
     communicationScore: score(raw?.communicationScore),
     decision: raw?.decision === "HIRE" ? "HIRE" : "NO_HIRE",
     summary: typeof raw?.summary === "string" ? boundedText(raw.summary) : "",
-    codingFeedback: feedback(raw?.codingFeedback),
-    communicationFeedback: feedback(raw?.communicationFeedback),
+    codingFeedback,
+    communicationFeedback,
+    improvementPlan,
     integrityEvents: integrityEvents(raw?.integrityEvents),
     ...checkpoint(raw),
     // Bounded like the scores: `JSON.parse` turns 1e999 into Infinity, which

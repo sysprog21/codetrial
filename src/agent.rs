@@ -398,11 +398,27 @@ pub fn fallback_report(hints_used: u32, note: &str) -> serde_json::Value {
         "summary": format!(
             "The automatic evaluation could not be completed: {note}. Your session ran end-to-end, but no scores were produced, so nothing here is an assessment of your work. Check the agent logs and GOOGLE_API_KEY, then try again."
         ),
+        "improvementPlan": [],
         "hintsUsed": hints_used,
     })
 }
 
 pub fn sanitize_report(raw: &serde_json::Value, hints_used: u32) -> serde_json::Value {
+    let coding_feedback = feedback(raw.get("codingFeedback"));
+    let communication_feedback = feedback(raw.get("communicationFeedback"));
+    let weaknesses = coding_feedback["improvements"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(
+            communication_feedback["improvements"]
+                .as_array()
+                .into_iter()
+                .flatten(),
+        )
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>();
+    let improvement_plan = improvement_plan(raw.get("improvementPlan"), &weaknesses);
     serde_json::json!({
         "codingScore": clamp_score(raw.get("codingScore")),
         "communicationScore": clamp_score(raw.get("communicationScore")),
@@ -412,10 +428,108 @@ pub fn sanitize_report(raw: &serde_json::Value, hints_used: u32) -> serde_json::
             "NO_HIRE"
         },
         "summary": value_string(raw.get("summary")).unwrap_or_default(),
-        "codingFeedback": feedback(raw.get("codingFeedback")),
-        "communicationFeedback": feedback(raw.get("communicationFeedback")),
+        "codingFeedback": coding_feedback,
+        "communicationFeedback": communication_feedback,
+        "improvementPlan": improvement_plan,
         "hintsUsed": hints_used,
     })
+}
+
+const IMPROVEMENT_PHASES: [&str; 10] = [
+    "Repeat",
+    "Example",
+    "Algorithm",
+    "Coding",
+    "Test",
+    "Optimizations",
+    "Situation",
+    "Task",
+    "Action",
+    "Result",
+];
+
+fn bounded_report_text(value: Option<&serde_json::Value>, max: usize) -> Option<String> {
+    let text = value?.as_str()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(text.chars().take(max).collect())
+}
+
+fn improvement_plan(
+    value: Option<&serde_json::Value>,
+    weaknesses: &[&str],
+) -> Vec<serde_json::Value> {
+    let mut planned_weaknesses = std::collections::HashSet::new();
+    let mut items = value
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(16)
+        .filter_map(|item| {
+            let item = item.as_object()?;
+            let phase = item.get("phase")?.as_str()?;
+            if !IMPROVEMENT_PHASES.contains(&phase) {
+                return None;
+            }
+            let weakness = bounded_report_text(item.get("weakness"), 400)?;
+            if !weaknesses.contains(&weakness.as_str()) {
+                return None;
+            }
+            if planned_weaknesses.contains(&weakness) {
+                return None;
+            }
+            let impact = item.get("impact")?.as_str()?;
+            let impact_rank = match impact {
+                "high" => 3,
+                "medium" => 2,
+                "low" => 1,
+                _ => return None,
+            };
+            let frequency = item.get("frequency").and_then(json_int)?.clamp(1, 99);
+            let duration_min = item.get("durationMin").and_then(json_int)?.clamp(1, 30);
+            let drill = bounded_report_text(item.get("drill"), 400)?;
+            let success = bounded_report_text(item.get("successCriterion"), 400)?;
+            let self_review = item
+                .get("selfReview")?
+                .as_array()?
+                .iter()
+                .filter_map(|value| bounded_report_text(Some(value), 240))
+                .take(4)
+                .collect::<Vec<_>>();
+            if self_review.is_empty() {
+                return None;
+            }
+            planned_weaknesses.insert(weakness.clone());
+            Some((
+                impact_rank,
+                frequency,
+                serde_json::json!({
+                    "phase": phase,
+                    "weakness": weakness,
+                    "impact": impact,
+                    "frequency": frequency,
+                    "drill": drill,
+                    "durationMin": duration_min,
+                    "successCriterion": success,
+                    "selfReview": self_review,
+                }),
+            ))
+        })
+        .collect::<Vec<_>>();
+    let required = weaknesses
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    if planned_weaknesses.len() != required.len()
+        || !required
+            .iter()
+            .all(|weakness| planned_weaknesses.contains(*weakness))
+    {
+        return Vec::new();
+    }
+    items.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
+    items.into_iter().take(8).map(|(_, _, item)| item).collect()
 }
 
 pub fn spoken_minutes_from_remaining_seconds(remaining_seconds: i64) -> i64 {
