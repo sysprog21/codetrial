@@ -13,19 +13,10 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
-const require = createRequire(import.meta.url);
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+import { launchChromium, root } from "./source.js";
 
-let chromium = null;
-try {
-  ({ chromium } = require("playwright"));
-} catch {
-  chromium = null;
-}
 
 /// Asked for rather than picked. A fixed port collides with a second copy of
 /// this suite and with whatever else on the machine happened to want it.
@@ -75,14 +66,8 @@ async function reachable() {
 }
 
 before(async () => {
-  if (!chromium) return;
-  try {
-    browser = await chromium.launch();
-  } catch {
-    // Chromium is not downloaded; every test below skips.
-    browser = null;
-    return;
-  }
+  browser = await launchChromium();
+  if (!browser) return;
   // An unbuilt checkout is the one honest reason to skip, so it is the only
   // one: everything past this point either serves or fails.
   if (!existsSync(binary)) {

@@ -1,4 +1,4 @@
-// Shared source-reading helpers for the browser tests.
+// Shared helpers for the browser tests: reading source, and launching one.
 //
 // These tests read `web/*.js` and assert on text, because nothing here can
 // execute `web/interview.js`. That makes them tripwires rather than proofs, and
@@ -94,6 +94,32 @@ export function failFetchWith(handler) {
   return () => {
     globalThis.fetch = previous;
   };
+}
+
+/// The browser, or null when there is no browser to be had. Shared so that
+/// every file launching one agrees on what a missing Playwright or an
+/// undownloaded Chromium means. `make check` installs neither, so a null here
+/// reads as "unverified", not "fine".
+///
+/// Which is why CI gets a throw instead. A skipped suite reports its tests, no
+/// failures, and exit 0, so if the workflow's Chromium install ever stops
+/// working the browser tests go on passing while running nothing and a green
+/// build is the only evidence. `.github/workflows/check.yml` installs it before
+/// the gate, so there is no legitimate skip there.
+export async function launchChromium() {
+  try {
+    const { chromium } = await import("playwright");
+    return await chromium.launch();
+  } catch (error) {
+    // `cause` rather than the message alone: when CI does break, the frame that
+    // names what went wrong is the launcher's, not this one's.
+    if (process.env.CI) {
+      throw new Error("CI has no usable Chromium, so the browser suite would test nothing", {
+        cause: error,
+      });
+    }
+    return null;
+  }
 }
 
 export function captures(source, pattern) {
