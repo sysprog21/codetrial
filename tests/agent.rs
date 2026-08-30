@@ -2929,3 +2929,69 @@ fn a_detail_that_reorders_or_hides_text_is_dropped_but_localized_text_survives()
         );
     }
 }
+
+#[test]
+fn every_problem_has_bounded_ordered_question_metadata() {
+    assert_eq!(PROBLEMS.len(), 150);
+    for problem in PROBLEMS {
+        let metadata = problem.question_metadata();
+        assert_eq!(metadata.difficulty, problem.difficulty, "{}", problem.id);
+        assert!(
+            (1..=8).contains(&metadata.competencies.len()),
+            "{}",
+            problem.id
+        );
+        let unique = metadata
+            .competencies
+            .iter()
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique.len(), metadata.competencies.len(), "{}", problem.id);
+        assert_eq!(metadata.reacto_stages, &ReactoStage::ALL, "{}", problem.id);
+        assert_eq!(metadata.follow_up_directions.len(), ReactoStage::ALL.len());
+        assert!(
+            metadata
+                .expected_discussion_points
+                .contains(&problem.optimal)
+        );
+        for (follow_up, stage) in metadata.follow_up_directions.iter().zip(ReactoStage::ALL) {
+            assert_eq!(follow_up.stage, stage, "{}", problem.id);
+            assert!(!follow_up.direction.trim().is_empty());
+        }
+    }
+    assert!(topics_for("not-a-problem").is_none());
+}
+
+#[test]
+fn generated_problem_metadata_exposes_no_private_rubric() {
+    for problem in PROBLEMS {
+        let text = std::fs::read_to_string(format!("web/problems/{}.json", problem.id))
+            .expect("generated browser problem exists");
+        let public: Value = serde_json::from_str(&text).expect("browser problem is JSON");
+        let metadata = public["interviewMetadata"]
+            .as_object()
+            .expect("public metadata exists");
+        let keys = metadata
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            keys,
+            [
+                "difficulty",
+                "competencies",
+                "reactoStages",
+                "followUpDirections"
+            ]
+            .into_iter()
+            .collect(),
+            "{}",
+            problem.id
+        );
+        for secret in std::iter::once(problem.optimal)
+            .chain(std::iter::once(problem.pitfalls))
+            .chain(problem.hint_ladder.iter().copied())
+        {
+            assert!(!text.contains(secret), "{} leaked private text", problem.id);
+        }
+    }
+}

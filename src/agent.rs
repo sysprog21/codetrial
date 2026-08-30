@@ -5,12 +5,13 @@
 //! behavior rather than data.
 
 mod integrity;
+mod problem_topics;
 mod problems;
 mod prompts;
 
 use integrity::integrity_hash;
 pub use integrity::{sanitize_integrity_event, sanitize_test_run};
-pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, get_problem};
+pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, get_problem, topics_for};
 pub use prompts::{
     LanguageChoiceContext, ReportPromptInput, build_instructions, build_instructions_for_context,
     build_instructions_for_mode, build_instructions_for_plan, build_instructions_for_profile,
@@ -70,6 +71,93 @@ pub struct Problem {
     pub optimal: &'static str,
     pub pitfalls: &'static str,
     pub hint_ladder: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReactoStage {
+    Repeat,
+    Example,
+    Algorithm,
+    Coding,
+    Test,
+    Optimizations,
+}
+
+impl ReactoStage {
+    pub const ALL: [Self; 6] = [
+        Self::Repeat,
+        Self::Example,
+        Self::Algorithm,
+        Self::Coding,
+        Self::Test,
+        Self::Optimizations,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Repeat => "repeat",
+            Self::Example => "example",
+            Self::Algorithm => "algorithm",
+            Self::Coding => "coding",
+            Self::Test => "test",
+            Self::Optimizations => "optimizations",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FollowUpDirection {
+    pub stage: ReactoStage,
+    pub direction: &'static str,
+}
+
+pub const NEUTRAL_FOLLOW_UPS: [FollowUpDirection; 6] = [
+    FollowUpDirection {
+        stage: ReactoStage::Repeat,
+        direction: "Ask the candidate to restate the inputs, outputs, constraints, and ambiguities.",
+    },
+    FollowUpDirection {
+        stage: ReactoStage::Example,
+        direction: "Ask the candidate to choose and trace an ordinary example and a boundary case.",
+    },
+    FollowUpDirection {
+        stage: ReactoStage::Algorithm,
+        direction: "Ask for the candidate's approach, correctness argument, and complexity.",
+    },
+    FollowUpDirection {
+        stage: ReactoStage::Coding,
+        direction: "Ask the candidate to implement their stated approach and explain major decisions.",
+    },
+    FollowUpDirection {
+        stage: ReactoStage::Test,
+        direction: "Ask the candidate to predict useful cases and expected results before running them.",
+    },
+    FollowUpDirection {
+        stage: ReactoStage::Optimizations,
+        direction: "Ask for complexity, an uncovered edge case, and a justified optimization or cleanup.",
+    },
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuestionMetadata<'a> {
+    pub difficulty: &'static str,
+    pub competencies: &'static [&'static str],
+    pub reacto_stages: &'static [ReactoStage],
+    pub follow_up_directions: &'static [FollowUpDirection],
+    /// Private rubric material. This type is constructed only on the server.
+    pub expected_discussion_points: [&'a str; 3],
+}
+
+impl Problem {
+    pub fn question_metadata(&self) -> QuestionMetadata<'_> {
+        QuestionMetadata {
+            difficulty: self.difficulty,
+            competencies: topics_for(self.id).unwrap_or(&[]),
+            reacto_stages: &ReactoStage::ALL,
+            follow_up_directions: &NEUTRAL_FOLLOW_UPS,
+            expected_discussion_points: [self.summary, self.optimal, self.pitfalls],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

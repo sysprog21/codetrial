@@ -30,5 +30,48 @@
     "python": "class WordDictionary:\n\n    def __init__(self):\n        \n\n    def addWord(self, word: str) -> None:\n        \n\n    def search(self, word: str) -> bool:\n        \n\n\n# Your WordDictionary object will be instantiated and called as such:\n# obj = WordDictionary()\n# obj.addWord(word)\n# param_2 = obj.search(word)",
     "javascript": "\nvar WordDictionary = function() {\n    \n};\n\n/** \n * @param {string} word\n * @return {void}\n */\nWordDictionary.prototype.addWord = function(word) {\n    \n};\n\n/** \n * @param {string} word\n * @return {boolean}\n */\nWordDictionary.prototype.search = function(word) {\n    \n};\n\n/** \n * Your WordDictionary object will be instantiated and called as such:\n * var obj = new WordDictionary()\n * obj.addWord(word)\n * var param_2 = obj.search(word)\n */",
     "c": "\n\n\ntypedef struct {\n    \n} WordDictionary;\n\n\nWordDictionary* wordDictionaryCreate() {\n    \n}\n\nvoid wordDictionaryAddWord(WordDictionary* obj, char* word) {\n    \n}\n\nbool wordDictionarySearch(WordDictionary* obj, char* word) {\n    \n}\n\nvoid wordDictionaryFree(WordDictionary* obj) {\n    \n}\n\n/**\n * Your WordDictionary struct will be instantiated and called as such:\n * WordDictionary* obj = wordDictionaryCreate();\n * wordDictionaryAddWord(obj, word);\n \n * bool param_2 = wordDictionarySearch(obj, word);\n \n * wordDictionaryFree(obj);\n*/"
+  },
+  "interviewMetadata": {
+    "difficulty": "Medium",
+    "competencies": [
+      "String",
+      "DFS",
+      "Design",
+      "Trie"
+    ],
+    "reactoStages": [
+      "repeat",
+      "example",
+      "algorithm",
+      "coding",
+      "test",
+      "optimizations"
+    ],
+    "followUpDirections": [
+      {
+        "stage": "repeat",
+        "direction": "Ask the candidate to restate the inputs, outputs, constraints, and ambiguities."
+      },
+      {
+        "stage": "example",
+        "direction": "Ask the candidate to choose and trace an ordinary example and a boundary case."
+      },
+      {
+        "stage": "algorithm",
+        "direction": "Ask for the candidate's approach, correctness argument, and complexity."
+      },
+      {
+        "stage": "coding",
+        "direction": "Ask the candidate to implement their stated approach and explain major decisions."
+      },
+      {
+        "stage": "test",
+        "direction": "Ask the candidate to predict useful cases and expected results before running them."
+      },
+      {
+        "stage": "optimizations",
+        "direction": "Ask for complexity, an uncovered edge case, and a justified optimization or cleanup."
+      }
+    ]
   }
 }
