@@ -29,17 +29,22 @@ const start = document.querySelector("#start");
 
 let signInFirst = false;
 
-start.addEventListener("click", async (event) => {
-  event.currentTarget.disabled = true;
+// The button by name, not by asking the event which element it was dispatched
+// to: the browser clears that property when dispatch ends, so every line after
+// the first await was writing to null. A gated candidate signed in, the handler
+// threw on the next line, and the button stayed disabled on "Recording
+// GitHub..." with the interview never starting.
+start.addEventListener("click", async () => {
+  start.disabled = true;
   if (signInFirst) {
-    event.currentTarget.textContent = "Recording GitHub...";
+    start.textContent = "Recording GitHub...";
     if (!(await recordGitHubLogin(false))) {
-      event.currentTarget.disabled = false;
+      start.disabled = false;
       setStartGate(true);
       return;
     }
   }
-  event.currentTarget.textContent = "Starting...";
+  start.textContent = "Starting...";
   window.location.href = `/interview?problem=${encodeURIComponent(problem)}&duration=${duration}`;
 });
 

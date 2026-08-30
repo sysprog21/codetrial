@@ -104,3 +104,18 @@ function response(body, ok = true) {
     json: async () => body,
   };
 }
+
+// event.currentTarget is null once dispatch ends, so an async handler that
+// keeps using it writes to null on every line after its first await. That
+// shipped: a candidate on a sign-in-gated lobby recorded their name, the start
+// handler threw, and the button stayed disabled on "Recording GitHub..." with
+// no interview. The rule is cheaper to check than the symptom.
+test("no handler in these files reaches for the event's current target", () => {
+  for (const name of ["app.js", "interview.js", "history.js"]) {
+    assert.doesNotMatch(
+      read(name),
+      /currentTarget/,
+      `${name} uses event.currentTarget, which is null after an await`,
+    );
+  }
+});
