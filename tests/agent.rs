@@ -309,6 +309,62 @@ fn strict_report_validation_is_atomic_and_server_owns_hints() {
 }
 
 #[test]
+fn unsupported_delivery_and_personality_judgments_are_rejected_atomically() {
+    for claim in [
+        "Your accent was distracting.",
+        "Your DIALECT sounded polished.",
+        "Your typing-speed was slow.",
+        "Your typing pace was unusually fast.",
+        "You used too many filler words.",
+        "Your eye contact was weak.",
+        "Your posture looked closed.",
+        "Your body_language suggested hesitation.",
+        "Your facial expression seemed tense.",
+        "Your voice tone was uncertain.",
+        "Your tone-of-voice came across poorly.",
+        "You appeared-confident throughout.",
+        "You sounded nervous.",
+        "You come across as confident on camera.",
+        "Your personality seems introverted.",
+        "You lacked charisma.",
+    ] {
+        let mut report = valid_strict_report();
+        report["summary"] = json!(claim);
+        let errors = validate_report_candidate(&report).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error == "$.summary: unsupported delivery or personality judgment"),
+            "claim escaped delivery policy: {claim:?}: {errors:?}"
+        );
+        let incomplete = final_report(Some(&report), 0, None);
+        assert_eq!(incomplete["incomplete"], true);
+        assert!(incomplete.get("codingScore").is_none());
+    }
+
+    let mut nested = valid_strict_report();
+    nested["communicationFeedback"]["strengths"][0] = json!("Maintained strong eye-contact.");
+    nested["improvementPlan"][0]["selfReview"][0] = json!("Check whether you appeared nervous.");
+    let errors = validate_report_candidate(&nested).unwrap_err().join("\n");
+    assert!(errors.contains("$.communicationFeedback.strengths[0]"));
+    assert!(errors.contains("$.improvementPlan[0].selfReview[0]"));
+}
+
+#[test]
+fn technical_confidence_language_remains_valid() {
+    for allowed in [
+        "You calculated a 95 percent confidence interval for the estimate.",
+        "You were confident that the loop invariant held and justified it with code.",
+        "The evidence confidence value is metadata, not a performance score.",
+    ] {
+        let mut report = valid_strict_report();
+        report["summary"] = json!(allowed);
+        validate_report_candidate(&report)
+            .unwrap_or_else(|errors| panic!("technical statement was rejected: {errors:?}"));
+    }
+}
+
+#[test]
 fn strict_report_validation_rejects_each_semantic_drift_class() {
     type Mutation = Box<dyn Fn(&mut Value)>;
     let cases: Vec<(&str, Mutation)> = vec![
@@ -3355,17 +3411,17 @@ fn generated_problem_metadata_exposes_no_private_rubric() {
 
 #[test]
 fn interview_contract_versions_are_one_closed_bundle() {
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 3);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 4);
     assert_eq!(LIVE_PROMPT_VERSION, 1);
-    assert_eq!(REPORT_PROMPT_VERSION, 3);
+    assert_eq!(REPORT_PROMPT_VERSION, 4);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 1);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 3,
+            "bundleVersion": 4,
             "livePromptVersion": 1,
-            "reportPromptVersion": 3,
+            "reportPromptVersion": 4,
             "rubricVersion": 1,
             "reportSchemaVersion": 1,
         })

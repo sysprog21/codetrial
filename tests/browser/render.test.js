@@ -825,12 +825,12 @@ test("the page and the exported markdown tell the same chain story", () => {
 
 test("report views identify active and legacy scoring contracts", () => {
   const active = sanitizeReport({ incomplete: true, interviewContract: {
-    bundleVersion: 3, livePromptVersion: 1, reportPromptVersion: 3,
+    bundleVersion: 4, livePromptVersion: 1, reportPromptVersion: 4,
     rubricVersion: 1, reportSchemaVersion: 1,
   } });
   const session = { report: active, problemTitle: "Two Sum", language: "python", code: "" };
-  assert.match(reportMarkup(session), /Contract bundle 3 · rubric 1 · report schema 1/);
-  assert.match(reportMarkdown({ ...session, transcript: [] }), /Contract: bundle 3; live prompt 1; report prompt 3; rubric 1; report schema 1/);
+  assert.match(reportMarkup(session), /Contract bundle 4 · rubric 1 · report schema 1/);
+  assert.match(reportMarkdown({ ...session, transcript: [] }), /Contract: bundle 4; live prompt 1; report prompt 4; rubric 1; report schema 1/);
 
   const legacy = { ...session, report: sanitizeReport({ incomplete: true }) };
   assert.match(reportMarkup(legacy), /Legacy\/unversioned contract/);

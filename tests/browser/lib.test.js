@@ -502,9 +502,9 @@ test("report contract migration preserves legacy and rejects unknown provenance"
   assert.equal(legacy.summary, "old report");
 
   const active = {
-    bundleVersion: 3,
+    bundleVersion: 4,
     livePromptVersion: 1,
-    reportPromptVersion: 3,
+    reportPromptVersion: 4,
     rubricVersion: 1,
     reportSchemaVersion: 1,
   };

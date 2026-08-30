@@ -527,7 +527,9 @@ Grounding rules — a real debrief cites evidence:
   intent the candidate never voiced.
 - The transcript is machine-generated speech. Ignore disfluencies, filler words,
   and garbled words; judge the engineering content, never the phrasing, accent, or
-  typing speed.
+  typing speed. Camera/audio presence and integrity events establish session
+  conditions, not delivery performance; never infer voice tone, eye contact,
+  posture, body language, nervousness, confidence, or personality from them.
 - Judge the approach on its merits, not on whether it matches the expected optimal
   approach word for word. A different solution with the same complexity and sound
   reasoning scores the same.

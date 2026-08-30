@@ -62,9 +62,9 @@ pub const REVIEW_INTERVAL_S: f64 = 30.0;
 pub const INTERJECTION_COOLDOWN_S: f64 = 45.0;
 pub const SPEECH_SETTLE_S: f64 = 4.0;
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 3;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 4;
 pub const LIVE_PROMPT_VERSION: u32 = 1;
-pub const REPORT_PROMPT_VERSION: u32 = 3;
+pub const REPORT_PROMPT_VERSION: u32 = 4;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 1;
 
@@ -1026,10 +1026,104 @@ pub fn validate_report_candidate(
         object.get("improvementPlan"),
         &mut errors,
     );
+    for key in [
+        "summary",
+        "codingFeedback",
+        "communicationFeedback",
+        "improvementPlan",
+    ] {
+        if let Some(value) = object.get(key) {
+            validate_observable_judgments(value, &format!("$.{key}"), &mut errors);
+        }
+    }
     if !errors.is_empty() {
         return Err(errors);
     }
     Ok(raw.clone())
+}
+
+fn validate_observable_judgments(value: &serde_json::Value, path: &str, errors: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(text) => {
+            let normalized = text
+                .chars()
+                .map(|character| {
+                    if character.is_alphanumeric() {
+                        character.to_ascii_lowercase()
+                    } else {
+                        ' '
+                    }
+                })
+                .collect::<String>()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let padded = format!(" {normalized} ");
+            const UNSUPPORTED: &[&str] = &[
+                " accent ",
+                " accents ",
+                " dialect ",
+                " dialects ",
+                " typing speed ",
+                " typing pace ",
+                " typed slowly ",
+                " typed quickly ",
+                " type slowly ",
+                " type quickly ",
+                " speech rate ",
+                " filler word ",
+                " filler words ",
+                " disfluency ",
+                " disfluencies ",
+                " eye contact ",
+                " posture ",
+                " body language ",
+                " facial expression ",
+                " facial expressions ",
+                " voice tone ",
+                " vocal tone ",
+                " tone of voice ",
+                " attractiveness ",
+                " physical appearance ",
+                " nervous demeanor ",
+                " confident demeanor ",
+                " personality ",
+                " introvert ",
+                " extrovert ",
+                " charisma ",
+                " appeared nervous ",
+                " appears nervous ",
+                " seemed nervous ",
+                " looked nervous ",
+                " sounded nervous ",
+                " come across as nervous ",
+                " comes across as nervous ",
+                " appeared confident ",
+                " appears confident ",
+                " seemed confident ",
+                " looked confident ",
+                " sounded confident ",
+                " come across as confident ",
+                " comes across as confident ",
+            ];
+            if UNSUPPORTED.iter().any(|phrase| padded.contains(phrase)) {
+                errors.push(format!(
+                    "{path}: unsupported delivery or personality judgment"
+                ));
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                validate_observable_judgments(item, &format!("{path}[{index}]"), errors);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            for (key, item) in object {
+                validate_observable_judgments(item, &format!("{path}.{key}"), errors);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn exact_keys(

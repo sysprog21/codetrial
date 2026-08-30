@@ -38,7 +38,7 @@ def corpus():
                 {"reviewerId": "reviewer-b", "scores": scores(min(100, base + 1), coding_only)},
             ],
         })
-    return {"version": 1, "contract": {"bundleVersion": 3, "reportPromptVersion": 3,
+    return {"version": 1, "contract": {"bundleVersion": 4, "reportPromptVersion": 4,
             "rubricVersion": 1, "reportSchemaVersion": 1, "model": "synthetic-test-only"},
             "samples": samples}
 
@@ -53,7 +53,7 @@ def content():
                     sample["modelScores"][phase] = min(100, value + 30)
     malformed = copy.deepcopy(passing)
     malformed["samples"][1]["id"] = malformed["samples"][0]["id"]
-    template = {"version": 1, "contract": {"bundleVersion": 3, "reportPromptVersion": 3,
+    template = {"version": 1, "contract": {"bundleVersion": 4, "reportPromptVersion": 4,
                 "rubricVersion": 1, "reportSchemaVersion": 1, "model": "FILL-ME"},
                 "samples": []}
     return {"passing-synthetic.json": passing, "failing-synthetic.json": failing,
