@@ -666,7 +666,22 @@
         <button id="start" class="start-button" type="button" disabled>Start interview</button>
       </section>
 
-      <section id="history" class="history" hidden></section>
+      <section id="history" class="history" aria-labelledby="progress-title" hidden>
+        <h2 id="progress-title">Interview progress</h2>
+        <fieldset class="progress-filters">
+          <legend>Filter attempts</legend>
+          <label>Difficulty <select id="progress-difficulty"><option value="all">All</option></select></label>
+          <label>Language <select id="progress-language"><option value="all">All</option></select></label>
+          <label>Duration <select id="progress-duration"><option value="all">All</option></select></label>
+          <label>Mode <select id="progress-mode"><option value="all">All</option></select></label>
+        </fieldset>
+        <p id="progress-summary" aria-live="polite"></p>
+        <div id="progress-trends" class="progress-trends"></div>
+        <section aria-labelledby="progress-weakness-title">
+          <h3 id="progress-weakness-title">Recurring weaknesses</h3>
+          <ol id="progress-weaknesses"></ol>
+        </section>
+      </section>
 
       <!-- The interviewer model's own metadata sets "creditNotation":
            "required", so naming its author is a license term rather than a

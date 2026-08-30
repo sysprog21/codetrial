@@ -1,5 +1,6 @@
 import { readLocalHistory } from "./history.js";
 import { pickProblem, suggestDifficulty } from "./problem-picker.js";
+import { buildProgressModel, progressPhases } from "./progress.js";
 
 let problem;
 let duration;
@@ -36,6 +37,13 @@ const nodes = {
   history: document.querySelector("#history"),
   recommendation: document.querySelector("#recommendation"),
   durationNote: document.querySelector("#duration-note"),
+  progressSummary: document.querySelector("#progress-summary"),
+  progressTrends: document.querySelector("#progress-trends"),
+  progressWeaknesses: document.querySelector("#progress-weaknesses"),
+  progressDifficulty: document.querySelector("#progress-difficulty"),
+  progressLanguage: document.querySelector("#progress-language"),
+  progressDuration: document.querySelector("#progress-duration"),
+  progressMode: document.querySelector("#progress-mode"),
 };
 
 // Every card carries the pressed state from the start, not only the one that
@@ -88,6 +96,13 @@ for (const input of levels) {
       nodes.recommendation.textContent = "";
     }
   });
+}
+
+let progressEntries = [];
+let progressSuffix = "saved";
+
+for (const filter of [nodes.progressDifficulty, nodes.progressLanguage, nodes.progressDuration, nodes.progressMode]) {
+  filter.addEventListener("change", renderProgress);
 }
 
 const durations = [...document.querySelectorAll("[data-duration]")];
@@ -284,20 +299,21 @@ async function renderServerHistory() {
     const data = await fetchJson("/api/reports");
     // `/api/reports` wraps each entry in `payload` (accounts.rs list_reports);
     // history.js stores the same entry flat. Flattened here so the picker knows
-    // one shape instead of guessing between two.
+    // one shape instead of guessing between two. The progress panel takes the
+    // wire shape as it comes: progress.js unwraps `payload` itself.
     reports = data.reports.map((entry) => ({ problemId: entry.problemId, report: entry.payload?.report }));
-    renderHistoryCount(reports.length, "saved to your account");
+    showProgress(data.reports, "saved to your account");
   } catch {
-    nodes.history.hidden = true;
+    showProgressError("Could not load saved account progress.");
   }
 }
 
 function renderLocalHistory() {
   try {
     reports = readLocalHistory();
-    renderHistoryCount(reports.length, "saved on this device");
+    showProgress(reports, "saved on this device");
   } catch {
-    nodes.history.hidden = true;
+    showProgressError("Could not load progress saved on this device.");
   }
 }
 
@@ -451,16 +467,98 @@ function title(card) {
   return card.button.querySelector(".problem-title").textContent;
 }
 
-function renderHistoryCount(count, suffix) {
-  if (count <= 0) {
-    nodes.history.hidden = true;
+function showProgressError(message) {
+  nodes.history.hidden = false;
+  nodes.progressSummary.textContent = message;
+  nodes.progressTrends.replaceChildren();
+  nodes.progressWeaknesses.replaceChildren();
+}
+
+function showProgress(entries, suffix) {
+  progressEntries = entries;
+  progressSuffix = suffix;
+  nodes.history.hidden = false;
+  const model = buildProgressModel(progressEntries);
+  syncFilter(nodes.progressDifficulty, model.options.difficulty, (value) => value);
+  syncFilter(nodes.progressLanguage, model.options.language, languageLabel);
+  syncFilter(nodes.progressDuration, model.options.durationMin, (value) => `${value} min`);
+  syncFilter(nodes.progressMode, model.options.mode, titleCase);
+  renderProgress();
+}
+
+function renderProgress() {
+  const filters = {
+    difficulty: nodes.progressDifficulty.value,
+    language: nodes.progressLanguage.value,
+    durationMin: nodes.progressDuration.value,
+    mode: nodes.progressMode.value,
+  };
+  const model = buildProgressModel(progressEntries, filters);
+  nodes.progressTrends.replaceChildren();
+  nodes.progressWeaknesses.replaceChildren();
+  if (model.total === 0) {
+    nodes.progressSummary.textContent = `No past reports are ${progressSuffix}. Complete an interview to start a trend.`;
     return;
   }
-  nodes.history.hidden = false;
-  // Both sources are flattened to one shape by the time they get here, so the
-  // mode lives in exactly one place rather than four candidate spellings.
-  const practice = reports.filter((entry) => entry?.report?.mode === "practice").length;
-  nodes.history.textContent = `${count - practice} scored · ${practice} practice ${suffix}.`;
+  if (model.attempts.length === 0) {
+    nodes.progressSummary.textContent = `No saved attempts match these filters. ${model.total} remain ${progressSuffix}.`;
+    return;
+  }
+  const assessed = model.attempts.filter((attempt) => attempt.report.frameworkAssessment).length;
+  nodes.progressSummary.textContent = assessed === 0
+    ? `${model.attempts.length} of ${model.total} attempts shown · these legacy or unassessed reports have no versioned phase scores, so no zeroes are plotted · ${progressSuffix}.`
+    : `${model.attempts.length} of ${model.total} attempts shown · ${assessed} have comparable phase scores · ${progressSuffix}.`;
+  const table = document.createElement("table");
+  const caption = document.createElement("caption");
+  caption.textContent = "REACTO and STAR phase trends; rubric versions are separate series";
+  table.append(caption);
+  const head = table.createTHead().insertRow();
+  for (const label of ["Phase", "Assessed scores by rubric version"]) {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = label;
+    head.append(cell);
+  }
+  const body = table.createTBody();
+  for (const phase of progressPhases) {
+    const row = body.insertRow();
+    const heading = document.createElement("th");
+    heading.scope = "row";
+    heading.textContent = phase;
+    row.append(heading);
+    const trend = row.insertCell();
+    const segments = model.series[phase];
+    trend.textContent = segments.length
+      ? segments.map((segment) => `Rubric v${segment.rubricVersion}: ${segment.points.map((point) => `attempt ${point.attemptIndex + 1}: ${point.score}`).join(" → ")}`).join(" | ")
+      : "Not assessed in these attempts";
+  }
+  nodes.progressTrends.append(table);
+  if (model.weaknesses.length === 0) {
+    const item = document.createElement("li");
+    item.textContent = "No grounded weakness tags in these attempts.";
+    nodes.progressWeaknesses.append(item);
+  } else {
+    for (const weakness of model.weaknesses) {
+      const item = document.createElement("li");
+      item.textContent = `${weakness.tag} · ${weakness.count} attempt${weakness.count === 1 ? "" : "s"}`;
+      nodes.progressWeaknesses.append(item);
+    }
+  }
+}
+
+function syncFilter(select, values, label) {
+  const selected = select.value;
+  select.replaceChildren(new Option("All", "all"));
+  for (const value of values) select.add(new Option(label(value), String(value)));
+  select.value = [...select.options].some((option) => option.value === selected) ? selected : "all";
+}
+
+function languageLabel(value) {
+  return ({ cpp: "C++", c: "C", java: "Java", javascript: "JavaScript", python: "Python" })[value] || value;
+}
+
+function titleCase(value) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 async function fetchJson(url) {

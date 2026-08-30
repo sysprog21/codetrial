@@ -271,8 +271,59 @@ p {
 
 .history {
   margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+}
+
+.progress-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.progress-filters legend {
+  grid-column: 1 / -1;
+  padding: 0;
+  font-weight: 600;
+}
+
+.progress-filters label {
+  display: grid;
+  gap: 0.25rem;
   color: var(--muted);
   font-size: 0.875rem;
+}
+
+.progress-filters select {
+  width: 100%;
+}
+
+.history table {
+  width: 100%;
+  margin-top: 1rem;
+  border-collapse: collapse;
+}
+
+.progress-trends {
+  overflow-x: auto;
+}
+
+.history caption {
+  margin-bottom: 0.5rem;
+  text-align: left;
+  color: var(--muted);
+}
+
+.history th,
+.history td {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  vertical-align: top;
 }
 
 .interview-shell {

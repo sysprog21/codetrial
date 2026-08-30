@@ -419,6 +419,21 @@ Return ONLY a valid JSON object, no markdown fences, exactly this shape:
     "successCriterion": "<observable completion criterion>",
     "selfReview": ["<check>", ...]
   }}, ...],
+  "frameworkAssessment": {{
+    "rubricVersion": 1,
+    "phases": [
+      {{ "phase": "Repeat", "score": <integer 0-100 or null>, "weaknessTags": ["<exact improvement string>", ...] }},
+      {{ "phase": "Example", "score": <integer 0-100 or null>, "weaknessTags": [] }},
+      {{ "phase": "Algorithm", "score": <integer 0-100 or null>, "weaknessTags": [] }},
+      {{ "phase": "Coding", "score": <integer 0-100 or null>, "weaknessTags": [] }},
+      {{ "phase": "Test", "score": <integer 0-100 or null>, "weaknessTags": [] }},
+      {{ "phase": "Optimizations", "score": <integer 0-100 or null>, "weaknessTags": [] }},
+      {{ "phase": "Situation", "score": <integer 0-100 or null>, "weaknessTags": [] }},
+      {{ "phase": "Task", "score": <integer 0-100 or null>, "weaknessTags": [] }},
+      {{ "phase": "Action", "score": <integer 0-100 or null>, "weaknessTags": [] }},
+      {{ "phase": "Result", "score": <integer 0-100 or null>, "weaknessTags": [] }}
+    ]
+  }},
   "hintsUsed": {}
 }}
 Each strengths/improvements list must contain 2 to 4 concrete, specific items
@@ -433,7 +448,20 @@ personal-contribution rewrite, or truthful metric mining. Every drill needs a
 duration, observable success criterion, and 1 to 4 self-review checks. A behavioral
 metric may appear only when the transcript states it; otherwise ask the candidate
 to supply truthful evidence using a placeholder such as `[your verified result]`.
-Never invent a number, employer, action, or outcome."#,
+Never invent a number, employer, action, or outcome.
+
+For `frameworkAssessment`, include every phase exactly once in the displayed
+order. Score only what the transcript, final code, or test account actually lets
+you assess; use `null`, never zero, for an unasked, skipped, missing-transcript, or
+otherwise unassessable phase. In particular, every STAR score is `null` when no
+behavioral question was asked. Apply rubric version 1 consistently to every
+assessed phase: 90–100 = complete, precise, and independent; 75–89 = sound with a
+minor gap; 60–74 = partially demonstrated with a material gap; 40–59 = weak or
+substantially incomplete; 0–39 = directly observed incorrect or missing despite a
+clear opportunity. A zero is observed performance, never a substitute for `null`.
+Weakness tags must be exact copies of improvements assigned to that same phase in
+`improvementPlan`; otherwise use an empty list. Evidence confidence is not
+performance and must never become a phase score."#,
         input.duration_min,
         input.elapsed_min,
         input.problem.title,

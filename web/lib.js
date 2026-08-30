@@ -393,6 +393,43 @@ export function sanitizeReport(raw) {
     && [...weaknesses].every((weakness) => plannedWeaknesses.has(weakness))
     ? candidatePlan
     : [];
+  const assessmentPhases = [...phases];
+  const candidateAssessment = raw?.frameworkAssessment;
+  const assessmentRows = Array.isArray(candidateAssessment?.phases)
+    ? candidateAssessment.phases : [];
+  const seenAssessmentPhases = new Set();
+  const normalizedAssessment = new Map();
+  const assessmentVersion = candidateAssessment?.rubricVersion;
+  let assessmentValid = Number.isSafeInteger(assessmentVersion) && assessmentVersion >= 1
+    && assessmentRows.length === assessmentPhases.length;
+  for (const item of assessmentRows) {
+    const phase = typeof item?.phase === "string" ? item.phase : "";
+    const score = item?.score;
+    const scoreValid = score === null
+      || (typeof score === "number" && Number.isInteger(score) && score >= 0 && score <= 100);
+    if (!phases.has(phase) || seenAssessmentPhases.has(phase) || !scoreValid
+      || !Array.isArray(item?.weaknessTags)) {
+      assessmentValid = false;
+      continue;
+    }
+    seenAssessmentPhases.add(phase);
+    const allowedTags = new Set(improvementPlan
+      .filter((entry) => entry.phase === phase)
+      .map((entry) => entry.weakness));
+    const weaknessTags = [...new Set(item.weaknessTags
+      .filter((tag) => typeof tag === "string")
+      .map((tag) => boundedText(tag, 400).trim())
+      .filter((tag) => tag && allowedTags.has(tag)))]
+      .slice(0, 4);
+    normalizedAssessment.set(phase, { phase, score, weaknessTags });
+  }
+  const frameworkAssessment = assessmentValid
+    && seenAssessmentPhases.size === assessmentPhases.length
+    ? {
+      rubricVersion: assessmentVersion,
+      phases: assessmentPhases.map((phase) => normalizedAssessment.get(phase)),
+    }
+    : null;
   const frameworkPhases = new Set(["repeat", "example", "algorithm", "coding", "test", "optimizations", "situation", "task", "action", "result"]);
   const frameworkSources = new Set(["candidate_speech", "editor_snapshot", "test_event", "session_timing"]);
   const frameworkKinds = new Set(["observed", "inferred", "skipped"]);
@@ -441,6 +478,7 @@ export function sanitizeReport(raw) {
       ...checkpoint(raw),
       hintsUsed: bounded(raw?.hintsUsed, 99),
       improvementPlan: [],
+      frameworkAssessment: null,
       frameworkEvidence,
     };
   }
@@ -453,6 +491,7 @@ export function sanitizeReport(raw) {
     codingFeedback,
     communicationFeedback,
     improvementPlan,
+    frameworkAssessment,
     frameworkEvidence,
     integrityEvents: integrityEvents(raw?.integrityEvents),
     ...checkpoint(raw),

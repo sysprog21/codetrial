@@ -1,5 +1,6 @@
 {
   "fallback": {
+    "frameworkAssessment": null,
     "hintsUsed": 3,
     "improvementPlan": [],
     "incomplete": true,
@@ -26,6 +27,7 @@
     },
     "communicationScore": 88,
     "decision": "NO_HIRE",
+    "frameworkAssessment": null,
     "hintsUsed": 3,
     "improvementPlan": [],
     "summary": "42"

@@ -288,6 +288,7 @@ impl Default for RuntimeState {
 }
 
 pub const FRAMEWORK_VERSION: u32 = 1;
+pub const REPORT_RUBRIC_VERSION: u32 = 1;
 pub const MAX_FRAMEWORK_EVIDENCE: usize = 64;
 const MAX_FRAMEWORK_SUMMARY_CHARS: usize = 240;
 
@@ -560,6 +561,7 @@ pub fn fallback_report(hints_used: u32, note: &str) -> serde_json::Value {
             "The automatic evaluation could not be completed: {note}. Your session ran end-to-end, but no scores were produced, so nothing here is an assessment of your work. Check the agent logs and GOOGLE_API_KEY, then try again."
         ),
         "improvementPlan": [],
+        "frameworkAssessment": null,
         "hintsUsed": hints_used,
     })
 }
@@ -580,6 +582,8 @@ pub fn sanitize_report(raw: &serde_json::Value, hints_used: u32) -> serde_json::
         .filter_map(serde_json::Value::as_str)
         .collect::<Vec<_>>();
     let improvement_plan = improvement_plan(raw.get("improvementPlan"), &weaknesses);
+    let framework_assessment =
+        framework_assessment(raw.get("frameworkAssessment"), &improvement_plan);
     serde_json::json!({
         "codingScore": clamp_score(raw.get("codingScore")),
         "communicationScore": clamp_score(raw.get("communicationScore")),
@@ -592,7 +596,85 @@ pub fn sanitize_report(raw: &serde_json::Value, hints_used: u32) -> serde_json::
         "codingFeedback": coding_feedback,
         "communicationFeedback": communication_feedback,
         "improvementPlan": improvement_plan,
+        "frameworkAssessment": framework_assessment,
         "hintsUsed": hints_used,
+    })
+}
+
+fn framework_assessment(
+    value: Option<&serde_json::Value>,
+    improvement_plan: &[serde_json::Value],
+) -> serde_json::Value {
+    let object = match value.and_then(serde_json::Value::as_object) {
+        Some(object)
+            if object.get("rubricVersion").and_then(json_int)
+                == Some(i64::from(REPORT_RUBRIC_VERSION)) =>
+        {
+            object
+        }
+        _ => return serde_json::Value::Null,
+    };
+    let phases = match object.get("phases").and_then(serde_json::Value::as_array) {
+        Some(phases) if phases.len() == IMPROVEMENT_PHASES.len() => phases,
+        _ => return serde_json::Value::Null,
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut normalized = std::collections::HashMap::new();
+    for item in phases {
+        let Some(item) = item.as_object() else {
+            return serde_json::Value::Null;
+        };
+        let Some(phase) = item.get("phase").and_then(serde_json::Value::as_str) else {
+            return serde_json::Value::Null;
+        };
+        if !IMPROVEMENT_PHASES.contains(&phase) || !seen.insert(phase) {
+            return serde_json::Value::Null;
+        }
+        let score = match item.get("score") {
+            Some(serde_json::Value::Null) => serde_json::Value::Null,
+            Some(value) => match json_int(value) {
+                Some(score @ 0..=100) => serde_json::json!(score),
+                _ => return serde_json::Value::Null,
+            },
+            None => return serde_json::Value::Null,
+        };
+        let allowed_tags = improvement_plan
+            .iter()
+            .filter(|plan| plan["phase"] == phase)
+            .filter_map(|plan| plan["weakness"].as_str())
+            .collect::<std::collections::HashSet<_>>();
+        let Some(raw_tags) = item
+            .get("weaknessTags")
+            .and_then(serde_json::Value::as_array)
+        else {
+            return serde_json::Value::Null;
+        };
+        let mut tags = Vec::new();
+        for tag in raw_tags {
+            let Some(tag) = bounded_report_text(Some(tag), 400) else {
+                continue;
+            };
+            if allowed_tags.contains(tag.as_str()) && !tags.contains(&tag) {
+                tags.push(tag);
+            }
+            if tags.len() == 4 {
+                break;
+            }
+        }
+        normalized.insert(
+            phase,
+            serde_json::json!({ "phase": phase, "score": score, "weaknessTags": tags }),
+        );
+    }
+    if seen.len() != IMPROVEMENT_PHASES.len() {
+        return serde_json::Value::Null;
+    }
+    serde_json::json!({
+        "rubricVersion": REPORT_RUBRIC_VERSION,
+        "phases": IMPROVEMENT_PHASES
+            .iter()
+            .map(|phase| normalized.remove(phase).expect("all phases validated"))
+            .collect::<Vec<_>>()
     })
 }
 

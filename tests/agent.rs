@@ -418,6 +418,7 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
             "\"codingFeedback\"",
             "\"communicationFeedback\"",
             "\"improvementPlan\"",
+            "\"frameworkAssessment\"",
             "\"hintsUsed\"",
         ] {
             assert!(prompt.contains(key), "{name}: report contract lost {key}");
@@ -432,6 +433,9 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
             "truthful metric mining",
             "[your verified result]",
             "Never invent a number",
+            "90–100 = complete, precise, and independent",
+            "A zero is observed performance, never a substitute for `null`",
+            "Evidence confidence is not\nperformance",
         ] {
             assert!(
                 prompt.contains(policy),
@@ -642,6 +646,83 @@ fn improvement_plans_are_linked_bounded_deduplicated_and_ranked() {
     });
     assert_eq!(sanitize_report(&partial, 0)["improvementPlan"], json!([]));
     assert_eq!(sanitize_report(&json!({}), 0)["improvementPlan"], json!([]));
+}
+
+#[test]
+fn framework_assessments_require_all_phases_and_preserve_unassessed_gaps() {
+    let phases = [
+        "Repeat",
+        "Example",
+        "Algorithm",
+        "Coding",
+        "Test",
+        "Optimizations",
+        "Situation",
+        "Task",
+        "Action",
+        "Result",
+    ];
+    let rows = phases
+        .iter()
+        .map(|phase| {
+            json!({
+                "phase": phase,
+                "score": if *phase == "Algorithm" { Some(72) } else { None },
+                "weaknessTags": if *phase == "Algorithm" { json!(["Explain complexity", "invented"]) } else { json!([]) }
+            })
+        })
+        .collect::<Vec<_>>();
+    let raw = json!({
+        "codingFeedback": {"improvements": ["Explain complexity"]},
+        "communicationFeedback": {"improvements": []},
+        "improvementPlan": [{
+            "phase":"Algorithm", "weakness":"Explain complexity", "impact":"high",
+            "frequency":1, "drill":"Narrate", "durationMin":5,
+            "successCriterion":"Justify bounds", "selfReview":["time"]
+        }],
+        "frameworkAssessment": {"rubricVersion": REPORT_RUBRIC_VERSION, "phases": rows}
+    });
+    let assessment = &sanitize_report(&raw, 0)["frameworkAssessment"];
+    assert_eq!(assessment["rubricVersion"], REPORT_RUBRIC_VERSION);
+    assert_eq!(assessment["phases"][2]["score"], 72);
+    assert_eq!(
+        assessment["phases"][2]["weaknessTags"],
+        json!(["Explain complexity"])
+    );
+    for index in 6..10 {
+        assert!(
+            assessment["phases"][index]["score"].is_null(),
+            "STAR must remain a gap"
+        );
+    }
+
+    let mut complete = raw.clone();
+    for row in complete["frameworkAssessment"]["phases"]
+        .as_array_mut()
+        .unwrap()
+    {
+        row["score"] = json!(85);
+    }
+    assert!(
+        sanitize_report(&complete, 0)["frameworkAssessment"]["phases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["score"] == 85)
+    );
+
+    let mut duplicate = raw.clone();
+    duplicate["frameworkAssessment"]["phases"][9]["phase"] = json!("Action");
+    assert!(sanitize_report(&duplicate, 0)["frameworkAssessment"].is_null());
+    let mut malformed = raw;
+    malformed["frameworkAssessment"]["phases"][2]["score"] = json!(101);
+    assert!(sanitize_report(&malformed, 0)["frameworkAssessment"].is_null());
+    malformed["frameworkAssessment"]["phases"][2]["score"] = json!(72);
+    malformed["frameworkAssessment"]["phases"][2]
+        .as_object_mut()
+        .unwrap()
+        .remove("weaknessTags");
+    assert!(sanitize_report(&malformed, 0)["frameworkAssessment"].is_null());
 }
 
 /// An outage is not a candidate. The fallback used to emit `NO_HIRE` with 0/100

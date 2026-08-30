@@ -488,8 +488,33 @@ test("sanitizeReport preserves a well-formed agent report", () => {
     integrityDropped: 380,
     hintsUsed: 2,
     improvementPlan: [],
+    frameworkAssessment: null,
     frameworkEvidence: [],
   });
+});
+
+test("framework assessment requires ten unique scores or explicit gaps", () => {
+  const phases = ["Repeat", "Example", "Algorithm", "Coding", "Test", "Optimizations", "Situation", "Task", "Action", "Result"];
+  const base = {
+    codingFeedback: { improvements: ["Explain complexity"] },
+    communicationFeedback: { improvements: [] },
+    improvementPlan: [{ phase: "Algorithm", weakness: "Explain complexity", impact: "high", frequency: 1, drill: "Narrate", durationMin: 5, successCriterion: "Justify bounds", selfReview: ["time"] }],
+    frameworkAssessment: {
+      rubricVersion: 1,
+      phases: phases.map((phase) => ({ phase, score: phase === "Algorithm" ? 72 : null, weaknessTags: phase === "Algorithm" ? ["Explain complexity", "invented"] : [] })),
+    },
+  };
+  const assessment = sanitizeReport(base).frameworkAssessment;
+  assert.equal(assessment.phases[2].score, 72);
+  assert.deepEqual(assessment.phases[2].weaknessTags, ["Explain complexity"]);
+  assert.ok(assessment.phases.slice(6).every((row) => row.score === null));
+
+  const duplicate = structuredClone(base);
+  duplicate.frameworkAssessment.phases[9].phase = "Action";
+  assert.equal(sanitizeReport(duplicate).frameworkAssessment, null);
+  const hostile = structuredClone(base);
+  hostile.frameworkAssessment.phases[2].score = "72";
+  assert.equal(sanitizeReport(hostile).frameworkAssessment, null);
 });
 
 test("framework evidence preserves valid kinds and drops hostile or contradictory rows", () => {
