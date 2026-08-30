@@ -1108,6 +1108,13 @@ pub fn sweep_expired_sessions(accounts: &Accounts, now: i64) -> rusqlite::Result
     })
 }
 
+/// Newest first, and totally ordered.
+///
+/// Anything reading this list as a chronology, which the lobby does, needs the
+/// order to be total. Both timestamps are whole seconds, so two reports written
+/// inside one second tie on either key and SQLite is free to return them in any
+/// order, putting that read at the mercy of the query plan. The id breaks the
+/// tie so the answer is at least the same one twice.
 pub fn list_reports(accounts: &Accounts, user_id: i64) -> rusqlite::Result<Vec<Value>> {
     accounts.with(|connection| {
         let mut statement = connection.prepare(
@@ -1115,7 +1122,7 @@ pub fn list_reports(accounts: &Accounts, user_id: i64) -> rusqlite::Result<Vec<V
         SELECT id, problem_id, payload, created_at, updated_at
         FROM reports
         WHERE user_id = ?1
-        ORDER BY updated_at DESC, created_at DESC
+        ORDER BY updated_at DESC, created_at DESC, id DESC
         ",
         )?;
         statement
@@ -1943,6 +1950,40 @@ mod migration_tests {
             list_reports(&accounts, user).unwrap().len() as i64,
             MAX_REPORTS_PER_USER
         );
+    }
+
+    /// Reports written inside one second still come back in one order.
+    ///
+    /// Both timestamps are whole seconds, so a candidate who finishes two
+    /// interviews in the same second ties on either sort key, and without a
+    /// third the answer would be whatever the query plan felt like. Anything
+    /// reading the list as a chronology needs it to be the same answer twice.
+    #[test]
+    fn reports_saved_in_the_same_second_come_back_in_a_stable_order() {
+        let path = scratch("report-order");
+        initialize_account_database(&path).unwrap();
+        let accounts = accounts_at(&path);
+        let user = user_id_for(&accounts, &sign_in(&path, "quick"));
+        for id in ["a", "b", "c"] {
+            assert_eq!(
+                save_report(&accounts, user, id, "two-sum", &json!({})).unwrap(),
+                ReportSave::Saved,
+            );
+        }
+
+        let ids = |accounts: &Accounts| -> Vec<String> {
+            list_reports(accounts, user)
+                .unwrap()
+                .iter()
+                .map(|report| report["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        // The tie-break named, not merely "the same twice": SQLite happens to
+        // return small tables in insertion order, so asserting only that two
+        // reads agree passes just as well with no third sort key at all.
+        assert_eq!(ids(&accounts), ["c", "b", "a"]);
+        // And on a connection that planned the statement for itself.
+        assert_eq!(ids(&accounts_at(&path)), ["c", "b", "a"]);
     }
 
     /// The quota is per account, so one candidate filling up must not lock out

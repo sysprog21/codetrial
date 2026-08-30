@@ -1,7 +1,20 @@
 import { readLocalHistory } from "./history.js";
+import { pickProblem, suggestDifficulty } from "./problem-picker.js";
 
-let problem = "two-sum";
-let duration = 45;
+let problem;
+let duration;
+let reports = [];
+let manualProblem = false;
+let manualDuration = false;
+let manualDifficulty = false;
+let historyReady = false;
+
+// The roll a recommendation is drawn with. It changes when the candidate asks
+// for something different and at no other time, so recommending twice for one
+// set of choices lands on the same problem. That is what lets the back/forward
+// restore re-run the recommendation without the card moving under whoever is
+// reading it.
+let roll = Math.random();
 
 const nodes = {
   accountStatus: document.querySelector("#account-status"),
@@ -9,38 +22,104 @@ const nodes = {
   loginLink: document.querySelector("#login-link"),
   logout: document.querySelector("#logout"),
   history: document.querySelector("#history"),
+  recommendation: document.querySelector("#recommendation"),
 };
 
-for (const button of document.querySelectorAll("[data-problem]")) {
-  button.addEventListener("click", () => {
-    problem = button.dataset.problem;
-    select("[data-problem]", button);
+// Every card carries the pressed state from the start, not only the one that
+// is on: one pressed button among 149 plain ones does not read as a choice.
+const cards = [...document.querySelectorAll("[data-problem]")].map((button) => ({
+  id: button.dataset.problem,
+  difficulty: button.dataset.difficulty,
+  button,
+}));
+for (const card of cards) mark(card.button, false);
+const levels = [...document.querySelectorAll('[name="difficulty"]')];
+
+// A picked card is a choice about this one interview, not about the filter the
+// checkboxes carry, so it leaves them alone. It suggests a length to go with
+// the level it belongs to, which `setDuration` applies only if the candidate
+// has not already chosen one.
+for (const card of cards) {
+  card.button.addEventListener("click", () => {
+    manualProblem = true;
+    setProblem(card);
+    setDuration(suggestedDuration(new Set([card.difficulty])));
+    nodes.recommendation.textContent = `Selected: ${title(card)}.`;
+  });
+}
+
+for (const input of levels) {
+  input.addEventListener("change", () => {
+    // Unchecking the last level is not a change: the box goes straight back,
+    // so nothing downstream may move either, the recommendation included.
+    if (!selectedDifficulties().size) {
+      input.checked = true;
+      return;
+    }
+    manualDifficulty = true;
+    applyDifficulties();
+    // A pick made by hand survives a filter that still includes it. Only one
+    // that now hides it hands the choice back to the lobby.
+    if (manualProblem && selectedDifficulties().has(problem?.difficulty)) return;
+    manualProblem = false;
+    roll = Math.random();
+    // Not before the reports are in. Recommending from an empty history here
+    // would offer a problem the candidate has already passed and then swap it
+    // when the fetch lands. `settle` makes the pick for this level instead, and
+    // until it does there is nothing to start: whatever was picked belongs to
+    // the levels this change just replaced.
+    if (historyReady) {
+      recommend();
+    } else {
+      setProblem(null);
+      nodes.recommendation.textContent = "";
+    }
   });
 }
 
 for (const button of document.querySelectorAll("[data-duration]")) {
-  button.addEventListener("click", () => {
-    duration = Number(button.dataset.duration);
-    select("[data-duration]", button);
-  });
+  button.addEventListener("click", () => setDuration(Number(button.dataset.duration), true));
 }
 
 const start = document.querySelector("#start");
 
 let signInFirst = false;
 
-start.addEventListener("click", async (event) => {
-  event.currentTarget.disabled = true;
+/// True for as long as a start is on its way out. The sign-in round trip is the
+/// one window where this handler is suspended with the page still live under
+/// it, and everything the candidate can touch during it writes the button's
+/// disabled state. Without this a card click re-armed a button that was already
+/// leaving and bought a second navigation out of one start.
+let starting = false;
+
+// The button by name, not by asking the event which element it was dispatched
+// to: the browser clears that property when dispatch ends, so every line after
+// the first `await` was writing to null. A gated candidate signed in, the
+// handler threw on the next line, and the button stayed disabled on "Recording
+// GitHub..." with the interview never starting.
+start.addEventListener("click", async () => {
+  // Both of them read before the round trip below, because everything the
+  // candidate can still touch during it writes one of the two. Taking the
+  // problem and leaving the length behind shipped an interview that was 45
+  // minutes when the button was pressed and 60 by the time it was answered.
+  const chosen = problem;
+  const minutes = duration;
+  if (!chosen) return;
+  starting = true;
+  start.disabled = true;
   if (signInFirst) {
-    event.currentTarget.textContent = "Recording GitHub...";
+    start.textContent = "Recording GitHub...";
     if (!(await recordGitHubLogin(false))) {
-      event.currentTarget.disabled = false;
+      starting = false;
+      // Not `false`: the same round trip can leave nothing selected, and a
+      // button armed over nothing is one whose handler returns above.
+      start.disabled = !problem;
       setStartGate(true);
       return;
     }
   }
-  event.currentTarget.textContent = "Starting...";
-  window.location.href = `/interview?problem=${encodeURIComponent(problem)}&duration=${duration}`;
+  start.textContent = "Starting...";
+  window.location.href = `/interview?problem=${encodeURIComponent(chosen.id)}&duration=${minutes}`;
 });
 
 // Returning from the media preflight can restore this page from the browser's
@@ -48,12 +127,19 @@ start.addEventListener("click", async (event) => {
 window.addEventListener("pageshow", (event) => {
   // Only the restore. A normal load fires this too, after `load`, which is
   // late enough to re-enable a button the candidate already pressed and hand
-  // them a second navigation; and it would run before `loadAccount` has
-  // answered, so the gate it restores is the placeholder rather than the
-  // session's.
+  // them a second navigation.
   if (!event.persisted) return;
-  start.disabled = false;
-  setStartGate(signInFirst);
+  // The cache holds the page as it was before the candidate left, and a login
+  // recorded on the way out is in none of it, so restoring what it holds told
+  // somebody who had just signed in to sign in. Ask the server instead, and
+  // treat the reports in hand as in flight again while it answers: the button
+  // stays down and a difficulty change waits, exactly as on a first load.
+  // `starting` with it: the page came back, so whatever start was on its way
+  // out did not happen, and a latch left set here disables the button for good.
+  historyReady = false;
+  starting = false;
+  start.disabled = true;
+  loadAccount().finally(settle);
 });
 
 nodes.loginLink.addEventListener("click", async () => {
@@ -79,7 +165,34 @@ nodes.logout.addEventListener("click", async () => {
   }
 });
 
-loadAccount();
+applyDifficulties();
+// Nothing is recommended before the reports arrive, because they choose the
+// level as well as the problem. The button ships disabled and `setProblem` is
+// what enables it, so the gap is a button that cannot be pressed rather than
+// one that starts an interview on nothing. `finally` rather than `then` for the
+// same reason: a rejection in `loadAccount` would otherwise leave it disabled
+// for good.
+loadAccount().finally(settle);
+
+/// What the lobby settles into once it knows the candidate's history: the level
+/// that history points at, a problem at that level, and a start button.
+///
+/// Shared with the back/forward restore above rather than written twice. That
+/// path refetches the reports, so leaving it to only re-enable the button meant
+/// the checked level and the sentence explaining it went on describing history
+/// the page had already replaced.
+function settle() {
+  historyReady = true;
+  // The level suggestion only applies when the candidate has not already said
+  // what they want. Moving their checkboxes would also hide the card they just
+  // picked.
+  const note = manualDifficulty || manualProblem ? "" : applySuggestedLevel();
+  recommend(note);
+  // `recommend` returns without touching anything when the candidate's own pick
+  // still stands, so the button the restore below held down needs releasing
+  // here rather than there.
+  start.disabled = !problem || starting;
+}
 
 async function loadAccount() {
   try {
@@ -145,7 +258,11 @@ async function recordGitHubLogin(reload) {
 async function renderServerHistory() {
   try {
     const data = await fetchJson("/api/reports");
-    renderHistoryCount(data.reports.length, "saved to your account");
+    // `/api/reports` wraps each entry in `payload` (accounts.rs list_reports);
+    // history.js stores the same entry flat. Flattened here so the picker knows
+    // one shape instead of guessing between two.
+    reports = data.reports.map((entry) => ({ problemId: entry.problemId, report: entry.payload?.report }));
+    renderHistoryCount(reports.length, "saved to your account");
   } catch {
     nodes.history.hidden = true;
   }
@@ -153,10 +270,121 @@ async function renderServerHistory() {
 
 function renderLocalHistory() {
   try {
-    renderHistoryCount(readLocalHistory().length, "saved on this device");
+    reports = readLocalHistory();
+    renderHistoryCount(reports.length, "saved on this device");
   } catch {
     nodes.history.hidden = true;
   }
+}
+
+function selectedDifficulties() {
+  return new Set(levels.filter((input) => input.checked).map((input) => input.value));
+}
+
+/// The checkboxes moved, so everything read off them moves too: which cards the
+/// picker offers, and the length the level implies. One place, because three
+/// copies of these two lines is three places to forget one.
+function applyDifficulties() {
+  const difficulties = selectedDifficulties();
+  // The picker is a shortcut to one problem, not a second copy of the wall the
+  // checkboxes just hid, so it shows what the checkboxes selected.
+  for (const card of cards) card.button.hidden = !difficulties.has(card.difficulty);
+  setDuration(suggestedDuration(difficulties));
+}
+
+/// `note` is the sentence explaining a level the reports chose, empty when the
+/// candidate chose it themselves and so already knows.
+function recommend(note = "") {
+  // A candidate who picked a card has answered the question this line asks, so
+  // it stays answered. Naming a different problem here contradicted the card
+  // they had just selected.
+  if (manualProblem) return;
+  const choice = pickProblem(cards, selectedDifficulties(), reports, () => roll);
+  // Nothing to offer is still an answer, and it has to go through `setProblem`
+  // like every other one. Returning here left whatever was picked for the
+  // levels this call just replaced sitting selected behind a live button, on a
+  // card `applyDifficulties` had already hidden.
+  if (!choice) {
+    setProblem(null);
+    nodes.recommendation.textContent = "";
+    return;
+  }
+  setProblem(choice.picked);
+  nodes.recommendation.textContent = choice.repeat
+    ? `${note}You have passed every problem at this level. Recommended again: ${title(choice.picked)}.`
+    : `${note}Recommended: ${title(choice.picked)}.`;
+}
+
+/// Check the level the candidate's own results point at and return the sentence
+/// saying why. Empty when the reports have no opinion yet, which leaves the
+/// markup's default standing.
+function applySuggestedLevel() {
+  const suggestion = suggestDifficulty(cards, reports);
+  if (!suggestion) return "";
+  for (const input of levels) input.checked = input.value === suggestion.difficulty;
+  applyDifficulties();
+  // Named after the level just finished, not the one being suggested: those
+  // differ whenever the streak actually moves the candidate.
+  return suggestion.reason === "passed"
+    ? `You passed your last two ${suggestion.from} problems. `
+    : `Your last two ${suggestion.from} problems did not land. `;
+}
+
+/// The only writer of `problem` and of the start button's disabled state, so
+/// the two cannot drift apart. `null` is the case where what was on screen
+/// stopped being something the candidate could have meant: picking a card by
+/// hand and then dropping its difficulty left it selected but hidden, with the
+/// button still carrying it into an interview on a level they had just cleared.
+///
+/// The button is enabled here and nowhere earlier because the recommendation
+/// waits on the report history, and a click during that wait used to build
+/// `?problem=undefined`. Callers own the sentence beside it: this only knows
+/// which problem, never why.
+function setProblem(card) {
+  // Two buttons, not a sweep of all 150. `problem` still holds the outgoing
+  // card here, which is what makes that possible.
+  mark(problem?.button, false);
+  mark(card?.button, true);
+  problem = card;
+  start.disabled = !card || starting;
+}
+
+/// Says whether a button is the chosen one, in both the ways that answer has to
+/// be given. Without `aria-pressed` the choice is a border colour, which a
+/// screen reader does not read out, and the two had already drifted once: the
+/// class was set in three places and the attribute in two.
+///
+/// A button rather than a card, because the duration row is the same question
+/// about buttons that carry no card, and wrapping each of those in a throwaway
+/// `{ button }` to get in here was the object existing for the parameter.
+function mark(button, on) {
+  if (!button) return;
+  button.classList.toggle("selected", on);
+  button.setAttribute("aria-pressed", String(on));
+}
+
+/// Capped at the server's own default length, which src/config.rs holds at or
+/// under the recording cap, so nothing the lobby picks on its own outlives its
+/// recording. Only the suggestion is capped: the sixty minute button is one
+/// click away and a deployment can set the two environment variables apart, so
+/// this narrows the default rather than guaranteeing anything.
+function suggestedDuration(difficulties) {
+  return difficulties.has("Medium") || difficulties.has("Hard") ? 45 : 30;
+}
+
+/// A suggestion unless `chosen` says the candidate picked it out loud, and once
+/// they have, nothing suggests over it again. The latch never releases: someone
+/// who asks for sixty minutes keeps it even if their history later moves them
+/// down to Easy.
+function setDuration(minutes, chosen = false) {
+  if (manualDuration && !chosen) return;
+  manualDuration ||= chosen;
+  duration = minutes;
+  select("[data-duration]", document.querySelector(`[data-duration="${minutes}"]`));
+}
+
+function title(card) {
+  return card.button.querySelector(".problem-title").textContent;
 }
 
 function renderHistoryCount(count, suffix) {
@@ -174,8 +402,8 @@ async function fetchJson(url) {
   return response.json();
 }
 
-function select(selector, selected) {
+function select(selector, chosen) {
   for (const button of document.querySelectorAll(selector)) {
-    button.classList.toggle("selected", button === selected);
+    mark(button, button === chosen);
   }
 }

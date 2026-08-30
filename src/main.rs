@@ -503,6 +503,7 @@ fn primary_config_path(options: &CliOptions) -> Result<PathBuf, String> {
             return Ok(path);
         }
     }
+
     // The keys, not a file to copy. `config/codetrial.env.example` exists in a
     // checkout and nowhere else: the release archives hold the executable and
     // nothing beside it, so telling someone who just unpacked one to copy it
@@ -736,10 +737,10 @@ fn published_secret_refusal(
     bound: std::net::SocketAddr,
 ) -> Option<String> {
     // What the cookie signer will actually use, not whether the key was
-    // mentioned. `value_or` trims, so `SESSION_SECRET=" codetrial-local-session "`
-    // is the published key spelled with whitespace rather than a secret of the
-    // operator's own, and a guard that only asked whether the variable was set
-    // would wave it through.
+    // mentioned. `value_or` trims, so `SESSION_SECRET=" codetrial-local-session
+    // "` is the published key spelled with whitespace rather than a secret of
+    // the operator's own, and a guard that only asked whether the variable was
+    // set would wave it through.
     if value_or(values, "SESSION_SECRET", DEFAULT_SESSION_SECRET) != DEFAULT_SESSION_SECRET {
         return None;
     }

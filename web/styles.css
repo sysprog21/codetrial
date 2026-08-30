@@ -134,6 +134,41 @@ p {
   gap: 0.75rem;
 }
 
+.difficulty-row,
+.problem-picker {
+  margin-top: 1.5rem;
+}
+
+/* Spacing comes from the shared control row below, so this only has to remove
+   the chrome a fieldset brings with it. */
+.difficulty-row {
+  padding: 0;
+  border: 0;
+}
+
+/* A fieldset lays its legend out above the box whatever `display` says, so it
+   is styled as the row's caption rather than fought into the flex line.
+   `--sub` and not `--muted`: this is the name of a control, and `--muted`
+   measures 4.22 against the page, under the 4.5 that normal text needs. */
+.difficulty-row legend {
+  padding: 0 0 0.5rem;
+  color: var(--sub);
+}
+
+.difficulty-row label,
+.problem-picker summary {
+  cursor: pointer;
+}
+
+.recommendation {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.problem-picker .problem-grid {
+  margin-top: 1rem;
+}
+
 .problem-card {
   min-height: 8rem;
   padding: 1rem;
@@ -276,6 +311,7 @@ p {
 .status-row,
 .control-row,
 .tab-row,
+.difficulty-row,
 .editor-toolbar,
 .language-tabs,
 .report-header,
