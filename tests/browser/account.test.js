@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { historyKey, saveReportHistory } from "../../web/history.js";
+import { historyKey, readLocalHistory, saveReportHistory } from "../../web/history.js";
 
 const web = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web");
 const read = (name) => readFileSync(join(web, name), "utf8");
@@ -93,7 +93,7 @@ test("report history keeps anonymous and failed account saves local", async () =
 function memoryStorage() {
   const data = new Map();
   return {
-    getItem: (key) => data.get(key) || null,
+    getItem: (key) => data.get(key) ?? null,
     setItem: (key, value) => data.set(key, String(value)),
   };
 }
@@ -118,4 +118,26 @@ test("no handler in these files reaches for the event's current target", () => {
       `${name} uses event.currentTarget, which is null after an await`,
     );
   }
+});
+
+// The key lives in the origin's local storage, so what it holds is input: an
+// older build, another tab, or anyone with devtools open can leave any JSON
+// under it, and every reader downstream treats what comes back as a list.
+test("a stored history that is not a list reads as no history", () => {
+  const stored = (value) => {
+    const storage = memoryStorage();
+    storage.setItem(historyKey, value);
+    return readLocalHistory(storage);
+  };
+
+  assert.deepEqual(stored("[]"), []);
+  assert.deepEqual(stored('[{"problemId":"two-sum"}]'), [{ problemId: "two-sum" }]);
+  // Each of these parses, so only the shape check turns them away, and each
+  // failed differently before it: an object was counted as "undefined past
+  // reports", "five" as four of them, and a missing key parses to null.
+  for (const value of ['{"a":1}', '"five"', "null"]) {
+    assert.deepEqual(stored(value), [], `${value} was not read as no history`);
+  }
+  // And unparseable JSON keeps the answer it already had.
+  assert.deepEqual(stored("{not json"), []);
 });

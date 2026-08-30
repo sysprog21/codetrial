@@ -1,8 +1,16 @@
 export const historyKey = "codetrial_history";
 
+/// Always a list. The key sits in the origin's local storage, which an older
+/// build, another tab, or anyone with devtools open can write, so what it holds
+/// is input rather than something this module chose. Unparseable JSON was
+/// already answered with an empty list, but parseable JSON that is not one went
+/// straight through to callers that all treat it as an array.
 export function readLocalHistory(storage = localStorage) {
   try {
-    return JSON.parse(storage.getItem(historyKey) ?? "[]");
+    // No fallback for a missing key: `JSON.parse(null)` answers null, which is
+    // not a list, and the shape check below already turns that into one.
+    const stored = JSON.parse(storage.getItem(historyKey));
+    return Array.isArray(stored) ? stored : [];
   } catch {
     return [];
   }
