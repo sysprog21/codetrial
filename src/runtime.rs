@@ -1,4 +1,4 @@
-use crate::agent::{Problem, build_instructions, get_problem, greeting};
+use crate::agent::{InterviewMode, Problem, build_instructions_for_mode, get_problem, greeting};
 use crate::config::{AgentConfig, MAX_DURATION_MIN, MIN_DURATION_MIN};
 
 pub const TOPIC_CODE_UPDATE: &str = "code_update";
@@ -20,6 +20,7 @@ pub struct RuntimeBootstrap<'a> {
     pub room_name: &'a str,
     pub problem: &'static Problem,
     pub duration_min: u32,
+    pub mode: InterviewMode,
     pub live_model: &'a str,
     pub report_model: &'a str,
     pub voice: &'a str,
@@ -35,6 +36,22 @@ pub fn bootstrap<'a>(
     problem_id: Option<&str>,
     duration_min: u32,
 ) -> RuntimeBootstrap<'a> {
+    bootstrap_with_mode(
+        config,
+        room_name,
+        problem_id,
+        duration_min,
+        InterviewMode::Scored,
+    )
+}
+
+pub fn bootstrap_with_mode<'a>(
+    config: &'a AgentConfig,
+    room_name: &'a str,
+    problem_id: Option<&str>,
+    duration_min: u32,
+    mode: InterviewMode,
+) -> RuntimeBootstrap<'a> {
     let problem = get_problem(problem_id);
     let duration_min = duration_min.clamp(MIN_DURATION_MIN, MAX_DURATION_MIN);
 
@@ -42,12 +59,13 @@ pub fn bootstrap<'a>(
         room_name,
         problem,
         duration_min,
+        mode,
         live_model: &config.gemini_live_model,
         report_model: &config.gemini_report_model,
         voice: &config.gemini_voice,
         silence_ms: config.gemini_silence_ms,
         start_sensitivity: &config.gemini_start_sensitivity,
-        instructions: build_instructions(problem, duration_min),
+        instructions: build_instructions_for_mode(problem, duration_min, mode),
         greeting: greeting(),
     }
 }

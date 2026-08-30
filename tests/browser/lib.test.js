@@ -24,6 +24,7 @@ import {
   orPlaceholder,
   renderValue,
   sanitizeReport,
+  resumeDeadline,
   sessionReport,
   testPayload,
   timeWarningPayload,
@@ -473,6 +474,7 @@ test("sanitizeReport preserves a well-formed agent report", () => {
   });
 
   assert.deepEqual(report, {
+    mode: "scored",
     codingScore: 82,
     communicationScore: 74,
     decision: "HIRE",
@@ -496,6 +498,18 @@ test("timer, clamp, and placeholder helpers", () => {
   assert.equal(clamp(500, 10, 90), 90);
   assert.deepEqual(orPlaceholder([]), ["(none captured)"]);
   assert.deepEqual(orPlaceholder(["kept"]), ["kept"]);
+});
+
+test("practice pause restores the exact wall-clock time remaining", () => {
+  assert.equal(resumeDeadline(60_000, 10_000, 17_500), 67_500);
+  assert.equal(67_500 - 17_500, 60_000 - 10_000);
+  assert.equal(resumeDeadline(60_000, 17_500, 10_000), 60_000, "a backward clock cannot shorten it");
+});
+
+test("report mode accepts only practice and defaults legacy or hostile values to scored", () => {
+  assert.equal(sanitizeReport({ incomplete: true, mode: "practice" }).mode, "practice");
+  assert.equal(sanitizeReport({ incomplete: true }).mode, "scored");
+  assert.equal(sanitizeReport({ incomplete: true, mode: "<script>" }).mode, "scored");
 });
 
 // The interview clock. Both assertions here are about a value that jumps: the

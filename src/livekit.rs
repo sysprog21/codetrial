@@ -73,9 +73,11 @@ use crate::gemini::{
     GeminiEvent, GeminiFunctionCall, GeminiLiveSession, generate_report, open_live_session,
     redact_api_key, resume_live_session,
 };
+#[cfg(test)]
+use crate::runtime::bootstrap;
 use crate::runtime::{
     AGENT_NAME, RuntimeBootstrap, TOOL_LOG_HINT, TOOL_READ_EDITOR, TOPIC_REPORT,
-    TOPIC_TRANSCRIPTION, agent_identity, bootstrap,
+    TOPIC_TRANSCRIPTION, agent_identity,
 };
 use crate::token::{LivekitTokenInput, livekit_room_admin_token, livekit_token};
 
@@ -321,7 +323,10 @@ async fn open_session<'a>(
     let started_at = Instant::now();
 
     let mut turn = TurnState {
-        state: RuntimeState::default(),
+        state: RuntimeState {
+            mode: boot.mode,
+            ..RuntimeState::default()
+        },
         agent_state: std::mem::take(&mut agent_state),
         activity: RuntimeActivity::new(started_at),
         turns: SpeakerTurns::default(),
@@ -411,12 +416,28 @@ pub async fn run_room(
     //
     // The grace is deliberate: the browser normally ends the interview itself,
     // and this only has to catch the case where it never does.
-    let hard_deadline = tokio::time::sleep(
-        Duration::from_secs(u64::from(boot.duration_min) * 60) + INTERVIEW_DEADLINE_GRACE,
-    );
+    let mut deadline_at = Instant::now()
+        + Duration::from_secs(u64::from(boot.duration_min) * 60)
+        + INTERVIEW_DEADLINE_GRACE;
+    let hard_deadline = tokio::time::sleep_until(deadline_at.into());
     tokio::pin!(hard_deadline);
+    let mut paused_at = None;
 
     loop {
+        if turn.state.paused && paused_at.is_none() {
+            paused_at = Some(Instant::now());
+
+            // A paused practice session has no running deadline. This wake-up
+            // is deliberately finite so a process can still be cancelled.
+            hard_deadline
+                .as_mut()
+                .reset((Instant::now() + Duration::from_secs(365 * 24 * 60 * 60)).into());
+        } else if !turn.state.paused
+            && let Some(started) = paused_at.take()
+        {
+            deadline_at += Instant::now().saturating_duration_since(started);
+            hard_deadline.as_mut().reset(deadline_at.into());
+        }
         tokio::select! {
             () = &mut hard_deadline, if !turn.state.ended => {
                 eprintln!(
@@ -527,12 +548,17 @@ pub async fn run_room(
                 // milliseconds of speech. Dropping the frame costs a tenth of a
                 // second of audio the resumed session did not need; propagating
                 // cost the interview.
-                if let Err(error) = pump_audio(&mut media, &mut gemini, frame).await {
+                if turn.state.paused {
+                    media.audio_bytes.clear();
+                    if frame.is_none() {
+                        media.audio = None;
+                    }
+                } else if let Err(error) = pump_audio(&mut media, &mut gemini, frame).await {
                     eprintln!("Gemini audio write failed ({error}); waiting for the close to be reported");
                 }
             }
             frame = next_video_frame(&mut media.video), if media.video.is_some() => {
-                if let Err(error) = pump_video(&mut media, &mut gemini, frame).await {
+                if !turn.state.paused && let Err(error) = pump_video(&mut media, &mut gemini, frame).await {
                     eprintln!("Gemini video write failed ({error}); waiting for the close to be reported");
                 }
             }
@@ -850,6 +876,9 @@ impl RuntimeActivity {
     /// read inside would already have moved past it, so a half-open window and
     /// a closed one behave identically to every test that can be written.
     fn watch_prompt(&mut self, state: &RuntimeState, now: Instant) -> Option<String> {
+        if state.paused {
+            return None;
+        }
         let decision = timing_decision(&TimingInput {
             agent_busy: self.floor != Floor::Listening,
             user_talking: now.duration_since(self.last_code_change) < CODE_SETTLE,
@@ -1242,11 +1271,12 @@ fn candidate_bootstrap<'a>(
     metadata: Option<&str>,
 ) -> RuntimeBootstrap<'a> {
     let candidate = parse_participant_metadata(metadata);
-    bootstrap(
+    crate::runtime::bootstrap_with_mode(
         config,
         room_name,
         Some(candidate.problem.id),
         candidate.duration_min,
+        candidate.mode,
     )
 }
 
@@ -1314,6 +1344,18 @@ async fn handle_data_packet(
     }
     if result.update_last_interjection {
         context.activity.last_interjection = Instant::now();
+    }
+    if let Some(paused) = result.pause_changed {
+        room.local_participant()
+            .publish_data(DataPacket {
+                payload: serde_json::to_vec(
+                    &serde_json::json!({ "type": "pause_state", "paused": paused }),
+                )?,
+                topic: Some(TOPIC_CONTROL.to_string()),
+                reliable: true,
+                ..Default::default()
+            })
+            .await?;
     }
     if let Some(prompt) = result.generate_reply {
         context.gemini.send_text(&prompt).await?;
@@ -2097,7 +2139,7 @@ async fn report_packet(
     elapsed_min: f64,
     api_key: &str,
 ) -> Result<DataPacket, Box<dyn std::error::Error + Send + Sync>> {
-    let report = match tokio::time::timeout(
+    let mut report = match tokio::time::timeout(
         REPORT_TIMEOUT,
         generate_report(
             api_key,
@@ -2125,6 +2167,9 @@ async fn report_packet(
             Some(&report_error_note(boot, state, reason, &error, api_key)),
         ),
     };
+    if let Some(object) = report.as_object_mut() {
+        object.insert("mode".to_string(), serde_json::json!(boot.mode.as_str()));
+    }
     Ok(report_data_packet(report_with_integrity_events(
         report, state,
     ))?)

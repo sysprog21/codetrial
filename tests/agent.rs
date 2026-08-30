@@ -1,4 +1,5 @@
 use codetrial::agent::*;
+use codetrial::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL};
 use serde_json::Value;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -673,6 +674,8 @@ fn participant_metadata_parsing_handles_frontend_metadata() {
     let zero_float_duration = parse_participant_metadata(Some(r#"{"durationMin":0.0}"#));
     let zero_string_duration = parse_participant_metadata(Some(r#"{"durationMin":"0"}"#));
     let whitespace_string_duration = parse_participant_metadata(Some(r#"{"durationMin":" 30 "}"#));
+    let practice = parse_participant_metadata(Some(r#"{"mode":"practice"}"#));
+    let forged = parse_participant_metadata(Some(r#"{"mode":"coach"}"#));
 
     assert_eq!(invalid_json.problem.id, DEFAULT_PROBLEM_ID);
     assert_eq!(invalid_json.duration_min, 45);
@@ -687,6 +690,45 @@ fn participant_metadata_parsing_handles_frontend_metadata() {
     assert_eq!(zero_float_duration.duration_min, 45);
     assert_eq!(zero_string_duration.duration_min, 10);
     assert_eq!(whitespace_string_duration.duration_min, 30);
+    assert_eq!(practice.mode, InterviewMode::Practice);
+    assert_eq!(forged.mode, InterviewMode::Scored);
+    assert_eq!(invalid_json.mode, InterviewMode::Scored);
+}
+
+#[test]
+fn only_practice_mode_can_pause_runtime_progression() {
+    let pause = json!({"type":"pause_interview","paused":true});
+    let mut scored = RuntimeState::default();
+    assert_eq!(
+        apply_data_event(&mut scored, TOPIC_CONTROL, &pause, 99.0).pause_changed,
+        None
+    );
+    assert!(!scored.paused);
+
+    let mut practice = RuntimeState {
+        mode: InterviewMode::Practice,
+        ..RuntimeState::default()
+    };
+    assert_eq!(
+        apply_data_event(&mut practice, TOPIC_CONTROL, &pause, 99.0).pause_changed,
+        Some(true)
+    );
+    assert!(practice.paused);
+    let ignored = apply_data_event(
+        &mut practice,
+        TOPIC_CODE_UPDATE,
+        &json!({"code":"forged while paused","language":"python"}),
+        99.0,
+    );
+    assert_eq!(ignored, DataEventResult::default());
+    assert!(practice.code.is_empty());
+
+    let resume = json!({"type":"pause_interview","paused":false});
+    assert_eq!(
+        apply_data_event(&mut practice, TOPIC_CONTROL, &resume, 99.0).pause_changed,
+        Some(false)
+    );
+    assert!(!practice.paused);
 }
 
 #[test]

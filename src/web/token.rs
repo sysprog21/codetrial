@@ -154,9 +154,11 @@ pub fn token_response(
         .and_then(Value::as_str)
         .unwrap_or(crate::agent::DEFAULT_PROBLEM_ID);
     let duration_min = token_duration_min(request.get("durationMin"), config.recording_max_min);
+    let mode = crate::agent::InterviewMode::parse(request.get("mode").and_then(Value::as_str));
     let metadata = json!({
         "problemId": problem_id,
         "durationMin": duration_min,
+        "mode": mode.as_str(),
         "candidateIdentity": default_identity,
     })
     .to_string();

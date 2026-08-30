@@ -149,8 +149,28 @@ fn token_response_matches_frontend_contract() {
     assert_eq!(claims["video"]["room"], response.room_name);
     assert_eq!(
         claims["metadata"],
-        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90,"candidateIdentity":"candidate-fixed"})).unwrap()
+        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90,"mode":"scored","candidateIdentity":"candidate-fixed"})).unwrap()
     );
+}
+
+#[test]
+fn token_mode_is_validated_and_legacy_requests_are_scored() {
+    let config = TokenConfig {
+        api_key: "devkey",
+        api_secret: "devsecret",
+        server_url: "wss://example.livekit.cloud",
+        recording_max_min: None,
+    };
+    for (body, expected) in [
+        (br#"{"mode":"practice"}"#.as_slice(), "practice"),
+        (br#"{"mode":"forged"}"#.as_slice(), "scored"),
+        (br#"{}"#.as_slice(), "scored"),
+    ] {
+        let response = token_response(&config, body, "room", "candidate", 2_000).unwrap();
+        let claims = claims(&response.token);
+        let metadata: Value = serde_json::from_str(claims["metadata"].as_str().unwrap()).unwrap();
+        assert_eq!(metadata["mode"], expected);
+    }
 }
 
 #[test]
@@ -1152,7 +1172,10 @@ fn static_interview_script_keeps_transcript_and_report_contract() {
 fn static_interview_script_leaves_candidate_identity_to_the_server() {
     let source = fs::read_to_string("web/interview.js").unwrap();
 
-    assert!(source.contains("JSON.stringify({ problemId: problem.id, durationMin, interviewId })"));
+    assert!(
+        source
+            .contains("JSON.stringify({ problemId: problem.id, durationMin, interviewId, mode })")
+    );
     assert!(!source.contains("candidateIdentity"));
 }
 

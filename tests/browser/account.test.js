@@ -36,6 +36,23 @@ test("interview history routes through the shared persistence helper", () => {
   assert.match(saveHistory, /return saveReportHistory\(entry\)/);
 });
 
+test("practice and scored modes stay explicit from lobby through artifacts", () => {
+  const lobby = read("index.html");
+  const app = read("app.js");
+  const page = read("interview.html");
+  const interview = read("interview.js");
+
+  assert.match(lobby, /data-mode="practice"/);
+  assert.match(lobby, /data-mode="scored"[^>]*class="[^"]*selected|class="[^"]*selected"[^>]*data-mode="scored"/);
+  assert.match(app, /let mode = "scored"/);
+  assert.match(app, /&mode=\$\{mode\}/);
+  for (const id of ["practice-guide", "pause", "retry"]) assert.match(page, new RegExp(`id="${id}"`));
+  assert.match(interview, /params\.get\("mode"\) === "practice" \? "practice" : "scored"/);
+  assert.match(interview, /JSON\.stringify\(\{ problemId: problem\.id, durationMin, interviewId, mode \}\)/);
+  assert.match(interview, /mode, report: state\.report/);
+  assert.match(interview, /searchParams\.set\("retry", Date\.now\(\)\.toString\(\)\)/);
+});
+
 test("report history writes local storage before account sync", async () => {
   const storage = memoryStorage();
   const entry = { id: "r1", problemId: "two-sum", report: { decision: "HIRE" } };

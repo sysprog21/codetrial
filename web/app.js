@@ -3,6 +3,7 @@ import { pickProblem, suggestDifficulty } from "./problem-picker.js";
 
 let problem;
 let duration;
+let mode = "scored";
 let reports = [];
 let manualProblem = false;
 let manualDuration = false;
@@ -94,6 +95,13 @@ for (const button of durations) {
   button.addEventListener("click", () => setDuration(Number(button.dataset.duration), true));
 }
 
+for (const button of document.querySelectorAll("[data-mode]")) {
+  button.addEventListener("click", () => {
+    mode = button.dataset.mode === "practice" ? "practice" : "scored";
+    select("[data-mode]", button);
+  });
+}
+
 const start = document.querySelector("#start");
 
 let signInFirst = false;
@@ -115,8 +123,10 @@ start.addEventListener("click", async () => {
   // candidate can still touch during it writes one of the two. Taking the
   // problem and leaving the length behind shipped an interview that was 45
   // minutes when the button was pressed and 60 by the time it was answered.
+  // The mode is on the same round trip and reads the same way.
   const chosen = problem;
   const minutes = duration;
+  const chosenMode = mode;
   if (!chosen) return;
   starting = true;
   start.disabled = true;
@@ -132,7 +142,7 @@ start.addEventListener("click", async () => {
     }
   }
   start.textContent = "Starting...";
-  window.location.href = `/interview?problem=${encodeURIComponent(chosen.id)}&duration=${minutes}`;
+  window.location.href = `/interview?problem=${encodeURIComponent(chosen.id)}&duration=${minutes}&mode=${chosenMode}`;
 });
 
 // Returning from the media preflight can restore this page from the browser's
@@ -447,7 +457,10 @@ function renderHistoryCount(count, suffix) {
     return;
   }
   nodes.history.hidden = false;
-  nodes.history.textContent = `${count} past report${count === 1 ? "" : "s"} ${suffix}.`;
+  // Both sources are flattened to one shape by the time they get here, so the
+  // mode lives in exactly one place rather than four candidate spellings.
+  const practice = reports.filter((entry) => entry?.report?.mode === "practice").length;
+  nodes.history.textContent = `${count - practice} scored · ${practice} practice ${suffix}.`;
 }
 
 async function fetchJson(url) {

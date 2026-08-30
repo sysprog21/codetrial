@@ -141,7 +141,7 @@ export function reportMarkup({ report, problemTitle, language, code }) {
   return `
     <div class="report-card">
       <div class="report-header">
-        <div><p>Interview report · ${escapeHtml(problemTitle)}</p><h2>${heading}</h2></div>
+        <div><p>${report.mode === "practice" ? "Practice" : "Scored"} interview report · ${escapeHtml(problemTitle)}</p><h2>${heading}</h2></div>
         ${badge}
       </div>${scores}
       <section><h3>${report.incomplete ? "What happened" : "Committee summary"}</h3><p>${escapeHtml(report.summary)}</p></section>
@@ -155,7 +155,7 @@ export function reportMarkup({ report, problemTitle, language, code }) {
 
 /// The downloadable report. Pure so the export can be tested without a DOM;
 /// `at` is injected because a timestamp would otherwise make it unassertable.
-export function reportMarkdown({ report, problemTitle, language, code, transcript, at }) {
+export function reportMarkdown({ report, problemTitle, language, code, transcript, at, mode }) {
   // One rule for every untrusted string in this document, where there used to
   // be three. Evidence rows ran through escapeHtml, feedback bullets and
   // transcript turns ran through nothing. escapeHtml was the wrong escaper for
@@ -255,6 +255,7 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
   return [
     `# Interview Report - ${mdText(problemTitle)}`,
     `_${at}_`,
+    `Mode: ${mode === "practice" || report.mode === "practice" ? "Practice" : "Scored"}`,
     "",
     ...head,
     "",

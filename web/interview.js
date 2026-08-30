@@ -29,6 +29,7 @@ import {
   formatTime,
   integrityEventPayload,
   isAgent,
+  resumeDeadline,
   sanitizeReport,
   sessionReport,
   testPayload,
@@ -122,7 +123,11 @@ const problem = await loadProblem(params.get("problem")).catch((error) => {
   throw error;
 });
 const durationMin = clamp(Number.parseInt(params.get("duration") || "45", 10) || 45, 10, 90);
+const mode = params.get("mode") === "practice" ? "practice" : "scored";
 const state = {
+  mode,
+  paused: false,
+  pausedAt: 0,
   codeByLanguage: { ...problem.starterCode },
   language: "python",
   remaining: durationMin * 60,
@@ -173,8 +178,11 @@ const nodes = {
   captionsBar: document.querySelector("#captions-bar"),
   captionsText: document.querySelector("#captions-text"),
   timer: document.querySelector("#timer"),
+  practiceGuide: document.querySelector("#practice-guide"),
 
   mic: document.querySelector("#mic"),
+  pause: document.querySelector("#pause"),
+  retry: document.querySelector("#retry"),
   end: document.querySelector("#end"),
   withdrawConsent: document.querySelector("#withdraw-consent"),
   recordingState: document.querySelector("#recording-state"),
@@ -320,6 +328,19 @@ function bindEvents() {
   nodes.problemTab.addEventListener("click", () => selectTab("problem"));
   nodes.transcriptTab.addEventListener("click", () => selectTab("transcript"));
   nodes.mic.addEventListener("click", toggleMicrophone);
+  if (mode === "practice") {
+    nodes.pause.hidden = false;
+    nodes.retry.hidden = false;
+    nodes.practiceGuide.hidden = false;
+    nodes.pause.addEventListener("click", togglePause);
+    nodes.retry.addEventListener("click", retryPractice);
+  } else {
+    // Hidden controls are still discoverable DOM and accessibility content.
+    // A scored interview has no coaching surface at all.
+    nodes.pause.remove();
+    nodes.retry.remove();
+    nodes.practiceGuide.remove();
+  }
   nodes.end.addEventListener("click", () => endInterview("candidate_ended"));
   nodes.withdrawConsent.addEventListener("click", withdrawRecordingConsent);
   nodes.forceReport.addEventListener("click", showReport);
@@ -699,7 +720,7 @@ async function connect(preflight, presenting = false) {
     const response = await fetch("/api/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ problemId: problem.id, durationMin, interviewId }),
+      body: JSON.stringify({ problemId: problem.id, durationMin, interviewId, mode }),
     });
     if (!response.ok) throw new Error((await response.json()).error || "Failed to create a session.");
     const connection = await response.json();
@@ -774,6 +795,10 @@ async function connectLiveKit(connection, preflight, presenting = false) {
   const room = new livekit.Room({ adaptiveStream: true, dynacast: true });
 
   room.on(livekit.RoomEvent.DataReceived, (payload, participant, kind, topic) => {
+    if (topic === topics.control && isAgent(participant)) {
+      receiveControl(payload);
+      return;
+    }
     if (!acceptsReport(topic, participant)) return;
     void receiveReport(room, payload);
   });
@@ -1124,7 +1149,7 @@ function updatePresenceBanner(eventType) {
 /// a lid close stopped it entirely; this file already reasons about exactly
 /// that hazard for the face sampler.
 function tickTimer() {
-  if (state.phase !== "live") return;
+  if (state.phase !== "live" || state.paused) return;
   const tick = countdown(state.remaining, state.endsAt, Date.now());
   state.remaining = tick.remaining;
   nodes.timer.textContent = formatTime(tick.remaining);
@@ -1132,6 +1157,48 @@ function tickTimer() {
   recordStageTick(tick.remaining);
   if (tick.warn) publish(topics.control, timeWarningPayload(tick.remaining));
   if (tick.expired) endInterview("time_up");
+}
+
+function togglePause() {
+  if (mode !== "practice" || state.phase !== "live") return;
+  publish(topics.control, { type: "pause_interview", paused: !state.paused });
+  // Offline practice has no authoritative room to acknowledge the change.
+  if (!state.room && !state.joinedRoom) applyPause(!state.paused);
+}
+
+function receiveControl(bytes) {
+  try {
+    const message = JSON.parse(new TextDecoder().decode(bytes));
+    if (message.type === "pause_state" && typeof message.paused === "boolean") {
+      applyPause(message.paused);
+    }
+  } catch {
+    // Untrusted data packets that are not valid controls are ignored.
+  }
+}
+
+function applyPause(paused) {
+  if (mode !== "practice" || paused === state.paused) return;
+  state.paused = paused;
+  if (paused) {
+    state.pausedAt = Date.now();
+  } else {
+    state.endsAt = resumeDeadline(state.endsAt, state.pausedAt, Date.now());
+    state.pausedAt = 0;
+  }
+  nodes.pause.textContent = paused ? "Resume practice" : "Pause practice";
+  nodes.editor.disabled = paused;
+  nodes.run.disabled = paused;
+  recordReplay("lifecycle", { state: paused ? "paused" : "resumed", mode });
+  recordStage();
+  tickTimer();
+}
+
+function retryPractice() {
+  if (mode !== "practice") return;
+  const retry = new URL(window.location.href);
+  retry.searchParams.set("retry", Date.now().toString());
+  window.location.href = retry.toString();
 }
 
 async function runTests() {
@@ -1255,12 +1322,12 @@ async function showReport() {
   // present is a different fact from whether the connection survived, and only
   // the first one decides if this browser may score anybody. The rule and the
   // failure it came from live in `sessionReport`.
-  state.report = sessionReport({
+  state.report = { ...sessionReport({
     joinedRoom: state.joinedRoom,
     passed,
     total,
     candidateTurns,
-  });
+  }), mode };
   await saveHistory();
   renderReport();
 }
@@ -1287,7 +1354,7 @@ function saveHistory() {
   // The interview id travels with the report so the replay page can put the
   // two beside each other. Reports are keyed by their own id and recordings by
   // theirs, and without this the only thing relating them is the clock.
-  const entry = { id: randomId(), date: new Date().toISOString(), interviewId: state.interviewId, problemId: problem.id, problemTitle: problem.title, durationMin, report: state.report };
+  const entry = { id: randomId(), date: new Date().toISOString(), interviewId: state.interviewId, problemId: problem.id, problemTitle: problem.title, durationMin, mode, report: state.report };
   return saveReportHistory(entry);
 }
 
@@ -1311,6 +1378,7 @@ function buildMarkdown() {
     code: currentCode(),
     transcript: state.transcript.values(),
     at: new Date().toLocaleString(),
+    mode,
   });
 }
 

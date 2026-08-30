@@ -1,7 +1,8 @@
+use codetrial::agent::InterviewMode;
 use codetrial::config::{
     DEFAULT_GEMINI_LIVE_MODEL, DEFAULT_GEMINI_REPORT_MODEL, DEFAULT_GEMINI_VOICE, load_from_pairs,
 };
-use codetrial::runtime::{agent_identity, bootstrap};
+use codetrial::runtime::{agent_identity, bootstrap, bootstrap_with_mode};
 
 fn config() -> codetrial::config::AgentConfig {
     load_from_pairs([
@@ -21,6 +22,25 @@ fn bootstrap_resolves_requested_problem_and_room() {
     assert_eq!(bootstrap.room_name, "interview-fixed");
     assert_eq!(bootstrap.problem.id, "merge-intervals");
     assert_eq!(bootstrap.duration_min, 30);
+}
+
+#[test]
+fn bootstrap_keeps_mode_immutable_in_its_prompt_contract() {
+    let config = config();
+    let practice = bootstrap_with_mode(
+        &config,
+        "interview-fixed",
+        Some("two-sum"),
+        45,
+        InterviewMode::Practice,
+    );
+    assert_eq!(practice.mode, InterviewMode::Practice);
+    assert!(practice.instructions.contains("PRACTICE MODE"));
+    assert!(practice.instructions.contains("name REACTO and STAR"));
+
+    let legacy = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    assert_eq!(legacy.mode, InterviewMode::Scored);
+    assert!(legacy.instructions.contains("SCORED MODE"));
 }
 
 #[test]

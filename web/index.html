@@ -655,6 +655,10 @@
            this deployment cannot record is disabled with the reason beside it
            rather than silently shortened after the candidate presses start. -->
       <p id="duration-note" class="duration-note" aria-live="polite" hidden></p>
+      <section class="duration-row" aria-label="Interview mode">
+        <button class="duration-button" type="button" data-mode="practice">Practice</button>
+        <button class="duration-button selected" type="button" data-mode="scored">Scored</button>
+      </section>
 
       <section class="start-row">
         <!-- Enabled by app.js once a problem is chosen, so the button cannot

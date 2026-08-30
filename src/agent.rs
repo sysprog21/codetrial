@@ -12,10 +12,10 @@ use integrity::integrity_hash;
 pub use integrity::{sanitize_integrity_event, sanitize_test_run};
 pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, get_problem};
 pub use prompts::{
-    LanguageChoiceContext, ReportPromptInput, build_instructions, format_test_run, greeting,
-    language_choice, log_hint_text, numbered, proactive_review, read_editor_text, report_prompt,
-    significant_change, silence_nudge, spoken_language, test_results_reaction, time_warning,
-    wrap_up,
+    LanguageChoiceContext, ReportPromptInput, build_instructions, build_instructions_for_mode,
+    format_test_run, greeting, language_choice, log_hint_text, numbered, proactive_review,
+    read_editor_text, report_prompt, significant_change, silence_nudge, spoken_language,
+    test_results_reaction, time_warning, wrap_up,
 };
 
 use crate::config::{DEFAULT_DURATION_MIN, MAX_DURATION_MIN, MIN_DURATION_MIN};
@@ -69,6 +69,29 @@ pub struct Problem {
     pub optimal: &'static str,
     pub pitfalls: &'static str,
     pub hint_ladder: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InterviewMode {
+    Practice,
+    #[default]
+    Scored,
+}
+
+impl InterviewMode {
+    pub fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("practice") => Self::Practice,
+            _ => Self::Scored,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Practice => "practice",
+            Self::Scored => "scored",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,6 +230,8 @@ impl SpeakerTurn {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeState {
+    pub mode: InterviewMode,
+    pub paused: bool,
     pub code: String,
     pub language: String,
     pub transcript: Vec<String>,
@@ -241,6 +266,8 @@ pub struct RuntimeState {
 impl Default for RuntimeState {
     fn default() -> Self {
         Self {
+            mode: InterviewMode::Scored,
+            paused: false,
             code: String::new(),
             language: "python".to_string(),
             transcript: Vec::new(),
@@ -260,6 +287,7 @@ impl Default for RuntimeState {
 pub struct MetadataConfig {
     pub problem: &'static Problem,
     pub duration_min: u32,
+    pub mode: InterviewMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -300,6 +328,8 @@ pub struct DataEventResult {
     pub update_last_interjection: bool,
     pub generate_reply: Option<String>,
     pub finish_interview: Option<String>,
+    /// Some only when a practice-mode pause state genuinely changed.
+    pub pause_changed: Option<bool>,
 }
 
 /// How much conversation the report prompt may carry. A 90-minute interview
@@ -400,10 +430,12 @@ pub fn parse_participant_metadata(metadata: Option<&str>) -> MetadataConfig {
         .unwrap_or_else(|| serde_json::json!({}));
     let problem = get_problem(value.get("problemId").and_then(serde_json::Value::as_str));
     let duration_min = duration_from_metadata(value.get("durationMin"));
+    let mode = InterviewMode::parse(value.get("mode").and_then(serde_json::Value::as_str));
 
     MetadataConfig {
         problem,
         duration_min,
+        mode,
     }
 }
 
@@ -464,6 +496,9 @@ pub fn apply_data_event(
     payload: &serde_json::Value,
     since_last_test_reaction_seconds: f64,
 ) -> DataEventResult {
+    if state.paused && matches!(topic, TOPIC_CODE_UPDATE | TOPIC_TEST_RESULTS) {
+        return DataEventResult::default();
+    }
     match topic {
         TOPIC_CODE_UPDATE => apply_code_update(state, payload),
         TOPIC_TEST_RESULTS => apply_test_results(state, payload, since_last_test_reaction_seconds),
@@ -599,12 +634,33 @@ fn apply_test_results(
         update_last_interjection: true,
         generate_reply: Some(test_results_reaction(&summary, all_passed)),
         finish_interview: None,
+        ..DataEventResult::default()
     }
 }
 
 fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataEventResult {
     match payload.get("type").and_then(serde_json::Value::as_str) {
-        Some("time_warning") if !state.ended => {
+        Some("pause_interview") if state.mode == InterviewMode::Practice && !state.ended => {
+            let paused = payload
+                .get("paused")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if paused == state.paused {
+                return DataEventResult::default();
+            }
+            state.paused = paused;
+            DataEventResult {
+                pause_changed: Some(paused),
+                generate_reply: Some(if paused {
+                    "The practice interview is paused. I will wait until you resume.".to_string()
+                } else {
+                    "The practice interview has resumed. Continue with your REACTO step."
+                        .to_string()
+                }),
+                ..DataEventResult::default()
+            }
+        }
+        Some("time_warning") if !state.ended && !state.paused => {
             let remaining_seconds = payload
                 .get("remainingSeconds")
                 .and_then(json_int)

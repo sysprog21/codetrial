@@ -323,6 +323,7 @@ export async function integrityEventPayload(input, previous = { seq: 0, hash: ""
 // The report arrives over a LiveKit data channel, so treat every field as
 // untrusted: scores are rendered into innerHTML and must not carry markup.
 export function sanitizeReport(raw) {
+  const mode = raw?.mode === "practice" ? "practice" : "scored";
   const bounded = (value, max) => {
     const number = Math.trunc(Number(value));
     return Number.isFinite(number) ? clamp(number, 0, max) : 0;
@@ -355,6 +356,7 @@ export function sanitizeReport(raw) {
   // again on the way out of storage would just move the fabrication later.
   if (raw?.incomplete) {
     return {
+      mode,
       incomplete: true,
       summary: typeof raw?.summary === "string" ? boundedText(raw.summary) : "",
       integrityEvents: integrityEvents(raw?.integrityEvents),
@@ -363,6 +365,7 @@ export function sanitizeReport(raw) {
     };
   }
   return {
+    mode,
     codingScore: score(raw?.codingScore),
     communicationScore: score(raw?.communicationScore),
     decision: raw?.decision === "HIRE" ? "HIRE" : "NO_HIRE",
@@ -456,6 +459,16 @@ export function countdown(previous, endsAt, now) {
     warn: previous > TIME_WARNING_S && remaining <= TIME_WARNING_S,
     expired: remaining === 0,
   };
+}
+
+/// Moves a wall-clock deadline by exactly the interval spent paused.
+/// Invalid/backward timestamps leave it unchanged rather than shortening a
+/// candidate's practice session.
+export function resumeDeadline(endsAt, pausedAt, resumedAt) {
+  const pauseDuration = Number(resumedAt) - Number(pausedAt);
+  return Number.isFinite(pauseDuration) && pauseDuration > 0
+    ? Number(endsAt) + pauseDuration
+    : Number(endsAt);
 }
 
 /// Whether this browser is allowed to score anybody, and what to say if not.

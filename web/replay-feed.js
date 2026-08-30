@@ -133,7 +133,7 @@ async function sendQueuedBatch() {
 /// heading with nothing, and a reader who joined late would find the problem
 /// title blank.
 function stagePayload(extra) {
-  return { title: problem.title, meta: nodes.meta.textContent, ...extra };
+  return { title: problem.title, meta: nodes.meta.textContent, mode: state.mode, ...extra };
 }
 
 export function recordStage() {

@@ -183,6 +183,12 @@ async function loadEvents(recordingId) {
 /// replaces the last one. Every snapshot keeps its time, so a moment can be
 /// opened rather than scrubbed to.
 export function render(events) {
+  const stage = events.findLast?.((event) => event.kind === "stage")
+    || [...events].reverse().find((event) => event.kind === "stage");
+  const mode = stage?.payload?.mode === "practice" ? "Practice" : "Scored";
+  nodes.status.textContent = nodes.status.textContent
+    ? `${nodes.status.textContent} · ${mode}`
+    : mode;
   const moments = [];
   for (const event of events) {
     if (event.kind === "transcript") {
