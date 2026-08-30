@@ -393,6 +393,40 @@ export function sanitizeReport(raw) {
     && [...weaknesses].every((weakness) => plannedWeaknesses.has(weakness))
     ? candidatePlan
     : [];
+  const frameworkPhases = new Set(["repeat", "example", "algorithm", "coding", "test", "optimizations", "situation", "task", "action", "result"]);
+  const frameworkSources = new Set(["candidate_speech", "editor_snapshot", "test_event", "session_timing"]);
+  const frameworkKinds = new Set(["observed", "inferred", "skipped"]);
+  const frameworkEvidence = (Array.isArray(raw?.frameworkEvidence) ? raw.frameworkEvidence : [])
+    .map((item) => {
+      const phase = typeof item?.phase === "string" ? item.phase : "";
+      const source = typeof item?.source === "string" ? item.source : "";
+      const kind = typeof item?.kind === "string" ? item.kind : "";
+      const atMs = Math.trunc(Number(item?.atMs));
+      const confidence = Math.trunc(Number(item?.confidence));
+      const frameworkVersion = Math.trunc(Number(item?.frameworkVersion));
+      const summary = typeof item?.summary === "string" ? boundedText(item.summary, 240).trim() : "";
+      if (!frameworkPhases.has(phase) || !frameworkSources.has(source) || !frameworkKinds.has(kind)
+        || (source === "session_timing") !== (kind === "skipped")
+        || !Number.isFinite(atMs) || atMs < 0 || !Number.isFinite(confidence)
+        || confidence < 0 || confidence > 100 || !Number.isFinite(frameworkVersion)
+        || frameworkVersion < 1 || !summary) return null;
+      return {
+        ...item,
+        // Matches the server's maximum paused deadline. A practice room may
+        // legitimately span more than a day even though active interview time
+        // is capped at 90 minutes.
+        atMs: clamp(atMs, 0, 31_536_000_000),
+        phase,
+        source,
+        kind,
+        confidence,
+        summary,
+        frameworkVersion,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 64)
+    .sort((left, right) => left.atMs - right.atMs);
   // A report with nothing in it must survive normalization as a report with
   // nothing in it. Falling through to the fields below would score the missing
   // numbers as 0 and coerce the missing decision to NO_HIRE, which is how a
@@ -407,6 +441,7 @@ export function sanitizeReport(raw) {
       ...checkpoint(raw),
       hintsUsed: bounded(raw?.hintsUsed, 99),
       improvementPlan: [],
+      frameworkEvidence,
     };
   }
   return {
@@ -418,6 +453,7 @@ export function sanitizeReport(raw) {
     codingFeedback,
     communicationFeedback,
     improvementPlan,
+    frameworkEvidence,
     integrityEvents: integrityEvents(raw?.integrityEvents),
     ...checkpoint(raw),
     // Bounded like the scores: `JSON.parse` turns 1e999 into Infinity, which

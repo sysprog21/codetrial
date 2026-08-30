@@ -3,7 +3,7 @@
 // return strings; the transcript view takes the document and panel it renders
 // into. interview.js owns the wiring, this owns the output.
 
-import { escapeHtml, orPlaceholder } from "./lib.js";
+import { escapeHtml, formatTime, orPlaceholder } from "./lib.js";
 
 export function runnerStatusMarkup(status) {
   const text = {
@@ -145,6 +145,7 @@ export function reportMarkup({ report, problemTitle, language, code }) {
         <p><strong>Success:</strong> ${escapeHtml(item.successCriterion)}</p>
         <ul>${item.selfReview.map((check) => `<li>${escapeHtml(check)}</li>`).join("")}</ul>
       </li>`).join("")}</ol></section>`;
+  const frameworkTimeline = frameworkEvidenceMarkup(report.frameworkEvidence);
 
   return `
     <div class="report-card">
@@ -155,6 +156,7 @@ export function reportMarkup({ report, problemTitle, language, code }) {
       <section><h3>${report.incomplete ? "What happened" : "Committee summary"}</h3><p>${escapeHtml(report.summary)}</p></section>
       ${feedback}
       ${practiceNext}
+      ${frameworkTimeline}
       ${integrityEvidenceMarkup(report)}
       <details><summary>Your final code (${escapeHtml(language)})</summary><pre>${escapeHtml(code.trimEnd() || "(editor was empty)")}</pre></details>
       <div class="report-actions"><button id="download-report" type="button">Download report (.md)</button><button id="done" type="button">Done - back to lobby</button></div>
@@ -225,6 +227,15 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
       ]),
       "",
     ];
+  const frameworkTimeline = report.frameworkEvidence?.length
+    ? [
+      "## Framework evidence",
+      "",
+      ...report.frameworkEvidence.map((item) =>
+        `- ${frameworkTime(item.atMs)} · **${mdText(item.phase)}** · ${mdText(item.kind)} · ${mdText(item.source)} · ${mdText(item.confidence)}% · v${mdText(item.frameworkVersion)} — ${mdText(item.summary)}`),
+      "",
+    ]
+    : [];
   const chainNote = mdText(chainSentence(report));
   const conversation = transcript
     .filter((segment) => segment.final || segment.text.trim())
@@ -282,6 +293,7 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
     ...head,
     "",
     ...practiceNext,
+    ...frameworkTimeline,
     // A session with no evaluation can still be one that ended because the
     // camera saw something. Refusing to score it is not a reason to drop the
     // evidence, which `sanitizeReport` deliberately keeps.
@@ -299,6 +311,22 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
     conversation || "(no speech captured)",
     "",
   ].join("\n");
+}
+
+function frameworkTime(atMs) {
+  return formatTime(Math.max(0, Math.floor(Number(atMs) / 1000)));
+}
+
+function frameworkEvidenceMarkup(items) {
+  if (!items?.length) return "";
+  return `<section aria-labelledby="framework-evidence-title">
+    <h3 id="framework-evidence-title">Framework evidence</h3>
+    <ol class="framework-timeline">${items.map((item) => `<li>
+      <strong>${escapeHtml(item.phase)}</strong>
+      <span>${frameworkTime(item.atMs)} · ${escapeHtml(item.kind)} · ${escapeHtml(item.source)} · ${escapeHtml(item.confidence)}% confidence · v${escapeHtml(item.frameworkVersion)}</span>
+      <p>${escapeHtml(item.summary)}</p>
+    </li>`).join("")}</ol>
+  </section>`;
 }
 
 /// Owns transcript segments and their rows together, because the two were

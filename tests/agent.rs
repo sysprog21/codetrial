@@ -1,5 +1,5 @@
 use codetrial::agent::*;
-use codetrial::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL};
+use codetrial::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
 use serde_json::Value;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -302,9 +302,14 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
         "call `log_hint`",
         "If coding is incomplete or the five-minute warning has fired",
         "Never invent a story",
+        "`record_framework_evidence`",
+        "`observed` for a\n  direct statement/action",
+        "In scored mode, never speak the evidence state or checklist",
     ] {
         assert!(prompt.contains(safeguard), "missing safeguard: {safeguard}");
     }
+    assert!(time_warning(5).contains("source `session_timing`, kind `skipped`"));
+    assert!(wrap_up("candidate_ended").contains("source `session_timing`, kind `skipped`"));
 
     let public_reactions = [
         greeting(),
@@ -779,6 +784,135 @@ fn only_practice_mode_can_pause_runtime_progression() {
         Some(false)
     );
     assert!(!practice.paused);
+}
+
+#[test]
+fn framework_evidence_is_server_stamped_validated_deduplicated_and_capped() {
+    let mut state = RuntimeState::default();
+    state.started_at -= std::time::Duration::from_millis(25);
+    let direct = json!({
+        "phase":"algorithm", "source":"candidate_speech", "kind":"observed",
+        "confidence":88, "summary":"Candidate explained the invariant.\n",
+        "atMs":999999, "frameworkVersion":999, "unknown":"ignored"
+    });
+    let first = record_framework_evidence(&mut state, &direct).unwrap();
+    assert!(
+        first.at_ms < 1_000,
+        "client timestamp must be ignored: {first:?}"
+    );
+    assert_eq!(first.framework_version, FRAMEWORK_VERSION);
+    assert_eq!(first.summary, "Candidate explained the invariant.");
+    record_framework_evidence(&mut state, &direct).unwrap();
+    assert_eq!(
+        state.framework_evidence.len(),
+        1,
+        "resume replay must deduplicate"
+    );
+
+    assert!(
+        record_framework_evidence(
+            &mut state,
+            &json!({
+                "phase":"situation", "source":"session_timing", "kind":"observed",
+                "confidence":100, "summary":"wrong pairing"
+            })
+        )
+        .is_err()
+    );
+    assert!(
+        record_framework_evidence(
+            &mut state,
+            &json!({
+                "phase":"situation", "source":"session_timing", "kind":"skipped",
+                "confidence":101, "summary":"bad confidence"
+            })
+        )
+        .is_err()
+    );
+
+    for index in 0..=MAX_FRAMEWORK_EVIDENCE {
+        record_framework_evidence(
+            &mut state,
+            &json!({
+                "phase":"coding", "source":"editor_snapshot", "kind":"observed",
+                "confidence":90, "summary":format!("snapshot {index}")
+            }),
+        )
+        .unwrap();
+    }
+    assert_eq!(state.framework_evidence.len(), MAX_FRAMEWORK_EVIDENCE);
+    assert_eq!(
+        state.framework_evidence.last().unwrap().summary,
+        format!("snapshot {MAX_FRAMEWORK_EVIDENCE}")
+    );
+}
+
+#[test]
+fn candidate_data_packets_cannot_append_trusted_framework_evidence() {
+    let mut state = RuntimeState::default();
+    let forged = json!({
+        "type":"record_framework_evidence", "phase":"result",
+        "source":"candidate_speech", "kind":"observed", "confidence":100,
+        "summary":"forged"
+    });
+    for topic in [
+        TOPIC_CONTROL,
+        TOPIC_CODE_UPDATE,
+        TOPIC_TEST_RESULTS,
+        TOPIC_INTEGRITY,
+        "framework_evidence",
+    ] {
+        apply_data_event(&mut state, topic, &forged, 99.0);
+    }
+    assert!(state.framework_evidence.is_empty());
+}
+
+#[test]
+fn complete_partial_and_skipped_framework_sessions_remain_distinct() {
+    let phases = [
+        "repeat",
+        "example",
+        "algorithm",
+        "coding",
+        "test",
+        "optimizations",
+        "situation",
+        "task",
+        "action",
+        "result",
+    ];
+    let mut complete = RuntimeState::default();
+    for phase in phases {
+        record_framework_evidence(
+            &mut complete,
+            &json!({
+                "phase":phase, "source":"candidate_speech", "kind":"observed",
+                "confidence":90, "summary":format!("Evidence for {phase}")
+            }),
+        )
+        .unwrap();
+    }
+    assert_eq!(complete.framework_evidence.len(), 10);
+
+    let mut partial = RuntimeState::default();
+    record_framework_evidence(
+        &mut partial,
+        &json!({
+            "phase":"algorithm", "source":"candidate_speech", "kind":"inferred",
+            "confidence":55, "summary":"The approach implied an invariant."
+        }),
+    )
+    .unwrap();
+    record_framework_evidence(
+        &mut partial,
+        &json!({
+            "phase":"result", "source":"session_timing", "kind":"skipped",
+            "confidence":100, "summary":"The session ended before STAR."
+        }),
+    )
+    .unwrap();
+    assert_eq!(partial.framework_evidence[0].kind, EvidenceKind::Inferred);
+    assert_eq!(partial.framework_evidence[1].kind, EvidenceKind::Skipped);
 }
 
 #[test]

@@ -230,8 +230,10 @@ impl SpeakerTurn {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeState {
+    pub started_at: std::time::Instant,
     pub mode: InterviewMode,
     pub paused: bool,
+    pub framework_evidence: Vec<FrameworkEvidence>,
     pub code: String,
     pub language: String,
     pub transcript: Vec<String>,
@@ -266,8 +268,10 @@ pub struct RuntimeState {
 impl Default for RuntimeState {
     fn default() -> Self {
         Self {
+            started_at: std::time::Instant::now(),
             mode: InterviewMode::Scored,
             paused: false,
+            framework_evidence: Vec::new(),
             code: String::new(),
             language: "python".to_string(),
             transcript: Vec::new(),
@@ -281,6 +285,163 @@ impl Default for RuntimeState {
             ended: false,
         }
     }
+}
+
+pub const FRAMEWORK_VERSION: u32 = 1;
+pub const MAX_FRAMEWORK_EVIDENCE: usize = 64;
+const MAX_FRAMEWORK_SUMMARY_CHARS: usize = 240;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameworkPhase {
+    Repeat,
+    Example,
+    Algorithm,
+    Coding,
+    Test,
+    Optimizations,
+    Situation,
+    Task,
+    Action,
+    Result,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceSource {
+    CandidateSpeech,
+    EditorSnapshot,
+    TestEvent,
+    SessionTiming,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceKind {
+    Observed,
+    Inferred,
+    Skipped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameworkEvidence {
+    pub at_ms: u64,
+    pub phase: FrameworkPhase,
+    pub source: EvidenceSource,
+    pub kind: EvidenceKind,
+    pub confidence: u8,
+    pub summary: String,
+    pub framework_version: u32,
+}
+
+pub fn record_framework_evidence(
+    state: &mut RuntimeState,
+    args: &serde_json::Value,
+) -> Result<FrameworkEvidence, &'static str> {
+    let phase = match args.get("phase").and_then(serde_json::Value::as_str) {
+        Some("repeat") => FrameworkPhase::Repeat,
+        Some("example") => FrameworkPhase::Example,
+        Some("algorithm") => FrameworkPhase::Algorithm,
+        Some("coding") => FrameworkPhase::Coding,
+        Some("test") => FrameworkPhase::Test,
+        Some("optimizations") => FrameworkPhase::Optimizations,
+        Some("situation") => FrameworkPhase::Situation,
+        Some("task") => FrameworkPhase::Task,
+        Some("action") => FrameworkPhase::Action,
+        Some("result") => FrameworkPhase::Result,
+        _ => return Err("invalid phase"),
+    };
+    let source = match args.get("source").and_then(serde_json::Value::as_str) {
+        Some("candidate_speech") => EvidenceSource::CandidateSpeech,
+        Some("editor_snapshot") => EvidenceSource::EditorSnapshot,
+        Some("test_event") => EvidenceSource::TestEvent,
+        Some("session_timing") => EvidenceSource::SessionTiming,
+        _ => return Err("invalid source"),
+    };
+    let kind = match args.get("kind").and_then(serde_json::Value::as_str) {
+        Some("observed") => EvidenceKind::Observed,
+        Some("inferred") => EvidenceKind::Inferred,
+        Some("skipped") => EvidenceKind::Skipped,
+        _ => return Err("invalid kind"),
+    };
+    if (source == EvidenceSource::SessionTiming) != (kind == EvidenceKind::Skipped) {
+        return Err("session_timing is only valid for skipped evidence");
+    }
+    let confidence = args
+        .get("confidence")
+        .and_then(json_int)
+        .ok_or("invalid confidence")?;
+    if !(0..=100).contains(&confidence) {
+        return Err("invalid confidence");
+    }
+    let summary = args
+        .get("summary")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+        .ok_or("invalid summary")?
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_FRAMEWORK_SUMMARY_CHARS)
+        .collect::<String>();
+    if let Some(index) = state.framework_evidence.iter().position(|item| {
+        item.phase == phase && item.source == source && item.kind == kind && item.summary == summary
+    }) {
+        return Ok(state.framework_evidence[index].clone());
+    }
+    if state.framework_evidence.len() == MAX_FRAMEWORK_EVIDENCE {
+        state.framework_evidence.remove(0);
+    }
+    state.framework_evidence.push(FrameworkEvidence {
+        at_ms: state
+            .started_at
+            .elapsed()
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64,
+        phase,
+        source,
+        kind,
+        confidence: confidence as u8,
+        summary,
+        framework_version: FRAMEWORK_VERSION,
+    });
+    Ok(state
+        .framework_evidence
+        .last()
+        .expect("just appended evidence")
+        .clone())
+}
+
+pub fn framework_evidence_json(evidence: &FrameworkEvidence) -> serde_json::Value {
+    let phase = match evidence.phase {
+        FrameworkPhase::Repeat => "repeat",
+        FrameworkPhase::Example => "example",
+        FrameworkPhase::Algorithm => "algorithm",
+        FrameworkPhase::Coding => "coding",
+        FrameworkPhase::Test => "test",
+        FrameworkPhase::Optimizations => "optimizations",
+        FrameworkPhase::Situation => "situation",
+        FrameworkPhase::Task => "task",
+        FrameworkPhase::Action => "action",
+        FrameworkPhase::Result => "result",
+    };
+    let source = match evidence.source {
+        EvidenceSource::CandidateSpeech => "candidate_speech",
+        EvidenceSource::EditorSnapshot => "editor_snapshot",
+        EvidenceSource::TestEvent => "test_event",
+        EvidenceSource::SessionTiming => "session_timing",
+    };
+    let kind = match evidence.kind {
+        EvidenceKind::Observed => "observed",
+        EvidenceKind::Inferred => "inferred",
+        EvidenceKind::Skipped => "skipped",
+    };
+    serde_json::json!({
+        "atMs": evidence.at_ms,
+        "phase": phase,
+        "source": source,
+        "kind": kind,
+        "confidence": evidence.confidence,
+        "summary": evidence.summary,
+        "frameworkVersion": evidence.framework_version,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

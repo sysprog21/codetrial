@@ -12,7 +12,9 @@ use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async, tungstenite::protocol::Message,
 };
 
-use crate::runtime::{RuntimeBootstrap, TOOL_LOG_HINT, TOOL_READ_EDITOR};
+use crate::runtime::{
+    RuntimeBootstrap, TOOL_LOG_HINT, TOOL_READ_EDITOR, TOOL_RECORD_FRAMEWORK_EVIDENCE,
+};
 
 const LIVE_WEBSOCKET_ENDPOINT: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 const SETUP_TIMEOUT: Duration = Duration::from_secs(15);
@@ -390,6 +392,21 @@ fn live_setup_message(boot: &RuntimeBootstrap<'_>, resume: Option<&str>) -> Valu
                         {
                             "name": TOOL_LOG_HINT,
                             "description": "Record that the interviewer gave the candidate a hint."
+                        },
+                        {
+                            "name": TOOL_RECORD_FRAMEWORK_EVIDENCE,
+                            "description": "Record trusted REACTO or STAR evidence only after it is present in candidate speech, an editor snapshot, or a test event.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "phase": { "type": "string", "enum": ["repeat", "example", "algorithm", "coding", "test", "optimizations", "situation", "task", "action", "result"] },
+                                    "source": { "type": "string", "enum": ["candidate_speech", "editor_snapshot", "test_event", "session_timing"] },
+                                    "kind": { "type": "string", "enum": ["observed", "inferred", "skipped"] },
+                                    "confidence": { "type": "integer", "minimum": 0, "maximum": 100 },
+                                    "summary": { "type": "string", "description": "Short evidence-grounded summary without scores or private rubric text." }
+                                },
+                                "required": ["phase", "source", "kind", "confidence", "summary"]
+                            }
                         }
                     ]
                 }
@@ -723,6 +740,22 @@ mod tests {
         assert!(
             setup["tools"][0]["functionDeclarations"][1]
                 .get("parameters")
+                .is_none()
+        );
+        let framework_tool = &setup["tools"][0]["functionDeclarations"][2];
+        assert_eq!(framework_tool["name"], TOOL_RECORD_FRAMEWORK_EVIDENCE);
+        assert_eq!(
+            framework_tool["parameters"]["required"],
+            json!(["phase", "source", "kind", "confidence", "summary"])
+        );
+        assert!(
+            framework_tool["parameters"]["properties"]
+                .get("atMs")
+                .is_none()
+        );
+        assert!(
+            framework_tool["parameters"]["properties"]
+                .get("frameworkVersion")
                 .is_none()
         );
         assert_eq!(setup["inputAudioTranscription"], json!({}));

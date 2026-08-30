@@ -44,9 +44,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::{
     ReportPromptInput, RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput,
-    WATCH_TICK_S, apply_data_event, final_report, format_test_run, log_hint_text, numbered,
-    parse_participant_metadata, proactive_review, read_editor_text, report_prompt,
-    significant_change, silence_nudge, timing_decision, transcript_for_report, wrap_up,
+    WATCH_TICK_S, apply_data_event, final_report, format_test_run, framework_evidence_json,
+    log_hint_text, numbered, parse_participant_metadata, proactive_review, read_editor_text,
+    record_framework_evidence, report_prompt, significant_change, silence_nudge, timing_decision,
+    transcript_for_report, wrap_up,
 };
 use crate::config::AgentConfig;
 use crate::runtime::TOPIC_CONTROL;
@@ -76,8 +77,8 @@ use crate::gemini::{
 #[cfg(test)]
 use crate::runtime::bootstrap;
 use crate::runtime::{
-    AGENT_NAME, RuntimeBootstrap, TOOL_LOG_HINT, TOOL_READ_EDITOR, TOPIC_REPORT,
-    TOPIC_TRANSCRIPTION, agent_identity,
+    AGENT_NAME, RuntimeBootstrap, TOOL_LOG_HINT, TOOL_READ_EDITOR, TOOL_RECORD_FRAMEWORK_EVIDENCE,
+    TOPIC_REPORT, TOPIC_TRANSCRIPTION, agent_identity,
 };
 use crate::token::{LivekitTokenInput, livekit_room_admin_token, livekit_token};
 
@@ -324,6 +325,7 @@ async fn open_session<'a>(
 
     let mut turn = TurnState {
         state: RuntimeState {
+            started_at,
             mode: boot.mode,
             ..RuntimeState::default()
         },
@@ -1897,6 +1899,10 @@ fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) -> ser
             state.hints_used += 1;
             serde_json::json!({ "result": log_hint_text(state.hints_used) })
         }
+        TOOL_RECORD_FRAMEWORK_EVIDENCE => match record_framework_evidence(state, &call.args) {
+            Ok(evidence) => serde_json::json!({ "result": framework_evidence_json(&evidence) }),
+            Err(error) => serde_json::json!({ "error": error }),
+        },
         name => serde_json::json!({ "error": format!("unknown tool: {name}") }),
     }
 }
@@ -2211,6 +2217,16 @@ fn report_with_integrity_events(
         object.insert(
             "integrityDropped".to_string(),
             serde_json::json!(verified.map(|seq| seq.saturating_sub(kept + samples))),
+        );
+        object.insert(
+            "frameworkEvidence".to_string(),
+            serde_json::Value::Array(
+                state
+                    .framework_evidence
+                    .iter()
+                    .map(framework_evidence_json)
+                    .collect(),
+            ),
         );
     }
     report
@@ -2710,6 +2726,31 @@ mod tests {
     }
 
     #[test]
+    fn complete_and_incomplete_reports_carry_agent_owned_framework_evidence() {
+        let mut state = RuntimeState::default();
+        record_framework_evidence(
+            &mut state,
+            &serde_json::json!({
+                "phase":"result", "source":"session_timing", "kind":"skipped",
+                "confidence":100, "summary":"The cutoff prevented STAR assessment."
+            }),
+        )
+        .unwrap();
+        for report in [
+            serde_json::json!({"decision":"HIRE"}),
+            serde_json::json!({"incomplete":true}),
+        ] {
+            let report = report_with_integrity_events(report, &state);
+            assert_eq!(report["frameworkEvidence"][0]["phase"], "result");
+            assert_eq!(report["frameworkEvidence"][0]["kind"], "skipped");
+            assert_eq!(
+                report["frameworkEvidence"][0]["frameworkVersion"],
+                crate::agent::FRAMEWORK_VERSION
+            );
+        }
+    }
+
+    #[test]
     fn execute_tool_call_reads_editor_and_tracks_hints() {
         let mut state = RuntimeState {
             code: "def two_sum(nums, target):\n    return [0, 1]".to_string(),
@@ -2740,6 +2781,17 @@ mod tests {
                 args: serde_json::json!({}),
             },
         );
+        let evidence = execute_tool_call(
+            &mut state,
+            &GeminiFunctionCall {
+                id: "3".to_string(),
+                name: TOOL_RECORD_FRAMEWORK_EVIDENCE.to_string(),
+                args: serde_json::json!({
+                    "phase":"algorithm", "source":"candidate_speech", "kind":"observed",
+                    "confidence":90, "summary":"Candidate explained the invariant."
+                }),
+            },
+        );
 
         assert!(
             editor["result"]
@@ -2755,6 +2807,8 @@ mod tests {
         );
         assert_eq!(hint["result"], "Recorded. Total hints so far: 1.");
         assert_eq!(state.hints_used, 1);
+        assert_eq!(evidence["result"]["phase"], "algorithm");
+        assert_eq!(state.framework_evidence.len(), 1);
     }
 
     #[test]

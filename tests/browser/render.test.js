@@ -350,6 +350,31 @@ test("practice-next drills render accessibly in HTML and Markdown", () => {
   assert.match(markdown, /Success: Cover four case classes/);
 });
 
+test("framework evidence timeline distinguishes observed inferred and skipped rows", () => {
+  const report = {
+    codingScore: 70, communicationScore: 70, decision: "HIRE", summary: "Grounded",
+    codingFeedback: { strengths: [], improvements: [] },
+    communicationFeedback: { strengths: [], improvements: [] }, hintsUsed: 0,
+    frameworkEvidence: [
+      { atMs: 65000, phase: "algorithm", source: "candidate_speech", kind: "observed", confidence: 95, summary: "Explained an invariant", frameworkVersion: 1, futurePrivateField: "must-not-render" },
+      { atMs: 70000, phase: "test", source: "test_event", kind: "inferred", confidence: 60, summary: "A test suggests coverage", frameworkVersion: 1 },
+      { atMs: 300000, phase: "result", source: "session_timing", kind: "skipped", confidence: 100, summary: "Cutoff prevented assessment", frameworkVersion: 1 },
+    ],
+  };
+  const session = { report, problemTitle: "Two Sum", language: "python", code: "pass", transcript: [], at: "now" };
+  const html = reportMarkup(session);
+  const markdown = reportMarkdown(session);
+  assert.match(html, /id="framework-evidence-title"/);
+  assert.match(html, /01:05 · observed · candidate_speech · 95% confidence · v1/);
+  for (const kind of ["observed", "inferred", "skipped"]) {
+    assert.match(html, new RegExp(kind));
+    assert.match(markdown, new RegExp(kind));
+  }
+  assert.match(markdown, /## Framework evidence/);
+  assert.doesNotMatch(html, /must-not-render/);
+  assert.doesNotMatch(markdown, /must-not-render/);
+});
+
 test("report markup marks a no-hire and an empty editor", () => {
   const body = reportMarkup({
     report: {

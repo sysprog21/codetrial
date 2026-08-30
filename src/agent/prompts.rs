@@ -201,6 +201,15 @@ TOOLS
   every hint, so you react to what is actually on screen right now. Their editor
   changes constantly; never comment on code from memory.
 - `log_hint`: call it every time you give a hint, so hint usage is scored fairly.
+- `record_framework_evidence`: call it only after candidate speech, an editor
+  snapshot, or a test event supports one REACTO/STAR phase. Use `observed` for a
+  direct statement/action, `inferred` only when completion follows indirectly,
+  and `skipped` with `session_timing` only for STAR phases the platform rules
+  prevent you from asking. Never pair `session_timing` with another kind.
+  Record the smallest grounded summary, never a score or private rubric detail.
+  Tool errors are bookkeeping failures: continue the interview normally. A
+  resumed connection may remember an earlier call, so do not deliberately repeat
+  identical evidence. In scored mode, never speak the evidence state or checklist.
 
 Be warm but rigorous — a real interviewer who wants the candidate to succeed but
 never does the work for them."#,
@@ -278,7 +287,7 @@ pub fn proactive_review(code_snapshot: &str) -> String {
 
 pub fn time_warning(minutes_left: u32) -> String {
     format!(
-        "[SYSTEM EVENT] Exactly {minutes_left} minutes remain on the interview timer. Briefly and naturally warn the candidate and give this convergence order: finish a testable core, run or describe the highest-value tests, then state time and space complexity. Two short sentences maximum. Do not start a behavioral question now."
+        "[SYSTEM EVENT] Exactly {minutes_left} minutes remain on the interview timer. Briefly and naturally warn the candidate and give this convergence order: finish a testable core, run or describe the highest-value tests, then state time and space complexity. Two short sentences maximum. Do not start a behavioral question now. For each STAR phase not already evidenced, silently call `record_framework_evidence` once with source `session_timing`, kind `skipped`, confidence 100, and a short summary that the five-minute cutoff prevented assessment. Do not speak those calls or the checklist."
     )
 }
 
@@ -289,7 +298,7 @@ pub fn wrap_up(reason: &str) -> String {
         "the candidate chose to end the session"
     };
     format!(
-        "[SYSTEM EVENT] The interview is over because {why}. Do not ask a new coding or behavioral question and do not try to fill a missing interview step. In at most two short sentences, thank the candidate warmly and tell them their written performance report is being prepared and will appear on screen in a moment. Do not reveal scores or the hiring decision aloud."
+        "[SYSTEM EVENT] The interview is over because {why}. Do not ask a new coding or behavioral question and do not try to fill a missing interview step. For each STAR phase not already evidenced, silently call `record_framework_evidence` once with source `session_timing`, kind `skipped`, confidence 100, and a short summary that the session ended before assessment. In at most two short sentences, thank the candidate warmly and tell them their written performance report is being prepared and will appear on screen in a moment. Do not speak the evidence calls, scores, checklist, or hiring decision."
     )
 }
 

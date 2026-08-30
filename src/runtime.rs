@@ -10,6 +10,7 @@ pub const TOPIC_TRANSCRIPTION: &str = "lk.transcription";
 
 pub const TOOL_READ_EDITOR: &str = "read_editor";
 pub const TOOL_LOG_HINT: &str = "log_hint";
+pub const TOOL_RECORD_FRAMEWORK_EVIDENCE: &str = "record_framework_evidence";
 pub const AGENT_NAME: &str = "Jim";
 
 /// Everything the Gemini live session needs to open an interview. The LiveKit

@@ -488,7 +488,29 @@ test("sanitizeReport preserves a well-formed agent report", () => {
     integrityDropped: 380,
     hintsUsed: 2,
     improvementPlan: [],
+    frameworkEvidence: [],
   });
+});
+
+test("framework evidence preserves valid kinds and drops hostile or contradictory rows", () => {
+  const report = sanitizeReport({
+    frameworkEvidence: [
+      { atMs: 9000, phase: "algorithm", source: "candidate_speech", kind: "observed", confidence: 90, summary: "Explained invariant", frameworkVersion: 1, future: "ignored" },
+      { atMs: 4000, phase: "test", source: "test_event", kind: "inferred", confidence: 70, summary: "Predicted a boundary", frameworkVersion: 1 },
+      { atMs: 12000, phase: "result", source: "session_timing", kind: "skipped", confidence: 100, summary: "Cutoff prevented assessment", frameworkVersion: 1 },
+      { atMs: 1, phase: "<script>", source: "candidate_speech", kind: "observed", confidence: 100, summary: "bad", frameworkVersion: 1 },
+      { atMs: 2, phase: "action", source: "session_timing", kind: "observed", confidence: 100, summary: "contradiction", frameworkVersion: 1 },
+    ],
+  });
+  assert.deepEqual(report.frameworkEvidence.map((item) => item.kind), ["inferred", "observed", "skipped"]);
+  assert.equal(report.frameworkEvidence[1].future, "ignored", "unknown fields round-trip but are never rendered");
+  assert.deepEqual(sanitizeReport({}).frameworkEvidence, []);
+});
+
+test("invalid framework rows cannot crowd valid evidence out of the cap", () => {
+  const hostile = Array.from({ length: 64 }, () => ({ phase: "hostile" }));
+  const valid = { atMs: 1, phase: "repeat", source: "candidate_speech", kind: "observed", confidence: 80, summary: "Restated the problem", frameworkVersion: 1 };
+  assert.deepEqual(sanitizeReport({ frameworkEvidence: [...hostile, valid] }).frameworkEvidence, [valid]);
 });
 
 test("improvement plan drops unrelated and hostile items and ranks valid drills", () => {
