@@ -327,6 +327,9 @@ async fn open_session<'a>(
         state: RuntimeState {
             started_at,
             mode: boot.mode,
+            interview_loop: boot.interview_loop,
+            coding_minutes: boot.coding_minutes,
+            behavioral_minutes: boot.behavioral_minutes,
             ..RuntimeState::default()
         },
         agent_state: std::mem::take(&mut agent_state),
@@ -1273,14 +1276,17 @@ fn candidate_bootstrap<'a>(
     metadata: Option<&str>,
 ) -> RuntimeBootstrap<'a> {
     let candidate = parse_participant_metadata(metadata);
-    crate::runtime::bootstrap_with_context(
+    crate::runtime::bootstrap_with_rounds(
         config,
         room_name,
         Some(candidate.problem.id),
         candidate.duration_min,
-        candidate.mode,
-        candidate.profile,
-        candidate.grounding,
+        crate::runtime::RuntimeOptions {
+            mode: candidate.mode,
+            profile: candidate.profile,
+            grounding: candidate.grounding,
+            interview_loop: candidate.interview_loop,
+        },
     )
 }
 
@@ -1355,6 +1361,18 @@ async fn handle_data_packet(
                 payload: serde_json::to_vec(
                     &serde_json::json!({ "type": "pause_state", "paused": paused }),
                 )?,
+                topic: Some(TOPIC_CONTROL.to_string()),
+                reliable: true,
+                ..Default::default()
+            })
+            .await?;
+    }
+    if let Some(status) = result.round_changed {
+        room.local_participant()
+            .publish_data(DataPacket {
+                payload: serde_json::to_vec(&serde_json::json!({
+                    "type": "round_state", "round": "behavioral", "status": status
+                }))?,
                 topic: Some(TOPIC_CONTROL.to_string()),
                 reliable: true,
                 ..Default::default()
@@ -2177,6 +2195,10 @@ async fn report_packet(
     };
     if let Some(object) = report.as_object_mut() {
         object.insert("mode".to_string(), serde_json::json!(boot.mode.as_str()));
+        object.insert(
+            "interviewLoop".to_string(),
+            serde_json::json!(boot.interview_loop.as_str()),
+        );
     }
     Ok(report_data_packet(report_with_integrity_events(
         report, state,
@@ -2230,6 +2252,37 @@ fn report_with_integrity_events(
                     .collect(),
             ),
         );
+        let coding_gate = [
+            crate::agent::FrameworkPhase::Test,
+            crate::agent::FrameworkPhase::Optimizations,
+        ]
+        .iter()
+        .all(|phase| {
+            state.framework_evidence.iter().any(|item| {
+                item.phase == *phase && item.kind != crate::agent::EvidenceKind::Skipped
+            })
+        });
+        object.insert(
+            "interviewLoop".to_string(),
+            serde_json::json!(state.interview_loop.as_str()),
+        );
+        let star_complete = state.behavioral_round_started
+            && [
+                crate::agent::FrameworkPhase::Situation,
+                crate::agent::FrameworkPhase::Task,
+                crate::agent::FrameworkPhase::Action,
+                crate::agent::FrameworkPhase::Result,
+            ]
+            .iter()
+            .all(|phase| {
+                state.framework_evidence.iter().any(|item| {
+                    item.phase == *phase && item.kind != crate::agent::EvidenceKind::Skipped
+                })
+            });
+        object.insert("rounds".to_string(), serde_json::json!([
+            {"kind":"coding","budgetMin": state.coding_minutes, "status": if coding_gate { "complete" } else { "incomplete" }},
+            {"kind":"behavioral","budgetMin": state.behavioral_minutes, "status": if state.interview_loop == crate::agent::InterviewLoop::CodingOnly { "not_configured" } else if star_complete { "complete" } else if state.behavioral_round_started { "started" } else { "skipped" }}
+        ]));
     }
     report
 }
@@ -2471,12 +2524,14 @@ mod tests {
             &config,
             "interview-fixed",
             Some(
-                r#"{"problemId":"merge-intervals","durationMin":30,"interviewProfile":{"role":"Platform engineer","seniority":"staff","targetCompany":"Example Co"}}"#,
+                r#"{"problemId":"merge-intervals","durationMin":30,"interviewLoop":"coding_only","interviewProfile":{"role":"Platform engineer","seniority":"staff","targetCompany":"Example Co"}}"#,
             ),
         );
 
         assert_eq!(boot.problem.id, "merge-intervals");
         assert_eq!(boot.duration_min, 30);
+        assert_eq!(boot.interview_loop, crate::agent::InterviewLoop::CodingOnly);
+        assert_eq!((boot.coding_minutes, boot.behavioral_minutes), (30, 0));
         assert_eq!(boot.profile.role, "Platform engineer");
         assert_eq!(boot.profile.target_company, "Example Co");
         assert!(boot.instructions.contains("candidate selected staff"));
@@ -2750,6 +2805,9 @@ mod tests {
             let report = report_with_integrity_events(report, &state);
             assert_eq!(report["frameworkEvidence"][0]["phase"], "result");
             assert_eq!(report["frameworkEvidence"][0]["kind"], "skipped");
+            assert_eq!(report["interviewLoop"], "coding_behavioral");
+            assert_eq!(report["rounds"][0]["budgetMin"], 37);
+            assert_eq!(report["rounds"][1]["status"], "skipped");
             assert_eq!(
                 report["frameworkEvidence"][0]["frameworkVersion"],
                 crate::agent::FRAMEWORK_VERSION

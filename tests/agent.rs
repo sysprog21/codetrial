@@ -300,7 +300,7 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
         "never make them repeat work",
         "it is a hint",
         "call `log_hint`",
-        "If coding is incomplete or the five-minute warning has fired",
+        "trusted [SYSTEM EVENT] says the\nbehavioral round started",
         "Never invent a story",
         "`record_framework_evidence`",
         "`observed` for a\n  direct statement/action",
@@ -859,6 +859,8 @@ fn participant_metadata_parsing_handles_frontend_metadata() {
     let whitespace_string_duration = parse_participant_metadata(Some(r#"{"durationMin":" 30 "}"#));
     let practice = parse_participant_metadata(Some(r#"{"mode":"practice"}"#));
     let forged = parse_participant_metadata(Some(r#"{"mode":"coach"}"#));
+    let coding_only = parse_participant_metadata(Some(r#"{"interviewLoop":"coding_only"}"#));
+    let hostile_loop = parse_participant_metadata(Some(r#"{"interviewLoop":"system_design"}"#));
     let profile = parse_participant_metadata(Some(
         r#"{"interviewProfile":{"role":"  Backend\nEngineer  ","seniority":"staff","targetCompany":"Example Co"}}"#,
     ));
@@ -882,6 +884,9 @@ fn participant_metadata_parsing_handles_frontend_metadata() {
     assert_eq!(practice.mode, InterviewMode::Practice);
     assert_eq!(forged.mode, InterviewMode::Scored);
     assert_eq!(invalid_json.mode, InterviewMode::Scored);
+    assert_eq!(coding_only.interview_loop, InterviewLoop::CodingOnly);
+    assert_eq!(hostile_loop.interview_loop, InterviewLoop::CodingBehavioral);
+    assert_eq!(invalid_json.interview_loop, InterviewLoop::CodingBehavioral);
     assert_eq!(profile.profile.role, "Backend Engineer");
     assert_eq!(profile.profile.seniority, Some(Seniority::Staff));
     assert_eq!(profile.profile.target_company, "Example Co");
@@ -974,6 +979,97 @@ fn only_practice_mode_can_pause_runtime_progression() {
         Some(false)
     );
     assert!(!practice.paused);
+}
+
+#[test]
+fn round_transition_is_one_shot_plan_scoped_and_evidence_gated() {
+    let event = json!({"type":"round_transition","round":"behavioral","remainingSeconds":480});
+    let mut coding_only = RuntimeState {
+        interview_loop: InterviewLoop::CodingOnly,
+        ..RuntimeState::default()
+    };
+    assert!(
+        apply_data_event(&mut coding_only, TOPIC_CONTROL, &event, 99.0)
+            .generate_reply
+            .is_none()
+    );
+    let mut early = RuntimeState::default();
+    assert!(
+        apply_data_event(
+            &mut early,
+            TOPIC_CONTROL,
+            &json!({"type":"round_transition","round":"behavioral","remainingSeconds":481}),
+            99.0
+        )
+        .generate_reply
+        .is_none()
+    );
+    assert!(!early.round_transition_seen);
+    let mut missing = RuntimeState::default();
+    let reply = apply_data_event(&mut missing, TOPIC_CONTROL, &event, 99.0)
+        .generate_reply
+        .unwrap();
+    assert!(reply.contains("did not pass") && reply.contains("Do not start STAR"));
+    assert!(missing.round_transition_seen && !missing.behavioral_round_started);
+    assert!(
+        apply_data_event(&mut missing, TOPIC_CONTROL, &event, 99.0)
+            .generate_reply
+            .is_none()
+    );
+    let mut complete = RuntimeState::default();
+    for phase in ["test", "optimizations"] {
+        record_framework_evidence(&mut complete, &json!({"phase":phase,"source":"candidate_speech","kind":"observed","confidence":90,"summary":format!("candidate completed {phase}")})).unwrap();
+    }
+    let reply = apply_data_event(&mut complete, TOPIC_CONTROL, &event, 99.0)
+        .generate_reply
+        .unwrap();
+    assert!(reply.contains("completion gate passed") && reply.contains("do not return to coding"));
+    assert!(complete.behavioral_round_started);
+    complete.code = "frozen".to_string();
+    let ignored = apply_data_event(
+        &mut complete,
+        TOPIC_CODE_UPDATE,
+        &json!({"code":"changed after coding closed","language":"javascript"}),
+        99.0,
+    );
+    assert_eq!(complete.code, "frozen");
+    assert_eq!(complete.language, "python");
+    assert!(ignored.generate_reply.is_none());
+    let warning = apply_data_event(
+        &mut complete,
+        TOPIC_CONTROL,
+        &json!({"type":"time_warning","remainingSeconds":300}),
+        99.0,
+    )
+    .generate_reply
+    .unwrap();
+    assert!(
+        warning.contains("active behavioral round") && warning.contains("Do not return to coding")
+    );
+    let end = apply_data_event(
+        &mut complete,
+        TOPIC_CONTROL,
+        &json!({"type":"end_interview","reason":"time_up","code":"late overwrite","language":"javascript"}),
+        99.0,
+    );
+    assert_eq!(end.finish_interview.as_deref(), Some("time_up"));
+    assert_eq!(complete.code, "frozen");
+    assert_eq!(complete.language, "python");
+}
+
+#[test]
+fn coding_only_prompt_removes_the_behavioral_round_contract() {
+    let prompt = build_instructions_for_plan(
+        get_problem(Some("two-sum")),
+        45,
+        InterviewMode::Scored,
+        &InterviewProfile::default(),
+        &InterviewGrounding::default(),
+        InterviewLoop::CodingOnly,
+    );
+    assert!(prompt.contains("coding round owns all 45 minutes"));
+    assert!(prompt.contains("STAR BEHAVIORAL ROUND — not configured"));
+    assert!(!prompt.contains("STAR BEHAVIORAL CLOSE — use only after"));
 }
 
 #[test]

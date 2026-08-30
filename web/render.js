@@ -146,16 +146,19 @@ export function reportMarkup({ report, problemTitle, language, code }) {
         <ul>${item.selfReview.map((check) => `<li>${escapeHtml(check)}</li>`).join("")}</ul>
       </li>`).join("")}</ol></section>`;
   const frameworkTimeline = frameworkEvidenceMarkup(report.frameworkEvidence);
+  const loopLabel = report.interviewLoop === "coding_only" ? "Coding only" : "Coding + behavioral";
+  const rounds = report.rounds?.length ? `<section><h3>Interview rounds</h3><ul>${report.rounds.map((round) => `<li>${escapeHtml(round.kind)} · ${escapeHtml(round.budgetMin)} min · ${escapeHtml(round.status)}</li>`).join("")}</ul></section>` : "";
 
   return `
     <div class="report-card">
       <div class="report-header">
-        <div><p>${report.mode === "practice" ? "Practice" : "Scored"} interview report · ${escapeHtml(problemTitle)}</p><h2>${heading}</h2></div>
+        <div><p>${report.mode === "practice" ? "Practice" : "Scored"} interview report · ${loopLabel} · ${escapeHtml(problemTitle)}</p><h2>${heading}</h2></div>
         ${badge}
       </div>${scores}
       <section><h3>${report.incomplete ? "What happened" : "Committee summary"}</h3><p>${escapeHtml(report.summary)}</p></section>
       ${feedback}
       ${practiceNext}
+      ${rounds}
       ${frameworkTimeline}
       ${integrityEvidenceMarkup(report)}
       <details><summary>Your final code (${escapeHtml(language)})</summary><pre>${escapeHtml(code.trimEnd() || "(editor was empty)")}</pre></details>
@@ -289,6 +292,8 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
     `# Interview Report - ${mdText(problemTitle)}`,
     `_${at}_`,
     `Mode: ${mode === "practice" || report.mode === "practice" ? "Practice" : "Scored"}`,
+    `Loop: ${report.interviewLoop === "coding_only" ? "Coding only" : "Coding + behavioral"}`,
+    ...(report.rounds?.length ? ["Rounds: " + report.rounds.map((round) => `${round.kind} (${round.budgetMin} min, ${round.status})`).join("; ")] : []),
     "",
     ...head,
     "",

@@ -1,9 +1,12 @@
-use codetrial::agent::{InterviewGrounding, InterviewMode, InterviewProfile, Seniority};
+use codetrial::agent::{
+    InterviewGrounding, InterviewLoop, InterviewMode, InterviewProfile, Seniority,
+};
 use codetrial::config::{
     DEFAULT_GEMINI_LIVE_MODEL, DEFAULT_GEMINI_REPORT_MODEL, DEFAULT_GEMINI_VOICE, load_from_pairs,
 };
 use codetrial::runtime::{
-    agent_identity, bootstrap, bootstrap_with_context, bootstrap_with_mode, bootstrap_with_profile,
+    RuntimeOptions, agent_identity, bootstrap, bootstrap_with_context, bootstrap_with_mode,
+    bootstrap_with_profile, bootstrap_with_rounds,
 };
 
 fn config() -> codetrial::config::AgentConfig {
@@ -106,6 +109,46 @@ fn bootstrap_carries_ephemeral_grounding_without_changing_profile() {
     assert_eq!(boot.grounding, grounding);
     assert_eq!(boot.profile, InterviewProfile::default());
     assert!(boot.instructions.contains("Led a migration"));
+}
+
+#[test]
+fn bootstrap_owns_validated_round_plan_and_budgets() {
+    let config = config();
+    let coding = bootstrap_with_rounds(
+        &config,
+        "coding",
+        None,
+        45,
+        RuntimeOptions {
+            mode: InterviewMode::Scored,
+            profile: InterviewProfile::default(),
+            grounding: InterviewGrounding::default(),
+            interview_loop: InterviewLoop::CodingOnly,
+        },
+    );
+    assert_eq!((coding.coding_minutes, coding.behavioral_minutes), (45, 0));
+    assert!(
+        !coding
+            .instructions
+            .contains("STAR BEHAVIORAL CLOSE — use only after")
+    );
+    let combined = bootstrap_with_rounds(
+        &config,
+        "combined",
+        None,
+        30,
+        RuntimeOptions {
+            mode: InterviewMode::Practice,
+            profile: InterviewProfile::default(),
+            grounding: InterviewGrounding::default(),
+            interview_loop: InterviewLoop::CodingBehavioral,
+        },
+    );
+    assert_eq!(
+        (combined.coding_minutes, combined.behavioral_minutes),
+        (22, 8)
+    );
+    assert!(combined.instructions.contains("two rounds"));
 }
 
 #[test]

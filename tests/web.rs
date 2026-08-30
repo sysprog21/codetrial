@@ -149,7 +149,7 @@ fn token_response_matches_frontend_contract() {
     assert_eq!(claims["video"]["room"], response.room_name);
     assert_eq!(
         claims["metadata"],
-        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90,"mode":"scored","interviewProfile":{"role":"","seniority":null,"targetCompany":""},"candidateIdentity":"candidate-fixed"})).unwrap()
+        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90,"mode":"scored","interviewLoop":"coding_behavioral","interviewProfile":{"role":"","seniority":null,"targetCompany":""},"candidateIdentity":"candidate-fixed"})).unwrap()
     );
 }
 
@@ -170,6 +170,32 @@ fn token_mode_is_validated_and_legacy_requests_are_scored() {
         let claims = claims(&response.token);
         let metadata: Value = serde_json::from_str(claims["metadata"].as_str().unwrap()).unwrap();
         assert_eq!(metadata["mode"], expected);
+    }
+}
+
+#[test]
+fn token_interview_loop_is_allowlisted_and_defaults_to_combined() {
+    let config = TokenConfig {
+        api_key: "key",
+        api_secret: "secret",
+        server_url: "wss://example.test",
+        recording_max_min: None,
+    };
+    for (body, expected) in [
+        (
+            br#"{"interviewLoop":"coding_only"}"#.as_slice(),
+            "coding_only",
+        ),
+        (
+            br#"{"interviewLoop":"system_design"}"#.as_slice(),
+            "coding_behavioral",
+        ),
+        (br#"{}"#.as_slice(), "coding_behavioral"),
+    ] {
+        let response = token_response(&config, body, "room", "candidate", 2_000).unwrap();
+        let metadata: Value =
+            serde_json::from_str(claims(&response.token)["metadata"].as_str().unwrap()).unwrap();
+        assert_eq!(metadata["interviewLoop"], expected);
     }
 }
 
@@ -1254,7 +1280,7 @@ fn static_interview_script_leaves_candidate_identity_to_the_server() {
 
     assert!(
         source
-            .contains("JSON.stringify({ problemId: problem.id, durationMin, interviewId, mode, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) })")
+            .contains("JSON.stringify({ problemId: problem.id, durationMin, interviewId, mode, interviewLoop, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) })")
     );
     assert!(!source.contains("candidateIdentity"));
 }

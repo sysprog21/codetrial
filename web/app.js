@@ -6,6 +6,7 @@ import { parseGroundingFile, selectedGroundingPacket, storeGroundingPacket } fro
 let problem;
 let duration;
 let mode = "scored";
+let interviewLoop = "coding_behavioral";
 let reports = [];
 let manualProblem = false;
 let manualDuration = false;
@@ -135,6 +136,13 @@ for (const button of document.querySelectorAll("[data-mode]")) {
   });
 }
 
+for (const button of document.querySelectorAll("[data-loop]")) {
+  button.addEventListener("click", () => {
+    interviewLoop = button.dataset.loop === "coding_only" ? "coding_only" : "coding_behavioral";
+    select("[data-loop]", button);
+  });
+}
+
 const start = document.querySelector("#start");
 
 let signInFirst = false;
@@ -160,6 +168,7 @@ start.addEventListener("click", async () => {
   const chosen = problem;
   const minutes = duration;
   const chosenMode = mode;
+  const chosenLoop = interviewLoop;
   if (!chosen) return;
   starting = true;
   start.disabled = true;
@@ -180,6 +189,7 @@ start.addEventListener("click", async () => {
   destination.searchParams.set("problem", chosen.id);
   destination.searchParams.set("duration", String(minutes));
   destination.searchParams.set("mode", chosenMode);
+  destination.searchParams.set("loop", chosenLoop);
   const profile = {
     role: nodes.profileRole.value.trim(),
     seniority: nodes.profileSeniority.value,

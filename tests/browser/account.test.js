@@ -48,9 +48,28 @@ test("practice and scored modes stay explicit from lobby through artifacts", () 
   assert.match(app, /destination\.searchParams\.set\("mode", mode\)/);
   for (const id of ["practice-guide", "pause", "retry"]) assert.match(page, new RegExp(`id="${id}"`));
   assert.match(interview, /params\.get\("mode"\) === "practice" \? "practice" : "scored"/);
-  assert.match(interview, /JSON\.stringify\(\{ problemId: problem\.id, durationMin, interviewId, mode, interviewProfile, \.\.\.\(interviewGrounding/);
-  assert.match(interview, /mode, report: state\.report/);
+  assert.match(interview, /JSON\.stringify\(\{ problemId: problem\.id, durationMin, interviewId, mode, interviewLoop, interviewProfile, \.\.\.\(interviewGrounding/);
+  assert.match(interview, /mode, interviewLoop, report: state\.report/);
   assert.match(interview, /searchParams\.set\("retry", Date\.now\(\)\.toString\(\)\)/);
+});
+
+test("interview loop is explicit, budgeted, gated, and carried into artifacts", () => {
+  const lobby = read("index.html");
+  const app = read("app.js");
+  const page = read("interview.html");
+  const interview = read("interview.js");
+  assert.match(lobby, /data-loop="coding_only"/);
+  assert.match(lobby, /data-loop="coding_behavioral"[^>]*class="[^"]*selected|class="[^"]*selected"[^>]*data-loop="coding_behavioral"/);
+  assert.match(app, /let interviewLoop = "coding_behavioral"/);
+  assert.match(app, /destination\.searchParams\.set\("loop", interviewLoop\)/);
+  assert.match(page, /id="round-plan-summary"/);
+  assert.match(interview, /behavioralMinutes = interviewLoop === "coding_behavioral" \? Math\.min\(8, durationMin\) : 0/);
+  assert.match(interview, /type: "round_transition", round: "behavioral"/);
+  assert.match(interview, /recordReplay\("lifecycle", \{ state: "round_reserve_started"/);
+  assert.match(interview, /message\.type === "round_state"/);
+  assert.match(interview, /nodes\.editor\.disabled = true/);
+  assert.match(interview, /state: "rounds_final"/);
+  assert.match(interview, /mode, interviewLoop, report: state\.report/);
 });
 
 test("optional interview profile is accessible, bounded, and omitted when blank", () => {

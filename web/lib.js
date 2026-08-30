@@ -324,6 +324,23 @@ export async function integrityEventPayload(input, previous = { seq: 0, hash: ""
 // untrusted: scores are rendered into innerHTML and must not carry markup.
 export function sanitizeReport(raw) {
   const mode = raw?.mode === "practice" ? "practice" : "scored";
+  const interviewLoop = raw?.interviewLoop === "coding_only" ? "coding_only" : "coding_behavioral";
+  const roundKinds = ["coding", "behavioral"];
+  const codingStatuses = new Set(["complete", "incomplete"]);
+  const behavioralStatuses = new Set(["complete", "started", "skipped", "not_configured"]);
+  const rounds = Array.isArray(raw?.rounds) && raw.rounds.length === 2
+    ? raw.rounds.map((round, index) => round?.kind === roundKinds[index]
+      && Number.isInteger(round.budgetMin) && round.budgetMin >= 0 && round.budgetMin <= 90
+      && (index === 0 ? codingStatuses : behavioralStatuses).has(round.status)
+      ? { kind: round.kind, budgetMin: round.budgetMin, status: round.status } : null)
+    : [];
+  const roundSummary = rounds.length === 2 && rounds.every(Boolean)
+    && rounds[0].budgetMin + rounds[1].budgetMin >= 10
+    && rounds[0].budgetMin + rounds[1].budgetMin <= 90
+    && (interviewLoop === "coding_only"
+      ? rounds[1].budgetMin === 0 && rounds[1].status === "not_configured"
+      : rounds[1].budgetMin === 8 && rounds[1].status !== "not_configured")
+    ? rounds : [];
   const bounded = (value, max) => {
     const number = Math.trunc(Number(value));
     return Number.isFinite(number) ? clamp(number, 0, max) : 0;
@@ -472,6 +489,8 @@ export function sanitizeReport(raw) {
   if (raw?.incomplete) {
     return {
       mode,
+      interviewLoop,
+      rounds: roundSummary,
       incomplete: true,
       summary: typeof raw?.summary === "string" ? boundedText(raw.summary) : "",
       integrityEvents: integrityEvents(raw?.integrityEvents),
@@ -484,6 +503,8 @@ export function sanitizeReport(raw) {
   }
   return {
     mode,
+    interviewLoop,
+    rounds: roundSummary,
     codingScore: score(raw?.codingScore),
     communicationScore: score(raw?.communicationScore),
     decision: raw?.decision === "HIRE" ? "HIRE" : "NO_HIRE",

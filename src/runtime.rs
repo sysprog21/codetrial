@@ -1,7 +1,7 @@
 use crate::agent::{
-    InterviewGrounding, InterviewMode, InterviewProfile, Problem, build_instructions_for_context,
-    get_problem, greeting, interview_grounding_json, interview_profile_json,
-    sanitize_interview_grounding, sanitize_interview_profile,
+    InterviewGrounding, InterviewLoop, InterviewMode, InterviewProfile, Problem,
+    build_instructions_for_plan, get_problem, greeting, interview_grounding_json,
+    interview_profile_json, sanitize_interview_grounding, sanitize_interview_profile,
 };
 use crate::config::{AgentConfig, MAX_DURATION_MIN, MIN_DURATION_MIN};
 
@@ -26,6 +26,9 @@ pub struct RuntimeBootstrap<'a> {
     pub problem: &'static Problem,
     pub duration_min: u32,
     pub mode: InterviewMode,
+    pub interview_loop: InterviewLoop,
+    pub coding_minutes: u32,
+    pub behavioral_minutes: u32,
     pub profile: InterviewProfile,
     pub grounding: InterviewGrounding,
     pub live_model: &'a str,
@@ -35,6 +38,14 @@ pub struct RuntimeBootstrap<'a> {
     pub start_sensitivity: &'a str,
     pub instructions: String,
     pub greeting: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeOptions {
+    pub mode: InterviewMode,
+    pub profile: InterviewProfile,
+    pub grounding: InterviewGrounding,
+    pub interview_loop: InterviewLoop,
 }
 
 pub fn bootstrap<'a>(
@@ -97,22 +108,55 @@ pub fn bootstrap_with_context<'a>(
     profile: InterviewProfile,
     grounding: InterviewGrounding,
 ) -> RuntimeBootstrap<'a> {
+    bootstrap_with_rounds(
+        config,
+        room_name,
+        problem_id,
+        duration_min,
+        RuntimeOptions {
+            mode,
+            profile,
+            grounding,
+            interview_loop: InterviewLoop::CodingBehavioral,
+        },
+    )
+}
+
+pub fn bootstrap_with_rounds<'a>(
+    config: &'a AgentConfig,
+    room_name: &'a str,
+    problem_id: Option<&str>,
+    duration_min: u32,
+    options: RuntimeOptions,
+) -> RuntimeBootstrap<'a> {
+    let RuntimeOptions {
+        mode,
+        profile,
+        grounding,
+        interview_loop,
+    } = options;
     let problem = get_problem(problem_id);
     let duration_min = duration_min.clamp(MIN_DURATION_MIN, MAX_DURATION_MIN);
     let profile = sanitize_interview_profile(Some(&interview_profile_json(&profile)));
     let grounding = sanitize_interview_grounding(Some(&interview_grounding_json(&grounding)));
+    let behavioral_minutes = interview_loop.behavioral_minutes().min(duration_min);
+    let coding_minutes = duration_min.saturating_sub(behavioral_minutes);
 
     RuntimeBootstrap {
         room_name,
         problem,
         duration_min,
         mode,
-        instructions: build_instructions_for_context(
+        interview_loop,
+        coding_minutes,
+        behavioral_minutes,
+        instructions: build_instructions_for_plan(
             problem,
             duration_min,
             mode,
             &profile,
             &grounding,
+            interview_loop,
         ),
         profile,
         grounding,

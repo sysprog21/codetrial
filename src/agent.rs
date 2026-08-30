@@ -13,10 +13,10 @@ pub use integrity::{sanitize_integrity_event, sanitize_test_run};
 pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, get_problem};
 pub use prompts::{
     LanguageChoiceContext, ReportPromptInput, build_instructions, build_instructions_for_context,
-    build_instructions_for_mode, build_instructions_for_profile, format_test_run, greeting,
-    language_choice, log_hint_text, numbered, proactive_review, read_editor_text, report_prompt,
-    significant_change, silence_nudge, spoken_language, test_results_reaction, time_warning,
-    wrap_up,
+    build_instructions_for_mode, build_instructions_for_plan, build_instructions_for_profile,
+    format_test_run, greeting, language_choice, log_hint_text, numbered, proactive_review,
+    read_editor_text, report_prompt, significant_change, silence_nudge, spoken_language,
+    test_results_reaction, time_warning, wrap_up,
 };
 
 use crate::config::{DEFAULT_DURATION_MIN, MAX_DURATION_MIN, MIN_DURATION_MIN};
@@ -91,6 +91,36 @@ impl InterviewMode {
         match self {
             Self::Practice => "practice",
             Self::Scored => "scored",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InterviewLoop {
+    CodingOnly,
+    #[default]
+    CodingBehavioral,
+}
+
+impl InterviewLoop {
+    pub fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("coding_only") => Self::CodingOnly,
+            _ => Self::CodingBehavioral,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CodingOnly => "coding_only",
+            Self::CodingBehavioral => "coding_behavioral",
+        }
+    }
+
+    pub const fn behavioral_minutes(self) -> u32 {
+        match self {
+            Self::CodingOnly => 0,
+            Self::CodingBehavioral => 8,
         }
     }
 }
@@ -394,6 +424,11 @@ impl SpeakerTurn {
 pub struct RuntimeState {
     pub started_at: std::time::Instant,
     pub mode: InterviewMode,
+    pub interview_loop: InterviewLoop,
+    pub coding_minutes: u32,
+    pub behavioral_minutes: u32,
+    pub round_transition_seen: bool,
+    pub behavioral_round_started: bool,
     pub paused: bool,
     pub framework_evidence: Vec<FrameworkEvidence>,
     pub code: String,
@@ -432,6 +467,11 @@ impl Default for RuntimeState {
         Self {
             started_at: std::time::Instant::now(),
             mode: InterviewMode::Scored,
+            interview_loop: InterviewLoop::CodingBehavioral,
+            coding_minutes: 37,
+            behavioral_minutes: 8,
+            round_transition_seen: false,
+            behavioral_round_started: false,
             paused: false,
             framework_evidence: Vec::new(),
             code: String::new(),
@@ -612,6 +652,7 @@ pub struct MetadataConfig {
     pub problem: &'static Problem,
     pub duration_min: u32,
     pub mode: InterviewMode,
+    pub interview_loop: InterviewLoop,
     pub profile: InterviewProfile,
     pub grounding: InterviewGrounding,
 }
@@ -656,6 +697,8 @@ pub struct DataEventResult {
     pub finish_interview: Option<String>,
     /// Some only when a practice-mode pause state genuinely changed.
     pub pause_changed: Option<bool>,
+    /// Agent-owned round transition result: `started` or `skipped`.
+    pub round_changed: Option<&'static str>,
 }
 
 /// How much conversation the report prompt may carry. A 90-minute interview
@@ -952,6 +995,11 @@ pub fn parse_participant_metadata(metadata: Option<&str>) -> MetadataConfig {
     let problem = get_problem(value.get("problemId").and_then(serde_json::Value::as_str));
     let duration_min = duration_from_metadata(value.get("durationMin"));
     let mode = InterviewMode::parse(value.get("mode").and_then(serde_json::Value::as_str));
+    let interview_loop = InterviewLoop::parse(
+        value
+            .get("interviewLoop")
+            .and_then(serde_json::Value::as_str),
+    );
     let profile = sanitize_interview_profile(value.get("interviewProfile"));
     let grounding = sanitize_interview_grounding(value.get("interviewGrounding"));
 
@@ -959,6 +1007,7 @@ pub fn parse_participant_metadata(metadata: Option<&str>) -> MetadataConfig {
         problem,
         duration_min,
         mode,
+        interview_loop,
         profile,
         grounding,
     }
@@ -1021,6 +1070,9 @@ pub fn apply_data_event(
     payload: &serde_json::Value,
     since_last_test_reaction_seconds: f64,
 ) -> DataEventResult {
+    if state.behavioral_round_started && matches!(topic, TOPIC_CODE_UPDATE | TOPIC_TEST_RESULTS) {
+        return DataEventResult::default();
+    }
     if state.paused && matches!(topic, TOPIC_CODE_UPDATE | TOPIC_TEST_RESULTS) {
         return DataEventResult::default();
     }
@@ -1185,20 +1237,60 @@ fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
                 ..DataEventResult::default()
             }
         }
+        Some("round_transition")
+            if !state.ended
+                && !state.paused
+                && state.interview_loop == InterviewLoop::CodingBehavioral
+                && !state.round_transition_seen
+                && payload.get("round").and_then(serde_json::Value::as_str)
+                    == Some("behavioral")
+                && payload
+                    .get("remainingSeconds")
+                    .and_then(json_int)
+                    .is_some_and(|value| (1..=480).contains(&value)) =>
+        {
+            state.round_transition_seen = true;
+            let completed = |phase| {
+                state
+                    .framework_evidence
+                    .iter()
+                    .any(|item| item.phase == phase && item.kind != EvidenceKind::Skipped)
+            };
+            if completed(FrameworkPhase::Test) && completed(FrameworkPhase::Optimizations) {
+                state.behavioral_round_started = true;
+                DataEventResult {
+                    round_changed: Some("started"),
+                    generate_reply: Some("[SYSTEM EVENT] The trusted coding completion gate passed: Test and Optimizations both have candidate evidence. The coding round is closed. Begin the reserved behavioral round now with exactly one concise question under the private STAR, profile, and document-grounding policies. Use prior candidate answers only to deepen the follow-up; do not repeat them and do not return to coding.".to_string()),
+                    ..DataEventResult::default()
+                }
+            } else {
+                DataEventResult {
+                    round_changed: Some("skipped"),
+                    generate_reply: Some("[SYSTEM EVENT] The behavioral reserve began, but the trusted coding completion gate did not pass because Test or Optimizations evidence is absent. Do not start STAR. Keep the candidate focused on a testable solution, highest-value tests, and justified complexity until the session ends; missing STAR phases will be marked skipped.".to_string()),
+                    ..DataEventResult::default()
+                }
+            }
+        }
         Some("time_warning") if !state.ended && !state.paused => {
             let remaining_seconds = payload
                 .get("remainingSeconds")
                 .and_then(json_int)
                 .unwrap_or(300);
+            let minutes = spoken_minutes_from_remaining_seconds(remaining_seconds) as u32;
             DataEventResult {
-                generate_reply: Some(time_warning(spoken_minutes_from_remaining_seconds(
-                    remaining_seconds,
-                ) as u32)),
+                generate_reply: Some(if state.behavioral_round_started {
+                    format!(
+                        "[SYSTEM EVENT] Exactly {minutes} minutes remain in the active behavioral round. Do not return to coding or ask a new question. Let the candidate finish the current answer, ask at most the one permitted neutral missing-STAR follow-up, then close naturally."
+                    )
+                } else {
+                    time_warning(minutes)
+                }),
                 ..DataEventResult::default()
             }
         }
         Some("end_interview") if !state.ended => {
-            if !payload.get("code").is_some_and(serde_json::Value::is_null)
+            if !state.behavioral_round_started
+                && !payload.get("code").is_some_and(serde_json::Value::is_null)
                 && let Some(code) = payload.get("code").and_then(serde_json::Value::as_str)
             {
                 state.code = code.to_string();
@@ -1209,10 +1301,11 @@ fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
             // report prompt was then written against whatever language the
             // session last happened to record. Validated for the same reason as
             // the code path: this string reaches the report prompt.
-            if let Some((id, _)) = payload
-                .get("language")
-                .and_then(serde_json::Value::as_str)
-                .and_then(offered_language)
+            if !state.behavioral_round_started
+                && let Some((id, _)) = payload
+                    .get("language")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(offered_language)
             {
                 state.language = id.to_string();
             }

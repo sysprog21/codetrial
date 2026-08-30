@@ -475,6 +475,8 @@ test("sanitizeReport preserves a well-formed agent report", () => {
 
   assert.deepEqual(report, {
     mode: "scored",
+    interviewLoop: "coding_behavioral",
+    rounds: [],
     codingScore: 82,
     communicationScore: 74,
     decision: "HIRE",
@@ -491,6 +493,25 @@ test("sanitizeReport preserves a well-formed agent report", () => {
     frameworkAssessment: null,
     frameworkEvidence: [],
   });
+});
+
+test("round summaries require plan-consistent kinds budgets and statuses", () => {
+  const coding = sanitizeReport({ interviewLoop: "coding_only", rounds: [
+    { kind: "coding", budgetMin: 45, status: "complete" },
+    { kind: "behavioral", budgetMin: 0, status: "not_configured" },
+  ] });
+  assert.equal(coding.interviewLoop, "coding_only");
+  assert.equal(coding.rounds[0].status, "complete");
+  const combined = sanitizeReport({ rounds: [
+    { kind: "coding", budgetMin: 37, status: "incomplete" },
+    { kind: "behavioral", budgetMin: 8, status: "skipped" },
+  ] });
+  assert.equal(combined.rounds[1].status, "skipped");
+  for (const rounds of [
+    [{ kind: "behavioral", budgetMin: 8, status: "started" }, { kind: "coding", budgetMin: 37, status: "complete" }],
+    [{ kind: "coding", budgetMin: 37, status: "started" }, { kind: "behavioral", budgetMin: 8, status: "complete" }],
+    [{ kind: "coding", budgetMin: 37, status: "complete" }, { kind: "behavioral", budgetMin: 7, status: "complete" }],
+  ]) assert.deepEqual(sanitizeReport({ rounds }).rounds, []);
 });
 
 test("framework assessment requires ten unique scores or explicit gaps", () => {

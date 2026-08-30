@@ -126,6 +126,9 @@ const problem = await loadProblem(params.get("problem")).catch((error) => {
 });
 const durationMin = clamp(Number.parseInt(params.get("duration") || "45", 10) || 45, 10, 90);
 const mode = params.get("mode") === "practice" ? "practice" : "scored";
+const interviewLoop = params.get("loop") === "coding_only" ? "coding_only" : "coding_behavioral";
+const behavioralMinutes = interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
+const codingMinutes = durationMin - behavioralMinutes;
 const interviewProfile = {
   role: params.get("role") || "",
   seniority: params.get("seniority") || "",
@@ -139,6 +142,7 @@ const state = {
   codeByLanguage: { ...problem.starterCode },
   language: "python",
   remaining: durationMin * 60,
+  roundTransitionSent: false,
   // Wall-clock deadline, set when the interview starts. The countdown is
   // derived from it rather than accumulated, so throttling and suspend cannot
   // bend it.
@@ -187,6 +191,7 @@ const nodes = {
   captionsText: document.querySelector("#captions-text"),
   timer: document.querySelector("#timer"),
   practiceGuide: document.querySelector("#practice-guide"),
+  roundPlanSummary: document.querySelector("#round-plan-summary"),
 
   mic: document.querySelector("#mic"),
   pause: document.querySelector("#pause"),
@@ -333,6 +338,9 @@ function applyIndent(next) {
 }
 
 function bindEvents() {
+  nodes.roundPlanSummary.textContent = interviewLoop === "coding_only"
+    ? `Coding-only loop · ${codingMinutes} minute coding budget.`
+    : `Coding + behavioral loop · ${codingMinutes} minute coding budget · ${behavioralMinutes} minute behavioral reserve.`;
   nodes.problemTab.addEventListener("click", () => selectTab("problem"));
   nodes.transcriptTab.addEventListener("click", () => selectTab("transcript"));
   nodes.mic.addEventListener("click", toggleMicrophone);
@@ -728,7 +736,7 @@ async function connect(preflight, presenting = false) {
     const response = await fetch("/api/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ problemId: problem.id, durationMin, interviewId, mode, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) }),
+      body: JSON.stringify({ problemId: problem.id, durationMin, interviewId, mode, interviewLoop, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) }),
     });
     if (!response.ok) throw new Error((await response.json()).error || "Failed to create a session.");
     const connection = await response.json();
@@ -746,7 +754,7 @@ async function connect(preflight, presenting = false) {
       await startRecording();
       // First event of the replay, so a template that joins late knows the
       // interview was already running rather than inferring it from silence.
-      recordReplay("lifecycle", { state: "started" });
+      recordReplay("lifecycle", { state: "started", interviewLoop, codingMinutes, behavioralMinutes });
       // The problem was rendered in the lobby, before this interview existed,
       // so its heading was dropped. Without this the recording shows a blank
       // title for the whole interview.
@@ -969,6 +977,8 @@ function stopLocalMedia() {
 async function receiveReport(room, payload) {
   try {
     state.report = sanitizeReport(JSON.parse(new TextDecoder().decode(payload)));
+    recordReplay("lifecycle", { state: "rounds_final", interviewLoop, rounds: state.report.rounds });
+    void flushReplay();
     state.phase = "report";
     setLocalAudioEnabled(false);
     await saveHistory();
@@ -1158,11 +1168,18 @@ function updatePresenceBanner(eventType) {
 /// that hazard for the face sampler.
 function tickTimer() {
   if (state.phase !== "live" || state.paused) return;
+  const previousRemaining = state.remaining;
   const tick = countdown(state.remaining, state.endsAt, Date.now());
   state.remaining = tick.remaining;
   nodes.timer.textContent = formatTime(tick.remaining);
   nodes.timer.classList.toggle("urgent", tick.urgent);
   recordStageTick(tick.remaining);
+  if (interviewLoop === "coding_behavioral" && !state.roundTransitionSent
+    && previousRemaining > behavioralMinutes * 60 && tick.remaining <= behavioralMinutes * 60) {
+    state.roundTransitionSent = true;
+    publish(topics.control, { type: "round_transition", round: "behavioral", remainingSeconds: tick.remaining });
+    recordReplay("lifecycle", { state: "round_reserve_started", round: "behavioral", remainingSeconds: tick.remaining, interviewLoop });
+  }
   if (tick.warn) publish(topics.control, timeWarningPayload(tick.remaining));
   if (tick.expired) endInterview("time_up");
 }
@@ -1179,6 +1196,14 @@ function receiveControl(bytes) {
     const message = JSON.parse(new TextDecoder().decode(bytes));
     if (message.type === "pause_state" && typeof message.paused === "boolean") {
       applyPause(message.paused);
+    } else if (message.type === "round_state" && message.round === "behavioral"
+      && ["started", "skipped"].includes(message.status)) {
+      recordReplay("lifecycle", { state: "round_transition", round: "behavioral", status: message.status, interviewLoop });
+      if (message.status === "started") {
+        nodes.editor.disabled = true;
+        nodes.run.disabled = true;
+        nodes.resultsLabel.textContent = "Coding round complete";
+      }
     }
   } catch {
     // Untrusted data packets that are not valid controls are ignored.
@@ -1335,7 +1360,10 @@ async function showReport() {
     passed,
     total,
     candidateTurns,
-  }), mode };
+  }), mode, interviewLoop, rounds: [
+    { kind: "coding", budgetMin: codingMinutes, status: total > 0 && passed === total ? "complete" : "incomplete" },
+    { kind: "behavioral", budgetMin: behavioralMinutes, status: interviewLoop === "coding_only" ? "not_configured" : "skipped" },
+  ] };
   await saveHistory();
   renderReport();
 }
@@ -1363,7 +1391,7 @@ function saveHistory() {
   // The interview id travels with the report so the replay page can put the
   // two beside each other. Reports are keyed by their own id and recordings by
   // theirs, and without this the only thing relating them is the clock.
-  const entry = { id: randomId(), date: new Date().toISOString(), interviewId: state.interviewId, problemId: problem.id, problemTitle: problem.title, difficulty: problem.difficulty, language: state.language, durationMin, mode, report: state.report };
+  const entry = { id: randomId(), date: new Date().toISOString(), interviewId: state.interviewId, problemId: problem.id, problemTitle: problem.title, difficulty: problem.difficulty, language: state.language, durationMin, mode, interviewLoop, report: state.report };
   return saveReportHistory(entry);
 }
 

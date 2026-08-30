@@ -5,7 +5,7 @@
 //! interviewer behaves, not a refactor.
 
 use super::{
-    InterviewGrounding, InterviewMode, InterviewProfile, MAX_TEST_FAILURES, Problem,
+    InterviewGrounding, InterviewLoop, InterviewMode, InterviewProfile, MAX_TEST_FAILURES, Problem,
     SILENCE_THRESHOLD_S, python_truthy, truthy_string, value_string,
 };
 use crate::runtime::AGENT_NAME;
@@ -39,8 +39,9 @@ location, it is a hint and you must follow the hint rules and call `log_hint`."#
 }
 
 fn star_policy() -> &'static str {
-    r#"STAR BEHAVIORAL CLOSE — use only after the candidate has a testable solution,
-has discussed optimization, and has not received the five-minute warning:
+    r#"STAR BEHAVIORAL CLOSE — use only after a trusted [SYSTEM EVENT] says the
+behavioral round started because the candidate has a testable solution and has
+discussed optimization; never start it merely because those conditions appear true:
 - Ask ONE concise, coding-relevant question about debugging, a technical trade-off,
   ownership, disagreement, or learning from a mistake.
 - Listen for Situation, Task, the candidate's personal Action, and Result. Never
@@ -101,6 +102,24 @@ pub fn build_instructions_for_context(
     profile: &InterviewProfile,
     grounding: &InterviewGrounding,
 ) -> String {
+    build_instructions_for_plan(
+        problem,
+        duration_min,
+        mode,
+        profile,
+        grounding,
+        InterviewLoop::CodingBehavioral,
+    )
+}
+
+pub fn build_instructions_for_plan(
+    problem: &Problem,
+    duration_min: u32,
+    mode: InterviewMode,
+    profile: &InterviewProfile,
+    grounding: &InterviewGrounding,
+    interview_loop: InterviewLoop,
+) -> String {
     let hint_ladder = problem
         .hint_ladder
         .iter()
@@ -116,6 +135,21 @@ pub fn build_instructions_for_context(
     };
     let profile_policy = profile_policy(profile);
     let grounding_policy = grounding_policy(grounding);
+    let behavioral_minutes = interview_loop.behavioral_minutes().min(duration_min);
+    let coding_minutes = duration_min.saturating_sub(behavioral_minutes);
+    let round_policy = match interview_loop {
+        InterviewLoop::CodingOnly => format!(
+            "ROUND PLAN — coding only. The REACTO coding round owns all {duration_min} minutes. Never ask a behavioral question. STAR remains unassessed and must be marked skipped at session end."
+        ),
+        InterviewLoop::CodingBehavioral => format!(
+            "ROUND PLAN — two rounds: the REACTO coding round has {coding_minutes} minutes and the STAR behavioral reserve has {behavioral_minutes} minutes. Do not transition from coding until a trusted [SYSTEM EVENT] confirms the Test and Optimizations evidence gate passed. Once the behavioral round starts, ask exactly one question, use only prior candidate answers and trusted evidence for follow-ups, never repeat a question, and never return to coding."
+        ),
+    };
+    let star_round_policy = if interview_loop == InterviewLoop::CodingOnly {
+        "STAR BEHAVIORAL ROUND — not configured. Never ask a behavioral or experience question in this session. At session end, record all STAR phases as skipped with source `session_timing`; do not score absence as candidate failure.".to_string()
+    } else {
+        star_policy().to_string()
+    };
     format!(
         r#"You are {AGENT_NAME}, a senior staff software engineer conducting a live, spoken,
 {duration_min}-minute technical coding interview over a video call. The candidate
@@ -158,6 +192,8 @@ HOW THE SESSION WORKS
   them again, including after a brief audio or connection interruption. Continue
   from the conversation and the current editor; if you need to reorient, read the
   editor and briefly ask what they were deciding before the interruption.
+
+{}
 
 {}
 
@@ -251,10 +287,11 @@ never does the work for them."#,
         problem.pitfalls,
         hint_ladder,
         reacto_policy(),
-        star_policy(),
+        star_round_policy,
         mode_policy,
         profile_policy,
         grounding_policy,
+        round_policy,
     )
 }
 

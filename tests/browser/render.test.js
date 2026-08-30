@@ -314,6 +314,11 @@ test("report markup renders scores, verdict, and escaped feedback", () => {
       communicationFeedback: { strengths: [], improvements: ["slow down"] },
       integrityEvents: [{ type: "REVIEW_EVENT", at: "now", severity: "warning", detail: "SCREEN_INTERRUPTION_WITH_FACE_MISSING", sourceEventIds: ["2", "5"] }],
       hintsUsed: 2,
+      interviewLoop: "coding_behavioral",
+      rounds: [
+        { kind: "coding", budgetMin: 37, status: "complete" },
+        { kind: "behavioral", budgetMin: 8, status: "started" },
+      ],
     },
     problemTitle: "Two Sum",
     language: "python",
@@ -321,6 +326,9 @@ test("report markup renders scores, verdict, and escaped feedback", () => {
   });
 
   assert.match(body, /class="good">HIRE</);
+  assert.match(body, /Coding \+ behavioral/);
+  assert.match(body, /coding · 37 min · complete/);
+  assert.match(body, /behavioral · 8 min · started/);
   assert.match(body, />82<span> \/ 100<\/span>/);
   assert.match(body, /<strong>2<\/strong> hints used/);
   assert.match(body, /Solid &lt;session&gt;/, "summary is escaped");
@@ -449,6 +457,11 @@ test("markdown export carries the whole session", () => {
       communicationFeedback: { strengths: [], improvements: ["slow down"] },
       integrityEvents: [{ type: "REVIEW_EVENT", at: "2026-08-15", severity: "info", detail: "<ok>|fine", sourceEventIds: ["1", "2"] }],
       hintsUsed: 2,
+      interviewLoop: "coding_only",
+      rounds: [
+        { kind: "coding", budgetMin: 45, status: "complete" },
+        { kind: "behavioral", budgetMin: 0, status: "not_configured" },
+      ],
     },
     problemTitle: "Two Sum",
     language: "python",
@@ -462,6 +475,8 @@ test("markdown export carries the whole session", () => {
   });
 
   assert.match(markdown, /^# Interview Report - Two Sum$/m);
+  assert.match(markdown, /^Loop: Coding only$/m);
+  assert.match(markdown, /^Rounds: coding \(45 min, complete\); behavioral \(0 min, not_configured\)$/m);
   assert.match(markdown, /^## Verdict: HIRE$/m);
   assert.match(markdown, /^\| Coding \| 82 \/ 100 \|$/m);
   assert.match(markdown, /^\| Hints used \| 2 \|$/m);
