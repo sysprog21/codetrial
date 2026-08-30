@@ -369,7 +369,7 @@ test("a dropped connection is visible and recovers its state", () => {
     assert.match(connect, new RegExp(`RoomEvent\\.${event}`), `RoomEvent.${event} must be handled`);
   }
   // Reconnecting is not a dead session, so the candidate is told to keep going.
-  assert.match(connect, /Keep working; your code is safe/);
+  assert.match(connect, /providerUiState\("reconnecting"\)/);
   // Nothing published during the gap arrived, so the buffer is resent rather
   // than left to drift until the next keystroke.
   assert.match(connect, /Reconnected[\s\S]*?publish\(topics\.code/);
@@ -383,10 +383,9 @@ test("a refused interview says why instead of silently practising", () => {
   const script = interviewSource();
   const connect = functionBody(script, "connect");
 
-  assert.match(connect, /setBanner\("connection", `\$\{error\?\.message/);
-  assert.match(connect, /keep practising here in the meantime/);
+  assert.match(connect, /providerUiState\("degraded", error\?\.message\)/);
   // The reason has to reach the candidate, not only the console.
-  const bannerAt = connect.indexOf('setBanner("connection"');
+  const bannerAt = connect.indexOf('setBanner("connection", degraded.message)');
   const practiceAt = connect.indexOf("Offline practice mode is ready");
   assert.ok(bannerAt !== -1 && practiceAt !== -1 && bannerAt < practiceAt);
 });

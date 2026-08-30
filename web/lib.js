@@ -630,13 +630,14 @@ export function resumeDeadline(endsAt, pausedAt, resumedAt) {
     : Number(endsAt);
 }
 
-/// Whether this browser is allowed to score anybody, and what to say if not.
+/// The browser never scores anybody; this decides which honest incomplete
+/// summary describes the provider state and locally observed activity.
 ///
 /// A session that reached a real interviewer is graded by that interviewer or
 /// not at all. Asking whether the socket is open right now is the wrong
 /// question, and was asked here for one round: a dropped connection nulls the
-/// room, which routed a candidate who had passed their tests straight into
-/// `offlineReport` and rendered a green HIRE badge for a network failure, saved
+/// room, which routed a candidate who had passed their tests straight into a
+/// local scorer and rendered a green HIRE badge for a network failure, saved
 /// it to localStorage and POSTed it to `/api/reports`. Whether an interviewer
 /// was ever present is a different fact from whether the connection survived,
 /// and only the first one decides this.
@@ -650,38 +651,11 @@ export function sessionReport({ joinedRoom, passed, total, candidateTurns }) {
     };
   }
 
-  // Nothing ran and nobody spoke, so there is nothing to score even offline.
-  if (!total && !candidateTurns) {
-    return {
-      incomplete: true,
-      summary:
-        "No interviewer joined and this session produced no evaluation. Nothing you did was assessed, and no result was recorded.",
-      hintsUsed: 0,
-    };
-  }
-
-  return offlineReport({ passed, total, candidateTurns });
-}
-
-/// The offline-practice scores. Not an evaluation of the candidate by anyone,
-/// which is why the only path that reaches it is `sessionReport` deciding that
-/// tests actually ran or the candidate actually spoke. Unexported for that
-/// reason: reaching it directly would skip the decision that guards it.
-function offlineReport({ passed, total, candidateTurns }) {
-  const score = total ? Math.round((passed / total) * 100) : 40;
   return {
-    codingScore: score,
-    communicationScore: candidateTurns ? 70 : 45,
-    decision: score >= 70 ? "HIRE" : "NO_HIRE",
-    summary: total ? `${passed}/${total} test cases passed in offline practice mode.` : "Offline practice ended before tests were run.",
-    codingFeedback: {
-      strengths: passed > 0 ? ["Made measurable progress against the test cases."] : [],
-      improvements: passed === total && total > 0 ? [] : ["Use the failing cases to tighten the implementation."],
-    },
-    communicationFeedback: {
-      strengths: candidateTurns ? ["Kept the session moving."] : [],
-      improvements: ["Narrate tradeoffs and edge cases as you code."],
-    },
+    incomplete: true,
+    summary: total || candidateTurns
+      ? `Offline practice recorded local activity${total ? ` and ${passed}/${total} browser test cases passed` : ""}. No live interviewer assessed it, so no personalized scores, verdict, or feedback were created.`
+      : "No interviewer joined and this session produced no evaluation. Nothing you did was assessed, and no result was recorded.",
     hintsUsed: 0,
   };
 }
@@ -733,4 +707,25 @@ export function captionWindow(text, maxChars) {
   // its own case because `slice(-0)` is `slice(0)`, which returns everything.
   if (maxChars < 4) return maxChars > 0 ? text.slice(-maxChars) : "";
   return `...${text.slice(-(maxChars - 3))}`;
+}
+
+export function providerUiState(kind, detail = "") {
+  const detailText = String(detail).toLowerCase();
+  const reason = /429|rate limit|too many|busy|capacity/.test(detailText)
+    ? "The live interview service is busy or rate limited."
+    : /quota|connection minutes/.test(detailText)
+      ? "The live interview provider has no available session capacity."
+      : /microphone|publish/.test(detailText)
+        ? "The microphone could not be connected to the live interview."
+        : "The live interview provider could not be reached.";
+  const states = {
+    connecting: { label: "Connecting", message: "Connecting to the live interviewer.", personalized: false, retry: false },
+    live: { label: "Live", message: "The live interviewer is connected.", personalized: true, retry: false },
+    reconnecting: { label: "Reconnecting", message: "Reconnecting to the interviewer. Keep working; your code is safe.", personalized: true, retry: false },
+    degraded: { label: "Offline practice", message: `${reason} Practice remains available, but it will not create a personalized evaluation.`, personalized: false, retry: true },
+    report_generating: { label: "Preparing report", message: "Preparing your personalized report. A slow grader can take up to a minute.", personalized: true, retry: false },
+    incomplete_report: { label: "Incomplete report", message: "The provider could not produce a valid personalized evaluation. No scores or verdict were created.", personalized: false, retry: true },
+    retry_ready: { label: "Retry available", message: "The report is still unavailable. Leave safely, then retry the interview when the provider recovers.", personalized: false, retry: true },
+  };
+  return states[kind] || states.degraded;
 }

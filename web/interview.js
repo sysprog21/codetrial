@@ -29,6 +29,7 @@ import {
   formatTime,
   integrityEventPayload,
   isAgent,
+  providerUiState,
   resumeDeadline,
   sanitizeReport,
   sessionReport,
@@ -721,7 +722,7 @@ async function startMediaMeter(stream, onPeak, onError, shouldStop) {
 }
 
 async function connect(preflight, presenting = false) {
-  setAgentStateLabel("Connecting...");
+  setAgentStateLabel(providerUiState("connecting").label);
   try {
     // Before the token, because the token is what precedes an Egress call. The
     // server refuses a recorded room without this row, so the ordering is
@@ -779,12 +780,13 @@ async function connect(preflight, presenting = false) {
     state.room = null;
     if (joined) void joined.disconnect?.()?.catch?.(() => {});
     stopPreflight(preflight);
-    setAgentStateLabel("Offline");
+    const degraded = providerUiState("degraded", error?.message);
+    setAgentStateLabel(degraded.label);
     // Practice mode without a reason reads as the product working. The server
     // says why it refused, in words written for a candidate, and a busy server
     // is a "come back in a few minutes" rather than a "your interview is now a
     // simulation" - so say it, and keep the practice editor underneath it.
-    setBanner("connection", `${error?.message || "The interview server could not be reached."} You can keep practising here in the meantime.`);
+    setBanner("connection", degraded.message);
     addTranscript("interviewer", "Offline practice mode is ready. Talk through your approach and run tests when you are ready.", true);
   }
 }
@@ -833,7 +835,7 @@ async function connectLiveKit(connection, preflight, presenting = false) {
   // on its own, so the candidate is told to wait rather than to restart.
   room.on(livekit.RoomEvent.Reconnecting, () => {
     state.connected = false;
-    setBanner("connection", "Reconnecting to the interview. Keep working; your code is safe.");
+    setBanner("connection", providerUiState("reconnecting").message);
   });
   room.on(livekit.RoomEvent.Reconnected, () => {
     state.connected = true;
@@ -854,7 +856,7 @@ async function connectLiveKit(connection, preflight, presenting = false) {
     // truthy, so leaving a dead room in place told the candidate to end the
     // interview and then left them waiting on an overlay for 55 seconds.
     state.room = null;
-    setBanner("connection", "The interview connection dropped. End the interview to get your report.");
+    setBanner("connection", providerUiState("degraded", "The interview connection dropped.").message);
     console.warn("codetrial room_disconnected");
   });
   // The participant is needed to tell Jim from any other remote audio, so both
@@ -977,6 +979,9 @@ function stopLocalMedia() {
 async function receiveReport(room, payload) {
   try {
     state.report = sanitizeReport(JSON.parse(new TextDecoder().decode(payload)));
+    if (state.report.incomplete) {
+      setBanner("session", providerUiState("incomplete_report").message);
+    }
     recordReplay("lifecycle", { state: "rounds_final", interviewLoop, rounds: state.report.rounds, interviewContract: state.report.interviewContract });
     void flushReplay();
     state.phase = "report";
@@ -1319,10 +1324,13 @@ function endInterview(reason) {
     // candidate to walk out on a report that is still coming, and leaving
     // never saves it.
     setTimeout(() => {
-      if (state.phase === "ending") nodes.endingDetail.textContent = "Still working. A slow grader can take up to a minute.";
+      if (state.phase === "ending") nodes.endingDetail.textContent = providerUiState("report_generating").message;
     }, 8000);
     setTimeout(() => {
-      if (state.phase === "ending") nodes.leaveRoom.hidden = false;
+      if (state.phase === "ending") {
+        nodes.endingDetail.textContent = providerUiState("retry_ready").message;
+        nodes.leaveRoom.hidden = false;
+      }
     }, 55000);
   }
   publish(topics.control, endInterviewPayload(reason, currentCode(), state.language));
@@ -1521,8 +1529,9 @@ function updateAgentState() {
   const published = agent?.attributes?.["lk.agent.state"];
   const value = published || "listening";
   const labels = { listening: "Listening", thinking: "Thinking...", speaking: "Speaking" };
-  setAgentStateLabel(labels[value] || "Listening", value === "listening");
-  // The same three states the pill shows. `questioning`, `encouraging`, and
+  setAgentStateLabel(labels[value] || providerUiState("live").label, value === "listening");
+  // The same three published states the pill shows. The generic Live fallback
+  // is availability only. `questioning`, `encouraging`, and
   // `challenging` wait for src/agent.rs to publish lk.avatar.state; inventing
   // them here would be the avatar guessing at the interviewer's intent.
   setAvatarExpression(value);

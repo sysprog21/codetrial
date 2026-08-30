@@ -22,6 +22,7 @@ import {
   integrityEventPayload,
   normalize,
   orPlaceholder,
+  providerUiState,
   renderValue,
   sanitizeReport,
   resumeDeadline,
@@ -30,6 +31,26 @@ import {
   timeWarningPayload,
   topics,
 } from "../../web/lib.js";
+
+test("provider degradation states distinguish availability and evaluation truth", () => {
+  const expected = {
+    connecting: [false, false], live: [true, false], reconnecting: [true, false],
+    degraded: [false, true], report_generating: [true, false],
+    incomplete_report: [false, true], retry_ready: [false, true],
+  };
+  for (const [kind, [personalized, retry]] of Object.entries(expected)) {
+    const state = providerUiState(kind, "provider refused\nsecret");
+    assert.equal(state.personalized, personalized, kind);
+    assert.equal(state.retry, retry, kind);
+    assert.ok(state.label && state.message, kind);
+    assert.doesNotMatch(state.message, /\n/);
+  }
+  assert.match(providerUiState("degraded").message, /will not create a personalized evaluation/);
+  assert.doesNotMatch(providerUiState("degraded", "https:\/\/key:secret@example.test").message, /secret|example/);
+  assert.match(providerUiState("degraded", "429 Too Many Requests").message, /busy or rate limited/);
+  assert.match(providerUiState("incomplete_report").message, /No scores or verdict were created/);
+  assert.notEqual(providerUiState("live").message, providerUiState("reconnecting").message);
+});
 
 const twoSum = { checker: "twoSum" };
 const palindrome = { checker: "palindrome" };
@@ -694,51 +715,30 @@ test("a session that reached an interviewer is never scored by the browser", () 
     /interviewer never returned a report/,
   );
 
-  assert.equal(sessionReport(scored).incomplete, undefined);
-  assert.equal(sessionReport(scored).decision, "HIRE");
+  const offline = sessionReport(scored);
+  assert.equal(offline.incomplete, true);
+  assert.equal(offline.decision, undefined);
+  assert.equal(offline.codingScore, undefined);
+  assert.equal(offline.frameworkAssessment, undefined);
+  assert.match(offline.summary, /no personalized scores, verdict, or feedback/);
 });
 
-test("offline practice scores only a session that actually did something", () => {
+test("offline practice reports local activity without fabricated evaluation", () => {
   // Nothing ran and nobody spoke: there is no evidence to score, so this is
   // reported as no evaluation rather than as a 40.
   const empty = sessionReport({ joinedRoom: false, passed: 0, total: 0, candidateTurns: 0 });
   assert.equal(empty.incomplete, true);
   assert.match(empty.summary, /No interviewer joined/);
 
-  // Either one alone is enough to have produced something worth reporting.
-  assert.equal(
-    sessionReport({ joinedRoom: false, passed: 0, total: 0, candidateTurns: 1 }).incomplete,
-    undefined,
-  );
-  assert.equal(
-    sessionReport({ joinedRoom: false, passed: 0, total: 3, candidateTurns: 0 }).incomplete,
-    undefined,
-  );
-});
-
-// Through sessionReport rather than the scorer directly: the guard and the
-// scores are one decision, and a test that reaches past the guard would keep
-// passing if the guard stopped calling it.
-test("the offline decision follows the test cases and speaking follows the turns", () => {
-  const at = (passed, total, candidateTurns) =>
-    sessionReport({ joinedRoom: false, passed, total, candidateTurns });
-
-  assert.equal(at(10, 10, 1).codingScore, 100);
-  assert.equal(at(10, 10, 1).decision, "HIRE");
-
-  // The boundary is inclusive, and it is the only place a pass is decided.
-  assert.equal(at(7, 10, 1).codingScore, 70);
-  assert.equal(at(7, 10, 1).decision, "HIRE");
-  assert.equal(at(69, 100, 1).decision, "NO_HIRE");
-
-  // Being greeted is not communicating: only the candidate's own turns count,
-  // which is why this reads turns rather than transcript length.
-  assert.equal(at(10, 10, 0).communicationScore, 45);
-  assert.equal(at(10, 10, 3).communicationScore, 70);
-
-  // No tests run at all is not a zero, which would read as a failed attempt.
-  assert.equal(at(0, 0, 2).codingScore, 40);
-  assert.match(at(0, 0, 2).summary, /ended before tests were run/);
+  for (const report of [
+    sessionReport({ joinedRoom: false, passed: 0, total: 0, candidateTurns: 1 }),
+    sessionReport({ joinedRoom: false, passed: 2, total: 3, candidateTurns: 0 }),
+  ]) {
+    assert.equal(report.incomplete, true);
+    for (const key of ["codingScore", "communicationScore", "decision", "codingFeedback", "communicationFeedback", "frameworkAssessment"]) {
+      assert.equal(report[key], undefined, `${key} must not be fabricated offline`);
+    }
+  }
 });
 
 test("the caption window opens at a sentence boundary, never mid-word", () => {

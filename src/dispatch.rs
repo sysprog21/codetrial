@@ -31,33 +31,18 @@ pub struct LocalDispatcher {
 
 impl RoomDispatcher for LocalDispatcher {
     fn ensure_agent(&self, room_name: &str, provider: &Provider) -> bool {
-        {
-            let mut live = self.live.lock().unwrap_or_else(|error| error.into_inner());
-
-            // A reload mints a token for the same fixed room in local mode, and
-            // two agents in one room evict each other.
-            if live.contains(room_name) {
-                return true;
-            }
-            if live.len() >= self.max_concurrent {
+        let slot = match self.reserve(room_name) {
+            Reservation::Existing => return true,
+            Reservation::Full => {
                 eprintln!(
                     "codetrial dispatch_refused room={room_name} reason=at_capacity limit={}",
                     self.max_concurrent
                 );
                 return false;
             }
-            live.insert(room_name.to_string());
-        }
-        let config = agent_config_for(&self.config, provider);
-
-        // Released by dropping, not by a line at the end of the task: a panic
-        // in the interview would otherwise skip that line and burn the slot for
-        // the life of the process, and a cap's worth of those refuse every
-        // interview after them.
-        let slot = Slot {
-            live: Arc::clone(&self.live),
-            room_name: room_name.to_string(),
+            Reservation::New(slot) => slot,
         };
+        let config = agent_config_for(&self.config, provider);
 
         // Spawned, not awaited: this runs on the request path, and the task
         // outlives the response by the length of the interview.
@@ -74,6 +59,32 @@ impl RoomDispatcher for LocalDispatcher {
             }
         });
         true
+    }
+}
+
+enum Reservation {
+    Existing,
+    New(Slot),
+    Full,
+}
+
+impl LocalDispatcher {
+    fn reserve(&self, room_name: &str) -> Reservation {
+        let mut live = self.live.lock().unwrap_or_else(|error| error.into_inner());
+
+        // A reload mints a token for the same fixed room in local mode, and two
+        // agents in one room evict each other.
+        if live.contains(room_name) {
+            return Reservation::Existing;
+        }
+        if live.len() >= self.max_concurrent {
+            return Reservation::Full;
+        }
+        live.insert(room_name.to_string());
+        Reservation::New(Slot {
+            live: Arc::clone(&self.live),
+            room_name: room_name.to_string(),
+        })
     }
 }
 
@@ -168,6 +179,47 @@ mod tests {
         // The room already running is still admitted, because a reload asks for
         // the same room and refusing it would break the page that is open.
         assert!(dispatcher.ensure_agent("interview-first", &provider));
+    }
+
+    #[tokio::test]
+    async fn a_concurrent_burst_never_overbooks_and_released_capacity_returns() {
+        let live = Arc::new(Mutex::new(HashSet::new()));
+        let dispatcher = LocalDispatcher {
+            config: crate::config::load_from_pairs([
+                ("LIVEKIT_URL", "wss://primary.example"),
+                ("LIVEKIT_API_KEY", "primary-key"),
+                ("LIVEKIT_API_SECRET", "primary-secret"),
+                ("GOOGLE_API_KEY", "primary-google"),
+            ])
+            .unwrap(),
+            runtime: tokio::runtime::Handle::current(),
+            live: Arc::clone(&live),
+            max_concurrent: 8,
+        };
+        let mut held = Vec::new();
+        for index in 0..100 {
+            match dispatcher.reserve(&format!("interview-burst-{index}")) {
+                Reservation::New(slot) => held.push(slot),
+                Reservation::Full => {}
+                Reservation::Existing => panic!("burst ids are unique"),
+            }
+        }
+        assert_eq!(held.len(), 8);
+        assert_eq!(live.lock().unwrap().len(), 8);
+        assert!(matches!(
+            dispatcher.reserve("interview-burst-0"),
+            Reservation::Existing
+        ));
+        held.truncate(3);
+        assert_eq!(live.lock().unwrap().len(), 3);
+        for index in 100..105 {
+            assert!(matches!(
+                dispatcher.reserve(&format!("interview-burst-{index}")),
+                Reservation::New(_)
+            ));
+        }
+        // The temporary slots above drop at the end of each assertion.
+        assert_eq!(live.lock().unwrap().len(), 3);
     }
 
     /// A provider's own Google key wins, and an empty one leaves the base key

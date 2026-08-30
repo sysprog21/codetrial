@@ -1956,8 +1956,9 @@ fn static_interview_script_marks_agent_ready_visually() {
     assert!(source.contains("function setAgentStateLabel"));
     assert!(source.contains(r#"setAgentStateLabel("Waiting", false)"#));
     assert!(
-        source
-            .contains(r#"setAgentStateLabel(labels[value] || "Listening", value === "listening")"#)
+        source.contains(
+            r#"setAgentStateLabel(labels[value] || providerUiState("live").label, value === "listening")"#
+        )
     );
     assert!(source.contains(r#"classList.toggle("ready", ready)"#));
     assert!(styles.contains(".agent-pill.ready"));

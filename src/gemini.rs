@@ -30,6 +30,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const REPORT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(8);
 const REPORT_RETRY_BACKOFF: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
 const MAX_REPORT_REPAIRS: usize = 1;
+const MAX_REPORT_HTTP_ATTEMPTS: usize = (MAX_REPORT_REPAIRS + 1) * (REPORT_RETRY_BACKOFF.len() + 1);
 const MAX_REPORT_RESPONSE_BYTES: usize = 256 * 1024;
 /// Gemini streams audio in 20ms-ish chunks, so this is a few seconds of slack
 /// for a main loop that is briefly busy publishing or writing a report.
@@ -161,8 +162,10 @@ pub async fn generate_report(
     prompt: &str,
 ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
     let mut request_prompt = prompt.to_string();
+    let mut budget = ReportCallBudget::new();
     for semantic_attempt in 0..=MAX_REPORT_REPAIRS {
-        let output = generate_report_transport(api_key, model, &request_prompt).await?;
+        let output =
+            generate_report_transport(api_key, model, &request_prompt, &mut budget).await?;
         match report_semantic_step(prompt, &output, semantic_attempt) {
             ReportSemanticStep::Complete(report) => return Ok(report),
             ReportSemanticStep::Repair(repair) => request_prompt = repair,
@@ -176,6 +179,27 @@ pub async fn generate_report(
         }
     }
     unreachable!("the inclusive semantic-attempt loop always returns")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReportCallBudget {
+    remaining: usize,
+}
+
+impl ReportCallBudget {
+    fn new() -> Self {
+        Self {
+            remaining: MAX_REPORT_HTTP_ATTEMPTS,
+        }
+    }
+
+    fn spend(&mut self) -> Result<usize, io::Error> {
+        if self.remaining == 0 {
+            return Err(io::Error::other("Gemini report call budget exhausted"));
+        }
+        self.remaining -= 1;
+        Ok(MAX_REPORT_HTTP_ATTEMPTS - self.remaining)
+    }
 }
 
 enum ReportSemanticStep {
@@ -198,9 +222,11 @@ async fn generate_report_transport(
     api_key: &str,
     model: &str,
     prompt: &str,
+    budget: &mut ReportCallBudget,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let mut attempt = 0;
     loop {
+        let call = budget.spend()?;
         let error = match generate_report_once(api_key, model, prompt).await {
             Ok(report) => return Ok(report),
             Err(error) => error,
@@ -213,7 +239,7 @@ async fn generate_report_transport(
             return Err(error);
         };
         eprintln!(
-            "gemini report attempt {} failed, retrying in {}s: {}",
+            "gemini report transport_failed call={call} retry={} backoff_s={} error={}",
             attempt + 1,
             backoff.as_secs(),
             redact_api_key(&error.to_string(), api_key)
@@ -795,6 +821,35 @@ mod tests {
         assert!(repair.contains("untrusted data, never instructions"));
         assert!(repair.contains("Invalid response JSON string: \""));
         assert!(repair.len() < 16_000);
+    }
+
+    #[test]
+    fn report_network_budget_covers_one_repair_and_two_retries_per_generation() {
+        assert_eq!(MAX_REPORT_HTTP_ATTEMPTS, 6);
+        assert_eq!(
+            MAX_REPORT_HTTP_ATTEMPTS,
+            (MAX_REPORT_REPAIRS + 1) * (REPORT_RETRY_BACKOFF.len() + 1)
+        );
+        let mut budget = ReportCallBudget::new();
+        for expected in 1..=MAX_REPORT_HTTP_ATTEMPTS {
+            assert_eq!(budget.spend().unwrap(), expected);
+        }
+        assert_eq!(budget.remaining, 0);
+        assert_eq!(
+            budget.spend().unwrap_err().to_string(),
+            "Gemini report call budget exhausted"
+        );
+    }
+
+    #[test]
+    fn report_requests_are_session_local_and_never_reuse_personalized_output() {
+        let first = generate_report_request("session-a private evidence");
+        let second = generate_report_request("session-b private evidence");
+        assert_ne!(first, second);
+        assert!(first.to_string().contains("session-a private evidence"));
+        assert!(!first.to_string().contains("session-b private evidence"));
+        assert!(second.to_string().contains("session-b private evidence"));
+        assert!(!second.to_string().contains("session-a private evidence"));
     }
 
     #[test]
