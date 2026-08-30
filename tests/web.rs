@@ -3483,7 +3483,6 @@ fn browser_number(source: &str, after: &str, until: char) -> u32 {
 #[test]
 fn browser_interview_duration_matches_the_server_clamp() {
     let interview = fs::read_to_string("web/interview.js").unwrap();
-    let lobby = fs::read_to_string("web/app.js").unwrap();
     let page = fs::read_to_string("web/index.html").unwrap();
 
     let clamp = call_arguments(
@@ -3524,12 +3523,6 @@ fn browser_interview_duration_matches_the_server_clamp() {
         "web/interview.js falls back to a different default than the server"
     );
 
-    assert_eq!(
-        browser_number(&lobby, "let duration = ", ';'),
-        DEFAULT_DURATION_MIN,
-        "the lobby starts on a different duration than the server default"
-    );
-
     // Every button the lobby offers has to be a length the server will honour,
     // or the candidate picks one number and is given another without being
     // told.
@@ -3558,6 +3551,80 @@ fn browser_interview_duration_matches_the_server_clamp() {
         DEFAULT_DURATION_MIN,
         "the preselected lobby duration is not the server default"
     );
+
+    // The lobby derives its length from the checked difficulty, so the two
+    // assertions above are only worth anything if exactly one box starts
+    // checked: two would make the derived length ambiguous, and none would
+    // leave `suggestedDuration` deciding from an empty set.
+    //
+    // What that box derives is checked in the browser rather than here, by "a
+    // candidate who touches nothing gets the server's own default length" in
+    // tests/browser/lobby.test.js, which asserts that the length app.js renders
+    // on an untouched lobby is the preselected one this test just pinned to
+    // DEFAULT_DURATION_MIN. There is no longer a lobby-side literal to read:
+    // app.js derives the length, so the constant reaches the candidate through
+    // the markup. Restating the mapping here in Rust would be a second copy
+    // that drifts: swapping which difficulty yields thirty keeps every number
+    // inside the cap, so a hand-written mirror of the mapping went on passing
+    // while the untouched default had moved.
+    //
+    // Each `<input>` start tag is read whole so the check does not care what
+    // order its attributes are written in.
+    let checked = page
+        .split("<input")
+        .skip(1)
+        .map(|tag| &tag[..tag.find('>').unwrap_or(tag.len())])
+        .filter(|tag| tag.contains("name=\"difficulty\"") && tag.contains("checked"))
+        .count();
+    assert_eq!(
+        checked, 1,
+        "exactly one difficulty starts checked, or the length it derives is ambiguous"
+    );
+
+    // The other half of this, that a suggested length is one a default
+    // deployment can record to the end, is a `const` assertion beside the two
+    // constants in src/config.rs and a rendered-attribute check in
+    // tests/browser/lobby.test.js. Neither belongs here: one is a compile-time
+    // relation and the other is what a browser paints.
+}
+
+/// A card the filter cannot show is a problem nobody can reach.
+///
+/// web/app.js hides every card whose `data-difficulty` is not among the checked
+/// boxes, so a generated card carrying a level the fieldset never offers is
+/// invisible for good, is never recommended, and nothing fails to say so. The
+/// cards come from problem-bank/problems.json through
+/// scripts/gen-problem-cards.py and the boxes are hand-written, which is
+/// exactly the seam a new difficulty string would slip through.
+///
+/// Both sides are read off the rendered page rather than restated here, because
+/// a third copy of the level names is a third place to forget one.
+#[test]
+fn browser_every_problem_card_has_a_difficulty_the_filter_offers() {
+    let page = fs::read_to_string("web/index.html").unwrap();
+
+    // Each `<input>` start tag read whole, so the check does not care what
+    // order its attributes are written in.
+    let offered: std::collections::BTreeSet<&str> = page
+        .split("<input")
+        .skip(1)
+        .map(|tag| &tag[..tag.find('>').unwrap_or(tag.len())])
+        .filter(|tag| tag.contains("name=\"difficulty\""))
+        .filter_map(|tag| tag.split("value=\"").nth(1))
+        .filter_map(|value| value.split('"').next())
+        .collect();
+    assert!(
+        !offered.is_empty(),
+        "web/index.html offers no difficulty filter at all"
+    );
+
+    for chunk in page.split("data-difficulty=\"").skip(1) {
+        let level = chunk.split('"').next().expect("data-difficulty is quoted");
+        assert!(
+            offered.contains(level),
+            "web/index.html has a {level} problem card, which the difficulty filter never shows"
+        );
+    }
 }
 
 /// A recording is delivered to a person, and a typed handle is not one.

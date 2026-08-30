@@ -833,6 +833,17 @@ fn livekit_authority(url: &str) -> &str {
 /// does produces an artifact that is missing exactly the part a reviewer would
 /// have watched it for.
 pub const DEFAULT_RECORDING_MAX_MINUTES: u32 = DEFAULT_DURATION_MIN;
+
+/// A recording has to outlast the interview it records: `stale_after` in
+/// recording/sweeper.rs reaps one that outlives this cap, ending the recording
+/// before the interview. `recording_config` refuses a configured deployment
+/// that gets this wrong; the compiler refuses the defaults, which is worth the
+/// four lines because the two are one expression apart today and a literal in
+/// place of that expression would otherwise be found in production.
+const _: () = assert!(
+    DEFAULT_DURATION_MIN <= DEFAULT_RECORDING_MAX_MINUTES,
+    "the default recording cap is below the default interview length"
+);
 /// Kilobits per second. The contract's ceiling, written down in one place.
 pub const DEFAULT_RECORDING_BITRATE: u32 = crate::recording::OUTPUT_VIDEO_BITRATE;
 /// Bounds, not preferences. Below the floor the 720p output is unwatchable and

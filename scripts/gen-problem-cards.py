@@ -15,7 +15,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "problem-bank" / "problems.json"
 INDEX = ROOT / "web" / "index.html"
-DEFAULT_SELECTED = "two-sum"
 # Matched without their indentation, which the surrounding markup owns and has
 # already changed once: wrapping the grid in a `<details>` moved it two columns
 # right, and the six-space literals these used to be went on matching only
@@ -38,12 +37,11 @@ def read_json(path: Path) -> object:
 
 
 def card(problem: dict[str, object]) -> str:
-    selected = " selected" if problem["id"] == DEFAULT_SELECTED else ""
     topics = ", ".join(html.escape(topic) for topic in problem["topics"])
     meta = f"{html.escape(problem['difficulty'])} &middot; {topics}"
     return "\n".join(
         [
-            f'  <button class="problem-card{selected}" type="button" data-problem="{html.escape(problem["id"])}" data-difficulty="{html.escape(problem["difficulty"])}">',
+            f'  <button class="problem-card" type="button" data-problem="{html.escape(problem["id"])}" data-difficulty="{html.escape(problem["difficulty"])}">',
             f'    <span class="problem-title">{html.escape(problem["title"])}</span>',
             f'    <span class="problem-meta">{meta}</span>',
             "  </button>",
