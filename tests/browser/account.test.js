@@ -45,12 +45,32 @@ test("practice and scored modes stay explicit from lobby through artifacts", () 
   assert.match(lobby, /data-mode="practice"/);
   assert.match(lobby, /data-mode="scored"[^>]*class="[^"]*selected|class="[^"]*selected"[^>]*data-mode="scored"/);
   assert.match(app, /let mode = "scored"/);
-  assert.match(app, /&mode=\$\{mode\}/);
+  assert.match(app, /destination\.searchParams\.set\("mode", mode\)/);
   for (const id of ["practice-guide", "pause", "retry"]) assert.match(page, new RegExp(`id="${id}"`));
   assert.match(interview, /params\.get\("mode"\) === "practice" \? "practice" : "scored"/);
-  assert.match(interview, /JSON\.stringify\(\{ problemId: problem\.id, durationMin, interviewId, mode \}\)/);
+  assert.match(interview, /JSON\.stringify\(\{ problemId: problem\.id, durationMin, interviewId, mode, interviewProfile \}\)/);
   assert.match(interview, /mode, report: state\.report/);
   assert.match(interview, /searchParams\.set\("retry", Date\.now\(\)\.toString\(\)\)/);
+});
+
+test("optional interview profile is accessible, bounded, and omitted when blank", () => {
+  const lobby = read("index.html");
+  const app = read("app.js");
+  const interview = read("interview.js");
+  assert.match(lobby, /<summary>Optional interview context<\/summary>/);
+  assert.match(lobby, /<fieldset>[\s\S]*<legend>Tailor the behavioral question<\/legend>/);
+  for (const id of ["profile-role", "profile-seniority", "profile-company"]) {
+    assert.match(lobby, new RegExp(`id="${id}"`));
+  }
+  assert.match(lobby, /id="profile-role"[^>]*maxlength="80"/);
+  assert.match(lobby, /id="profile-company"[^>]*maxlength="80"/);
+  for (const value of ["intern", "junior", "mid", "senior", "staff", "manager"]) {
+    assert.match(lobby, new RegExp(`<option value="${value}">`));
+  }
+  assert.match(app, /if \(profile\.role\) destination\.searchParams\.set\("role", profile\.role\)/);
+  assert.match(app, /if \(profile\.seniority\) destination\.searchParams\.set\("seniority", profile\.seniority\)/);
+  assert.match(app, /if \(profile\.targetCompany\) destination\.searchParams\.set\("company", profile\.targetCompany\)/);
+  assert.match(interview, /const interviewProfile = \{/);
 });
 
 test("report history writes local storage before account sync", async () => {

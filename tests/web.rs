@@ -149,7 +149,7 @@ fn token_response_matches_frontend_contract() {
     assert_eq!(claims["video"]["room"], response.room_name);
     assert_eq!(
         claims["metadata"],
-        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90,"mode":"scored","candidateIdentity":"candidate-fixed"})).unwrap()
+        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90,"mode":"scored","interviewProfile":{"role":"","seniority":null,"targetCompany":""},"candidateIdentity":"candidate-fixed"})).unwrap()
     );
 }
 
@@ -171,6 +171,59 @@ fn token_mode_is_validated_and_legacy_requests_are_scored() {
         let metadata: Value = serde_json::from_str(claims["metadata"].as_str().unwrap()).unwrap();
         assert_eq!(metadata["mode"], expected);
     }
+}
+
+#[test]
+fn token_profile_is_bounded_and_enum_validated_before_signed_metadata() {
+    let response = token_response(
+        &TokenConfig {
+            api_key: "key",
+            api_secret: "secret",
+            server_url: "wss://example.test",
+            recording_max_min: None,
+        },
+        serde_json::to_string(&json!({"interviewProfile": {
+            "role": format!("  {}\n", "r".repeat(100)),
+            "seniority": "staff",
+            "targetCompany": "Example\u{0000} Co"
+        }}))
+        .unwrap()
+        .as_bytes(),
+        "room",
+        "candidate",
+        2_000,
+    )
+    .unwrap();
+    let token_claims = claims(&response.token);
+    let metadata: Value = serde_json::from_str(token_claims["metadata"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        metadata["interviewProfile"]["role"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count(),
+        80
+    );
+    assert_eq!(metadata["interviewProfile"]["seniority"], "staff");
+    assert_eq!(metadata["interviewProfile"]["targetCompany"], "Example Co");
+
+    let invalid = token_response(
+        &TokenConfig {
+            api_key: "key",
+            api_secret: "secret",
+            server_url: "wss://example.test",
+            recording_max_min: None,
+        },
+        br#"{"interviewProfile":{"seniority":"founder","role":4}}"#,
+        "room",
+        "candidate",
+        2_000,
+    )
+    .unwrap();
+    let metadata: Value =
+        serde_json::from_str(claims(&invalid.token)["metadata"].as_str().unwrap()).unwrap();
+    assert!(metadata["interviewProfile"]["seniority"].is_null());
+    assert_eq!(metadata["interviewProfile"]["role"], "");
 }
 
 #[test]
@@ -1174,7 +1227,7 @@ fn static_interview_script_leaves_candidate_identity_to_the_server() {
 
     assert!(
         source
-            .contains("JSON.stringify({ problemId: problem.id, durationMin, interviewId, mode })")
+            .contains("JSON.stringify({ problemId: problem.id, durationMin, interviewId, mode, interviewProfile })")
     );
     assert!(!source.contains("candidateIdentity"));
 }

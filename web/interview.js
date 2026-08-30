@@ -125,6 +125,11 @@ const problem = await loadProblem(params.get("problem")).catch((error) => {
 });
 const durationMin = clamp(Number.parseInt(params.get("duration") || "45", 10) || 45, 10, 90);
 const mode = params.get("mode") === "practice" ? "practice" : "scored";
+const interviewProfile = {
+  role: params.get("role") || "",
+  seniority: params.get("seniority") || "",
+  targetCompany: params.get("company") || "",
+};
 const state = {
   mode,
   paused: false,
@@ -721,7 +726,7 @@ async function connect(preflight, presenting = false) {
     const response = await fetch("/api/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ problemId: problem.id, durationMin, interviewId, mode }),
+      body: JSON.stringify({ problemId: problem.id, durationMin, interviewId, mode, interviewProfile }),
     });
     if (!response.ok) throw new Error((await response.json()).error || "Failed to create a session.");
     const connection = await response.json();

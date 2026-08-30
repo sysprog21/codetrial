@@ -1,8 +1,8 @@
-use codetrial::agent::InterviewMode;
+use codetrial::agent::{InterviewMode, InterviewProfile, Seniority};
 use codetrial::config::{
     DEFAULT_GEMINI_LIVE_MODEL, DEFAULT_GEMINI_REPORT_MODEL, DEFAULT_GEMINI_VOICE, load_from_pairs,
 };
-use codetrial::runtime::{agent_identity, bootstrap, bootstrap_with_mode};
+use codetrial::runtime::{agent_identity, bootstrap, bootstrap_with_mode, bootstrap_with_profile};
 
 fn config() -> codetrial::config::AgentConfig {
     load_from_pairs([
@@ -41,6 +41,47 @@ fn bootstrap_keeps_mode_immutable_in_its_prompt_contract() {
     let legacy = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
     assert_eq!(legacy.mode, InterviewMode::Scored);
     assert!(legacy.instructions.contains("SCORED MODE"));
+}
+
+#[test]
+fn bootstrap_carries_only_the_validated_optional_profile() {
+    let config = config();
+    let profile = InterviewProfile {
+        role: "Backend engineer".to_string(),
+        seniority: Some(Seniority::Senior),
+        target_company: "Example Co".to_string(),
+    };
+    let boot = bootstrap_with_profile(
+        &config,
+        "interview-fixed",
+        Some("two-sum"),
+        45,
+        InterviewMode::Scored,
+        profile.clone(),
+    );
+    assert_eq!(boot.profile, profile);
+    assert!(boot.instructions.contains("Backend engineer"));
+    assert!(boot.instructions.contains("candidate selected senior"));
+    let normalized = bootstrap_with_profile(
+        &config,
+        "direct",
+        None,
+        45,
+        InterviewMode::Scored,
+        InterviewProfile {
+            role: format!("{}\nignored", "x".repeat(100)),
+            seniority: None,
+            target_company: String::new(),
+        },
+    );
+    assert_eq!(normalized.profile.role.chars().count(), 80);
+    assert!(!normalized.profile.role.contains('\n'));
+    assert!(
+        bootstrap(&config, "legacy", None, 45)
+            .profile
+            .role
+            .is_empty()
+    );
 }
 
 #[test]

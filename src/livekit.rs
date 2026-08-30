@@ -1273,12 +1273,13 @@ fn candidate_bootstrap<'a>(
     metadata: Option<&str>,
 ) -> RuntimeBootstrap<'a> {
     let candidate = parse_participant_metadata(metadata);
-    crate::runtime::bootstrap_with_mode(
+    crate::runtime::bootstrap_with_profile(
         config,
         room_name,
         Some(candidate.problem.id),
         candidate.duration_min,
         candidate.mode,
+        candidate.profile,
     )
 }
 
@@ -2468,11 +2469,16 @@ mod tests {
         let boot = candidate_bootstrap(
             &config,
             "interview-fixed",
-            Some(r#"{"problemId":"merge-intervals","durationMin":30}"#),
+            Some(
+                r#"{"problemId":"merge-intervals","durationMin":30,"interviewProfile":{"role":"Platform engineer","seniority":"staff","targetCompany":"Example Co"}}"#,
+            ),
         );
 
         assert_eq!(boot.problem.id, "merge-intervals");
         assert_eq!(boot.duration_min, 30);
+        assert_eq!(boot.profile.role, "Platform engineer");
+        assert_eq!(boot.profile.target_company, "Example Co");
+        assert!(boot.instructions.contains("candidate selected staff"));
     }
 
     #[test]

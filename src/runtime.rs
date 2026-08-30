@@ -1,4 +1,7 @@
-use crate::agent::{InterviewMode, Problem, build_instructions_for_mode, get_problem, greeting};
+use crate::agent::{
+    InterviewMode, InterviewProfile, Problem, build_instructions_for_profile, get_problem,
+    greeting, interview_profile_json, sanitize_interview_profile,
+};
 use crate::config::{AgentConfig, MAX_DURATION_MIN, MIN_DURATION_MIN};
 
 pub const TOPIC_CODE_UPDATE: &str = "code_update";
@@ -22,6 +25,7 @@ pub struct RuntimeBootstrap<'a> {
     pub problem: &'static Problem,
     pub duration_min: u32,
     pub mode: InterviewMode,
+    pub profile: InterviewProfile,
     pub live_model: &'a str,
     pub report_model: &'a str,
     pub voice: &'a str,
@@ -53,20 +57,40 @@ pub fn bootstrap_with_mode<'a>(
     duration_min: u32,
     mode: InterviewMode,
 ) -> RuntimeBootstrap<'a> {
+    bootstrap_with_profile(
+        config,
+        room_name,
+        problem_id,
+        duration_min,
+        mode,
+        InterviewProfile::default(),
+    )
+}
+
+pub fn bootstrap_with_profile<'a>(
+    config: &'a AgentConfig,
+    room_name: &'a str,
+    problem_id: Option<&str>,
+    duration_min: u32,
+    mode: InterviewMode,
+    profile: InterviewProfile,
+) -> RuntimeBootstrap<'a> {
     let problem = get_problem(problem_id);
     let duration_min = duration_min.clamp(MIN_DURATION_MIN, MAX_DURATION_MIN);
+    let profile = sanitize_interview_profile(Some(&interview_profile_json(&profile)));
 
     RuntimeBootstrap {
         room_name,
         problem,
         duration_min,
         mode,
+        instructions: build_instructions_for_profile(problem, duration_min, mode, &profile),
+        profile,
         live_model: &config.gemini_live_model,
         report_model: &config.gemini_report_model,
         voice: &config.gemini_voice,
         silence_ms: config.gemini_silence_ms,
         start_sensitivity: &config.gemini_start_sensitivity,
-        instructions: build_instructions_for_mode(problem, duration_min, mode),
         greeting: greeting(),
     }
 }

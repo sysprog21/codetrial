@@ -645,6 +645,27 @@
         </section>
       </details>
 
+      <details class="interview-context">
+        <summary>Optional interview context</summary>
+        <fieldset>
+          <legend>Tailor the behavioral question</legend>
+          <p class="muted small">Skip any or all fields. Coding correctness is unchanged.</p>
+          <label>Target role <input id="profile-role" type="text" maxlength="80" autocomplete="organization-title"></label>
+          <label>Seniority
+            <select id="profile-seniority">
+              <option value="">Not specified</option>
+              <option value="intern">Intern</option>
+              <option value="junior">Junior</option>
+              <option value="mid">Mid-level</option>
+              <option value="senior">Senior</option>
+              <option value="staff">Staff+</option>
+              <option value="manager">Engineering manager</option>
+            </select>
+          </label>
+          <label>Target company <input id="profile-company" type="text" maxlength="80" autocomplete="organization"></label>
+        </fieldset>
+      </details>
+
       <section class="duration-row" aria-label="Duration">
         <button class="duration-button" type="button" data-duration="30">30 min</button>
         <button class="duration-button selected" type="button" data-duration="45">45 min</button>

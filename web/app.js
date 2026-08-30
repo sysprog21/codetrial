@@ -44,6 +44,9 @@ const nodes = {
   progressLanguage: document.querySelector("#progress-language"),
   progressDuration: document.querySelector("#progress-duration"),
   progressMode: document.querySelector("#progress-mode"),
+  profileRole: document.querySelector("#profile-role"),
+  profileSeniority: document.querySelector("#profile-seniority"),
+  profileCompany: document.querySelector("#profile-company"),
 };
 
 // Every card carries the pressed state from the start, not only the one that
@@ -157,7 +160,19 @@ start.addEventListener("click", async () => {
     }
   }
   start.textContent = "Starting...";
-  window.location.href = `/interview?problem=${encodeURIComponent(chosen.id)}&duration=${minutes}&mode=${chosenMode}`;
+  const destination = new URL("/interview", window.location.origin);
+  destination.searchParams.set("problem", chosen.id);
+  destination.searchParams.set("duration", String(minutes));
+  destination.searchParams.set("mode", chosenMode);
+  const profile = {
+    role: nodes.profileRole.value.trim(),
+    seniority: nodes.profileSeniority.value,
+    targetCompany: nodes.profileCompany.value.trim(),
+  };
+  if (profile.role) destination.searchParams.set("role", profile.role);
+  if (profile.seniority) destination.searchParams.set("seniority", profile.seniority);
+  if (profile.targetCompany) destination.searchParams.set("company", profile.targetCompany);
+  window.location.href = destination.toString();
 });
 
 // Returning from the media preflight can restore this page from the browser's

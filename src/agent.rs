@@ -13,9 +13,9 @@ pub use integrity::{sanitize_integrity_event, sanitize_test_run};
 pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, get_problem};
 pub use prompts::{
     LanguageChoiceContext, ReportPromptInput, build_instructions, build_instructions_for_mode,
-    format_test_run, greeting, language_choice, log_hint_text, numbered, proactive_review,
-    read_editor_text, report_prompt, significant_change, silence_nudge, spoken_language,
-    test_results_reaction, time_warning, wrap_up,
+    build_instructions_for_profile, format_test_run, greeting, language_choice, log_hint_text,
+    numbered, proactive_review, read_editor_text, report_prompt, significant_change, silence_nudge,
+    spoken_language, test_results_reaction, time_warning, wrap_up,
 };
 
 use crate::config::{DEFAULT_DURATION_MIN, MAX_DURATION_MIN, MIN_DURATION_MIN};
@@ -92,6 +92,90 @@ impl InterviewMode {
             Self::Scored => "scored",
         }
     }
+}
+
+pub const MAX_PROFILE_TEXT_CHARS: usize = 80;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InterviewProfile {
+    pub role: String,
+    pub seniority: Option<Seniority>,
+    pub target_company: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seniority {
+    Intern,
+    Junior,
+    Mid,
+    Senior,
+    Staff,
+    Manager,
+}
+
+impl Seniority {
+    pub fn parse(value: Option<&str>) -> Option<Self> {
+        match value {
+            Some("intern") => Some(Self::Intern),
+            Some("junior") => Some(Self::Junior),
+            Some("mid") => Some(Self::Mid),
+            Some("senior") => Some(Self::Senior),
+            Some("staff") => Some(Self::Staff),
+            Some("manager") => Some(Self::Manager),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Intern => "intern",
+            Self::Junior => "junior",
+            Self::Mid => "mid",
+            Self::Senior => "senior",
+            Self::Staff => "staff",
+            Self::Manager => "manager",
+        }
+    }
+}
+
+pub fn sanitize_interview_profile(value: Option<&serde_json::Value>) -> InterviewProfile {
+    let value = value.and_then(serde_json::Value::as_object);
+    InterviewProfile {
+        role: profile_text(value.and_then(|item| item.get("role"))),
+        seniority: Seniority::parse(
+            value
+                .and_then(|item| item.get("seniority"))
+                .and_then(serde_json::Value::as_str),
+        ),
+        target_company: profile_text(value.and_then(|item| item.get("targetCompany"))),
+    }
+}
+
+pub fn interview_profile_json(profile: &InterviewProfile) -> serde_json::Value {
+    serde_json::json!({
+        "role": profile.role,
+        "seniority": profile.seniority.map(Seniority::as_str),
+        "targetCompany": profile.target_company,
+    })
+}
+
+fn profile_text(value: Option<&serde_json::Value>) -> String {
+    let normalized = value
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    normalized.chars().take(MAX_PROFILE_TEXT_CHARS).collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -445,11 +529,12 @@ pub fn framework_evidence_json(evidence: &FrameworkEvidence) -> serde_json::Valu
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetadataConfig {
     pub problem: &'static Problem,
     pub duration_min: u32,
     pub mode: InterviewMode,
+    pub profile: InterviewProfile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -788,11 +873,13 @@ pub fn parse_participant_metadata(metadata: Option<&str>) -> MetadataConfig {
     let problem = get_problem(value.get("problemId").and_then(serde_json::Value::as_str));
     let duration_min = duration_from_metadata(value.get("durationMin"));
     let mode = InterviewMode::parse(value.get("mode").and_then(serde_json::Value::as_str));
+    let profile = sanitize_interview_profile(value.get("interviewProfile"));
 
     MetadataConfig {
         problem,
         duration_min,
         mode,
+        profile,
     }
 }
 
