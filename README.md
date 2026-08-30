@@ -76,19 +76,22 @@ for pooling.
 
 ## Prebuilt binaries
 
-Every push to `main` publishes a prerelease tagged `main-<commit sha>` under
-<https://github.com/sysprog21/codetrial/releases>, newest first. The tag names
-the commit and never moves, and a release that has already published is left
-alone rather than rebuilt over, so a download link keeps serving the bytes it
-served the first time. Only the most recent few are kept: the `release` job in
-`.github/workflows/check.yml` names the retention, and older prereleases are
-deleted with their tags. Nothing is required at runtime beyond the binary
-itself: the browser application, its vendored assets, and the WASM are compiled
-in, so there is no Node.js, no `node_modules`, and no `web/` directory to
-unpack alongside it. The avatar model is not in there either: the browser
-downloads it once from a pinned upstream URL, checks it against a pinned
-SHA-256, and keeps it in its own cache. Without that reachable, the interview
-falls back to Jim's voice-only panel and nothing else changes.
+Every successful build of `main` replaces the `latest` release under
+<https://github.com/sysprog21/codetrial/releases>, unless a newer commit landed
+while it was running. The binaries go to a draft first, and their sizes are
+checked against the files the build produced before that draft takes the name,
+so a truncated upload never reaches the download page. Two things that tag will not
+give you: replacing a release is not atomic, so each publish has a short window
+where `latest` resolves to nothing, and the tag moves, so a link does not keep
+serving the bytes it served last week. Pin a commit and keep your own checksum
+if you need the same binary twice. Nothing is required at runtime beyond the
+binary itself: the browser application, its vendored assets, and the WASM are
+compiled in, so there is no Node.js, no `node_modules`, and no `web/` directory
+to unpack alongside it. The avatar
+model is not in there either: the browser downloads it once from a pinned
+upstream URL, checks it against a pinned SHA-256, and keeps it in its own cache.
+Without that reachable, the interview falls back to Jim's voice-only panel and
+nothing else changes.
 
 ```bash
 # Linux
