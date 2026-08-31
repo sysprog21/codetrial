@@ -2,21 +2,22 @@
 //! Gemini, publish Gemini's audio back, and produce the report when the
 //! interview ends.
 //!
-//! This is the largest module in the tree, so here is its shape. The regions
-//! below are cohesive and appear in this order; a split, when one is wanted,
-//! should follow these lines rather than a line count.
+//! Still the largest module in the tree, so here is its shape. The regions
+//! below are cohesive and appear in this order; a further split should follow
+//! these lines rather than a line count.
+//!
+//! Two are already out: `media` holds the buffers, pumps and codecs that carry
+//! audio and video in both directions, and `turn` holds the state a turn is
+//! made of, which explains what stayed behind with the loop.
 //!
 //! - `run_room` and `join_room`: the lifecycle, and the only entry point.
 //! - Room admin over the LiveKit REST API (`isolate_local_agent` through
 //!   `evict_duplicate_agent`): finding and removing a duplicate agent left
 //!   behind by a previous run.
-//! - Event handling (`handle_media_event`, `handle_data_packet`,
-//!   `handle_gemini_event`): the three sources that drive the session.
-//! - `OutputAudio` and its worker: Gemini's audio, paced onto a LiveKit track.
-//! - Media codecs (`append_pcm16_bytes` through
-//!   `encode_video_frame_jpeg_off_thread`):
-//!   pure functions, no room state, each covered by the tests at the bottom of
-//!   this file.
+//! - Event handling (`handle_data_packet`, `handle_gemini_event`): the sources
+//!   that drive the session. The third, `handle_media_event`, is in `media`.
+//! - Turn procedures (`send_wrap_up_and_wait` through `close_turn`): what ends
+//!   a turn, operating on the context above.
 //! - Report building (`publish_report` through `report_data_packet`).
 
 use std::collections::HashMap;
@@ -26,28 +27,12 @@ use std::time::{Duration, Instant};
 use ::livekit::DisconnectReason;
 use ::livekit::ParticipantKind;
 use ::livekit::data_stream::api::StreamTextOptions;
-use ::livekit::options::TrackPublishOptions;
-use ::livekit::prelude::{
-    DataPacket, LocalAudioTrack, LocalTrack, RemoteAudioTrack, RemoteParticipant, RemoteTrack,
-    Room, RoomEvent, RoomOptions, RtcAudioSource, TrackSource,
-};
-use ::livekit::webrtc::audio_frame::AudioFrame;
-use ::livekit::webrtc::audio_source::AudioSourceOptions;
-use ::livekit::webrtc::audio_source::native::NativeAudioSource;
-use ::livekit::webrtc::audio_stream::native::NativeAudioStream;
-use ::livekit::webrtc::video_frame::{BoxVideoFrame, VideoFormatType};
-use ::livekit::webrtc::video_stream::native::NativeVideoStream;
-use futures_util::StreamExt;
-use jpeg_encoder::{ColorType, Encoder};
-use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
+use ::livekit::prelude::{DataPacket, RemoteParticipant, Room, RoomEvent, RoomOptions};
 
 use crate::agent::{
-    ReportPromptInput, RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput,
-    WATCH_TICK_S, apply_data_event, final_report, format_test_run, framework_evidence_json,
-    interview_contract_json, numbered, parse_participant_metadata, proactive_review,
-    read_editor_text, record_framework_evidence, report_prompt, significant_change, silence_nudge,
-    timing_decision, transcript_for_report, wrap_up,
+    ReportPromptInput, RuntimeState, SpeakerTurn, WATCH_TICK_S, apply_data_event, final_report,
+    format_test_run, framework_evidence_json, interview_contract_json, parse_participant_metadata,
+    read_editor_text, record_framework_evidence, report_prompt, transcript_for_report, wrap_up,
 };
 use crate::config::AgentConfig;
 use crate::runtime::TOPIC_CONTROL;
@@ -82,21 +67,18 @@ use crate::runtime::{
 };
 use crate::token::{LivekitTokenInput, livekit_room_admin_token, livekit_token};
 
-const GEMINI_AUDIO_SAMPLE_RATE: i32 = 16_000;
-const GEMINI_AUDIO_CHANNELS: i32 = 1;
-const GEMINI_AUDIO_BUFFER_BYTES: usize = 3_200;
-const GEMINI_VIDEO_MIME_TYPE: &str = "image/jpeg";
-const GEMINI_VIDEO_FRAME_INTERVAL: Duration = Duration::from_secs(1);
-const GEMINI_VIDEO_JPEG_QUALITY: u8 = 75;
+mod media;
+mod turn;
+
+use media::*;
+use turn::*;
+
 const GEMINI_OUTPUT_AUDIO_SAMPLE_RATE: u32 = 24_000;
 /// Gemini closes a connection roughly every ten minutes, so the longest
 /// interview this offers needs about nine resumptions. The ceiling is here to
 /// stop a socket that fails immediately from spinning, not to bound a healthy
 /// interview; past it the supervisor restart takes over as before.
 const GEMINI_RESUME_LIMIT: usize = 16;
-const LIVEKIT_OUTPUT_CHANNELS: u32 = 1;
-const LIVEKIT_OUTPUT_QUEUE_MS: u32 = 100;
-const LIVEKIT_OUTPUT_FRAME_QUEUE: usize = 6_000;
 const LIVEKIT_AGENT_STATE: &str = "lk.agent.state";
 const AGENT_STATE_LISTENING: &str = "listening";
 const AGENT_STATE_SPEAKING: &str = "speaking";
@@ -106,10 +88,6 @@ const WRAP_UP_WAIT: Duration = Duration::from_secs(8);
 /// retries. The candidate is watching a spinner, so this is the point where
 /// waiting stops being worth more than an honest incomplete report.
 const REPORT_TIMEOUT: Duration = Duration::from_secs(45);
-/// A candidate who has just typed is still working, even if their speech has
-/// paused. Give them a beat before a periodic review tries to take the floor.
-const CODE_SETTLE: Duration = Duration::from_secs(10);
-
 /// Whether the candidate is in the room, and since when they have not been.
 ///
 /// The departure, the return and the grace check happen in three different
@@ -571,62 +549,6 @@ pub async fn run_room(
     }
 }
 
-/// Buffers one arriving audio frame, and flushes when there is enough to send.
-///
-/// `None` is the track ending: what is buffered goes now, because nothing else
-/// is going to arrive to push it over the threshold.
-async fn pump_audio(
-    media: &mut CandidateMedia,
-    gemini: &mut GeminiLiveSession,
-    frame: Option<AudioFrame<'static>>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let Some(frame) = frame else {
-        flush_audio(gemini, &mut media.audio_bytes).await?;
-        media.audio = None;
-        return Ok(());
-    };
-
-    // Not `last_user_speech`. LiveKit delivers frames for as long as the track
-    // is live, silence included, so stamping here made the interview
-    // permanently "just spoke": `idle_seconds` never reached
-    // SILENCE_THRESHOLD_S and the nudge never fired. Real speech is stamped on
-    // `InputTranscript`, where Gemini has already decided that words were said.
-    append_pcm16_bytes(&frame, &mut media.audio_bytes);
-    if media.audio_bytes.len() >= GEMINI_AUDIO_BUFFER_BYTES {
-        flush_audio(gemini, &mut media.audio_bytes).await?;
-    }
-    Ok(())
-}
-
-/// Sends one arriving video frame, at most one per interval.
-async fn pump_video(
-    media: &mut CandidateMedia,
-    gemini: &mut GeminiLiveSession,
-    frame: Option<BoxVideoFrame>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let Some(frame) = frame else {
-        media.video = None;
-        return Ok(());
-    };
-    if !should_send_video_frame(media.last_video_frame.elapsed()) {
-        return Ok(());
-    }
-
-    // Stamped on the attempt, not the success: the dimensions come off the
-    // wire, and a source stuck emitting frames that will not encode must cost
-    // one try per interval rather than one per arriving frame.
-    media.last_video_frame = Instant::now();
-    match encode_video_frame_jpeg_off_thread(&frame, GEMINI_VIDEO_JPEG_QUALITY).await {
-        Ok(bytes) => {
-            gemini
-                .send_video_frame(&bytes, GEMINI_VIDEO_MIME_TYPE)
-                .await?
-        }
-        Err(error) => eprintln!("skipping unencodable video frame: {error}"),
-    }
-    Ok(())
-}
-
 /// One LiveKit room event that was not the candidate's media.
 ///
 /// `Break` means the interview is over: the browser asked to end it, and the
@@ -746,184 +668,6 @@ async fn join_room(
         room.local_participant().identity()
     );
     Ok((room, events))
-}
-
-/// The candidate's inbound media, plus the identity their tracks arrived on.
-/// Bundled because every track event touches two or three of these together.
-struct CandidateMedia {
-    audio: Option<NativeAudioStream>,
-    video: Option<NativeVideoStream>,
-    audio_bytes: Vec<u8>,
-    identity: Option<String>,
-    last_video_frame: Instant,
-}
-
-impl CandidateMedia {
-    fn new() -> Self {
-        Self {
-            audio: None,
-            video: None,
-            audio_bytes: Vec::new(),
-            identity: None,
-
-            // Seeded in the past so the first frame sends immediately. The
-            // monotonic clock starts at boot, so on a machine that just came up
-            // there may be nothing to subtract from.
-            last_video_frame: Instant::now()
-                .checked_sub(GEMINI_VIDEO_FRAME_INTERVAL)
-                .unwrap_or_else(Instant::now),
-        }
-    }
-
-    fn attach_audio(&mut self, track: &RemoteAudioTrack, participant: &RemoteParticipant) {
-        // Drop any half-buffered frame from a previous publication so the new
-        // stream does not start mid-sample.
-        self.audio_bytes.clear();
-        self.identity = Some(participant.identity().to_string());
-        self.audio = Some(NativeAudioStream::new(
-            track.rtc_track(),
-            GEMINI_AUDIO_SAMPLE_RATE,
-            GEMINI_AUDIO_CHANNELS,
-        ));
-    }
-}
-
-struct RuntimeActivity {
-    last_code_change: Instant,
-    last_user_speech: Instant,
-    /// When the candidate stopped talking and started waiting, if they have and
-    /// the reply has not begun. Separate from `last_user_speech`, which the
-    /// nudge logic needs seeded at the interview start and never absent.
-    ///
-    /// Sharing one field is what made the reply-latency line lie. `Interrupted`
-    /// hands the floor back without ever saying when the candidate finished, so
-    /// a reply that followed one measured from whatever the seed was: on the
-    /// first turn that is the start of the interview, which is how a candidate
-    /// who waited under a second was reported as having waited fifteen.
-    awaiting_reply_since: Option<Instant>,
-    last_agent_speech: Instant,
-    last_nudge: Instant,
-    last_review: Instant,
-    last_interjection: Instant,
-    last_test_reaction: Instant,
-    code_at_last_review: String,
-    floor: Floor,
-}
-
-/// Who holds the conversation. `agent_busy` + `agent_turn_complete` encoded
-/// this as two bools, but only three of the four combinations were reachable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Floor {
-    /// The candidate has the floor.
-    Listening,
-    /// A prompt is in flight; Gemini is still producing the turn.
-    Speaking,
-    /// The turn is complete but queued audio is still draining.
-    AwaitingPlayout,
-}
-
-impl RuntimeActivity {
-    fn new(now: Instant) -> Self {
-        Self {
-            last_code_change: now,
-            last_user_speech: now,
-            awaiting_reply_since: None,
-            last_agent_speech: now,
-            last_nudge: now,
-            last_review: now,
-            last_interjection: now,
-
-            // Seeded in the past so the first test run reacts immediately; see
-            // `CandidateMedia::new` for why the subtraction is checked.
-            last_test_reaction: now
-                .checked_sub(Duration::from_secs_f64(TEST_REACTION_COOLDOWN_S))
-                .unwrap_or(now),
-            code_at_last_review: String::new(),
-            floor: Floor::Listening,
-        }
-    }
-
-    /// The agent has the floor: it was just handed a prompt and owns the
-    /// conversation until Gemini reports the turn complete.
-    fn mark_speaking(&mut self) {
-        self.floor = Floor::Speaking;
-    }
-
-    /// Turn finished and audio drained: hand the floor back to the candidate.
-    fn mark_listening(&mut self) {
-        self.floor = Floor::Listening;
-        self.last_agent_speech = Instant::now();
-    }
-
-    /// Gemini has transcribed something the candidate said, so they have
-    /// stopped talking and started waiting.
-    ///
-    /// The two stamps are not the same fact, which is why they are separate
-    /// fields. `last_user_speech` feeds the idle timers and has to move on
-    /// every fragment. `awaiting_reply_since` is the start of a measurable
-    /// wait, and it exists only while there is a wait to measure.
-    ///
-    /// Not armed while the agent holds the floor. Input transcription lags the
-    /// audio it describes, so a fragment covering the tail of what the
-    /// candidate said can land after the reply has already begun. Arming on
-    /// that one made the next chunk of a turn already in progress announce
-    /// itself as the reply starting, measured from a moment nobody waited from.
-    fn note_candidate_finished(&mut self, now: Instant) {
-        self.last_user_speech = now;
-        if self.floor != Floor::Speaking {
-            self.awaiting_reply_since = Some(now);
-        }
-    }
-
-    /// `now` is passed in rather than sampled here, like every other method on
-    /// this struct. Sampling internally makes the boundaries untestable: a test
-    /// can set `last_code_change` to exactly `CODE_SETTLE` ago, but the clock
-    /// read inside would already have moved past it, so a half-open window and
-    /// a closed one behave identically to every test that can be written.
-    fn watch_prompt(&mut self, state: &RuntimeState, now: Instant) -> Option<String> {
-        if state.paused {
-            return None;
-        }
-        let decision = timing_decision(&TimingInput {
-            agent_busy: self.floor != Floor::Listening,
-            user_talking: now.duration_since(self.last_code_change) < CODE_SETTLE,
-            idle_seconds: now
-                .duration_since(
-                    self.last_user_speech
-                        .max(self.last_code_change)
-                        .max(self.last_agent_speech),
-                )
-                .as_secs_f64(),
-            since_last_nudge_seconds: now.duration_since(self.last_nudge).as_secs_f64(),
-            since_last_review_seconds: now.duration_since(self.last_review).as_secs_f64(),
-            since_last_interjection_seconds: now
-                .duration_since(self.last_interjection)
-                .as_secs_f64(),
-            speech_gap_seconds: now
-                .duration_since(self.last_user_speech.max(self.last_agent_speech))
-                .as_secs_f64(),
-            significant_change: significant_change(&self.code_at_last_review, &state.code),
-        });
-        if decision.update_last_nudge {
-            self.last_nudge = now;
-        }
-        if decision.update_last_review {
-            self.last_review = now;
-        }
-        if decision.update_last_interjection {
-            self.last_interjection = now;
-        }
-        if decision.sync_code_at_last_review {
-            self.code_at_last_review = state.code.clone();
-        }
-        if decision.silence_nudge {
-            return Some(silence_nudge(&numbered(&state.code)));
-        }
-        if decision.proactive_review {
-            return Some(proactive_review(&numbered(&state.code)));
-        }
-        None
-    }
 }
 
 async fn isolate_local_agent(
@@ -1128,66 +872,6 @@ async fn evict_duplicate_agent(
     remove_room_participant(config, room_name, &identity, now_seconds).await
 }
 
-/// The candidate's tracks arriving and going away. Reports whether the event
-/// was media, so the caller's match only has to carry what is left.
-async fn handle_media_event(
-    media: &mut CandidateMedia,
-    gemini: &mut GeminiLiveSession,
-    candidate_identity: &str,
-    forward_video_to_gemini: bool,
-    event: &RoomEvent,
-) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    match event {
-        RoomEvent::TrackSubscribed {
-            track: RemoteTrack::Audio(track),
-            participant,
-            ..
-        } if is_interview_participant(Some(&participant.identity().0), candidate_identity) => {
-            media.attach_audio(track, participant);
-        }
-        RoomEvent::TrackSubscribed {
-            track: RemoteTrack::Video(track),
-            participant,
-            ..
-        } if candidate_video_frames_go_to_gemini(
-            Some(&participant.identity().0),
-            candidate_identity,
-            forward_video_to_gemini,
-        ) =>
-        {
-            media.video = Some(NativeVideoStream::new(track.rtc_track()));
-        }
-
-        // Guarded like the subscribe arms: an unrelated participant leaving
-        // must not tear down the stream the candidate is still speaking into.
-        RoomEvent::TrackUnsubscribed {
-            track: RemoteTrack::Audio(_),
-            participant,
-            ..
-        } if is_interview_participant(Some(&participant.identity().0), candidate_identity) => {
-            flush_audio(gemini, &mut media.audio_bytes).await?;
-            media.audio = None;
-        }
-        RoomEvent::TrackUnsubscribed {
-            track: RemoteTrack::Video(_),
-            participant,
-            ..
-        } if is_interview_participant(Some(&participant.identity().0), candidate_identity) => {
-            media.video = None;
-        }
-        _ => return Ok(false),
-    }
-    Ok(true)
-}
-
-fn candidate_video_frames_go_to_gemini(
-    sender: Option<&str>,
-    candidate_identity: &str,
-    opt_in: bool,
-) -> bool {
-    opt_in && is_interview_participant(sender, candidate_identity)
-}
-
 /// Only the candidate this interview bootstrapped from may drive the runtime.
 /// Their token grants both `canPublishData` and `canPublish`, so a second
 /// participant in the room could otherwise end the interview over the data
@@ -1288,25 +972,6 @@ fn candidate_bootstrap<'a>(
             interview_loop: candidate.interview_loop,
         },
     )
-}
-
-async fn flush_audio(
-    gemini: &mut GeminiLiveSession,
-    bytes: &mut Vec<u8>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if !bytes.is_empty() {
-        gemini.send_audio_pcm_16khz(bytes).await?;
-        bytes.clear();
-    }
-    Ok(())
-}
-
-async fn next_audio_frame(stream: &mut Option<NativeAudioStream>) -> Option<AudioFrame<'static>> {
-    stream.as_mut()?.next().await
-}
-
-async fn next_video_frame(stream: &mut Option<NativeVideoStream>) -> Option<BoxVideoFrame> {
-    stream.as_mut()?.next().await
 }
 
 /// The immutable side of a running interview: fixed once the candidate joins,
@@ -1411,46 +1076,6 @@ async fn handle_data_packet(
     Ok(ControlFlow::Break(()))
 }
 
-/// What one interview accumulates, minus the two things the select loop borrows
-/// as futures. `gemini` and `media` have to stay outside: their arms hold a
-/// mutable borrow for as long as the select is polled, so bundling them here
-/// would make every other arm's condition fight the borrow checker.
-///
-/// The four that are left exist to make [`TurnState::context`] possible. Three
-/// arms of the select need a `GeminiEventContext`, and it borrows seven things
-/// mutably, so it lives exactly as long as the call it is handed to. That used
-/// to be a macro, purely to stop the field list being written out three times.
-///
-/// Worth knowing before anyone tries to go further: bundling these four and
-/// stopping there makes the function *longer*, because every use site grows a
-/// prefix and the macro stays. It only pays once the method exists to replace
-/// the macro outright.
-struct TurnState {
-    state: RuntimeState,
-    agent_state: String,
-    activity: RuntimeActivity,
-    turns: SpeakerTurns,
-}
-
-impl TurnState {
-    fn context<'a>(
-        &'a mut self,
-        output_audio: &'a mut OutputAudio,
-        gemini: &'a mut GeminiLiveSession,
-        candidate_identity: Option<&'a str>,
-    ) -> GeminiEventContext<'a> {
-        GeminiEventContext {
-            output_audio,
-            gemini,
-            state: &mut self.state,
-            agent_state: &mut self.agent_state,
-            activity: &mut self.activity,
-            turns: &mut self.turns,
-            candidate_identity,
-        }
-    }
-}
-
 struct GeminiEventContext<'a> {
     output_audio: &'a mut OutputAudio,
     gemini: &'a mut GeminiLiveSession,
@@ -1459,138 +1084,6 @@ struct GeminiEventContext<'a> {
     activity: &'a mut RuntimeActivity,
     turns: &'a mut SpeakerTurns,
     candidate_identity: Option<&'a str>,
-}
-
-/// Whether a candidate talking over the interviewer cuts it short.
-///
-/// Carried as an argument rather than a flag on the context. It was a field
-/// that `send_wrap_up_and_wait` set and restored, which is one early return
-/// away from leaving barge-in off for good, and it read as state when it is
-/// really a property of the turn being handled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Interruptible {
-    /// An ordinary exchange. The candidate speaking wins the floor.
-    Yes,
-    /// The closing message. Cutting it leaves the candidate without the ending,
-    /// and `wrap_up_settled` reads the emptied queue as the turn being over, so
-    /// a "thanks" mid sentence ended the interview there.
-    No,
-}
-
-/// One open turn per speaker. Gemini interleaves input and output
-/// transcription, so they cannot share a single accumulator.
-#[derive(Debug, Default)]
-struct SpeakerTurns {
-    interviewer: SpeakerTurn,
-    candidate: SpeakerTurn,
-}
-
-async fn send_wrap_up_and_wait(
-    room: &Room,
-    context: &mut GeminiEventContext<'_>,
-    reason: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    context.gemini.send_text(&wrap_up(reason)).await?;
-    context.activity.mark_speaking();
-    let deadline = Instant::now() + WRAP_UP_WAIT;
-    loop {
-        if Instant::now() >= deadline {
-            return Ok(());
-        }
-        if wrap_up_settled(context.output_audio, context.activity) {
-            context.activity.mark_listening();
-            set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
-            return Ok(());
-        }
-        tokio::select! {
-            event = context.gemini.next_event() => {
-                let Some(event) = event else { return Ok(()) };
-                // The closing message is the one turn that plays to the end.
-                handle_gemini_event(room, context, event, Interruptible::No).await?;
-            }
-            _ = tokio::time::sleep_until(context.output_audio.playout_deadline.into()), if context.activity.floor == Floor::AwaitingPlayout => {}
-            _ = tokio::time::sleep_until(deadline.into()) => {
-                return Ok(());
-            }
-        }
-    }
-}
-
-/// The goodbye is done once nothing is queued and Gemini is not mid-turn.
-fn wrap_up_settled(output_audio: &OutputAudio, activity: &RuntimeActivity) -> bool {
-    !output_audio.is_playing() && activity.floor != Floor::Speaking
-}
-
-/// Throws away agent audio that is queued but no longer wanted.
-///
-/// Only acts in `Floor::AwaitingPlayout` with audio genuinely still queued.
-/// `AwaitingPlayout` alone is not enough: it is stamped once when the turn
-/// completes, and the queue drains on its own afterwards, so the state outlives
-/// the condition it was named for.
-///
-/// Deliberately does not call `close_turns`. `TurnComplete` already closed both
-/// sides before setting this floor, and closing again would split one utterance
-/// across two transcript segments.
-async fn drop_stale_playout(
-    room: &Room,
-    context: &mut GeminiEventContext<'_>,
-    interruptible: Interruptible,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let Some(dropped) = take_stale_playout(context.activity, context.output_audio, interruptible)
-    else {
-        return Ok(());
-    };
-    eprintln!(
-        "timing: dropped {:.1}s of queued interviewer speech the candidate talked over",
-        dropped.as_secs_f64()
-    );
-    set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
-    Ok(())
-}
-
-/// The decision and its effect, with no room in sight so a test can reach it.
-/// Returns how much queued speech was thrown away, which both decides whether
-/// the agent state attribute needs republishing and is the number worth
-/// logging: it is exactly the delay the candidate would otherwise have sat
-/// through before hearing an answer.
-/// Ends a turn that will not finish: drops what is queued and hands the floor
-/// back. Returns how much speech was thrown away.
-///
-/// `mark_listening`, not a bare assignment to the floor. This used to assign it
-/// bare, on the reasoning that stamping agent speech would start the silence
-/// timers from the wrong instant. It does the opposite: `last_agent_speech` is
-/// parked at the playout deadline while audio is queued, and that deadline is
-/// in the future, so leaving it there after throwing the queue away suppresses
-/// the silence nudge for the whole length of speech nobody heard. `now` is the
-/// earlier of the two.
-fn cut_off_turn(activity: &mut RuntimeActivity, output_audio: &mut OutputAudio) -> Duration {
-    let unplayed = output_audio
-        .playout_deadline
-        .saturating_duration_since(Instant::now());
-    output_audio.interrupt();
-    activity.mark_listening();
-
-    // The pending measurement dies with the turn. A candidate who finished,
-    // waited, and then started talking again is no longer waiting for anything,
-    // and leaving the stamp behind meant the next reply that produced audio
-    // without its own transcript measured from it: the same lie this field was
-    // split out of `last_user_speech` to stop telling, one turn later.
-    activity.awaiting_reply_since = None;
-    unplayed
-}
-
-fn take_stale_playout(
-    activity: &mut RuntimeActivity,
-    output_audio: &mut OutputAudio,
-    interruptible: Interruptible,
-) -> Option<Duration> {
-    if interruptible == Interruptible::No
-        || activity.floor != Floor::AwaitingPlayout
-        || !output_audio.is_playing()
-    {
-        return None;
-    }
-    Some(cut_off_turn(activity, output_audio))
 }
 
 async fn handle_gemini_event(
@@ -1762,149 +1255,6 @@ fn agent_state_attributes(
     attributes
 }
 
-struct OutputAudio {
-    source: NativeAudioSource,
-    sample_rate: u32,
-    pending_bytes: Vec<u8>,
-    playout_deadline: Instant,
-    frames: mpsc::Sender<QueuedOutputFrame>,
-    output_cancellation: CancellationToken,
-}
-
-struct QueuedOutputFrame {
-    output_cancellation: CancellationToken,
-    samples: Vec<i16>,
-}
-
-impl OutputAudio {
-    fn interrupt(&mut self) {
-        self.output_cancellation.cancel();
-        self.output_cancellation = CancellationToken::new();
-        self.source.clear_buffer();
-        self.pending_bytes.clear();
-        self.playout_deadline = Instant::now();
-    }
-
-    fn is_playing(&self) -> bool {
-        Instant::now() < self.playout_deadline
-    }
-
-    /// Whether `capture` would queue anything for this chunk.
-    ///
-    /// Split out so the caller can ask before dropping a turn that is still
-    /// playing. Dropping first and then finding the new chunk unusable cuts the
-    /// interviewer off mid-sentence with nothing behind it.
-    fn accepts(&self, bytes: &[u8], mime_type: &str) -> bool {
-        !bytes.is_empty()
-            && audio_sample_rate(mime_type, self.sample_rate) == Some(self.sample_rate)
-    }
-
-    async fn capture(
-        &mut self,
-        bytes: &[u8],
-        mime_type: &str,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        if !self.accepts(bytes, mime_type) {
-            return Ok(false);
-        }
-        let mut queued = false;
-        for samples in take_pcm16_frames(
-            bytes,
-            self.sample_rate,
-            LIVEKIT_OUTPUT_CHANNELS,
-            &mut self.pending_bytes,
-        ) {
-            queued = true;
-            let samples_per_channel = samples.len() as u32 / LIVEKIT_OUTPUT_CHANNELS;
-            let frame_duration =
-                Duration::from_secs_f64(samples_per_channel as f64 / self.sample_rate as f64);
-            self.playout_deadline = self.playout_deadline.max(Instant::now()) + frame_duration;
-            self.frames
-                .try_send(QueuedOutputFrame {
-                    output_cancellation: self.output_cancellation.clone(),
-                    samples,
-                })
-                .map_err(|error| {
-                    std::io::Error::other(match error {
-                        mpsc::error::TrySendError::Full(_) => "output audio worker queue full",
-                        mpsc::error::TrySendError::Closed(_) => "output audio worker stopped",
-                    })
-                })?;
-        }
-        Ok(queued)
-    }
-}
-
-async fn output_audio_worker(
-    source: NativeAudioSource,
-    sample_rate: u32,
-    mut frames: mpsc::Receiver<QueuedOutputFrame>,
-) {
-    while let Some(frame) = frames.recv().await {
-        if frame.output_cancellation.is_cancelled() {
-            continue;
-        }
-        let cancelled = frame.output_cancellation.cancelled();
-        tokio::pin!(cancelled);
-        let samples_per_channel = frame.samples.len() as u32 / LIVEKIT_OUTPUT_CHANNELS;
-        let audio_frame = AudioFrame {
-            data: frame.samples.into(),
-            sample_rate,
-            num_channels: LIVEKIT_OUTPUT_CHANNELS,
-            samples_per_channel,
-        };
-        tokio::select! {
-            result = source.capture_frame(&audio_frame) => {
-                if let Err(error) = result {
-                    eprintln!("failed to publish output audio frame: {error}");
-                }
-            }
-            _ = &mut cancelled => {
-                source.clear_buffer();
-            }
-        }
-    }
-}
-
-async fn publish_output_audio(
-    room: &Room,
-    sample_rate: u32,
-) -> Result<OutputAudio, Box<dyn std::error::Error + Send + Sync>> {
-    let source = NativeAudioSource::new(
-        AudioSourceOptions::default(),
-        sample_rate,
-        LIVEKIT_OUTPUT_CHANNELS,
-        LIVEKIT_OUTPUT_QUEUE_MS,
-    );
-    let track = LocalAudioTrack::create_audio_track(
-        "interviewer-audio",
-        RtcAudioSource::Native(source.clone()),
-    );
-    room.local_participant()
-        .publish_track(
-            LocalTrack::Audio(track),
-            TrackPublishOptions {
-                source: TrackSource::Microphone,
-                ..Default::default()
-            },
-        )
-        .await?;
-    let (frames, queued_frames) = mpsc::channel(LIVEKIT_OUTPUT_FRAME_QUEUE);
-    tokio::spawn(output_audio_worker(
-        source.clone(),
-        sample_rate,
-        queued_frames,
-    ));
-    Ok(OutputAudio {
-        source,
-        sample_rate,
-        pending_bytes: Vec::new(),
-        playout_deadline: Instant::now(),
-        frames,
-        output_cancellation: CancellationToken::new(),
-    })
-}
-
 fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) -> serde_json::Value {
     match call.name.as_str() {
         TOOL_READ_EDITOR => serde_json::json!({
@@ -1924,44 +1274,6 @@ fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) -> ser
         },
         name => serde_json::json!({ "error": format!("unknown tool: {name}") }),
     }
-}
-
-/// Republishes each open turn once as final, so the browser can stop showing
-/// it as in-progress, then opens fresh segment ids for the next turn.
-async fn close_turns(
-    room: &Room,
-    context: &mut GeminiEventContext<'_>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let candidate_identity = context.candidate_identity.map(str::to_string);
-    let closing = [
-        close_turn(&mut context.turns.interviewer, "interviewer"),
-        close_turn(&mut context.turns.candidate, "candidate"),
-    ];
-    for (index, closed) in closing.into_iter().enumerate() {
-        let Some((whole, segment_id)) = closed else {
-            continue;
-        };
-
-        // Only the candidate's own speech is attributed to them; the
-        // interviewer publishes as the agent participant.
-        let identity = (index == 1)
-            .then_some(candidate_identity.as_deref())
-            .flatten();
-        publish_transcript(room, &whole, segment_id, true, identity).await?;
-    }
-    Ok(())
-}
-
-/// Ends the turn and hands back what has to be published as final, or `None`
-/// when the speaker had nothing open. Split out so the borrow ends before the
-/// publish await.
-fn close_turn(turn: &mut SpeakerTurn, speaker: &str) -> Option<(String, String)> {
-    if !turn.is_open() {
-        return None;
-    }
-    let closed = (turn.text().to_string(), turn.segment_id(speaker));
-    turn.finish();
-    Some(closed)
 }
 
 async fn publish_transcript(
@@ -2003,144 +1315,6 @@ fn transcript_stream_options(
 fn transcript_text(text: &str) -> Option<&str> {
     let text = text.trim();
     (!text.is_empty()).then_some(text)
-}
-
-fn append_pcm16_bytes(frame: &AudioFrame<'_>, bytes: &mut Vec<u8>) {
-    frame
-        .data
-        .iter()
-        .for_each(|sample| bytes.extend(sample.to_le_bytes()));
-}
-
-fn audio_sample_rate(mime_type: &str, default_pcm_rate: u32) -> Option<u32> {
-    mime_type
-        .split(';')
-        .find_map(|part| {
-            part.trim()
-                .strip_prefix("rate=")
-                .and_then(|rate| rate.parse().ok())
-        })
-        .or_else(|| (mime_type.trim() == "audio/pcm").then_some(default_pcm_rate))
-}
-
-fn take_pcm16_frames(
-    bytes: &[u8],
-    sample_rate: u32,
-    channels: u32,
-    pending: &mut Vec<u8>,
-) -> Vec<Vec<i16>> {
-    let frame_bytes = (sample_rate / 100 * channels) as usize * 2;
-    if frame_bytes == 0 {
-        return Vec::new();
-    }
-
-    pending.extend_from_slice(bytes);
-    let complete_len = pending.len() - pending.len() % frame_bytes;
-    let frames = pending[..complete_len]
-        .chunks_exact(frame_bytes)
-        .map(decode_pcm16)
-        .collect();
-    pending.drain(..complete_len);
-    frames
-}
-
-fn decode_pcm16(bytes: &[u8]) -> Vec<i16> {
-    bytes
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
-        .collect()
-}
-
-fn should_send_video_frame(elapsed: Duration) -> bool {
-    elapsed >= GEMINI_VIDEO_FRAME_INTERVAL
-}
-
-/// JPEG sides and RGBA byte count for a frame, or `None` when the dimensions
-/// are absurd. Both bounds live here because they answer one question and a
-/// frame that clears the pixel cap can still overflow a 16-bit JPEG side: the
-/// pixel cap is well past 8K and only exists so a bogus header cannot ask for a
-/// gigabyte, while a 100000x1 frame sits under it and still has no valid SOF.
-fn jpeg_frame_geometry(width: u32, height: u32) -> Option<(u16, u16, usize)> {
-    const MAX_PIXELS: u32 = 8192 * 8192;
-    let pixels = width.checked_mul(height)?;
-    (1..=MAX_PIXELS).contains(&pixels).then_some(())?;
-    Some((
-        u16::try_from(width).ok()?,
-        u16::try_from(height).ok()?,
-        pixels as usize * 4,
-    ))
-}
-
-/// Converts a frame to packed R, G, B, A bytes.
-///
-/// The format name is a trap. libyuv names its 32-bit formats after the
-/// little-endian word rather than the byte order, so `ABGR` is the variant that
-/// writes R, G, B, A into memory and `RGBA` writes A, B, G, R. Asking for
-/// `RGBA` pins the red channel to the alpha constant and transposes green and
-/// blue, which `channel_order_survives_the_libyuv_naming_trap` pins down.
-fn frame_to_rgba(frame: &BoxVideoFrame) -> Result<(Vec<u8>, u16, u16), String> {
-    let width = frame.buffer.as_ref().width();
-    let height = frame.buffer.as_ref().height();
-
-    // Remote-controlled dimensions: overflow here would panic in debug and
-    // under-allocate the buffer `to_argb` writes into in release.
-    let Some((jpeg_width, jpeg_height, rgba_len)) = jpeg_frame_geometry(width, height) else {
-        return Err(format!(
-            "frame {width}x{height} is outside JPEG limits (each side at most 65535, at most 8192x8192 pixels)"
-        ));
-    };
-    let mut rgba = vec![0; rgba_len];
-    frame.buffer.as_ref().to_argb(
-        VideoFormatType::ABGR,
-        &mut rgba,
-        width * 4,
-        width as i32,
-        height as i32,
-    );
-    Ok((rgba, jpeg_width, jpeg_height))
-}
-
-/// The compression on its own, so the caller can put it somewhere other than
-/// the executor. Owned pixels rather than the frame, because the frame does not
-/// cross a thread and this does.
-fn encode_rgba_jpeg(
-    rgba: &[u8],
-    jpeg_width: u16,
-    jpeg_height: u16,
-    quality: u8,
-) -> Result<Vec<u8>, String> {
-    // Chroma is subsampled 2x2 here, because that is what `Encoder::new` picks
-    // below quality 90 and nothing below overrides it. Deliberate: the source
-    // is I420, whose chroma is already 4:2:0, so encoding it at full resolution
-    // would spend about a fifth of the payload on interpolated values. The
-    // override, if a future frame source is not I420, is
-    // `set_sampling_factor(SamplingFactor::F_1_1)` before the call.
-    let mut jpeg = Vec::new();
-    Encoder::new(&mut jpeg, quality)
-        .encode(rgba, jpeg_width, jpeg_height, ColorType::Rgba)
-        .map_err(|error| error.to_string())?;
-    Ok(jpeg)
-}
-
-/// A frame to JPEG bytes, with the compression moved off the executor.
-///
-/// The colour conversion stays inline: it is libyuv, which is compiled
-/// optimized whatever profile this crate is built at, and the frame it borrows
-/// does not cross a thread. The JPEG pass is the one that costs, and it is pure
-/// Rust: measured at 6.8ms per 720p frame in release and 138ms in a dev build.
-/// It shares an executor with Gemini's audio events, so at a frame a second
-/// that stall lands in the middle of a conversation and the candidate hears it
-/// as the reply arriving late.
-async fn encode_video_frame_jpeg_off_thread(
-    frame: &BoxVideoFrame,
-    quality: u8,
-) -> Result<Vec<u8>, String> {
-    let (rgba, jpeg_width, jpeg_height) = frame_to_rgba(frame)?;
-    tokio::task::spawn_blocking(move || encode_rgba_jpeg(&rgba, jpeg_width, jpeg_height, quality))
-        .await
-        .map_err(|error| format!("jpeg encode task did not finish: {error}"))?
 }
 
 async fn publish_report(
@@ -2289,10 +1463,6 @@ fn report_with_integrity_events(
     report
 }
 
-fn should_send_wrap_up(reason: &str) -> bool {
-    reason != "candidate_ended"
-}
-
 fn report_prompt_text(
     boot: &RuntimeBootstrap<'_>,
     state: &RuntimeState,
@@ -2342,9 +1512,184 @@ fn report_data_packet(report: serde_json::Value) -> Result<DataPacket, serde_jso
     })
 }
 
+async fn send_wrap_up_and_wait(
+    room: &Room,
+    context: &mut GeminiEventContext<'_>,
+    reason: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    context.gemini.send_text(&wrap_up(reason)).await?;
+    context.activity.mark_speaking();
+    let deadline = Instant::now() + WRAP_UP_WAIT;
+    loop {
+        if Instant::now() >= deadline {
+            return Ok(());
+        }
+        if wrap_up_settled(context.output_audio, context.activity) {
+            context.activity.mark_listening();
+            set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
+            return Ok(());
+        }
+        tokio::select! {
+            event = context.gemini.next_event() => {
+                let Some(event) = event else { return Ok(()) };
+                // The closing message is the one turn that plays to the end.
+                handle_gemini_event(room, context, event, Interruptible::No).await?;
+            }
+            _ = tokio::time::sleep_until(context.output_audio.playout_deadline.into()), if context.activity.floor == Floor::AwaitingPlayout => {}
+            _ = tokio::time::sleep_until(deadline.into()) => {
+                return Ok(());
+            }
+        }
+    }
+}
+
+/// The goodbye is done once nothing is queued and Gemini is not mid-turn.
+fn wrap_up_settled(output_audio: &OutputAudio, activity: &RuntimeActivity) -> bool {
+    !output_audio.is_playing() && activity.floor != Floor::Speaking
+}
+
+/// Throws away agent audio that is queued but no longer wanted.
+///
+/// Only acts in `Floor::AwaitingPlayout` with audio genuinely still queued.
+/// `AwaitingPlayout` alone is not enough: it is stamped once when the turn
+/// completes, and the queue drains on its own afterwards, so the state outlives
+/// the condition it was named for.
+///
+/// Deliberately does not call `close_turns`. `TurnComplete` already closed both
+/// sides before setting this floor, and closing again would split one utterance
+/// across two transcript segments.
+async fn drop_stale_playout(
+    room: &Room,
+    context: &mut GeminiEventContext<'_>,
+    interruptible: Interruptible,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let Some(dropped) = take_stale_playout(context.activity, context.output_audio, interruptible)
+    else {
+        return Ok(());
+    };
+    eprintln!(
+        "timing: dropped {:.1}s of queued interviewer speech the candidate talked over",
+        dropped.as_secs_f64()
+    );
+    set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
+    Ok(())
+}
+
+/// The decision and its effect, with no room in sight so a test can reach it.
+/// Returns how much queued speech was thrown away, which both decides whether
+/// the agent state attribute needs republishing and is the number worth
+/// logging: it is exactly the delay the candidate would otherwise have sat
+/// through before hearing an answer.
+/// Ends a turn that will not finish: drops what is queued and hands the floor
+/// back. Returns how much speech was thrown away.
+///
+/// `mark_listening`, not a bare assignment to the floor. This used to assign it
+/// bare, on the reasoning that stamping agent speech would start the silence
+/// timers from the wrong instant. It does the opposite: `last_agent_speech` is
+/// parked at the playout deadline while audio is queued, and that deadline is
+/// in the future, so leaving it there after throwing the queue away suppresses
+/// the silence nudge for the whole length of speech nobody heard. `now` is the
+/// earlier of the two.
+fn cut_off_turn(activity: &mut RuntimeActivity, output_audio: &mut OutputAudio) -> Duration {
+    let unplayed = output_audio
+        .playout_deadline
+        .saturating_duration_since(Instant::now());
+    output_audio.interrupt();
+    activity.mark_listening();
+
+    // The pending measurement dies with the turn. A candidate who finished,
+    // waited, and then started talking again is no longer waiting for anything,
+    // and leaving the stamp behind meant the next reply that produced audio
+    // without its own transcript measured from it: the same lie this field was
+    // split out of `last_user_speech` to stop telling, one turn later.
+    activity.awaiting_reply_since = None;
+    unplayed
+}
+
+fn take_stale_playout(
+    activity: &mut RuntimeActivity,
+    output_audio: &mut OutputAudio,
+    interruptible: Interruptible,
+) -> Option<Duration> {
+    if interruptible == Interruptible::No
+        || activity.floor != Floor::AwaitingPlayout
+        || !output_audio.is_playing()
+    {
+        return None;
+    }
+    Some(cut_off_turn(activity, output_audio))
+}
+
+/// Republishes each open turn once as final, so the browser can stop showing
+/// it as in-progress, then opens fresh segment ids for the next turn.
+async fn close_turns(
+    room: &Room,
+    context: &mut GeminiEventContext<'_>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let candidate_identity = context.candidate_identity.map(str::to_string);
+    let closing = [
+        close_turn(&mut context.turns.interviewer, "interviewer"),
+        close_turn(&mut context.turns.candidate, "candidate"),
+    ];
+    for (index, closed) in closing.into_iter().enumerate() {
+        let Some((whole, segment_id)) = closed else {
+            continue;
+        };
+
+        // Only the candidate's own speech is attributed to them; the
+        // interviewer publishes as the agent participant.
+        let identity = (index == 1)
+            .then_some(candidate_identity.as_deref())
+            .flatten();
+        publish_transcript(room, &whole, segment_id, true, identity).await?;
+    }
+    Ok(())
+}
+
+/// Ends the turn and hands back what has to be published as final, or `None`
+/// when the speaker had nothing open. Split out so the borrow ends before the
+/// publish await.
+fn close_turn(turn: &mut SpeakerTurn, speaker: &str) -> Option<(String, String)> {
+    if !turn.is_open() {
+        return None;
+    }
+    let closed = (turn.text().to_string(), turn.segment_id(speaker));
+    turn.finish();
+    Some(closed)
+}
+
+/// The room loop's event bundle, borrowed out of the turn state that owns most
+/// of it. Here rather than beside `TurnState` because `GeminiEventContext` is
+/// this module's type: the turn state is data the loop keeps, and this is the
+/// one place the two are stitched together.
+impl TurnState {
+    fn context<'a>(
+        &'a mut self,
+        output_audio: &'a mut OutputAudio,
+        gemini: &'a mut GeminiLiveSession,
+        candidate_identity: Option<&'a str>,
+    ) -> GeminiEventContext<'a> {
+        GeminiEventContext {
+            output_audio,
+            gemini,
+            state: &mut self.state,
+            agent_state: &mut self.agent_state,
+            activity: &mut self.activity,
+            turns: &mut self.turns,
+            candidate_identity,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ::livekit::webrtc::audio_frame::AudioFrame;
+    use ::livekit::webrtc::audio_source::AudioSourceOptions;
+    use ::livekit::webrtc::audio_source::native::NativeAudioSource;
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+
     use crate::config::load_from_pairs;
     use ::livekit::webrtc::video_frame::{I420Buffer, VideoBuffer, VideoFrame, VideoRotation};
 
@@ -2483,36 +1828,6 @@ mod tests {
     }
 
     #[test]
-    fn jpeg_frame_geometry_rejects_overflowing_and_empty_frames() {
-        assert_eq!(
-            jpeg_frame_geometry(640, 480),
-            Some((640, 480, 640 * 480 * 4))
-        );
-        assert_eq!(
-            jpeg_frame_geometry(8192, 8192),
-            Some((8192, 8192, 8192 * 8192 * 4))
-        );
-
-        // Would wrap a u32 multiply and under-allocate the buffer `to_argb`
-        // writes into.
-        assert_eq!(jpeg_frame_geometry(u32::MAX, 4), None);
-        assert_eq!(jpeg_frame_geometry(8193, 8192), None);
-        assert_eq!(jpeg_frame_geometry(0, 480), None);
-
-        // Clears the pixel cap and still has no representable JPEG side.
-        assert_eq!(jpeg_frame_geometry(100_000, 1), None);
-
-        // The exact boundary, in both directions, because 65535 is the largest
-        // side a JPEG SOF can carry and off-by-one here is a silent truncation.
-        assert_eq!(
-            jpeg_frame_geometry(65_535, 1),
-            Some((65_535, 1, 65_535 * 4))
-        );
-        assert_eq!(jpeg_frame_geometry(65_536, 1), None);
-        assert_eq!(jpeg_frame_geometry(1, 65_536), None);
-    }
-
-    #[test]
     fn candidate_bootstrap_uses_participant_metadata() {
         let config = load_from_pairs([
             ("LIVEKIT_URL", "wss://example.livekit.cloud"),
@@ -2537,44 +1852,6 @@ mod tests {
         assert_eq!(boot.profile.role, "Platform engineer");
         assert_eq!(boot.profile.target_company, "Example Co");
         assert!(boot.instructions.contains("candidate selected staff"));
-    }
-
-    #[test]
-    fn candidate_video_frames_are_opt_in_for_gemini() {
-        let default_config = load_from_pairs([
-            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
-            ("LIVEKIT_API_KEY", "devkey"),
-            ("LIVEKIT_API_SECRET", "devsecret"),
-            ("GOOGLE_API_KEY", "google-key"),
-        ])
-        .unwrap();
-        let enabled_config = load_from_pairs([
-            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
-            ("LIVEKIT_API_KEY", "devkey"),
-            ("LIVEKIT_API_SECRET", "devsecret"),
-            ("GOOGLE_API_KEY", "google-key"),
-            ("CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED", "true"),
-        ])
-        .unwrap();
-
-        assert!(
-            !candidate_video_frames_go_to_gemini(
-                Some("candidate-fixed"),
-                "candidate-fixed",
-                default_config.gemini_candidate_video_enabled,
-            ),
-            "default integrity mode must not forward candidate video frames server-side"
-        );
-        assert!(candidate_video_frames_go_to_gemini(
-            Some("candidate-fixed"),
-            "candidate-fixed",
-            enabled_config.gemini_candidate_video_enabled,
-        ));
-        assert!(!candidate_video_frames_go_to_gemini(
-            Some("candidate-other"),
-            "candidate-fixed",
-            enabled_config.gemini_candidate_video_enabled,
-        ));
     }
 
     /// Losing the race with a duplicate agent that left on its own must not end
@@ -2979,12 +2256,6 @@ mod tests {
     }
 
     #[test]
-    fn candidate_exit_skips_wrap_up_before_report() {
-        assert!(!should_send_wrap_up("candidate_ended"));
-        assert!(should_send_wrap_up("time_up"));
-    }
-
-    #[test]
     fn wrap_up_wait_finishes_after_turn_and_playout_complete() {
         let now = Instant::now();
         let (mut output_audio, _) = test_output_audio(Vec::new());
@@ -3104,16 +2375,6 @@ mod tests {
         append_pcm16_bytes(&frame, &mut bytes);
 
         assert_eq!(bytes, vec![1, 0, 254, 255, 0x34, 0x12]);
-    }
-
-    #[test]
-    fn audio_sample_rate_reads_pcm_mime_rate() {
-        assert_eq!(
-            audio_sample_rate("audio/pcm;rate=24000", 16_000),
-            Some(24_000)
-        );
-        assert_eq!(audio_sample_rate("audio/pcm", 24_000), Some(24_000));
-        assert_eq!(audio_sample_rate("audio/webm", 24_000), None);
     }
 
     /// The closing message is the one turn barge-in must not touch. Cutting it
@@ -3325,6 +2586,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn output_audio_interrupt_clears_partial_pcm_frame_and_cancels_old_queue() {
+        let (mut output_audio, _) = test_output_audio(vec![1, 2, 3]);
+        let old_cancellation = output_audio.output_cancellation.clone();
+        output_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
+
+        output_audio.interrupt();
+
+        assert!(output_audio.pending_bytes.is_empty());
+        assert!(old_cancellation.is_cancelled());
+        assert!(!output_audio.output_cancellation.is_cancelled());
+        assert!(!output_audio.is_playing());
+    }
+
     fn test_output_audio(
         pending_bytes: Vec<u8>,
     ) -> (OutputAudio, mpsc::Receiver<QueuedOutputFrame>) {
@@ -3370,20 +2645,6 @@ mod tests {
     }
 
     #[test]
-    fn output_audio_interrupt_clears_partial_pcm_frame_and_cancels_old_queue() {
-        let (mut output_audio, _) = test_output_audio(vec![1, 2, 3]);
-        let old_cancellation = output_audio.output_cancellation.clone();
-        output_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
-
-        output_audio.interrupt();
-
-        assert!(output_audio.pending_bytes.is_empty());
-        assert!(old_cancellation.is_cancelled());
-        assert!(!output_audio.output_cancellation.is_cancelled());
-        assert!(!output_audio.is_playing());
-    }
-
-    #[test]
     fn take_pcm16_frames_decodes_full_ten_ms_frames_and_keeps_remainder() {
         let frame_bytes = 240 * 2;
         let mut bytes = vec![0_u8; frame_bytes + 2];
@@ -3398,12 +2659,6 @@ mod tests {
         assert_eq!(frames[0].len(), 240);
         assert_eq!(frames[0][0], 1);
         assert_eq!(pending, vec![9, 0]);
-    }
-
-    #[test]
-    fn video_frame_throttle_matches_gemini_live_limit() {
-        assert!(!should_send_video_frame(Duration::from_millis(999)));
-        assert!(should_send_video_frame(Duration::from_secs(1)));
     }
 
     #[test]
