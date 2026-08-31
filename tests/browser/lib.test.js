@@ -284,9 +284,11 @@ test("a camera label is carried as detail without outgrowing the hashed bound", 
   // divergence is the entire reason `integrityDetail` uses `Array.from`. A label
   // that fits under the bound exercises none of it.
   // Placed so the emoji's two UTF-16 units straddle index 80: "camera=" is 7,
-  // the kana are 70, "ab" is 2, so the pair occupies units 79 and 80. A
-  // `.slice(0, 80)` keeps unit 79 and drops its partner.
-  const label = "仮想カメラ".repeat(14) + "ab\u{1F3A5}tail";
+  // the Greek is 70, "ab" is 2, so the pair occupies units 79 and 80. A
+  // `.slice(0, 80)` keeps unit 79 and drops its partner. The letters are a
+  // fixture chosen for byte and unit width, not for any language: each is one
+  // UTF-16 unit and two bytes, and the emoji is the pair that can be split.
+  const label = "αβγδε".repeat(14) + "ab\u{1F3A5}tail";
   const event = await integrityEventPayload({
     type: "MEDIA_PREFLIGHT_PASSED",
     source: "preflight",
@@ -299,7 +301,7 @@ test("a camera label is carried as detail without outgrowing the hashed bound", 
     !Array.from(event.detail).some((c) => c.length === 1 && c.charCodeAt(0) >= 0xd800 && c.charCodeAt(0) <= 0xdfff),
     "truncation split a surrogate pair",
   );
-  assert.ok(event.detail.startsWith("camera=仮想カメラ"), event.detail);
+  assert.ok(event.detail.startsWith("camera=αβγδε"), event.detail);
 });
 
 test("a device label cannot reorder or hide the report it is printed in", async () => {

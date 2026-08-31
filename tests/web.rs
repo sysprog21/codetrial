@@ -394,9 +394,9 @@ fn token_duration_preserves_fractional_frontend_metadata() {
 #[test]
 fn token_duration_stops_at_the_recording_cap() {
     for (recording_max_min, requested, expected) in [
-        // The lobby offers sixty. A deployment recording at the default cap
-        // has `stale_after` reap the recording at fifty, so the last ten
-        // minutes are interview no artifact survives to cover.
+        // The lobby offers sixty. A deployment recording at the default cap has
+        // `stale_after` reap the recording at fifty, so the last ten minutes
+        // are interview no artifact survives to cover.
         (Some(45), json!(60), json!(45)),
         // Under the cap is nobody's problem and stays untouched.
         (Some(45), json!(30), json!(30)),

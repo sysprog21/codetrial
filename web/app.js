@@ -38,7 +38,6 @@ const nodes = {
   logout: document.querySelector("#logout"),
   history: document.querySelector("#history"),
   recommendation: document.querySelector("#recommendation"),
-  durationNote: document.querySelector("#duration-note"),
   progressSummary: document.querySelector("#progress-summary"),
   progressTrends: document.querySelector("#progress-trends"),
   progressWeaknesses: document.querySelector("#progress-weaknesses"),
@@ -56,6 +55,7 @@ const nodes = {
   groundingConsent: document.querySelector("#grounding-consent"),
   groundingClear: document.querySelector("#grounding-clear"),
   groundingError: document.querySelector("#grounding-error"),
+  durationNote: document.querySelector("#duration-note"),
 };
 
 // Every card carries the pressed state from the start, not only the one that

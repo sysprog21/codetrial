@@ -2884,7 +2884,7 @@ fn the_integrity_fixture_exercises_the_detail_control_character_contract() {
 #[test]
 fn localized_camera_labels_survive_integrity_verification() {
     let mut state = RuntimeState::default();
-    let detail = "camera=仮想カメラ Café (046d:086b)";
+    let detail = "camera=Κάμερα Café (046d:086b)";
     apply_data_event(
         &mut state,
         "integrity",
