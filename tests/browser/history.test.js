@@ -163,3 +163,13 @@ test("a replay with no recorded mode shows no dangling separator", () => {
   const render = functionBody(code, "render");
   assert.match(render, /if \(mode\) \{\s*nodes\.status\.textContent =/);
 });
+
+test("a rate-limited replay batch is kept, not dropped", () => {
+  // The batch is spliced off the queue before the request, so a status nobody
+  // handles loses that stretch of the interview for good. Rate limiting bounds
+  // how often a browser may ask; it is not a decision about which evidence
+  // survives, which is what silently discarding the batch made it.
+  const send = functionBody(withoutComments(read("web/replay-feed.js")), "sendQueuedBatch");
+  assert.match(send, /=== 429/, "429 has to be handled at all");
+  assert.match(send, /429[\s\S]*replayQueue\.unshift\(\.\.\.batch\)/, "and handled by keeping it");
+});

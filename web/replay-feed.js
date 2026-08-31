@@ -119,6 +119,15 @@ async function sendQueuedBatch() {
         .catch(() => null);
       if (code === "replay_quota_exceeded") closeReplay();
     }
+    // Rate limiting says "not now", not "never", and the batch has already
+    // been taken off the queue. Dropping it here lost that stretch of the
+    // interview for good, which is the one outcome the limit is not meant to
+    // have: it exists to bound how often a browser may ask, not to decide
+    // which evidence survives. Put back at the front, because the feed is
+    // ordered by what the candidate did.
+    if (response.status === 429) {
+      replayQueue.unshift(...batch);
+    }
   } catch {
     // Offline. The interview is what matters and it is still running.
   }

@@ -562,6 +562,12 @@ function title(card) {
 }
 
 function showProgressError(message) {
+  // Emptied, not just unpainted. These outlive the panel: recommendations and
+  // every filter change read them again afterwards, so a lobby that failed to
+  // load one account's history went on answering from whichever account's
+  // history it had last managed to load.
+  reports = [];
+  progressEntries = [];
   nodes.history.hidden = false;
   nodes.progressSummary.textContent = message;
   nodes.progressTrends.replaceChildren();
