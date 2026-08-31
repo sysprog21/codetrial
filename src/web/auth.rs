@@ -287,12 +287,18 @@ pub(crate) async fn session_handler(
     // record a login at all, and telling the page to demand one anyway leaves
     // the candidate typing a username into an endpoint that answers 404.
     let login_required = state.accounts_required;
+    // The lobby offers lengths this deployment may not be able to record, and
+    // only the server knows the recording cap. Answered on both branches
+    // because the duration row is live before anyone signs in.
+    let max_duration_min =
+        super::token::duration_ceiling(state.config.recording.as_ref().map(|it| it.max_minutes));
     match current_user(state.accounts.as_ref(), request.headers()).await {
         Ok(Some(user)) => json_response(
             StatusCode::OK,
             json!({
                 "signedIn": true,
                 "loginRequired": login_required,
+                "maxDurationMin": max_duration_min,
                 "user": {
                     "login": user.login,
                     "avatarUrl": user.avatar_url
@@ -301,7 +307,11 @@ pub(crate) async fn session_handler(
         ),
         Ok(None) => json_response(
             StatusCode::OK,
-            json!({ "signedIn": false, "loginRequired": login_required }),
+            json!({
+                "signedIn": false,
+                "loginRequired": login_required,
+                "maxDurationMin": max_duration_min,
+            }),
         ),
         Err(_) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,

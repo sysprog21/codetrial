@@ -130,6 +130,10 @@ const snapshot = (page) =>
       card: one(".problem-card.selected")?.dataset.problem ?? null,
       pressed: one('.problem-card[aria-pressed="true"]')?.dataset.problem ?? null,
       duration: one(".duration-button.selected")?.dataset.duration ?? null,
+      durationsOff: [...document.querySelectorAll(".duration-button")]
+        .filter((button) => button.disabled)
+        .map((button) => button.dataset.duration),
+      durationNote: one("#duration-note").hidden ? "" : one("#duration-note").textContent,
       levels: [...document.querySelectorAll('[name="difficulty"]:checked')].map((i) => i.value),
       visibleCards: [...document.querySelectorAll(".problem-card")].filter((c) => !c.hidden).length,
       startDisabled: one("#start").disabled,
@@ -789,4 +793,52 @@ lobbyTest("a start already on its way out is not undone by a later choice", asyn
     "start shipped something other than the problem that was on screen when it was pressed",
   );
   release();
+});
+
+lobbyTest("a length this deployment cannot record is disabled, and says why", async (page) => {
+  // The cap the server reports, which is `DEFAULT_RECORDING_MAX_MINUTES` on a
+  // default deployment. Sixty is the length the row offers past it, and
+  // `stale_after` reaps that recording ten minutes before the interview ends.
+  session = { signedIn: true, user: { login: "candidate" }, maxDurationMin: 45 };
+
+  const state = await lobby(page);
+
+  assert.deepEqual(state.durationsOff, ["60"], "a length past the recording cap was still on offer");
+  assert.match(state.durationNote, /at most 45 minutes/, "the disabled button gave no reason");
+  assert.equal(state.duration, "45", "the cap moved a length that was already under it");
+});
+
+lobbyTest("the recording cap outranks the length the markup preselected", async (page) => {
+  // Nothing else here overrules a length that is already set. This does,
+  // because it is not a second opinion about what suits the candidate: it is
+  // what this server is able to record.
+  session = { signedIn: true, user: { login: "candidate" }, maxDurationMin: 30 };
+
+  const state = await lobby(page);
+
+  assert.equal(state.duration, "30", "the lobby kept a length longer than the recording");
+  assert.deepEqual(state.durationsOff, ["45", "60"]);
+});
+
+lobbyTest("a server that can record every length on offer disables nothing", async (page) => {
+  session = { signedIn: true, user: { login: "candidate" }, maxDurationMin: 90 };
+
+  const state = await lobby(page);
+
+  assert.deepEqual(state.durationsOff, []);
+  assert.equal(state.durationNote, "", "a lobby with nothing capped explained a cap anyway");
+  assert.equal(state.duration, markupDuration());
+});
+
+lobbyTest("a cap under every length on offer leaves the row alone", async (page) => {
+  // A deployment that records less than the shortest interview it offers is
+  // misconfigured, and `recording_config` refuses that pairing at startup. If
+  // one reaches the browser anyway, a row with every button dead is a lobby
+  // nobody can start; the server's own floor decides instead.
+  session = { signedIn: true, user: { login: "candidate" }, maxDurationMin: 15 };
+
+  const state = await lobby(page);
+
+  assert.deepEqual(state.durationsOff, []);
+  assert.equal(state.durationNote, "");
 });

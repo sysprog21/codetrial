@@ -8,6 +8,17 @@ let manualProblem = false;
 let manualDuration = false;
 let manualDifficulty = false;
 let historyReady = false;
+/// The longest interview this deployment can record, which only the server
+/// knows. `Infinity` until `/api/session` answers: the duration row is live
+/// before that lands, and `/api/token` clamps anything that gets out in the
+/// meantime, so the gap costs a shortened interview rather than a lost
+/// recording.
+///
+/// Declared with the other module state rather than beside the functions that
+/// read it. The setup below calls `setDuration` while a `let` further down the
+/// file is still in its temporal dead zone, and reading one there throws
+/// before the lobby has rendered anything at all.
+let durationCeiling = Infinity;
 
 // The roll a recommendation is drawn with. It changes when the candidate asks
 // for something different and at no other time, so recommending twice for one
@@ -23,6 +34,7 @@ const nodes = {
   logout: document.querySelector("#logout"),
   history: document.querySelector("#history"),
   recommendation: document.querySelector("#recommendation"),
+  durationNote: document.querySelector("#duration-note"),
 };
 
 // Every card carries the pressed state from the start, not only the one that
@@ -77,7 +89,8 @@ for (const input of levels) {
   });
 }
 
-for (const button of document.querySelectorAll("[data-duration]")) {
+const durations = [...document.querySelectorAll("[data-duration]")];
+for (const button of durations) {
   button.addEventListener("click", () => setDuration(Number(button.dataset.duration), true));
 }
 
@@ -197,6 +210,7 @@ function settle() {
 async function loadAccount() {
   try {
     const session = await fetchJson("/api/session");
+    applyDurationCeiling(session.maxDurationMin);
     if (session.signedIn) {
       nodes.accountStatus.textContent = `Signed in as ${session.user.login}`;
       nodes.githubLogin.hidden = true;
@@ -376,11 +390,51 @@ function suggestedDuration(difficulties) {
 /// they have, nothing suggests over it again. The latch never releases: someone
 /// who asks for sixty minutes keeps it even if their history later moves them
 /// down to Easy.
+///
+/// The ceiling is applied here rather than at each caller, so a length can no
+/// more get past it by being suggested than by being clicked.
 function setDuration(minutes, chosen = false) {
   if (manualDuration && !chosen) return;
   manualDuration ||= chosen;
-  duration = minutes;
-  select("[data-duration]", document.querySelector(`[data-duration="${minutes}"]`));
+  duration = underCeiling(minutes);
+  select("[data-duration]", document.querySelector(`[data-duration="${duration}"]`));
+}
+
+/// Snapped to a length the row actually offers, not to the cap itself: a cap
+/// of forty would otherwise leave `duration` at forty with no button to show
+/// for it, and the candidate reading a row where nothing is selected.
+function underCeiling(minutes) {
+  if (minutes <= durationCeiling) return minutes;
+  const offered = durations
+    .map((button) => Number(button.dataset.duration))
+    .filter((value) => value <= durationCeiling);
+  return offered.length ? Math.max(...offered) : minutes;
+}
+
+/// What the server said it can record, turned into a row that says so. The
+/// button is disabled rather than removed: a length that quietly stops being
+/// on offer is the same silence as one that quietly gets shortened, and this
+/// one has a reason worth reading.
+function applyDurationCeiling(minutes) {
+  if (!Number.isFinite(minutes)) return;
+  durationCeiling = minutes;
+  const over = durations.filter((button) => Number(button.dataset.duration) > minutes);
+  // A cap under every length on offer is a misconfigured deployment, not a
+  // lobby with nothing to press. Leave the row alone and let the server's own
+  // floor decide, rather than handing back a page that cannot start anything.
+  const capped = over.length < durations.length ? over : [];
+  for (const button of durations) button.disabled = capped.includes(button);
+  nodes.durationNote.textContent = capped.length
+    ? `Interviews here are recorded for at most ${minutes} minutes, so longer ones are not offered.`
+    : "";
+  nodes.durationNote.hidden = !capped.length;
+  // The cap outranks a length the candidate chose out loud, which nothing else
+  // here does: it is not a second opinion about what suits them, it is what
+  // this server can record.
+  if (duration > durationCeiling) {
+    duration = underCeiling(duration);
+    select("[data-duration]", document.querySelector(`[data-duration="${duration}"]`));
+  }
 }
 
 function title(card) {

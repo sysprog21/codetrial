@@ -180,6 +180,34 @@ tab with tab audio enabled. Meet owns the shared tab after that point, and
 face-presence analysis is disabled for the session. See the
 [manual check](docs/meet-tab-audio-manual-check.md) for the supported flow.
 
+### Interview length
+
+The lobby offers 30, 45, and 60 minutes, and the candidate picks one before
+starting. `CODETRIAL_DURATION_MIN` is only the length preselected for a
+candidate who does not choose; the endpoint accepts 10 to 90 either way, so a
+deployment that lowers the default has not lowered the ceiling.
+
+Recording lowers it. `CODETRIAL_RECORDING_MAX_MINUTES` bounds a single
+recording, and the sweeper fails one still running five minutes past it, so an
+interview longer than the cap loses exactly the stretch past it and the artifact
+is failed rather than delivered. Where recording is on, the longest interview
+this deployment will start is that cap, clamped into the 10–90 the endpoint
+offers; where it is off, the ceiling is 90.
+
+The lobby is told the ceiling rather than left to discover it. `/api/session`
+reports `maxDurationMin`, and the duration row disables the lengths above it
+with the reason beside them — a length this deployment cannot record is never
+offered and then quietly shortened. `/api/token` clamps to the same ceiling, so
+a request that skips the lobby is bounded too, and both endpoints read it from
+one function so the length that is offered and the length that is enforced
+cannot drift apart.
+
+Startup refuses a cap below `CODETRIAL_DURATION_MIN`, so the length this
+deployment preselects is always one it can record; the pairing is a
+configuration error rather than a quietly shortened interview. Should a cap ever
+sit below every length the row offers, the lobby leaves the row alone rather
+than rendering a page with nothing to press.
+
 ## Development
 
 ```bash
@@ -262,7 +290,7 @@ the environment instead. The common ones are:
 | Variable | Default | Purpose |
 |---|---|---|
 | `CODETRIAL_WEB_ADDR` | `127.0.0.1:3000` | Listen address |
-| `CODETRIAL_DURATION_MIN` | `45` | Default interview length (10–90) |
+| `CODETRIAL_DURATION_MIN` | `45` | Interview length preselected in the lobby (10–90); see [Interview length](#interview-length) |
 | `GEMINI_LIVE_MODEL` | `gemini-3.1-flash-live-preview` | Realtime interviewer model |
 | `GEMINI_REPORT_MODEL` | `gemini-3.1-flash-lite` | Report model |
 | `CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED` | `false` | Forward candidate video to Gemini |
@@ -293,8 +321,11 @@ Serving more than one LiveKit project from one deployment is in
 
 Recording is off by default. Enabling it requires a separate LiveKit project,
 private GCS staging bucket, Shared Drive, service account, GitHub OAuth, and
-candidate consent. The full configuration, lifecycle, retention policy, and
-credentialed acceptance check are in [docs/recording-contract.md](docs/recording-contract.md).
+candidate consent. It also caps how long an interview can run:
+`CODETRIAL_RECORDING_MAX_MINUTES` (45 by default) becomes the longest length the
+lobby offers, described under [Interview length](#interview-length). The full
+configuration, lifecycle, retention policy, and credentialed acceptance check
+are in [docs/recording-contract.md](docs/recording-contract.md).
 
 ## Further documentation
 

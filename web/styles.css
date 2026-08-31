@@ -160,6 +160,14 @@ p {
   cursor: pointer;
 }
 
+/* `--sub` for the same reason the fieldset legend uses it: this explains a
+   control rather than decorating it, and `--muted` measures under the 4.5 that
+   normal text needs. */
+.duration-note {
+  margin-top: 0.5rem;
+  color: var(--sub);
+}
+
 .recommendation {
   color: var(--ink);
   font-weight: 700;

@@ -132,6 +132,7 @@ fn token_response_matches_frontend_contract() {
             api_key: "devkey",
             api_secret: "devsecret",
             server_url: "wss://example.livekit.cloud",
+            recording_max_min: None,
         },
         br#"{"problemId":"merge-intervals","durationMin":120}"#,
         "interview-fixed",
@@ -159,6 +160,7 @@ fn token_response_mints_the_candidate_identity() {
             api_key: "devkey",
             api_secret: "devsecret",
             server_url: "wss://example.livekit.cloud",
+            recording_max_min: None,
         },
         br#"{"candidateIdentity":"candidate-a1b2c3"}"#,
         "interview-fixed",
@@ -182,6 +184,7 @@ fn token_response_ignores_a_supplied_candidate_identity() {
             api_key: "devkey",
             api_secret: "devsecret",
             server_url: "wss://example.livekit.cloud",
+            recording_max_min: None,
         },
         br#"{"candidateIdentity":"candidate-a1b2c3"}"#,
         "interview-fixed",
@@ -211,6 +214,7 @@ fn token_duration_matches_current_frontend_clamp() {
                 api_key: "devkey",
                 api_secret: "devsecret",
                 server_url: "wss://example.livekit.cloud",
+                recording_max_min: None,
             },
             &body,
             "interview-fixed",
@@ -234,6 +238,7 @@ fn token_duration_preserves_fractional_frontend_metadata() {
             api_key: "devkey",
             api_secret: "devsecret",
             server_url: "wss://example.livekit.cloud",
+            recording_max_min: None,
         },
         br#"{"durationMin":42.8}"#,
         "interview-fixed",
@@ -246,6 +251,95 @@ fn token_duration_preserves_fractional_frontend_metadata() {
     assert_eq!(
         serde_json::from_str::<Value>(claims["metadata"].as_str().unwrap()).unwrap()["durationMin"],
         json!(42.8)
+    );
+}
+
+#[test]
+fn token_duration_stops_at_the_recording_cap() {
+    for (recording_max_min, requested, expected) in [
+        // The lobby offers sixty. A deployment recording at the default cap
+        // has `stale_after` reap the recording at fifty, so the last ten
+        // minutes are interview no artifact survives to cover.
+        (Some(45), json!(60), json!(45)),
+        // Under the cap is nobody's problem and stays untouched.
+        (Some(45), json!(30), json!(30)),
+        // A cap above the range the endpoint offers does not widen it.
+        (Some(120), json!(100), json!(90)),
+        // Nothing to outlive when this server does not record.
+        (None, json!(60), json!(60)),
+    ] {
+        let body = serde_json::to_vec(&json!({"durationMin": requested})).unwrap();
+        let response = token_response(
+            &TokenConfig {
+                api_key: "devkey",
+                api_secret: "devsecret",
+                server_url: "wss://example.livekit.cloud",
+                recording_max_min,
+            },
+            &body,
+            "interview-fixed",
+            "candidate-fixed",
+            2000,
+        )
+        .unwrap();
+        let claims = claims(&response.token);
+
+        assert_eq!(
+            serde_json::from_str::<Value>(claims["metadata"].as_str().unwrap()).unwrap()["durationMin"],
+            expected,
+            "asked for {requested} under a cap of {recording_max_min:?}"
+        );
+    }
+}
+
+#[test]
+fn token_duration_default_stops_at_the_recording_cap() {
+    // A caller who names no length gets the default, and the default is a
+    // length like any other. Handing back forty-five to a deployment that can
+    // only record thirty loses the same stretch, for the want of a request.
+    let response = token_response(
+        &TokenConfig {
+            api_key: "devkey",
+            api_secret: "devsecret",
+            server_url: "wss://example.livekit.cloud",
+            recording_max_min: Some(30),
+        },
+        b"{}",
+        "interview-fixed",
+        "candidate-fixed",
+        2000,
+    )
+    .unwrap();
+    let claims = claims(&response.token);
+
+    assert_eq!(
+        serde_json::from_str::<Value>(claims["metadata"].as_str().unwrap()).unwrap()["durationMin"],
+        30
+    );
+}
+
+#[test]
+fn token_duration_survives_a_recording_cap_under_the_floor() {
+    // `f64::clamp` panics when its bounds cross, so a cap below the shortest
+    // interview on offer has to land on the floor rather than in the handler.
+    let response = token_response(
+        &TokenConfig {
+            api_key: "devkey",
+            api_secret: "devsecret",
+            server_url: "wss://example.livekit.cloud",
+            recording_max_min: Some(1),
+        },
+        br#"{"durationMin":45}"#,
+        "interview-fixed",
+        "candidate-fixed",
+        2000,
+    )
+    .unwrap();
+    let claims = claims(&response.token);
+
+    assert_eq!(
+        serde_json::from_str::<Value>(claims["metadata"].as_str().unwrap()).unwrap()["durationMin"],
+        10
     );
 }
 
@@ -2265,7 +2359,7 @@ async fn account_routes_record_interviewee_github_login() {
 
     assert_eq!(
         session.json::<Value>().await.unwrap(),
-        json!({"signedIn": false, "loginRequired": true})
+        json!({"signedIn": false, "loginRequired": true, "maxDurationMin": MAX_DURATION_MIN})
     );
 
     let signed_in = client
@@ -2380,7 +2474,7 @@ async fn an_unmigratable_account_database_refuses_rather_than_disabling_login() 
         .unwrap();
     assert_eq!(
         session,
-        json!({"signedIn": false, "loginRequired": true}),
+        json!({"signedIn": false, "loginRequired": true, "maxDurationMin": MAX_DURATION_MIN}),
         "a database this binary cannot migrate still requires a login"
     );
 
@@ -2420,7 +2514,7 @@ async fn an_unopenable_account_database_refuses_rather_than_disabling_login() {
         .unwrap();
     assert_eq!(
         session,
-        json!({"signedIn": false, "loginRequired": true}),
+        json!({"signedIn": false, "loginRequired": true, "maxDurationMin": MAX_DURATION_MIN}),
         "a broken database still requires a login; it cannot serve one"
     );
 
@@ -2915,7 +3009,7 @@ async fn account_reports_are_scoped_to_the_signed_in_user() {
         .unwrap();
     assert_eq!(
         signed_out,
-        json!({"signedIn": false, "loginRequired": true}),
+        json!({"signedIn": false, "loginRequired": true, "maxDurationMin": MAX_DURATION_MIN}),
         "accounts exist here, so the browser has to know to demand a sign-in"
     );
 
@@ -3896,6 +3990,44 @@ async fn start_interview(client: &reqwest::Client, base: &str, cookie: &str) -> 
 }
 
 /// A recording block for tests that only care that recording is on.
+/// The lobby offers lengths this deployment may not be able to record, and only
+/// the server knows the cap. Without it in the payload the browser goes on
+/// offering sixty minutes and `/api/token` shortens the interview after the
+/// candidate has already asked for it, which is the substitution #16 is about.
+#[tokio::test]
+async fn the_session_reports_how_long_a_recorded_interview_may_run() {
+    let mut config = web_config();
+    config.recording = Some(recording_config());
+    let (base, server) = spawn_web_server(config).await;
+
+    let session = reqwest::get(format!("{base}/api/session"))
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+
+    assert_eq!(session["maxDurationMin"], recording_config().max_minutes);
+    server.abort();
+}
+
+/// The same endpoint on a server that records nothing, so the cap is the range
+/// the endpoint has always offered rather than a number the lobby invents.
+#[tokio::test]
+async fn a_server_that_does_not_record_caps_nothing_beyond_the_range() {
+    let (base, server) = spawn_web_server(web_config()).await;
+
+    let session = reqwest::get(format!("{base}/api/session"))
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+
+    assert_eq!(session["maxDurationMin"], MAX_DURATION_MIN);
+    server.abort();
+}
+
 fn recording_config() -> codetrial::config::RecordingConfig {
     codetrial::config::RecordingConfig {
         livekit: None,
