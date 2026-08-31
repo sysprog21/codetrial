@@ -160,16 +160,29 @@ let starting = false;
 // handler threw on the next line, and the button stayed disabled on "Recording
 // GitHub..." with the interview never starting.
 start.addEventListener("click", async () => {
-  // Both of them read before the round trip below, because everything the
-  // candidate can still touch during it writes one of the two. Taking the
-  // problem and leaving the length behind shipped an interview that was 45
-  // minutes when the button was pressed and 60 by the time it was answered.
-  // The mode is on the same round trip and reads the same way.
-  const chosen = problem;
-  const minutes = duration;
-  const chosenMode = mode;
-  const chosenLoop = interviewLoop;
-  if (!chosen) return;
+  if (!problem) return;
+  // The whole form is read here, before the sign-in round trip below, because
+  // every control the candidate can still touch during it feeds this URL.
+  // Reading them afterwards shipped an interview that was 45 minutes when the
+  // button was pressed and 60 by the time it was answered, and the same for
+  // the mode, the round plan, and the profile beside them. One read, then go.
+  const destination = new URL("/interview", window.location.origin);
+  destination.searchParams.set("problem", problem.id);
+  destination.searchParams.set("duration", String(duration));
+  destination.searchParams.set("mode", mode);
+  destination.searchParams.set("loop", interviewLoop);
+  const profile = {
+    role: nodes.profileRole.value.trim(),
+    seniority: nodes.profileSeniority.value,
+    targetCompany: nodes.profileCompany.value.trim(),
+  };
+  if (profile.role) destination.searchParams.set("role", profile.role);
+  if (profile.seniority) destination.searchParams.set("seniority", profile.seniority);
+  if (profile.targetCompany) destination.searchParams.set("company", profile.targetCompany);
+  const selected = { requirements: [], skills: [], anchors: [] };
+  for (const input of nodes.groundingChoices.querySelectorAll("input:checked")) selected[input.dataset.group].push(Number(input.value));
+  const consented = nodes.groundingConsent.checked;
+
   starting = true;
   start.disabled = true;
   nodes.groundingError.textContent = "";
@@ -183,29 +196,19 @@ start.addEventListener("click", async () => {
       setStartGate(true);
       return;
     }
+    // The login is recorded, so the gate is answered. Leaving it set told a
+    // candidate who had just signed in to sign in again on the next bail-out
+    // below, and spent a second /api/login doing it.
+    signInFirst = false;
   }
   start.textContent = "Starting...";
-  const destination = new URL("/interview", window.location.origin);
-  destination.searchParams.set("problem", chosen.id);
-  destination.searchParams.set("duration", String(minutes));
-  destination.searchParams.set("mode", chosenMode);
-  destination.searchParams.set("loop", chosenLoop);
-  const profile = {
-    role: nodes.profileRole.value.trim(),
-    seniority: nodes.profileSeniority.value,
-    targetCompany: nodes.profileCompany.value.trim(),
-  };
-  if (profile.role) destination.searchParams.set("role", profile.role);
-  if (profile.seniority) destination.searchParams.set("seniority", profile.seniority);
-  if (profile.targetCompany) destination.searchParams.set("company", profile.targetCompany);
   try {
-    const selected = { requirements: [], skills: [], anchors: [] };
-    for (const input of nodes.groundingChoices.querySelectorAll("input:checked")) selected[input.dataset.group].push(Number(input.value));
-    const packet = selectedGroundingPacket(grounding, selected, nodes.groundingConsent.checked);
+    const packet = selectedGroundingPacket(grounding, selected, consented);
     storeGroundingPacket(sessionStorage, packet);
   } catch (error) {
     nodes.groundingError.textContent = error.message;
-    event.currentTarget.disabled = false;
+    starting = false;
+    start.disabled = !problem;
     setStartGate(signInFirst);
     return;
   }
