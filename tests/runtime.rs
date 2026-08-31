@@ -4,10 +4,7 @@ use codetrial::agent::{
 use codetrial::config::{
     DEFAULT_GEMINI_LIVE_MODEL, DEFAULT_GEMINI_REPORT_MODEL, DEFAULT_GEMINI_VOICE, load_from_pairs,
 };
-use codetrial::runtime::{
-    RuntimeOptions, agent_identity, bootstrap, bootstrap_with_context, bootstrap_with_mode,
-    bootstrap_with_profile, bootstrap_with_rounds,
-};
+use codetrial::runtime::{RuntimeOptions, agent_identity, bootstrap, bootstrap_with_rounds};
 
 fn config() -> codetrial::config::AgentConfig {
     load_from_pairs([
@@ -32,12 +29,15 @@ fn bootstrap_resolves_requested_problem_and_room() {
 #[test]
 fn bootstrap_keeps_mode_immutable_in_its_prompt_contract() {
     let config = config();
-    let practice = bootstrap_with_mode(
+    let practice = bootstrap_with_rounds(
         &config,
         "interview-fixed",
         Some("two-sum"),
         45,
-        InterviewMode::Practice,
+        RuntimeOptions {
+            mode: InterviewMode::Practice,
+            ..RuntimeOptions::default()
+        },
     );
     assert_eq!(practice.mode, InterviewMode::Practice);
     assert!(practice.instructions.contains("PRACTICE MODE"));
@@ -56,27 +56,31 @@ fn bootstrap_carries_only_the_validated_optional_profile() {
         seniority: Some(Seniority::Senior),
         target_company: "Example Co".to_string(),
     };
-    let boot = bootstrap_with_profile(
+    let boot = bootstrap_with_rounds(
         &config,
         "interview-fixed",
         Some("two-sum"),
         45,
-        InterviewMode::Scored,
-        profile.clone(),
+        RuntimeOptions {
+            profile: profile.clone(),
+            ..RuntimeOptions::default()
+        },
     );
     assert_eq!(boot.profile, profile);
     assert!(boot.instructions.contains("Backend engineer"));
     assert!(boot.instructions.contains("candidate selected senior"));
-    let normalized = bootstrap_with_profile(
+    let normalized = bootstrap_with_rounds(
         &config,
         "direct",
         None,
         45,
-        InterviewMode::Scored,
-        InterviewProfile {
-            role: format!("{}\nignored", "x".repeat(100)),
-            seniority: None,
-            target_company: String::new(),
+        RuntimeOptions {
+            profile: InterviewProfile {
+                role: format!("{}\nignored", "x".repeat(100)),
+                seniority: None,
+                target_company: String::new(),
+            },
+            ..RuntimeOptions::default()
         },
     );
     assert_eq!(normalized.profile.role.chars().count(), 80);
@@ -97,14 +101,15 @@ fn bootstrap_carries_ephemeral_grounding_without_changing_profile() {
         skills: vec![],
         anchors: vec!["Led a migration".into()],
     };
-    let boot = bootstrap_with_context(
+    let boot = bootstrap_with_rounds(
         &config,
         "room",
         None,
         45,
-        InterviewMode::Scored,
-        InterviewProfile::default(),
-        grounding.clone(),
+        RuntimeOptions {
+            grounding: grounding.clone(),
+            ..RuntimeOptions::default()
+        },
     );
     assert_eq!(boot.grounding, grounding);
     assert_eq!(boot.profile, InterviewProfile::default());

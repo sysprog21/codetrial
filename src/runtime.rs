@@ -40,7 +40,7 @@ pub struct RuntimeBootstrap<'a> {
     pub greeting: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RuntimeOptions {
     pub mode: InterviewMode,
     pub profile: InterviewProfile,
@@ -54,71 +54,12 @@ pub fn bootstrap<'a>(
     problem_id: Option<&str>,
     duration_min: u32,
 ) -> RuntimeBootstrap<'a> {
-    bootstrap_with_mode(
-        config,
-        room_name,
-        problem_id,
-        duration_min,
-        InterviewMode::Scored,
-    )
-}
-
-pub fn bootstrap_with_mode<'a>(
-    config: &'a AgentConfig,
-    room_name: &'a str,
-    problem_id: Option<&str>,
-    duration_min: u32,
-    mode: InterviewMode,
-) -> RuntimeBootstrap<'a> {
-    bootstrap_with_profile(
-        config,
-        room_name,
-        problem_id,
-        duration_min,
-        mode,
-        InterviewProfile::default(),
-    )
-}
-
-pub fn bootstrap_with_profile<'a>(
-    config: &'a AgentConfig,
-    room_name: &'a str,
-    problem_id: Option<&str>,
-    duration_min: u32,
-    mode: InterviewMode,
-    profile: InterviewProfile,
-) -> RuntimeBootstrap<'a> {
-    bootstrap_with_context(
-        config,
-        room_name,
-        problem_id,
-        duration_min,
-        mode,
-        profile,
-        InterviewGrounding::default(),
-    )
-}
-
-pub fn bootstrap_with_context<'a>(
-    config: &'a AgentConfig,
-    room_name: &'a str,
-    problem_id: Option<&str>,
-    duration_min: u32,
-    mode: InterviewMode,
-    profile: InterviewProfile,
-    grounding: InterviewGrounding,
-) -> RuntimeBootstrap<'a> {
     bootstrap_with_rounds(
         config,
         room_name,
         problem_id,
         duration_min,
-        RuntimeOptions {
-            mode,
-            profile,
-            grounding,
-            interview_loop: InterviewLoop::CodingBehavioral,
-        },
+        RuntimeOptions::default(),
     )
 }
 

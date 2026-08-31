@@ -68,50 +68,6 @@ fn practice_policy() -> &'static str {
   not the definition or accounting of a hint."#
 }
 
-pub fn build_instructions(problem: &Problem, duration_min: u32) -> String {
-    build_instructions_for_mode(problem, duration_min, InterviewMode::Scored)
-}
-
-pub fn build_instructions_for_mode(
-    problem: &Problem,
-    duration_min: u32,
-    mode: InterviewMode,
-) -> String {
-    build_instructions_for_profile(problem, duration_min, mode, &InterviewProfile::default())
-}
-
-pub fn build_instructions_for_profile(
-    problem: &Problem,
-    duration_min: u32,
-    mode: InterviewMode,
-    profile: &InterviewProfile,
-) -> String {
-    build_instructions_for_context(
-        problem,
-        duration_min,
-        mode,
-        profile,
-        &InterviewGrounding::default(),
-    )
-}
-
-pub fn build_instructions_for_context(
-    problem: &Problem,
-    duration_min: u32,
-    mode: InterviewMode,
-    profile: &InterviewProfile,
-    grounding: &InterviewGrounding,
-) -> String {
-    build_instructions_for_plan(
-        problem,
-        duration_min,
-        mode,
-        profile,
-        grounding,
-        InterviewLoop::CodingBehavioral,
-    )
-}
-
 pub fn build_instructions_for_plan(
     problem: &Problem,
     duration_min: u32,

@@ -13,11 +13,10 @@ use integrity::integrity_hash;
 pub use integrity::{sanitize_integrity_event, sanitize_test_run};
 pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, get_problem, topics_for};
 pub use prompts::{
-    LanguageChoiceContext, ReportPromptInput, build_instructions, build_instructions_for_context,
-    build_instructions_for_mode, build_instructions_for_plan, build_instructions_for_profile,
-    format_test_run, greeting, language_choice, log_hint_text, numbered, proactive_review,
-    read_editor_text, report_prompt, significant_change, silence_nudge, spoken_language,
-    test_results_reaction, time_warning, wrap_up,
+    LanguageChoiceContext, ReportPromptInput, build_instructions_for_plan, format_test_run,
+    greeting, language_choice, log_hint_text, numbered, proactive_review, read_editor_text,
+    report_prompt, significant_change, silence_nudge, spoken_language, test_results_reaction,
+    time_warning, wrap_up,
 };
 
 use crate::config::{DEFAULT_DURATION_MIN, MAX_DURATION_MIN, MIN_DURATION_MIN};
