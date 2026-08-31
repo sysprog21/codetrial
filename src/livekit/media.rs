@@ -55,8 +55,12 @@ pub(super) async fn pump_audio(
     frame: Option<AudioFrame<'static>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let Some(frame) = frame else {
+        // Only the flush. Letting go of the stream is the caller's, because it
+        // has to happen whether or not this fails: the caller logs a write
+        // error and keeps looping, and a stream still in place is polled again
+        // at once, ends again and fails again, which is the busy loop
+        // `discard_paused_audio` already describes for the paused path.
         flush_audio(gemini, &mut media.audio_bytes).await?;
-        media.audio = None;
         return Ok(());
     };
 
@@ -78,14 +82,15 @@ pub(super) async fn pump_audio(
 /// and a tenth of a second of speech the resumed session never needed is not
 /// worth propagating a write error over.
 ///
-/// The end of a track is not a frame though, it is the track going away, and
-/// dropping that leaves the stream in place. Both `select!` arms are guarded on
-/// the stream still being present, and an ended stream yields `None` the moment
-/// it is polled, so the arm would re-arm and fire again immediately for as long
-/// as the pause lasted. That is a busy loop, not a lost frame.
-pub(super) fn discard_paused_audio(media: &mut CandidateMedia, ended: bool) {
+/// Letting go of an ended track is the caller's, once, for every path through
+/// the arm. Doing it here as well would be a second answer to a question that
+/// already has one, and the bug worth guarding against is a path that answers
+/// it nowhere: both `select!` arms are guarded on the stream still being
+/// present, and an ended stream yields `None` the moment it is polled, so a
+/// stream left in place re-arms the arm and fires again immediately, for as
+/// long as the room lasts. That is a busy loop, not a lost frame.
+pub(super) fn discard_paused_audio(media: &mut CandidateMedia) {
     media.audio_bytes.clear();
-    release_if_ended(&mut media.audio, ended);
 }
 
 /// Generic so it can be tested, and called directly for video, which has no
@@ -537,6 +542,78 @@ mod tests {
     use super::*;
     use crate::config::load_from_pairs;
 
+    /// An ended audio track is let go of even when the final flush fails.
+    ///
+    /// The flush writes to Gemini, which is exactly what is broken when a
+    /// session dies mid-interview, and the room loop logs that failure and
+    /// keeps going. Releasing only on the success path left the ended stream
+    /// in place, and both `select!` arms are guarded on the stream being
+    /// present, so the arm re-fired forever. Read here as source because
+    /// failing a real flush needs a live websocket, while the ordering is the
+    /// whole of the bug.
+    #[test]
+    fn an_ended_audio_track_is_released_even_when_the_flush_fails() {
+        let loop_source = include_str!("../livekit.rs");
+        let arm = loop_source
+            .split("frame = next_audio_frame")
+            .nth(1)
+            .expect("the room loop still has an audio arm");
+        let pump = arm.find("pump_audio").expect("the arm still pumps audio");
+        let release = arm
+            .find("release_if_ended(&mut media.audio")
+            .expect("the arm must let go of an ended audio stream itself");
+        assert!(
+            release > pump,
+            "releasing inside pump_audio skips the error path, which is the one that repeats"
+        );
+
+        // Ordering alone would still hold if the release were made conditional
+        // on the write succeeding, which is the original bug written a second
+        // way. Nothing may stand between the pump and the release.
+        let between = &arm[pump..release];
+        for guard in ["is_ok", "if let Ok", "match ", "?;"] {
+            assert!(
+                !between.contains(guard),
+                "the release must not be reachable only when the write succeeded: found {guard}"
+            );
+        }
+
+        // And it has to sit at the arm's own level rather than inside either
+        // branch, because the paused path has no release of its own any more:
+        // every brace opened since the pause test is closed again before the
+        // release is reached.
+        let branch = arm
+            .find("if turn.state.paused")
+            .expect("the arm still decides on the pause first");
+        let depth = arm[branch..release].chars().fold(0i32, |depth, c| match c {
+            '{' => depth + 1,
+            '}' => depth - 1,
+            _ => depth,
+        });
+        assert_eq!(
+            depth, 0,
+            "the release is nested in a branch, so some path through the arm keeps an ended stream"
+        );
+        assert!(
+            !include_str!("media.rs")
+                .split("pub(super) fn discard_paused_audio")
+                .nth(1)
+                .and_then(|rest| rest.split("\n}").next())
+                .expect("discard_paused_audio is still defined here")
+                .contains("release_if_ended"),
+            "two answers to one question: the arm releases for every path, including this one"
+        );
+        let pump_audio_source = include_str!("media.rs")
+            .split("pub(super) async fn pump_audio")
+            .nth(1)
+            .and_then(|rest| rest.split("\npub(super)").next())
+            .expect("pump_audio is still defined here");
+        assert!(
+            !pump_audio_source.contains("media.audio = None"),
+            "releasing here too would put the rule back in the place that skips the error path"
+        );
+    }
+
     /// A pause drops frames but must not drop the fact that a track ended.
     ///
     /// Both `select!` arms in the room loop are guarded on the stream still
@@ -565,7 +642,7 @@ mod tests {
         // into the tail of whatever was said as it was pausing.
         let mut media = CandidateMedia::new();
         media.audio_bytes.extend_from_slice(&[1, 2, 3, 4]);
-        discard_paused_audio(&mut media, false);
+        discard_paused_audio(&mut media);
         assert!(media.audio_bytes.is_empty());
     }
 

@@ -525,11 +525,18 @@ pub async fn run_room(
                 // milliseconds of speech. Dropping the frame costs a tenth of a
                 // second of audio the resumed session did not need; propagating
                 // cost the interview.
+                let ended = frame.is_none();
                 if turn.state.paused {
-                    discard_paused_audio(&mut media, frame.is_none());
+                    discard_paused_audio(&mut media);
                 } else if let Err(error) = pump_audio(&mut media, &mut gemini, frame).await {
                     eprintln!("Gemini audio write failed ({error}); waiting for the close to be reported");
                 }
+
+                // One release for the arm, past every branch above it. Sitting
+                // inside a branch is what let a failed final flush keep an
+                // ended stream, and there is no path through here that wants to
+                // hold on to one.
+                release_if_ended(&mut media.audio, ended);
             }
             frame = next_video_frame(&mut media.video), if media.video.is_some() => {
                 if turn.state.paused {
