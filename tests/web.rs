@@ -22,8 +22,9 @@ use codetrial::token::{
     livekit_token,
 };
 use codetrial::web::{
-    MAX_BODY_BYTES, MAX_REPORT_BYTES, RoomDispatcher, TOKEN_RATE_LIMIT, TokenConfig,
-    WebServerConfig, initialize_account_database, login_config, static_file_meta, token_response,
+    MAX_BODY_BYTES, MAX_REPORT_BYTES, REPLAY_RATE_LIMIT, RoomDispatcher, TOKEN_RATE_LIMIT,
+    TokenConfig, WebServerConfig, initialize_account_database, login_config, static_file_meta,
+    token_response,
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -5023,6 +5024,62 @@ async fn the_recording_template_is_reachable_under_a_policy_that_permits_its_roo
     );
 
     server.abort();
+}
+
+/// The per-batch caps bound one request and the stored quota bounds what an
+/// interview keeps. Neither bounds how often one account may ask, and an ask
+/// that is not refused before the body is a parse and a stored batch. This is
+/// the refusal.
+#[tokio::test]
+async fn replay_ingestion_rate_limits_a_looping_client() {
+    let (base, server, path, client, cookie) = recorded_server("replay-rate-limit").await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    let url = format!("{base}/api/interviews/{interview}/events");
+    let batch = json!({
+        "events": [{
+            "v": codetrial::recording::REPLAY_VERSION,
+            "kind": "transcript",
+            "at": 1_770_000_000_000i64,
+            "payload": { "text": "hello" }
+        }]
+    });
+
+    for attempt in 1..=REPLAY_RATE_LIMIT {
+        let response = client
+            .post(&url)
+            .header("cookie", &cookie)
+            .json(&batch)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "batch {attempt} should be allowed");
+    }
+
+    let blocked = client
+        .post(&url)
+        .header("cookie", &cookie)
+        .json(&batch)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(blocked.status(), 429);
+    assert_eq!(blocked.headers().get("retry-after").unwrap(), "60");
+
+    // Refused before the body, so the refused batch stored nothing. A limiter
+    // that ran after the insert would answer 429 to a client whose events it
+    // had already kept.
+    let stored: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM replay_events WHERE interview_id = ?1",
+            [&interview],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, i64::from(REPLAY_RATE_LIMIT));
+
+    server.abort();
+    remove_database(path);
 }
 
 /// The replay is the account's own, and only the account's.

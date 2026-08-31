@@ -73,15 +73,22 @@ pub const TOKEN_RATE_LIMIT: u32 = 30;
 
 pub(crate) const TOKEN_RATE_WINDOW: Duration = Duration::from_secs(60);
 
-#[derive(Clone, Default)]
-pub(crate) struct TokenRateLimit(Arc<Mutex<RateLimitState>>);
+/// The key is what the route can name a caller by. `/api/token` and
+/// `/api/login` are reachable without a credential, so they key on the address;
+/// replay ingestion runs behind `Owner` and keys on the account. The window is
+/// shared because all three buckets want the same minute.
+#[derive(Clone)]
+pub(crate) struct TokenRateLimit<K = IpAddr> {
+    state: Arc<Mutex<RateLimitState<K>>>,
+    limit: u32,
+}
 
-pub(crate) struct RateLimitState {
-    windows: HashMap<IpAddr, Window>,
+struct RateLimitState<K> {
+    windows: HashMap<K, Window>,
     last_sweep: Instant,
 }
 
-impl Default for RateLimitState {
+impl<K> Default for RateLimitState<K> {
     fn default() -> Self {
         Self {
             windows: HashMap::new(),
@@ -91,16 +98,24 @@ impl Default for RateLimitState {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Window {
+struct Window {
     started: Instant,
     count: u32,
 }
 
-impl TokenRateLimit {
-    /// Crosses a module boundary: the token handlers and the login handler in
-    /// `super::auth` each hold their own limiter of this type.
-    pub(crate) fn allow(&self, client: IpAddr, now: Instant) -> bool {
-        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+impl<K: Eq + std::hash::Hash> TokenRateLimit<K> {
+    pub(crate) fn with_limit(limit: u32) -> Self {
+        Self {
+            state: Arc::default(),
+            limit,
+        }
+    }
+
+    /// Crosses a module boundary: the token handlers, the login handler in
+    /// `super::auth` and the replay handler in `super::interviews` each hold
+    /// their own limiter of this type.
+    pub(crate) fn allow(&self, client: K, now: Instant) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
 
         // Sweeping every tracked client on every call cost O(clients) per
         // request while holding the lock, so a flood from many addresses was
@@ -125,14 +140,55 @@ impl TokenRateLimit {
             };
         }
         window.count += 1;
-        window.count <= TOKEN_RATE_LIMIT
+        window.count <= self.limit
     }
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct RoomAuthorization {
+struct RoomAuthorization {
     owner_id: i64,
     expires_at: u64,
+}
+
+/// Who may watch which room, and for how long.
+///
+/// Granting sweeps and reading enforces expiry per entry, for the reason
+/// [`TokenRateLimit::allow`] gives: a sweep on the read is O(rooms) under the
+/// lock on the request path. It also put the pruning on the rare operation, so
+/// a server nobody observed never swept and the map grew for every token it
+/// minted.
+#[derive(Default)]
+pub(crate) struct RoomAuthorizations {
+    grants: HashMap<String, RoomAuthorization>,
+    last_sweep: u64,
+}
+
+impl RoomAuthorizations {
+    /// Records that `owner_id` may observe `room_name` until their token
+    /// expires.
+    pub(crate) fn grant(&mut self, room_name: String, owner_id: i64, now: u64) {
+        // At most once per token lifetime, because nothing in the map can
+        // expire faster than that and a sweep that finds nothing is pure cost.
+        if now.saturating_sub(self.last_sweep) >= TOKEN_TTL_SECONDS {
+            self.grants.retain(|_, grant| grant.expires_at > now);
+            self.last_sweep = now;
+        }
+        self.grants.insert(
+            room_name,
+            RoomAuthorization {
+                owner_id,
+                expires_at: now + TOKEN_TTL_SECONDS,
+            },
+        );
+    }
+
+    /// Whether `owner_id` may observe `room_name` right now. A grant left
+    /// behind by a sweep that has not run yet is still expired.
+    pub(crate) fn allows(&self, room_name: &str, owner_id: i64, now: u64) -> bool {
+        self.grants
+            .get(room_name)
+            .is_some_and(|grant| grant.owner_id == owner_id && grant.expires_at > now)
+    }
 }
 
 pub fn token_response(
@@ -413,13 +469,7 @@ pub(crate) async fn token_handler(
         .room_authorizations
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .insert(
-            room_name,
-            RoomAuthorization {
-                owner_id: user.id,
-                expires_at: current_epoch_seconds() + TOKEN_TTL_SECONDS,
-            },
-        );
+        .grant(room_name, user.id, current_epoch_seconds());
 
     json_response(
         StatusCode::OK,
@@ -458,16 +508,11 @@ pub(crate) async fn observer_token_handler(
         );
     };
     let now = current_epoch_seconds();
-    let authorized = {
-        let mut rooms = state
-            .room_authorizations
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        rooms.retain(|_, grant| grant.expires_at > now);
-        rooms
-            .get(&room_name)
-            .is_some_and(|grant| grant.owner_id == user.id)
-    };
+    let authorized = state
+        .room_authorizations
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .allows(&room_name, user.id, now);
     if !authorized {
         return json_response(
             StatusCode::FORBIDDEN,
@@ -574,6 +619,34 @@ mod tests {
         );
     }
 
+    /// Expiry is enforced on the entry that is read, not by pruning first, so
+    /// a grant the sweep has not reached yet must still be refused. The sweep
+    /// runs at most once per token lifetime, which is exactly long enough for
+    /// an expired grant to still be sitting in the map.
+    #[test]
+    fn an_observation_grant_expires_whether_or_not_the_sweep_has_run() {
+        let mut rooms = RoomAuthorizations::default();
+        rooms.grant("interview-one".to_string(), 7, 1_000);
+
+        assert!(rooms.allows("interview-one", 7, 1_000));
+        assert!(
+            !rooms.allows("interview-one", 8, 1_000),
+            "a grant belongs to the account it was made for"
+        );
+        assert!(!rooms.allows("interview-two", 7, 1_000));
+
+        // One second past the token's life, and no second grant has run, so
+        // nothing has swept.
+        let expired = 1_000 + TOKEN_TTL_SECONDS + 1;
+        assert!(!rooms.allows("interview-one", 7, expired));
+
+        // A later grant sweeps the dead entry out rather than letting the map
+        // grow for the life of the process.
+        rooms.grant("interview-three".to_string(), 7, expired);
+        assert_eq!(rooms.grants.len(), 1);
+        assert!(rooms.allows("interview-three", 7, expired));
+    }
+
     #[test]
     fn client_ip_reads_the_hop_the_operator_declared() {
         // Each proxy appends the address it saw, so the client sits `hops` from
@@ -612,7 +685,7 @@ mod tests {
 
     #[test]
     fn rate_limit_window_expires_so_a_blocked_client_recovers() {
-        let limit = TokenRateLimit::default();
+        let limit = TokenRateLimit::with_limit(TOKEN_RATE_LIMIT);
         let start = Instant::now();
 
         for attempt in 1..=TOKEN_RATE_LIMIT {
@@ -633,7 +706,7 @@ mod tests {
     /// stays blocked until the next sweep happens to come round.
     #[test]
     fn a_window_expires_even_when_no_sweep_is_due() {
-        let limit = TokenRateLimit::default();
+        let limit = TokenRateLimit::with_limit(TOKEN_RATE_LIMIT);
         let start = Instant::now();
 
         // Spend one client's budget early, then force a sweep it survives, so
@@ -644,7 +717,7 @@ mod tests {
         assert!(!limit.allow(ip(1), start + Duration::from_secs(50)));
         assert!(limit.allow(ip(2), start + TOKEN_RATE_WINDOW));
         assert_eq!(
-            limit.0.lock().unwrap().windows.len(),
+            limit.state.lock().unwrap().windows.len(),
             2,
             "the blocked client is still inside its window and must survive the sweep"
         );
@@ -659,7 +732,7 @@ mod tests {
 
     #[test]
     fn rate_limit_is_per_client_and_prunes_expired_windows() {
-        let limit = TokenRateLimit::default();
+        let limit = TokenRateLimit::with_limit(TOKEN_RATE_LIMIT);
         let start = Instant::now();
 
         for _ in 0..TOKEN_RATE_LIMIT {
@@ -673,10 +746,10 @@ mod tests {
 
         // The map is only bounded by pruning, so an idle client must not
         // linger.
-        assert_eq!(limit.0.lock().unwrap().windows.len(), 2);
+        assert_eq!(limit.state.lock().unwrap().windows.len(), 2);
         assert!(limit.allow(ip(3), start + TOKEN_RATE_WINDOW));
         assert_eq!(
-            limit.0.lock().unwrap().windows.len(),
+            limit.state.lock().unwrap().windows.len(),
             1,
             "expired windows should be dropped, not accumulated"
         );
