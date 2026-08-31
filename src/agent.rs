@@ -1019,6 +1019,7 @@ pub fn validate_report_candidate(
                 .flatten(),
         )
         .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
         .collect::<Vec<_>>();
     validate_improvement_plan(object.get("improvementPlan"), &improvements, &mut errors);
     validate_framework_assessment(
