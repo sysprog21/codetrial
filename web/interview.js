@@ -1194,8 +1194,13 @@ function tickTimer() {
 function togglePause() {
   if (mode !== "practice" || state.phase !== "live") return;
   publish(topics.control, { type: "pause_interview", paused: !state.paused });
-  // Offline practice has no authoritative room to acknowledge the change.
-  if (!state.room && !state.joinedRoom) applyPause(!state.paused);
+  // No room, no acknowledgement coming, so this browser is the authority.
+  // `state.room`, not `state.joinedRoom`: the latter stays true for the rest
+  // of the session once an interviewer has been present, and a disconnect
+  // nulls the room, so testing both left the pause button dead for the whole
+  // remainder of a practice interview that lost its connection - `publish`
+  // dropped the packet and nothing applied the change locally either.
+  if (!state.room) applyPause(!state.paused);
 }
 
 function receiveControl(bytes) {
