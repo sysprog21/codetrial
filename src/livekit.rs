@@ -85,6 +85,9 @@ const AGENT_STATE_SPEAKING: &str = "speaking";
 const DUPLICATE_AGENT_ISOLATION_ATTEMPTS: usize = 20;
 const WRAP_UP_WAIT: Duration = Duration::from_secs(8);
 
+/// Below this, a queued turn is not a wait anyone experiences, and saying so
+/// costs a log line per turn that reads as zero.
+const NOTABLE_PLAYOUT_BACKLOG: Duration = Duration::from_millis(500);
 /// Covers the normal report attempt, one schema repair, and bounded transient
 /// retries. The candidate is watching a spinner, so this is the point where
 /// waiting stops being worth more than an honest incomplete report.
@@ -472,7 +475,10 @@ pub async fn run_room(
             }
             event = events.recv() => {
                 let Some(event) = event else {
-                    eprintln!("LiveKit event stream ended for room={room_name}; ending");
+                    eprintln!(
+                        "LiveKit event stream ended for room={room_name}; ending with no report, \
+                         because the room closed before the interview did"
+                    );
                     gemini.close().await?;
                     return Ok(());
                 };
@@ -1222,7 +1228,10 @@ async fn handle_gemini_event(
                 .playout_deadline
                 .saturating_duration_since(Instant::now());
 
-            if !backlog.is_zero() {
+            // Only a backlog a candidate would notice. `!is_zero()` fired on a
+            // millisecond and printed "0.0s", so every one of these lines in a
+            // real session said nothing at all.
+            if backlog >= NOTABLE_PLAYOUT_BACKLOG {
                 eprintln!(
                     "timing: turn generated, {:.1}s of it still to play",
                     backlog.as_secs_f64()
@@ -1245,9 +1254,21 @@ async fn handle_gemini_event(
             // consequence: a turn that completed with nothing left to play.
             let unplayed = cut_off_turn(context.activity, context.output_audio);
 
+            // What Gemini heard is the whole diagnosis. It interrupts on its
+            // own voice activity detection, so a cut with the candidate
+            // mid-sentence is barge-in working, and a cut with nothing
+            // transcribed is the microphone hearing the interviewer through the
+            // candidate's speakers. The line reported the size of the loss and
+            // left the cause to guesswork across a whole session of them.
+            let heard = context.turns.candidate.tail(80);
             eprintln!(
-                "timing: Gemini cut its own turn, {:.1}s of it unplayed",
-                unplayed.as_secs_f64()
+                "timing: Gemini cut its own turn, {:.1}s of it unplayed; candidate audio so far: {}",
+                unplayed.as_secs_f64(),
+                if heard.is_empty() {
+                    "(nothing transcribed)"
+                } else {
+                    heard
+                }
             );
 
             // A cut-off turn is still over. Without this the next thing either

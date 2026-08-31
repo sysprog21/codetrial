@@ -467,6 +467,19 @@ impl SpeakerTurn {
 
     /// Stable for the life of one turn, so the browser patches one row instead
     /// of appending a new one per fragment.
+    /// The tail of what this speaker has said in the turn so far.
+    ///
+    /// For the log only, and bounded: a cut turn is diagnosable from what the
+    /// candidate was heard saying at the moment it was cut, and a full turn in
+    /// a log line is not.
+    pub fn tail(&self, max: usize) -> &str {
+        let text = self.text.trim();
+        match text.char_indices().nth_back(max.saturating_sub(1)) {
+            Some((start, _)) if text.chars().count() > max => &text[start..],
+            _ => text,
+        }
+    }
+
     pub fn segment_id(&self, speaker: &str) -> String {
         format!("{speaker}-{}", self.index)
     }

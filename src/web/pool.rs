@@ -235,10 +235,13 @@ pub(crate) async fn room_and_available_provider(state: &AppState) -> ProviderCho
         if state.provider_quota.not_known_exhausted(provider).await {
             return ProviderChoice::Ready(room_name, provider);
         }
-        eprintln!(
-            "livekit provider {} is out of connection minutes; trying the next project",
-            provider.id
-        );
+
+        // Deliberately silent. This fires exactly when the quota already knows
+        // the project is spent, so it reported a fact the refresher's own
+        // `livekit quota:` line already carries, once per interview, for as
+        // long as a project stays exhausted. A rotation that finds a provider
+        // is not news; running out of all of them is, and that is answered
+        // below.
     }
     ProviderChoice::AllExhausted
 }

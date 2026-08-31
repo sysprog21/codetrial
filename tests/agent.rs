@@ -3612,6 +3612,41 @@ fn framework_progress_reports_phases_once_and_nothing_else() {
     }
 }
 
+/// What the log is allowed to quote back when a turn is cut.
+///
+/// A cut turn is only diagnosable from what the candidate was heard saying as
+/// it happened, and the whole turn in a log line is not a log line. The bound
+/// counts characters rather than bytes, because a transcript that arrives in
+/// any non-Latin script would otherwise panic on a byte index inside a
+/// character, and the failure would land in the middle of an interview.
+#[test]
+fn a_cut_turn_quotes_a_bounded_tail_of_what_was_heard() {
+    let mut transcript = Vec::new();
+    let mut turn = SpeakerTurn::default();
+    turn.record(
+        &mut transcript,
+        "Candidate",
+        "so the question is to implement a trie",
+    );
+    assert_eq!(turn.tail(80), "so the question is to implement a trie");
+
+    // The tail, not the head: what was being said as the cut landed.
+    assert_eq!(turn.tail(10), "ent a trie");
+
+    // Multi-byte on purpose and deliberately not prose: what this pins is that
+    // a byte index can fall inside a character, which any non-ASCII transcript
+    // makes reachable. Two bytes per Greek letter and four for the camera, so a
+    // byte-counted tail splits one of them.
+    let mut wide = SpeakerTurn::default();
+    wide.record(&mut transcript, "Candidate", "αβγδεζηθ\u{1F3A5}");
+    assert_eq!(wide.tail(4).chars().count(), 4);
+    assert_eq!(wide.tail(100), "αβγδεζηθ\u{1F3A5}");
+
+    // Nothing heard is the case that matters most: it separates a candidate
+    // talking over the interviewer from a microphone hearing the interviewer.
+    assert_eq!(SpeakerTurn::default().tail(80), "");
+}
+
 /// Whitespace must not decide whether a report survives.
 ///
 /// The plan gate trims a weakness before matching it, because `strict_text`
