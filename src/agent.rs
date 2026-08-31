@@ -1438,15 +1438,22 @@ fn validate_framework_assessment(
             .get("weaknessTags")
             .and_then(serde_json::Value::as_array)
         {
+            // Trimmed on both sides, like every other comparison in this
+            // module: `validate_improvement_plan` matches a plan weakness to a
+            // feedback improvement after trimming, so a tag that is an exact
+            // copy of an accepted weakness apart from surrounding whitespace
+            // has to be accepted here too. Comparing raw rejected the whole
+            // report over a trailing space and spent the one repair on it.
             let allowed = plan
                 .iter()
                 .filter(|item| {
                     item.get("phase").and_then(serde_json::Value::as_str) == Some(*expected_phase)
                 })
                 .filter_map(|item| item.get("weakness").and_then(serde_json::Value::as_str))
+                .map(str::trim)
                 .collect::<std::collections::HashSet<_>>();
             for tag in tags.iter().filter_map(serde_json::Value::as_str) {
-                if !allowed.contains(tag) {
+                if !allowed.contains(tag.trim()) {
                     errors.push(format!(
                         "{path}.weaknessTags: tag has no same-phase improvement"
                     ));

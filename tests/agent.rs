@@ -3548,6 +3548,32 @@ fn generated_problem_metadata_exposes_no_private_rubric() {
     }
 }
 
+/// Whitespace must not decide whether a report survives.
+///
+/// The plan gate trims a weakness before matching it, because `strict_text`
+/// returns a trimmed string, so `"Explain complexity "` is an accepted plan
+/// weakness. The tag gate compared raw, so the assessment row naming that same
+/// weakness without the space failed. The model is not asked to keep the two
+/// byte-identical and has no reason to, and the cost of disagreeing was the
+/// whole report plus the one repair it is allowed.
+#[test]
+fn a_weakness_tag_matches_its_plan_item_across_stray_whitespace() {
+    let mut raw = valid_strict_report();
+    let plan = raw["improvementPlan"].as_array_mut().unwrap();
+    let item = plan
+        .iter_mut()
+        .find(|item| item["phase"] == "Algorithm")
+        .expect("the fixture plans an Algorithm item");
+    let padded = format!(" {} ", item["weakness"].as_str().unwrap());
+    item["weakness"] = json!(padded);
+
+    assert!(
+        validate_report_candidate(&raw).is_ok(),
+        "a tag and its plan weakness that differ only in surrounding whitespace \
+         must not cost the candidate their report"
+    );
+}
+
 #[test]
 fn interview_contract_versions_are_one_closed_bundle() {
     assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 4);
