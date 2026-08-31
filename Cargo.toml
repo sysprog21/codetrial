@@ -21,6 +21,14 @@ tokio-tungstenite = { version = "0.29", default-features = false, features = ["c
 tokio-util = "0.7"
 tower-http = { version = "0.6", default-features = false, features = ["compression-gzip"] }
 
+# Only the tests need this. `livekit` already depends on the same version, so
+# it unifies to one build rather than adding a crate: what it buys is the
+# generated `Deserialize`, which decodes an Egress request body exactly as the
+# server does, so a hand-written body is checked against the real message
+# instead of against a list of field names copied out of it.
+[dev-dependencies]
+livekit-protocol = "0.7.12"
+
 # Release archives distribute the executable, not a debugging target. Cargo
 # already omits debug information in this profile; omit linker symbols too.
 #

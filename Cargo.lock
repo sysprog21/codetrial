@@ -310,6 +310,7 @@ dependencies = [
  "hmac",
  "jpeg-encoder",
  "livekit",
+ "livekit-protocol",
  "reqwest",
  "ring",
  "rusqlite",
