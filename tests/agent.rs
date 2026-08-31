@@ -3901,3 +3901,159 @@ fn grounding_that_exactly_fills_the_budget_is_kept() {
         "one character past the budget takes the whole packet with it"
     );
 }
+
+/// The grounding limits are boundaries, and a boundary is where they act.
+///
+/// Each of these was free to move by one without a test noticing, and the
+/// packet is all-or-nothing: an item one character over its limit does not get
+/// trimmed, it takes every other snippet in the interview with it.
+#[test]
+fn grounding_limits_hold_exactly_where_they_say() {
+    let packet = |requirements: serde_json::Value| json!({"consentVersion": 1, "requirements": requirements, "skills": [], "anchors": []});
+    let at_char_limit = "x".repeat(MAX_GROUNDING_TEXT_CHARS);
+    let over_char_limit = "x".repeat(MAX_GROUNDING_TEXT_CHARS + 1);
+
+    // The longest item that is still allowed, and one character past it.
+    assert_eq!(
+        sanitize_interview_grounding(Some(&packet(json!([at_char_limit])))).requirements,
+        vec![at_char_limit.clone()]
+    );
+    assert!(sanitize_interview_grounding(Some(&packet(json!([over_char_limit])))).is_empty());
+
+    // A full array is accepted; one item more is not. Distinct, because a
+    // repeat is refused before any limit is consulted.
+    let full: Vec<String> = (0..8).map(|index| format!("requirement {index}")).collect();
+    assert_eq!(
+        sanitize_interview_grounding(Some(&packet(json!(full))))
+            .requirements
+            .len(),
+        8
+    );
+    let mut over = full.clone();
+    over.push("requirement 8".to_string());
+    assert!(sanitize_interview_grounding(Some(&packet(json!(over)))).is_empty());
+
+    // Whitespace that normalizes away is an empty item, not a kept blank.
+    assert!(sanitize_interview_grounding(Some(&packet(json!(["   "])))).is_empty());
+    assert!(sanitize_interview_grounding(Some(&packet(json!([""])))).is_empty());
+
+    // A repeat takes the packet with it, which is why the browser refuses one.
+    assert!(
+        sanitize_interview_grounding(Some(&packet(json!(["same", "same"])))).is_empty(),
+        "a duplicate is refused rather than deduplicated"
+    );
+}
+
+/// Grounding counts as present when any one list has something in it.
+#[test]
+fn grounding_is_empty_only_when_every_list_is() {
+    let one = |field: &str| {
+        let mut object = serde_json::Map::new();
+        object.insert("consentVersion".to_string(), json!(1));
+        for name in ["requirements", "skills", "anchors"] {
+            object.insert(name.to_string(), json!([]));
+        }
+        object.insert(field.to_string(), json!(["something the document said"]));
+        serde_json::Value::Object(object)
+    };
+    for field in ["requirements", "skills", "anchors"] {
+        assert!(
+            !sanitize_interview_grounding(Some(&one(field))).is_empty(),
+            "{field} alone is still grounding, and dropping it drops the document"
+        );
+    }
+    assert!(InterviewGrounding::default().is_empty());
+}
+
+/// The transcript tail is the last `max` characters, counted in characters.
+///
+/// It goes into a log line beside a cut turn, and slicing by bytes would panic
+/// on the multi-byte text the interview is full of.
+#[test]
+fn a_turn_tail_is_the_last_characters_and_never_splits_one() {
+    let turn = |text: &str| {
+        let mut turn = SpeakerTurn::default();
+        turn.record(&mut Vec::new(), "Candidate", text);
+        turn
+    };
+    assert_eq!(turn("  hello  ").tail(80), "hello");
+    assert_eq!(
+        turn("abcdef").tail(6),
+        "abcdef",
+        "exactly max is not trimmed"
+    );
+    assert_eq!(turn("abcdef").tail(5), "bcdef", "one over max drops one");
+
+    // Two bytes each, so a byte slice at the same offset would panic.
+    let greek = "\u{03b1}\u{03b2}\u{03b3}\u{03b4}";
+    assert_eq!(turn(greek).tail(2), "\u{03b3}\u{03b4}");
+}
+
+/// The report validator's bounds are load-bearing, so their edges are pinned.
+///
+/// This is the only thing standing between a model's free text and a report
+/// the candidate is shown, and each of these could be moved by one, or deleted
+/// outright, without a test objecting.
+#[test]
+fn report_validation_holds_its_bounds_and_its_ordering() {
+    // An array outside its item count is refused. Without the array check at
+    // all, a report with one strength, or with five, would be shown as written.
+    for strengths in [json!(["only one"]), json!(["a", "b", "c", "d", "e"])] {
+        let mut report = valid_strict_report();
+        report["codingFeedback"]["strengths"] = strengths;
+        let errors = validate_report_candidate(&report)
+            .expect_err("an out-of-range array is not a report")
+            .join("\n");
+        assert!(errors.contains("$.codingFeedback.strengths"), "{errors}");
+    }
+
+    // Two identical entries are one entry said twice, which reads as two
+    // independent observations of the same weakness.
+    let mut repeated = valid_strict_report();
+    repeated["codingFeedback"]["strengths"] = json!(["Same point", "Same point"]);
+    assert!(
+        validate_report_candidate(&repeated)
+            .expect_err("a duplicate is not a second strength")
+            .join("\n")
+            .contains("duplicate")
+    );
+
+    // The plan is ordered by impact and then by how often the weakness came up,
+    // so the first thing the candidate reads is what costs them most. Impacts
+    // are set on the fixture's own plan, which keeps it consistent with the
+    // feedback and the assessment it cross-references.
+    let impacts = |values: [(&str, u32); 4]| {
+        let mut report = valid_strict_report();
+        for (index, (impact, frequency)) in values.iter().enumerate() {
+            report["improvementPlan"][index]["impact"] = json!(impact);
+            report["improvementPlan"][index]["frequency"] = json!(frequency);
+        }
+        report
+    };
+
+    let misordered = impacts([("medium", 1), ("high", 9), ("medium", 1), ("medium", 1)]);
+    assert!(
+        validate_report_candidate(&misordered)
+            .expect_err("a plan that buries the worst item is not ordered")
+            .join("\n")
+            .contains("$.improvementPlan"),
+    );
+
+    // The same items the right way round. This also pins that high outranks
+    // medium: collapse those two ranks and this stops being ordered.
+    let ordered = impacts([("high", 1), ("medium", 9), ("medium", 2), ("medium", 1)]);
+    assert!(
+        validate_report_candidate(&ordered).is_ok(),
+        "high outranks medium however often the medium one came up: {:?}",
+        validate_report_candidate(&ordered).err()
+    );
+
+    // And within one rank it is the frequency that orders them.
+    let by_frequency = impacts([("medium", 1), ("medium", 9), ("medium", 1), ("medium", 1)]);
+    assert!(
+        validate_report_candidate(&by_frequency)
+            .expect_err("a rarer weakness does not come first")
+            .join("\n")
+            .contains("$.improvementPlan"),
+    );
+}

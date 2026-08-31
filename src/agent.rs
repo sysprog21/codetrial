@@ -500,9 +500,15 @@ impl SpeakerTurn {
     /// a log line is not.
     pub fn tail(&self, max: usize) -> &str {
         let text = self.text.trim();
+
+        // No length test beside this. `nth_back` already answers it: it yields
+        // nothing when there are fewer than `max` characters, and when there
+        // are exactly `max` it lands on the first one, so the slice is the
+        // whole string either way. The condition that used to be here could be
+        // written as `>` or `>=` without changing a single result.
         match text.char_indices().nth_back(max.saturating_sub(1)) {
-            Some((start, _)) if text.chars().count() > max => &text[start..],
-            _ => text,
+            Some((start, _)) => &text[start..],
+            None => text,
         }
     }
 
