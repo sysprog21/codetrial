@@ -304,7 +304,13 @@ async fn open_session<'a>(
         "timing: room and Gemini session ready {:.2}s after the candidate joined",
         setup_began.elapsed().as_secs_f64()
     );
-    let started_at = Instant::now();
+
+    // The candidate's clock, not a third one. The browser starts counting when
+    // its own connect resolves, which is this instant seen from the other side,
+    // and stamping again here put the agent a second or two behind the tab for
+    // the rest of the interview. Every consumer below reads this as "when the
+    // interview started", and that is when it started.
+    let started_at = setup_began;
 
     let mut turn = TurnState {
         state: RuntimeState {
@@ -1765,6 +1771,34 @@ mod tests {
 
     use crate::config::load_from_pairs;
     use ::livekit::webrtc::video_frame::{I420Buffer, VideoBuffer, VideoFrame, VideoRotation};
+
+    /// The interview starts once, when the candidate joined.
+    ///
+    /// Stamping a second `Instant::now()` after the room and the Gemini session
+    /// came up put this process a second or two behind the tab for the rest of
+    /// the interview, and the browser announces the round boundary exactly once
+    /// off its own clock. The gap has to be absorbed by a tolerance nobody can
+    /// justify, or removed here. Read as source because the two stamps are only
+    /// distinguishable in a room that really connected.
+    #[test]
+    fn the_interview_clock_starts_when_the_candidate_joined() {
+        let source = include_str!("livekit.rs");
+        let opener = source
+            .split("async fn open_session")
+            .nth(1)
+            .expect("open_session is still defined here");
+        let bound = opener
+            .split_once("let started_at =")
+            .expect("open_session still stamps the interview clock")
+            .1
+            .lines()
+            .next()
+            .unwrap_or_default();
+        assert!(
+            bound.contains("setup_began"),
+            "the clock must start where the candidate's does, not after setup: {bound}"
+        );
+    }
 
     /// The checklist is redrawn for a change the candidate can see, and for
     /// nothing else.

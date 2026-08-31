@@ -1179,7 +1179,10 @@ function tickTimer() {
   if (interviewLoop === "coding_behavioral" && !state.roundTransitionSent
     && previousRemaining > behavioralMinutes * 60 && tick.remaining <= behavioralMinutes * 60) {
     state.roundTransitionSent = true;
-    publish(topics.control, { type: "round_transition", round: "behavioral", remainingSeconds: tick.remaining });
+    // No remainingSeconds: the agent decides the round boundary from its own
+    // clock, and a number on the wire that nothing reads is one the next
+    // reader assumes is checked.
+    publish(topics.control, { type: "round_transition", round: "behavioral" });
     recordReplay("lifecycle", { state: "round_reserve_started", round: "behavioral", remainingSeconds: tick.remaining, interviewLoop });
   }
   if (tick.warn) publish(topics.control, timeWarningPayload(tick.remaining));

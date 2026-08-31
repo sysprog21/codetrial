@@ -724,6 +724,16 @@ fn exact_fixture_keys(value: &Value, expected: &[&str], path: &str) {
     assert_eq!(actual, expected, "{path} has schema drift");
 }
 
+/// Puts the interview past its coding round, which is the state the browser's
+/// one `round_transition` announcement arrives in.
+///
+/// Spends the budget rather than winding `started_at` back: `Instant` counts
+/// from boot, and subtracting the default thirty-seven minute budget panics
+/// outright on a machine that has been up for less than that.
+fn past_the_coding_round(state: &mut RuntimeState) {
+    state.coding_minutes = 0;
+}
+
 fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
     let reaction = &case["reaction"];
     let code = reaction["code"].as_str().expect("reaction code is text");
@@ -761,14 +771,17 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
                 .generate_reply
                 .expect("test event produces a reaction")
         }
-        "round_gate" => apply_data_event(
-            state,
-            TOPIC_CONTROL,
-            &json!({"type":"round_transition", "round":"behavioral", "remainingSeconds":480}),
-            99.0,
-        )
-        .generate_reply
-        .expect("round gate produces a reaction"),
+        "round_gate" => {
+            past_the_coding_round(state);
+            apply_data_event(
+                state,
+                TOPIC_CONTROL,
+                &json!({"type":"round_transition", "round":"behavioral"}),
+                99.0,
+            )
+            .generate_reply
+            .expect("round gate produces a reaction")
+        }
         "report" => report_prompt(ReportPromptInput {
             problem: get_problem(Some("two-sum")),
             transcript: case["transcript"].as_str().expect("transcript is text"),
@@ -1543,7 +1556,10 @@ fn a_paused_interview_accepts_no_progress_until_it_resumes() {
 
 #[test]
 fn round_transition_is_one_shot_plan_scoped_and_evidence_gated() {
-    let event = json!({"type":"round_transition","round":"behavioral","remainingSeconds":480});
+    // 481 was outside the window the old gate accepted, so a case that now goes
+    // through proves the field stopped deciding anything. The browser no longer
+    // sends it; the server must not start reading it again either.
+    let event = json!({"type":"round_transition","round":"behavioral","remainingSeconds":481});
     let mut coding_only = RuntimeState {
         interview_loop: InterviewLoop::CodingOnly,
         ..RuntimeState::default()
@@ -1553,19 +1569,33 @@ fn round_transition_is_one_shot_plan_scoped_and_evidence_gated() {
             .generate_reply
             .is_none()
     );
-    let mut early = RuntimeState::default();
+    // A whole coding round early, which is what a forged jump looks like.
+    let mut forged = RuntimeState::default();
     assert!(
-        apply_data_event(
-            &mut early,
-            TOPIC_CONTROL,
-            &json!({"type":"round_transition","round":"behavioral","remainingSeconds":481}),
-            99.0
-        )
-        .generate_reply
-        .is_none()
+        apply_data_event(&mut forged, TOPIC_CONTROL, &event, 99.0)
+            .generate_reply
+            .is_none()
     );
-    assert!(!early.round_transition_seen);
+    assert!(!forged.round_transition_seen);
+
+    // Seconds early, which is what the real announcement looks like: the
+    // browser rounds its countdown to the second and the message has to cross
+    // the wire, and it announces the transition exactly once, so refusing this
+    // means the behavioral round never begins.
+    let mut skewed = RuntimeState {
+        coding_minutes: 1,
+        ..RuntimeState::default()
+    };
+    skewed.started_at -= std::time::Duration::from_secs(58);
+    assert!(
+        apply_data_event(&mut skewed, TOPIC_CONTROL, &event, 99.0)
+            .generate_reply
+            .is_some(),
+        "two seconds short is the wire, not a forgery"
+    );
+
     let mut missing = RuntimeState::default();
+    past_the_coding_round(&mut missing);
     let reply = apply_data_event(&mut missing, TOPIC_CONTROL, &event, 99.0)
         .generate_reply
         .unwrap();
@@ -1577,6 +1607,7 @@ fn round_transition_is_one_shot_plan_scoped_and_evidence_gated() {
             .is_none()
     );
     let mut complete = RuntimeState::default();
+    past_the_coding_round(&mut complete);
     for phase in ["test", "optimizations"] {
         record_framework_evidence(&mut complete, &json!({"phase":phase,"source":"candidate_speech","kind":"observed","confidence":90,"summary":format!("candidate completed {phase}")})).unwrap();
     }

@@ -61,6 +61,17 @@ pub const REVIEW_INTERVAL_S: f64 = 30.0;
 pub const INTERJECTION_COOLDOWN_S: f64 = 45.0;
 pub const SPEECH_SETTLE_S: f64 = 4.0;
 
+/// How far ahead of this process's clock a round transition may legitimately
+/// claim to be.
+///
+/// Both sides now count from the moment the candidate joined, so what is left
+/// is the trip the message makes and the second the browser rounds its
+/// countdown to, not the setup time this used to have to cover. It cannot be
+/// zero: the browser announces the transition exactly once, and refusing it to
+/// the second means the behavioral round never begins at all. What the gate is
+/// for is a forged jump past the coding round, which is minutes early.
+const ROUND_TRANSITION_SKEW: std::time::Duration = std::time::Duration::from_secs(10);
+
 pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 4;
 pub const LIVE_PROMPT_VERSION: u32 = 1;
 pub const REPORT_PROMPT_VERSION: u32 = 4;
@@ -1796,10 +1807,8 @@ fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
                 && !state.round_transition_seen
                 && payload.get("round").and_then(serde_json::Value::as_str)
                     == Some("behavioral")
-                && payload
-                    .get("remainingSeconds")
-                    .and_then(json_int)
-                    .is_some_and(|value| (1..=480).contains(&value)) =>
+                && state.started_at.elapsed() + ROUND_TRANSITION_SKEW
+                    >= std::time::Duration::from_secs(u64::from(state.coding_minutes) * 60) =>
         {
             state.round_transition_seen = true;
             let completed = |phase| {
