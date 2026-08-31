@@ -3769,3 +3769,67 @@ fn the_interview_contract_is_the_same_bundle_on_both_sides() {
          produces"
     );
 }
+
+/// Picking a language before typing still opens the interview.
+///
+/// The editor is never empty: the browser publishes the starter template on
+/// connect and publishes the next one in the same packet as a language switch.
+/// Reading the buffer to decide therefore always concluded the candidate had
+/// work in progress, and told the interviewer not to ask them to restate
+/// "work they already completed", which is the REACTO opening skipped for
+/// anyone who chose a language before they said anything.
+#[test]
+fn a_language_picked_before_any_typing_still_asks_for_the_restatement() {
+    let mut state = RuntimeState::default();
+    let update = |code: &str, language: &str| json!({"code": code, "language": language});
+
+    // Connect: the starter template for the default language.
+    apply_data_event(
+        &mut state,
+        TOPIC_CODE_UPDATE,
+        &update("def two_sum(nums, target):\n    pass\n", "python"),
+        1.0,
+    );
+    assert!(!state.code_edited, "a template nobody typed is not work");
+
+    // A switch, carrying that language's template. Nothing has been typed.
+    let reply = apply_data_event(
+        &mut state,
+        TOPIC_CODE_UPDATE,
+        &update("class Solution {\n}\n", "java"),
+        2.0,
+    )
+    .generate_reply
+    .expect("a real language change is acknowledged");
+    assert!(
+        reply.contains("begin the interview by asking them to restate"),
+        "the opening restatement must survive an early language pick: {reply}"
+    );
+    assert!(!state.code_edited, "switching tabs is not typing");
+
+    // Now a keystroke, with no language change in the packet.
+    apply_data_event(
+        &mut state,
+        TOPIC_CODE_UPDATE,
+        &update(
+            "class Solution {\n  int[] twoSum() { return null; }\n}\n",
+            "java",
+        ),
+        3.0,
+    );
+    assert!(state.code_edited);
+
+    // From here a switch must not throw away what they wrote.
+    let reply = apply_data_event(
+        &mut state,
+        TOPIC_CODE_UPDATE,
+        &update("x = 1\n", "python"),
+        4.0,
+    )
+    .generate_reply
+    .expect("a real language change is acknowledged");
+    assert!(
+        reply.contains("already have code")
+            && !reply.contains("begin the interview by asking them to restate")
+    );
+}

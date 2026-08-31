@@ -550,6 +550,9 @@ pub struct RuntimeState {
     pub paused: bool,
     pub framework_evidence: Vec<FrameworkEvidence>,
     pub code: String,
+    /// Whether the candidate has typed, as opposed to the browser having
+    /// published a template. See `apply_code_update`.
+    pub code_edited: bool,
     pub language: String,
     pub transcript: Vec<String>,
     pub last_test_run: Option<serde_json::Value>,
@@ -592,6 +595,7 @@ impl Default for RuntimeState {
             paused: false,
             framework_evidence: Vec::new(),
             code: String::new(),
+            code_edited: false,
             language: "python".to_string(),
             transcript: Vec::new(),
             last_test_run: None,
@@ -1670,6 +1674,7 @@ fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> D
 
     // Editor packets arrive several times a second and are usually identical to
     // the last one, so only touch the buffer when the text actually moved.
+    let first_code_packet = state.code.is_empty();
     let update_last_code_change = new_code.is_some_and(|code| code != state.code);
     if let Some(code) = new_code.filter(|_| update_last_code_change) {
         state.code.clear();
@@ -1687,18 +1692,34 @@ fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> D
     // change the state or reach a prompt. The id comes from the candidate's
     // browser and is interpolated into Gemini's instructions, so an unvalidated
     // one is a way to write into them.
-    let mut language_changed = None;
-    if let Some(spoken) = payload
+    let switching = payload
         .get("language")
         .and_then(serde_json::Value::as_str)
         .filter(|language| *language != state.language)
-        .and_then(offered_language)
-    {
+        .and_then(offered_language);
+
+    // A non-empty buffer is not evidence that the candidate has done anything.
+    // The browser publishes the starter template on connect and publishes the
+    // next language's template on every switch, in the same packet as the
+    // switch, so the buffer is a template from the first second of the
+    // interview onward. What separates work from a template is a change that
+    // arrived without a language switch, which is a keystroke.
+    if update_last_code_change && !first_code_packet && switching.is_none() {
+        state.code_edited = true;
+    }
+
+    let mut language_changed = None;
+    if let Some(spoken) = switching {
         state.language = spoken.0.to_string();
-        let context = if state.code.trim().is_empty() {
-            LanguageChoiceContext::Start
-        } else {
+
+        // Reading the buffer here instead asked Gemini not to make a candidate
+        // "restate work they already completed" for a template they had not
+        // touched, which skipped the restatement the whole REACTO opening is
+        // built on for anyone who picked a language before speaking.
+        let context = if state.code_edited {
             LanguageChoiceContext::SwitchWithCode
+        } else {
+            LanguageChoiceContext::Start
         };
         language_changed = Some(language_choice(spoken.1, context));
     }
