@@ -3592,3 +3592,44 @@ fn interview_contract_versions_are_one_closed_bundle() {
         })
     );
 }
+
+/// The same bundle, spelled a second time in the browser.
+///
+/// `sanitizeReport` compares every report's `interviewContract` against its own
+/// literal and, on any mismatch, throws the scores away and renders
+/// "unsupported
+/// or malformed interview contract". So a version bumped here and not there
+/// does
+/// not fail a test or degrade one report: it turns every live report for every
+/// candidate into an unscored stub, and the only place that is visible is the
+/// candidate's own screen. Pinned on both sides for the reason
+/// `the_integrity_detail_bound_is_the_same_number_on_both_sides` gives.
+#[test]
+fn the_interview_contract_is_the_same_bundle_on_both_sides() {
+    let browser = std::fs::read_to_string("web/lib.js").expect("web/lib.js is readable");
+    let declaration = "const activeContract = {";
+    let start = browser
+        .find(declaration)
+        .expect("web/lib.js declares activeContract")
+        + declaration.len();
+    let rest = &browser[start..];
+    let end = rest.find('}').expect("the object literal is closed");
+    let browser_contract = rest[..end]
+        .split(',')
+        .filter(|field| !field.trim().is_empty())
+        .map(|field| {
+            let (key, value) = field.split_once(':').expect("each field is `key: value`");
+            let value: u64 = value.trim().parse().expect("each version is a number");
+            (key.trim().to_string(), json!(value))
+        })
+        .collect::<serde_json::Map<_, _>>();
+
+    assert_eq!(
+        Value::Object(browser_contract),
+        interview_contract_json(),
+        "web/lib.js pins a different interview contract than src/agent.rs; \
+         `sanitizeReport` refuses every report whose bundle it does not \
+         recognize, so the two diverging discards every score this server \
+         produces"
+    );
+}
