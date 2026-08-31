@@ -1,7 +1,7 @@
 use crate::agent::{
-    InterviewGrounding, InterviewLoop, InterviewMode, InterviewProfile, Problem,
-    build_instructions_for_plan, get_problem, greeting, interview_grounding_json,
-    interview_profile_json, sanitize_interview_grounding, sanitize_interview_profile,
+    InterviewGrounding, InterviewLoop, InterviewProfile, Problem, build_instructions_for_plan,
+    get_problem, greeting, interview_grounding_json, interview_profile_json,
+    sanitize_interview_grounding, sanitize_interview_profile,
 };
 use crate::config::{AgentConfig, MAX_DURATION_MIN, MIN_DURATION_MIN};
 
@@ -25,7 +25,6 @@ pub struct RuntimeBootstrap<'a> {
     pub room_name: &'a str,
     pub problem: &'static Problem,
     pub duration_min: u32,
-    pub mode: InterviewMode,
     pub interview_loop: InterviewLoop,
     pub coding_minutes: u32,
     pub behavioral_minutes: u32,
@@ -42,7 +41,6 @@ pub struct RuntimeBootstrap<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RuntimeOptions {
-    pub mode: InterviewMode,
     pub profile: InterviewProfile,
     pub grounding: InterviewGrounding,
     pub interview_loop: InterviewLoop,
@@ -71,7 +69,6 @@ pub fn bootstrap_with_rounds<'a>(
     options: RuntimeOptions,
 ) -> RuntimeBootstrap<'a> {
     let RuntimeOptions {
-        mode,
         profile,
         grounding,
         interview_loop,
@@ -87,14 +84,12 @@ pub fn bootstrap_with_rounds<'a>(
         room_name,
         problem,
         duration_min,
-        mode,
         interview_loop,
         coding_minutes,
         behavioral_minutes,
         instructions: build_instructions_for_plan(
             problem,
             duration_min,
-            mode,
             &profile,
             &grounding,
             interview_loop,

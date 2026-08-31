@@ -304,7 +304,6 @@ async fn open_session<'a>(
     let mut turn = TurnState {
         state: RuntimeState {
             started_at,
-            mode: boot.mode,
             interview_loop: boot.interview_loop,
             coding_minutes: boot.coding_minutes,
             behavioral_minutes: boot.behavioral_minutes,
@@ -966,7 +965,6 @@ fn candidate_bootstrap<'a>(
         Some(candidate.problem.id),
         candidate.duration_min,
         crate::runtime::RuntimeOptions {
-            mode: candidate.mode,
             profile: candidate.profile,
             grounding: candidate.grounding,
             interview_loop: candidate.interview_loop,
@@ -1095,8 +1093,17 @@ async fn handle_gemini_event(
     match event {
         GeminiEvent::ToolCall(calls) => {
             for call in calls {
+                let evidence_before = context.state.framework_evidence.len();
                 let response = execute_tool_call(context.state, &call);
                 context.gemini.send_tool_response(&call, response).await?;
+
+                // Only when the list actually grew. The tool is idempotent and
+                // returns the existing entry for a repeat, so publishing on
+                // every call would redraw the candidate's checklist for
+                // evidence it already shows.
+                if context.state.framework_evidence.len() > evidence_before {
+                    publish_framework_progress(room, context.state).await?;
+                }
             }
         }
         GeminiEvent::OutputTranscript(text) => {
@@ -1276,6 +1283,30 @@ fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) -> ser
     }
 }
 
+/// What the candidate is allowed to see of their own framework progress: which
+/// phases have evidence, and nothing else.
+///
+/// The interviewer names the step it is steering toward out loud, so a phase it
+/// has already banked is not a secret. The summary, confidence and source stay
+/// server-side, because those are the reading rather than the fact.
+async fn publish_framework_progress(
+    room: &Room,
+    state: &RuntimeState,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    room.local_participant()
+        .publish_data(DataPacket {
+            payload: serde_json::to_vec(&serde_json::json!({
+                "type": "framework_state",
+                "phases": crate::agent::framework_progress(state),
+            }))?,
+            topic: Some(TOPIC_CONTROL.to_string()),
+            reliable: true,
+            ..Default::default()
+        })
+        .await?;
+    Ok(())
+}
+
 async fn publish_transcript(
     room: &Room,
     text: &str,
@@ -1367,9 +1398,6 @@ async fn report_packet(
         ),
     };
     stamp_report_contract(&mut report);
-    if let Some(object) = report.as_object_mut() {
-        object.insert("mode".to_string(), serde_json::json!(boot.mode.as_str()));
-    }
     Ok(report_data_packet(report_with_integrity_events(
         report, state,
     ))?)

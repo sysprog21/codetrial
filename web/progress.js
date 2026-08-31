@@ -5,7 +5,6 @@ export const progressPhases = frameworkPhases;
 
 const allowedDifficulties = new Set(LEVELS);
 const allowedLanguages = new Set(["python", "javascript", "c", "cpp", "java"]);
-const allowedModes = new Set(["practice", "scored"]);
 
 /// `/api/reports` wraps each entry in `payload` (accounts.rs list_reports) while
 /// history.js stores the same entry flat. One rule for which of the two an entry
@@ -36,9 +35,6 @@ export function normalizeProgressEntry(raw) {
     difficulty: allowedDifficulties.has(entry.difficulty) ? entry.difficulty : null,
     language: allowedLanguages.has(entry.language) ? entry.language : null,
     durationMin,
-    mode: allowedModes.has(entry.mode)
-      ? entry.mode
-      : allowedModes.has(entry.report?.mode) ? entry.report.mode : null,
     report,
   };
 }
@@ -52,7 +48,7 @@ export function buildProgressModel(rawEntries, filters = {}) {
     || String(entry[key]) === String(filters[key]);
   const attempts = normalized.filter((entry) =>
     matches(entry, "difficulty") && matches(entry, "language")
-    && matches(entry, "durationMin") && matches(entry, "mode"));
+    && matches(entry, "durationMin"));
   const series = Object.fromEntries(progressPhases.map((phase) => [phase, []]));
   const weaknessCounts = new Map();
   let activeVersion = null;
@@ -99,6 +95,5 @@ function progressOptions(entries) {
     difficulty: values("difficulty"),
     language: values("language"),
     durationMin: values("durationMin", (left, right) => left - right),
-    mode: values("mode"),
   };
 }

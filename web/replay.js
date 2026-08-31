@@ -184,7 +184,10 @@ async function loadEvents(recordingId) {
 /// opened rather than scrubbed to.
 export function render(events) {
   const stage = events.findLast((event) => event.kind === "stage");
-  const mode = modeLabel(stage?.payload?.mode);
+  // Only where the recording actually carried one. Reading it unconditionally
+  // floored `undefined` to "Scored" and announced a distinction that no longer
+  // exists on every replay made since the practice mode was removed.
+  const mode = stage?.payload?.mode === undefined ? "" : modeLabel(stage.payload.mode);
   nodes.status.textContent = nodes.status.textContent
     ? `${nodes.status.textContent} · ${mode}`
     : mode;

@@ -688,11 +688,6 @@
            this deployment cannot record is disabled with the reason beside it
            rather than silently shortened after the candidate presses start. -->
       <p id="duration-note" class="duration-note" aria-live="polite" hidden></p>
-      <section class="duration-row" aria-label="Interview mode">
-        <button class="duration-button" type="button" data-mode="practice">Practice</button>
-        <button class="duration-button selected" type="button" data-mode="scored">Scored</button>
-      </section>
-
       <section class="duration-row" aria-label="Interview loop">
         <button class="duration-button" type="button" data-loop="coding_only">Coding only</button>
         <button class="duration-button selected" type="button" data-loop="coding_behavioral">Coding + behavioral</button>
@@ -711,7 +706,6 @@
           <label>Difficulty <select id="progress-difficulty"><option value="all">All</option></select></label>
           <label>Language <select id="progress-language"><option value="all">All</option></select></label>
           <label>Duration <select id="progress-duration"><option value="all">All</option></select></label>
-          <label>Mode <select id="progress-mode"><option value="all">All</option></select></label>
         </fieldset>
         <p id="progress-summary" aria-live="polite"></p>
         <div id="progress-trends" class="progress-trends"></div>

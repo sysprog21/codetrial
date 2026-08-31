@@ -176,29 +176,6 @@ impl Problem {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum InterviewMode {
-    Practice,
-    #[default]
-    Scored,
-}
-
-impl InterviewMode {
-    pub fn parse(value: Option<&str>) -> Self {
-        match value {
-            Some("practice") => Self::Practice,
-            _ => Self::Scored,
-        }
-    }
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Practice => "practice",
-            Self::Scored => "scored",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InterviewLoop {
     CodingOnly,
     #[default]
@@ -526,7 +503,6 @@ impl SpeakerTurn {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeState {
     pub started_at: std::time::Instant,
-    pub mode: InterviewMode,
     pub interview_loop: InterviewLoop,
     pub coding_minutes: u32,
     pub behavioral_minutes: u32,
@@ -569,7 +545,6 @@ impl Default for RuntimeState {
     fn default() -> Self {
         Self {
             started_at: std::time::Instant::now(),
-            mode: InterviewMode::Scored,
             interview_loop: InterviewLoop::CodingBehavioral,
             coding_minutes: 37,
             behavioral_minutes: 8,
@@ -714,8 +689,28 @@ pub fn record_framework_evidence(
         .clone())
 }
 
-pub fn framework_evidence_json(evidence: &FrameworkEvidence) -> serde_json::Value {
-    let phase = match evidence.phase {
+/// The phases this interview has evidence for, in the id spelling the browser
+/// ticks off.
+///
+/// Derived rather than accumulated: the evidence list is already the record,
+/// and
+/// a second counter beside it would be one restart away from disagreeing with
+/// the report built from the same list. Carries no summary, confidence or
+/// source, because this is the only framework state the candidate is allowed to
+/// see and any of those would leak how they are being read.
+pub fn framework_progress(state: &RuntimeState) -> Vec<&'static str> {
+    let mut phases = Vec::new();
+    for evidence in &state.framework_evidence {
+        let phase = phase_id(evidence.phase);
+        if !phases.contains(&phase) {
+            phases.push(phase);
+        }
+    }
+    phases
+}
+
+const fn phase_id(phase: FrameworkPhase) -> &'static str {
+    match phase {
         FrameworkPhase::Repeat => "repeat",
         FrameworkPhase::Example => "example",
         FrameworkPhase::Algorithm => "algorithm",
@@ -726,7 +721,11 @@ pub fn framework_evidence_json(evidence: &FrameworkEvidence) -> serde_json::Valu
         FrameworkPhase::Task => "task",
         FrameworkPhase::Action => "action",
         FrameworkPhase::Result => "result",
-    };
+    }
+}
+
+pub fn framework_evidence_json(evidence: &FrameworkEvidence) -> serde_json::Value {
+    let phase = phase_id(evidence.phase);
     let source = match evidence.source {
         EvidenceSource::CandidateSpeech => "candidate_speech",
         EvidenceSource::EditorSnapshot => "editor_snapshot",
@@ -758,7 +757,6 @@ pub fn record_hint(state: &mut RuntimeState) -> String {
 pub struct MetadataConfig {
     pub problem: &'static Problem,
     pub duration_min: u32,
-    pub mode: InterviewMode,
     pub interview_loop: InterviewLoop,
     pub profile: InterviewProfile,
     pub grounding: InterviewGrounding,
@@ -1488,7 +1486,6 @@ pub fn parse_participant_metadata(metadata: Option<&str>) -> MetadataConfig {
         .unwrap_or_else(|| serde_json::json!({}));
     let problem = get_problem(value.get("problemId").and_then(serde_json::Value::as_str));
     let duration_min = duration_from_metadata(value.get("durationMin"));
-    let mode = InterviewMode::parse(value.get("mode").and_then(serde_json::Value::as_str));
     let interview_loop = InterviewLoop::parse(
         value
             .get("interviewLoop")
@@ -1500,7 +1497,6 @@ pub fn parse_participant_metadata(metadata: Option<&str>) -> MetadataConfig {
     MetadataConfig {
         problem,
         duration_min,
-        mode,
         interview_loop,
         profile,
         grounding,
@@ -1735,7 +1731,12 @@ fn apply_test_results(
 
 fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataEventResult {
     match payload.get("type").and_then(serde_json::Value::as_str) {
-        Some("pause_interview") if state.mode == InterviewMode::Practice && !state.ended => {
+        // Pause used to be a practice-only affordance, and practice is gone.
+        // Left working for everyone rather than deleted with the mode: the
+        // browser still offers the control, and a candidate whose machine or
+        // network interrupts them mid-interview has no other way to stop the
+        // clock. It is recorded, so a paused stretch is visible in the report.
+        Some("pause_interview") if !state.ended => {
             let paused = payload
                 .get("paused")
                 .and_then(serde_json::Value::as_bool)

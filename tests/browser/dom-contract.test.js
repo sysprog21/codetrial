@@ -375,19 +375,19 @@ test("a dropped connection is visible and recovers its state", () => {
   assert.match(connect, /Reconnected[\s\S]*?publish\(topics\.code/);
 });
 
-// Offline practice mode looks identical whether the server has no LiveKit
+// A degraded start looks identical whether the server has no LiveKit
 // credentials, is at capacity, or the microphone failed to publish. The server
 // writes candidate-facing text for exactly this; dropping it on the floor is
 // what makes a refusal indistinguishable from the product working.
-test("a refused interview says why instead of silently practising", () => {
+test("a refused interview says why instead of silently degrading", () => {
   const script = interviewSource();
   const connect = functionBody(script, "connect");
 
   assert.match(connect, /providerUiState\("degraded", error\?\.message\)/);
   // The reason has to reach the candidate, not only the console.
   const bannerAt = connect.indexOf('setBanner("connection", degraded.message)');
-  const practiceAt = connect.indexOf("Offline practice mode is ready");
-  assert.ok(bannerAt !== -1 && practiceAt !== -1 && bannerAt < practiceAt);
+  const offlineAt = connect.indexOf("Offline mode is ready");
+  assert.ok(bannerAt !== -1 && offlineAt !== -1 && bannerAt < offlineAt);
 });
 
 // One banner element with several owners, ranked, so a new owner is a row here

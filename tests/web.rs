@@ -150,27 +150,37 @@ fn token_response_matches_frontend_contract() {
     assert_eq!(claims["video"]["room"], response.room_name);
     assert_eq!(
         claims["metadata"],
-        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90,"mode":"scored","interviewLoop":"coding_behavioral","interviewProfile":{"role":"","seniority":null,"targetCompany":""},"candidateIdentity":"candidate-fixed"})).unwrap()
+        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90,"interviewLoop":"coding_behavioral","interviewProfile":{"role":"","seniority":null,"targetCompany":""},"candidateIdentity":"candidate-fixed"})).unwrap()
     );
 }
 
+/// There is one interview now, so a mode is not a thing a browser can ask for.
+///
+/// A stale page or a hand-rolled client can still send one. It must not reach
+/// the participant metadata under any spelling, because the agent no longer
+/// reads it and a value sitting there would read as a setting that does
+/// something.
 #[test]
-fn token_mode_is_validated_and_legacy_requests_are_scored() {
+fn token_ignores_a_mode_a_stale_client_still_sends() {
     let config = TokenConfig {
         api_key: "devkey",
         api_secret: "devsecret",
         server_url: "wss://example.livekit.cloud",
         recording_max_min: None,
     };
-    for (body, expected) in [
-        (br#"{"mode":"practice"}"#.as_slice(), "practice"),
-        (br#"{"mode":"forged"}"#.as_slice(), "scored"),
-        (br#"{}"#.as_slice(), "scored"),
+    for body in [
+        br#"{"mode":"practice"}"#.as_slice(),
+        br#"{"mode":"scored"}"#.as_slice(),
+        br#"{"mode":"forged"}"#.as_slice(),
+        br#"{}"#.as_slice(),
     ] {
         let response = token_response(&config, body, "room", "candidate", 2_000).unwrap();
         let claims = claims(&response.token);
         let metadata: Value = serde_json::from_str(claims["metadata"].as_str().unwrap()).unwrap();
-        assert_eq!(metadata["mode"], expected);
+        assert!(
+            metadata.get("mode").is_none(),
+            "a mode reached the metadata for {body:?}"
+        );
     }
 }
 
@@ -1281,7 +1291,7 @@ fn static_interview_script_leaves_candidate_identity_to_the_server() {
 
     assert!(
         source
-            .contains("JSON.stringify({ problemId: problem.id, durationMin, interviewId, mode, interviewLoop, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) })")
+            .contains("JSON.stringify({ problemId: problem.id, durationMin, interviewId, interviewLoop, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) })")
     );
     assert!(!source.contains("candidateIdentity"));
 }

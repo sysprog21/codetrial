@@ -39,10 +39,9 @@ test("progress normalizes local and account wrappers without rewriting legacy hi
   assert.equal(normalizeProgressEntry(account).id, "payload");
   const legacy = normalizeProgressEntry({ id: "old", date: "2025-01-01", report: { decision: "HIRE" } });
   assert.equal(legacy.report.frameworkAssessment, null);
-  assert.equal(legacy.mode, null, "legacy mode is unknown, not silently scored");
   const hostile = normalizeProgressEntry({ date: "not-a-date", difficulty: "Expert", language: "brainfuck", durationMin: 1, mode: "hire", report: {} });
   assert.equal(hostile.at, null);
-  assert.deepEqual([hostile.difficulty, hostile.language, hostile.durationMin, hostile.mode], [null, null, null, null]);
+  assert.deepEqual([hostile.difficulty, hostile.language, hostile.durationMin], [null, null, null]);
 });
 
 test("progress filters metadata, orders attempts, ranks tags, and keeps null as a gap", () => {
@@ -75,10 +74,10 @@ test("rubric changes and legacy attempts split otherwise comparable series", () 
   ], "legacy data and a rubric change create explicit discontinuities");
 });
 
-test("lobby progress surface is accessible and exposes all four filters", () => {
+test("lobby progress surface is accessible and separates the two frameworks", () => {
   const page = readFileSync(join(web, "index.html"), "utf8");
   const app = readFileSync(join(web, "app.js"), "utf8");
-  for (const id of ["progress-difficulty", "progress-language", "progress-duration", "progress-mode", "progress-summary", "progress-trends", "progress-weaknesses"]) {
+  for (const id of ["progress-difficulty", "progress-language", "progress-duration", "progress-summary", "progress-trends", "progress-weaknesses"]) {
     assert.match(page, new RegExp(`id="${id}"`));
   }
   assert.match(page, /aria-labelledby="progress-title"/);
@@ -87,5 +86,12 @@ test("lobby progress surface is accessible and exposes all four filters", () => 
   assert.match(app, /Not assessed in these attempts/);
   assert.match(app, /no zeroes are plotted/);
   assert.match(app, /formative phase scores, not calibrated hiring evidence/);
-  assert.match(app, /Formative REACTO and STAR phase trends/);
+  // A table each, with its own caption naming the exercise it scores. One
+  // table with the two as groups inside it still read as a single ten-step
+  // scale, and neither half is evidence about the other.
+  assert.match(app, /for \(const framework of Object\.values\(FRAMEWORKS\)\)/);
+  assert.match(app, /caption\.textContent = `\$\{framework\.name\} · \$\{framework\.scenario\}`/);
+  assert.match(app, /nodes\.progressTrends\.append\(table\);\s*\}/);
+  assert.doesNotMatch(app, /colgroup/);
+  assert.doesNotMatch(app, /Formative phase trends/);
 });

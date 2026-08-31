@@ -320,22 +320,70 @@ export async function integrityEventPayload(input, previous = { seq: 0, hash: ""
   return event;
 }
 
+/// The two frameworks, kept apart on purpose.
+///
+/// A candidate in the coding round is working through REACTO and has no use for
+/// the four behavioral steps; showing all ten at once was the confusion this
+/// replaced. Ids match the `phase` spelling the interviewer records evidence
+/// under, so a tick is a lookup rather than a translation.
+export const FRAMEWORKS = {
+  coding: {
+    name: "REACTO",
+    scenario: "Working a problem: what was asked for at each step of the coding round",
+    // One clause each, written for someone reading it once while waiting for
+    // the interviewer to speak. Long enough to act on, short enough that the
+    // whole flow is legible before the card goes away.
+    steps: [
+      { id: "repeat", label: "Repeat", hint: "say the problem back in your own words" },
+      { id: "example", label: "Example", hint: "walk one ordinary case and one edge case" },
+      { id: "algorithm", label: "Algorithm", hint: "explain the approach and its cost before you type" },
+      { id: "coding", label: "Coding", hint: "write what you just described" },
+      { id: "test", label: "Test", hint: "predict what should happen, then run it" },
+      { id: "optimizations", label: "Optimizations", hint: "confirm the complexity and name one improvement" },
+    ],
+  },
+  behavioral: {
+    name: "STAR",
+    scenario: "Recounting past work: what a behavioral answer is listened for",
+    steps: [
+      { id: "situation", label: "Situation", hint: "where you were and what was going on" },
+      { id: "task", label: "Task", hint: "what you were responsible for" },
+      { id: "action", label: "Action", hint: "what you personally did, not the team" },
+      { id: "result", label: "Result", hint: "how it turned out, and what you took from it" },
+    ],
+  },
+};
+
 // The report arrives over a LiveKit data channel, so treat every field as
 // untrusted: scores are rendered into innerHTML and must not carry markup.
 /// The ten REACTO and STAR phases, in the order src/agent.rs IMPROVEMENT_PHASES
 /// and validate_framework_assessment require. Written once: it was three
 /// literals here and in progress.js, and a phase added to one of them would have
 /// been silently unassessed by the others.
-export const frameworkPhases = [
-  "Repeat", "Example", "Algorithm", "Coding", "Test", "Optimizations",
-  "Situation", "Task", "Action", "Result",
-];
+export const frameworkPhases = Object.values(FRAMEWORKS).flatMap((framework) =>
+  framework.steps.map((step) => step.label));
 
 /// The two closed enums the server owns (InterviewMode::parse and
 /// InterviewLoop::parse in src/agent.rs). Anything else is the default, which is
 /// what makes a legacy or hostile value safe rather than an error. Stated once
 /// here because seven modules were each restating the same ternary.
-export function interviewMode(value) {
+
+
+/// The steps of one round, each marked done or not.
+///
+/// Anything the interviewer sends that is not a known id is dropped rather than
+/// rendered: the packet is untrusted like every other, and an unknown phase is
+/// either a version skew or someone else's idea of a step.
+export function frameworkChecklist(round, phases) {
+  const framework = FRAMEWORKS[round] || FRAMEWORKS.coding;
+  const done = new Set(Array.isArray(phases) ? phases.filter((phase) => typeof phase === "string") : []);
+  return {
+    name: framework.name,
+    steps: framework.steps.map((step) => ({ ...step, done: done.has(step.id) })),
+  };
+}
+
+function interviewMode(value) {
   return value === "practice" ? "practice" : "scored";
 }
 
@@ -343,6 +391,8 @@ export function codingLoop(value) {
   return value === "coding_only" ? "coding_only" : "coding_behavioral";
 }
 
+/// Reports written before the practice/scored split was removed still carry a
+/// mode, and the viewer shows what they say. Nothing produces one any more.
 export function modeLabel(value) {
   return interviewMode(value) === "practice" ? "Practice" : "Scored";
 }
@@ -364,7 +414,10 @@ export function sanitizeReport(raw) {
   const interviewContract = candidateContract === undefined ? null : contractValues;
   const unsupportedContract = candidateContract !== undefined
     && (interviewContract === null || contractKeys.some((key) => interviewContract[key] !== activeContract[key]));
-  const mode = interviewMode(raw?.mode);
+  // Only what the report actually recorded. Defaulting this to "scored" put a
+  // mode on every new report and made the header announce a distinction that no
+  // longer exists; a report written before the split still says what it was.
+  const mode = raw?.mode === undefined ? undefined : interviewMode(raw.mode);
   const interviewLoop = codingLoop(raw?.interviewLoop);
   const roundKinds = ["coding", "behavioral"];
   const codingStatuses = new Set(["complete", "incomplete"]);
@@ -683,7 +736,7 @@ export function sessionReport({ joinedRoom, passed, total, candidateTurns }) {
   return {
     incomplete: true,
     summary: total || candidateTurns
-      ? `Offline practice recorded local activity${total ? ` and ${passed}/${total} browser test cases passed` : ""}. No live interviewer assessed it, so no personalized scores, verdict, or feedback were created.`
+      ? `Offline mode recorded local activity${total ? ` and ${passed}/${total} browser test cases passed` : ""}. No live interviewer assessed it, so no personalized scores, verdict, or feedback were created.`
       : "No interviewer joined and this session produced no evaluation. Nothing you did was assessed, and no result was recorded.",
     hintsUsed: 0,
   };
@@ -751,7 +804,7 @@ export function providerUiState(kind, detail = "") {
     connecting: { label: "Connecting", message: "Connecting to the live interviewer.", personalized: false, retry: false },
     live: { label: "Live", message: "The live interviewer is connected.", personalized: true, retry: false },
     reconnecting: { label: "Reconnecting", message: "Reconnecting to the interviewer. Keep working; your code is safe.", personalized: true, retry: false },
-    degraded: { label: "Offline practice", message: `${reason} Practice remains available, but it will not create a personalized evaluation.`, personalized: false, retry: true },
+    degraded: { label: "Offline", message: `${reason} You can still work the problem, but it will not create a personalized evaluation.`, personalized: false, retry: true },
     report_generating: { label: "Preparing report", message: "Preparing your personalized report. A slow grader can take up to a minute.", personalized: true, retry: false },
     incomplete_report: { label: "Incomplete report", message: "The provider could not produce a valid personalized evaluation. No scores or verdict were created.", personalized: false, retry: true },
     retry_ready: { label: "Retry available", message: "The report is still unavailable. Leave safely, then retry the interview when the provider recovers.", personalized: false, retry: true },

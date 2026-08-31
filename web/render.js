@@ -158,7 +158,7 @@ export function reportMarkup({ report, problemTitle, language, code }) {
   return `
     <div class="report-card">
       <div class="report-header">
-        <div><p>${modeLabel(report.mode)} interview report · ${loop} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p><h2>${heading}</h2></div>
+        <div><p>${report.mode ? `${modeLabel(report.mode)} ` : ""}interview report · ${loop} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p><h2>${heading}</h2></div>
         ${badge}
       </div>${scores}
       <section><h3>${report.incomplete ? "What happened" : "Committee summary"}</h3><p>${escapeHtml(report.summary)}</p></section>
@@ -298,7 +298,7 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
   return [
     `# Interview Report - ${mdText(problemTitle)}`,
     `_${at}_`,
-    `Mode: ${modeLabel(report.mode)}`,
+    ...(report.mode ? [`Mode: ${modeLabel(report.mode)}`] : []),
     `Loop: ${loopLabel(report.interviewLoop)}`,
     report.interviewContract
       ? `Contract: bundle ${report.interviewContract.bundleVersion}; live prompt ${report.interviewContract.livePromptVersion}; report prompt ${report.interviewContract.reportPromptVersion}; rubric ${report.interviewContract.rubricVersion}; report schema ${report.interviewContract.reportSchemaVersion}`

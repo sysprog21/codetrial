@@ -36,25 +36,52 @@ test("interview history routes through the shared persistence helper", () => {
   assert.match(saveHistory, /return saveReportHistory\(entry\)/);
 });
 
-test("practice and scored modes stay explicit from lobby through artifacts", () => {
+test("the lobby offers one interview and carries no mode to the room", () => {
   const lobby = read("index.html");
   const app = read("app.js");
   const page = read("interview.html");
   const interview = read("interview.js");
 
-  assert.match(lobby, /data-mode="practice"/);
-  assert.match(lobby, /data-mode="scored"[^>]*class="[^"]*selected|class="[^"]*selected"[^>]*data-mode="scored"/);
-  assert.match(app, /let mode = "scored"/);
-  assert.match(app, /destination\.searchParams\.set\("mode", mode\)/);
-  for (const id of ["practice-guide", "pause", "retry"]) assert.match(page, new RegExp(`id="${id}"`));
-  // The rule lives in lib.js now, so this follows it there rather than pinning a
-  // ternary that six other modules used to restate. Both halves matter: the page
-  // reads the URL through the normalizer, and the normalizer defaults to scored.
-  assert.match(interview, /const mode = interviewMode\(params\.get\("mode"\)\)/);
-  assert.match(read("lib.js"), /export function interviewMode\(value\) \{\s*return value === "practice" \? "practice" : "scored";/);
-  assert.match(interview, /JSON\.stringify\(\{ problemId: problem\.id, durationMin, interviewId, mode, interviewLoop, interviewProfile, \.\.\.\(interviewGrounding/);
-  assert.match(interview, /mode, interviewLoop, report: state\.report/);
-  assert.match(interview, /searchParams\.set\("retry", Date\.now\(\)\.toString\(\)\)/);
+  // One interview, so the lobby offers no mode to pick and nothing carries one
+  // to the room. Asserted as absence because the confusion this removed was a
+  // choice on screen, and a stray button is exactly how it would come back.
+  assert.doesNotMatch(lobby, /data-mode=/);
+  assert.doesNotMatch(app, /searchParams\.set\("mode"/);
+  assert.doesNotMatch(interview, /params\.get\("mode"\)/);
+  // Pause stayed; the two coaching controls went with the mode that gated them.
+  assert.match(page, /id="pause"/);
+  assert.doesNotMatch(interview, /retryPractice/);
+  assert.doesNotMatch(interview, /practiceGuide/);
+  // One framework on screen at a time, ticked from what the interviewer banks,
+  // and an offer that leaves on its own while the candidate is waiting on Jim.
+  assert.match(page, /id="framework-progress"/);
+  assert.match(page, /id="framework-hint"/);
+  // Centred over the page, and inert on the way past: it can appear while the
+  // candidate is typing, so it must not take focus or swallow a click.
+  const css = read("styles.css");
+  // Centred by the same rule the ending overlay uses, differing only where it
+  // means to. Asserted as composition rather than as a second copy of the
+  // positioning, because a duplicate block is what painted a border around the
+  // whole viewport: only the properties the later rule named were overridden.
+  assert.match(page, /class="overlay framework-hint"/);
+  assert.match(css, /\.overlay \{[^}]*position: fixed;/s);
+  assert.equal(css.match(/^\.framework-hint \{/gm).length, 1, "a second rule block overrides only part of the first");
+  // It must paint nothing: the page behind it is what the candidate is being
+  // asked about, and the card is bounded so it cannot fill the screen.
+  assert.match(css, /\.framework-hint \{[^}]*background: none;[^}]*pointer-events: none;/s);
+  assert.match(css, /\.framework-hint-card \{[^}]*max-height: 70vh;/s);
+  assert.match(css, /\.framework-hint-card \{[^}]*max-width: min\(/s);
+  assert.doesNotMatch(interview, /showModal\(\)/);
+  assert.match(interview, /frameworkHintBody\.innerHTML/);
+  assert.match(interview, /<caption>\$\{escapeHtml\(framework\.name\)\}/);
+  assert.doesNotMatch(interview, /frameworkBriefing/);
+  assert.doesNotMatch(interview, /Two shapes fit this interview/);
+  assert.doesNotMatch(page, /REACTO: Repeat/);
+  assert.match(interview, /message\.type === "framework_state" && Array\.isArray\(message\.phases\)/);
+  assert.match(interview, /frameworkRound = "behavioral"/);
+  assert.match(interview, /globalThis\.setTimeout\(\(\) => \{\s*nodes\.frameworkHint\.hidden = true;/);
+  assert.match(interview, /JSON\.stringify\(\{ problemId: problem\.id, durationMin, interviewId, interviewLoop, interviewProfile, \.\.\.\(interviewGrounding/);
+  assert.match(interview, /interviewLoop, report: state\.report/);
 });
 
 test("interview loop is explicit, budgeted, gated, and carried into artifacts", () => {
@@ -73,7 +100,7 @@ test("interview loop is explicit, budgeted, gated, and carried into artifacts", 
   assert.match(interview, /message\.type === "round_state"/);
   assert.match(interview, /nodes\.editor\.disabled = true/);
   assert.match(interview, /state: "rounds_final"/);
-  assert.match(interview, /mode, interviewLoop, report: state\.report/);
+  assert.match(interview, /interviewLoop, report: state\.report/);
 });
 
 test("optional interview profile is accessible, bounded, and omitted when blank", () => {

@@ -26,10 +26,12 @@ import {
   codeUpdatePayload,
   codingLoop,
   countdown,
+  FRAMEWORKS,
+  frameworkChecklist,
   endInterviewPayload,
+  escapeHtml,
   formatTime,
   integrityEventPayload,
-  interviewMode,
   isAgent,
   providerUiState,
   resumeDeadline,
@@ -94,6 +96,9 @@ let codePublishTimer = null;
 // The agent reads the editor once per 2s watch tick, so publishing every
 // keystroke sends ~10x more full-buffer packets than anyone consumes.
 const CODE_PUBLISH_DEBOUNCE_MS = 300;
+/// Long enough to read twice, short enough that it is gone before the answer
+/// it is about. Measured against the hint text, not chosen round.
+const FRAMEWORK_HINT_MS = 12000;
 
 // From /runtime-config.js, which is the only thing allowed to name what the
 // server does. A literal here would be a second answer to "does this server
@@ -128,7 +133,6 @@ const problem = await loadProblem(params.get("problem")).catch((error) => {
   throw error;
 });
 const durationMin = clamp(Number.parseInt(params.get("duration") || "45", 10) || 45, 10, 90);
-const mode = interviewMode(params.get("mode"));
 const interviewLoop = codingLoop(params.get("loop"));
 const behavioralMinutes = interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
 const codingMinutes = durationMin - behavioralMinutes;
@@ -139,7 +143,6 @@ const interviewProfile = {
 };
 const interviewGrounding = consumeGroundingPacket(sessionStorage);
 const state = {
-  mode,
   paused: false,
   pausedAt: 0,
   codeByLanguage: { ...problem.starterCode },
@@ -193,12 +196,14 @@ const nodes = {
   captionsBar: document.querySelector("#captions-bar"),
   captionsText: document.querySelector("#captions-text"),
   timer: document.querySelector("#timer"),
-  practiceGuide: document.querySelector("#practice-guide"),
+  frameworkProgress: document.querySelector("#framework-progress"),
+  frameworkHint: document.querySelector("#framework-hint"),
+  frameworkHintTitle: document.querySelector("#framework-hint-title"),
+  frameworkHintBody: document.querySelector("#framework-hint-body"),
   roundPlanSummary: document.querySelector("#round-plan-summary"),
 
   mic: document.querySelector("#mic"),
   pause: document.querySelector("#pause"),
-  retry: document.querySelector("#retry"),
   end: document.querySelector("#end"),
   withdrawConsent: document.querySelector("#withdraw-consent"),
   recordingState: document.querySelector("#recording-state"),
@@ -347,19 +352,11 @@ function bindEvents() {
   nodes.problemTab.addEventListener("click", () => selectTab("problem"));
   nodes.transcriptTab.addEventListener("click", () => selectTab("transcript"));
   nodes.mic.addEventListener("click", toggleMicrophone);
-  if (mode === "practice") {
-    nodes.pause.hidden = false;
-    nodes.retry.hidden = false;
-    nodes.practiceGuide.hidden = false;
-    nodes.pause.addEventListener("click", togglePause);
-    nodes.retry.addEventListener("click", retryPractice);
-  } else {
-    // Hidden controls are still discoverable DOM and accessibility content.
-    // A scored interview has no coaching surface at all.
-    nodes.pause.remove();
-    nodes.retry.remove();
-    nodes.practiceGuide.remove();
-  }
+  // A candidate whose machine or network interrupts them still needs a way to
+  // stop the clock, and the pause is recorded so the gap is visible in the
+  // report rather than passing as thinking time.
+  nodes.pause.hidden = false;
+  nodes.pause.addEventListener("click", togglePause);
   nodes.end.addEventListener("click", () => endInterview("candidate_ended"));
   nodes.withdrawConsent.addEventListener("click", withdrawRecordingConsent);
   nodes.forceReport.addEventListener("click", showReport);
@@ -739,7 +736,7 @@ async function connect(preflight, presenting = false) {
     const response = await fetch("/api/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ problemId: problem.id, durationMin, interviewId, mode, interviewLoop, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) }),
+      body: JSON.stringify({ problemId: problem.id, durationMin, interviewId, interviewLoop, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) }),
     });
     if (!response.ok) throw new Error((await response.json()).error || "Failed to create a session.");
     const connection = await response.json();
@@ -784,12 +781,12 @@ async function connect(preflight, presenting = false) {
     stopPreflight(preflight);
     const degraded = providerUiState("degraded", error?.message);
     setAgentStateLabel(degraded.label);
-    // Practice mode without a reason reads as the product working. The server
+    // A degraded start without a reason reads as the product working. The server
     // says why it refused, in words written for a candidate, and a busy server
     // is a "come back in a few minutes" rather than a "your interview is now a
     // simulation" - so say it, and keep the practice editor underneath it.
     setBanner("connection", degraded.message);
-    addTranscript("interviewer", "Offline practice mode is ready. Talk through your approach and run tests when you are ready.", true);
+    addTranscript("interviewer", "Offline mode is ready. Talk through your approach and run tests when you are ready.", true);
   }
 }
 
@@ -1192,7 +1189,7 @@ function tickTimer() {
 }
 
 function togglePause() {
-  if (mode !== "practice" || state.phase !== "live") return;
+  if (state.phase !== "live") return;
   publish(topics.control, { type: "pause_interview", paused: !state.paused });
   // No room, no acknowledgement coming, so this browser is the authority.
   // `state.room`, not `state.joinedRoom`: the latter stays true for the rest
@@ -1203,11 +1200,55 @@ function togglePause() {
   if (!state.room) applyPause(!state.paused);
 }
 
+/// Which framework the candidate is being read against right now. The rounds
+/// never overlap, so this is a single value rather than a pair.
+let frameworkRound = "coding";
+let frameworkPhases = [];
+let frameworkHintTimer = null;
+
+/// The checklist, redrawn from the phases the interviewer has banked.
+///
+/// Rebuilt whole rather than patched: it is ten list items at most, and a patch
+/// would need its own record of what is already ticked, which is the second
+/// copy of the truth that these packets exist to avoid.
+function renderFrameworkProgress() {
+  const { name, steps } = frameworkChecklist(frameworkRound, frameworkPhases);
+  nodes.frameworkProgress.hidden = false;
+  nodes.frameworkProgress.innerHTML = steps
+    .map((step) => `<li class="${step.done ? "done" : ""}"><span aria-hidden="true">${step.done ? "&#10003;" : "&#183;"}</span>${escapeHtml(step.label)}</li>`)
+    .join("");
+  nodes.frameworkProgress.setAttribute("aria-label", `${name} steps`);
+}
+
+/// Says what shape of answer fits, while the interviewer is still thinking.
+///
+/// It disappears on its own because it is an offer and not a status: a panel
+/// that stayed would become another thing on screen to read, which is what the
+/// two-framework list beside the timer already was.
+function showFrameworkHint() {
+  nodes.frameworkHintTitle.textContent = "Jim is listening.";
+  nodes.frameworkHintBody.innerHTML = Object.values(FRAMEWORKS)
+    .map((framework) => `
+      <table>
+        <caption>${escapeHtml(framework.name)}<span>${escapeHtml(framework.scenario)}</span></caption>
+        <tbody>${framework.steps.map((step) => `<tr><th scope="row">${escapeHtml(step.label)}</th><td>${escapeHtml(step.hint)}</td></tr>`).join("")}</tbody>
+      </table>`)
+    .join("");
+  nodes.frameworkHint.hidden = false;
+  globalThis.clearTimeout(frameworkHintTimer);
+  frameworkHintTimer = globalThis.setTimeout(() => {
+    nodes.frameworkHint.hidden = true;
+  }, FRAMEWORK_HINT_MS);
+}
+
 function receiveControl(bytes) {
   try {
     const message = JSON.parse(new TextDecoder().decode(bytes));
     if (message.type === "pause_state" && typeof message.paused === "boolean") {
       applyPause(message.paused);
+    } else if (message.type === "framework_state" && Array.isArray(message.phases)) {
+      frameworkPhases = message.phases;
+      renderFrameworkProgress();
     } else if (message.type === "round_state" && message.round === "behavioral"
       && ["started", "skipped"].includes(message.status)) {
       recordReplay("lifecycle", { state: "round_transition", round: "behavioral", status: message.status, interviewLoop });
@@ -1215,6 +1256,10 @@ function receiveControl(bytes) {
         nodes.editor.disabled = true;
         nodes.run.disabled = true;
         nodes.resultsLabel.textContent = "Coding round complete";
+        // The round changed, so the checklist and the offer change with it.
+        frameworkRound = "behavioral";
+        renderFrameworkProgress();
+        showFrameworkHint();
       }
     }
   } catch {
@@ -1223,7 +1268,7 @@ function receiveControl(bytes) {
 }
 
 function applyPause(paused) {
-  if (mode !== "practice" || paused === state.paused) return;
+  if (paused === state.paused) return;
   state.paused = paused;
   if (paused) {
     state.pausedAt = Date.now();
@@ -1231,20 +1276,14 @@ function applyPause(paused) {
     state.endsAt = resumeDeadline(state.endsAt, state.pausedAt, Date.now());
     state.pausedAt = 0;
   }
-  nodes.pause.textContent = paused ? "Resume practice" : "Pause practice";
+  nodes.pause.textContent = paused ? "Resume" : "Pause";
   nodes.editor.disabled = paused;
   nodes.run.disabled = paused;
-  recordReplay("lifecycle", { state: paused ? "paused" : "resumed", mode });
+  recordReplay("lifecycle", { state: paused ? "paused" : "resumed" });
   recordStage();
   tickTimer();
 }
 
-function retryPractice() {
-  if (mode !== "practice") return;
-  const retry = new URL(window.location.href);
-  retry.searchParams.set("retry", Date.now().toString());
-  window.location.href = retry.toString();
-}
 
 async function runTests() {
   flushPendingCodePublish();
@@ -1375,7 +1414,7 @@ async function showReport() {
     passed,
     total,
     candidateTurns,
-  }), mode, interviewLoop, rounds: [
+  }), interviewLoop, rounds: [
     { kind: "coding", budgetMin: codingMinutes, status: total > 0 && passed === total ? "complete" : "incomplete" },
     { kind: "behavioral", budgetMin: behavioralMinutes, status: interviewLoop === "coding_only" ? "not_configured" : "skipped" },
   ] };
@@ -1406,7 +1445,7 @@ function saveHistory() {
   // The interview id travels with the report so the replay page can put the
   // two beside each other. Reports are keyed by their own id and recordings by
   // theirs, and without this the only thing relating them is the clock.
-  const entry = { id: randomId(), date: new Date().toISOString(), interviewId: state.interviewId, problemId: problem.id, problemTitle: problem.title, difficulty: problem.difficulty, language: state.language, durationMin, mode, interviewLoop, report: state.report };
+  const entry = { id: randomId(), date: new Date().toISOString(), interviewId: state.interviewId, problemId: problem.id, problemTitle: problem.title, difficulty: problem.difficulty, language: state.language, durationMin, interviewLoop, report: state.report };
   return saveReportHistory(entry);
 }
 
@@ -1526,6 +1565,13 @@ function updateAgentState() {
   // the connection last said is still in theirs, so the banner falls back to it
   // rather than to blank: the interviewer returning is not evidence about the
   // camera or the network.
+  // First sight of the interviewer is the moment the candidate is waiting on it
+  // to speak, which is when saying what shape of answer fits is worth a few
+  // seconds of screen. Once only: it is an opener, not a reminder.
+  if (!state.sawAgent) {
+    renderFrameworkProgress();
+    showFrameworkHint();
+  }
   state.sawAgent = true;
   state.agentIdentity ||= agent.identity;
   setBanner("interviewer", "");

@@ -6,6 +6,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  FRAMEWORKS,
+  frameworkChecklist,
   captionWindow,
   TIME_WARNING_S,
   acceptsReport,
@@ -496,7 +498,7 @@ test("sanitizeReport preserves a well-formed agent report", () => {
 
   assert.deepEqual(report, {
     interviewContract: null,
-    mode: "scored",
+    mode: undefined,
     interviewLoop: "coding_behavioral",
     rounds: [],
     codingScore: 82,
@@ -649,9 +651,13 @@ test("practice pause restores the exact wall-clock time remaining", () => {
   assert.equal(resumeDeadline(60_000, 17_500, 10_000), 60_000, "a backward clock cannot shorten it");
 });
 
-test("report mode accepts only practice and defaults legacy or hostile values to scored", () => {
+test("report mode is kept only where a report actually recorded one", () => {
+  // Reports written before the practice/scored split still say which they were
+  // and the viewer shows it. Nothing produces one now, so a report without one
+  // must not have a mode invented for it: the header would announce a
+  // distinction that no longer exists.
   assert.equal(sanitizeReport({ incomplete: true, mode: "practice" }).mode, "practice");
-  assert.equal(sanitizeReport({ incomplete: true }).mode, "scored");
+  assert.equal(sanitizeReport({ incomplete: true }).mode, undefined);
   assert.equal(sanitizeReport({ incomplete: true, mode: "<script>" }).mode, "scored");
 });
 
@@ -798,4 +804,46 @@ test("the caption window opens at a sentence boundary, never mid-word", () => {
     assert.ok(window.trim().length > 0, `blanked the bar on ${JSON.stringify(finished)}`);
     assert.ok(window.length <= budget, `${window.length} > ${budget}`);
   }
+});
+
+test("the two frameworks stay apart and tick only what the interviewer banked", () => {
+  // Never both at once. A candidate in the coding round is working through
+  // REACTO, and the four behavioral steps are not theirs to think about yet.
+  const coding = frameworkChecklist("coding", ["repeat", "algorithm"]);
+  assert.equal(coding.name, "REACTO");
+  assert.deepEqual(coding.steps.map((step) => step.id), ["repeat", "example", "algorithm", "coding", "test", "optimizations"]);
+  assert.deepEqual(coding.steps.filter((step) => step.done).map((step) => step.id), ["repeat", "algorithm"]);
+
+  const behavioral = frameworkChecklist("behavioral", ["situation", "result"]);
+  assert.equal(behavioral.name, "STAR");
+  assert.deepEqual(behavioral.steps.map((step) => step.id), ["situation", "task", "action", "result"]);
+  assert.deepEqual(behavioral.steps.filter((step) => step.done).map((step) => step.id), ["situation", "result"]);
+
+  // The packet is untrusted like every other. An unknown phase is a version
+  // skew or someone else's idea of a step, and neither belongs on screen.
+  const hostile = frameworkChecklist("coding", ["repeat", "situation", "<script>", 7, null]);
+  assert.deepEqual(hostile.steps.filter((step) => step.done).map((step) => step.id), ["repeat"]);
+
+  // An unknown round falls back rather than rendering an empty list, because a
+  // checklist with no steps reads as an interview with nothing to do.
+  assert.equal(frameworkChecklist("nonsense", []).name, "REACTO");
+  assert.deepEqual(frameworkChecklist("coding", "not-a-list").steps.filter((step) => step.done), []);
+
+  // Every step explains itself. The card is read once, while waiting, so a
+  // label with no clause behind it is a step the candidate cannot act on.
+  for (const framework of Object.values(FRAMEWORKS)) {
+    for (const step of framework.steps) {
+      assert.ok(step.hint && step.hint.length > 10, `${step.id} has no usable explanation`);
+    }
+  }
+
+  // Each framework says which exercise it is for, so a table of one can stand
+  // without borrowing context from a table of the other.
+  for (const framework of Object.values(FRAMEWORKS)) {
+    assert.ok(framework.scenario && framework.scenario.length > 20, `${framework.name} does not say what it scores`);
+  }
+
+  // No id appears in both, or a tick in one round would light up the other.
+  const ids = Object.values(FRAMEWORKS).flatMap((framework) => framework.steps.map((step) => step.id));
+  assert.equal(new Set(ids).size, ids.length);
 });

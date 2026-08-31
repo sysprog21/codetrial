@@ -1,6 +1,4 @@
-use codetrial::agent::{
-    InterviewGrounding, InterviewLoop, InterviewMode, InterviewProfile, Seniority,
-};
+use codetrial::agent::{InterviewGrounding, InterviewLoop, InterviewProfile, Seniority};
 use codetrial::config::{
     DEFAULT_GEMINI_LIVE_MODEL, DEFAULT_GEMINI_REPORT_MODEL, DEFAULT_GEMINI_VOICE, load_from_pairs,
 };
@@ -35,17 +33,17 @@ fn bootstrap_keeps_mode_immutable_in_its_prompt_contract() {
         Some("two-sum"),
         45,
         RuntimeOptions {
-            mode: InterviewMode::Practice,
             ..RuntimeOptions::default()
         },
     );
-    assert_eq!(practice.mode, InterviewMode::Practice);
-    assert!(practice.instructions.contains("PRACTICE MODE"));
-    assert!(practice.instructions.contains("name REACTO and STAR"));
 
-    let legacy = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
-    assert_eq!(legacy.mode, InterviewMode::Scored);
-    assert!(legacy.instructions.contains("SCORED MODE"));
+    // One interview now, and the frameworks are spoken rather than hidden: the
+    // agent names the step it is moving to and says what it listens for in a
+    // behavioral answer, while the rubric and the scores stay its own.
+    assert!(practice.instructions.contains("REACTO CODING FLOW"));
+    assert!(practice.instructions.contains("WHAT STAYS HIDDEN"));
+    assert!(!practice.instructions.contains("PRACTICE MODE"));
+    assert!(!practice.instructions.contains("SCORED MODE"));
 }
 
 #[test]
@@ -125,7 +123,6 @@ fn bootstrap_owns_validated_round_plan_and_budgets() {
         None,
         45,
         RuntimeOptions {
-            mode: InterviewMode::Scored,
             profile: InterviewProfile::default(),
             grounding: InterviewGrounding::default(),
             interview_loop: InterviewLoop::CodingOnly,
@@ -143,7 +140,6 @@ fn bootstrap_owns_validated_round_plan_and_budgets() {
         None,
         30,
         RuntimeOptions {
-            mode: InterviewMode::Practice,
             profile: InterviewProfile::default(),
             grounding: InterviewGrounding::default(),
             interview_loop: InterviewLoop::CodingBehavioral,
