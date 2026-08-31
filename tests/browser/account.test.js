@@ -154,7 +154,7 @@ test("document grounding is explicit, clearable, ephemeral, and absent from save
   assert.match(app, /nodes\.groundingClear\.addEventListener\("click", clearGrounding\)/);
   assert.match(app, /storeGroundingPacket\(sessionStorage, packet\)/);
   assert.match(interview, /consumeGroundingPacket\(sessionStorage\)/);
-  const savedArtifacts = [read("history.js"), read("replay-feed.js"), interview.slice(interview.indexOf("function saveHistory"))];
+  const savedArtifacts = [read("history.js"), read("replay-feed.js"), functionBody(interview, "saveHistory")];
   for (const source of savedArtifacts) assert.doesNotMatch(source, /interviewGrounding/);
 });
 

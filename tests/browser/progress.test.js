@@ -48,9 +48,9 @@ test("progress filters metadata, orders attempts, ranks tags, and keeps null as 
   const rows = [
     entry("later", "2026-02-01", 80, { weakness: "Explain complexity" }),
     entry("earlier", "2026-01-01", 60, { weakness: "Explain complexity" }),
-    entry("other", "2026-03-01", 99, { difficulty: "Hard", language: "java", durationMin: 60, mode: "practice" }),
+    entry("other", "2026-03-01", 99, { difficulty: "Hard", language: "java", durationMin: 60 }),
   ];
-  const model = buildProgressModel(rows, { difficulty: "Easy", language: "python", durationMin: "45", mode: "scored" });
+  const model = buildProgressModel(rows, { difficulty: "Easy", language: "python", durationMin: "45" });
   assert.deepEqual(model.attempts.map((item) => item.id), ["earlier", "later"]);
   assert.deepEqual(model.series.Algorithm[0].points.map((point) => point.score), [60, 80]);
   assert.deepEqual(model.series.Action, [], "null STAR values are gaps, not zeroes");

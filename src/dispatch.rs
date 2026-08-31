@@ -196,20 +196,38 @@ mod tests {
             live: Arc::clone(&live),
             max_concurrent: 8,
         };
-        let mut held = Vec::new();
+
+        // Reserved from concurrent tasks released together, not in a loop: the
+        // cap is a check and an insert under one lock, and a serial caller
+        // cannot tell that apart from a version that overbooks when a hundred
+        // requests arrive at once.
+        let dispatcher = Arc::new(dispatcher);
+        let gate = Arc::new(tokio::sync::Barrier::new(100));
+        let mut tasks = Vec::new();
         for index in 0..100 {
-            match dispatcher.reserve(&format!("interview-burst-{index}")) {
-                Reservation::New(slot) => held.push(slot),
-                Reservation::Full => {}
-                Reservation::Existing => panic!("burst ids are unique"),
-            }
+            let dispatcher = Arc::clone(&dispatcher);
+            let gate = Arc::clone(&gate);
+            tasks.push(tokio::spawn(async move {
+                gate.wait().await;
+                match dispatcher.reserve(&format!("interview-burst-{index}")) {
+                    Reservation::New(slot) => Some(slot),
+                    Reservation::Full => None,
+                    Reservation::Existing => panic!("burst ids are unique"),
+                }
+            }));
+        }
+        let mut held = Vec::new();
+        for task in tasks {
+            held.extend(task.await.unwrap());
         }
         assert_eq!(held.len(), 8);
         assert_eq!(live.lock().unwrap().len(), 8);
-        assert!(matches!(
-            dispatcher.reserve("interview-burst-0"),
-            Reservation::Existing
-        ));
+
+        // Named from a slot that actually won: which eight of the hundred get
+        // in is up to the scheduler, so the serial loop's assumption that it is
+        // the first eight does not survive running them at once.
+        let winner = held[0].room_name.clone();
+        assert!(matches!(dispatcher.reserve(&winner), Reservation::Existing));
         held.truncate(3);
         assert_eq!(live.lock().unwrap().len(), 3);
         for index in 100..105 {
