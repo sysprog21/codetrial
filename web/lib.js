@@ -322,6 +322,35 @@ export async function integrityEventPayload(input, previous = { seq: 0, hash: ""
 
 // The report arrives over a LiveKit data channel, so treat every field as
 // untrusted: scores are rendered into innerHTML and must not carry markup.
+/// The ten REACTO and STAR phases, in the order src/agent.rs IMPROVEMENT_PHASES
+/// and validate_framework_assessment require. Written once: it was three
+/// literals here and in progress.js, and a phase added to one of them would have
+/// been silently unassessed by the others.
+export const frameworkPhases = [
+  "Repeat", "Example", "Algorithm", "Coding", "Test", "Optimizations",
+  "Situation", "Task", "Action", "Result",
+];
+
+/// The two closed enums the server owns (InterviewMode::parse and
+/// InterviewLoop::parse in src/agent.rs). Anything else is the default, which is
+/// what makes a legacy or hostile value safe rather than an error. Stated once
+/// here because seven modules were each restating the same ternary.
+export function interviewMode(value) {
+  return value === "practice" ? "practice" : "scored";
+}
+
+export function codingLoop(value) {
+  return value === "coding_only" ? "coding_only" : "coding_behavioral";
+}
+
+export function modeLabel(value) {
+  return interviewMode(value) === "practice" ? "Practice" : "Scored";
+}
+
+export function loopLabel(value) {
+  return codingLoop(value) === "coding_only" ? "Coding only" : "Coding + behavioral";
+}
+
 export function sanitizeReport(raw) {
   const activeContract = { bundleVersion: 4, livePromptVersion: 1, reportPromptVersion: 4, reportSchemaVersion: 1, rubricVersion: 1 };
   const contractKeys = Object.keys(activeContract);
@@ -335,8 +364,8 @@ export function sanitizeReport(raw) {
   const interviewContract = candidateContract === undefined ? null : contractValues;
   const unsupportedContract = candidateContract !== undefined
     && (interviewContract === null || contractKeys.some((key) => interviewContract[key] !== activeContract[key]));
-  const mode = raw?.mode === "practice" ? "practice" : "scored";
-  const interviewLoop = raw?.interviewLoop === "coding_only" ? "coding_only" : "coding_behavioral";
+  const mode = interviewMode(raw?.mode);
+  const interviewLoop = codingLoop(raw?.interviewLoop);
   const roundKinds = ["coding", "behavioral"];
   const codingStatuses = new Set(["complete", "incomplete"]);
   const behavioralStatuses = new Set(["complete", "started", "skipped", "not_configured"]);
@@ -381,7 +410,7 @@ export function sanitizeReport(raw) {
   const codingFeedback = feedback(raw?.codingFeedback);
   const communicationFeedback = feedback(raw?.communicationFeedback);
   const weaknesses = new Set([...codingFeedback.improvements, ...communicationFeedback.improvements]);
-  const phases = new Set(["Repeat", "Example", "Algorithm", "Coding", "Test", "Optimizations", "Situation", "Task", "Action", "Result"]);
+  const phases = new Set(frameworkPhases);
   const plannedWeaknesses = new Set();
   const impactRank = { high: 3, medium: 2, low: 1 };
   const candidatePlan = (Array.isArray(raw?.improvementPlan) ? raw.improvementPlan : [])
@@ -460,7 +489,7 @@ export function sanitizeReport(raw) {
       phases: assessmentPhases.map((phase) => normalizedAssessment.get(phase)),
     }
     : null;
-  const frameworkPhases = new Set(["repeat", "example", "algorithm", "coding", "test", "optimizations", "situation", "task", "action", "result"]);
+  const evidencePhases = new Set(frameworkPhases.map((phase) => phase.toLowerCase()));
   const frameworkSources = new Set(["candidate_speech", "editor_snapshot", "test_event", "session_timing"]);
   const frameworkKinds = new Set(["observed", "inferred", "skipped"]);
   const frameworkEvidence = (Array.isArray(raw?.frameworkEvidence) ? raw.frameworkEvidence : [])
@@ -472,7 +501,7 @@ export function sanitizeReport(raw) {
       const confidence = Math.trunc(Number(item?.confidence));
       const frameworkVersion = Math.trunc(Number(item?.frameworkVersion));
       const summary = typeof item?.summary === "string" ? boundedText(item.summary, 240).trim() : "";
-      if (!frameworkPhases.has(phase) || !frameworkSources.has(source) || !frameworkKinds.has(kind)
+      if (!evidencePhases.has(phase) || !frameworkSources.has(source) || !frameworkKinds.has(kind)
         || (source === "session_timing") !== (kind === "skipped")
         || !Number.isFinite(atMs) || atMs < 0 || !Number.isFinite(confidence)
         || confidence < 0 || confidence > 100 || !Number.isFinite(frameworkVersion)

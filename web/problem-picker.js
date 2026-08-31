@@ -1,4 +1,4 @@
-const LEVELS = ["Easy", "Medium", "Hard"];
+export const LEVELS = ["Easy", "Medium", "Hard"];
 
 /// How many results in a row at one level move a candidate off it. One is a
 /// single lucky or unlucky problem. Three means somebody practising once a week

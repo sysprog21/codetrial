@@ -24,10 +24,12 @@ import {
   acceptsReport,
   clamp,
   codeUpdatePayload,
+  codingLoop,
   countdown,
   endInterviewPayload,
   formatTime,
   integrityEventPayload,
+  interviewMode,
   isAgent,
   providerUiState,
   resumeDeadline,
@@ -126,8 +128,8 @@ const problem = await loadProblem(params.get("problem")).catch((error) => {
   throw error;
 });
 const durationMin = clamp(Number.parseInt(params.get("duration") || "45", 10) || 45, 10, 90);
-const mode = params.get("mode") === "practice" ? "practice" : "scored";
-const interviewLoop = params.get("loop") === "coding_only" ? "coding_only" : "coding_behavioral";
+const mode = interviewMode(params.get("mode"));
+const interviewLoop = codingLoop(params.get("loop"));
 const behavioralMinutes = interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
 const codingMinutes = durationMin - behavioralMinutes;
 const interviewProfile = {
@@ -1423,7 +1425,6 @@ function buildMarkdown() {
     code: currentCode(),
     transcript: state.transcript.values(),
     at: new Date().toLocaleString(),
-    mode,
   });
 }
 

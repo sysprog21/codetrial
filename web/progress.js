@@ -1,17 +1,28 @@
-import { sanitizeReport } from "./lib.js";
+import { frameworkPhases, sanitizeReport } from "./lib.js";
+import { LEVELS } from "./problem-picker.js";
 
-export const progressPhases = [
-  "Repeat", "Example", "Algorithm", "Coding", "Test", "Optimizations",
-  "Situation", "Task", "Action", "Result",
-];
+export const progressPhases = frameworkPhases;
 
-const allowedDifficulties = new Set(["Easy", "Medium", "Hard"]);
+const allowedDifficulties = new Set(LEVELS);
 const allowedLanguages = new Set(["python", "javascript", "c", "cpp", "java"]);
 const allowedModes = new Set(["practice", "scored"]);
 
-export function normalizeProgressEntry(raw) {
+/// `/api/reports` wraps each entry in `payload` (accounts.rs list_reports) while
+/// history.js stores the same entry flat. One rule for which of the two an entry
+/// is, so the lobby's picker and its progress panel cannot disagree about it.
+export function unwrapEntry(raw) {
   const wrapper = raw && typeof raw === "object" ? raw : {};
   const entry = wrapper.payload && typeof wrapper.payload === "object" ? wrapper.payload : wrapper;
+  // The wrapper is the stored row and the payload is what the browser saved
+  // into it. Only the row is guaranteed to carry the problem id, so it is the
+  // fallback: without it the picker saw every account report as unattributed
+  // and recommended problems the candidate had already passed.
+  return entry.problemId === undefined ? { ...entry, problemId: wrapper.problemId } : entry;
+}
+
+export function normalizeProgressEntry(raw) {
+  const wrapper = raw && typeof raw === "object" ? raw : {};
+  const entry = unwrapEntry(raw);
   const report = sanitizeReport(entry.report);
   const dateValue = entry.date ?? (Number.isFinite(wrapper.createdAt) ? wrapper.createdAt * 1000 : null);
   const at = dateValue == null ? NaN : new Date(dateValue).getTime();

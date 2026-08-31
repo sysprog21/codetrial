@@ -47,7 +47,11 @@ test("practice and scored modes stay explicit from lobby through artifacts", () 
   assert.match(app, /let mode = "scored"/);
   assert.match(app, /destination\.searchParams\.set\("mode", mode\)/);
   for (const id of ["practice-guide", "pause", "retry"]) assert.match(page, new RegExp(`id="${id}"`));
-  assert.match(interview, /params\.get\("mode"\) === "practice" \? "practice" : "scored"/);
+  // The rule lives in lib.js now, so this follows it there rather than pinning a
+  // ternary that six other modules used to restate. Both halves matter: the page
+  // reads the URL through the normalizer, and the normalizer defaults to scored.
+  assert.match(interview, /const mode = interviewMode\(params\.get\("mode"\)\)/);
+  assert.match(read("lib.js"), /export function interviewMode\(value\) \{\s*return value === "practice" \? "practice" : "scored";/);
   assert.match(interview, /JSON\.stringify\(\{ problemId: problem\.id, durationMin, interviewId, mode, interviewLoop, interviewProfile, \.\.\.\(interviewGrounding/);
   assert.match(interview, /mode, interviewLoop, report: state\.report/);
   assert.match(interview, /searchParams\.set\("retry", Date\.now\(\)\.toString\(\)\)/);

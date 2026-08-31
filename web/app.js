@@ -1,6 +1,7 @@
+import { codingLoop, interviewMode } from "./lib.js";
 import { readLocalHistory } from "./history.js";
 import { pickProblem, suggestDifficulty } from "./problem-picker.js";
-import { buildProgressModel, progressPhases } from "./progress.js";
+import { buildProgressModel, progressPhases, unwrapEntry } from "./progress.js";
 import { parseGroundingFile, selectedGroundingPacket, storeGroundingPacket } from "./document-grounding.js";
 
 let problem;
@@ -131,14 +132,14 @@ for (const button of durations) {
 
 for (const button of document.querySelectorAll("[data-mode]")) {
   button.addEventListener("click", () => {
-    mode = button.dataset.mode === "practice" ? "practice" : "scored";
+    mode = interviewMode(button.dataset.mode);
     select("[data-mode]", button);
   });
 }
 
 for (const button of document.querySelectorAll("[data-loop]")) {
   button.addEventListener("click", () => {
-    interviewLoop = button.dataset.loop === "coding_only" ? "coding_only" : "coding_behavioral";
+    interviewLoop = codingLoop(button.dataset.loop);
     select("[data-loop]", button);
   });
 }
@@ -402,11 +403,9 @@ async function recordGitHubLogin(reload) {
 async function renderServerHistory() {
   try {
     const data = await fetchJson("/api/reports");
-    // `/api/reports` wraps each entry in `payload` (accounts.rs list_reports);
-    // history.js stores the same entry flat. Flattened here so the picker knows
-    // one shape instead of guessing between two. The progress panel takes the
-    // wire shape as it comes: progress.js unwraps `payload` itself.
-    reports = data.reports.map((entry) => ({ problemId: entry.problemId, report: entry.payload?.report }));
+    // The picker reads the unwrapped entry, the panel takes the wire shape and
+    // unwraps it itself, and both go through the one rule in progress.js.
+    reports = data.reports.map(unwrapEntry);
     showProgress(data.reports, "saved to your account");
   } catch {
     showProgressError("Could not load saved account progress.");

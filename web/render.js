@@ -3,7 +3,7 @@
 // return strings; the transcript view takes the document and panel it renders
 // into. interview.js owns the wiring, this owns the output.
 
-import { escapeHtml, formatTime, orPlaceholder } from "./lib.js";
+import { escapeHtml, formatTime, loopLabel, modeLabel, orPlaceholder } from "./lib.js";
 
 export function runnerStatusMarkup(status) {
   const text = {
@@ -149,7 +149,7 @@ export function reportMarkup({ report, problemTitle, language, code }) {
   const frameworkCalibration = report.frameworkAssessment
     ? `<p class="muted small">REACTO/STAR phase scores are formative coaching signals, not calibrated hiring evidence.</p>`
     : "";
-  const loopLabel = report.interviewLoop === "coding_only" ? "Coding only" : "Coding + behavioral";
+  const loop = loopLabel(report.interviewLoop);
   const rounds = report.rounds?.length ? `<section><h3>Interview rounds</h3><ul>${report.rounds.map((round) => `<li>${escapeHtml(round.kind)} · ${escapeHtml(round.budgetMin)} min · ${escapeHtml(round.status)}</li>`).join("")}</ul></section>` : "";
   const contract = report.interviewContract
     ? `Contract bundle ${report.interviewContract.bundleVersion} · rubric ${report.interviewContract.rubricVersion} · report schema ${report.interviewContract.reportSchemaVersion}`
@@ -158,7 +158,7 @@ export function reportMarkup({ report, problemTitle, language, code }) {
   return `
     <div class="report-card">
       <div class="report-header">
-        <div><p>${report.mode === "practice" ? "Practice" : "Scored"} interview report · ${loopLabel} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p><h2>${heading}</h2></div>
+        <div><p>${modeLabel(report.mode)} interview report · ${loop} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p><h2>${heading}</h2></div>
         ${badge}
       </div>${scores}
       <section><h3>${report.incomplete ? "What happened" : "Committee summary"}</h3><p>${escapeHtml(report.summary)}</p></section>
@@ -176,7 +176,7 @@ export function reportMarkup({ report, problemTitle, language, code }) {
 
 /// The downloadable report. Pure so the export can be tested without a DOM;
 /// `at` is injected because a timestamp would otherwise make it unassertable.
-export function reportMarkdown({ report, problemTitle, language, code, transcript, at, mode }) {
+export function reportMarkdown({ report, problemTitle, language, code, transcript, at }) {
   // One rule for every untrusted string in this document, where there used to
   // be three. Evidence rows ran through escapeHtml, feedback bullets and
   // transcript turns ran through nothing. escapeHtml was the wrong escaper for
@@ -298,8 +298,8 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
   return [
     `# Interview Report - ${mdText(problemTitle)}`,
     `_${at}_`,
-    `Mode: ${mode === "practice" || report.mode === "practice" ? "Practice" : "Scored"}`,
-    `Loop: ${report.interviewLoop === "coding_only" ? "Coding only" : "Coding + behavioral"}`,
+    `Mode: ${modeLabel(report.mode)}`,
+    `Loop: ${loopLabel(report.interviewLoop)}`,
     report.interviewContract
       ? `Contract: bundle ${report.interviewContract.bundleVersion}; live prompt ${report.interviewContract.livePromptVersion}; report prompt ${report.interviewContract.reportPromptVersion}; rubric ${report.interviewContract.rubricVersion}; report schema ${report.interviewContract.reportSchemaVersion}`
       : "Contract: legacy/unversioned",
