@@ -215,6 +215,7 @@ pub struct InterviewProfile {
 }
 
 pub const MAX_GROUNDING_TEXT_CHARS: usize = 240;
+pub const MAX_GROUNDING_TEXT_BYTES: usize = 6 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct InterviewGrounding {
@@ -249,6 +250,20 @@ pub fn sanitize_interview_grounding(value: Option<&serde_json::Value>) -> Interv
     let Some(anchors) = grounding_array(object.get("anchors"), 6) else {
         return InterviewGrounding::default();
     };
+
+    // Per-item limits alone still admit 22 items of 240 characters, which is
+    // four times this much once they are multi-byte. The budget is what the
+    // prompt can afford to carry, so it is a property of the whole packet.
+    if requirements
+        .iter()
+        .chain(&skills)
+        .chain(&anchors)
+        .map(String::len)
+        .sum::<usize>()
+        > MAX_GROUNDING_TEXT_BYTES
+    {
+        return InterviewGrounding::default();
+    }
     InterviewGrounding {
         requirements,
         skills,

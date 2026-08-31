@@ -1,6 +1,9 @@
 export const groundingStorageKey = "codetrial.interview-grounding.v1";
 export const groundingConsentVersion = 1;
 export const maxGroundingFileBytes = 64 * 1024;
+// MAX_GROUNDING_TEXT_BYTES in src/agent.rs, and that is not a coincidence to
+// be maintained by memory: the server drops over-budget grounding silently.
+export const maxGroundingPacketBytes = 6 * 1024;
 
 const limits = { requirements: 8, skills: 8, anchors: 6 };
 const textLimit = 240;
@@ -26,14 +29,49 @@ export async function parseGroundingFile(file, kind) {
 export function selectedGroundingPacket(extracted, selected, consent) {
   const packet = {
     consentVersion: groundingConsentVersion,
-    requirements: pick(extracted.requirements, selected.requirements),
-    skills: pick(extracted.skills, selected.skills),
-    anchors: pick(extracted.anchors, selected.anchors),
+    requirements: pick(extracted.requirements, selected.requirements).map(normalizeSnippet),
+    skills: pick(extracted.skills, selected.skills).map(normalizeSnippet),
+    anchors: pick(extracted.anchors, selected.anchors).map(normalizeSnippet),
   };
   const count = packet.requirements.length + packet.skills.length + packet.anchors.length;
   if (!count) return null;
   if (!consent) throw new Error("Agree to send only your selected snippets before starting.");
+
+  // The server rejects a list holding the same snippet twice, and rejecting it
+  // means dropping every snippet in the packet, not just the repeat. `pick`
+  // only rules out choosing one index twice, so two lines that read alike in
+  // the document still arrive as a pair. Said here, because the alternative is
+  // an interview that quietly runs with no grounding at all.
+  for (const field of ["requirements", "skills", "anchors"]) {
+    if (new Set(packet[field]).size !== packet[field].length) {
+      throw new Error("Two selected snippets are identical. Remove the repeat before starting.");
+    }
+  }
+
+  // Counted over the same text the server counts, which is why the snippets
+  // are normalized above rather than at the point of use: the server measures
+  // what it stores, and measuring the raw selection here would be counting a
+  // different string and calling it the same budget.
+  const bytes = [...packet.requirements, ...packet.skills, ...packet.anchors]
+    .reduce((total, text) => total + new TextEncoder().encode(text).length, 0);
+  if (bytes > maxGroundingPacketBytes) {
+    throw new Error("Selected snippets are too long. Select fewer or shorter snippets.");
+  }
   return packet;
+}
+
+/// The normalization `grounding_array` applies in src/agent.rs, using the same
+/// two Unicode properties it does: `char::is_control` is the Cc category, and
+/// `split_whitespace` is the White_Space property. Spelling either as a
+/// hand-written character class would agree with Rust today and drift at the
+/// next edition of the tables.
+function normalizeSnippet(text) {
+  return [...String(text)]
+    .map((character) => (/\p{Cc}/u.test(character) ? " " : character))
+    .join("")
+    .split(/\p{White_Space}+/u)
+    .filter(Boolean)
+    .join(" ");
 }
 
 export function storeGroundingPacket(storage, packet) {

@@ -531,12 +531,21 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
 
 #[test]
 fn document_grounding_requires_consent_and_is_bounded_as_untrusted_prompt_data() {
+    let at_char_limit = |prefix: &str| {
+        (0..8)
+            .map(|i| format!("{}{prefix}{i}", "\u{03b1}".repeat(238)))
+            .collect::<Vec<_>>()
+    };
     for value in [
         json!({"requirements": [], "skills": [], "anchors": []}),
         json!({"consentVersion": 2, "requirements": [], "skills": [], "anchors": []}),
         json!({"consentVersion": 1, "requirements": "no", "skills": [], "anchors": []}),
         json!({"consentVersion": 1, "requirements": vec!["x"; 9], "skills": [], "anchors": []}),
         json!({"consentVersion": 1, "requirements": ["x".repeat(241)], "skills": [], "anchors": []}),
+        // Each snippet is inside the 240-character limit, and two full arrays
+        // of them still overrun the packet budget once the characters are two
+        // bytes each. Nothing but the byte cap rejects this.
+        json!({"consentVersion": 1, "requirements": at_char_limit("r"), "skills": at_char_limit("s"), "anchors": []}),
     ] {
         assert!(sanitize_interview_grounding(Some(&value)).is_empty());
     }
