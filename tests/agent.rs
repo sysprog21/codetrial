@@ -3833,3 +3833,71 @@ fn a_language_picked_before_any_typing_still_asks_for_the_restatement() {
             && !reply.contains("begin the interview by asking them to restate")
     );
 }
+
+/// The two ends of the grounding budget hold the same number.
+///
+/// The server drops over-budget grounding silently and returns empty
+/// grounding, so the browser's refusal is the only thing the candidate ever
+/// sees. A browser guessing high loses their snippets with nothing on screen
+/// to say why, and the comments on both constants promise this agreement
+/// without anything checking it.
+#[test]
+fn the_grounding_budget_is_the_number_the_browser_enforces() {
+    assert_eq!(MAX_GROUNDING_TEXT_BYTES, 6 * 1024);
+    assert_eq!(MAX_GROUNDING_TEXT_CHARS, 240);
+    let browser = include_str!("../web/document-grounding.js");
+    assert!(
+        browser.contains("maxGroundingPacketBytes = 6 * 1024"),
+        "web/document-grounding.js must carry the same budget"
+    );
+    assert!(
+        browser.contains("const textLimit = 240;"),
+        "web/document-grounding.js must carry the same per-item limit"
+    );
+}
+
+/// Grounding that exactly fills the budget is kept, and one byte more is not.
+///
+/// The budget rejects the whole packet, so the boundary decides between an
+/// interview grounded in the candidate's documents and one grounded in
+/// nothing. Built from distinct two-byte letters because the per-item
+/// character limit puts the budget out of reach of ASCII entirely: 22 items of
+/// 240 one-byte characters cannot reach 6 KiB.
+#[test]
+fn grounding_that_exactly_fills_the_budget_is_kept() {
+    let letter = |index: u32| {
+        char::from_u32(0x03b1 + index)
+            .expect("greek lowercase")
+            .to_string()
+    };
+    let full: Vec<String> = (0..12).map(|index| letter(index).repeat(240)).collect();
+    let tail = letter(12).repeat(192);
+
+    let bytes: usize = full.iter().chain([&tail]).map(String::len).sum();
+    assert_eq!(
+        bytes, MAX_GROUNDING_TEXT_BYTES,
+        "the fixture has to sit exactly on the boundary to test it"
+    );
+
+    let packet = |skills: Vec<String>| {
+        json!({
+            "consentVersion": 1,
+            "requirements": full[..8].to_vec(),
+            "skills": skills,
+            "anchors": [],
+        })
+    };
+    let mut exact = full[8..].to_vec();
+    exact.push(tail.clone());
+    assert!(
+        !sanitize_interview_grounding(Some(&packet(exact))).is_empty(),
+        "a packet that fills the budget exactly is inside it"
+    );
+
+    let mut over = full[8..].to_vec();
+    over.push(format!("{tail}\u{03b1}"));
+    assert!(
+        sanitize_interview_grounding(Some(&packet(over))).is_empty(),
+        "one character past the budget takes the whole packet with it"
+    );
+}

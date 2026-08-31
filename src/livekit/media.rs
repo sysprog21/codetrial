@@ -49,9 +49,9 @@ pub(super) const LIVEKIT_OUTPUT_FRAME_QUEUE: usize = 6_000;
 ///
 /// `None` is the track ending: what is buffered goes now, because nothing else
 /// is going to arrive to push it over the threshold.
-pub(super) async fn pump_audio(
+pub(super) async fn pump_audio<S: AudioSink>(
     media: &mut CandidateMedia,
-    gemini: &mut GeminiLiveSession,
+    gemini: &mut S,
     frame: Option<AudioFrame<'static>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let Some(frame) = frame else {
@@ -233,12 +233,36 @@ fn candidate_video_frames_go_to_gemini(
     opt_in && is_interview_participant(sender, candidate_identity)
 }
 
-async fn flush_audio(
-    gemini: &mut GeminiLiveSession,
+/// Where buffered candidate audio goes.
+///
+/// Named as a trait with one method so the buffering above can be tested. The
+/// real implementation is a websocket to Gemini, so a test that took the
+/// concrete type could not call `pump_audio` at all, and the flush threshold,
+/// the tail flush on a track ending, and the error on a dead socket all went
+/// unchecked because the argument was unconstructible rather than because the
+/// behaviour was uninteresting.
+pub(super) trait AudioSink {
+    fn send_pcm_16khz(
+        &mut self,
+        bytes: &[u8],
+    ) -> impl Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>;
+}
+
+impl AudioSink for GeminiLiveSession {
+    fn send_pcm_16khz(
+        &mut self,
+        bytes: &[u8],
+    ) -> impl Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+        self.send_audio_pcm_16khz(bytes)
+    }
+}
+
+async fn flush_audio<S: AudioSink>(
+    gemini: &mut S,
     bytes: &mut Vec<u8>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if !bytes.is_empty() {
-        gemini.send_audio_pcm_16khz(bytes).await?;
+        gemini.send_pcm_16khz(bytes).await?;
         bytes.clear();
     }
     Ok(())
@@ -309,7 +333,13 @@ impl OutputAudio {
             &mut self.pending_bytes,
         ) {
             queued = true;
-            let samples_per_channel = samples.len() as u32 / LIVEKIT_OUTPUT_CHANNELS;
+
+            // Ten milliseconds, which is what `take_pcm16_frames` cut this
+            // into. Dividing the sample count by the channel count says the
+            // same thing, but the channel count is one, so it says it with an
+            // operation that reads identically whichever way round it is
+            // written and cannot be wrong in a way anything could observe.
+            let samples_per_channel = self.sample_rate / 100;
             let frame_duration =
                 Duration::from_secs_f64(samples_per_channel as f64 / self.sample_rate as f64);
             self.playout_deadline = self.playout_deadline.max(Instant::now()) + frame_duration;
@@ -340,7 +370,8 @@ async fn output_audio_worker(
         }
         let cancelled = frame.output_cancellation.cancelled();
         tokio::pin!(cancelled);
-        let samples_per_channel = frame.samples.len() as u32 / LIVEKIT_OUTPUT_CHANNELS;
+        // Ten milliseconds, as cut by `take_pcm16_frames`. See `capture`.
+        let samples_per_channel = sample_rate / 100;
         let audio_frame = AudioFrame {
             data: frame.samples.into(),
             sample_rate,
@@ -550,6 +581,102 @@ pub(super) async fn encode_video_frame_jpeg_off_thread(
 mod tests {
     use super::*;
     use crate::config::load_from_pairs;
+
+    /// A sink that records instead of dialling Gemini, and can be told to fail.
+    #[derive(Default)]
+    struct RecordingSink {
+        sent: Vec<Vec<u8>>,
+        fail: bool,
+    }
+
+    impl AudioSink for RecordingSink {
+        async fn send_pcm_16khz(
+            &mut self,
+            bytes: &[u8],
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            if self.fail {
+                return Err("the socket is gone".into());
+            }
+            self.sent.push(bytes.to_vec());
+            Ok(())
+        }
+    }
+
+    fn frame_of(samples: usize) -> AudioFrame<'static> {
+        AudioFrame {
+            data: vec![0i16; samples].into(),
+            sample_rate: 16_000,
+            num_channels: 1,
+            samples_per_channel: samples as u32,
+        }
+    }
+
+    /// Speech is buffered until there is enough of it to be worth sending, and
+    /// the tail still goes when the track ends.
+    ///
+    /// Sending every arriving frame would be a websocket message every ten
+    /// milliseconds, and dropping the tail would lose whatever was said last.
+    /// Both were unreachable from a test while this took the concrete session
+    /// type, which needs a live socket to exist at all.
+    #[tokio::test]
+    async fn audio_is_buffered_to_a_threshold_and_the_tail_still_goes() {
+        let mut media = CandidateMedia::new();
+        let mut sink = RecordingSink::default();
+
+        pump_audio(&mut media, &mut sink, Some(frame_of(160)))
+            .await
+            .expect("buffering cannot fail");
+        assert!(sink.sent.is_empty(), "a tenth of a second is not a message");
+        assert_eq!(media.audio_bytes.len(), 320);
+
+        // Bounded, because a flush empties the buffer: waiting on the buffer to
+        // reach the threshold is waiting for something that is cleared the
+        // instant it gets there.
+        for _ in 0..GEMINI_AUDIO_BUFFER_BYTES {
+            if !sink.sent.is_empty() {
+                break;
+            }
+            pump_audio(&mut media, &mut sink, Some(frame_of(160)))
+                .await
+                .expect("buffering cannot fail");
+        }
+        assert_eq!(sink.sent.len(), 1, "one flush, not a message per frame");
+        assert!(sink.sent[0].len() >= GEMINI_AUDIO_BUFFER_BYTES);
+        assert!(
+            media.audio_bytes.is_empty(),
+            "a sent buffer is not sent twice"
+        );
+
+        pump_audio(&mut media, &mut sink, Some(frame_of(160)))
+            .await
+            .expect("buffering cannot fail");
+        pump_audio(&mut media, &mut sink, None)
+            .await
+            .expect("the tail flush succeeds here");
+        assert_eq!(sink.sent.len(), 2);
+        assert_eq!(sink.sent[1].len(), 320, "the tail is what was left");
+
+        pump_audio(&mut media, &mut sink, None)
+            .await
+            .expect("an empty tail is not an error");
+        assert_eq!(sink.sent.len(), 2, "nothing held is nothing to send");
+    }
+
+    /// A dead socket is reported rather than swallowed. The room loop logs it
+    /// and keeps going, which is only right because this says it went wrong.
+    #[tokio::test]
+    async fn a_failed_flush_is_an_error_the_caller_can_see() {
+        let mut media = CandidateMedia::new();
+        let mut sink = RecordingSink {
+            fail: true,
+            ..RecordingSink::default()
+        };
+        media.audio_bytes.extend_from_slice(&[1, 2, 3, 4]);
+        assert!(
+            pump_audio(&mut media, &mut sink, None).await.is_err(),
+            "a flush that never reached Gemini is not a success"
+        );
+    }
 
     /// An ended audio track is let go of even when the final flush fails.
     ///

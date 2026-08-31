@@ -1127,15 +1127,7 @@ async fn handle_gemini_event(
                 let shown_before = framework_progress(context.state);
                 let response = execute_tool_call(context.state, &call);
                 context.gemini.send_tool_response(&call, response).await?;
-
-                // Only when what the candidate can see actually changes. The
-                // tool is idempotent and returns the existing entry for a
-                // repeat, and evidence for a phase they never reached is
-                // recorded but never shown, so keying this on the evidence
-                // count instead would redraw the checklist with nothing new in
-                // it, and reveal an empty one for a skip recorded before any
-                // phase was banked.
-                if framework_progress(context.state) != shown_before {
+                if checklist_changed(&shown_before, context.state) {
                     publish_framework_progress(room, context.state).await?;
                 }
             }
@@ -1340,6 +1332,16 @@ fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) -> ser
 /// The interviewer names the step it is steering toward out loud, so a phase it
 /// has already banked is not a secret. The summary, confidence and source stay
 /// server-side, because those are the reading rather than the fact.
+/// Whether the candidate's checklist would look any different now.
+///
+/// The tool is idempotent and returns the existing entry for a repeat, and
+/// evidence for a phase they never reached is recorded but never shown. Asking
+/// how much has been recorded instead would redraw the checklist with nothing
+/// new in it, and reveal an empty one for a skip banked before any phase was.
+fn checklist_changed(shown_before: &[&'static str], state: &RuntimeState) -> bool {
+    framework_progress(state) != shown_before
+}
+
 async fn publish_framework_progress(
     room: &Room,
     state: &RuntimeState,
@@ -1833,21 +1835,26 @@ mod tests {
             "a skip changes nothing on screen, so it must not trigger a redraw"
         );
 
-        // The publish has to be keyed on that comparison rather than on the
-        // count, which is the difference the assertion above cannot see.
-        let source = include_str!("livekit.rs");
-        let arm = source
-            .split("let response = execute_tool_call")
-            .next()
-            .and_then(|before| before.rsplit("GeminiEvent::ToolCall").next())
-            .expect("the tool-call arm is still here");
+        // And the rule the publish is keyed on, which the assertion above
+        // cannot see: same phases means no redraw, a new phase means one.
         assert!(
-            arm.contains("framework_progress(context.state)"),
-            "the redraw must compare what is shown, not how much was recorded"
+            !checklist_changed(&shown_before, &state),
+            "a skip leaves the checklist looking exactly as it did"
         );
+        record_framework_evidence(
+            &mut state,
+            &serde_json::json!({
+                "phase": "repeat",
+                "source": "candidate_speech",
+                "kind": "observed",
+                "confidence": 80,
+                "summary": "restated the inputs and outputs",
+            }),
+        )
+        .expect("evidence should record");
         assert!(
-            !arm.contains("framework_evidence.len()"),
-            "keying on the evidence count redraws for evidence that is never shown"
+            checklist_changed(&shown_before, &state),
+            "a phase the candidate reached is a new tick and has to be sent"
         );
     }
 
@@ -2796,7 +2803,20 @@ mod tests {
         let frame = queued_frames.try_recv().unwrap();
         assert!(!frame.output_cancellation.is_cancelled());
         assert_eq!(frame.samples.len(), 240);
-        assert!(output_audio.playout_deadline > start_deadline);
+
+        // By how much, not merely that it moved. The deadline is what paces
+        // playout, and ten milliseconds of audio buys ten milliseconds of it:
+        // arithmetic that divides where it should multiply still moves this
+        // forward, only by minutes or by nothing.
+        let advance = output_audio.playout_deadline - start_deadline;
+        assert!(
+            advance >= Duration::from_millis(10),
+            "240 samples at 24 kHz is ten milliseconds of playout, got {advance:?}"
+        );
+        assert!(
+            advance < Duration::from_millis(500),
+            "ten milliseconds of audio must not reserve more, got {advance:?}"
+        );
         output_audio.interrupt();
         assert!(frame.output_cancellation.is_cancelled());
         assert!(queued_frames.try_recv().is_err());
@@ -2856,11 +2876,29 @@ mod tests {
         let (rgba, width, height) = frame_to_rgba(&frame).unwrap();
 
         assert_eq!((width, height), (16, 16));
-        let pixel = &rgba[..4];
-        assert!(pixel[0] > 200, "red belongs in byte 0, got {pixel:?}");
-        assert!(pixel[1] < 60, "green belongs in byte 1, got {pixel:?}");
-        assert!(pixel[2] < 60, "blue belongs in byte 2, got {pixel:?}");
-        assert_eq!(pixel[3], 255, "alpha belongs in byte 3, got {pixel:?}");
+
+        // Checked on the first pixel and on the last. The first is right
+        // whatever the row stride is, because row zero starts at offset zero,
+        // so a stride computed any other way still paints it correctly and
+        // leaves the bottom of the image as the zeroes it was allocated with.
+        for (where_, pixel) in [("first", &rgba[..4]), ("last", &rgba[rgba.len() - 4..])] {
+            assert!(
+                pixel[0] > 200,
+                "red belongs in byte 0 of the {where_}, got {pixel:?}"
+            );
+            assert!(
+                pixel[1] < 60,
+                "green belongs in byte 1 of the {where_}, got {pixel:?}"
+            );
+            assert!(
+                pixel[2] < 60,
+                "blue belongs in byte 2 of the {where_}, got {pixel:?}"
+            );
+            assert_eq!(
+                pixel[3], 255,
+                "alpha belongs in byte 3 of the {where_}, got {pixel:?}"
+            );
+        }
     }
 }
 /// The ceiling is a boundary, so both sides of it are named. One attempt short
