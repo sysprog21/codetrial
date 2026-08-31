@@ -453,17 +453,26 @@ fn should_send_video_frame(elapsed: Duration) -> bool {
 
 /// JPEG sides and RGBA byte count for a frame, or `None` when the dimensions
 /// are absurd. Both bounds live here because they answer one question and a
-/// frame that clears the pixel cap can still overflow a 16-bit JPEG side: the
-/// pixel cap is well past 8K and only exists so a bogus header cannot ask for a
-/// gigabyte, while a 100000x1 frame sits under it and still has no valid SOF.
+/// frame that clears the size cap can still overflow a 16-bit JPEG side, while
+/// a 100000x1 frame sits under the cap and still has no valid SOF.
+///
+/// Bounded in bytes rather than in pixels, because bytes are what is actually
+/// at stake: this is the buffer the frame is unpacked into before it is
+/// encoded. A pixel cap set past 8K allowed a quarter of a gigabyte for one
+/// frame off a header this process does not control. The budget below fits 4K
+/// with room to spare, which is past any camera a candidate is interviewing on.
 fn jpeg_frame_geometry(width: u32, height: u32) -> Option<(u16, u16, usize)> {
-    const MAX_PIXELS: u32 = 8192 * 8192;
+    const MAX_RGBA_BYTES: usize = 64 * 1024 * 1024;
     let pixels = width.checked_mul(height)?;
-    (1..=MAX_PIXELS).contains(&pixels).then_some(())?;
+    if pixels == 0 {
+        return None;
+    }
+    let bytes = (pixels as usize).checked_mul(4)?;
+    (bytes <= MAX_RGBA_BYTES).then_some(())?;
     Some((
         u16::try_from(width).ok()?,
         u16::try_from(height).ok()?,
-        pixels as usize * 4,
+        bytes,
     ))
 }
 
@@ -652,19 +661,30 @@ mod tests {
             jpeg_frame_geometry(640, 480),
             Some((640, 480, 640 * 480 * 4))
         );
+        // 4K fits, which is past any camera a candidate is interviewing on.
         assert_eq!(
-            jpeg_frame_geometry(8192, 8192),
-            Some((8192, 8192, 8192 * 8192 * 4))
+            jpeg_frame_geometry(3840, 2160),
+            Some((3840, 2160, 3840 * 2160 * 4))
         );
+
+        // A quarter of a gigabyte for one frame, off a header this process does
+        // not control, and the buffer is allocated before anything is encoded.
+        assert_eq!(jpeg_frame_geometry(8192, 8192), None);
 
         // Would wrap a u32 multiply and under-allocate the buffer `to_argb`
         // writes into.
         assert_eq!(jpeg_frame_geometry(u32::MAX, 4), None);
-        assert_eq!(jpeg_frame_geometry(8193, 8192), None);
         assert_eq!(jpeg_frame_geometry(0, 480), None);
 
-        // Clears the pixel cap and still has no representable JPEG side.
+        // Clears the byte budget and still has no representable JPEG side.
         assert_eq!(jpeg_frame_geometry(100_000, 1), None);
+
+        // The budget itself, in both directions.
+        assert_eq!(
+            jpeg_frame_geometry(4096, 4096),
+            Some((4096, 4096, 64 << 20))
+        );
+        assert_eq!(jpeg_frame_geometry(4097, 4096), None);
 
         // The exact boundary, in both directions, because 65535 is the largest
         // side a JPEG SOF can carry and off-by-one here is a silent truncation.
