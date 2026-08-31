@@ -1360,6 +1360,10 @@ function flushPendingCodePublish() {
 function endInterview(reason) {
   if (state.phase !== "live") return;
   state.phase = "ending";
+  // The hint outranks the ending overlay in the stacking order, so a candidate
+  // who ends while it is still up would read the report status through it.
+  globalThis.clearTimeout(frameworkHintTimer);
+  nodes.frameworkHint.hidden = true;
   // Last event, and sent rather than queued: the page is about to stop being
   // the kind of page that flushes timers, and an "ended" nobody sent leaves a
   // replay that just stops.

@@ -1282,6 +1282,10 @@ p {
 }
 
 .framework-hint-card {
+  /* The overlay takes no pointer events so it cannot swallow a click meant for
+     the page behind it. The card has to take them back, or its own bounded
+     scroll is unreachable and a short viewport clips the tables. */
+  pointer-events: auto;
   max-width: min(44rem, 92vw);
   max-height: 70vh;
   overflow: auto;
