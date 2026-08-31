@@ -651,6 +651,11 @@
         <button class="duration-button" type="button" data-duration="60">60 min</button>
       </section>
 
+      <!-- Written by app.js from the cap `/api/session` reports, so a length
+           this deployment cannot record is disabled with the reason beside it
+           rather than silently shortened after the candidate presses start. -->
+      <p id="duration-note" class="duration-note" aria-live="polite" hidden></p>
+
       <section class="start-row">
         <!-- Enabled by app.js once a problem is chosen, so the button cannot
              start an interview on a problem the page has not picked yet. -->

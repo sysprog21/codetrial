@@ -185,16 +185,26 @@ pub(crate) fn generated_candidate_identity() -> String {
 
 pub(crate) const CANDIDATE_SUFFIX_LEN: usize = 6;
 
-pub(crate) fn token_duration_min(value: Option<&Value>, recording_max_min: Option<u32>) -> Value {
-    // The ceiling a recorded interview gets is its own recording's, because the
-    // sweeper reaps the recording on that bound and not on this one. Clamped
-    // into the range rather than taken as given: a cap above `MAX_DURATION_MIN`
-    // does not buy a longer interview than the endpoint has ever offered, and
-    // one below `MIN_DURATION_MIN` would cross the floor, which is a panic in
-    // `f64::clamp` rather than a short interview.
-    let ceiling = recording_max_min.map_or(MAX_DURATION_MIN, |cap| {
+/// The longest interview this deployment will start, which is its recording's
+/// bound wherever it records: the sweeper reaps a recording that outlives
+/// `max_minutes`, so a longer interview loses the stretch past it.
+///
+/// One function because two callers need the same answer and must not drift.
+/// `/api/token` enforces it, and `/api/session` hands it to the lobby so the
+/// browser stops offering what this server would silently shorten.
+///
+/// Clamped into the range rather than taken as given: a cap above
+/// `MAX_DURATION_MIN` does not buy a longer interview than the endpoint has
+/// ever offered, and one below `MIN_DURATION_MIN` would cross the floor, which
+/// is a panic in `f64::clamp` rather than a short interview.
+pub(crate) fn duration_ceiling(recording_max_min: Option<u32>) -> u32 {
+    recording_max_min.map_or(MAX_DURATION_MIN, |cap| {
         cap.clamp(MIN_DURATION_MIN, MAX_DURATION_MIN)
-    });
+    })
+}
+
+pub(crate) fn token_duration_min(value: Option<&Value>, recording_max_min: Option<u32>) -> Value {
+    let ceiling = duration_ceiling(recording_max_min);
     let duration = value.and_then(crate::agent::json_number).unwrap_or(0.0);
     if duration == 0.0 || duration.is_nan() {
         // The default is a request like any other where the cap is shorter than
