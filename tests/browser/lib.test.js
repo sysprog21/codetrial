@@ -27,7 +27,6 @@ import {
   providerUiState,
   renderValue,
   sanitizeReport,
-  resumeDeadline,
   sessionReport,
   testPayload,
   timeWarningPayload,
@@ -645,12 +644,6 @@ test("timer, clamp, and placeholder helpers", () => {
   assert.equal(clamp(500, 10, 90), 90);
   assert.deepEqual(orPlaceholder([]), ["(none captured)"]);
   assert.deepEqual(orPlaceholder(["kept"]), ["kept"]);
-});
-
-test("practice pause restores the exact wall-clock time remaining", () => {
-  assert.equal(resumeDeadline(60_000, 10_000, 17_500), 67_500);
-  assert.equal(67_500 - 17_500, 60_000 - 10_000);
-  assert.equal(resumeDeadline(60_000, 17_500, 10_000), 60_000, "a backward clock cannot shorten it");
 });
 
 test("report mode is kept only where a report actually recorded one", () => {

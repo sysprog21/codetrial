@@ -1760,10 +1760,11 @@ fn apply_test_results(
 fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataEventResult {
     match payload.get("type").and_then(serde_json::Value::as_str) {
         // Pause used to be a practice-only affordance, and practice is gone.
-        // Left working for everyone rather than deleted with the mode: the
-        // browser still offers the control, and a candidate whose machine or
-        // network interrupts them mid-interview has no other way to stop the
-        // clock. It is recorded, so a paused stretch is visible in the report.
+        // Left working for everyone rather than deleted with the mode: a
+        // candidate whose machine or network interrupts them mid-interview can
+        // at least stop the interviewer talking into an empty room. It stops
+        // the conversation, not the deadline, which runs on wall clock either
+        // way. It is recorded, so a paused stretch is visible in the report.
         Some("pause_interview") if !state.ended => {
             let paused = payload
                 .get("paused")

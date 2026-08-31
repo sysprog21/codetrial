@@ -402,28 +402,15 @@ pub async fn run_room(
     //
     // The grace is deliberate: the browser normally ends the interview itself,
     // and this only has to catch the case where it never does.
-    let mut deadline_at = Instant::now()
-        + Duration::from_secs(u64::from(boot.duration_min) * 60)
-        + INTERVIEW_DEADLINE_GRACE;
-    let hard_deadline = tokio::time::sleep_until(deadline_at.into());
+    let hard_deadline = tokio::time::sleep_until(
+        (Instant::now()
+            + Duration::from_secs(u64::from(boot.duration_min) * 60)
+            + INTERVIEW_DEADLINE_GRACE)
+            .into(),
+    );
     tokio::pin!(hard_deadline);
-    let mut paused_at = None;
 
     loop {
-        if turn.state.paused && paused_at.is_none() {
-            paused_at = Some(Instant::now());
-
-            // A paused practice session has no running deadline. This wake-up
-            // is deliberately finite so a process can still be cancelled.
-            hard_deadline
-                .as_mut()
-                .reset((Instant::now() + Duration::from_secs(365 * 24 * 60 * 60)).into());
-        } else if !turn.state.paused
-            && let Some(started) = paused_at.take()
-        {
-            deadline_at += Instant::now().saturating_duration_since(started);
-            hard_deadline.as_mut().reset(deadline_at.into());
-        }
         tokio::select! {
             () = &mut hard_deadline, if !turn.state.ended => {
                 eprintln!(

@@ -69,6 +69,8 @@ test("the lobby offers one interview and carries no mode to the room", () => {
   // Pause stayed; the two coaching controls went with the mode that gated them.
   assert.match(page, /id="pause"/);
   assert.doesNotMatch(interview, /retryPractice/);
+  // Pause moves no deadline any more; see the note in applyPause.
+  assert.doesNotMatch(interview + read("lib.js"), /resumeDeadline/);
   assert.doesNotMatch(interview, /practiceGuide/);
   // One framework on screen at a time, ticked from what the interviewer banks,
   // and an offer that leaves on its own while the candidate is waiting on Jim.

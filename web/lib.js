@@ -561,9 +561,9 @@ export function sanitizeReport(raw) {
         || frameworkVersion < 1 || !summary) return null;
       return {
         ...item,
-        // Matches the server's maximum paused deadline. A practice room may
-        // legitimately span more than a day even though active interview time
-        // is capped at 90 minutes.
+        // A year, which no interview approaches: this is a sanity bound on a
+        // timestamp that arrives as untrusted JSON, not a statement about how
+        // long a session runs.
         atMs: clamp(atMs, 0, 31_536_000_000),
         phase,
         source,
@@ -700,16 +700,6 @@ export function countdown(previous, endsAt, now) {
     warn: previous > TIME_WARNING_S && remaining <= TIME_WARNING_S,
     expired: remaining === 0,
   };
-}
-
-/// Moves a wall-clock deadline by exactly the interval spent paused.
-/// Invalid/backward timestamps leave it unchanged rather than shortening a
-/// candidate's practice session.
-export function resumeDeadline(endsAt, pausedAt, resumedAt) {
-  const pauseDuration = Number(resumedAt) - Number(pausedAt);
-  return Number.isFinite(pauseDuration) && pauseDuration > 0
-    ? Number(endsAt) + pauseDuration
-    : Number(endsAt);
 }
 
 /// The browser never scores anybody; this decides which honest incomplete

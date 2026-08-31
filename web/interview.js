@@ -34,7 +34,6 @@ import {
   integrityEventPayload,
   isAgent,
   providerUiState,
-  resumeDeadline,
   sanitizeReport,
   sessionReport,
   testPayload,
@@ -144,7 +143,6 @@ const interviewProfile = {
 const interviewGrounding = consumeGroundingPacket(sessionStorage);
 const state = {
   paused: false,
-  pausedAt: 0,
   codeByLanguage: { ...problem.starterCode },
   language: "python",
   remaining: durationMin * 60,
@@ -1277,12 +1275,12 @@ function codingClosed() {
 function applyPause(paused) {
   if (paused === state.paused) return;
   state.paused = paused;
-  if (paused) {
-    state.pausedAt = Date.now();
-  } else {
-    state.endsAt = resumeDeadline(state.endsAt, state.pausedAt, Date.now());
-    state.pausedAt = 0;
-  }
+  // The deadline is absolute and pause no longer moves it, matching the
+  // server, which stopped extending its own when practice mode went. Ticking
+  // stops while paused, so the display goes stale and the first tick after
+  // resume corrects it. Adding the paused time back, as this used to, would
+  // promise minutes the server has already decided to end the interview
+  // without.
   nodes.pause.textContent = paused ? "Resume" : "Pause";
   // Resuming must not hand back a control the round already retired. The
   // behavioral round disables the editor and the runner on purpose, and a
