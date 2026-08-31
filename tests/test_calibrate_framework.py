@@ -25,6 +25,24 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(result["status"], "NOT_CALIBRATED")
         self.assertTrue(any("language MAE gap" in failure for failure in result["failures"]))
 
+    def test_version_must_be_a_real_integer(self):
+        # `True != 1` and `1.0 != 1` are both false, so a bare inequality
+        # accepted a boolean and a float where the contract keys beside it
+        # already refused them.
+        for bogus in (True, 1.0):
+            raw = self.fixture("passing-synthetic.json")
+            raw["version"] = bogus
+            with self.assertRaisesRegex(ValueError, r"\$\.version"):
+                CAL.analyze(raw)
+
+    def test_a_cohort_too_small_to_compare_is_named(self):
+        # Cohorts under the size threshold were dropped from the eligible set
+        # and from the result, so a corpus that never gathered enough of one
+        # read exactly like a corpus with no subgroup gap.
+        result = CAL.analyze(self.fixture("passing-synthetic.json"))
+        for key in ("language", "accentCohort", "transcriptQuality"):
+            self.assertIn("insufficientCohorts", result["metrics"]["subgroups"][key])
+
     def test_malformed_fixture_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "unique"):
             CAL.analyze(self.fixture("malformed-synthetic.json"))

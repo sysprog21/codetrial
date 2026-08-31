@@ -61,7 +61,8 @@ def mean(values):
 
 def analyze(raw):
     exact_keys(raw, ["version", "contract", "samples"], "$")
-    if raw["version"] != 1:
+    if isinstance(raw["version"], bool) or not isinstance(raw["version"], int) \
+            or raw["version"] != 1:
         raise ValueError("$.version: expected 1")
     exact_keys(raw["contract"], ["bundleVersion", "reportPromptVersion", "rubricVersion",
                                  "reportSchemaVersion", "model"], "$.contract")
@@ -171,8 +172,11 @@ def analyze(raw):
     for key in ("language", "accentCohort", "transcriptQuality"):
         eligible = {group: mean(values) for (kind, group), values in errors.items()
                     if kind == key and len(values) >= THRESHOLDS["cohortSize"]}
+        insufficient = {group: len(values) for (kind, group), values in errors.items()
+                        if kind == key and len(values) < THRESHOLDS["cohortSize"]}
         gap = max(eligible.values()) - min(eligible.values()) if len(eligible) >= 2 else None
-        subgroup[key] = {"eligibleCohorts": eligible, "maxMaeGap": gap}
+        subgroup[key] = {"eligibleCohorts": eligible, "maxMaeGap": gap,
+                         "insufficientCohorts": insufficient}
         if gap is not None and gap > THRESHOLDS["subgroupMaeGap"]:
             failures.append(f"{key} MAE gap {gap} > {THRESHOLDS['subgroupMaeGap']}")
     return {"status": "PASS" if not failures else "NOT_CALIBRATED", "contract": contract,
