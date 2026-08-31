@@ -2195,10 +2195,6 @@ async fn report_packet(
     stamp_report_contract(&mut report);
     if let Some(object) = report.as_object_mut() {
         object.insert("mode".to_string(), serde_json::json!(boot.mode.as_str()));
-        object.insert(
-            "interviewLoop".to_string(),
-            serde_json::json!(boot.interview_loop.as_str()),
-        );
     }
     Ok(report_data_packet(report_with_integrity_events(
         report, state,
