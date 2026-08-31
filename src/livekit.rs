@@ -84,6 +84,7 @@ const AGENT_STATE_LISTENING: &str = "listening";
 const AGENT_STATE_SPEAKING: &str = "speaking";
 const DUPLICATE_AGENT_ISOLATION_ATTEMPTS: usize = 20;
 const WRAP_UP_WAIT: Duration = Duration::from_secs(8);
+
 /// Covers the normal report attempt, one schema repair, and bounded transient
 /// retries. The candidate is watching a spinner, so this is the point where
 /// waiting stops being worth more than an honest incomplete report.
@@ -531,16 +532,15 @@ pub async fn run_room(
                 // second of audio the resumed session did not need; propagating
                 // cost the interview.
                 if turn.state.paused {
-                    media.audio_bytes.clear();
-                    if frame.is_none() {
-                        media.audio = None;
-                    }
+                    discard_paused_audio(&mut media, frame.is_none());
                 } else if let Err(error) = pump_audio(&mut media, &mut gemini, frame).await {
                     eprintln!("Gemini audio write failed ({error}); waiting for the close to be reported");
                 }
             }
             frame = next_video_frame(&mut media.video), if media.video.is_some() => {
-                if !turn.state.paused && let Err(error) = pump_video(&mut media, &mut gemini, frame).await {
+                if turn.state.paused {
+                    release_if_ended(&mut media.video, frame.is_none());
+                } else if let Err(error) = pump_video(&mut media, &mut gemini, frame).await {
                     eprintln!("Gemini video write failed ({error}); waiting for the close to be reported");
                 }
             }
@@ -1029,6 +1029,13 @@ async fn handle_data_packet(
                 ..Default::default()
             })
             .await?;
+        if paused && context.activity.floor != Floor::Listening {
+            context.activity.discarding_output =
+                pause_leaves_output_in_flight(context.activity.floor);
+            cut_off_turn(context.activity, context.output_audio);
+            close_turns(room, context).await?;
+            set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
+        }
     }
     if let Some(status) = result.round_changed {
         room.local_participant()
@@ -1090,6 +1097,23 @@ async fn handle_gemini_event(
     event: GeminiEvent,
     interruptible: Interruptible,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if context.activity.discarding_output {
+        match &event {
+            GeminiEvent::Audio { .. } | GeminiEvent::OutputTranscript(_) => return Ok(()),
+            GeminiEvent::TurnComplete | GeminiEvent::Interrupted => {
+                context.activity.discarding_output = false;
+            }
+            _ => {}
+        }
+    }
+    if context.state.paused
+        && matches!(
+            &event,
+            GeminiEvent::Audio { .. } | GeminiEvent::OutputTranscript(_)
+        )
+    {
+        return Ok(());
+    }
     match event {
         GeminiEvent::ToolCall(calls) => {
             for call in calls {
@@ -1197,6 +1221,7 @@ async fn handle_gemini_event(
                 .output_audio
                 .playout_deadline
                 .saturating_duration_since(Instant::now());
+
             if !backlog.is_zero() {
                 eprintln!(
                     "timing: turn generated, {:.1}s of it still to play",
@@ -1219,6 +1244,7 @@ async fn handle_gemini_event(
             // fragment or nothing, and without this line the log shows only the
             // consequence: a turn that completed with nothing left to play.
             let unplayed = cut_off_turn(context.activity, context.output_audio);
+
             eprintln!(
                 "timing: Gemini cut its own turn, {:.1}s of it unplayed",
                 unplayed.as_secs_f64()

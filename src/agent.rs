@@ -1747,11 +1747,8 @@ fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
             state.paused = paused;
             DataEventResult {
                 pause_changed: Some(paused),
-                generate_reply: Some(if paused {
-                    "The practice interview is paused. I will wait until you resume.".to_string()
-                } else {
-                    "The practice interview has resumed. Continue with your REACTO step."
-                        .to_string()
+                generate_reply: (!paused).then(|| {
+                    "The interview has resumed. Continue with your REACTO step.".to_string()
                 }),
                 ..DataEventResult::default()
             }

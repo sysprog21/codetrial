@@ -1267,6 +1267,13 @@ function receiveControl(bytes) {
   }
 }
 
+/// Whether the coding exercise is over, by round or by the interview ending.
+/// Asked in both places that re-enable the editor and the runner, so the two
+/// cannot disagree about when coding is finished.
+function codingClosed() {
+  return frameworkRound === "behavioral" || state.phase !== "live";
+}
+
 function applyPause(paused) {
   if (paused === state.paused) return;
   state.paused = paused;
@@ -1277,8 +1284,11 @@ function applyPause(paused) {
     state.pausedAt = 0;
   }
   nodes.pause.textContent = paused ? "Resume" : "Pause";
-  nodes.editor.disabled = paused;
-  nodes.run.disabled = paused;
+  // Resuming must not hand back a control the round already retired. The
+  // behavioral round disables the editor and the runner on purpose, and a
+  // pause taken during it used to give both back on the way out.
+  nodes.editor.disabled = paused || codingClosed();
+  nodes.run.disabled = paused || codingClosed();
   recordReplay("lifecycle", { state: paused ? "paused" : "resumed" });
   recordStage();
   tickTimer();
@@ -1305,7 +1315,7 @@ async function runTests() {
     addTranscript("you", "I ran the tests.", true);
     addTranscript("interviewer", summary.setupError ? "I could not run that yet. Check the setup error and keep going." : `${summary.passed}/${summary.total} tests passed. Explain what changed.`, true);
   }
-  nodes.run.disabled = false;
+  nodes.run.disabled = state.paused || codingClosed();
   nodes.run.textContent = "Run tests";
 }
 

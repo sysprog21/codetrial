@@ -72,6 +72,33 @@ pub(super) async fn pump_audio(
     Ok(())
 }
 
+/// What a media frame is worth while the interview is paused.
+///
+/// The frame itself is dropped: a paused interview is not collecting evidence,
+/// and a tenth of a second of speech the resumed session never needed is not
+/// worth propagating a write error over.
+///
+/// The end of a track is not a frame though, it is the track going away, and
+/// dropping that leaves the stream in place. Both `select!` arms are guarded on
+/// the stream still being present, and an ended stream yields `None` the moment
+/// it is polled, so the arm would re-arm and fire again immediately for as long
+/// as the pause lasted. That is a busy loop, not a lost frame.
+pub(super) fn discard_paused_audio(media: &mut CandidateMedia, ended: bool) {
+    media.audio_bytes.clear();
+    release_if_ended(&mut media.audio, ended);
+}
+
+/// Generic so it can be tested, and called directly for video, which has no
+/// buffer to clear and so needs nothing wrapped around it. A real stream needs
+/// a real track, so a rule
+/// written directly against `NativeAudioStream` is one no test can reach, and
+/// this rule is the whole of the bug.
+pub(super) fn release_if_ended<T>(stream: &mut Option<T>, ended: bool) {
+    if ended {
+        *stream = None;
+    }
+}
+
 /// Sends one arriving video frame, at most one per interval.
 pub(super) async fn pump_video(
     media: &mut CandidateMedia,
@@ -509,6 +536,38 @@ pub(super) async fn encode_video_frame_jpeg_off_thread(
 mod tests {
     use super::*;
     use crate::config::load_from_pairs;
+
+    /// A pause drops frames but must not drop the fact that a track ended.
+    ///
+    /// Both `select!` arms in the room loop are guarded on the stream still
+    /// being present. An ended stream yields `None` the instant it is polled,
+    /// so leaving it in place while paused re-arms the arm forever: the loop
+    /// spins for the whole pause instead of waiting. A camera taken by another
+    /// application is exactly how a track ends mid-interview.
+    #[test]
+    fn a_track_that_ends_while_paused_is_let_go_of() {
+        // A stand-in for the stream, because a real one needs a real track.
+        // What is under test is the rule, and the rule is what was missing.
+        let mut stream = Some("camera");
+        release_if_ended(&mut stream, false);
+        assert_eq!(
+            stream,
+            Some("camera"),
+            "a paused track is still wanted on resume"
+        );
+        release_if_ended(&mut stream, true);
+        assert!(
+            stream.is_none(),
+            "an ended track re-arms the select arm forever"
+        );
+
+        // The buffer half: a paused interview resumes into silence rather than
+        // into the tail of whatever was said as it was pausing.
+        let mut media = CandidateMedia::new();
+        media.audio_bytes.extend_from_slice(&[1, 2, 3, 4]);
+        discard_paused_audio(&mut media, false);
+        assert!(media.audio_bytes.is_empty());
+    }
 
     #[test]
     fn jpeg_frame_geometry_rejects_overflowing_and_empty_frames() {

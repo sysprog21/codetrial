@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { historyKey, readLocalHistory, saveReportHistory } from "../../web/history.js";
+import { functionBody } from "./source.js";
 
 const web = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web");
 const read = (name) => readFileSync(join(web, name), "utf8");
@@ -34,6 +35,23 @@ test("interview history routes through the shared persistence helper", () => {
 
   assert.match(script, /import \{ saveReportHistory \} from "\.\/history\.js"/);
   assert.match(saveHistory, /return saveReportHistory\(entry\)/);
+});
+
+test("a completed test run keeps pause and round locks", () => {
+  const interview = read("interview.js");
+
+  // Both places that hand the runner back have to ask the same question. A
+  // finished test run was the one that got it right; resuming from a pause was
+  // the one that did not, and gave the editor and the runner back during the
+  // behavioral round that had just retired them.
+  assert.match(functionBody(interview, "runTests"), /nodes\.run\.disabled = state\.paused \|\| codingClosed\(\)/);
+  const applyPause = functionBody(interview, "applyPause");
+  assert.match(applyPause, /nodes\.editor\.disabled = paused \|\| codingClosed\(\)/);
+  assert.match(applyPause, /nodes\.run\.disabled = paused \|\| codingClosed\(\)/);
+  assert.match(
+    functionBody(interview, "codingClosed"),
+    /frameworkRound === "behavioral" \|\| state\.phase !== "live"/,
+  );
 });
 
 test("the lobby offers one interview and carries no mode to the room", () => {
