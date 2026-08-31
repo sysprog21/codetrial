@@ -475,14 +475,20 @@ fn live_setup_message(boot: &RuntimeBootstrap<'_>, resume: Option<&str>) -> Valu
                         {
                             "name": TOOL_RECORD_FRAMEWORK_EVIDENCE,
                             "description": "Record trusted REACTO or STAR evidence only after it is present in candidate speech, an editor snapshot, or a test event.",
+
+                            // Schema.Type is an enum, so these are its value
+                            // names, not free text. Lowercase happens to be
+                            // accepted here and is rejected on the report
+                            // schema, which is not a difference worth relying
+                            // on twice in one process.
                             "parameters": {
-                                "type": "object",
+                                "type": "OBJECT",
                                 "properties": {
-                                    "phase": { "type": "string", "enum": ["repeat", "example", "algorithm", "coding", "test", "optimizations", "situation", "task", "action", "result"] },
-                                    "source": { "type": "string", "enum": ["candidate_speech", "editor_snapshot", "test_event", "session_timing"] },
-                                    "kind": { "type": "string", "enum": ["observed", "inferred", "skipped"] },
-                                    "confidence": { "type": "integer", "minimum": 0, "maximum": 100 },
-                                    "summary": { "type": "string", "description": "Short evidence-grounded summary without scores or private rubric text." }
+                                    "phase": { "type": "STRING", "enum": ["repeat", "example", "algorithm", "coding", "test", "optimizations", "situation", "task", "action", "result"] },
+                                    "source": { "type": "STRING", "enum": ["candidate_speech", "editor_snapshot", "test_event", "session_timing"] },
+                                    "kind": { "type": "STRING", "enum": ["observed", "inferred", "skipped"] },
+                                    "confidence": { "type": "INTEGER", "minimum": 0, "maximum": 100 },
+                                    "summary": { "type": "STRING", "description": "Short evidence-grounded summary without scores or private rubric text." }
                                 },
                                 "required": ["phase", "source", "kind", "confidence", "summary"]
                             }
@@ -913,6 +919,21 @@ mod tests {
                 .unwrap()
                 .contains("45-minute technical coding interview")
         );
+
+        // Schema.Type is an enum, so these are value names and the case is not
+        // cosmetic. The report schema next door is rejected for the lowercase
+        // spelling, and matching case-insensitively here would pass for the
+        // spelling that only works because this endpoint happens to be lenient.
+        let params = &setup["tools"][0]["functionDeclarations"][2]["parameters"];
+        assert_eq!(params["type"], "OBJECT");
+        for field in ["phase", "source", "kind", "summary"] {
+            assert_eq!(
+                params["properties"][field]["type"], "STRING",
+                "{field} must name Schema.Type exactly"
+            );
+        }
+        assert_eq!(params["properties"]["confidence"]["type"], "INTEGER");
+
         assert_eq!(
             setup["tools"][0]["functionDeclarations"][0]["name"],
             TOOL_READ_EDITOR
