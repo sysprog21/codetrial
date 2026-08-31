@@ -418,7 +418,12 @@ export function sanitizeReport(raw) {
   // mode on every new report and made the header announce a distinction that no
   // longer exists; a report written before the split still says what it was.
   const mode = raw?.mode === undefined ? undefined : interviewMode(raw.mode);
+  // Defaulted for the round arithmetic below, which has always assumed the
+  // two-round shape, but reported only where the report recorded it. Naming a
+  // loop on a report written before loops existed describes a session that
+  // never ran, the same way defaulting the mode did.
   const interviewLoop = codingLoop(raw?.interviewLoop);
+  const recordedLoop = raw?.interviewLoop === undefined ? undefined : interviewLoop;
   const roundKinds = ["coding", "behavioral"];
   const codingStatuses = new Set(["complete", "incomplete"]);
   const behavioralStatuses = new Set(["complete", "started", "skipped", "not_configured"]);
@@ -585,7 +590,7 @@ export function sanitizeReport(raw) {
     return {
       interviewContract,
       mode,
-      interviewLoop,
+      interviewLoop: recordedLoop,
       rounds: roundSummary,
       incomplete: true,
       summary: unsupportedContract
@@ -602,7 +607,7 @@ export function sanitizeReport(raw) {
   return {
     interviewContract,
     mode,
-    interviewLoop,
+    interviewLoop: recordedLoop,
     rounds: roundSummary,
     codingScore: score(raw?.codingScore),
     communicationScore: score(raw?.communicationScore),

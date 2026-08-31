@@ -153,3 +153,13 @@ test("replay renders moments, not media", () => {
   assert.ok(code.includes("Could not load the report."));
   assert.ok(code.includes("No report was saved for this interview."));
 });
+
+test("a replay with no recorded mode shows no dangling separator", () => {
+  // select() sets the status text before render() runs, so the status node is
+  // always truthy by the time the mode is appended. Every recording made since
+  // the mode was removed has an empty mode, and appending it unconditionally
+  // left the status reading "Recording ready · " with nothing after the dot.
+  // The append has to sit inside the guard, not merely somewhere near it.
+  const render = functionBody(code, "render");
+  assert.match(render, /if \(mode\) \{\s*nodes\.status\.textContent =/);
+});

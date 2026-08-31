@@ -485,6 +485,10 @@ test("sanitizeReport keeps an unevaluated session unevaluated", () => {
 
 test("sanitizeReport preserves a well-formed agent report", () => {
   const report = sanitizeReport({
+    // Every report the agent writes names its loop, so a well-formed one has
+    // it here. Absence means a report written before loops existed, and that
+    // is the one case sanitizeReport must not invent a value for.
+    interviewLoop: "coding_behavioral",
     codingScore: 82,
     communicationScore: 74,
     decision: "HIRE",

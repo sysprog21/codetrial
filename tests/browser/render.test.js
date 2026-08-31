@@ -836,3 +836,19 @@ test("report views identify active and legacy scoring contracts", () => {
   assert.match(reportMarkup(legacy), /Legacy\/unversioned contract/);
   assert.match(reportMarkdown({ ...legacy, transcript: [] }), /Contract: legacy\/unversioned/);
 });
+
+test("a report that recorded no loop is not given one", () => {
+  // Reports written before the interview loop existed carry no interviewLoop,
+  // and the exporter named one anyway, so a historical session was described
+  // in the markdown as a shape it never ran.
+  const session = (report) => ({
+    report: sanitizeReport(report), problemTitle: "Two Sum",
+    language: "python", code: "", transcript: [], at: "2026-01-01",
+  });
+  assert.doesNotMatch(reportMarkdown(session({ incomplete: true })), /^Loop:/m);
+  assert.match(reportMarkdown(session({ incomplete: true, interviewLoop: "coding_only" })), /^Loop: /m);
+  // The on-screen report says it in the header rather than on its own line, and
+  // was fabricating it there after the markdown export stopped.
+  assert.doesNotMatch(reportMarkup(session({ incomplete: true })), /Coding \+ behavioral/);
+  assert.match(reportMarkup(session({ incomplete: true, interviewLoop: "coding_only" })), /Coding only/);
+});

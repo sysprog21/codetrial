@@ -188,9 +188,11 @@ export function render(events) {
   // floored `undefined` to "Scored" and announced a distinction that no longer
   // exists on every replay made since the practice mode was removed.
   const mode = stage?.payload?.mode === undefined ? "" : modeLabel(stage.payload.mode);
-  nodes.status.textContent = nodes.status.textContent
-    ? `${nodes.status.textContent} · ${mode}`
-    : mode;
+  if (mode) {
+    nodes.status.textContent = nodes.status.textContent
+      ? `${nodes.status.textContent} · ${mode}`
+      : mode;
+  }
   const moments = [];
   for (const event of events) {
     if (event.kind === "transcript") {
