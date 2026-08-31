@@ -599,7 +599,7 @@ function renderProgress() {
   nodes.progressTrends.replaceChildren();
   nodes.progressWeaknesses.replaceChildren();
   if (model.total === 0) {
-    nodes.progressSummary.textContent = `No past reports are ${progressSuffix}. Complete an interview to start a trend.`;
+    nodes.history.hidden = true;
     return;
   }
   if (model.attempts.length === 0) {

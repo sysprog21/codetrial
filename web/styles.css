@@ -216,6 +216,13 @@ p {
   margin-top: 1.5rem;
 }
 
+/* Duration, mode and loop are three answers to one question, so they sit as one
+   group rather than three sections a section-gap apart. Three full gaps is also
+   what pushed the lobby past the one screen the picker collapsed to buy. */
+.duration-row + .duration-row {
+  margin-top: 0.5rem;
+}
+
 .duration-button,
 .start-button {
   border: 1px solid var(--hairline);
