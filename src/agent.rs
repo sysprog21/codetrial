@@ -729,6 +729,13 @@ pub fn record_framework_evidence(
 pub fn framework_progress(state: &RuntimeState) -> Vec<&'static str> {
     let mut phases = Vec::new();
     for evidence in &state.framework_evidence {
+        // Skipped is the record of a phase the candidate never reached, which a
+        // session that times out writes for everything still outstanding.
+        // Ticking those would hand out a full checklist for running out of
+        // time, which is the opposite of what the marks are for.
+        if evidence.kind == EvidenceKind::Skipped {
+            continue;
+        }
         let phase = phase_id(evidence.phase);
         if !phases.contains(&phase) {
             phases.push(phase);

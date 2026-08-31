@@ -3606,6 +3606,22 @@ fn framework_progress_reports_phases_once_and_nothing_else() {
     // a phase revisited is not a second step.
     assert_eq!(framework_progress(&state), ["repeat", "algorithm"]);
 
+    // A phase the candidate never reached is recorded as skipped, which a
+    // session that runs out of time writes for everything outstanding. Ticking
+    // those would award the whole checklist for running out of time.
+    record_framework_evidence(
+        &mut state,
+        &json!({
+            "phase": "optimizations",
+            "source": "session_timing",
+            "kind": "skipped",
+            "confidence": 0,
+            "summary": "the session ended before optimizations",
+        }),
+    )
+    .expect("evidence should record");
+    assert_eq!(framework_progress(&state), ["repeat", "algorithm"]);
+
     // Nothing but the phase ids. Anything else here would tell the candidate
     // how strongly they were read, mid-interview.
     let published = json!({ "phases": framework_progress(&state) });

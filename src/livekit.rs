@@ -31,8 +31,9 @@ use ::livekit::prelude::{DataPacket, RemoteParticipant, Room, RoomEvent, RoomOpt
 
 use crate::agent::{
     ReportPromptInput, RuntimeState, SpeakerTurn, WATCH_TICK_S, apply_data_event, final_report,
-    format_test_run, framework_evidence_json, interview_contract_json, parse_participant_metadata,
-    read_editor_text, record_framework_evidence, report_prompt, transcript_for_report, wrap_up,
+    format_test_run, framework_evidence_json, framework_progress, interview_contract_json,
+    parse_participant_metadata, read_editor_text, record_framework_evidence, report_prompt,
+    transcript_for_report, wrap_up,
 };
 use crate::config::AgentConfig;
 use crate::runtime::TOPIC_CONTROL;
@@ -1110,15 +1111,18 @@ async fn handle_gemini_event(
     match event {
         GeminiEvent::ToolCall(calls) => {
             for call in calls {
-                let evidence_before = context.state.framework_evidence.len();
+                let shown_before = framework_progress(context.state);
                 let response = execute_tool_call(context.state, &call);
                 context.gemini.send_tool_response(&call, response).await?;
 
-                // Only when the list actually grew. The tool is idempotent and
-                // returns the existing entry for a repeat, so publishing on
-                // every call would redraw the candidate's checklist for
-                // evidence it already shows.
-                if context.state.framework_evidence.len() > evidence_before {
+                // Only when what the candidate can see actually changes. The
+                // tool is idempotent and returns the existing entry for a
+                // repeat, and evidence for a phase they never reached is
+                // recorded but never shown, so keying this on the evidence
+                // count instead would redraw the checklist with nothing new in
+                // it, and reveal an empty one for a skip recorded before any
+                // phase was banked.
+                if framework_progress(context.state) != shown_before {
                     publish_framework_progress(room, context.state).await?;
                 }
             }
@@ -1754,6 +1758,57 @@ mod tests {
 
     use crate::config::load_from_pairs;
     use ::livekit::webrtc::video_frame::{I420Buffer, VideoBuffer, VideoFrame, VideoRotation};
+
+    /// The checklist is redrawn for a change the candidate can see, and for
+    /// nothing else.
+    ///
+    /// Evidence for a phase they never reached is recorded but never shown, so
+    /// keying the publish on the evidence count sends a message whose phase
+    /// list is identical to the one already on screen. The browser unhides the
+    /// checklist on every `framework_state` it receives, so the first such
+    /// message reveals an empty, wholly unticked list before the candidate has
+    /// banked anything.
+    #[test]
+    fn the_checklist_is_republished_only_when_it_would_look_different() {
+        let mut state = RuntimeState::default();
+        let skip = serde_json::json!({
+            "phase": "optimizations",
+            "source": "session_timing",
+            "kind": "skipped",
+            "confidence": 0,
+            "summary": "the session ended before optimizations",
+        });
+
+        let shown_before = framework_progress(&state);
+        record_framework_evidence(&mut state, &skip).expect("evidence should record");
+        assert_eq!(
+            state.framework_evidence.len(),
+            1,
+            "the skip is still recorded for the report"
+        );
+        assert_eq!(
+            framework_progress(&state),
+            shown_before,
+            "a skip changes nothing on screen, so it must not trigger a redraw"
+        );
+
+        // The publish has to be keyed on that comparison rather than on the
+        // count, which is the difference the assertion above cannot see.
+        let source = include_str!("livekit.rs");
+        let arm = source
+            .split("let response = execute_tool_call")
+            .next()
+            .and_then(|before| before.rsplit("GeminiEvent::ToolCall").next())
+            .expect("the tool-call arm is still here");
+        assert!(
+            arm.contains("framework_progress(context.state)"),
+            "the redraw must compare what is shown, not how much was recorded"
+        );
+        assert!(
+            !arm.contains("framework_evidence.len()"),
+            "keying on the evidence count redraws for evidence that is never shown"
+        );
+    }
 
     #[test]
     fn only_the_interview_candidate_can_drive_the_runtime() {
