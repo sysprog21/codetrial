@@ -1150,6 +1150,117 @@ fn report_schema_matches_frozen_fixture() {
     assert_eq!(spoken_minutes_from_remaining_seconds(270), 4);
 }
 
+/// The golden fixture proves the schema is stable, not that it is legal, and it
+/// froze an illegal one. Two separate keys made the API reject every report
+/// call, so every candidate got the incomplete fallback and nothing in the
+/// suite could see it, because the failure was upstream.
+///
+/// Two of the rules below are ones that were actually broken, not guesses:
+/// `additionalProperties` is not a field of Gemini's `Schema` at all, and
+/// `Schema.enum` is typed as repeated string, so an integer entry fails with
+/// "Invalid value ... (TYPE_STRING)" even where the type is INTEGER. The other
+/// two cover the same shape of mistake in the fields next to them. This checks
+/// those four rules, not legality in general: a wrong value type on some other
+/// keyword would still reach the API.
+#[test]
+fn report_schema_uses_only_what_gemini_accepts() {
+    // https://ai.google.dev/api/caching#Schema, which is the subset
+    // `generationConfig.responseSchema` parses. Anything outside it is not
+    // ignored: it fails the whole request.
+    const ACCEPTED: &[&str] = &[
+        "anyOf",
+        "default",
+        "description",
+        "enum",
+        "example",
+        "format",
+        "items",
+        "maxItems",
+        "maxLength",
+        "maxProperties",
+        "maximum",
+        "minItems",
+        "minLength",
+        "minProperties",
+        "minimum",
+        "nullable",
+        "pattern",
+        "properties",
+        "propertyOrdering",
+        "required",
+        "title",
+        "type",
+    ];
+
+    // Only these hold further schemas. Recursing into everything would read a
+    // `default` or `example` object as though its data keys were keywords.
+    const SCHEMA_BEARING: &[&str] = &["properties", "items", "anyOf"];
+
+    // `Schema.type` is an enum, so a lowercase spelling is not a synonym.
+    const TYPES: &[&str] = &[
+        "TYPE_UNSPECIFIED",
+        "STRING",
+        "NUMBER",
+        "INTEGER",
+        "BOOLEAN",
+        "ARRAY",
+        "OBJECT",
+    ];
+
+    fn walk(node: &Value, path: &str, bad: &mut Vec<String>) {
+        let Value::Object(fields) = node else { return };
+        for (key, value) in fields {
+            if !ACCEPTED.contains(&key.as_str()) {
+                bad.push(format!("{path}.{key}: not a Schema field"));
+            }
+            if key == "type"
+                && !value
+                    .as_str()
+                    .is_some_and(|name| TYPES.contains(&name.to_ascii_uppercase().as_str()))
+            {
+                bad.push(format!("{path}.type: not a Schema.Type name"));
+            }
+            if key == "enum" {
+                let strings = value
+                    .as_array()
+                    .is_some_and(|values| values.iter().all(Value::is_string));
+                if !strings {
+                    bad.push(format!("{path}.enum: Schema.enum is repeated string"));
+                }
+            }
+            if !SCHEMA_BEARING.contains(&key.as_str()) {
+                continue;
+            }
+            match value {
+                // Keys under `properties` are field names, not keywords.
+                Value::Object(named) if key == "properties" => {
+                    for (name, schema) in named {
+                        walk(schema, &format!("{path}.properties.{name}"), bad);
+                    }
+                }
+
+                // `anyOf` is the only repeated Schema. `items` is a single one,
+                // so the JSON-Schema tuple spelling is a type error.
+                Value::Array(_) if key == "items" => {
+                    bad.push(format!(
+                        "{path}.items: Schema.items is one schema, not a list"
+                    ));
+                }
+                Value::Array(schemas) => {
+                    for (index, schema) in schemas.iter().enumerate() {
+                        walk(schema, &format!("{path}.{key}[{index}]"), bad);
+                    }
+                }
+                other => walk(other, &format!("{path}.{key}"), bad),
+            }
+        }
+    }
+
+    let mut bad = Vec::new();
+    walk(&report_response_schema(), "$", &mut bad);
+    assert!(bad.is_empty(), "the API will 400 on: {}", bad.join(", "));
+}
+
 #[test]
 fn improvement_plans_are_linked_bounded_deduplicated_and_ranked() {
     let mut raw = valid_strict_report();

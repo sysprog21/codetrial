@@ -882,9 +882,12 @@ pub fn fallback_report(hints_used: u32, note: &str) -> serde_json::Value {
 }
 
 pub fn report_response_schema() -> serde_json::Value {
-    // `responseSchema` accepts only Gemini's OpenAPI subset. Text bounds are
-    // therefore enforced by `validate_report_candidate`, while supported object
-    // closure and array/numeric bounds are also sent to the provider.
+    // `responseSchema` accepts only Gemini's OpenAPI subset, which has no
+    // `additionalProperties`: sending it fails the whole call with a 400 naming
+    // an unknown field, so every report came back as the incomplete fallback.
+    // Object closure is enforced on the response instead, by the `unknown
+    // field` arm of `validate_report_candidate`. Array and numeric bounds are
+    // in the subset and are still sent.
     let text = || serde_json::json!({ "type": "STRING" });
     let strings = |min: u32, max: u32| {
         serde_json::json!({
@@ -931,6 +934,10 @@ pub fn report_response_schema() -> serde_json::Value {
             "frameworkAssessment": {
                 "type": "OBJECT", "propertyOrdering": ["rubricVersion", "phases"],
                 "properties": {
+                    // No `enum` here. Gemini's subset types `Schema.enum` as
+                    // repeated string, so an integer entry fails the whole
+                    // request with "Invalid value ... (TYPE_STRING)". The exact
+                    // value is pinned on the response by `strict_integer`.
                     "rubricVersion": {
                         "type": "INTEGER",
                         "minimum": RUBRIC_VERSION,
@@ -1565,16 +1572,39 @@ pub fn apply_data_event(
     }
 }
 
+/// The report, or a stub saying why there is none.
+///
+/// Every fallback is logged, because the note it carries reaches the candidate
+/// and nobody else. A schema the provider refused answered 400 on every
+/// interview for the life of a branch while the suite stayed green, and the
+/// only place that was visible was a sentence in the candidate's own report.
+/// An operator reading the log sees it now, on the line that produced it, with
+/// the validation errors rather than only the fact that there were some: which
+/// field the model got wrong is the whole diagnostic, and the stub the
+/// candidate receives cannot carry it.
 pub fn final_report(
     raw_report: Option<&serde_json::Value>,
     hints_used: u32,
     error_note: Option<&str>,
 ) -> serde_json::Value {
-    match (raw_report, error_note) {
-        (Some(raw_report), None) => validate_report(raw_report, hints_used)
-            .unwrap_or_else(|_| fallback_report(hints_used, "report schema validation failed")),
-        _ => fallback_report(hints_used, error_note.unwrap_or("report generation failed")),
-    }
+    let (reason, errors) = match (raw_report, error_note) {
+        (Some(raw_report), None) => match validate_report(raw_report, hints_used) {
+            Ok(report) => return report,
+            Err(errors) => ("report schema validation failed", errors),
+        },
+        _ => (error_note.unwrap_or("report generation failed"), Vec::new()),
+    };
+    eprintln!(
+        "codetrial report_incomplete reason={reason}{}",
+        // Bounded, because a wholly wrong shape produces one per field and this
+        // is a log line, not the report.
+        errors
+            .iter()
+            .take(5)
+            .map(|error| format!(" | {error}"))
+            .collect::<String>()
+    );
+    fallback_report(hints_used, reason)
 }
 
 /// The id and its spoken form, or nothing at all when the browser sent
