@@ -52,3 +52,15 @@ test("review module has reset and dismiss wiring and no provider path", () => {
   assert.doesNotMatch(source, /\bfetch\s*\(|Gemini|\/api\//);
   assert.doesNotMatch(source, /localStorage|saveReportHistory|reportMarkdown/);
 });
+
+test("the tagging form is laid out, not left as running text", () => {
+  // The markup was always semantic: a label wrapping its own textarea. With no
+  // rule for it the pair laid out inline, so each box sat between its own name
+  // and the next one and the fourth wrapped alone onto a second line. Asserted
+  // here because nothing else in the suite looks at how this renders.
+  const css = readFileSync(new URL("../../web/styles.css", import.meta.url), "utf8");
+  assert.match(css, /\.star-fields \{[^}]*display: grid;/s);
+  assert.match(css, /\.star-field \{[^}]*flex-direction: column;/s);
+  assert.match(css, /#star-suggestion label \{[^}]*display: block;/s);
+  assert.match(css, /\.star-field textarea,\s*#star-suggestion textarea \{[^}]*width: 100%;/s);
+});

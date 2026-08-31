@@ -1347,3 +1347,48 @@ p {
   vertical-align: baseline;
 }
 
+/* The STAR tagging form had no styles at all, so a `<label>Name <textarea>`
+   pair laid out as running text: every box sat between its own label and the
+   next one, which read as though the label after a box belonged to it, and the
+   fourth box wrapped onto a line of its own. The markup was already right; only
+   this was missing. */
+.star-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+}
+
+/* Column, so the name is above the box it names rather than beside it. */
+.star-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--sub);
+}
+
+#star-suggestion label {
+  display: block;
+  margin-bottom: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--sub);
+}
+
+.star-field textarea,
+#star-suggestion textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--hairline);
+  border-radius: 0.35rem;
+  background: var(--page);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.85rem;
+  resize: vertical;
+}
+
+#star-grounding {
+  margin: 0.4rem 0 0.6rem;
+}
