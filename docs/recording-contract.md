@@ -34,6 +34,34 @@ supplied key and short-lived access-token header only to a private temporary
 directory, removes the key from its child-process environment, and does not
 replace a developer's active `gcloud` account.
 
+### Recording 1 staging run
+
+Do not create a billable resource until every cell in this record is filled by
+the recording operations lead. It records owners and references, never keys,
+OAuth tokens, or raw media. The current `UNFILLED` values are an intentional
+stop condition, not defaults or estimates.
+
+| Field | Recorded value |
+|---|---|
+| Budget approver name | **UNFILLED — stop** |
+| Approval date | **UNFILLED — stop** |
+| Pricing-source URL | **UNFILLED — stop** |
+| Per-60-second-run estimate | **UNFILLED — stop** |
+| Google Cloud billing account and project | **UNFILLED — stop** |
+| LiveKit Cloud organization and region | **UNFILLED — stop** |
+| Workspace domain | **UNFILLED — stop** |
+| Key custodian | **UNFILLED — stop** |
+| Naming prefix | **UNFILLED — stop; use `codetrial-recording-staging-<date>`** |
+| Public template HTTPS origin | **UNFILLED — stop** |
+| DNS owner | **UNFILLED — stop** |
+| TLS owner | **UNFILLED — stop** |
+| IAM-audit observer and read authority | **UNFILLED — stop; must not be the delivery service account** |
+
+Once filled, record the LiveKit project ID, bucket name, Drive ID, grant dates,
+template curl result, and the deletion-run acceptance JSON in the private
+operations record named here. Do not commit credentials, raw media, or OAuth
+material with this document.
+
 ### Naming, without the identifiers
 
 The identifiers stay in the private operations record, but their shape does not,
@@ -1070,6 +1098,19 @@ deadlines forward and writes `deleted_by = 'operator'` on them, so the sweeper
 deletes their media on its next pass and the tombstone says a person asked
 rather than that a deadline arrived. That is the third value `deleted_by` takes,
 and this is what produces it.
+
+### Disposable acceptance-retention trigger
+
+The credentialed Recording 1 run must not change the production retention
+constant. For its isolated staging database, run
+`./scripts/recording-cleanup.sh --db "$CODETRIAL_DB_PATH" --expire "$CODETRIAL_RECORDING_ID"`
+after delivery, with the server and its normal sweeper running. This writes the
+test row's deadline forward and labels the tombstone `operator`; it does not
+delete media itself. The delivery/cleanup harness then polls that exact Drive
+file and GCS object until both are absent. A back-dated row is an equivalent
+fixture-only trigger, but a global `RETENTION_SECONDS` override is not: it
+would change unrelated staging rows and no longer proves the named recording's
+cleanup path.
 
 The script does not talk to Drive or GCS itself, because a second
 implementation of a deletion is a second thing that can be wrong about what it
