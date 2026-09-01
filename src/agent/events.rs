@@ -364,8 +364,7 @@ fn apply_integrity(state: &mut RuntimeState, payload: &serde_json::Value) -> Dat
     // slots in about two minutes: a camera that stopped at minute three was
     // gone from a thirty minute report by minute five.
     if state.integrity_events.len() > MAX_INTEGRITY_EVENTS {
-        let excess = state.integrity_events.len() - MAX_INTEGRITY_EVENTS;
-        state.integrity_events.drain(0..excess);
+        state.integrity_events.remove(0);
     }
     DataEventResult::default()
 }

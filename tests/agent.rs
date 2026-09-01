@@ -3348,6 +3348,20 @@ fn heartbeats_are_evicted_before_evidence_and_do_not_break_the_chain() {
         "the closing sample is the most recent heartbeat"
     );
 
+    // Filling the buffer exactly is not overflowing it. One event arrives per
+    // call, so the cap is reached before it is passed, and evicting on arrival
+    // at the cap would throw away evidence there was room for.
+    let mut exact = RuntimeState::default();
+    let mut exact_chain = Chain::new();
+    for _ in 0..MAX_INTEGRITY_EVENTS {
+        exact_chain.push(&mut exact, "CAMERA_STOPPED", "high");
+    }
+    assert_eq!(
+        exact.integrity_events.len(),
+        MAX_INTEGRITY_EVENTS,
+        "a full buffer is not an overflowing one"
+    );
+
     // Evidence past the cap still evicts oldest-first, and that is now the only
     // eviction there is.
     for _ in 0..30 {
