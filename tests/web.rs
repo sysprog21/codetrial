@@ -429,6 +429,45 @@ fn token_duration_stops_at_the_recording_cap() {
     }
 }
 
+/// The response and the metadata are one number, not two that happen to agree.
+/// Nothing else can keep them in step: the browser never opens the token, so a
+/// body reporting the requested length would be believed over the granted one
+/// for the whole interview.
+#[test]
+fn token_response_reports_the_length_it_granted() {
+    for (recording_max_min, requested, expected) in [
+        (None, json!(60), json!(60)),
+        (Some(45), json!(60), json!(45)),
+        (Some(45), json!(42.8), json!(42.8)),
+    ] {
+        let body = serde_json::to_vec(&json!({"durationMin": requested})).unwrap();
+        let response = token_response(
+            &TokenConfig {
+                api_key: "devkey",
+                api_secret: "devsecret",
+                server_url: "wss://example.livekit.cloud",
+                recording_max_min,
+            },
+            &body,
+            "interview-fixed",
+            "candidate-fixed",
+            2000,
+        )
+        .unwrap();
+        let claims = claims(&response.token);
+        let metadata = serde_json::from_str::<Value>(claims["metadata"].as_str().unwrap()).unwrap();
+
+        assert_eq!(
+            response.duration_min, expected,
+            "asked for {requested} under a cap of {recording_max_min:?}"
+        );
+        assert_eq!(
+            response.duration_min, metadata["durationMin"],
+            "the response and the metadata named different lengths"
+        );
+    }
+}
+
 #[test]
 fn token_duration_default_stops_at_the_recording_cap() {
     // A caller who names no length gets the default, and the default is a
@@ -1991,7 +2030,7 @@ async fn token_api_matches_frontend_contract_over_http() {
     let body: Value = response.json().await.unwrap();
     let mut keys = body.as_object().unwrap().keys().collect::<Vec<_>>();
     keys.sort();
-    assert_eq!(keys, ["roomName", "serverUrl", "token"]);
+    assert_eq!(keys, ["durationMin", "roomName", "serverUrl", "token"]);
     assert_eq!(body["serverUrl"], "wss://example.livekit.cloud");
     assert!(body["roomName"].as_str().unwrap().starts_with("interview-"));
 
@@ -2011,6 +2050,11 @@ async fn token_api_matches_frontend_contract_over_http() {
     assert_eq!(metadata["problemId"], "merge-intervals");
     assert_eq!(metadata["durationMin"], 90);
     assert_eq!(metadata["candidateIdentity"], claims["sub"]);
+
+    // The page cannot read the metadata: it is inside a signed token it never
+    // opens. The response body carries the same number so the countdown and the
+    // round split are built from the length the agent was given.
+    assert_eq!(body["durationMin"], metadata["durationMin"]);
 
     server.abort();
     remove_database(db_path);
@@ -3709,6 +3753,35 @@ fn browser_number(source: &str, after: &str, until: char) -> u32 {
         .unwrap_or_else(|error| panic!("{after} is not a number: {error}"))
 }
 
+/// The clamp above is the fallback, not the authority. `token_duration_min` also
+/// bounds the length by the recording cap, which is per deployment and so cannot
+/// be pinned by a constant the way the range is: the only way the page can know
+/// it is to be told, and the only way it stays told is to read the answer rather
+/// than the request.
+#[test]
+fn browser_interview_takes_the_length_the_server_granted() {
+    let interview = fs::read_to_string("web/interview.js").unwrap();
+
+    assert!(
+        interview.contains("applyGrantedDuration(connection.durationMin)"),
+        "web/interview.js never reads the length /api/token granted"
+    );
+
+    // Ahead of `connectLiveKit`, because the replay's opening lifecycle event
+    // writes the round split down and a split from the requested length would
+    // be the first thing recorded.
+    let applied = interview
+        .find("applyGrantedDuration(connection.durationMin)")
+        .expect("the call is asserted above");
+    let connected = interview
+        .find("await connectLiveKit(connection")
+        .expect("the page joins the room");
+    assert!(
+        applied < connected,
+        "the length is applied after the room is joined"
+    );
+}
+
 /// `src/config.rs` owns the interview length and says the browser lobby mirrors
 /// the range, which nothing checked. The two are not interchangeable: the
 /// browser countdown and `run_room`'s server-side hard deadline are both built
@@ -3721,7 +3794,7 @@ fn browser_interview_duration_matches_the_server_clamp() {
     let page = fs::read_to_string("web/index.html").unwrap();
 
     let clamp = call_arguments(
-        &interview[interview.find("const durationMin = ").unwrap()..],
+        &interview[interview.find("let durationMin = ").unwrap()..],
         "clamp(",
     );
     assert_eq!(

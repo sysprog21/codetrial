@@ -144,10 +144,30 @@ const problem = await loadProblem(params.get("problem")).catch((error) => {
 // reports that failure itself.
 const judgePromise = loadJudge(problem.id).catch(() => null);
 let languages = languagesFor(null);
-const durationMin = clamp(Number.parseInt(params.get("duration") || "45", 10) || 45, 10, 90);
+/// What the lobby asked for, until `/api/token` says what it got. The range
+/// here mirrors the server's own and is the fallback for a URL that arrives
+/// without passing through the lobby; the answer below is what the interview
+/// actually runs on.
+let durationMin = clamp(Number.parseInt(params.get("duration") || "45", 10) || 45, 10, 90);
 const interviewLoop = codingLoop(params.get("loop"));
-const behavioralMinutes = interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
-const codingMinutes = durationMin - behavioralMinutes;
+let behavioralMinutes = interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
+let codingMinutes = durationMin - behavioralMinutes;
+
+/// The server clamps the requested length to its range and, where it records,
+/// to the recording cap, and it is that number the agent is handed in the room
+/// metadata. Keeping the requested one here would leave the countdown, the
+/// round split and the saved report describing an interview nobody is having.
+///
+/// An answer that is missing or unusable leaves the request in place: the page
+/// still runs, on the length the URL named, exactly as it did before the
+/// server sent this.
+function applyGrantedDuration(granted) {
+  if (typeof granted !== "number" || !Number.isFinite(granted) || granted <= 0) return;
+  durationMin = granted;
+  behavioralMinutes = interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
+  codingMinutes = durationMin - behavioralMinutes;
+  state.remaining = durationMin * 60;
+}
 const interviewProfile = {
   role: params.get("role") || "",
   seniority: params.get("seniority") || "",
@@ -756,6 +776,10 @@ async function connect(preflight, presenting = false) {
     });
     if (!response.ok) throw new Error((await response.json()).error || "Failed to create a session.");
     const connection = await response.json();
+    // Before the room, and before anything that reads the length: the replay's
+    // opening lifecycle event carries the round split, and a split computed
+    // from the requested length would be the first thing written down.
+    applyGrantedDuration(connection.durationMin);
     await connectLiveKit(connection, preflight, presenting);
     state.connected = true;
     // After the room, not before it. The server refuses to record an interview
