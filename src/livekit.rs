@@ -995,8 +995,6 @@ struct InterviewContext<'a> {
     started_at: Instant,
 }
 
-/// Applies one decoded data packet. `Break` means the interview is over and the
-/// report has been published.
 /// The interview's starting state, from the plan the token was minted for.
 ///
 /// Every field here is read for the length of the interview and none can be
@@ -1031,6 +1029,8 @@ fn browser_packet(
     })
 }
 
+/// Applies one decoded data packet. `Break` means the interview is over and the
+/// report has been published.
 async fn handle_data_packet(
     room: &Room,
     context: &mut GeminiEventContext<'_>,
@@ -1348,12 +1348,6 @@ fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) -> ser
     }
 }
 
-/// What the candidate is allowed to see of their own framework progress: which
-/// phases have evidence, and nothing else.
-///
-/// The interviewer names the step it is steering toward out loud, so a phase it
-/// has already banked is not a secret. The summary, confidence and source stay
-/// server-side, because those are the reading rather than the fact.
 /// Whether the candidate's checklist would look any different now.
 ///
 /// The tool is idempotent and returns the existing entry for a repeat, and
@@ -1364,6 +1358,12 @@ fn checklist_changed(shown_before: &[&'static str], state: &RuntimeState) -> boo
     framework_progress(state) != shown_before
 }
 
+/// What the candidate is allowed to see of their own framework progress: which
+/// phases have evidence, and nothing else.
+///
+/// The interviewer names the step it is steering toward out loud, so a phase it
+/// has already banked is not a secret. The summary, confidence and source stay
+/// server-side, because those are the reading rather than the fact.
 async fn publish_framework_progress(
     room: &Room,
     state: &RuntimeState,

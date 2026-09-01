@@ -181,7 +181,7 @@ mod tests {
         assert!(dispatcher.ensure_agent("interview-first", &provider));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_concurrent_burst_never_overbooks_and_released_capacity_returns() {
         let live = Arc::new(Mutex::new(HashSet::new()));
         let dispatcher = LocalDispatcher {

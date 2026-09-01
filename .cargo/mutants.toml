@@ -64,6 +64,12 @@
 # `parse_and_validate_report` in gemini.rs, which is the half of report
 # generation that does not need a network.
 #
+# `report_packet` is `generate_report` with a timeout and an envelope around
+# it, so reaching any line of it means posting to Google with a real key. What
+# it builds is `browser_packet`, which is tested, and what it validates is
+# `parse_and_validate_report`, which is tested; the wait in between is the part
+# that needs the network.
+#
 # The media helpers are the same shape one layer down. `handle_media_event`
 # and `attach_audio` take a LiveKit participant, `next_audio_frame` and
 # `next_video_frame` poll a track, and `pump_video` and
@@ -88,10 +94,8 @@ exclude_re = [
     "send_wrap_up_and_wait",
     "drop_stale_playout",
     "close_turns",
-    "report_packet",
     "generate_report",
-    "generate_report_transport",
-    "generate_report_once",
+    "report_packet",
     "handle_media_event",
     "attach_audio",
     "next_audio_frame",
