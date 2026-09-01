@@ -24,13 +24,25 @@ STANDARDISED_BUCKET = {
 }
 
 
+PROJECT_NUMBER = "1234567890"
+
+
+def bucket_resource(**overrides):
+    """A correctly provisioned bucket, with only what a test varies replaced."""
+    return {
+        "projectNumber": PROJECT_NUMBER,
+        "iamConfiguration": {"uniformBucketLevelAccess": {"enabled": True}},
+        "lifecycle": {"rule": [{"action": {"type": "Delete"}, "condition": {"age": 1}}]},
+    } | overrides
+
+
 class ProvisionCheckTests(unittest.TestCase):
     def write_executable(self, directory: Path, name: str, contents: str) -> None:
         path = directory / name
         path.write_text(contents)
         path.chmod(0o755)
 
-    def run_check(self, *, bucket_iam=None, ancestors_iam=None, bucket=None, drive=None, fail="", delivery_email=DELIVERY_EMAIL, auditor_email="auditor@staging-project.iam.gserviceaccount.com", template_origin="https://1.1.1.1", project_number="1234567890"):
+    def run_check(self, *, bucket_iam=None, ancestors_iam=None, bucket=None, drive=None, fail="", delivery_email=DELIVERY_EMAIL, auditor_email="auditor@staging-project.iam.gserviceaccount.com", template_origin="https://1.1.1.1"):
         if bucket_iam is None:
             bucket_iam = {
                 "bindings": [{"role": "roles/storage.objectAdmin", "members": [f"serviceAccount:{DELIVERY_EMAIL}"]}]
@@ -38,10 +50,7 @@ class ProvisionCheckTests(unittest.TestCase):
         if ancestors_iam is None:
             ancestors_iam = [{"resource": "projects/staging-project", "policy": {"bindings": []}}]
         if bucket is None:
-            bucket = {
-                "projectNumber": "1234567890", "iamConfiguration": {"uniformBucketLevelAccess": {"enabled": True}},
-                "lifecycle": {"rule": [{"action": {"type": "Delete"}, "condition": {"age": 1}}]},
-            }
+            bucket = bucket_resource()
         if drive is None:
             drive = {"permissions": [{"emailAddress": DELIVERY_EMAIL, "type": "user", "role": "organizer"}]}
 
@@ -91,7 +100,7 @@ esac
                 "PATH": f"{fake_bin}:{os.environ['PATH']}",
                 "FAKE_ROOT": str(temporary_path),
                 "FAKE_FAIL": fail,
-                "FAKE_PROJECT_NUMBER": project_number,
+                "FAKE_PROJECT_NUMBER": PROJECT_NUMBER,
                 "CODETRIAL_RECORDING_PROJECT": "staging-project",
                 "CODETRIAL_RECORDING_GCS_BUCKET": "staging-recordings",
                 "CODETRIAL_RECORDING_DRIVE_ID": "drive_123",
@@ -202,21 +211,14 @@ esac
         self.assertIn("forbidden ancestor IAM roles", result.stderr)
 
     def test_missing_24_hour_lifecycle_is_refused(self):
-        result = self.run_check(bucket={
-            "projectNumber": "1234567890", "iamConfiguration": {"uniformBucketLevelAccess": {"enabled": True}},
-            "lifecycle": {"rule": []},
-        })
+        result = self.run_check(bucket=bucket_resource(lifecycle={"rule": []}))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("24-hour Delete lifecycle", result.stderr)
 
     def test_bucket_owned_by_another_project_is_refused(self):
         # The ancestor audit walked this project. A bucket owned elsewhere
         # inherits grants from a chain nothing here looked at.
-        result = self.run_check(bucket={
-            "projectNumber": "9999999999",
-            "iamConfiguration": {"uniformBucketLevelAccess": {"enabled": True}},
-            "lifecycle": {"rule": [{"action": {"type": "Delete"}, "condition": {"age": 1}}]},
-        })
+        result = self.run_check(bucket=bucket_resource(projectNumber="9999999999"))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("belongs to project number", result.stderr)
 
@@ -226,19 +228,15 @@ esac
         for extra in [{"matchesPrefix": ["other/"]}, {"matchesStorageClass": ["NEARLINE"]},
                       {"numNewerVersions": 2}]:
             with self.subTest(extra=extra):
-                result = self.run_check(bucket={
-                    "projectNumber": "1234567890", "iamConfiguration": {"uniformBucketLevelAccess": {"enabled": True}},
-                    "lifecycle": {"rule": [{"action": {"type": "Delete"},
-                                            "condition": {"age": 1, **extra}}]},
-                })
+                result = self.run_check(bucket=bucket_resource(
+                    lifecycle={"rule": [{"action": {"type": "Delete"},
+                                         "condition": {"age": 1, **extra}}]}))
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("unconditional 24-hour Delete lifecycle", result.stderr)
 
     def test_bucket_without_uniform_access_is_refused(self):
-        result = self.run_check(bucket={
-            "projectNumber": "1234567890", "iamConfiguration": {"uniformBucketLevelAccess": {"enabled": False}},
-            "lifecycle": {"rule": [{"action": {"type": "Delete"}, "condition": {"age": 1}}]},
-        })
+        result = self.run_check(bucket=bucket_resource(
+            iamConfiguration={"uniformBucketLevelAccess": {"enabled": False}}))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Uniform Bucket-Level Access", result.stderr)
 

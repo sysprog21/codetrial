@@ -16,12 +16,20 @@ RECORDING_ID = "recording_123"
 RECIPIENT = "candidate@example.test"
 
 
+def reader(hours=23, **overrides):
+    """The recipient's live reader grant, with only what a test varies replaced."""
+    return {
+        "id": "permission-1", "type": "user", "role": "reader", "emailAddress": RECIPIENT,
+        "expirationTime": (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat(),
+    } | overrides
+
+
 # One recording, delivered and readable by its recipient. Every test starts here
 # and names only what it changes.
 DELIVERED = {
     "files.json": {"files": [{"id": "file-1", "name": f"{RECORDING_ID}.mp4",
                               "createdTime": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()}]},
-    "permissions.json": {"permissions": [{"id": "permission-1", "type": "user", "role": "reader", "emailAddress": RECIPIENT, "expirationTime": (datetime.now(timezone.utc) + timedelta(hours=23)).isoformat()}]},
+    "permissions.json": {"permissions": [reader()]},
 }
 
 
@@ -52,8 +60,8 @@ esac
 args="$*"
 if echo "$args" | grep -q '%{http_code}'; then
   if echo "$args" | grep -q 'storage.googleapis.com'; then
-    case "$args" in *'codetrial%2F%2F'*) echo 200 ;; *) echo "${FAKE_CLEANUP_GCS_STATUS:-404}" ;; esac
-  elif echo "$args" | grep -q '/drive/v3/files/file-1?'; then echo "${FAKE_CLEANUP_DRIVE_STATUS:-404}"
+    case "$args" in *'codetrial%2F%2F'*) echo 200 ;; *) echo "$FAKE_CLEANUP_GCS_STATUS" ;; esac
+  elif echo "$args" | grep -q '/drive/v3/files/file-1?'; then echo "$FAKE_CLEANUP_DRIVE_STATUS"
   else
     out=; previous=; for word in "$@"; do [ "$previous" = -o ] && out=$word; previous=$word; done
     [ -z "$out" ] || printf '<div id="recording-ready"></div>' > "$out"; echo 200
@@ -112,19 +120,13 @@ fi
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_delivery_refuses_a_permission_more_than_24_hours_out(self):
-        files = DELIVERED | {"permissions.json": {"permissions": [{
-            "id": "permission-1", "type": "user", "role": "reader", "emailAddress": RECIPIENT,
-            "expirationTime": (datetime.now(timezone.utc) + timedelta(hours=25)).isoformat(),
-        }]}}
+        files = DELIVERED | {"permissions.json": {"permissions": [reader(hours=25)]}}
         result, _ = self.run_harness(files, phase="delivery")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("active and within 24 hours of verification", result.stderr)
 
     def test_delivery_refuses_an_expired_permission(self):
-        files = DELIVERED | {"permissions.json": {"permissions": [{
-            "id": "permission-1", "type": "user", "role": "reader", "emailAddress": RECIPIENT,
-            "expirationTime": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
-        }]}}
+        files = DELIVERED | {"permissions.json": {"permissions": [reader(hours=-1)]}}
         result, _ = self.run_harness(files, phase="delivery")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("active and within 24 hours of verification", result.stderr)
@@ -132,11 +134,10 @@ fi
     def test_delivery_refuses_anything_but_one_expiring_reader(self):
         # Two readers means somebody else can still open it, and a reader with
         # no expiry never stops being able to. Both are the same refusal.
-        reader = {"id": "permission-1", "type": "user", "role": "reader", "emailAddress": RECIPIENT,
-                  "expirationTime": (datetime.now(timezone.utc) + timedelta(hours=23)).isoformat()}
+        grant = reader()
         for label, permissions in [
-            ("two readers", [reader, dict(reader, id="permission-2")]),
-            ("no expiry", [{k: v for k, v in reader.items() if k != "expirationTime"}]),
+            ("two readers", [grant, dict(grant, id="permission-2")]),
+            ("no expiry", [{k: v for k, v in grant.items() if k != "expirationTime"}]),
         ]:
             with self.subTest(label=label):
                 result, _ = self.run_harness(
@@ -149,11 +150,10 @@ fi
         # Counting only the recipient's permissions made "exactly one reader"
         # mean "exactly one of theirs", so a second account holding the file
         # read as a correctly scoped delivery.
-        reader = {"id": "permission-1", "type": "user", "role": "reader", "emailAddress": RECIPIENT,
-                  "expirationTime": (datetime.now(timezone.utc) + timedelta(hours=23)).isoformat()}
-        stranger = dict(reader, id="permission-2", emailAddress="stranger@example.test")
+        grant = reader()
+        stranger = reader(id="permission-2", emailAddress="stranger@example.test")
         result, _ = self.run_harness(
-            DELIVERED | {"permissions.json": {"permissions": [reader, stranger]}}, phase="delivery"
+            DELIVERED | {"permissions.json": {"permissions": [grant, stranger]}}, phase="delivery"
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("exactly one expiring reader permission", result.stderr)
@@ -161,11 +161,9 @@ fi
     def test_delivery_accepts_the_recipient_however_drive_folded_the_address(self):
         # Drive answers with the address it normalised, not the spelling the
         # operator exported, and a case difference is not a different person.
-        reader = {"id": "permission-1", "type": "user", "role": "reader",
-                  "emailAddress": RECIPIENT.upper(),
-                  "expirationTime": (datetime.now(timezone.utc) + timedelta(hours=23)).isoformat()}
+        grant = reader(emailAddress=RECIPIENT.upper())
         result, document = self.run_harness(
-            DELIVERED | {"permissions.json": {"permissions": [reader]}}, phase="delivery"
+            DELIVERED | {"permissions.json": {"permissions": [grant]}}, phase="delivery"
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("permission_expires_at", document)
@@ -181,10 +179,7 @@ fi
     def test_cleanup_alone_does_not_need_a_live_reader_permission(self):
         # Cleanup runs after the grant has lapsed, which is the state it exists
         # to prove. Demanding a live one would refuse to verify the deletion.
-        expired = DELIVERED | {"permissions.json": {"permissions": [{
-            "id": "permission-1", "type": "user", "role": "reader", "emailAddress": RECIPIENT,
-            "expirationTime": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
-        }]}}
+        expired = DELIVERED | {"permissions.json": {"permissions": [reader(hours=-1)]}}
         result, document = self.run_harness(expired, phase="cleanup", include_recipient=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(document["cleanup_status"], {"drive_file_absent": True, "gcs_object_absent": True})
