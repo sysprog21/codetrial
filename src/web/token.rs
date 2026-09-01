@@ -584,6 +584,62 @@ mod tests {
         IpAddr::from([127, 0, 0, last])
     }
 
+    /// An observer grant belongs to one account and dies with the token.
+    ///
+    /// This decides who may watch a live interview, so every edge of it
+    /// matters: the moment a grant stops counting, the account it was issued
+    /// to, and the sweep that clears the map without ever clearing a grant
+    /// that is still good.
+    #[test]
+    fn a_room_grant_expires_and_belongs_to_one_account() {
+        let mut grants = RoomAuthorizations::default();
+        grants.grant("interview-alice".to_string(), 7, 1_000);
+
+        assert!(grants.allows("interview-alice", 7, 1_000));
+        assert!(
+            !grants.allows("interview-alice", 8, 1_000),
+            "a grant is to an account, not to whoever knows the room name"
+        );
+        assert!(!grants.allows("interview-bob", 7, 1_000), "and to one room");
+
+        // The last second it is good, and the first it is not. Expiry is not a
+        // sweep: a grant nobody has swept yet is still over.
+        assert!(grants.allows("interview-alice", 7, 1_000 + TOKEN_TTL_SECONDS - 1));
+        assert!(!grants.allows("interview-alice", 7, 1_000 + TOKEN_TTL_SECONDS));
+
+        // The sweep is what bounds the map, and `allows` answers expiry on its
+        // own, so nothing about who may watch can show whether it ran. Counted
+        // here instead: a server that never sweeps keeps every room it ever
+        // issued a token for, for as long as it runs.
+        let mut swept = RoomAuthorizations::default();
+        swept.grant("interview-old".to_string(), 1, 0);
+        swept.grant("interview-later".to_string(), 2, TOKEN_TTL_SECONDS * 2);
+        assert_eq!(
+            swept.grants.len(),
+            1,
+            "a grant expired long ago is not still held"
+        );
+
+        // A grant expiring exactly now is over, and goes with the rest.
+        let mut boundary = RoomAuthorizations::default();
+        boundary.grant("interview-edge".to_string(), 1, 0);
+        boundary.grant("interview-trigger".to_string(), 2, TOKEN_TTL_SECONDS);
+        assert_eq!(
+            boundary.grants.len(),
+            1,
+            "expiring on the second of the sweep is still expiring"
+        );
+
+        // And a live grant survives the sweep, or watching stops mid-interview.
+        let mut live = RoomAuthorizations::default();
+        live.grant("interview-new".to_string(), 2, 100);
+        live.grant("interview-trigger".to_string(), 3, TOKEN_TTL_SECONDS + 50);
+        assert!(
+            live.allows("interview-new", 2, TOKEN_TTL_SECONDS + 50),
+            "a grant still inside its lifetime is not swept out from under it"
+        );
+    }
+
     fn forwarded(value: &str) -> header::HeaderMap {
         let mut headers = header::HeaderMap::new();
         headers.insert("x-forwarded-for", HeaderValue::from_str(value).unwrap());

@@ -4140,3 +4140,76 @@ fn control_events_respect_the_end_and_report_what_they_did() {
     assert_eq!(result.round_changed, Some("started"));
     assert!(both.behavioral_round_started);
 }
+
+/// A plan may name eight things, and eight is allowed.
+///
+/// Every entry has to answer to a feedback improvement, so a plan this long
+/// needs a report whose feedback is equally long. The limit sits one past what
+/// that can produce, which is why nothing had reached it: moved down by one it
+/// rejects a full report, and turned into an equality it stops refusing the
+/// long ones entirely.
+#[test]
+fn an_improvement_plan_may_carry_eight_entries() {
+    let improvements = [
+        ("Repeat", "Restate the constraints"),
+        ("Example", "Walk a worked example"),
+        ("Algorithm", "Explain complexity"),
+        ("Test", "Test boundaries"),
+        ("Situation", "Set the scene"),
+        ("Task", "Name the goal"),
+        ("Action", "Name your own action"),
+        ("Result", "State the result"),
+    ];
+    let phases = [
+        "Repeat",
+        "Example",
+        "Algorithm",
+        "Coding",
+        "Test",
+        "Optimizations",
+        "Situation",
+        "Task",
+        "Action",
+        "Result",
+    ];
+    let mut report = valid_strict_report();
+    report["codingFeedback"]["improvements"] = json!(
+        improvements[..4]
+            .iter()
+            .map(|(_, weakness)| *weakness)
+            .collect::<Vec<_>>()
+    );
+    report["communicationFeedback"]["improvements"] = json!(
+        improvements[4..]
+            .iter()
+            .map(|(_, weakness)| *weakness)
+            .collect::<Vec<_>>()
+    );
+    report["improvementPlan"] = json!(
+        improvements
+            .iter()
+            .map(|(phase, weakness)| json!({
+                "phase": phase, "weakness": weakness, "impact": "medium", "frequency": 1,
+                "drill": "Practice the missing step", "durationMin": 5,
+                "successCriterion": "State it without prompting",
+                "selfReview": ["Grounded in evidence"],
+            }))
+            .collect::<Vec<_>>()
+    );
+    report["frameworkAssessment"] = json!({
+        "rubricVersion": 1,
+        "phases": phases.iter().map(|phase| json!({
+            "phase": phase, "score": 75,
+            "weaknessTags": improvements.iter()
+                .filter(|(assigned, _)| assigned == phase)
+                .map(|(_, weakness)| *weakness)
+                .collect::<Vec<_>>(),
+        })).collect::<Vec<_>>()
+    });
+
+    assert!(
+        validate_report_candidate(&report).is_ok(),
+        "eight is inside the limit: {:?}",
+        validate_report_candidate(&report).err()
+    );
+}
