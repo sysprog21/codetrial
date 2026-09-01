@@ -4057,3 +4057,86 @@ fn report_validation_holds_its_bounds_and_its_ordering() {
             .contains("$.improvementPlan"),
     );
 }
+
+/// Pause and the round gate answer to the interview being over, and say what
+/// they did.
+///
+/// Each of these could be quietly loosened: the pause arm could run after the
+/// interview ended, resuming could stop speaking, the coding gate could accept
+/// one phase where it wants two, and either branch could stop reporting which
+/// round it moved to. The browser and the report both read those answers.
+#[test]
+fn control_events_respect_the_end_and_report_what_they_did() {
+    let pause = |paused: bool| json!({"type": "pause_interview", "paused": paused});
+
+    // Nothing is driven after the interview ends, pause included.
+    let mut ended = RuntimeState {
+        ended: true,
+        ..RuntimeState::default()
+    };
+    let after = apply_data_event(&mut ended, TOPIC_CONTROL, &pause(true), 99.0);
+    assert!(
+        after.pause_changed.is_none(),
+        "an ended interview cannot be paused"
+    );
+    assert!(!ended.paused);
+
+    // Pausing is silent; resuming says so, because the candidate is waiting for
+    // the interviewer to pick the conversation back up.
+    let mut live = RuntimeState::default();
+    let paused = apply_data_event(&mut live, TOPIC_CONTROL, &pause(true), 1.0);
+    assert_eq!(paused.pause_changed, Some(true));
+    assert!(
+        paused.generate_reply.is_none(),
+        "nobody is listening while paused"
+    );
+
+    let resumed = apply_data_event(&mut live, TOPIC_CONTROL, &pause(false), 2.0);
+    assert_eq!(resumed.pause_changed, Some(false));
+    assert!(
+        resumed.generate_reply.is_some(),
+        "resuming into silence leaves the candidate waiting on a turn nobody takes"
+    );
+
+    // The coding gate wants both phases, and says which round it moved to
+    // either way: the browser closes the editor on that answer.
+    let evidence = |phase: &str| {
+        json!({"phase": phase, "source": "candidate_speech", "kind": "observed",
+               "confidence": 90, "summary": format!("candidate completed {phase}")})
+    };
+    let transition = json!({"type": "round_transition", "round": "behavioral"});
+
+    let mut one_phase = RuntimeState::default();
+    past_the_coding_round(&mut one_phase);
+    record_framework_evidence(&mut one_phase, &evidence("test")).expect("records");
+    let result = apply_data_event(&mut one_phase, TOPIC_CONTROL, &transition, 99.0);
+    assert_eq!(
+        result.round_changed,
+        Some("skipped"),
+        "one phase is not both"
+    );
+    assert!(!one_phase.behavioral_round_started);
+
+    // Evidence for some other phase is not evidence for these two. Asking
+    // whether any banked phase is not Test answers yes for a candidate who only
+    // ever restated the problem, and opens the behavioral round on it.
+    let mut unrelated = RuntimeState::default();
+    past_the_coding_round(&mut unrelated);
+    record_framework_evidence(&mut unrelated, &evidence("repeat")).expect("records");
+    let result = apply_data_event(&mut unrelated, TOPIC_CONTROL, &transition, 99.0);
+    assert_eq!(
+        result.round_changed,
+        Some("skipped"),
+        "restating the problem is not having tested or optimized it"
+    );
+    assert!(!unrelated.behavioral_round_started);
+
+    let mut both = RuntimeState::default();
+    past_the_coding_round(&mut both);
+    for phase in ["test", "optimizations"] {
+        record_framework_evidence(&mut both, &evidence(phase)).expect("records");
+    }
+    let result = apply_data_event(&mut both, TOPIC_CONTROL, &transition, 99.0);
+    assert_eq!(result.round_changed, Some("started"));
+    assert!(both.behavioral_round_started);
+}

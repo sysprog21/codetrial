@@ -662,6 +662,37 @@ mod tests {
         assert_eq!(sink.sent.len(), 2, "nothing held is nothing to send");
     }
 
+    /// Playout is cut into ten-millisecond frames and the remainder waits.
+    ///
+    /// A partial frame handed to the audio source is a click, and a dropped
+    /// one is a gap, so what is left over has to survive until the next
+    /// packet arrives rather than being padded or discarded.
+    #[test]
+    fn pcm_is_framed_at_ten_milliseconds_and_the_remainder_waits() {
+        // Stereo on purpose: at one channel a frame size computed by dividing
+        // by the channel count instead of multiplying comes out the same.
+        const RATE: u32 = 24_000;
+        const CHANNELS: u32 = 2;
+        let frame_bytes = (RATE / 100 * CHANNELS) as usize * 2;
+        assert_eq!(frame_bytes, 960);
+
+        let mut pending = Vec::new();
+        let frames = take_pcm16_frames(&vec![7u8; frame_bytes + 480], RATE, CHANNELS, &mut pending);
+        assert_eq!(frames.len(), 1, "one whole frame, not the half behind it");
+        assert_eq!(frames[0].len(), frame_bytes / 2, "samples, not bytes");
+        assert_eq!(pending.len(), 480, "the half frame is held, not padded out");
+
+        // The held half joins what comes next instead of being dropped.
+        let frames = take_pcm16_frames(&vec![7u8; 480], RATE, CHANNELS, &mut pending);
+        assert_eq!(frames.len(), 1, "the two halves make one frame");
+        assert!(pending.is_empty());
+
+        // Nothing whole yet is nothing to play, and it is all still held.
+        let frames = take_pcm16_frames(&[7u8; 16], RATE, CHANNELS, &mut pending);
+        assert!(frames.is_empty());
+        assert_eq!(pending.len(), 16);
+    }
+
     /// A dead socket is reported rather than swallowed. The room loop logs it
     /// and keeps going, which is only right because this says it went wrong.
     #[tokio::test]
