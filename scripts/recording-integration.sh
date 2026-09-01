@@ -35,7 +35,6 @@ Environment, every phase:
 
 Media phase only:
   CODETRIAL_RECORDING_TEMPLATE_BASE_URL    the public origin serving the template
-  LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET  the isolated project
   CODETRIAL_CANDIDATE_SECONDS              attested seconds of candidate camera on screen
   CODETRIAL_AUDIO_TRACKS                   attested count of distinct audio sources
   CODETRIAL_AVATAR_RENDERED                attested true or false: was the VRM rendering
@@ -70,7 +69,10 @@ done
 [ -n "$phases" ] || usage
 
 runs() {
-  printf '%s' "$phases" | tr ',' '\n' | grep -qx "$1"
+  case ",$phases," in
+    *",$1,"*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # Checked before anything else, so a typo cannot half-run an acceptance. The
@@ -79,8 +81,8 @@ runs() {
 #
 # Whitespace is refused rather than trimmed, because the two readers of this
 # list tokenize differently: the loop below splits on it and `runs` does not.
-# `--phase='media, delivery'` used to validate both and then run only the
-# media phase, which is the half-run this check exists to prevent.
+# `--phase='media, delivery'` used to validate both and then run only the media
+# phase, which is the half-run this check exists to prevent.
 case "$phases" in
   *[[:space:]]*)
     echo "phases are comma separated with no spaces: $phases" >&2
@@ -116,16 +118,15 @@ for name in \
   need "$name"
 done
 
-# The room, the template and the measurement belong to the media phase alone. A
-# cleanup re-run polls two provider URLs for a 404; making it produce LiveKit
-# secrets and install ffmpeg first fails it on something it was never going to
-# use.
+# The template and the measurement belong to the media phase alone. A cleanup
+# re-run polls two provider URLs for a 404; making it install ffmpeg and stand
+# up a public origin first fails it on something it was never going to use.
+#
+# The room is nobody's business here. The operator's own server opens it, and
+# this script only reads what that server has already staged, which is why it
+# asks for no LiveKit credentials at all.
 if runs media; then
-  for name in \
-    CODETRIAL_RECORDING_TEMPLATE_BASE_URL \
-    LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET; do
-    need "$name"
-  done
+  need CODETRIAL_RECORDING_TEMPLATE_BASE_URL
 
   # `ffprobe` is how the file is measured, and a run that gets to the end and
   # then cannot measure anything has spent a provisioned project for nothing.
@@ -157,7 +158,6 @@ template_origin=${template_origin%/}
 gcs_prefix=${CODETRIAL_RECORDING_GCS_PREFIX:-codetrial}
 while [ "${gcs_prefix%/}" != "$gcs_prefix" ]; do gcs_prefix=${gcs_prefix%/}; done
 work=$(mktemp -d)
-object=
 
 # One trap, on every exit, over what this script created: a temporary directory
 # with a copy of the file in it.
@@ -225,9 +225,7 @@ if runs media; then
     exit 1
   }
   echo "template ok: $template_url"
-fi
 
-if runs media; then
   echo "the media phase needs an interview to record."
   cat >&2 <<'MEDIA'
 Not automated here, and deliberately so: the recording under test is a person
@@ -384,6 +382,7 @@ json.dump(delivery, open(delivery_path, "w", encoding="utf-8"))
 print(delivery["drive_file_id"])
 PY
 )
+
   # Only delivery judges the grant. Cleanup runs after it, and the whole point
   # of cleanup is that the grant has lapsed by then, so requiring a live one
   # would refuse to prove the deletion this pipeline exists to prove.
