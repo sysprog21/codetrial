@@ -304,7 +304,15 @@ impl OutputAudio {
     }
 
     pub(super) fn is_playing(&self) -> bool {
-        Instant::now() < self.playout_deadline
+        self.playing_at(Instant::now())
+    }
+
+    /// `now` is a parameter rather than an `Instant::now()` inside, so the
+    /// moment playout ends can be asked about: a clock read in here can be
+    /// compared with `<` or `<=` and no test could ever tell, because it
+    /// cannot land on the deadline exactly.
+    fn playing_at(&self, now: Instant) -> bool {
+        now < self.playout_deadline
     }
 
     /// Whether `capture` would queue anything for this chunk.
@@ -391,6 +399,18 @@ async fn output_audio_worker(
     }
 }
 
+/// How the agent's own voice is published.
+///
+/// Named as the microphone rather than left to default, because a track with
+/// no source is not the one a client picks when it looks for who is speaking:
+/// the browser subscribes by source, and Meet presentation mode routes on it.
+fn agent_voice_track_options() -> TrackPublishOptions {
+    TrackPublishOptions {
+        source: TrackSource::Microphone,
+        ..Default::default()
+    }
+}
+
 pub(super) async fn publish_output_audio(
     room: &Room,
     sample_rate: u32,
@@ -406,13 +426,7 @@ pub(super) async fn publish_output_audio(
         RtcAudioSource::Native(source.clone()),
     );
     room.local_participant()
-        .publish_track(
-            LocalTrack::Audio(track),
-            TrackPublishOptions {
-                source: TrackSource::Microphone,
-                ..Default::default()
-            },
-        )
+        .publish_track(LocalTrack::Audio(track), agent_voice_track_options())
         .await?;
     let (frames, queued_frames) = mpsc::channel(LIVEKIT_OUTPUT_FRAME_QUEUE);
     tokio::spawn(output_audio_worker(
@@ -609,6 +623,45 @@ mod tests {
             num_channels: 1,
             samples_per_channel: samples as u32,
         }
+    }
+
+    /// The agent publishes its voice as a microphone track.
+    ///
+    /// Left to the default the track has no source, and a client looking for
+    /// who is speaking does not find it: the browser subscribes by source.
+    #[test]
+    fn the_agent_voice_is_published_as_a_microphone() {
+        assert_eq!(agent_voice_track_options().source, TrackSource::Microphone);
+    }
+
+    /// Playout is over on the deadline, not after it.
+    ///
+    /// The room loop arms a timer on this and asks again when it fires, so a
+    /// deadline that still counts as playing at the instant it is reached
+    /// re-arms the timer for zero and spins.
+    #[test]
+    fn playout_ends_on_its_deadline() {
+        let (frames, _queued) = tokio::sync::mpsc::channel(1);
+        let output_audio = OutputAudio {
+            source: NativeAudioSource::new(
+                AudioSourceOptions::default(),
+                24_000,
+                LIVEKIT_OUTPUT_CHANNELS,
+                LIVEKIT_OUTPUT_QUEUE_MS,
+            ),
+            sample_rate: 24_000,
+            pending_bytes: Vec::new(),
+            playout_deadline: Instant::now() + Duration::from_secs(1),
+            frames,
+            output_cancellation: CancellationToken::new(),
+        };
+        let deadline = output_audio.playout_deadline;
+        assert!(output_audio.playing_at(deadline - Duration::from_nanos(1)));
+        assert!(
+            !output_audio.playing_at(deadline),
+            "the deadline is the end of it"
+        );
+        assert!(!output_audio.playing_at(deadline + Duration::from_millis(1)));
     }
 
     /// Speech is buffered until there is enough of it to be worth sending, and

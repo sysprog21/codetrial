@@ -313,13 +313,7 @@ async fn open_session<'a>(
     let started_at = setup_began;
 
     let mut turn = TurnState {
-        state: RuntimeState {
-            started_at,
-            interview_loop: boot.interview_loop,
-            coding_minutes: boot.coding_minutes,
-            behavioral_minutes: boot.behavioral_minutes,
-            ..RuntimeState::default()
-        },
+        state: initial_runtime_state(&boot, started_at),
         agent_state: std::mem::take(&mut agent_state),
         activity: RuntimeActivity::new(started_at),
         turns: SpeakerTurns::default(),
@@ -1003,6 +997,22 @@ struct InterviewContext<'a> {
 
 /// Applies one decoded data packet. `Break` means the interview is over and the
 /// report has been published.
+/// The interview's starting state, from the plan the token was minted for.
+///
+/// Every field here is read for the length of the interview and none can be
+/// recovered once it is missed: the clock the round boundary is measured
+/// against, the loop that decides whether a behavioral round exists at all,
+/// and the two budgets the report divides the session into.
+fn initial_runtime_state(boot: &RuntimeBootstrap<'_>, started_at: Instant) -> RuntimeState {
+    RuntimeState {
+        started_at,
+        interview_loop: boot.interview_loop,
+        coding_minutes: boot.coding_minutes,
+        behavioral_minutes: boot.behavioral_minutes,
+        ..RuntimeState::default()
+    }
+}
+
 /// A packet for the browser, on the topic it is listening to.
 ///
 /// The three fields here are what decide whether the message arrives at all:
@@ -1778,6 +1788,199 @@ mod tests {
 
     use crate::config::load_from_pairs;
     use ::livekit::webrtc::video_frame::{I420Buffer, VideoBuffer, VideoFrame, VideoRotation};
+
+    /// The interview starts from the plan its token was minted for.
+    ///
+    /// None of this can be recovered once it is missed: the clock the round
+    /// boundary is measured against, the loop that decides whether there is a
+    /// behavioral round at all, and the budgets the report divides the session
+    /// into. A field dropped here is a default carried for the whole hour.
+    #[test]
+    fn the_interview_begins_from_the_plan_it_was_booked_with() {
+        let config = load_from_pairs([
+            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+            ("LIVEKIT_API_KEY", "devkey"),
+            ("LIVEKIT_API_SECRET", "devsecret"),
+            ("GOOGLE_API_KEY", "google-key"),
+        ])
+        .unwrap();
+
+        // A plan that differs from the default in every field, because the
+        // default is the forty-five minute two-round one: booked with that, a
+        // field dropped here still reads correctly and the test proves nothing.
+        let boot = crate::runtime::bootstrap_with_rounds(
+            &config,
+            "interview-fixed",
+            Some("two-sum"),
+            30,
+            crate::runtime::RuntimeOptions {
+                interview_loop: crate::agent::InterviewLoop::CodingOnly,
+                ..crate::runtime::RuntimeOptions::default()
+            },
+        );
+        let untouched = RuntimeState::default();
+        for (named, same) in [
+            (
+                "interview_loop",
+                boot.interview_loop == untouched.interview_loop,
+            ),
+            (
+                "coding_minutes",
+                boot.coding_minutes == untouched.coding_minutes,
+            ),
+            (
+                "behavioral_minutes",
+                boot.behavioral_minutes == untouched.behavioral_minutes,
+            ),
+        ] {
+            assert!(
+                !same,
+                "{named} matches the default, so dropping it is invisible"
+            );
+        }
+
+        let started_at = Instant::now() - Duration::from_secs(300);
+        let state = initial_runtime_state(&boot, started_at);
+
+        assert_eq!(
+            state.started_at, started_at,
+            "the clock is the room's, not now"
+        );
+        assert_eq!(state.interview_loop, boot.interview_loop);
+        assert_eq!(state.coding_minutes, boot.coding_minutes);
+        assert_eq!(state.behavioral_minutes, boot.behavioral_minutes);
+    }
+
+    /// Closing a turn yields what to publish, once, and only for an open one.
+    ///
+    /// The pair is the line and the segment it replaces, so an empty text or a
+    /// borrowed id publishes a turn that says nothing or overwrites another
+    /// one. Closing a turn nobody opened would publish a blank line for a
+    /// speaker who has not spoken.
+    #[test]
+    fn a_turn_closes_once_and_only_when_it_was_open() {
+        let mut unopened = SpeakerTurn::default();
+        assert!(
+            close_turn(&mut unopened, "Candidate").is_none(),
+            "a speaker who has not spoken has no line to publish"
+        );
+
+        let mut turn = SpeakerTurn::default();
+        turn.record(&mut Vec::new(), "Candidate", "I will use a hash map.");
+        let open_segment = turn.segment_id("Candidate");
+        let (text, segment) = close_turn(&mut turn, "Candidate").expect("an open turn closes");
+        assert_eq!(text, "I will use a hash map.");
+        assert_eq!(
+            segment, open_segment,
+            "the id names the segment being replaced, not the one after it"
+        );
+        assert_ne!(
+            turn.segment_id("Candidate"),
+            open_segment,
+            "and the next line is a new segment, not an overwrite of this one"
+        );
+
+        assert!(
+            close_turn(&mut turn, "Candidate").is_none(),
+            "a closed turn closes once; publishing it again repeats the line"
+        );
+    }
+
+    /// The report says which rounds actually completed, from banked evidence.
+    ///
+    /// Two gates, and both are the same shape: every phase of the round needs
+    /// evidence that is not a skip. Loosened to "any phase" or to "including
+    /// skips", a candidate who ran out of time reads as one who finished.
+    #[test]
+    fn the_rounds_a_report_calls_complete_are_the_ones_with_evidence() {
+        let rounds = |state: &RuntimeState| {
+            report_with_integrity_events(serde_json::json!({}), state)["rounds"].clone()
+        };
+        let bank = |state: &mut RuntimeState, phase: &str, kind: &str| {
+            crate::agent::record_framework_evidence(
+                state,
+                &serde_json::json!({
+                    "phase": phase, "source": if kind == "skipped" { "session_timing" }
+                        else { "candidate_speech" },
+                    "kind": kind, "confidence": 90,
+                    "summary": format!("candidate {kind} {phase}"),
+                }),
+            )
+            .expect("evidence should record");
+        };
+
+        // Nothing banked: neither round is claimed.
+        let bare = RuntimeState {
+            interview_loop: crate::agent::InterviewLoop::CodingBehavioral,
+            ..RuntimeState::default()
+        };
+        assert_eq!(rounds(&bare)[0]["status"], "incomplete");
+        assert_eq!(rounds(&bare)[1]["status"], "skipped");
+
+        // Evidence for some other phase is evidence for neither of these.
+        // Asking whether any banked phase is not Test answers yes for a
+        // candidate who only restated the problem, and calls the round done.
+        let mut elsewhere = bare.clone();
+        bank(&mut elsewhere, "repeat", "observed");
+        assert_eq!(
+            rounds(&elsewhere)[0]["status"],
+            "incomplete",
+            "restating the problem is not having tested or optimized it"
+        );
+
+        // One of the two coding phases is not both of them.
+        let mut half = bare.clone();
+        bank(&mut half, "test", "observed");
+        assert_eq!(
+            rounds(&half)[0]["status"],
+            "incomplete",
+            "one phase is not the gate"
+        );
+
+        // A skip is the record of not reaching it, so it cannot complete it.
+        let mut skipped = half.clone();
+        bank(&mut skipped, "optimizations", "skipped");
+        assert_eq!(
+            rounds(&skipped)[0]["status"],
+            "incomplete",
+            "running out of time is not finishing"
+        );
+
+        let mut coding_done = half.clone();
+        bank(&mut coding_done, "optimizations", "observed");
+        assert_eq!(rounds(&coding_done)[0]["status"], "complete");
+
+        // STAR needs the round to have started and all four phases banked.
+        let mut star = coding_done.clone();
+        for phase in ["situation", "task", "action", "result"] {
+            bank(&mut star, phase, "observed");
+        }
+        assert_eq!(
+            rounds(&star)[1]["status"],
+            "skipped",
+            "four phases without the round beginning is not a behavioral round"
+        );
+        star.behavioral_round_started = true;
+        assert_eq!(rounds(&star)[1]["status"], "complete");
+
+        // Begun but not finished. Evidence for one STAR phase is not evidence
+        // for the other three, and asking whether any banked phase is not Task
+        // answers yes as soon as anything else was said, which reports a
+        // behavioral round the candidate barely entered as one they completed.
+        let mut begun = coding_done.clone();
+        begun.behavioral_round_started = true;
+        bank(&mut begun, "situation", "observed");
+        assert_eq!(
+            rounds(&begun)[1]["status"],
+            "started",
+            "one STAR phase in is started, not complete"
+        );
+
+        // A coding-only interview reserves no behavioral round at all.
+        let mut coding_only = coding_done.clone();
+        coding_only.interview_loop = crate::agent::InterviewLoop::CodingOnly;
+        assert_eq!(rounds(&coding_only)[1]["status"], "not_configured");
+    }
 
     /// A packet the browser never receives is the same as one never sent.
     ///

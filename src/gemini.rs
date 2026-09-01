@@ -794,6 +794,32 @@ mod tests {
         }).to_string()
     }
 
+    /// The size limit is checked before the parse, and at the size it names.
+    ///
+    /// It exists so a runaway response is refused without being parsed, so the
+    /// boundary is where refusing starts: a limit one byte early rejects a
+    /// report that fits, and one that only fires on an exact length stops
+    /// refusing the runaway ones entirely.
+    #[test]
+    fn an_oversized_report_response_is_refused_at_the_size_it_names() {
+        let exceeds = |text: &str| {
+            parse_and_validate_report(text)
+                .unwrap_err()
+                .iter()
+                .any(|error| error.contains("exceeds"))
+        };
+
+        // Not JSON either way, so both are refused. What differs is why, and
+        // the size is the only reason that can be given without parsing.
+        let at_limit = "x".repeat(MAX_REPORT_RESPONSE_BYTES);
+        assert_eq!(at_limit.len(), MAX_REPORT_RESPONSE_BYTES);
+        assert!(
+            !exceeds(&at_limit),
+            "a response of exactly the limit is inside it"
+        );
+        assert!(exceeds(&format!("{at_limit}x")), "one byte past it is not");
+    }
+
     #[test]
     fn report_parser_requires_the_entire_response_and_strict_schema() {
         let valid = valid_report_text();
