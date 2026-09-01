@@ -167,6 +167,18 @@ function applyGrantedDuration(granted) {
   behavioralMinutes = interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
   codingMinutes = durationMin - behavioralMinutes;
   state.remaining = durationMin * 60;
+  // The budget is on screen by now: `bindEvents` wrote it during setup, from
+  // the length the URL asked for. Leaving it there would put the old number in
+  // front of the candidate for the whole interview.
+  renderRoundPlan();
+}
+
+/// One place, because it is written twice: once during setup and again when the
+/// server answers with a length the request did not get.
+function renderRoundPlan() {
+  nodes.roundPlanSummary.textContent = interviewLoop === "coding_only"
+    ? `Coding-only loop · ${codingMinutes} minute coding budget.`
+    : `Coding + behavioral loop · ${codingMinutes} minute coding budget · ${behavioralMinutes} minute behavioral reserve.`;
 }
 const interviewProfile = {
   role: params.get("role") || "",
@@ -382,9 +394,7 @@ function applyIndent(next) {
 }
 
 function bindEvents() {
-  nodes.roundPlanSummary.textContent = interviewLoop === "coding_only"
-    ? `Coding-only loop · ${codingMinutes} minute coding budget.`
-    : `Coding + behavioral loop · ${codingMinutes} minute coding budget · ${behavioralMinutes} minute behavioral reserve.`;
+  renderRoundPlan();
   nodes.problemTab.addEventListener("click", () => selectTab("problem"));
   nodes.transcriptTab.addEventListener("click", () => selectTab("transcript"));
   nodes.mic.addEventListener("click", toggleMicrophone);

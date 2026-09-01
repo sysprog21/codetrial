@@ -438,7 +438,11 @@ fn token_response_reports_the_length_it_granted() {
     for (recording_max_min, requested, expected) in [
         (None, json!(60), json!(60)),
         (Some(45), json!(60), json!(45)),
-        (Some(45), json!(42.8), json!(42.8)),
+        // The metadata keeps a fractional request fractional; the agent
+        // truncates it to whole minutes before building its deadline. The page
+        // is told what will be enforced, or it counts 42.8 minutes against an
+        // interview the interviewer ends at 42.
+        (Some(45), json!(42.8), json!(42)),
     ] {
         let body = serde_json::to_vec(&json!({"durationMin": requested})).unwrap();
         let response = token_response(
@@ -461,10 +465,19 @@ fn token_response_reports_the_length_it_granted() {
             response.duration_min, expected,
             "asked for {requested} under a cap of {recording_max_min:?}"
         );
-        assert_eq!(
-            response.duration_min, metadata["durationMin"],
-            "the response and the metadata named different lengths"
+        // Whole minutes always, whatever was asked for: a length the agent
+        // cannot enforce is a countdown that disagrees with the interview.
+        assert!(
+            response.duration_min.as_u64().is_some(),
+            "the page was handed {} minutes, which the agent would truncate",
+            response.duration_min
         );
+        if metadata["durationMin"].as_u64().is_some() {
+            assert_eq!(
+                response.duration_min, metadata["durationMin"],
+                "the response and the metadata named different lengths"
+            );
+        }
     }
 }
 
@@ -2052,8 +2065,8 @@ async fn token_api_matches_frontend_contract_over_http() {
     assert_eq!(metadata["candidateIdentity"], claims["sub"]);
 
     // The page cannot read the metadata: it is inside a signed token it never
-    // opens. The response body carries the same number so the countdown and the
-    // round split are built from the length the agent was given.
+    // opens. The response body carries the length the agent will enforce, which
+    // for a whole-minute request is the metadata value itself.
     assert_eq!(body["durationMin"], metadata["durationMin"]);
 
     server.abort();

@@ -55,11 +55,19 @@ pub struct TokenResponse {
     pub token: String,
     pub server_url: String,
     pub room_name: String,
-    /// The length this interview actually got, which is not always the length
-    /// that was asked for: `token_duration_min` clamps to the range and, where
-    /// this server records, to the recording cap. The page runs its own
+    /// The length this interview actually runs for, which is not always the
+    /// length that was asked for: `token_duration_min` clamps to the range and,
+    /// where this server records, to the recording cap. The page runs its own
     /// countdown and its own round split, so it has to be told the answer
     /// rather than keep the question it asked.
+    ///
+    /// Read back out of the metadata with the agent's own
+    /// `duration_from_metadata`, rather than taken from the value that went in.
+    /// The metadata keeps a fractional request fractional and the agent
+    /// truncates it to whole minutes before it builds the deadline, so handing
+    /// the page the value as written would have it counting 42.8 minutes
+    /// against an interview the interviewer ends at 42. One function, so the
+    /// two cannot answer differently.
     pub duration_min: Value,
 }
 
@@ -255,7 +263,7 @@ pub fn token_response(
         })?,
         server_url: config.server_url.to_string(),
         room_name: room_name.to_string(),
-        duration_min,
+        duration_min: json!(crate::agent::duration_from_metadata(Some(&duration_min))),
     })
 }
 
