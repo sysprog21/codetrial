@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://codetrial.example/media-output.schema.json",
   "title": "Recording media acceptance",
-  "description": "What ./scripts/recording-integration.sh --phase=media emits after ffprobe and operator attestations, and what tests/recording_integration.rs checks. File facts come from ffprobe; the three candidate/interviewer presentation facts are marked operator-attested by x-codetrial-evidence until recorder-side telemetry replaces all three.",
+  "description": "The staged document ./scripts/recording-integration.sh emits. The media phase writes file and presentation facts, the attested ones marked by x-codetrial-evidence; delivery and cleanup append their provider facts. Rust lifecycle_acceptance requires the completed document.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -64,6 +64,43 @@
       "type": "boolean",
       "x-codetrial-evidence": "operator-attestation",
       "description": "Operator attestation that the template's production VRM render was running. False until a model is published, which keeps this acceptance blocked on avatar work."
+    },
+    "drive_file_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The one Shared Drive file whose name is the recording ID plus .mp4."
+    },
+    "delivery_created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Drive-created time for the delivered file; the reader permission must expire after it."
+    },
+    "permission_expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Expiry of the named recipient's active reader permission on the delivered file."
+    },
+    "delivery_verified_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Harness time when it read the reader permission; it bounds its remaining lifetime."
+    },
+    "cleanup_status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "drive_file_absent",
+        "gcs_object_absent"
+      ],
+      "properties": {
+        "drive_file_absent": {
+          "const": true
+        },
+        "gcs_object_absent": {
+          "const": true
+        }
+      },
+      "description": "Both provider lookups returned absence after the server-owned retention path ran."
     }
   }
 }

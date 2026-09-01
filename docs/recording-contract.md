@@ -1128,6 +1128,28 @@ fixture-only trigger, but a global `RETENTION_SECONDS` override is not: it
 would change unrelated staging rows and no longer proves the named recording's
 cleanup path.
 
+The credentialed harness records one lifecycle document, not three unrelated
+passes. After the media phase has written it, run the delivery and cleanup
+phases with `CODETRIAL_RECORDING_RECIPIENT_EMAIL` set to the verified recipient
+address for delivery, and `CODETRIAL_DB_PATH` set to the isolated staging
+database for cleanup. Each phase asks only for what it reads: delivery opens no
+database, and cleanup judges no reader permission, because by the time cleanup
+runs that grant is meant to have lapsed. It finds exactly one
+`<recording_id>.mp4` in the Shared Drive and reads that recipient's single
+reader permission, whose expiry must still be active and be no more than 24
+hours from verification. That reader must also be the file's only one: counting
+the recipient's permissions alone would call a file with a second reader on it
+a correctly scoped delivery. The server sets the expiry from its post-upload
+clock; comparing it to Drive's earlier `createdTime` would reject valid 24-hour
+grants. Cleanup success means both the exact Drive file and GCS object return
+HTTP 404 after the server-owned sweeper runs; any other status remains a
+failure.
+
+The completed document is judged by `cargo test --test recording_integration
+lifecycle_acceptance`, which runs only with `CODETRIAL_RECORDING_INTEGRATION=1`
+and `CODETRIAL_RECORDING_LIFECYCLE_ACCEPTANCE=1` set. Both are opt-in because a
+media-only pass has no Drive file or cleanup result to judge yet.
+
 The script does not talk to Drive or GCS itself, because a second
 implementation of a deletion is a second thing that can be wrong about what it
 deleted. A marked recording is deleted by the running server, and with no server

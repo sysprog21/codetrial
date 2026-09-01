@@ -116,6 +116,7 @@ gate gen-problem-cards python3 "$ROOT/scripts/gen-problem-cards.py" --check
 gate wire-fixtures node "$ROOT/scripts/gen-wire-fixtures.mjs" --check
 gate recording-fixtures node "$ROOT/scripts/gen-recording-fixtures.mjs" --check
 gate recording-provision-check-tests python3 -m unittest "$ROOT/tests/test_recording_provision_check.py"
+gate recording-integration-harness-tests python3 -m unittest "$ROOT/tests/test_recording_integration_harness.py"
 gate todo-deps python3 "$ROOT/scripts/check-todo-deps.py"
 gate study-plan-guards python3 "$ROOT/scripts/check-study-plan-guards.py"
 gate calibration-fixtures python3 "$ROOT/scripts/gen-calibration-fixtures.py" --check
