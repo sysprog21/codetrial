@@ -345,6 +345,10 @@ fn unsupported_delivery_and_personality_judgments_are_rejected_atomically() {
         "Visible anxiety slowed the walkthrough.",
         "You lacked confidence in the approach.",
         "A lack-of-confidence came through.",
+        "You came across as nervous.",
+        "You were visibly nervous.",
+        "A nervous pause followed the question.",
+        "Your nervous energy showed.",
     ] {
         let mut report = valid_strict_report();
         report["summary"] = json!(claim);
