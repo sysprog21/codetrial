@@ -2789,6 +2789,29 @@ fn browser_control_packets_all_reach_the_agent() {
     );
 }
 
+/// A run with no cases is not a run every case passed. `passed == total` holds
+/// at zero and zero, so the positive-count guard is the only thing standing
+/// between an empty run and the congratulation, and it is the same shape as the
+/// clamp that once mapped 100 of 150 onto 99 of 99.
+#[test]
+fn a_test_run_with_no_cases_is_not_congratulated() {
+    let mut state = RuntimeState::default();
+    let payload = json!({"language": "python", "passed": 0, "total": 0});
+    let result = apply_data_event(
+        &mut state,
+        TOPIC_TEST_RESULTS,
+        &payload,
+        TEST_REACTION_COOLDOWN_S,
+    );
+    let reply = result
+        .generate_reply
+        .expect("the agent reacts to the run it was handed");
+    assert!(
+        !reply.contains("every one passed"),
+        "a run with no cases was congratulated: {reply}"
+    );
+}
+
 /// The agent's reaction to a test run is chosen from `passed`, `total`, and
 /// `setupError`. A renamed field on the producer side does not fail anything;
 /// it congratulates a candidate whose tests failed.

@@ -162,11 +162,9 @@ fn apply_test_results(
     let summary = format_test_run(Some(payload), state.test_runs);
 
     DataEventResult {
-        update_last_code_change: false,
         update_last_test_reaction: true,
         update_last_interjection: true,
         generate_reply: Some(test_results_reaction(&summary, all_passed)),
-        finish_interview: None,
         ..DataEventResult::default()
     }
 }
