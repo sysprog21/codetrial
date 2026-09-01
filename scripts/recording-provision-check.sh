@@ -175,9 +175,38 @@ project_number=$(gcloud projects describe "$project" --format="value(projectNumb
 auditor_token=$(gcloud auth print-access-token)
 auditor_curl=$work/auditor-curl.conf
 printf 'header = "Authorization: Bearer %s"\n' "$auditor_token" >"$auditor_curl"
-curl --fail --silent --show-error --max-time 20 --config "$auditor_curl" \
-  "https://www.googleapis.com/drive/v3/files/$drive_id/permissions?supportsAllDrives=true&fields=permissions(id,type,role,emailAddress,deleted)" \
-  >"$work/drive-permissions.json"
+
+# Follow the pages. A shared drive caps permissions.list at 100 per page, and
+# naming only permissions() in fields drops nextPageToken, so a truncated answer
+# looked exactly like a complete one: a second grant for this account on page
+# two left the count at one and the audit reported an exactness it never saw.
+drive_query="supportsAllDrives=true&pageSize=100&fields=nextPageToken,permissions(id,type,role,emailAddress,deleted)"
+drive_url="https://www.googleapis.com/drive/v3/files/$drive_id/permissions?$drive_query"
+page=0
+while :; do
+  page=$((page + 1))
+  [ "$page" -le 50 ] || {
+    echo "Shared Drive permissions did not stop paging after $((page - 1)) pages" >&2
+    exit 1
+  }
+  curl --fail --silent --show-error --max-time 20 --config "$auditor_curl" \
+    "$drive_url" >"$work/drive-page-$page.json"
+  token=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("nextPageToken") or "")' \
+    "$work/drive-page-$page.json")
+  [ -n "$token" ] || break
+  drive_url="https://www.googleapis.com/drive/v3/files/$drive_id/permissions?$drive_query&pageToken=$token"
+done
+
+python3 - "$work/drive-permissions.json" "$work"/drive-page-*.json <<'PY_MERGE'
+import json
+import sys
+
+out, *pages = sys.argv[1:]
+permissions = []
+for page in pages:
+    permissions.extend(json.load(open(page, encoding="utf-8")).get("permissions", []))
+json.dump({"permissions": permissions}, open(out, "w", encoding="utf-8"))
+PY_MERGE
 
 python3 - "$delivery_email" "$work/bucket-iam.json" "$work/ancestors-iam.json" \
   "$work/bucket.json" "$work/drive-permissions.json" "$project_number" <<'PY'

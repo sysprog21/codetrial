@@ -42,7 +42,7 @@ class ProvisionCheckTests(unittest.TestCase):
         path.write_text(contents)
         path.chmod(0o755)
 
-    def run_check(self, *, bucket_iam=None, ancestors_iam=None, bucket=None, drive=None, fail="", delivery_email=DELIVERY_EMAIL, auditor_email="auditor@staging-project.iam.gserviceaccount.com", template_origin="https://1.1.1.1"):
+    def run_check(self, *, bucket_iam=None, ancestors_iam=None, bucket=None, drive=None, drive_page_2=None, fail="", delivery_email=DELIVERY_EMAIL, auditor_email="auditor@staging-project.iam.gserviceaccount.com", template_origin="https://1.1.1.1"):
         if bucket_iam is None:
             bucket_iam = {
                 "bindings": [{"role": "roles/storage.objectAdmin", "members": [f"serviceAccount:{DELIVERY_EMAIL}"]}]
@@ -53,6 +53,10 @@ class ProvisionCheckTests(unittest.TestCase):
             bucket = bucket_resource()
         if drive is None:
             drive = {"permissions": [{"emailAddress": DELIVERY_EMAIL, "type": "user", "role": "organizer"}]}
+        if drive_page_2 is not None:
+            drive = drive | {"nextPageToken": "page-2"}
+        else:
+            drive_page_2 = {"permissions": []}
 
         with tempfile.TemporaryDirectory() as temporary:
             temporary_path = Path(temporary)
@@ -64,6 +68,7 @@ class ProvisionCheckTests(unittest.TestCase):
                 "ancestors-iam.json": ancestors_iam,
                 "bucket.json": bucket,
                 "drive.json": drive,
+                "drive-page-2.json": drive_page_2,
             }
             for name, value in files.items():
                 (temporary_path / name).write_text(json.dumps(value))
@@ -89,6 +94,7 @@ esac
                 "curl",
                 """#!/bin/sh
 case "$*" in
+  *"/permissions?"*pageToken=*) cat "$FAKE_ROOT/drive-page-2.json" ;;
   *"/permissions?"*) cat "$FAKE_ROOT/drive.json" ;;
   *"/drive/v3/files?"*) printf '{"files": []}\\n' ;;
   *"/recording/index.html"*) ;;
@@ -239,6 +245,25 @@ esac
             iamConfiguration={"uniformBucketLevelAccess": {"enabled": False}}))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Uniform Bucket-Level Access", result.stderr)
+
+    def test_a_second_page_of_drive_permissions_is_read(self):
+        # A shared drive caps this listing at 100 per page. A second grant for
+        # the delivery account landing on page two used to leave the count at
+        # one, and the audit reported an exactness it had never seen.
+        result = self.run_check(drive_page_2={"permissions": [
+            {"emailAddress": DELIVERY_EMAIL, "type": "user", "role": "writer"},
+        ]})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exactly one active Shared Drive organizer", result.stderr)
+
+    def test_a_sole_grant_on_the_second_page_is_still_found(self):
+        result = self.run_check(
+            drive={"permissions": []},
+            drive_page_2={"permissions": [
+                {"emailAddress": DELIVERY_EMAIL, "type": "user", "role": "organizer"},
+            ]},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_non_organizer_drive_membership_is_refused(self):
         result = self.run_check(drive={"permissions": [
