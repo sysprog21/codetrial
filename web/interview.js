@@ -1,4 +1,4 @@
-import { loadProblem } from "./problem-data.js";
+import { loadJudge, loadProblem } from "./problem-data.js";
 import {
   MIC_CONFIRM_FRAMES,
   mediaReadiness,
@@ -85,11 +85,17 @@ import {
 } from "./recording-state.js";
 import { saveReportHistory } from "./history.js";
 import { createFacePresenceDetector, facePresenceVerdict } from "./face-presence.js";
+import { harnessGap, languagesFor } from "./compiler-explorer.js";
 import { runBrowserTests } from "./runners.js";
 import { mountBehavioralReview } from "./behavioral-review.js";
 import { consumeGroundingPacket } from "./document-grounding.js";
 
-const languages = ["python", "javascript", "c", "cpp", "java"];
+/// Which framework the candidate is being read against right now. The rounds
+/// never overlap, so this is a single value rather than a pair. Declared up
+/// here because `codingClosed` reads it and `init` runs before the rest of the
+/// module body does, so a declaration beside its other readers would be in the
+/// temporal dead zone for the first paint.
+let frameworkRound = "coding";
 let editorInitialized = false;
 let codePublishTimer = null;
 // The agent reads the editor once per 2s watch tick, so publishing every
@@ -131,6 +137,13 @@ const problem = await loadProblem(params.get("problem")).catch((error) => {
   if (title) title.textContent = "This interview could not load its problem. Reload the page.";
   throw error;
 });
+// Started here and awaited nowhere: which tabs are real is a property of the
+// judge, but it is not worth holding a page the candidate can already work in.
+// Every tab is offered until the answer arrives, which is what the row did
+// before this and what it keeps doing if the judge never loads; the run path
+// reports that failure itself.
+const judgePromise = loadJudge(problem.id).catch(() => null);
+let languages = languagesFor(null);
 const durationMin = clamp(Number.parseInt(params.get("duration") || "45", 10) || 45, 10, 90);
 const interviewLoop = codingLoop(params.get("loop"));
 const behavioralMinutes = interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
@@ -155,6 +168,7 @@ const state = {
   transcript: null, // createTranscriptView, built in init once nodes exist
   latestSummary: null,
   testStatus: "done",
+  runningTests: false,
   report: null,
   room: null,
   connected: false,
@@ -271,6 +285,10 @@ async function init() {
   renderProblem();
   setLanguage("python");
   bindEvents();
+  // After bindEvents, so the callback cannot beat the row it edits: everything
+  // above here is synchronous, and a `then` runs no earlier than the next
+  // microtask.
+  void judgePromise.then(applyLanguages);
   // No enumeration here. Before the preflight grant the browser reports only a
   // blank placeholder, so the list is discarded and repainted a few lines down;
   // the `toggle` handler covers a panel opened while the preflight is still up.
@@ -1109,6 +1127,20 @@ function selectTab(tab) {
   nodes.transcriptTab.classList.toggle("selected", transcript);
 }
 
+/// Both the row and its tooltips come from `harnessGap`, so a tab is never
+/// dead for a reason it does not state. An already-active buffer stays
+/// visible: hiding it would replace the candidate's final submission with a
+/// starter buffer when the judge response arrives late.
+function applyLanguages(spec) {
+  languages = languagesFor(spec);
+  for (const button of document.querySelectorAll("[data-language]")) {
+    const gap = harnessGap(button.dataset.language, spec);
+    button.disabled = gap !== null;
+    button.title = gap ?? "";
+  }
+  updateRunAvailability();
+}
+
 function setLanguage(language) {
   if (!languages.includes(language)) return;
   if (editorInitialized) {
@@ -1121,6 +1153,7 @@ function setLanguage(language) {
   for (const button of document.querySelectorAll("[data-language]")) {
     button.classList.toggle("selected", button.dataset.language === language);
   }
+  updateRunAvailability();
   // Debounced like a keystroke, and for the same reason. Publishing on every
   // click meant a candidate trying three tabs in a row produced three language
   // changes, and the agent speaks a confirmation for each, so Jim talked over
@@ -1201,9 +1234,6 @@ function togglePause() {
   if (!state.room) applyPause(!state.paused);
 }
 
-/// Which framework the candidate is being read against right now. The rounds
-/// never overlap, so this is a single value rather than a pair.
-let frameworkRound = "coding";
 let frameworkPhases = [];
 let frameworkHintTimer = null;
 
@@ -1289,7 +1319,7 @@ function applyPause(paused) {
   // behavioral round disables the editor and the runner on purpose, and a
   // pause taken during it used to give both back on the way out.
   nodes.editor.disabled = paused || codingClosed();
-  nodes.run.disabled = paused || codingClosed();
+  updateRunAvailability();
   recordReplay("lifecycle", { state: paused ? "paused" : "resumed" });
   recordStage();
   tickTimer();
@@ -1298,6 +1328,7 @@ function applyPause(paused) {
 
 async function runTests() {
   flushPendingCodePublish();
+  state.runningTests = true;
   nodes.run.disabled = true;
   nodes.run.textContent = "Running...";
   nodes.resultsBody.hidden = false;
@@ -1316,8 +1347,14 @@ async function runTests() {
     addTranscript("you", "I ran the tests.", true);
     addTranscript("interviewer", summary.setupError ? "I could not run that yet. Check the setup error and keep going." : `${summary.passed}/${summary.total} tests passed. Explain what changed.`, true);
   }
-  nodes.run.disabled = state.paused || codingClosed();
+  state.runningTests = false;
+  updateRunAvailability();
   nodes.run.textContent = "Run tests";
+}
+
+function updateRunAvailability() {
+  nodes.run.disabled = state.runningTests || state.paused || codingClosed()
+    || !languages.includes(state.language);
 }
 
 function firstRunnerStatus(language) {

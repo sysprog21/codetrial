@@ -40,14 +40,19 @@ test("interview history routes through the shared persistence helper", () => {
 test("a completed test run keeps pause and round locks", () => {
   const interview = read("interview.js");
 
-  // Both places that hand the runner back have to ask the same question. A
-  // finished test run was the one that got it right; resuming from a pause was
-  // the one that did not, and gave the editor and the runner back during the
-  // behavioral round that had just retired them.
-  assert.match(functionBody(interview, "runTests"), /nodes\.run\.disabled = state\.paused \|\| codingClosed\(\)/);
+  // Both places that hand the runner back use the same guard. A finished test
+  // run was the one that got it right; resuming from a pause was the one that
+  // did not, and gave the editor and the runner back during the behavioral
+  // round that had just retired them.
+  assert.match(functionBody(interview, "runTests"), /updateRunAvailability\(\)/);
   const applyPause = functionBody(interview, "applyPause");
   assert.match(applyPause, /nodes\.editor\.disabled = paused \|\| codingClosed\(\)/);
-  assert.match(applyPause, /nodes\.run\.disabled = paused \|\| codingClosed\(\)/);
+  assert.match(applyPause, /updateRunAvailability\(\)/);
+  // Asserted as two facts rather than one spelling: the guard is `codingClosed`
+  // itself now, not a DOM attribute that happens to track it.
+  const updateRunAvailability = functionBody(interview, "updateRunAvailability");
+  assert.match(updateRunAvailability, /codingClosed\(\)/);
+  assert.match(updateRunAvailability, /!languages\.includes\(state\.language\)/);
   assert.match(
     functionBody(interview, "codingClosed"),
     /frameworkRound === "behavioral" \|\| state\.phase !== "live"/,

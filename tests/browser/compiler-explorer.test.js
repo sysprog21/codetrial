@@ -6,8 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  ALL_LANGUAGES,
   compilerType,
   generateHarness,
+  harnessGap,
+  languagesFor,
   mapCompilerResponse,
   nativeLiteral,
   parseCompilerResults,
@@ -515,3 +518,19 @@ function bankFunctionTypes() {
   }
   return [...types].sort();
 }
+
+test("a class-style judge withholds C, and says why", () => {
+  assert.equal(judges["lru-cache"].kind, "class");
+  assert.deepEqual(languagesFor(judges["lru-cache"]), ALL_LANGUAGES.filter((one) => one !== "c"));
+  assert.match(harnessGap("c", judges["lru-cache"]), /only builds function judges/);
+  assert.equal(harnessGap("cpp", judges["lru-cache"]), null);
+});
+
+test("a function-style judge offers every language, and so does an unreadable one", () => {
+  assert.equal(judges["two-sum"].kind, "function");
+  assert.deepEqual(languagesFor(judges["two-sum"]), ALL_LANGUAGES);
+  // A judge that could not be fetched must not cost a candidate a language:
+  // the run path reports the failure itself.
+  assert.deepEqual(languagesFor(null), ALL_LANGUAGES);
+  assert.equal(harnessGap("c", null), null);
+});

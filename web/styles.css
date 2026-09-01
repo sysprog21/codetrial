@@ -302,6 +302,13 @@ p {
   opacity: 0.6;
 }
 
+/* A tab the judge cannot run, dimmed rather than removed: the row stays the
+   same five tabs everywhere, and the title says which one is out and why. */
+.language-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .history {
   margin-top: 1rem;
   padding: 1rem;

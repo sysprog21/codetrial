@@ -72,6 +72,35 @@ export function nativeLiteral(value, type, language) {
   throw new Error(`Unsupported literal type: ${type}`);
 }
 
+/// Every language the editor offers, in tab order. The list lives here because
+/// the only thing that ever removes one from it is what the harness below can
+/// generate. Frozen because it is exported: a caller that filtered it in place
+/// would change what every later caller is offered.
+export const ALL_LANGUAGES = Object.freeze(["python", "javascript", "c", "cpp", "java"]);
+
+/// Why this judge cannot be run in this language, in a sentence a candidate can
+/// read, or null when it can. The tab row disables from it and shows it as the
+/// tooltip, so the reason a tab is dead cannot drift from the rule that killed
+/// it; a second withheld pair is a second case here rather than a second place
+/// to remember.
+///
+/// C has no classes, so `generateHarness` refuses a class judge for it and a
+/// candidate would otherwise find that out by writing a whole solution and
+/// pressing run.
+export function harnessGap(language, spec) {
+  if (language === "c" && spec?.kind === "class") {
+    return "This problem asks for a class, and the C harness only builds function judges.";
+  }
+  return null;
+}
+
+/// A missing or unreadable judge offers everything: the run path says why it
+/// failed on its own, and dropping a tab over a dropped request is the worse
+/// guess.
+export function languagesFor(spec) {
+  return ALL_LANGUAGES.filter((language) => !harnessGap(language, spec));
+}
+
 export function generateHarness(language, spec, candidateCode) {
   if (!["c", "cpp", "java"].includes(language)) throw new Error(`Unsupported harness language: ${language}`);
   if (spec.kind === "class" && language === "c") throw new Error("Only function judges are supported for C");

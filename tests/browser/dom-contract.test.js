@@ -251,6 +251,17 @@ test("the interview page keeps the structure the script drives", () => {
   );
 });
 
+test("a late judge response does not replace the active editor buffer", () => {
+  const script = read("interview.js");
+  const applyLanguages = functionBody(script, "applyLanguages");
+  const setLanguage = functionBody(script, "setLanguage");
+  const updateRunAvailability = functionBody(script, "updateRunAvailability");
+  assert.doesNotMatch(applyLanguages, /setLanguage\(/);
+  assert.match(applyLanguages, /updateRunAvailability\(\)/, "the unsupported active tab cannot run");
+  assert.match(setLanguage, /updateRunAvailability\(\)/, "a supported tab restores the runner");
+  assert.match(updateRunAvailability, /!languages\.includes\(state\.language\)/);
+});
+
 test("output confirmation is required but not blocked by tone timing", () => {
   const script = interviewSource();
   const heardHandler = script.slice(

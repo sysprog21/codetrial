@@ -21,18 +21,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURES = join(ROOT, "tests", "fixtures");
 
 const lib = await import(join(ROOT, "web", "lib.js"));
-
-// Read the offered languages out of the producer instead of restating them.
-// The point of these fixtures is to catch the two sides disagreeing, and a
-// hardcoded list here would be a third place to disagree with. A language the
-// tabs offer but src/agent.rs does not recognize reaches no prompt and changes
-// no state, so the candidate's click is silently ignored.
-function offeredLanguages() {
-  const source = readFileSync(join(ROOT, "web", "interview.js"), "utf8");
-  const match = source.match(/^const languages = \[(.*?)\];$/m);
-  if (!match) throw new Error("could not find the language list in web/interview.js");
-  return match[1].split(",").map((part) => part.trim().replace(/^"|"$/g, ""));
-}
+const { ALL_LANGUAGES } = await import(join(ROOT, "web", "compiler-explorer.js"));
 
 const CODE = "def two_sum(nums, target):\n    return []\n";
 const EDITED = "def two_sum(nums, target):\n    seen = {}\n    return []\n";
@@ -218,7 +207,11 @@ async function integrityChain() {
   return events;
 }
 
-const languages = offeredLanguages();
+// Imported rather than restated: a hardcoded list here would be a third place
+// to disagree with. The constant, not `languagesFor`, because which tabs a
+// given judge offers is a UX choice and this is the whole set src/agent.rs has
+// to recognize.
+const languages = ALL_LANGUAGES;
 const files = {
   "code-update.json": { topic: lib.topics.code, cases: codeUpdateCases(languages) },
   "control.json": { topic: lib.topics.control, cases: controlCases() },
