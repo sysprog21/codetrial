@@ -401,6 +401,8 @@ export function loopLabel(value) {
   return codingLoop(value) === "coding_only" ? "Coding only" : "Coding + behavioral";
 }
 
+const textEncoder = new TextEncoder();
+
 export function sanitizeReport(raw) {
   const activeContract = { bundleVersion: 4, livePromptVersion: 1, reportPromptVersion: 4, reportSchemaVersion: 1, rubricVersion: 1 };
   const contractKeys = Object.keys(activeContract);
@@ -574,12 +576,16 @@ export function sanitizeReport(raw) {
       // refuses the request rather than trimming it: over that, the candidate
       // keeps the local copy and the account copy simply never arrives. So
       // they are carried while they are a field rather than a payload.
-      const extras = Object.fromEntries(
-        Object.entries(item).filter(([key]) => !knownEvidenceFields.has(key)),
-      );
-      const carried = new TextEncoder().encode(JSON.stringify(extras)).length <= 512
-        ? extras
-        : {};
+      // The common row has nothing unknown on it, and this runs over whatever
+      // length arrived from storage or the wire, before the cap below trims
+      // it. Counting the keys is one comparison; building and serializing an
+      // empty object to learn the same thing is five allocations a row.
+      const extras = Object.keys(item).length === knownEvidenceFields.size
+        ? {}
+        : Object.fromEntries(
+          Object.entries(item).filter(([key]) => !knownEvidenceFields.has(key)),
+        );
+      const carried = textEncoder.encode(JSON.stringify(extras)).length <= 512 ? extras : {};
       return {
         ...carried,
         // A year, which no interview approaches: this is a sanity bound on a

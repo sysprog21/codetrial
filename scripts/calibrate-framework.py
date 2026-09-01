@@ -61,8 +61,9 @@ def mean(values):
 
 def analyze(raw):
     exact_keys(raw, ["version", "contract", "samples"], "$")
-    if isinstance(raw["version"], bool) or not isinstance(raw["version"], int) \
-            or raw["version"] != 1:
+    # `type(...) is int` rather than isinstance: bool subclasses int, so a JSON
+    # `true` passes an isinstance check and then compares equal to 1.
+    if type(raw["version"]) is not int or raw["version"] != 1:
         raise ValueError("$.version: expected 1")
     exact_keys(raw["contract"], ["bundleVersion", "reportPromptVersion", "rubricVersion",
                                  "reportSchemaVersion", "model"], "$.contract")

@@ -5,6 +5,7 @@ export const maxGroundingFileBytes = 64 * 1024;
 // be maintained by memory: the server drops over-budget grounding silently.
 export const maxGroundingPacketBytes = 6 * 1024;
 
+const encoder = new TextEncoder();
 const limits = { requirements: 8, skills: 8, anchors: 6 };
 const textLimit = 240;
 
@@ -53,7 +54,7 @@ export function selectedGroundingPacket(extracted, selected, consent) {
   // what it stores, and measuring the raw selection here would be counting a
   // different string and calling it the same budget.
   const bytes = [...packet.requirements, ...packet.skills, ...packet.anchors]
-    .reduce((total, text) => total + new TextEncoder().encode(text).length, 0);
+    .reduce((total, text) => total + encoder.encode(text).length, 0);
   if (bytes > maxGroundingPacketBytes) {
     throw new Error("Selected snippets are too long. Select fewer or shorter snippets.");
   }
@@ -66,9 +67,8 @@ export function selectedGroundingPacket(extracted, selected, consent) {
 /// hand-written character class would agree with Rust today and drift at the
 /// next edition of the tables.
 function normalizeSnippet(text) {
-  return [...String(text)]
-    .map((character) => (/\p{Cc}/u.test(character) ? " " : character))
-    .join("")
+  return String(text)
+    .replace(/\p{Cc}/gu, " ")
     .split(/\p{White_Space}+/u)
     .filter(Boolean)
     .join(" ");
