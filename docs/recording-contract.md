@@ -8,9 +8,11 @@ operator records the following values outside the repository and runs
 
 | Environment variable | Required value |
 |---|---|
+| `CODETRIAL_RECORDING_PROJECT` | Google Cloud project that owns the staging bucket |
 | `CODETRIAL_RECORDING_GCS_BUCKET` | Private staging bucket name |
 | `CODETRIAL_RECORDING_DRIVE_ID` | Platform-owned Shared Drive ID |
 | `CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON` | Service-account key JSON, supplied from a secret store |
+| `CODETRIAL_RECORDING_IAM_AUDITOR_JSON` | Different service-account key with read authority to audit the project, every ancestor policy, bucket, and Shared Drive |
 | `CODETRIAL_RECORDING_TEMPLATE_BASE_URL` | Public HTTPS origin that will serve `/recording/index.html` |
 
 Record the LiveKit Cloud project ID, service-account principal, its exact roles,
@@ -26,13 +28,27 @@ needed to create reader permissions and delete the delivered artifact. Do not
 grant it a project-wide Storage role, Workspace administrator privilege, or any
 other Shared Drive membership.
 
-The checker performs only a basic HTTPS-origin check (including no loopback or
-bracketed IPv6 host) and does not establish public reachability or fetch the
-path before task 8a creates it. The operator records that evidence separately;
-task 7a verifies the template URL in a real Egress run. The checker writes the
-supplied key and short-lived access-token header only to a private temporary
-directory, removes the key from its child-process environment, and does not
-replace a developer's active `gcloud` account.
+The staging bucket must enable Uniform Bucket-Level Access; legacy bucket and
+default-object ACLs are not an auditable least-privilege boundary. The checker
+reads that setting, and the lifecycle rule beside it, from the bucket resource
+as the JSON API returns it, which is why it asks gcloud for the raw form: the
+standardised form renames both fields and would refuse a bucket that is
+configured correctly.
+
+The checker authenticates the independent auditor first and refuses a delivery
+account other than the dedicated
+`codetrial-recording@<project-id>.iam.gserviceaccount.com` identity, an
+unreadable project, folder, or organization policy, a delivery grant at any
+ancestor scope, anything other than the exact bucket-scoped Storage role, a
+one-day Delete lifecycle rule carrying any filter beside the age, a bucket
+owned by a different project than the one whose ancestors it just walked, or
+anything other than one active organizer membership on the Shared Drive. It
+then authenticates the delivery account to prove its own bucket and Drive
+access, and fetches the recording template from the public, globally-routable
+HTTPS origin. The two supplied keys and short-lived access-token headers live
+only in a private temporary directory, are removed from child-process
+environments where they are not needed, and do not replace a developer's active
+`gcloud` account.
 
 ### Recording 1 staging run
 

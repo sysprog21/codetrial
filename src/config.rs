@@ -1125,18 +1125,19 @@ fn recording_flag(
 }
 
 /// LiveKit Cloud Egress fetches the RoomComposite template over the public
-/// internet, so a loopback or private address is not a URL it can reach. This
-/// is the same rule `scripts/recording-provision-check.sh` applies to the
-/// value an operator records, kept in step deliberately: an operator who
-/// passed the provisioning check should not then fail at startup.
+/// internet, so a loopback or private address is not a URL it can reach. The
+/// credential-free `scripts/recording-provision-check.sh` is the authoritative
+/// DNS-resolution gate: it refuses any origin whose answers are not globally
+/// routable before a staging run is provisioned. Startup deliberately keeps a
+/// syntactic guard for the recorded value, so it neither depends on DNS nor
+/// creates a second, differently timed resolver policy.
 ///
 /// The ceiling, because this is not an SSRF guard and nothing here fetches the
 /// URL: a literal address is classified by parsing it, but `0x7f000001`,
 /// `2130706433` and a hostname that resolves privately all read as ordinary
-/// hosts and are accepted. What this catches is the mistake an operator
-/// actually makes, which is pointing Egress at the machine they are sitting
-/// at. Catching the rest would mean resolving names at startup and again
-/// before every fetch, for a value only an operator can set.
+/// hosts and are accepted here. The provisioning check catches them before the
+/// origin is approved; resolving again at startup and before every fetch would
+/// create a second, differently timed DNS policy for an operator-owned value.
 fn validate_template_base_url(url: &str) -> Result<(), String> {
     let Some(rest) = url.strip_prefix("https://") else {
         return Err(
