@@ -35,6 +35,14 @@ const MIN_CANDIDATE_SECONDS: f64 = 5.0;
 /// themselves.
 const EXPECTED_AUDIO_TRACKS: i64 = 2;
 
+/// The presentation fields no file can answer for, named once.
+///
+/// The schema annotates these three and requires the document to declare them,
+/// and the checker refuses a document that claims any of them was measured.
+/// Three statements of one set, so the set is written here and asserted equal
+/// to the schema rather than typed out again beside it.
+const ATTESTED: [&str; 3] = ["candidate_video_seconds", "audio_tracks", "avatar_rendered"];
+
 /// Every field the schema requires, in the order it lists them.
 const REQUIRED: [&str; 10] = [
     "recording_id",
@@ -231,6 +239,30 @@ fn the_schema_and_the_checker_agree_on_the_fields() {
         "the schema describes a field the checker does not know about"
     );
     assert_eq!(schema["additionalProperties"], json!(false));
+
+    // The attested set, twice: whichever properties the schema annotates, and
+    // the ones this checker knows cannot be measured. `properties` orders its
+    // keys rather than keeping the file's order, so both sides are sorted.
+    let mut expected = ATTESTED;
+    expected.sort_unstable();
+    let annotated = properties
+        .iter()
+        .filter(|(_, schema)| schema["x-codetrial-evidence"] == json!("operator-attestation"))
+        .map(|(field, _)| field.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(annotated, expected, "the schema annotates a different set");
+
+    // The document the script emits is the third copy of the field list and the
+    // only one no gate reads. Catching a drifted key here costs a grep;
+    // catching it in the acceptance costs a provisioned project and a sat
+    // interview.
+    let emitter = std::fs::read_to_string("scripts/recording-integration.sh").unwrap();
+    for field in REQUIRED {
+        assert!(
+            emitter.contains(&format!("\"{field}\":")),
+            "scripts/recording-integration.sh never writes {field}"
+        );
+    }
 }
 
 #[test]

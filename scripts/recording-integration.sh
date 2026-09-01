@@ -170,6 +170,31 @@ Then measure the file this script can reach, with the id:
 The measurement below runs when CODETRIAL_RECORDING_ID is set.
 MEDIA
   [ -n "${CODETRIAL_RECORDING_ID:-}" ] || exit 2
+  for name in \
+    CODETRIAL_CANDIDATE_SECONDS \
+    CODETRIAL_AUDIO_TRACKS \
+    CODETRIAL_AVATAR_RENDERED; do
+    need "$name"
+  done
+  case "$CODETRIAL_CANDIDATE_SECONDS" in
+    . | *[!0-9.]* | *.*.*)
+      echo "CODETRIAL_CANDIDATE_SECONDS must be a non-negative number" >&2
+      exit 2
+      ;;
+  esac
+  case "$CODETRIAL_AUDIO_TRACKS" in
+    *[!0-9]*)
+      echo "CODETRIAL_AUDIO_TRACKS must be a non-negative integer" >&2
+      exit 2
+      ;;
+  esac
+  case "$CODETRIAL_AVATAR_RENDERED" in
+    true | false) ;;
+    *)
+      echo "CODETRIAL_AVATAR_RENDERED must be true or false" >&2
+      exit 2
+      ;;
+  esac
 
   recording_id=$CODETRIAL_RECORDING_ID
   object=${CODETRIAL_RECORDING_GCS_PREFIX:-codetrial}/$recording_id.mp4
@@ -181,13 +206,10 @@ MEDIA
   ffprobe -v error -print_format json -show_streams -show_format "$work/recording.mp4" \
     >"$work/probe.json"
 
-  # Three numbers the file cannot answer: how long the room was up, how long the
-  # candidate was on screen, and whether the local avatar was rendering. They
-  # come from the operator running the interview, which is the ceiling of this
-  # harness and is worth stating plainly: they are declarations, not
-  # measurements, and somebody who declares them wrongly gets an acceptance that
-  # says nothing. Absent, they are zero and false, so the failure mode of not
-  # supplying them is a refusal rather than a pass.
+  # Three facts the file cannot answer: how long the candidate was on screen,
+  # how many sources were heard, and whether the local avatar rendered. They are
+  # operator attestations, not measurements. Requiring each declaration keeps a
+  # missing attestation from borrowing a plausible value from ffprobe.
   #
   # Making them measurements means the recording template reporting them from
   # inside the Egress browser, keyed to the recording id, through a route this
@@ -202,7 +224,6 @@ import json, os, sys
 
 probe = json.load(open(os.environ["CODETRIAL_PROBE"]))
 video = next((s for s in probe["streams"] if s.get("codec_type") == "video"), {})
-audio = [s for s in probe["streams"] if s.get("codec_type") == "audio"]
 
 def rate(value):
     if not value or "/" not in value:
@@ -219,11 +240,11 @@ document = {
     "bitrate_kbps": float(probe.get("format", {}).get("bit_rate") or 0) / 1000.0,
     "duration_seconds": float(probe.get("format", {}).get("duration") or 0),
     "expected_duration_seconds": float(os.environ["CODETRIAL_ROOM_SECONDS"]),
-    # Measured by the page, not by the file: an MP4 of a composited layout
-    # cannot say whose face was in it.
-    "candidate_video_seconds": float(os.environ.get("CODETRIAL_CANDIDATE_SECONDS", 0)),
-    "audio_tracks": int(os.environ.get("CODETRIAL_AUDIO_TRACKS", len(audio))),
-    "avatar_rendered": os.environ.get("CODETRIAL_AVATAR_RENDERED") == "true",
+    # Operator attestations, not file measurements: an MP4 of a composited
+    # layout cannot identify whose face or sources were present.
+    "candidate_video_seconds": float(os.environ["CODETRIAL_CANDIDATE_SECONDS"]),
+    "audio_tracks": int(os.environ["CODETRIAL_AUDIO_TRACKS"]),
+    "avatar_rendered": os.environ["CODETRIAL_AVATAR_RENDERED"] == "true",
 }
 json.dump(document, open(sys.argv[1], "w"), indent=2)
 print(json.dumps(document, indent=2))
