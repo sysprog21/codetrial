@@ -216,6 +216,13 @@ p {
   margin-top: 1.5rem;
 }
 
+/* Duration, mode and loop are three answers to one question, so they sit as one
+   group rather than three sections a section-gap apart. Three full gaps is also
+   what pushed the lobby past the one screen the picker collapsed to buy. */
+.duration-row + .duration-row {
+  margin-top: 0.5rem;
+}
+
 .duration-button,
 .start-button {
   border: 1px solid var(--hairline);
@@ -248,6 +255,32 @@ p {
   margin-top: 1rem;
 }
 
+.interview-context {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+}
+
+.interview-context fieldset {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  padding: 0;
+  border: 0;
+}
+
+.interview-context legend,
+.interview-context p {
+  grid-column: 1 / -1;
+}
+
+.interview-context label {
+  display: grid;
+  gap: 0.25rem;
+}
+
 .start-button {
   border-color: var(--accent);
   border-radius: 8px;
@@ -271,8 +304,59 @@ p {
 
 .history {
   margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+}
+
+.progress-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.progress-filters legend {
+  grid-column: 1 / -1;
+  padding: 0;
+  font-weight: 600;
+}
+
+.progress-filters label {
+  display: grid;
+  gap: 0.25rem;
   color: var(--muted);
   font-size: 0.875rem;
+}
+
+.progress-filters select {
+  width: 100%;
+}
+
+.history table {
+  width: 100%;
+  margin-top: 1rem;
+  border-collapse: collapse;
+}
+
+.progress-trends {
+  overflow-x: auto;
+}
+
+.history caption {
+  margin-bottom: 0.5rem;
+  text-align: left;
+  color: var(--muted);
+}
+
+.history th,
+.history td {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  vertical-align: top;
 }
 
 .interview-shell {
@@ -1137,4 +1221,178 @@ p {
   border: 1px solid var(--hairline);
   border-radius: 8px;
   white-space: pre;
+}
+
+/* One framework's steps, top left under the problem heading. Small on purpose:
+   it is a place marker during an interview, not a panel to study, and the
+   candidate's attention belongs in the editor. */
+.framework-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.7rem;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.framework-progress li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25rem;
+}
+
+.framework-progress li span {
+  width: 0.7rem;
+  text-align: center;
+}
+
+/* Done is stated by the tick as well as the colour, so it survives being read
+   without colour perception. */
+.framework-progress li.done {
+  color: var(--ink);
+}
+
+/* The transient offer. Sits in the flow rather than over the editor: an overlay
+   that vanishes on a timer is one a candidate can be mid-sentence under. */
+/* Centred over the page, and deliberately inert: `pointer-events: none` means a
+   card that appears while the candidate is typing cannot swallow a click or a
+   caret placement on its way past. It leaves on a timer, so there is nothing to
+   dismiss and nothing to tab to.
+
+   The positioning layer covers the viewport because that is how a thing is
+   centred in it, but it paints nothing: no backdrop, no dimming. Only the card
+   is visible, and the card is bounded so the editor, the timer and the step
+   ticks stay readable around it. A candidate reading this is mid-interview and
+   the page behind it is the thing they are being asked about. */
+/* `.overlay` already centres a thing over the page and this reuses it, so the
+   two differ only where they mean to: no backdrop, because the page behind is
+   what the candidate is being asked about, and no pointer events, because this
+   can appear while they are typing. */
+.framework-hint {
+  z-index: 40;
+  background: none;
+  pointer-events: none;
+}
+
+.framework-hint[hidden] {
+  display: none;
+}
+
+.framework-hint-card {
+  /* The overlay takes no pointer events so it cannot swallow a click meant for
+     the page behind it. The card has to take them back, or its own bounded
+     scroll is unreachable and a short viewport clips the tables. */
+  pointer-events: auto;
+  max-width: min(44rem, 92vw);
+  max-height: 70vh;
+  overflow: auto;
+  padding: 0.9rem 1.2rem 1rem;
+  border: 1px solid var(--hairline);
+  border-radius: 0.6rem;
+  background: var(--float-surface);
+  box-shadow: 0 1.2rem 3rem rgb(0 0 0 / 45%);
+}
+
+.framework-hint-title {
+  margin: 0 0 0.6rem;
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+
+/* Side by side where there is room, so the whole hour is one glance rather
+   than a column tall enough to hide the page it is explaining. */
+.framework-hint-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 0.5rem 1.4rem;
+}
+
+/* A table each, and neither refers to the other: they score different
+   exercises, so a shared header row would be the cross-reference this avoids. */
+.framework-hint-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.framework-hint-body caption {
+  text-align: left;
+  padding-bottom: 0.3rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* The scenario sits under the name, so each table says what it is for without
+   borrowing the context of the one beside it. */
+.framework-hint-body caption span {
+  display: block;
+  font-weight: 400;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.framework-hint-body th {
+  text-align: left;
+  padding: 0.12rem 0.6rem 0.12rem 0;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+
+.framework-hint-body td {
+  padding: 0.12rem 0;
+  color: var(--sub);
+  vertical-align: baseline;
+}
+
+/* The STAR tagging form had no styles at all, so a `<label>Name <textarea>`
+   pair laid out as running text: every box sat between its own label and the
+   next one, which read as though the label after a box belonged to it, and the
+   fourth box wrapped onto a line of its own. The markup was already right; only
+   this was missing. */
+.star-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+}
+
+/* Column, so the name is above the box it names rather than beside it. */
+.star-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--sub);
+}
+
+#star-suggestion label {
+  display: block;
+  margin-bottom: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--sub);
+}
+
+.star-field textarea,
+#star-suggestion textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--hairline);
+  border-radius: 0.35rem;
+  background: var(--page);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.85rem;
+  resize: vertical;
+}
+
+#star-grounding {
+  margin: 0.4rem 0 0.6rem;
 }

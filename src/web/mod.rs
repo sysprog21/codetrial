@@ -37,6 +37,7 @@ pub(crate) use {
 // `pub fn` here silently; this way adding one is a deliberate line.
 pub use assets::static_file_meta;
 pub use auth::login_config;
+pub use interviews::REPLAY_RATE_LIMIT;
 use pool::{ProviderQuota, QuotaRefresher, spawn_provider_quota_refresher};
 pub use token::{TOKEN_RATE_LIMIT, TokenConfig, TokenResponse, token_response};
 
@@ -189,6 +190,12 @@ pub(crate) struct AppState {
     // flood of it must not lock a signed-in candidate out of a token.
     login_limit: TokenRateLimit,
 
+    /// Its own bucket, keyed on the account rather than the address because
+    /// `Owner` has already resolved one. Replay ingestion is a stream that runs
+    /// for the length of an interview, so sharing the token bucket would have a
+    /// candidate's own replay spend the budget their next token needs.
+    replay_limit: TokenRateLimit<i64>,
+
     /// Which provider the next room goes to. Relaxed because nothing depends on
     /// the order two concurrent requests observe, only that they observe
     /// different values.
@@ -198,7 +205,7 @@ pub(crate) struct AppState {
     /// whose browser can only report the refusal as an unexplained socket
     /// error.
     provider_quota: ProviderQuota,
-    room_authorizations: Arc<Mutex<HashMap<String, RoomAuthorization>>>,
+    room_authorizations: Arc<Mutex<token::RoomAuthorizations>>,
 }
 
 /// Opens the connection the server keeps, brings its schema up to date, and
@@ -359,12 +366,13 @@ pub(crate) fn web_router(
             accounts_required,
             dispatcher,
             recorder,
-            token_limit: TokenRateLimit::default(),
-            login_limit: TokenRateLimit::default(),
+            token_limit: TokenRateLimit::with_limit(token::TOKEN_RATE_LIMIT),
+            login_limit: TokenRateLimit::with_limit(token::TOKEN_RATE_LIMIT),
+            replay_limit: TokenRateLimit::with_limit(interviews::REPLAY_RATE_LIMIT),
             provider_counter: Arc::new(AtomicUsize::new(0)),
             provider_quota,
             quota_refresher: Arc::new(quota_refresher),
-            room_authorizations: Arc::new(Mutex::new(HashMap::new())),
+            room_authorizations: Arc::default(),
         })
 }
 
@@ -394,9 +402,9 @@ impl AppState {
 /// supplies the implementation.
 ///
 /// The provider is handed over rather than looked up again from the room name.
-/// Re-deriving it is precisely the mistake [`room_and_provider`] documents: two
-/// pools assembled by two directory scans can disagree, and the candidate then
-/// holds a token for one LiveKit project while the interviewer waits in
+/// Re-deriving it is precisely the mistake `pool::room_and_provider` documents:
+/// two pools assembled by two directory scans can disagree, and the candidate
+/// then holds a token for one LiveKit project while the interviewer waits in
 /// another. There is one lookup, and this is its result.
 ///
 /// Returns `false` when no interviewer will come, so the caller can refuse

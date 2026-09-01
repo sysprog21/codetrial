@@ -3,7 +3,7 @@
 // return strings; the transcript view takes the document and panel it renders
 // into. interview.js owns the wiring, this owns the output.
 
-import { escapeHtml, orPlaceholder } from "./lib.js";
+import { escapeHtml, formatTime, loopLabel, modeLabel, orPlaceholder } from "./lib.js";
 
 export function runnerStatusMarkup(status) {
   const text = {
@@ -137,15 +137,37 @@ export function reportMarkup({ report, problemTitle, language, code }) {
   const feedback = report.incomplete
     ? ""
     : `${feedbackMarkup("Coding", report.codingFeedback)}${feedbackMarkup("Communication", report.communicationFeedback)}`;
+  const practiceNext = report.incomplete || !report.improvementPlan?.length
+    ? ""
+    : `<section><h3>Practice next</h3><ol>${report.improvementPlan.map((item) => `
+      <li><strong>${escapeHtml(item.phase)} · ${escapeHtml(item.durationMin)} min · ${escapeHtml(item.impact)} impact</strong>
+        <p>${escapeHtml(item.drill)}</p>
+        <p><strong>Success:</strong> ${escapeHtml(item.successCriterion)}</p>
+        <ul>${item.selfReview.map((check) => `<li>${escapeHtml(check)}</li>`).join("")}</ul>
+      </li>`).join("")}</ol></section>`;
+  const frameworkTimeline = frameworkEvidenceMarkup(report.frameworkEvidence);
+  const frameworkCalibration = report.frameworkAssessment
+    ? `<p class="muted small">REACTO/STAR phase scores are formative coaching signals, not calibrated hiring evidence.</p>`
+    : "";
+  // Only where the report recorded one, like the mode beside it in the header.
+  const loop = report.interviewLoop ? ` · ${loopLabel(report.interviewLoop)}` : "";
+  const rounds = report.rounds?.length ? `<section><h3>Interview rounds</h3><ul>${report.rounds.map((round) => `<li>${escapeHtml(round.kind)} · ${escapeHtml(round.budgetMin)} min · ${escapeHtml(round.status)}</li>`).join("")}</ul></section>` : "";
+  const contract = report.interviewContract
+    ? `Contract bundle ${report.interviewContract.bundleVersion} · rubric ${report.interviewContract.rubricVersion} · report schema ${report.interviewContract.reportSchemaVersion}`
+    : "Legacy/unversioned contract";
 
   return `
     <div class="report-card">
       <div class="report-header">
-        <div><p>Interview report · ${escapeHtml(problemTitle)}</p><h2>${heading}</h2></div>
+        <div><p>${report.mode ? `${modeLabel(report.mode)} ` : ""}interview report${loop} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p><h2>${heading}</h2></div>
         ${badge}
       </div>${scores}
       <section><h3>${report.incomplete ? "What happened" : "Committee summary"}</h3><p>${escapeHtml(report.summary)}</p></section>
       ${feedback}
+      ${practiceNext}
+      ${rounds}
+      ${frameworkCalibration}
+      ${frameworkTimeline}
       ${integrityEvidenceMarkup(report)}
       <details><summary>Your final code (${escapeHtml(language)})</summary><pre>${escapeHtml(code.trimEnd() || "(editor was empty)")}</pre></details>
       <div class="report-actions"><button id="download-report" type="button">Download report (.md)</button><button id="done" type="button">Done - back to lobby</button></div>
@@ -203,6 +225,28 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
     const sources = event.sourceEventIds?.length ? ` - sources: ${event.sourceEventIds.map(mdText).join(", ")}` : "";
     return `- ${mdText(event.at)} [${mdText(event.severity)}] ${mdText(event.type)}${event.detail ? ` - ${mdText(event.detail)}` : ""}${sources}`;
   }).join("\n") || "(none captured)";
+  const practiceNext = report.incomplete || !report.improvementPlan?.length
+    ? []
+    : [
+      "## Practice next",
+      "",
+      ...report.improvementPlan.flatMap((item, index) => [
+        `${index + 1}. **${mdText(item.phase)} · ${mdText(item.durationMin)} min · ${mdText(item.impact)} impact**`,
+        `   - Drill: ${mdText(item.drill)}`,
+        `   - Success: ${mdText(item.successCriterion)}`,
+        ...item.selfReview.map((check) => `   - Check: ${mdText(check)}`),
+      ]),
+      "",
+    ];
+  const frameworkTimeline = report.frameworkEvidence?.length
+    ? [
+      "## Framework evidence",
+      "",
+      ...report.frameworkEvidence.map((item) =>
+        `- ${frameworkTime(item.atMs)} · **${mdText(item.phase)}** · ${mdText(item.kind)} · ${mdText(item.source)} · ${mdText(item.confidence)}% · v${mdText(item.frameworkVersion)} — ${mdText(item.summary)}`),
+      "",
+    ]
+    : [];
   const chainNote = mdText(chainSentence(report));
   const conversation = transcript
     .filter((segment) => segment.final || segment.text.trim())
@@ -255,9 +299,18 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
   return [
     `# Interview Report - ${mdText(problemTitle)}`,
     `_${at}_`,
+    ...(report.mode ? [`Mode: ${modeLabel(report.mode)}`] : []),
+    ...(report.interviewLoop ? [`Loop: ${loopLabel(report.interviewLoop)}`] : []),
+    report.interviewContract
+      ? `Contract: bundle ${report.interviewContract.bundleVersion}; live prompt ${report.interviewContract.livePromptVersion}; report prompt ${report.interviewContract.reportPromptVersion}; rubric ${report.interviewContract.rubricVersion}; report schema ${report.interviewContract.reportSchemaVersion}`
+      : "Contract: legacy/unversioned",
+    ...(report.rounds?.length ? ["Rounds: " + report.rounds.map((round) => `${round.kind} (${round.budgetMin} min, ${round.status})`).join("; ")] : []),
+    ...(report.frameworkAssessment ? ["REACTO/STAR phase scores are formative coaching signals, not calibrated hiring evidence."] : []),
     "",
     ...head,
     "",
+    ...practiceNext,
+    ...frameworkTimeline,
     // A session with no evaluation can still be one that ended because the
     // camera saw something. Refusing to score it is not a reason to drop the
     // evidence, which `sanitizeReport` deliberately keeps.
@@ -275,6 +328,22 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
     conversation || "(no speech captured)",
     "",
   ].join("\n");
+}
+
+function frameworkTime(atMs) {
+  return formatTime(Math.max(0, Math.floor(Number(atMs) / 1000)));
+}
+
+function frameworkEvidenceMarkup(items) {
+  if (!items?.length) return "";
+  return `<section aria-labelledby="framework-evidence-title">
+    <h3 id="framework-evidence-title">Framework evidence</h3>
+    <ol class="framework-timeline">${items.map((item) => `<li>
+      <strong>${escapeHtml(item.phase)}</strong>
+      <span>${frameworkTime(item.atMs)} · ${escapeHtml(item.kind)} · ${escapeHtml(item.source)} · ${escapeHtml(item.confidence)}% confidence · v${escapeHtml(item.frameworkVersion)}</span>
+      <p>${escapeHtml(item.summary)}</p>
+    </li>`).join("")}</ol>
+  </section>`;
 }
 
 /// Owns transcript segments and their rows together, because the two were

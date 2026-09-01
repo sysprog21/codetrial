@@ -27,5 +27,46 @@
     "c": "typedef struct {\n    // Think out loud as you go!\n} MinStack;\n\nMinStack* minStackCreate() {\n    return NULL;\n}\n\nvoid minStackPush(MinStack* obj, int value) {\n}\n\nvoid minStackPop(MinStack* obj) {\n}\n\nint minStackTop(MinStack* obj) {\n    return 0;\n}\n\nint minStackGetMin(MinStack* obj) {\n    return 0;\n}\n\nvoid minStackFree(MinStack* obj) {\n}\n",
     "cpp": "class MinStack {\npublic:\n    MinStack() {\n    }\n\n    void push(int value) {\n    }\n\n    void pop() {\n    }\n\n    int top() {\n        return 0;\n    }\n\n    int getMin() {\n        return 0;\n    }\n};\n",
     "java": "class MinStack {\n    public MinStack() {\n    }\n\n    public void push(int value) {\n    }\n\n    public void pop() {\n    }\n\n    public int top() {\n        return 0;\n    }\n\n    public int getMin() {\n        return 0;\n    }\n}\n"
+  },
+  "interviewMetadata": {
+    "difficulty": "Medium",
+    "competencies": [
+      "Stack",
+      "Design"
+    ],
+    "reactoStages": [
+      "repeat",
+      "example",
+      "algorithm",
+      "coding",
+      "test",
+      "optimizations"
+    ],
+    "followUpDirections": [
+      {
+        "stage": "repeat",
+        "direction": "Ask the candidate to restate the inputs, outputs, constraints, and ambiguities."
+      },
+      {
+        "stage": "example",
+        "direction": "Ask the candidate to choose and trace an ordinary example and a boundary case."
+      },
+      {
+        "stage": "algorithm",
+        "direction": "Ask for the candidate's approach, correctness argument, and complexity."
+      },
+      {
+        "stage": "coding",
+        "direction": "Ask the candidate to implement their stated approach and explain major decisions."
+      },
+      {
+        "stage": "test",
+        "direction": "Ask the candidate to predict useful cases and expected results before running them."
+      },
+      {
+        "stage": "optimizations",
+        "direction": "Ask for complexity, an uncovered edge case, and a justified optimization or cleanup."
+      }
+    ]
   }
 }

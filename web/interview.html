@@ -26,8 +26,15 @@
             <div id="timer" class="timer" title="Time remaining">00:00</div>
           </div>
           <div id="presence-banner" class="presence-banner" hidden role="alert" aria-live="assertive"></div>
+          <!-- One framework at a time, never both: the coding round is REACTO
+               and the behavioral round is STAR, and showing the ten together
+               told a candidate in step two about six steps that are not their
+               problem yet. Ticks arrive from the interviewer over the control
+               topic as it banks evidence. -->
+          <ol id="framework-progress" class="framework-progress" hidden aria-label="Interview steps"></ol>
           <div class="control-row">
             <button id="mic" class="pill-button" type="button">Mic on</button>
+            <button id="pause" class="pill-button" type="button" hidden>Pause</button>
             <button id="end" class="pill-button danger" type="button">End interview</button>
             <!-- The notice promises a candidate can withdraw during the
                  interview, so there has to be something to withdraw with.
@@ -126,6 +133,7 @@
         <div class="audio-check-card">
           <h2>Media preflight</h2>
           <p>Confirm output, microphone, and camera before the interview starts.</p>
+          <p id="round-plan-summary" class="muted small"></p>
 
           <div class="audio-check-step" id="audio-step-output">
             <p><span class="step-mark" aria-hidden="true"></span><strong>Output</strong> — <span id="audio-output-state" aria-live="polite">play a short tone.</span></p>
@@ -198,12 +206,23 @@
         </div>
       </section>
 
+      <!-- Centred over the page while the interviewer is still thinking, then
+           gone on a timer. `role="status"` rather than `alert` because it is an
+           offer, not a fault, and deliberately not a modal dialog: focus stays
+           in the editor, so a candidate already typing is never interrupted. -->
+      <div id="framework-hint" class="overlay framework-hint" hidden role="status" aria-live="polite">
+        <div class="framework-hint-card">
+          <p id="framework-hint-title" class="framework-hint-title"></p>
+          <div id="framework-hint-body" class="framework-hint-body"></div>
+        </div>
+      </div>
+
       <section id="ending-overlay" class="overlay" hidden>
         <div class="spinner"></div>
         <p>Jim is writing up your evaluation...</p>
         <p id="ending-detail">Scoring your code and communication - this usually takes a few seconds.</p>
         <button id="leave-room" class="pill-button" type="button" hidden>Taking too long? Leave the room</button>
-        <button id="force-report" class="pill-button" type="button">Show offline report</button>
+        <button id="force-report" class="pill-button" type="button">Show offline summary</button>
       </section>
 
       <!-- Floats over the editor's top-right rather than sitting in the

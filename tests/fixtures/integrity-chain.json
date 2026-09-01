@@ -103,13 +103,13 @@
     "severity": "info",
     "source": "preflight",
     "durationMs": 0,
-    "detail": "camera=FaceTime HD カメラ می‌ر gnitautis (05AC:8514)",
+    "detail": "camera=FaceTime HD Κάμερα می‌ر gnitautis (05AC:8514)",
     "sourceEventIds": [],
-    "hash": "177213497b39eb1584e86b70c09ff614eb531ddf44622adfecb1d605bd949b18"
+    "hash": "43b36ddbd9e6dff14cc737d4a23d771792c7324fa6c067335e0fd4fe9848acc9"
   },
   {
     "seq": 10,
-    "prevHash": "177213497b39eb1584e86b70c09ff614eb531ddf44622adfecb1d605bd949b18",
+    "prevHash": "43b36ddbd9e6dff14cc737d4a23d771792c7324fa6c067335e0fd4fe9848acc9",
     "type": "MULTIPLE_FACES",
     "at": "2026-08-18T06:40:11.006Z",
     "severity": "critical",
@@ -122,6 +122,6 @@
       "333333333333",
       "444444444444"
     ],
-    "hash": "e7d0832bf0943d5f5ccf2244480e184237f4362b9397b0bd0b027ad82abe5614"
+    "hash": "1217fdb32fa0f2f7874a2bfcccc2b6140d4175846348185a21f2c80a67503270"
   }
 ]

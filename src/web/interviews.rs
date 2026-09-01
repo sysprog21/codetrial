@@ -2,6 +2,8 @@
 //! gates recording, the replay events it accumulates, and the reports written
 //! against it.
 
+use std::time::Instant;
+
 use axum::body::{Body, to_bytes};
 use axum::extract::{Path as UriPath, State};
 use axum::http::{Request, StatusCode};
@@ -16,7 +18,18 @@ use crate::current_epoch_seconds;
 
 use super::auth::Owner;
 use super::recordings::finish_recording;
-use super::{AppState, MAX_BODY_BYTES, MAX_REPORT_BYTES, json_response, replay_body};
+use super::{
+    AppState, MAX_BODY_BYTES, MAX_REPORT_BYTES, json_response, rate_limited_response, replay_body,
+};
+
+/// What one account posting replay events may spend in a window.
+///
+/// Derived from the only first-party caller rather than picked.
+/// `web/replay-feed.js` flushes on a `REPLAY_FLUSH_MS = 1000` timer and again
+/// whenever its queue fills, so an honest browser posts about sixty times a
+/// minute with short bursts over that. Twice that leaves the bursts room and
+/// still cuts a looping browser from thousands a second to two.
+pub const REPLAY_RATE_LIMIT: u32 = 120;
 
 pub(crate) async fn list_reports_handler(Owner { accounts, user }: Owner) -> Response {
     match blocking(move || list_reports(&accounts, user.id)).await {
@@ -236,6 +249,20 @@ pub(crate) async fn replay_events_handler(
             json!({ "code": "recording_not_enabled", "error": "This server does not record interviews." }),
         );
     }
+
+    // Before the body, so a refused batch costs less than an accepted one: the
+    // per-batch caps bound one request and the stored quota bounds what an
+    // interview keeps, but neither bounds how often a looping browser may ask.
+    // After the recorder check, which is free and answers the same for every
+    // request.
+    //
+    // Keyed on the account, which `Owner` has already resolved. The address
+    // would put a whole office behind one budget, where a single looping
+    // browser could refuse everyone beside it.
+    if !state.replay_limit.allow(user.id, Instant::now()) {
+        return rate_limited_response("Too much replay at once. Wait a minute.");
+    }
+
     let Ok(body) = to_bytes(request.into_body(), MAX_REPLAY_BATCH_BYTES).await else {
         return json_response(
             StatusCode::PAYLOAD_TOO_LARGE,

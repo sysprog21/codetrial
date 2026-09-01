@@ -111,11 +111,14 @@ gate clippy cargo clippy --locked --all-targets --manifest-path "$ROOT/Cargo.tom
 gate cargo-test cargo test --locked --manifest-path "$ROOT/Cargo.toml"
 
 gate gen-problems python3 "$ROOT/scripts/gen-problems.py" --check
+gate gen-problems-tests python3 -m unittest "$ROOT/tests/test_gen_problems.py"
 gate gen-problem-cards python3 "$ROOT/scripts/gen-problem-cards.py" --check
 gate wire-fixtures node "$ROOT/scripts/gen-wire-fixtures.mjs" --check
 gate recording-fixtures node "$ROOT/scripts/gen-recording-fixtures.mjs" --check
 gate todo-deps python3 "$ROOT/scripts/check-todo-deps.py"
 gate study-plan-guards python3 "$ROOT/scripts/check-study-plan-guards.py"
+gate calibration-fixtures python3 "$ROOT/scripts/gen-calibration-fixtures.py" --check
+gate calibration-tests python3 -m unittest "$ROOT/tests/test_calibrate_framework.py"
 gate browser-tests browser_tests
 gate eslint eslint_gate
 gate cargo-audit cargo_audit_gate

@@ -1,8 +1,12 @@
+import { FRAMEWORKS, codingLoop } from "./lib.js";
 import { readLocalHistory } from "./history.js";
 import { pickProblem, suggestDifficulty } from "./problem-picker.js";
+import { buildProgressModel, unwrapEntry } from "./progress.js";
+import { parseGroundingFile, selectedGroundingPacket, storeGroundingPacket } from "./document-grounding.js";
 
 let problem;
 let duration;
+let interviewLoop = "coding_behavioral";
 let reports = [];
 let manualProblem = false;
 let manualDuration = false;
@@ -34,6 +38,23 @@ const nodes = {
   logout: document.querySelector("#logout"),
   history: document.querySelector("#history"),
   recommendation: document.querySelector("#recommendation"),
+  progressSummary: document.querySelector("#progress-summary"),
+  progressTrends: document.querySelector("#progress-trends"),
+  progressWeaknesses: document.querySelector("#progress-weaknesses"),
+  progressDifficulty: document.querySelector("#progress-difficulty"),
+  progressLanguage: document.querySelector("#progress-language"),
+  progressDuration: document.querySelector("#progress-duration"),
+  profileRole: document.querySelector("#profile-role"),
+  profileSeniority: document.querySelector("#profile-seniority"),
+  profileCompany: document.querySelector("#profile-company"),
+  groundingJd: document.querySelector("#grounding-jd"),
+  groundingResume: document.querySelector("#grounding-resume"),
+  groundingJdStatus: document.querySelector("#grounding-jd-status"),
+  groundingResumeStatus: document.querySelector("#grounding-resume-status"),
+  groundingChoices: document.querySelector("#grounding-choices"),
+  groundingConsent: document.querySelector("#grounding-consent"),
+  groundingClear: document.querySelector("#grounding-clear"),
+  groundingError: document.querySelector("#grounding-error"),
   durationNote: document.querySelector("#duration-note"),
 };
 
@@ -89,9 +110,29 @@ for (const input of levels) {
   });
 }
 
+let grounding = { requirements: [], skills: [], anchors: [] };
+
+nodes.groundingJd.addEventListener("change", () => loadGroundingFile("jd"));
+nodes.groundingResume.addEventListener("change", () => loadGroundingFile("resume"));
+nodes.groundingClear.addEventListener("click", clearGrounding);
+
+let progressEntries = [];
+let progressSuffix = "saved";
+
+for (const filter of [nodes.progressDifficulty, nodes.progressLanguage, nodes.progressDuration]) {
+  filter.addEventListener("change", renderProgress);
+}
+
 const durations = [...document.querySelectorAll("[data-duration]")];
 for (const button of durations) {
   button.addEventListener("click", () => setDuration(Number(button.dataset.duration), true));
+}
+
+for (const button of document.querySelectorAll("[data-loop]")) {
+  button.addEventListener("click", () => {
+    interviewLoop = codingLoop(button.dataset.loop);
+    select("[data-loop]", button);
+  });
 }
 
 const start = document.querySelector("#start");
@@ -111,15 +152,31 @@ let starting = false;
 // handler threw on the next line, and the button stayed disabled on "Recording
 // GitHub..." with the interview never starting.
 start.addEventListener("click", async () => {
-  // Both of them read before the round trip below, because everything the
-  // candidate can still touch during it writes one of the two. Taking the
-  // problem and leaving the length behind shipped an interview that was 45
-  // minutes when the button was pressed and 60 by the time it was answered.
-  const chosen = problem;
-  const minutes = duration;
-  if (!chosen) return;
+  if (!problem) return;
+  // The whole form is read here, before the sign-in round trip below, because
+  // every control the candidate can still touch during it feeds this URL.
+  // Reading them afterwards shipped an interview that was 45 minutes when the
+  // button was pressed and 60 by the time it was answered, and the same for
+  // the round plan and the profile beside them. One read, then go.
+  const destination = new URL("/interview", window.location.origin);
+  destination.searchParams.set("problem", problem.id);
+  destination.searchParams.set("duration", String(duration));
+  destination.searchParams.set("loop", interviewLoop);
+  const profile = {
+    role: nodes.profileRole.value.trim(),
+    seniority: nodes.profileSeniority.value,
+    targetCompany: nodes.profileCompany.value.trim(),
+  };
+  if (profile.role) destination.searchParams.set("role", profile.role);
+  if (profile.seniority) destination.searchParams.set("seniority", profile.seniority);
+  if (profile.targetCompany) destination.searchParams.set("company", profile.targetCompany);
+  const selected = { requirements: [], skills: [], anchors: [] };
+  for (const input of nodes.groundingChoices.querySelectorAll("input:checked")) selected[input.dataset.group].push(Number(input.value));
+  const consented = nodes.groundingConsent.checked;
+
   starting = true;
   start.disabled = true;
+  nodes.groundingError.textContent = "";
   if (signInFirst) {
     start.textContent = "Recording GitHub...";
     if (!(await recordGitHubLogin(false))) {
@@ -130,10 +187,74 @@ start.addEventListener("click", async () => {
       setStartGate(true);
       return;
     }
+    // The login is recorded, so the gate is answered. Leaving it set told a
+    // candidate who had just signed in to sign in again on the next bail-out
+    // below, and spent a second /api/login doing it.
+    signInFirst = false;
   }
   start.textContent = "Starting...";
-  window.location.href = `/interview?problem=${encodeURIComponent(chosen.id)}&duration=${minutes}`;
+  try {
+    const packet = selectedGroundingPacket(grounding, selected, consented);
+    storeGroundingPacket(sessionStorage, packet);
+  } catch (error) {
+    nodes.groundingError.textContent = error.message;
+    starting = false;
+    start.disabled = !problem;
+    setStartGate(signInFirst);
+    return;
+  }
+  window.location.href = destination.toString();
 });
+
+async function loadGroundingFile(kind) {
+  const input = kind === "jd" ? nodes.groundingJd : nodes.groundingResume;
+  const status = kind === "jd" ? nodes.groundingJdStatus : nodes.groundingResumeStatus;
+  status.textContent = "Reading locally...";
+  try {
+    const parsed = await parseGroundingFile(input.files[0], kind);
+    if (kind === "jd") grounding.requirements = parsed.requirements;
+    else ({ skills: grounding.skills, anchors: grounding.anchors } = parsed);
+    status.textContent = "Parsed locally. Select only snippets you want to send.";
+  } catch (error) {
+    if (kind === "jd") grounding.requirements = [];
+    else { grounding.skills = []; grounding.anchors = []; }
+    status.textContent = error.message;
+  }
+  renderGroundingChoices();
+}
+
+function renderGroundingChoices() {
+  nodes.groundingChoices.replaceChildren();
+  for (const [group, label] of [["requirements", "JD requirements"], ["skills", "Resume skills"], ["anchors", "Resume experience/project anchors"]]) {
+    if (!grounding[group].length) continue;
+    const fieldset = document.createElement("fieldset");
+    const legend = document.createElement("legend");
+    legend.textContent = label;
+    fieldset.append(legend);
+    grounding[group].forEach((snippet, index) => {
+      const row = document.createElement("label");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.dataset.group = group;
+      checkbox.value = String(index);
+      row.append(checkbox, document.createTextNode(` ${snippet}`));
+      fieldset.append(row);
+    });
+    nodes.groundingChoices.append(fieldset);
+  }
+}
+
+function clearGrounding() {
+  grounding = { requirements: [], skills: [], anchors: [] };
+  nodes.groundingJd.value = "";
+  nodes.groundingResume.value = "";
+  nodes.groundingJdStatus.textContent = "";
+  nodes.groundingResumeStatus.textContent = "";
+  nodes.groundingConsent.checked = false;
+  nodes.groundingError.textContent = "";
+  nodes.groundingChoices.replaceChildren();
+  try { storeGroundingPacket(sessionStorage, null); } catch { /* clearing is best effort */ }
+}
 
 // Returning from the media preflight can restore this page from the browser's
 // back/forward cache after the start button was deliberately disabled.
@@ -272,22 +393,21 @@ async function recordGitHubLogin(reload) {
 async function renderServerHistory() {
   try {
     const data = await fetchJson("/api/reports");
-    // `/api/reports` wraps each entry in `payload` (accounts.rs list_reports);
-    // history.js stores the same entry flat. Flattened here so the picker knows
-    // one shape instead of guessing between two.
-    reports = data.reports.map((entry) => ({ problemId: entry.problemId, report: entry.payload?.report }));
-    renderHistoryCount(reports.length, "saved to your account");
+    // The picker reads the unwrapped entry, the panel takes the wire shape and
+    // unwraps it itself, and both go through the one rule in progress.js.
+    reports = data.reports.map(unwrapEntry);
+    showProgress(data.reports, "saved to your account");
   } catch {
-    nodes.history.hidden = true;
+    showProgressError("Could not load saved account progress.");
   }
 }
 
 function renderLocalHistory() {
   try {
     reports = readLocalHistory();
-    renderHistoryCount(reports.length, "saved on this device");
+    showProgress(reports, "saved on this device");
   } catch {
-    nodes.history.hidden = true;
+    showProgressError("Could not load progress saved on this device.");
   }
 }
 
@@ -441,14 +561,107 @@ function title(card) {
   return card.button.querySelector(".problem-title").textContent;
 }
 
-function renderHistoryCount(count, suffix) {
-  if (count <= 0) {
+function showProgressError(message) {
+  // Emptied, not just unpainted. These outlive the panel: recommendations and
+  // every filter change read them again afterwards, so a lobby that failed to
+  // load one account's history went on answering from whichever account's
+  // history it had last managed to load.
+  reports = [];
+  progressEntries = [];
+  nodes.history.hidden = false;
+  nodes.progressSummary.textContent = message;
+  nodes.progressTrends.replaceChildren();
+  nodes.progressWeaknesses.replaceChildren();
+}
+
+function showProgress(entries, suffix) {
+  progressEntries = entries;
+  progressSuffix = suffix;
+  nodes.history.hidden = false;
+  const model = buildProgressModel(progressEntries);
+  syncFilter(nodes.progressDifficulty, model.options.difficulty, (value) => value);
+  syncFilter(nodes.progressLanguage, model.options.language, languageLabel);
+  syncFilter(nodes.progressDuration, model.options.durationMin, (value) => `${value} min`);
+  renderProgress();
+}
+
+function renderProgress() {
+  const filters = {
+    difficulty: nodes.progressDifficulty.value,
+    language: nodes.progressLanguage.value,
+    durationMin: nodes.progressDuration.value,
+  };
+  const model = buildProgressModel(progressEntries, filters);
+  nodes.progressTrends.replaceChildren();
+  nodes.progressWeaknesses.replaceChildren();
+  if (model.total === 0) {
     nodes.history.hidden = true;
     return;
   }
-  nodes.history.hidden = false;
-  nodes.history.textContent = `${count} past report${count === 1 ? "" : "s"} ${suffix}.`;
+  if (model.attempts.length === 0) {
+    nodes.progressSummary.textContent = `No saved attempts match these filters. ${model.total} remain ${progressSuffix}.`;
+    return;
+  }
+  const assessed = model.attempts.filter((attempt) => attempt.report.frameworkAssessment).length;
+  nodes.progressSummary.textContent = assessed === 0
+    ? `${model.attempts.length} of ${model.total} attempts shown · these legacy or unassessed reports have no versioned phase scores, so no zeroes are plotted · ${progressSuffix}.`
+    : `${model.attempts.length} of ${model.total} attempts shown · ${assessed} have comparable formative phase scores, not calibrated hiring evidence · ${progressSuffix}.`;
+  // A table each, not one table with the two as groups inside it. They score
+  // different exercises: REACTO is how a problem was worked, STAR is how past
+  // work was recounted. A single Phase column ran them together as one
+  // ten-step scale, and neither table refers to the other because a candidate
+  // reading one has no use for the other's rows.
+  for (const framework of Object.values(FRAMEWORKS)) {
+    const table = document.createElement("table");
+    const caption = document.createElement("caption");
+    caption.textContent = `${framework.name} · ${framework.scenario}`;
+    table.append(caption);
+    const head = table.createTHead().insertRow();
+    for (const label of ["Step", "Assessed scores by rubric version"]) {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      cell.textContent = label;
+      head.append(cell);
+    }
+    const body = table.createTBody();
+    for (const step of framework.steps) {
+      const row = body.insertRow();
+      const heading = document.createElement("th");
+      heading.scope = "row";
+      heading.textContent = step.label;
+      row.append(heading);
+      const trend = row.insertCell();
+      const segments = model.series[step.label];
+      trend.textContent = segments.length
+        ? segments.map((segment) => `Rubric v${segment.rubricVersion}: ${segment.points.map((point) => `attempt ${point.attemptIndex + 1}: ${point.score}`).join(" → ")}`).join(" | ")
+        : "Not assessed in these attempts";
+    }
+    nodes.progressTrends.append(table);
+  }
+  if (model.weaknesses.length === 0) {
+    const item = document.createElement("li");
+    item.textContent = "No grounded weakness tags in these attempts.";
+    nodes.progressWeaknesses.append(item);
+  } else {
+    for (const weakness of model.weaknesses) {
+      const item = document.createElement("li");
+      item.textContent = `${weakness.tag} · ${weakness.count} attempt${weakness.count === 1 ? "" : "s"}`;
+      nodes.progressWeaknesses.append(item);
+    }
+  }
 }
+
+function syncFilter(select, values, label) {
+  const selected = select.value;
+  select.replaceChildren(new Option("All", "all"));
+  for (const value of values) select.add(new Option(label(value), String(value)));
+  select.value = [...select.options].some((option) => option.value === selected) ? selected : "all";
+}
+
+function languageLabel(value) {
+  return ({ cpp: "C++", c: "C", java: "Java", javascript: "JavaScript", python: "Python" })[value] || value;
+}
+
 
 async function fetchJson(url) {
   const response = await fetch(url);

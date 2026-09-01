@@ -24,11 +24,16 @@ import {
   acceptsReport,
   clamp,
   codeUpdatePayload,
+  codingLoop,
   countdown,
+  FRAMEWORKS,
+  frameworkChecklist,
   endInterviewPayload,
+  escapeHtml,
   formatTime,
   integrityEventPayload,
   isAgent,
+  providerUiState,
   sanitizeReport,
   sessionReport,
   testPayload,
@@ -81,6 +86,8 @@ import {
 import { saveReportHistory } from "./history.js";
 import { createFacePresenceDetector, facePresenceVerdict } from "./face-presence.js";
 import { runBrowserTests } from "./runners.js";
+import { mountBehavioralReview } from "./behavioral-review.js";
+import { consumeGroundingPacket } from "./document-grounding.js";
 
 const languages = ["python", "javascript", "c", "cpp", "java"];
 let editorInitialized = false;
@@ -88,6 +95,9 @@ let codePublishTimer = null;
 // The agent reads the editor once per 2s watch tick, so publishing every
 // keystroke sends ~10x more full-buffer packets than anyone consumes.
 const CODE_PUBLISH_DEBOUNCE_MS = 300;
+/// Long enough to read twice, short enough that it is gone before the answer
+/// it is about. Measured against the hint text, not chosen round.
+const FRAMEWORK_HINT_MS = 12000;
 
 // From /runtime-config.js, which is the only thing allowed to name what the
 // server does. A literal here would be a second answer to "does this server
@@ -122,10 +132,21 @@ const problem = await loadProblem(params.get("problem")).catch((error) => {
   throw error;
 });
 const durationMin = clamp(Number.parseInt(params.get("duration") || "45", 10) || 45, 10, 90);
+const interviewLoop = codingLoop(params.get("loop"));
+const behavioralMinutes = interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
+const codingMinutes = durationMin - behavioralMinutes;
+const interviewProfile = {
+  role: params.get("role") || "",
+  seniority: params.get("seniority") || "",
+  targetCompany: params.get("company") || "",
+};
+const interviewGrounding = consumeGroundingPacket(sessionStorage);
 const state = {
+  paused: false,
   codeByLanguage: { ...problem.starterCode },
   language: "python",
   remaining: durationMin * 60,
+  roundTransitionSent: false,
   // Wall-clock deadline, set when the interview starts. The countdown is
   // derived from it rather than accumulated, so throttling and suspend cannot
   // bend it.
@@ -173,8 +194,14 @@ const nodes = {
   captionsBar: document.querySelector("#captions-bar"),
   captionsText: document.querySelector("#captions-text"),
   timer: document.querySelector("#timer"),
+  frameworkProgress: document.querySelector("#framework-progress"),
+  frameworkHint: document.querySelector("#framework-hint"),
+  frameworkHintTitle: document.querySelector("#framework-hint-title"),
+  frameworkHintBody: document.querySelector("#framework-hint-body"),
+  roundPlanSummary: document.querySelector("#round-plan-summary"),
 
   mic: document.querySelector("#mic"),
+  pause: document.querySelector("#pause"),
   end: document.querySelector("#end"),
   withdrawConsent: document.querySelector("#withdraw-consent"),
   recordingState: document.querySelector("#recording-state"),
@@ -317,9 +344,17 @@ function applyIndent(next) {
 }
 
 function bindEvents() {
+  nodes.roundPlanSummary.textContent = interviewLoop === "coding_only"
+    ? `Coding-only loop · ${codingMinutes} minute coding budget.`
+    : `Coding + behavioral loop · ${codingMinutes} minute coding budget · ${behavioralMinutes} minute behavioral reserve.`;
   nodes.problemTab.addEventListener("click", () => selectTab("problem"));
   nodes.transcriptTab.addEventListener("click", () => selectTab("transcript"));
   nodes.mic.addEventListener("click", toggleMicrophone);
+  // A candidate whose machine or network interrupts them still needs a way to
+  // stop the clock, and the pause is recorded so the gap is visible in the
+  // report rather than passing as thinking time.
+  nodes.pause.hidden = false;
+  nodes.pause.addEventListener("click", togglePause);
   nodes.end.addEventListener("click", () => endInterview("candidate_ended"));
   nodes.withdrawConsent.addEventListener("click", withdrawRecordingConsent);
   nodes.forceReport.addEventListener("click", showReport);
@@ -684,7 +719,7 @@ async function startMediaMeter(stream, onPeak, onError, shouldStop) {
 }
 
 async function connect(preflight, presenting = false) {
-  setAgentStateLabel("Connecting...");
+  setAgentStateLabel(providerUiState("connecting").label);
   try {
     // Before the token, because the token is what precedes an Egress call. The
     // server refuses a recorded room without this row, so the ordering is
@@ -699,7 +734,7 @@ async function connect(preflight, presenting = false) {
     const response = await fetch("/api/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ problemId: problem.id, durationMin, interviewId }),
+      body: JSON.stringify({ problemId: problem.id, durationMin, interviewId, interviewLoop, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) }),
     });
     if (!response.ok) throw new Error((await response.json()).error || "Failed to create a session.");
     const connection = await response.json();
@@ -717,7 +752,7 @@ async function connect(preflight, presenting = false) {
       await startRecording();
       // First event of the replay, so a template that joins late knows the
       // interview was already running rather than inferring it from silence.
-      recordReplay("lifecycle", { state: "started" });
+      recordReplay("lifecycle", { state: "started", interviewLoop, codingMinutes, behavioralMinutes });
       // The problem was rendered in the lobby, before this interview existed,
       // so its heading was dropped. Without this the recording shows a blank
       // title for the whole interview.
@@ -742,13 +777,14 @@ async function connect(preflight, presenting = false) {
     state.room = null;
     if (joined) void joined.disconnect?.()?.catch?.(() => {});
     stopPreflight(preflight);
-    setAgentStateLabel("Offline");
-    // Practice mode without a reason reads as the product working. The server
+    const degraded = providerUiState("degraded", error?.message);
+    setAgentStateLabel(degraded.label);
+    // A degraded start without a reason reads as the product working. The server
     // says why it refused, in words written for a candidate, and a busy server
     // is a "come back in a few minutes" rather than a "your interview is now a
     // simulation" - so say it, and keep the practice editor underneath it.
-    setBanner("connection", `${error?.message || "The interview server could not be reached."} You can keep practising here in the meantime.`);
-    addTranscript("interviewer", "Offline practice mode is ready. Talk through your approach and run tests when you are ready.", true);
+    setBanner("connection", degraded.message);
+    addTranscript("interviewer", "Offline mode is ready. Talk through your approach and run tests when you are ready.", true);
   }
 }
 
@@ -774,6 +810,10 @@ async function connectLiveKit(connection, preflight, presenting = false) {
   const room = new livekit.Room({ adaptiveStream: true, dynacast: true });
 
   room.on(livekit.RoomEvent.DataReceived, (payload, participant, kind, topic) => {
+    if (topic === topics.control && isAgent(participant)) {
+      receiveControl(payload);
+      return;
+    }
     if (!acceptsReport(topic, participant)) return;
     void receiveReport(room, payload);
   });
@@ -792,7 +832,7 @@ async function connectLiveKit(connection, preflight, presenting = false) {
   // on its own, so the candidate is told to wait rather than to restart.
   room.on(livekit.RoomEvent.Reconnecting, () => {
     state.connected = false;
-    setBanner("connection", "Reconnecting to the interview. Keep working; your code is safe.");
+    setBanner("connection", providerUiState("reconnecting").message);
   });
   room.on(livekit.RoomEvent.Reconnected, () => {
     state.connected = true;
@@ -813,7 +853,7 @@ async function connectLiveKit(connection, preflight, presenting = false) {
     // truthy, so leaving a dead room in place told the candidate to end the
     // interview and then left them waiting on an overlay for 55 seconds.
     state.room = null;
-    setBanner("connection", "The interview connection dropped. End the interview to get your report.");
+    setBanner("connection", providerUiState("degraded", "The interview connection dropped.").message);
     console.warn("codetrial room_disconnected");
   });
   // The participant is needed to tell Jim from any other remote audio, so both
@@ -936,6 +976,11 @@ function stopLocalMedia() {
 async function receiveReport(room, payload) {
   try {
     state.report = sanitizeReport(JSON.parse(new TextDecoder().decode(payload)));
+    if (state.report.incomplete) {
+      setBanner("session", providerUiState("incomplete_report").message);
+    }
+    recordReplay("lifecycle", { state: "rounds_final", interviewLoop, rounds: state.report.rounds, interviewContract: state.report.interviewContract });
+    void flushReplay();
     state.phase = "report";
     setLocalAudioEnabled(false);
     await saveHistory();
@@ -1124,15 +1169,132 @@ function updatePresenceBanner(eventType) {
 /// a lid close stopped it entirely; this file already reasons about exactly
 /// that hazard for the face sampler.
 function tickTimer() {
-  if (state.phase !== "live") return;
+  if (state.phase !== "live" || state.paused) return;
+  const previousRemaining = state.remaining;
   const tick = countdown(state.remaining, state.endsAt, Date.now());
   state.remaining = tick.remaining;
   nodes.timer.textContent = formatTime(tick.remaining);
   nodes.timer.classList.toggle("urgent", tick.urgent);
   recordStageTick(tick.remaining);
+  if (interviewLoop === "coding_behavioral" && !state.roundTransitionSent
+    && previousRemaining > behavioralMinutes * 60 && tick.remaining <= behavioralMinutes * 60) {
+    state.roundTransitionSent = true;
+    // No remainingSeconds: the agent decides the round boundary from its own
+    // clock, and a number on the wire that nothing reads is one the next
+    // reader assumes is checked.
+    publish(topics.control, { type: "round_transition", round: "behavioral" });
+    recordReplay("lifecycle", { state: "round_reserve_started", round: "behavioral", remainingSeconds: tick.remaining, interviewLoop });
+  }
   if (tick.warn) publish(topics.control, timeWarningPayload(tick.remaining));
   if (tick.expired) endInterview("time_up");
 }
+
+function togglePause() {
+  if (state.phase !== "live") return;
+  publish(topics.control, { type: "pause_interview", paused: !state.paused });
+  // No room, no acknowledgement coming, so this browser is the authority.
+  // `state.room`, not `state.joinedRoom`: the latter stays true for the rest
+  // of the session once an interviewer has been present, and a disconnect
+  // nulls the room, so testing both left the pause button dead for the whole
+  // remainder of a practice interview that lost its connection - `publish`
+  // dropped the packet and nothing applied the change locally either.
+  if (!state.room) applyPause(!state.paused);
+}
+
+/// Which framework the candidate is being read against right now. The rounds
+/// never overlap, so this is a single value rather than a pair.
+let frameworkRound = "coding";
+let frameworkPhases = [];
+let frameworkHintTimer = null;
+
+/// The checklist, redrawn from the phases the interviewer has banked.
+///
+/// Rebuilt whole rather than patched: it is ten list items at most, and a patch
+/// would need its own record of what is already ticked, which is the second
+/// copy of the truth that these packets exist to avoid.
+function renderFrameworkProgress() {
+  const { name, steps } = frameworkChecklist(frameworkRound, frameworkPhases);
+  nodes.frameworkProgress.hidden = false;
+  nodes.frameworkProgress.innerHTML = steps
+    .map((step) => `<li class="${step.done ? "done" : ""}"><span aria-hidden="true">${step.done ? "&#10003;" : "&#183;"}</span>${escapeHtml(step.label)}</li>`)
+    .join("");
+  nodes.frameworkProgress.setAttribute("aria-label", `${name} steps`);
+}
+
+/// Says what shape of answer fits, while the interviewer is still thinking.
+///
+/// It disappears on its own because it is an offer and not a status: a panel
+/// that stayed would become another thing on screen to read, which is what the
+/// two-framework list beside the timer already was.
+function showFrameworkHint() {
+  nodes.frameworkHintTitle.textContent = "Jim is listening.";
+  nodes.frameworkHintBody.innerHTML = Object.values(FRAMEWORKS)
+    .map((framework) => `
+      <table>
+        <caption>${escapeHtml(framework.name)}<span>${escapeHtml(framework.scenario)}</span></caption>
+        <tbody>${framework.steps.map((step) => `<tr><th scope="row">${escapeHtml(step.label)}</th><td>${escapeHtml(step.hint)}</td></tr>`).join("")}</tbody>
+      </table>`)
+    .join("");
+  nodes.frameworkHint.hidden = false;
+  globalThis.clearTimeout(frameworkHintTimer);
+  frameworkHintTimer = globalThis.setTimeout(() => {
+    nodes.frameworkHint.hidden = true;
+  }, FRAMEWORK_HINT_MS);
+}
+
+function receiveControl(bytes) {
+  try {
+    const message = JSON.parse(new TextDecoder().decode(bytes));
+    if (message.type === "pause_state" && typeof message.paused === "boolean") {
+      applyPause(message.paused);
+    } else if (message.type === "framework_state" && Array.isArray(message.phases)) {
+      frameworkPhases = message.phases;
+      renderFrameworkProgress();
+    } else if (message.type === "round_state" && message.round === "behavioral"
+      && ["started", "skipped"].includes(message.status)) {
+      recordReplay("lifecycle", { state: "round_transition", round: "behavioral", status: message.status, interviewLoop });
+      if (message.status === "started") {
+        nodes.editor.disabled = true;
+        nodes.run.disabled = true;
+        nodes.resultsLabel.textContent = "Coding round complete";
+        // The round changed, so the checklist and the offer change with it.
+        frameworkRound = "behavioral";
+        renderFrameworkProgress();
+        showFrameworkHint();
+      }
+    }
+  } catch {
+    // Untrusted data packets that are not valid controls are ignored.
+  }
+}
+
+/// Whether the coding exercise is over, by round or by the interview ending.
+/// Asked in both places that re-enable the editor and the runner, so the two
+/// cannot disagree about when coding is finished.
+function codingClosed() {
+  return frameworkRound === "behavioral" || state.phase !== "live";
+}
+
+function applyPause(paused) {
+  if (paused === state.paused) return;
+  state.paused = paused;
+  // The deadline is absolute and pause no longer moves it, matching the
+  // server, which stopped extending its own when practice mode went. Ticking
+  // stops while paused, so the display goes stale and the first tick after
+  // resume corrects it. Adding the paused time back, as this used to, would
+  // promise minutes the server has already decided to end the interview
+  // without.
+  nodes.pause.textContent = paused ? "Resume" : "Pause";
+  // Resuming must not hand back a control the round already retired. The
+  // behavioral round disables the editor and the runner on purpose, and a
+  // pause taken during it used to give both back on the way out.
+  nodes.editor.disabled = paused || codingClosed();
+  nodes.run.disabled = paused || codingClosed();
+  recordReplay("lifecycle", { state: paused ? "paused" : "resumed" });
+  recordStage();
+  tickTimer();
+}
+
 
 async function runTests() {
   flushPendingCodePublish();
@@ -1154,7 +1316,7 @@ async function runTests() {
     addTranscript("you", "I ran the tests.", true);
     addTranscript("interviewer", summary.setupError ? "I could not run that yet. Check the setup error and keep going." : `${summary.passed}/${summary.total} tests passed. Explain what changed.`, true);
   }
-  nodes.run.disabled = false;
+  nodes.run.disabled = state.paused || codingClosed();
   nodes.run.textContent = "Run tests";
 }
 
@@ -1201,6 +1363,10 @@ function flushPendingCodePublish() {
 function endInterview(reason) {
   if (state.phase !== "live") return;
   state.phase = "ending";
+  // The hint outranks the ending overlay in the stacking order, so a candidate
+  // who ends while it is still up would read the report status through it.
+  globalThis.clearTimeout(frameworkHintTimer);
+  nodes.frameworkHint.hidden = true;
   // Last event, and sent rather than queued: the page is about to stop being
   // the kind of page that flushes timers, and an "ended" nobody sent leaves a
   // replay that just stops.
@@ -1219,10 +1385,13 @@ function endInterview(reason) {
     // candidate to walk out on a report that is still coming, and leaving
     // never saves it.
     setTimeout(() => {
-      if (state.phase === "ending") nodes.endingDetail.textContent = "Still working. A slow grader can take up to a minute.";
+      if (state.phase === "ending") nodes.endingDetail.textContent = providerUiState("report_generating").message;
     }, 8000);
     setTimeout(() => {
-      if (state.phase === "ending") nodes.leaveRoom.hidden = false;
+      if (state.phase === "ending") {
+        nodes.endingDetail.textContent = providerUiState("retry_ready").message;
+        nodes.leaveRoom.hidden = false;
+      }
     }, 55000);
   }
   publish(topics.control, endInterviewPayload(reason, currentCode(), state.language));
@@ -1255,12 +1424,15 @@ async function showReport() {
   // present is a different fact from whether the connection survived, and only
   // the first one decides if this browser may score anybody. The rule and the
   // failure it came from live in `sessionReport`.
-  state.report = sessionReport({
+  state.report = { ...sessionReport({
     joinedRoom: state.joinedRoom,
     passed,
     total,
     candidateTurns,
-  });
+  }), interviewLoop, rounds: [
+    { kind: "coding", budgetMin: codingMinutes, status: total > 0 && passed === total ? "complete" : "incomplete" },
+    { kind: "behavioral", budgetMin: behavioralMinutes, status: interviewLoop === "coding_only" ? "not_configured" : "skipped" },
+  ] };
   await saveHistory();
   renderReport();
 }
@@ -1281,13 +1453,14 @@ function renderReport() {
     language: state.language,
     code: currentCode(),
   });
+  mountBehavioralReview(nodes.report, state.transcript.values());
 }
 
 function saveHistory() {
   // The interview id travels with the report so the replay page can put the
   // two beside each other. Reports are keyed by their own id and recordings by
   // theirs, and without this the only thing relating them is the clock.
-  const entry = { id: randomId(), date: new Date().toISOString(), interviewId: state.interviewId, problemId: problem.id, problemTitle: problem.title, durationMin, report: state.report };
+  const entry = { id: randomId(), date: new Date().toISOString(), interviewId: state.interviewId, problemId: problem.id, problemTitle: problem.title, difficulty: problem.difficulty, language: state.language, durationMin, interviewLoop, report: state.report };
   return saveReportHistory(entry);
 }
 
@@ -1407,6 +1580,13 @@ function updateAgentState() {
   // the connection last said is still in theirs, so the banner falls back to it
   // rather than to blank: the interviewer returning is not evidence about the
   // camera or the network.
+  // First sight of the interviewer is the moment the candidate is waiting on it
+  // to speak, which is when saying what shape of answer fits is worth a few
+  // seconds of screen. Once only: it is an opener, not a reminder.
+  if (!state.sawAgent) {
+    renderFrameworkProgress();
+    showFrameworkHint();
+  }
   state.sawAgent = true;
   state.agentIdentity ||= agent.identity;
   setBanner("interviewer", "");
@@ -1416,8 +1596,9 @@ function updateAgentState() {
   const published = agent?.attributes?.["lk.agent.state"];
   const value = published || "listening";
   const labels = { listening: "Listening", thinking: "Thinking...", speaking: "Speaking" };
-  setAgentStateLabel(labels[value] || "Listening", value === "listening");
-  // The same three states the pill shows. `questioning`, `encouraging`, and
+  setAgentStateLabel(labels[value] || providerUiState("live").label, value === "listening");
+  // The same three published states the pill shows. The generic Live fallback
+  // is availability only. `questioning`, `encouraging`, and
   // `challenging` wait for src/agent.rs to publish lk.avatar.state; inventing
   // them here would be the avatar guessing at the interviewer's intent.
   setAvatarExpression(value);

@@ -39,5 +39,48 @@
     "python": "\"\"\"\n# Definition for a Node.\nclass Node:\n    def __init__(self, val = 0, neighbors = None):\n        self.val = val\n        self.neighbors = neighbors if neighbors is not None else []\n\"\"\"\n\nfrom typing import Optional\nclass Solution:\n    def cloneGraph(self, node: Optional['Node']) -> Optional['Node']:\n        ",
     "javascript": "/**\n * // Definition for a _Node.\n * function _Node(val, neighbors) {\n *    this.val = val === undefined ? 0 : val;\n *    this.neighbors = neighbors === undefined ? [] : neighbors;\n * };\n */\n\n/**\n * @param {_Node} node\n * @return {_Node}\n */\nvar cloneGraph = function(node) {\n    \n};",
     "c": "/**\n * Definition for a Node.\n * struct Node {\n *     int val;\n *     int numNeighbors;\n *     struct Node** neighbors;\n * };\n */\n\nstruct Node *cloneGraph(struct Node *s) {\n    \n}"
+  },
+  "interviewMetadata": {
+    "difficulty": "Medium",
+    "competencies": [
+      "Hash Table",
+      "DFS",
+      "BFS",
+      "Graph"
+    ],
+    "reactoStages": [
+      "repeat",
+      "example",
+      "algorithm",
+      "coding",
+      "test",
+      "optimizations"
+    ],
+    "followUpDirections": [
+      {
+        "stage": "repeat",
+        "direction": "Ask the candidate to restate the inputs, outputs, constraints, and ambiguities."
+      },
+      {
+        "stage": "example",
+        "direction": "Ask the candidate to choose and trace an ordinary example and a boundary case."
+      },
+      {
+        "stage": "algorithm",
+        "direction": "Ask for the candidate's approach, correctness argument, and complexity."
+      },
+      {
+        "stage": "coding",
+        "direction": "Ask the candidate to implement their stated approach and explain major decisions."
+      },
+      {
+        "stage": "test",
+        "direction": "Ask the candidate to predict useful cases and expected results before running them."
+      },
+      {
+        "stage": "optimizations",
+        "direction": "Ask for complexity, an uncovered edge case, and a justified optimization or cleanup."
+      }
+    ]
   }
 }

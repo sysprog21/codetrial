@@ -314,6 +314,11 @@ test("report markup renders scores, verdict, and escaped feedback", () => {
       communicationFeedback: { strengths: [], improvements: ["slow down"] },
       integrityEvents: [{ type: "REVIEW_EVENT", at: "now", severity: "warning", detail: "SCREEN_INTERRUPTION_WITH_FACE_MISSING", sourceEventIds: ["2", "5"] }],
       hintsUsed: 2,
+      interviewLoop: "coding_behavioral",
+      rounds: [
+        { kind: "coding", budgetMin: 37, status: "complete" },
+        { kind: "behavioral", budgetMin: 8, status: "started" },
+      ],
     },
     problemTitle: "Two Sum",
     language: "python",
@@ -321,6 +326,9 @@ test("report markup renders scores, verdict, and escaped feedback", () => {
   });
 
   assert.match(body, /class="good">HIRE</);
+  assert.match(body, /Coding \+ behavioral/);
+  assert.match(body, /coding · 37 min · complete/);
+  assert.match(body, /behavioral · 8 min · started/);
   assert.match(body, />82<span> \/ 100<\/span>/);
   assert.match(body, /<strong>2<\/strong> hints used/);
   assert.match(body, /Solid &lt;session&gt;/, "summary is escaped");
@@ -332,6 +340,60 @@ test("report markup renders scores, verdict, and escaped feedback", () => {
   assert.match(body, /<pre>print\(1\)<\/pre>/, "trailing blank lines are trimmed");
   assert.match(body, /id="download-report"/);
   assert.match(body, /id="done"/);
+});
+
+test("practice-next drills render accessibly in HTML and Markdown", () => {
+  const report = {
+    codingScore: 70, communicationScore: 70, decision: "HIRE", summary: "Grounded",
+    codingFeedback: { strengths: [], improvements: ["Test boundaries"] },
+    communicationFeedback: { strengths: [], improvements: [] }, hintsUsed: 0,
+    improvementPlan: [{ phase: "Test", weakness: "Test boundaries", impact: "high", frequency: 2, drill: "Build a test table", durationMin: 10, successCriterion: "Cover four case classes", selfReview: ["Predicted outputs", "Included a boundary"] }],
+  };
+  const session = { report, problemTitle: "Two Sum", language: "python", code: "pass", transcript: [], at: "now" };
+  const html = reportMarkup(session);
+  const markdown = reportMarkdown(session);
+  assert.match(html, /<h3>Practice next<\/h3>/);
+  assert.match(html, /Test · 10 min · high impact/);
+  assert.match(markdown, /## Practice next/);
+  assert.match(markdown, /Success: Cover four case classes/);
+});
+
+test("framework phase scores are labeled formative in HTML and Markdown", () => {
+  const report = {
+    codingScore: 70, communicationScore: 70, decision: "HIRE", summary: "Grounded",
+    codingFeedback: { strengths: [], improvements: [] },
+    communicationFeedback: { strengths: [], improvements: [] }, hintsUsed: 0,
+    frameworkAssessment: { rubricVersion: 1, phases: [] },
+  };
+  const session = { report, problemTitle: "Two Sum", language: "python", code: "pass", transcript: [], at: "now" };
+  for (const output of [reportMarkup(session), reportMarkdown(session)]) {
+    assert.match(output, /formative coaching signals, not calibrated hiring evidence/);
+  }
+});
+
+test("framework evidence timeline distinguishes observed inferred and skipped rows", () => {
+  const report = {
+    codingScore: 70, communicationScore: 70, decision: "HIRE", summary: "Grounded",
+    codingFeedback: { strengths: [], improvements: [] },
+    communicationFeedback: { strengths: [], improvements: [] }, hintsUsed: 0,
+    frameworkEvidence: [
+      { atMs: 65000, phase: "algorithm", source: "candidate_speech", kind: "observed", confidence: 95, summary: "Explained an invariant", frameworkVersion: 1, futurePrivateField: "must-not-render" },
+      { atMs: 70000, phase: "test", source: "test_event", kind: "inferred", confidence: 60, summary: "A test suggests coverage", frameworkVersion: 1 },
+      { atMs: 300000, phase: "result", source: "session_timing", kind: "skipped", confidence: 100, summary: "Cutoff prevented assessment", frameworkVersion: 1 },
+    ],
+  };
+  const session = { report, problemTitle: "Two Sum", language: "python", code: "pass", transcript: [], at: "now" };
+  const html = reportMarkup(session);
+  const markdown = reportMarkdown(session);
+  assert.match(html, /id="framework-evidence-title"/);
+  assert.match(html, /01:05 · observed · candidate_speech · 95% confidence · v1/);
+  for (const kind of ["observed", "inferred", "skipped"]) {
+    assert.match(html, new RegExp(kind));
+    assert.match(markdown, new RegExp(kind));
+  }
+  assert.match(markdown, /## Framework evidence/);
+  assert.doesNotMatch(html, /must-not-render/);
+  assert.doesNotMatch(markdown, /must-not-render/);
 });
 
 test("report markup marks a no-hire and an empty editor", () => {
@@ -408,6 +470,11 @@ test("markdown export carries the whole session", () => {
       communicationFeedback: { strengths: [], improvements: ["slow down"] },
       integrityEvents: [{ type: "REVIEW_EVENT", at: "2026-08-15", severity: "info", detail: "<ok>|fine", sourceEventIds: ["1", "2"] }],
       hintsUsed: 2,
+      interviewLoop: "coding_only",
+      rounds: [
+        { kind: "coding", budgetMin: 45, status: "complete" },
+        { kind: "behavioral", budgetMin: 0, status: "not_configured" },
+      ],
     },
     problemTitle: "Two Sum",
     language: "python",
@@ -421,6 +488,8 @@ test("markdown export carries the whole session", () => {
   });
 
   assert.match(markdown, /^# Interview Report - Two Sum$/m);
+  assert.match(markdown, /^Loop: Coding only$/m);
+  assert.match(markdown, /^Rounds: coding \(45 min, complete\); behavioral \(0 min, not_configured\)$/m);
   assert.match(markdown, /^## Verdict: HIRE$/m);
   assert.match(markdown, /^\| Coding \| 82 \/ 100 \|$/m);
   assert.match(markdown, /^\| Hints used \| 2 \|$/m);
@@ -752,4 +821,34 @@ test("the page and the exported markdown tell the same chain story", () => {
     assert.ok(reportMarkup(session).includes(sentence), sentence);
     assert.ok(reportMarkdown({ ...session, transcript: [] }).includes(sentence), sentence);
   }
+});
+
+test("report views identify active and legacy scoring contracts", () => {
+  const active = sanitizeReport({ incomplete: true, interviewContract: {
+    bundleVersion: 4, livePromptVersion: 1, reportPromptVersion: 4,
+    rubricVersion: 1, reportSchemaVersion: 1,
+  } });
+  const session = { report: active, problemTitle: "Two Sum", language: "python", code: "" };
+  assert.match(reportMarkup(session), /Contract bundle 4 · rubric 1 · report schema 1/);
+  assert.match(reportMarkdown({ ...session, transcript: [] }), /Contract: bundle 4; live prompt 1; report prompt 4; rubric 1; report schema 1/);
+
+  const legacy = { ...session, report: sanitizeReport({ incomplete: true }) };
+  assert.match(reportMarkup(legacy), /Legacy\/unversioned contract/);
+  assert.match(reportMarkdown({ ...legacy, transcript: [] }), /Contract: legacy\/unversioned/);
+});
+
+test("a report that recorded no loop is not given one", () => {
+  // Reports written before the interview loop existed carry no interviewLoop,
+  // and the exporter named one anyway, so a historical session was described
+  // in the markdown as a shape it never ran.
+  const session = (report) => ({
+    report: sanitizeReport(report), problemTitle: "Two Sum",
+    language: "python", code: "", transcript: [], at: "2026-01-01",
+  });
+  assert.doesNotMatch(reportMarkdown(session({ incomplete: true })), /^Loop:/m);
+  assert.match(reportMarkdown(session({ incomplete: true, interviewLoop: "coding_only" })), /^Loop: /m);
+  // The on-screen report says it in the header rather than on its own line, and
+  // was fabricating it there after the markdown export stopped.
+  assert.doesNotMatch(reportMarkup(session({ incomplete: true })), /Coding \+ behavioral/);
+  assert.match(reportMarkup(session({ incomplete: true, interviewLoop: "coding_only" })), /Coding only/);
 });

@@ -1,4 +1,8 @@
-use crate::agent::{Problem, build_instructions, get_problem, greeting};
+use crate::agent::{
+    InterviewGrounding, InterviewLoop, InterviewProfile, Problem, build_instructions_for_plan,
+    get_problem, greeting, interview_grounding_json, interview_profile_json,
+    sanitize_interview_grounding, sanitize_interview_profile,
+};
 use crate::config::{AgentConfig, MAX_DURATION_MIN, MIN_DURATION_MIN};
 
 pub const TOPIC_CODE_UPDATE: &str = "code_update";
@@ -10,6 +14,7 @@ pub const TOPIC_TRANSCRIPTION: &str = "lk.transcription";
 
 pub const TOOL_READ_EDITOR: &str = "read_editor";
 pub const TOOL_LOG_HINT: &str = "log_hint";
+pub const TOOL_RECORD_FRAMEWORK_EVIDENCE: &str = "record_framework_evidence";
 pub const AGENT_NAME: &str = "Jim";
 
 /// Everything the Gemini live session needs to open an interview. The LiveKit
@@ -20,6 +25,11 @@ pub struct RuntimeBootstrap<'a> {
     pub room_name: &'a str,
     pub problem: &'static Problem,
     pub duration_min: u32,
+    pub interview_loop: InterviewLoop,
+    pub coding_minutes: u32,
+    pub behavioral_minutes: u32,
+    pub profile: InterviewProfile,
+    pub grounding: InterviewGrounding,
     pub live_model: &'a str,
     pub report_model: &'a str,
     pub voice: &'a str,
@@ -29,25 +39,68 @@ pub struct RuntimeBootstrap<'a> {
     pub greeting: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RuntimeOptions {
+    pub profile: InterviewProfile,
+    pub grounding: InterviewGrounding,
+    pub interview_loop: InterviewLoop,
+}
+
 pub fn bootstrap<'a>(
     config: &'a AgentConfig,
     room_name: &'a str,
     problem_id: Option<&str>,
     duration_min: u32,
 ) -> RuntimeBootstrap<'a> {
+    bootstrap_with_rounds(
+        config,
+        room_name,
+        problem_id,
+        duration_min,
+        RuntimeOptions::default(),
+    )
+}
+
+pub fn bootstrap_with_rounds<'a>(
+    config: &'a AgentConfig,
+    room_name: &'a str,
+    problem_id: Option<&str>,
+    duration_min: u32,
+    options: RuntimeOptions,
+) -> RuntimeBootstrap<'a> {
+    let RuntimeOptions {
+        profile,
+        grounding,
+        interview_loop,
+    } = options;
     let problem = get_problem(problem_id);
     let duration_min = duration_min.clamp(MIN_DURATION_MIN, MAX_DURATION_MIN);
+    let profile = sanitize_interview_profile(Some(&interview_profile_json(&profile)));
+    let grounding = sanitize_interview_grounding(Some(&interview_grounding_json(&grounding)));
+    let behavioral_minutes = interview_loop.behavioral_minutes().min(duration_min);
+    let coding_minutes = duration_min.saturating_sub(behavioral_minutes);
 
     RuntimeBootstrap {
         room_name,
         problem,
         duration_min,
+        interview_loop,
+        coding_minutes,
+        behavioral_minutes,
+        instructions: build_instructions_for_plan(
+            problem,
+            duration_min,
+            &profile,
+            &grounding,
+            interview_loop,
+        ),
+        profile,
+        grounding,
         live_model: &config.gemini_live_model,
         report_model: &config.gemini_report_model,
         voice: &config.gemini_voice,
         silence_ms: config.gemini_silence_ms,
         start_sensitivity: &config.gemini_start_sensitivity,
-        instructions: build_instructions(problem, duration_min),
         greeting: greeting(),
     }
 }

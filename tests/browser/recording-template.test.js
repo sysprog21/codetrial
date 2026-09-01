@@ -454,7 +454,7 @@ test("replay-producer avatar", () => {
 
 test("replay-producer lifecycle", () => {
   assert.ok(
-    interview.includes('recordReplay("lifecycle", { state: "started" });'),
+    interview.includes('recordReplay("lifecycle", { state: "started", interviewLoop, codingMinutes, behavioralMinutes });'),
     "a template that joins late has to know the interview was already running",
   );
   const ending = withoutComments(functionBody(interview, "endInterview"));

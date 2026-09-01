@@ -1110,9 +1110,9 @@ WordDictionary.prototype.search = function(word) {
       await runAndExpectPassing();
 
       await page.getByRole("button", { name: "End interview" }).click();
-      await page.getByRole("heading", { name: "Your performance packet" }).waitFor({ timeout: 30000 });
+      await page.getByRole("heading", { name: "No evaluation" }).waitFor({ timeout: 30000 });
       const report = await page.evaluate(() => JSON.parse(localStorage.getItem("codetrial_history") || "[]")[0]?.report || null);
-      if (!report || report.codingScore !== 100) throw new Error("offline report not persisted with passing score");
+      if (!report?.incomplete || "codingScore" in report || "decision" in report) throw new Error("offline activity was presented as personalized evaluation");
       return;
     }
 

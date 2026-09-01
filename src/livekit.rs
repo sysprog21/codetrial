@@ -2,21 +2,22 @@
 //! Gemini, publish Gemini's audio back, and produce the report when the
 //! interview ends.
 //!
-//! This is the largest module in the tree, so here is its shape. The regions
-//! below are cohesive and appear in this order; a split, when one is wanted,
-//! should follow these lines rather than a line count.
+//! Still the largest module in the tree, so here is its shape. The regions
+//! below are cohesive and appear in this order; a further split should follow
+//! these lines rather than a line count.
+//!
+//! Two are already out: `media` holds the buffers, pumps and codecs that carry
+//! audio and video in both directions, and `turn` holds the state a turn is
+//! made of, which explains what stayed behind with the loop.
 //!
 //! - `run_room` and `join_room`: the lifecycle, and the only entry point.
 //! - Room admin over the LiveKit REST API (`isolate_local_agent` through
 //!   `evict_duplicate_agent`): finding and removing a duplicate agent left
 //!   behind by a previous run.
-//! - Event handling (`handle_media_event`, `handle_data_packet`,
-//!   `handle_gemini_event`): the three sources that drive the session.
-//! - `OutputAudio` and its worker: Gemini's audio, paced onto a LiveKit track.
-//! - Media codecs (`append_pcm16_bytes` through
-//!   `encode_video_frame_jpeg_off_thread`):
-//!   pure functions, no room state, each covered by the tests at the bottom of
-//!   this file.
+//! - Event handling (`handle_data_packet`, `handle_gemini_event`): the sources
+//!   that drive the session. The third, `handle_media_event`, is in `media`.
+//! - Turn procedures (`send_wrap_up_and_wait` through `close_turn`): what ends
+//!   a turn, operating on the context above.
 //! - Report building (`publish_report` through `report_data_packet`).
 
 use std::collections::HashMap;
@@ -26,27 +27,13 @@ use std::time::{Duration, Instant};
 use ::livekit::DisconnectReason;
 use ::livekit::ParticipantKind;
 use ::livekit::data_stream::api::StreamTextOptions;
-use ::livekit::options::TrackPublishOptions;
-use ::livekit::prelude::{
-    DataPacket, LocalAudioTrack, LocalTrack, RemoteAudioTrack, RemoteParticipant, RemoteTrack,
-    Room, RoomEvent, RoomOptions, RtcAudioSource, TrackSource,
-};
-use ::livekit::webrtc::audio_frame::AudioFrame;
-use ::livekit::webrtc::audio_source::AudioSourceOptions;
-use ::livekit::webrtc::audio_source::native::NativeAudioSource;
-use ::livekit::webrtc::audio_stream::native::NativeAudioStream;
-use ::livekit::webrtc::video_frame::{BoxVideoFrame, VideoFormatType};
-use ::livekit::webrtc::video_stream::native::NativeVideoStream;
-use futures_util::StreamExt;
-use jpeg_encoder::{ColorType, Encoder};
-use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
+use ::livekit::prelude::{DataPacket, RemoteParticipant, Room, RoomEvent, RoomOptions};
 
 use crate::agent::{
-    ReportPromptInput, RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput,
-    WATCH_TICK_S, apply_data_event, final_report, format_test_run, log_hint_text, numbered,
-    parse_participant_metadata, proactive_review, read_editor_text, report_prompt,
-    significant_change, silence_nudge, timing_decision, transcript_for_report, wrap_up,
+    ReportPromptInput, RuntimeState, SpeakerTurn, WATCH_TICK_S, apply_data_event, final_report,
+    format_test_run, framework_evidence_json, framework_progress, interview_contract_json,
+    parse_participant_metadata, read_editor_text, record_framework_evidence, report_prompt,
+    transcript_for_report, wrap_up,
 };
 use crate::config::AgentConfig;
 use crate::runtime::TOPIC_CONTROL;
@@ -73,40 +60,39 @@ use crate::gemini::{
     GeminiEvent, GeminiFunctionCall, GeminiLiveSession, generate_report, open_live_session,
     redact_api_key, resume_live_session,
 };
+#[cfg(test)]
+use crate::runtime::bootstrap;
 use crate::runtime::{
-    AGENT_NAME, RuntimeBootstrap, TOOL_LOG_HINT, TOOL_READ_EDITOR, TOPIC_REPORT,
-    TOPIC_TRANSCRIPTION, agent_identity, bootstrap,
+    AGENT_NAME, RuntimeBootstrap, TOOL_LOG_HINT, TOOL_READ_EDITOR, TOOL_RECORD_FRAMEWORK_EVIDENCE,
+    TOPIC_REPORT, TOPIC_TRANSCRIPTION, agent_identity,
 };
 use crate::token::{LivekitTokenInput, livekit_room_admin_token, livekit_token};
 
-const GEMINI_AUDIO_SAMPLE_RATE: i32 = 16_000;
-const GEMINI_AUDIO_CHANNELS: i32 = 1;
-const GEMINI_AUDIO_BUFFER_BYTES: usize = 3_200;
-const GEMINI_VIDEO_MIME_TYPE: &str = "image/jpeg";
-const GEMINI_VIDEO_FRAME_INTERVAL: Duration = Duration::from_secs(1);
-const GEMINI_VIDEO_JPEG_QUALITY: u8 = 75;
+mod media;
+mod turn;
+
+use media::*;
+use turn::*;
+
 const GEMINI_OUTPUT_AUDIO_SAMPLE_RATE: u32 = 24_000;
 /// Gemini closes a connection roughly every ten minutes, so the longest
 /// interview this offers needs about nine resumptions. The ceiling is here to
 /// stop a socket that fails immediately from spinning, not to bound a healthy
 /// interview; past it the supervisor restart takes over as before.
 const GEMINI_RESUME_LIMIT: usize = 16;
-const LIVEKIT_OUTPUT_CHANNELS: u32 = 1;
-const LIVEKIT_OUTPUT_QUEUE_MS: u32 = 100;
-const LIVEKIT_OUTPUT_FRAME_QUEUE: usize = 6_000;
 const LIVEKIT_AGENT_STATE: &str = "lk.agent.state";
 const AGENT_STATE_LISTENING: &str = "listening";
 const AGENT_STATE_SPEAKING: &str = "speaking";
 const DUPLICATE_AGENT_ISOLATION_ATTEMPTS: usize = 20;
 const WRAP_UP_WAIT: Duration = Duration::from_secs(8);
-/// Covers `generate_report`'s three attempts and their backoff. The candidate
-/// is watching a spinner, so this is the point where waiting stops being worth
-/// more than a fallback report.
-const REPORT_TIMEOUT: Duration = Duration::from_secs(45);
-/// A candidate who has just typed is still working, even if their speech has
-/// paused. Give them a beat before a periodic review tries to take the floor.
-const CODE_SETTLE: Duration = Duration::from_secs(10);
 
+/// Below this, a queued turn is not a wait anyone experiences, and saying so
+/// costs a log line per turn that reads as zero.
+const NOTABLE_PLAYOUT_BACKLOG: Duration = Duration::from_millis(500);
+/// Covers the normal report attempt, one schema repair, and bounded transient
+/// retries. The candidate is watching a spinner, so this is the point where
+/// waiting stops being worth more than an honest incomplete report.
+const REPORT_TIMEOUT: Duration = Duration::from_secs(45);
 /// Whether the candidate is in the room, and since when they have not been.
 ///
 /// The departure, the return and the grace check happen in three different
@@ -318,10 +304,16 @@ async fn open_session<'a>(
         "timing: room and Gemini session ready {:.2}s after the candidate joined",
         setup_began.elapsed().as_secs_f64()
     );
-    let started_at = Instant::now();
+
+    // The candidate's clock, not a third one. The browser starts counting when
+    // its own connect resolves, which is this instant seen from the other side,
+    // and stamping again here put the agent a second or two behind the tab for
+    // the rest of the interview. Every consumer below reads this as "when the
+    // interview started", and that is when it started.
+    let started_at = setup_began;
 
     let mut turn = TurnState {
-        state: RuntimeState::default(),
+        state: initial_runtime_state(&boot, started_at),
         agent_state: std::mem::take(&mut agent_state),
         activity: RuntimeActivity::new(started_at),
         turns: SpeakerTurns::default(),
@@ -411,8 +403,11 @@ pub async fn run_room(
     //
     // The grace is deliberate: the browser normally ends the interview itself,
     // and this only has to catch the case where it never does.
-    let hard_deadline = tokio::time::sleep(
-        Duration::from_secs(u64::from(boot.duration_min) * 60) + INTERVIEW_DEADLINE_GRACE,
+    let hard_deadline = tokio::time::sleep_until(
+        (Instant::now()
+            + Duration::from_secs(u64::from(boot.duration_min) * 60)
+            + INTERVIEW_DEADLINE_GRACE)
+            .into(),
     );
     tokio::pin!(hard_deadline);
 
@@ -468,7 +463,10 @@ pub async fn run_room(
             }
             event = events.recv() => {
                 let Some(event) = event else {
-                    eprintln!("LiveKit event stream ended for room={room_name}; ending");
+                    eprintln!(
+                        "LiveKit event stream ended for room={room_name}; ending with no report, \
+                         because the room closed before the interview did"
+                    );
                     gemini.close().await?;
                     return Ok(());
                 };
@@ -527,73 +525,28 @@ pub async fn run_room(
                 // milliseconds of speech. Dropping the frame costs a tenth of a
                 // second of audio the resumed session did not need; propagating
                 // cost the interview.
-                if let Err(error) = pump_audio(&mut media, &mut gemini, frame).await {
+                let ended = frame.is_none();
+                if turn.state.paused {
+                    discard_paused_audio(&mut media);
+                } else if let Err(error) = pump_audio(&mut media, &mut gemini, frame).await {
                     eprintln!("Gemini audio write failed ({error}); waiting for the close to be reported");
                 }
+
+                // One release for the arm, past every branch above it. Sitting
+                // inside a branch is what let a failed final flush keep an
+                // ended stream, and there is no path through here that wants to
+                // hold on to one.
+                release_if_ended(&mut media.audio, ended);
             }
             frame = next_video_frame(&mut media.video), if media.video.is_some() => {
-                if let Err(error) = pump_video(&mut media, &mut gemini, frame).await {
+                if turn.state.paused {
+                    release_if_ended(&mut media.video, frame.is_none());
+                } else if let Err(error) = pump_video(&mut media, &mut gemini, frame).await {
                     eprintln!("Gemini video write failed ({error}); waiting for the close to be reported");
                 }
             }
         }
     }
-}
-
-/// Buffers one arriving audio frame, and flushes when there is enough to send.
-///
-/// `None` is the track ending: what is buffered goes now, because nothing else
-/// is going to arrive to push it over the threshold.
-async fn pump_audio(
-    media: &mut CandidateMedia,
-    gemini: &mut GeminiLiveSession,
-    frame: Option<AudioFrame<'static>>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let Some(frame) = frame else {
-        flush_audio(gemini, &mut media.audio_bytes).await?;
-        media.audio = None;
-        return Ok(());
-    };
-
-    // Not `last_user_speech`. LiveKit delivers frames for as long as the track
-    // is live, silence included, so stamping here made the interview
-    // permanently "just spoke": `idle_seconds` never reached
-    // SILENCE_THRESHOLD_S and the nudge never fired. Real speech is stamped on
-    // `InputTranscript`, where Gemini has already decided that words were said.
-    append_pcm16_bytes(&frame, &mut media.audio_bytes);
-    if media.audio_bytes.len() >= GEMINI_AUDIO_BUFFER_BYTES {
-        flush_audio(gemini, &mut media.audio_bytes).await?;
-    }
-    Ok(())
-}
-
-/// Sends one arriving video frame, at most one per interval.
-async fn pump_video(
-    media: &mut CandidateMedia,
-    gemini: &mut GeminiLiveSession,
-    frame: Option<BoxVideoFrame>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let Some(frame) = frame else {
-        media.video = None;
-        return Ok(());
-    };
-    if !should_send_video_frame(media.last_video_frame.elapsed()) {
-        return Ok(());
-    }
-
-    // Stamped on the attempt, not the success: the dimensions come off the
-    // wire, and a source stuck emitting frames that will not encode must cost
-    // one try per interval rather than one per arriving frame.
-    media.last_video_frame = Instant::now();
-    match encode_video_frame_jpeg_off_thread(&frame, GEMINI_VIDEO_JPEG_QUALITY).await {
-        Ok(bytes) => {
-            gemini
-                .send_video_frame(&bytes, GEMINI_VIDEO_MIME_TYPE)
-                .await?
-        }
-        Err(error) => eprintln!("skipping unencodable video frame: {error}"),
-    }
-    Ok(())
 }
 
 /// One LiveKit room event that was not the candidate's media.
@@ -715,181 +668,6 @@ async fn join_room(
         room.local_participant().identity()
     );
     Ok((room, events))
-}
-
-/// The candidate's inbound media, plus the identity their tracks arrived on.
-/// Bundled because every track event touches two or three of these together.
-struct CandidateMedia {
-    audio: Option<NativeAudioStream>,
-    video: Option<NativeVideoStream>,
-    audio_bytes: Vec<u8>,
-    identity: Option<String>,
-    last_video_frame: Instant,
-}
-
-impl CandidateMedia {
-    fn new() -> Self {
-        Self {
-            audio: None,
-            video: None,
-            audio_bytes: Vec::new(),
-            identity: None,
-
-            // Seeded in the past so the first frame sends immediately. The
-            // monotonic clock starts at boot, so on a machine that just came up
-            // there may be nothing to subtract from.
-            last_video_frame: Instant::now()
-                .checked_sub(GEMINI_VIDEO_FRAME_INTERVAL)
-                .unwrap_or_else(Instant::now),
-        }
-    }
-
-    fn attach_audio(&mut self, track: &RemoteAudioTrack, participant: &RemoteParticipant) {
-        // Drop any half-buffered frame from a previous publication so the new
-        // stream does not start mid-sample.
-        self.audio_bytes.clear();
-        self.identity = Some(participant.identity().to_string());
-        self.audio = Some(NativeAudioStream::new(
-            track.rtc_track(),
-            GEMINI_AUDIO_SAMPLE_RATE,
-            GEMINI_AUDIO_CHANNELS,
-        ));
-    }
-}
-
-struct RuntimeActivity {
-    last_code_change: Instant,
-    last_user_speech: Instant,
-    /// When the candidate stopped talking and started waiting, if they have and
-    /// the reply has not begun. Separate from `last_user_speech`, which the
-    /// nudge logic needs seeded at the interview start and never absent.
-    ///
-    /// Sharing one field is what made the reply-latency line lie. `Interrupted`
-    /// hands the floor back without ever saying when the candidate finished, so
-    /// a reply that followed one measured from whatever the seed was: on the
-    /// first turn that is the start of the interview, which is how a candidate
-    /// who waited under a second was reported as having waited fifteen.
-    awaiting_reply_since: Option<Instant>,
-    last_agent_speech: Instant,
-    last_nudge: Instant,
-    last_review: Instant,
-    last_interjection: Instant,
-    last_test_reaction: Instant,
-    code_at_last_review: String,
-    floor: Floor,
-}
-
-/// Who holds the conversation. `agent_busy` + `agent_turn_complete` encoded
-/// this as two bools, but only three of the four combinations were reachable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Floor {
-    /// The candidate has the floor.
-    Listening,
-    /// A prompt is in flight; Gemini is still producing the turn.
-    Speaking,
-    /// The turn is complete but queued audio is still draining.
-    AwaitingPlayout,
-}
-
-impl RuntimeActivity {
-    fn new(now: Instant) -> Self {
-        Self {
-            last_code_change: now,
-            last_user_speech: now,
-            awaiting_reply_since: None,
-            last_agent_speech: now,
-            last_nudge: now,
-            last_review: now,
-            last_interjection: now,
-
-            // Seeded in the past so the first test run reacts immediately; see
-            // `CandidateMedia::new` for why the subtraction is checked.
-            last_test_reaction: now
-                .checked_sub(Duration::from_secs_f64(TEST_REACTION_COOLDOWN_S))
-                .unwrap_or(now),
-            code_at_last_review: String::new(),
-            floor: Floor::Listening,
-        }
-    }
-
-    /// The agent has the floor: it was just handed a prompt and owns the
-    /// conversation until Gemini reports the turn complete.
-    fn mark_speaking(&mut self) {
-        self.floor = Floor::Speaking;
-    }
-
-    /// Turn finished and audio drained: hand the floor back to the candidate.
-    fn mark_listening(&mut self) {
-        self.floor = Floor::Listening;
-        self.last_agent_speech = Instant::now();
-    }
-
-    /// Gemini has transcribed something the candidate said, so they have
-    /// stopped talking and started waiting.
-    ///
-    /// The two stamps are not the same fact, which is why they are separate
-    /// fields. `last_user_speech` feeds the idle timers and has to move on
-    /// every fragment. `awaiting_reply_since` is the start of a measurable
-    /// wait, and it exists only while there is a wait to measure.
-    ///
-    /// Not armed while the agent holds the floor. Input transcription lags the
-    /// audio it describes, so a fragment covering the tail of what the
-    /// candidate said can land after the reply has already begun. Arming on
-    /// that one made the next chunk of a turn already in progress announce
-    /// itself as the reply starting, measured from a moment nobody waited from.
-    fn note_candidate_finished(&mut self, now: Instant) {
-        self.last_user_speech = now;
-        if self.floor != Floor::Speaking {
-            self.awaiting_reply_since = Some(now);
-        }
-    }
-
-    /// `now` is passed in rather than sampled here, like every other method on
-    /// this struct. Sampling internally makes the boundaries untestable: a test
-    /// can set `last_code_change` to exactly `CODE_SETTLE` ago, but the clock
-    /// read inside would already have moved past it, so a half-open window and
-    /// a closed one behave identically to every test that can be written.
-    fn watch_prompt(&mut self, state: &RuntimeState, now: Instant) -> Option<String> {
-        let decision = timing_decision(&TimingInput {
-            agent_busy: self.floor != Floor::Listening,
-            user_talking: now.duration_since(self.last_code_change) < CODE_SETTLE,
-            idle_seconds: now
-                .duration_since(
-                    self.last_user_speech
-                        .max(self.last_code_change)
-                        .max(self.last_agent_speech),
-                )
-                .as_secs_f64(),
-            since_last_nudge_seconds: now.duration_since(self.last_nudge).as_secs_f64(),
-            since_last_review_seconds: now.duration_since(self.last_review).as_secs_f64(),
-            since_last_interjection_seconds: now
-                .duration_since(self.last_interjection)
-                .as_secs_f64(),
-            speech_gap_seconds: now
-                .duration_since(self.last_user_speech.max(self.last_agent_speech))
-                .as_secs_f64(),
-            significant_change: significant_change(&self.code_at_last_review, &state.code),
-        });
-        if decision.update_last_nudge {
-            self.last_nudge = now;
-        }
-        if decision.update_last_review {
-            self.last_review = now;
-        }
-        if decision.update_last_interjection {
-            self.last_interjection = now;
-        }
-        if decision.sync_code_at_last_review {
-            self.code_at_last_review = state.code.clone();
-        }
-        if decision.silence_nudge {
-            return Some(silence_nudge(&numbered(&state.code)));
-        }
-        if decision.proactive_review {
-            return Some(proactive_review(&numbered(&state.code)));
-        }
-        None
-    }
 }
 
 async fn isolate_local_agent(
@@ -1094,66 +872,6 @@ async fn evict_duplicate_agent(
     remove_room_participant(config, room_name, &identity, now_seconds).await
 }
 
-/// The candidate's tracks arriving and going away. Reports whether the event
-/// was media, so the caller's match only has to carry what is left.
-async fn handle_media_event(
-    media: &mut CandidateMedia,
-    gemini: &mut GeminiLiveSession,
-    candidate_identity: &str,
-    forward_video_to_gemini: bool,
-    event: &RoomEvent,
-) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    match event {
-        RoomEvent::TrackSubscribed {
-            track: RemoteTrack::Audio(track),
-            participant,
-            ..
-        } if is_interview_participant(Some(&participant.identity().0), candidate_identity) => {
-            media.attach_audio(track, participant);
-        }
-        RoomEvent::TrackSubscribed {
-            track: RemoteTrack::Video(track),
-            participant,
-            ..
-        } if candidate_video_frames_go_to_gemini(
-            Some(&participant.identity().0),
-            candidate_identity,
-            forward_video_to_gemini,
-        ) =>
-        {
-            media.video = Some(NativeVideoStream::new(track.rtc_track()));
-        }
-
-        // Guarded like the subscribe arms: an unrelated participant leaving
-        // must not tear down the stream the candidate is still speaking into.
-        RoomEvent::TrackUnsubscribed {
-            track: RemoteTrack::Audio(_),
-            participant,
-            ..
-        } if is_interview_participant(Some(&participant.identity().0), candidate_identity) => {
-            flush_audio(gemini, &mut media.audio_bytes).await?;
-            media.audio = None;
-        }
-        RoomEvent::TrackUnsubscribed {
-            track: RemoteTrack::Video(_),
-            participant,
-            ..
-        } if is_interview_participant(Some(&participant.identity().0), candidate_identity) => {
-            media.video = None;
-        }
-        _ => return Ok(false),
-    }
-    Ok(true)
-}
-
-fn candidate_video_frames_go_to_gemini(
-    sender: Option<&str>,
-    candidate_identity: &str,
-    opt_in: bool,
-) -> bool {
-    opt_in && is_interview_participant(sender, candidate_identity)
-}
-
 /// Only the candidate this interview bootstrapped from may drive the runtime.
 /// Their token grants both `canPublishData` and `canPublish`, so a second
 /// participant in the room could otherwise end the interview over the data
@@ -1242,31 +960,17 @@ fn candidate_bootstrap<'a>(
     metadata: Option<&str>,
 ) -> RuntimeBootstrap<'a> {
     let candidate = parse_participant_metadata(metadata);
-    bootstrap(
+    crate::runtime::bootstrap_with_rounds(
         config,
         room_name,
         Some(candidate.problem.id),
         candidate.duration_min,
+        crate::runtime::RuntimeOptions {
+            profile: candidate.profile,
+            grounding: candidate.grounding,
+            interview_loop: candidate.interview_loop,
+        },
     )
-}
-
-async fn flush_audio(
-    gemini: &mut GeminiLiveSession,
-    bytes: &mut Vec<u8>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if !bytes.is_empty() {
-        gemini.send_audio_pcm_16khz(bytes).await?;
-        bytes.clear();
-    }
-    Ok(())
-}
-
-async fn next_audio_frame(stream: &mut Option<NativeAudioStream>) -> Option<AudioFrame<'static>> {
-    stream.as_mut()?.next().await
-}
-
-async fn next_video_frame(stream: &mut Option<NativeVideoStream>) -> Option<BoxVideoFrame> {
-    stream.as_mut()?.next().await
 }
 
 /// The immutable side of a running interview: fixed once the candidate joins,
@@ -1289,6 +993,40 @@ struct InterviewContext<'a> {
     config: &'a AgentConfig,
     boot: &'a RuntimeBootstrap<'a>,
     started_at: Instant,
+}
+
+/// The interview's starting state, from the plan the token was minted for.
+///
+/// Every field here is read for the length of the interview and none can be
+/// recovered once it is missed: the clock the round boundary is measured
+/// against, the loop that decides whether a behavioral round exists at all,
+/// and the two budgets the report divides the session into.
+fn initial_runtime_state(boot: &RuntimeBootstrap<'_>, started_at: Instant) -> RuntimeState {
+    RuntimeState {
+        started_at,
+        interview_loop: boot.interview_loop,
+        coding_minutes: boot.coding_minutes,
+        behavioral_minutes: boot.behavioral_minutes,
+        ..RuntimeState::default()
+    }
+}
+
+/// A packet for the browser, on the topic it is listening to.
+///
+/// The three fields here are what decide whether the message arrives at all:
+/// an unreliable one may be dropped on a bad network, and one with no topic
+/// lands on a channel nothing reads. Built in one place because it was written
+/// out at four call sites, where each field was free to go missing on its own.
+fn browser_packet(
+    topic: &str,
+    message: &serde_json::Value,
+) -> Result<DataPacket, serde_json::Error> {
+    Ok(DataPacket {
+        payload: serde_json::to_vec(message)?,
+        topic: Some(topic.to_string()),
+        reliable: true,
+        ..Default::default()
+    })
 }
 
 /// Applies one decoded data packet. `Break` means the interview is over and the
@@ -1314,6 +1052,31 @@ async fn handle_data_packet(
     }
     if result.update_last_interjection {
         context.activity.last_interjection = Instant::now();
+    }
+    if let Some(paused) = result.pause_changed {
+        room.local_participant()
+            .publish_data(browser_packet(
+                TOPIC_CONTROL,
+                &serde_json::json!({ "type": "pause_state", "paused": paused }),
+            )?)
+            .await?;
+        if paused && context.activity.floor != Floor::Listening {
+            context.activity.discarding_output =
+                pause_leaves_output_in_flight(context.activity.floor);
+            cut_off_turn(context.activity, context.output_audio);
+            close_turns(room, context).await?;
+            set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
+        }
+    }
+    if let Some(status) = result.round_changed {
+        room.local_participant()
+            .publish_data(browser_packet(
+                TOPIC_CONTROL,
+                &serde_json::json!({
+                    "type": "round_state", "round": "behavioral", "status": status
+                }),
+            )?)
+            .await?;
     }
     if let Some(prompt) = result.generate_reply {
         context.gemini.send_text(&prompt).await?;
@@ -1347,46 +1110,6 @@ async fn handle_data_packet(
     Ok(ControlFlow::Break(()))
 }
 
-/// What one interview accumulates, minus the two things the select loop borrows
-/// as futures. `gemini` and `media` have to stay outside: their arms hold a
-/// mutable borrow for as long as the select is polled, so bundling them here
-/// would make every other arm's condition fight the borrow checker.
-///
-/// The four that are left exist to make [`TurnState::context`] possible. Three
-/// arms of the select need a `GeminiEventContext`, and it borrows seven things
-/// mutably, so it lives exactly as long as the call it is handed to. That used
-/// to be a macro, purely to stop the field list being written out three times.
-///
-/// Worth knowing before anyone tries to go further: bundling these four and
-/// stopping there makes the function *longer*, because every use site grows a
-/// prefix and the macro stays. It only pays once the method exists to replace
-/// the macro outright.
-struct TurnState {
-    state: RuntimeState,
-    agent_state: String,
-    activity: RuntimeActivity,
-    turns: SpeakerTurns,
-}
-
-impl TurnState {
-    fn context<'a>(
-        &'a mut self,
-        output_audio: &'a mut OutputAudio,
-        gemini: &'a mut GeminiLiveSession,
-        candidate_identity: Option<&'a str>,
-    ) -> GeminiEventContext<'a> {
-        GeminiEventContext {
-            output_audio,
-            gemini,
-            state: &mut self.state,
-            agent_state: &mut self.agent_state,
-            activity: &mut self.activity,
-            turns: &mut self.turns,
-            candidate_identity,
-        }
-    }
-}
-
 struct GeminiEventContext<'a> {
     output_audio: &'a mut OutputAudio,
     gemini: &'a mut GeminiLiveSession,
@@ -1397,28 +1120,492 @@ struct GeminiEventContext<'a> {
     candidate_identity: Option<&'a str>,
 }
 
-/// Whether a candidate talking over the interviewer cuts it short.
-///
-/// Carried as an argument rather than a flag on the context. It was a field
-/// that `send_wrap_up_and_wait` set and restored, which is one early return
-/// away from leaving barge-in off for good, and it read as state when it is
-/// really a property of the turn being handled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Interruptible {
-    /// An ordinary exchange. The candidate speaking wins the floor.
-    Yes,
-    /// The closing message. Cutting it leaves the candidate without the ending,
-    /// and `wrap_up_settled` reads the emptied queue as the turn being over, so
-    /// a "thanks" mid sentence ended the interview there.
-    No,
+async fn handle_gemini_event(
+    room: &Room,
+    context: &mut GeminiEventContext<'_>,
+    event: GeminiEvent,
+    interruptible: Interruptible,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if context.activity.discarding_output {
+        match &event {
+            GeminiEvent::Audio { .. } | GeminiEvent::OutputTranscript(_) => return Ok(()),
+            GeminiEvent::TurnComplete | GeminiEvent::Interrupted => {
+                context.activity.discarding_output = false;
+            }
+            _ => {}
+        }
+    }
+    if context.state.paused
+        && matches!(
+            &event,
+            GeminiEvent::Audio { .. } | GeminiEvent::OutputTranscript(_)
+        )
+    {
+        return Ok(());
+    }
+    match event {
+        GeminiEvent::ToolCall(calls) => {
+            for call in calls {
+                let shown_before = framework_progress(context.state);
+                let response = execute_tool_call(context.state, &call);
+                context.gemini.send_tool_response(&call, response).await?;
+                if checklist_changed(&shown_before, context.state) {
+                    publish_framework_progress(room, context.state).await?;
+                }
+            }
+        }
+        GeminiEvent::OutputTranscript(text) => {
+            // `text` is passed whole, not the trimmed form: fragments have to
+            // be concatenated exactly as received. The trimmed view only
+            // decides whether this event carried anything at all.
+            if transcript_text(&text).is_some() {
+                let turn = &mut context.turns.interviewer;
+                let whole = turn
+                    .record(&mut context.state.transcript, "Interviewer", &text)
+                    .to_string();
+                publish_transcript(room, &whole, turn.segment_id("interviewer"), false, None)
+                    .await?;
+            }
+        }
+        GeminiEvent::InputTranscript(text) => {
+            if let (Some(_), Some(identity)) = (transcript_text(&text), context.candidate_identity)
+            {
+                // The candidate is talking over audio Gemini finished producing
+                // a while ago. Gemini will not call this an interruption,
+                // because as far as it is concerned that turn ended when it
+                // stopped generating; only this side knows the queue is still
+                // draining. Cut it here or the reply lands behind the rest of
+                // the old turn.
+                drop_stale_playout(room, context, interruptible).await?;
+                context.activity.note_candidate_finished(Instant::now());
+                let turn = &mut context.turns.candidate;
+                let whole = turn
+                    .record(&mut context.state.transcript, "Candidate", &text)
+                    .to_string();
+                publish_transcript(
+                    room,
+                    &whole,
+                    turn.segment_id("candidate"),
+                    false,
+                    Some(identity),
+                )
+                .await?;
+            }
+        }
+        GeminiEvent::Audio { bytes, mime_type } => {
+            // Read before the interrupt below, because that is the point the
+            // candidate stops waiting. Stamped on the last input transcript
+            // fragment, so it covers endpointing plus model latency plus
+            // anything still queued ahead of the reply: the silence the
+            // candidate actually sits through.
+            //
+            // `None` means Gemini is answering something it never transcribed,
+            // and there is no moment the candidate finished to measure from.
+            // Printing anything then is worse than printing nothing.
+            let waited = context.activity.awaiting_reply_since;
+
+            // A new turn's first chunk while the previous one is still
+            // draining. `InputTranscript` normally clears the queue before this
+            // point, so reaching here means Gemini answered something it never
+            // transcribed. Backstop rather than the main path, and it must run
+            // before `capture` or the new audio queues behind the old.
+            //
+            // Only for a chunk that will actually be queued. Dropping ahead of
+            // a chunk `capture` rejects leaves the candidate with a sentence
+            // cut in half and no reply behind it.
+            if context.output_audio.accepts(&bytes, &mime_type) {
+                drop_stale_playout(room, context, interruptible).await?;
+            }
+            if context.output_audio.capture(&bytes, &mime_type).await? {
+                // Cleared here rather than where it is read: a chunk `capture`
+                // rejects is not the reply starting, and consuming the stamp on
+                // one would lose the measurement for the chunk that is.
+                if let Some(since) = waited {
+                    context.activity.awaiting_reply_since = None;
+                    eprintln!(
+                        "timing: {:.2}s from the candidate finishing to the reply starting",
+                        since.elapsed().as_secs_f64()
+                    );
+                }
+                context.activity.mark_speaking();
+
+                // Speech is queued, not played: the floor stays busy until the
+                // buffered audio actually finishes.
+                context.activity.last_agent_speech = context.output_audio.playout_deadline;
+                set_agent_state(room, context.agent_state, AGENT_STATE_SPEAKING).await?;
+            }
+        }
+        GeminiEvent::TurnComplete => {
+            // The gap between Gemini finishing and the queue emptying. Gemini
+            // synthesises far faster than speech plays, so this is how long the
+            // agent will still be talking after it has stopped thinking, and
+            // therefore how long a candidate answering now would have waited
+            // before `drop_stale_playout` existed.
+            let backlog = context
+                .output_audio
+                .playout_deadline
+                .saturating_duration_since(Instant::now());
+
+            // Only a backlog a candidate would notice. `!is_zero()` fired on a
+            // millisecond and printed "0.0s", so every one of these lines in a
+            // real session said nothing at all.
+            if backlog >= NOTABLE_PLAYOUT_BACKLOG {
+                eprintln!(
+                    "timing: turn generated, {:.1}s of it still to play",
+                    backlog.as_secs_f64()
+                );
+            }
+
+            // Gemini finishing its turn also means the candidate utterance it
+            // answered is over, so both sides close here.
+            close_turns(room, context).await?;
+            context.activity.floor = Floor::AwaitingPlayout;
+            if !context.output_audio.is_playing() {
+                context.activity.mark_listening();
+                set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
+            }
+        }
+        GeminiEvent::Interrupted => {
+            // The only other path that empties the queue, and it used to do so
+            // silently. If a turn is cut this way the candidate hears a
+            // fragment or nothing, and without this line the log shows only the
+            // consequence: a turn that completed with nothing left to play.
+            let unplayed = cut_off_turn(context.activity, context.output_audio);
+
+            // What Gemini heard is the whole diagnosis. It interrupts on its
+            // own voice activity detection, so a cut with the candidate
+            // mid-sentence is barge-in working, and a cut with nothing
+            // transcribed is the microphone hearing the interviewer through the
+            // candidate's speakers. The line reported the size of the loss and
+            // left the cause to guesswork across a whole session of them.
+            let heard = context.turns.candidate.tail(80);
+            eprintln!(
+                "timing: Gemini cut its own turn, {:.1}s of it unplayed; candidate audio so far: {}",
+                unplayed.as_secs_f64(),
+                if heard.is_empty() {
+                    "(nothing transcribed)"
+                } else {
+                    heard
+                }
+            );
+
+            // A cut-off turn is still over. Without this the next thing either
+            // party says appends to the abandoned turn under its segment id, so
+            // the panel would glue two separate utterances into one row and the
+            // report prompt would read them as one line.
+            close_turns(room, context).await?;
+
+            set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
-/// One open turn per speaker. Gemini interleaves input and output
-/// transcription, so they cannot share a single accumulator.
-#[derive(Debug, Default)]
-struct SpeakerTurns {
-    interviewer: SpeakerTurn,
-    candidate: SpeakerTurn,
+async fn set_agent_state(
+    room: &Room,
+    current: &mut String,
+    next: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if current == next {
+        return Ok(());
+    }
+    let participant = room.local_participant();
+    participant
+        .set_attributes(agent_state_attributes(participant.attributes(), next))
+        .await?;
+    current.clear();
+    current.push_str(next);
+    Ok(())
+}
+
+fn agent_state_attributes(
+    mut attributes: HashMap<String, String>,
+    state: &str,
+) -> HashMap<String, String> {
+    attributes.insert(LIVEKIT_AGENT_STATE.to_string(), state.to_string());
+    attributes
+}
+
+fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) -> serde_json::Value {
+    match call.name.as_str() {
+        TOOL_READ_EDITOR => serde_json::json!({
+            "result": read_editor_text(
+                &state.language,
+                &state.code,
+                state.last_test_run.as_ref(),
+                state.test_runs,
+            )
+        }),
+        TOOL_LOG_HINT => {
+            serde_json::json!({ "result": crate::agent::record_hint(state) })
+        }
+        TOOL_RECORD_FRAMEWORK_EVIDENCE => match record_framework_evidence(state, &call.args) {
+            Ok(evidence) => serde_json::json!({ "result": framework_evidence_json(&evidence) }),
+            Err(error) => serde_json::json!({ "error": error }),
+        },
+        name => serde_json::json!({ "error": format!("unknown tool: {name}") }),
+    }
+}
+
+/// Whether the candidate's checklist would look any different now.
+///
+/// The tool is idempotent and returns the existing entry for a repeat, and
+/// evidence for a phase they never reached is recorded but never shown. Asking
+/// how much has been recorded instead would redraw the checklist with nothing
+/// new in it, and reveal an empty one for a skip banked before any phase was.
+fn checklist_changed(shown_before: &[&'static str], state: &RuntimeState) -> bool {
+    framework_progress(state) != shown_before
+}
+
+/// What the candidate is allowed to see of their own framework progress: which
+/// phases have evidence, and nothing else.
+///
+/// The interviewer names the step it is steering toward out loud, so a phase it
+/// has already banked is not a secret. The summary, confidence and source stay
+/// server-side, because those are the reading rather than the fact.
+async fn publish_framework_progress(
+    room: &Room,
+    state: &RuntimeState,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    room.local_participant()
+        .publish_data(browser_packet(
+            TOPIC_CONTROL,
+            &serde_json::json!({
+                "type": "framework_state",
+                "phases": crate::agent::framework_progress(state),
+            }),
+        )?)
+        .await?;
+    Ok(())
+}
+
+async fn publish_transcript(
+    room: &Room,
+    text: &str,
+    segment_id: String,
+    final_segment: bool,
+    sender_identity: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    room.local_participant()
+        .send_text(
+            text,
+            transcript_stream_options(segment_id, final_segment, sender_identity),
+        )
+        .await?;
+    Ok(())
+}
+
+/// `lk.segment_id` is what lets the browser patch one row per turn instead of
+/// reassembling sentences from timestamps, and `lk.transcription_final` says
+/// whether the turn is still being spoken.
+fn transcript_stream_options(
+    segment_id: String,
+    final_segment: bool,
+    sender_identity: Option<&str>,
+) -> StreamTextOptions {
+    let options = StreamTextOptions::new_with_topic(TOPIC_TRANSCRIPTION)
+        .with_attribute("lk.segment_id", &segment_id)
+        .with_attribute(
+            "lk.transcription_final",
+            if final_segment { "true" } else { "false" },
+        );
+    match sender_identity {
+        Some(identity) => options.with_sender_identity(identity),
+        None => options,
+    }
+}
+
+fn transcript_text(text: &str) -> Option<&str> {
+    let text = text.trim();
+    (!text.is_empty()).then_some(text)
+}
+
+async fn publish_report(
+    room: &Room,
+    boot: &RuntimeBootstrap<'_>,
+    state: &RuntimeState,
+    reason: &str,
+    elapsed_min: f64,
+    api_key: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    room.local_participant()
+        .publish_data(report_packet(boot, state, reason, elapsed_min, api_key).await?)
+        .await?;
+    Ok(())
+}
+
+async fn report_packet(
+    boot: &RuntimeBootstrap<'_>,
+    state: &RuntimeState,
+    reason: &str,
+    elapsed_min: f64,
+    api_key: &str,
+) -> Result<DataPacket, Box<dyn std::error::Error + Send + Sync>> {
+    let mut report = match tokio::time::timeout(
+        REPORT_TIMEOUT,
+        generate_report(
+            api_key,
+            boot.report_model,
+            &report_prompt_text(boot, state, elapsed_min),
+        ),
+    )
+    .await
+    {
+        Ok(Ok(raw)) => final_report(Some(&raw), state.hints_used, None),
+        Ok(Err(error)) => final_report(
+            None,
+            state.hints_used,
+            Some(&report_error_note(
+                boot,
+                state,
+                reason,
+                error.as_ref(),
+                api_key,
+            )),
+        ),
+        Err(error) => final_report(
+            None,
+            state.hints_used,
+            Some(&report_error_note(boot, state, reason, &error, api_key)),
+        ),
+    };
+    stamp_report_contract(&mut report);
+    Ok(report_data_packet(report_with_integrity_events(
+        report, state,
+    ))?)
+}
+
+fn stamp_report_contract(report: &mut serde_json::Value) {
+    if let Some(object) = report.as_object_mut() {
+        object.insert("interviewContract".to_string(), interview_contract_json());
+    }
+}
+
+fn report_with_integrity_events(
+    mut report: serde_json::Value,
+    state: &RuntimeState,
+) -> serde_json::Value {
+    if let Some(object) = report.as_object_mut() {
+        // The evidence, plus the heartbeats that bookend it, merged by sequence
+        // rather than appended: a reader goes down this list in the order the
+        // interview happened, and a device-state sample out of place reads as a
+        // fault rather than as a bookend.
+        let kept = state.integrity_events.len() as u64;
+        let liveness = state.integrity_first_heartbeat.iter();
+        let liveness = liveness.chain(state.integrity_last_heartbeat.iter());
+        let samples = liveness.clone().count() as u64;
+        let mut events = state.integrity_events.clone();
+        events.extend(liveness.cloned());
+        events.sort_by_key(|event| event["seq"].as_u64().unwrap_or(0));
+        object.insert(
+            "integrityEvents".to_string(),
+            serde_json::Value::Array(events),
+        );
+
+        // How far verification got, and how much of it this report is not
+        // showing. The array above is a subsequence, so its links cannot be
+        // recomputed by whoever holds the report; without these a reader cannot
+        // tell a retention gap from a deleted row, which is the distinction the
+        // chain exists to make visible.
+        //
+        // The dropped count is derived rather than tallied. Every accepted
+        // event is in the evidence, held as a sample, or gone, and the cursor
+        // counts acceptances, so a counter would have been a fourth place for
+        // the same fact to be wrong.
+        let verified = state.integrity_chain.as_ref().map(|(seq, _)| *seq);
+        object.insert("integrityChainSeq".to_string(), serde_json::json!(verified));
+        object.insert(
+            "integrityDropped".to_string(),
+            serde_json::json!(verified.map(|seq| seq.saturating_sub(kept + samples))),
+        );
+        object.insert(
+            "frameworkEvidence".to_string(),
+            serde_json::Value::Array(
+                state
+                    .framework_evidence
+                    .iter()
+                    .map(framework_evidence_json)
+                    .collect(),
+            ),
+        );
+        let coding_gate = [
+            crate::agent::FrameworkPhase::Test,
+            crate::agent::FrameworkPhase::Optimizations,
+        ]
+        .iter()
+        .all(|phase| {
+            state.framework_evidence.iter().any(|item| {
+                item.phase == *phase && item.kind != crate::agent::EvidenceKind::Skipped
+            })
+        });
+        object.insert(
+            "interviewLoop".to_string(),
+            serde_json::json!(state.interview_loop.as_str()),
+        );
+        let star_complete = state.behavioral_round_started
+            && [
+                crate::agent::FrameworkPhase::Situation,
+                crate::agent::FrameworkPhase::Task,
+                crate::agent::FrameworkPhase::Action,
+                crate::agent::FrameworkPhase::Result,
+            ]
+            .iter()
+            .all(|phase| {
+                state.framework_evidence.iter().any(|item| {
+                    item.phase == *phase && item.kind != crate::agent::EvidenceKind::Skipped
+                })
+            });
+        object.insert("rounds".to_string(), serde_json::json!([
+            {"kind":"coding","budgetMin": state.coding_minutes, "status": if coding_gate { "complete" } else { "incomplete" }},
+            {"kind":"behavioral","budgetMin": state.behavioral_minutes, "status": if state.interview_loop == crate::agent::InterviewLoop::CodingOnly { "not_configured" } else if star_complete { "complete" } else if state.behavioral_round_started { "started" } else { "skipped" }}
+        ]));
+    }
+    report
+}
+
+fn report_prompt_text(
+    boot: &RuntimeBootstrap<'_>,
+    state: &RuntimeState,
+    elapsed_min: f64,
+) -> String {
+    let transcript = transcript_for_report(&state.transcript);
+    let test_summary = format_test_run(state.last_test_run.as_ref(), state.test_runs);
+    report_prompt(ReportPromptInput {
+        problem: boot.problem,
+        transcript: &transcript,
+        final_code: &state.code,
+        language: &state.language,
+        hints_used: state.hints_used,
+        duration_min: boot.duration_min,
+        elapsed_min,
+        test_summary: &test_summary,
+    })
+}
+
+/// This note is published to the candidate's browser and rendered in the report
+/// card, so `api_key` is not decoration: an error carrying a credentialed URL
+/// would otherwise hand the server's Google key to whoever is taking the
+/// interview.
+fn report_error_note(
+    boot: &RuntimeBootstrap<'_>,
+    state: &RuntimeState,
+    reason: &str,
+    error: &(dyn std::error::Error + 'static),
+    api_key: &str,
+) -> String {
+    let detail = redact_api_key(&error.to_string(), api_key);
+    format!(
+        "Rust LiveKit runner ended ({reason}) but Gemini report generation failed for model {} on {}. Final editor state: {} bytes of {}. Error: {detail}",
+        boot.report_model,
+        boot.problem.id,
+        state.code.len(),
+        state.language
+    )
+}
+
+fn report_data_packet(report: serde_json::Value) -> Result<DataPacket, serde_json::Error> {
+    browser_packet(TOPIC_REPORT, &report)
 }
 
 async fn send_wrap_up_and_wait(
@@ -1529,336 +1716,6 @@ fn take_stale_playout(
     Some(cut_off_turn(activity, output_audio))
 }
 
-async fn handle_gemini_event(
-    room: &Room,
-    context: &mut GeminiEventContext<'_>,
-    event: GeminiEvent,
-    interruptible: Interruptible,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    match event {
-        GeminiEvent::ToolCall(calls) => {
-            for call in calls {
-                let response = execute_tool_call(context.state, &call);
-                context.gemini.send_tool_response(&call, response).await?;
-            }
-        }
-        GeminiEvent::OutputTranscript(text) => {
-            // `text` is passed whole, not the trimmed form: fragments have to
-            // be concatenated exactly as received. The trimmed view only
-            // decides whether this event carried anything at all.
-            if transcript_text(&text).is_some() {
-                let turn = &mut context.turns.interviewer;
-                let whole = turn
-                    .record(&mut context.state.transcript, "Interviewer", &text)
-                    .to_string();
-                publish_transcript(room, &whole, turn.segment_id("interviewer"), false, None)
-                    .await?;
-            }
-        }
-        GeminiEvent::InputTranscript(text) => {
-            if let (Some(_), Some(identity)) = (transcript_text(&text), context.candidate_identity)
-            {
-                // The candidate is talking over audio Gemini finished producing
-                // a while ago. Gemini will not call this an interruption,
-                // because as far as it is concerned that turn ended when it
-                // stopped generating; only this side knows the queue is still
-                // draining. Cut it here or the reply lands behind the rest of
-                // the old turn.
-                drop_stale_playout(room, context, interruptible).await?;
-                context.activity.note_candidate_finished(Instant::now());
-                let turn = &mut context.turns.candidate;
-                let whole = turn
-                    .record(&mut context.state.transcript, "Candidate", &text)
-                    .to_string();
-                publish_transcript(
-                    room,
-                    &whole,
-                    turn.segment_id("candidate"),
-                    false,
-                    Some(identity),
-                )
-                .await?;
-            }
-        }
-        GeminiEvent::Audio { bytes, mime_type } => {
-            // Read before the interrupt below, because that is the point the
-            // candidate stops waiting. Stamped on the last input transcript
-            // fragment, so it covers endpointing plus model latency plus
-            // anything still queued ahead of the reply: the silence the
-            // candidate actually sits through.
-            //
-            // `None` means Gemini is answering something it never transcribed,
-            // and there is no moment the candidate finished to measure from.
-            // Printing anything then is worse than printing nothing.
-            let waited = context.activity.awaiting_reply_since;
-
-            // A new turn's first chunk while the previous one is still
-            // draining. `InputTranscript` normally clears the queue before this
-            // point, so reaching here means Gemini answered something it never
-            // transcribed. Backstop rather than the main path, and it must run
-            // before `capture` or the new audio queues behind the old.
-            //
-            // Only for a chunk that will actually be queued. Dropping ahead of
-            // a chunk `capture` rejects leaves the candidate with a sentence
-            // cut in half and no reply behind it.
-            if context.output_audio.accepts(&bytes, &mime_type) {
-                drop_stale_playout(room, context, interruptible).await?;
-            }
-            if context.output_audio.capture(&bytes, &mime_type).await? {
-                // Cleared here rather than where it is read: a chunk `capture`
-                // rejects is not the reply starting, and consuming the stamp on
-                // one would lose the measurement for the chunk that is.
-                if let Some(since) = waited {
-                    context.activity.awaiting_reply_since = None;
-                    eprintln!(
-                        "timing: {:.2}s from the candidate finishing to the reply starting",
-                        since.elapsed().as_secs_f64()
-                    );
-                }
-                context.activity.mark_speaking();
-
-                // Speech is queued, not played: the floor stays busy until the
-                // buffered audio actually finishes.
-                context.activity.last_agent_speech = context.output_audio.playout_deadline;
-                set_agent_state(room, context.agent_state, AGENT_STATE_SPEAKING).await?;
-            }
-        }
-        GeminiEvent::TurnComplete => {
-            // The gap between Gemini finishing and the queue emptying. Gemini
-            // synthesises far faster than speech plays, so this is how long the
-            // agent will still be talking after it has stopped thinking, and
-            // therefore how long a candidate answering now would have waited
-            // before `drop_stale_playout` existed.
-            let backlog = context
-                .output_audio
-                .playout_deadline
-                .saturating_duration_since(Instant::now());
-            if !backlog.is_zero() {
-                eprintln!(
-                    "timing: turn generated, {:.1}s of it still to play",
-                    backlog.as_secs_f64()
-                );
-            }
-
-            // Gemini finishing its turn also means the candidate utterance it
-            // answered is over, so both sides close here.
-            close_turns(room, context).await?;
-            context.activity.floor = Floor::AwaitingPlayout;
-            if !context.output_audio.is_playing() {
-                context.activity.mark_listening();
-                set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
-            }
-        }
-        GeminiEvent::Interrupted => {
-            // The only other path that empties the queue, and it used to do so
-            // silently. If a turn is cut this way the candidate hears a
-            // fragment or nothing, and without this line the log shows only the
-            // consequence: a turn that completed with nothing left to play.
-            let unplayed = cut_off_turn(context.activity, context.output_audio);
-            eprintln!(
-                "timing: Gemini cut its own turn, {:.1}s of it unplayed",
-                unplayed.as_secs_f64()
-            );
-
-            // A cut-off turn is still over. Without this the next thing either
-            // party says appends to the abandoned turn under its segment id, so
-            // the panel would glue two separate utterances into one row and the
-            // report prompt would read them as one line.
-            close_turns(room, context).await?;
-
-            set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-async fn set_agent_state(
-    room: &Room,
-    current: &mut String,
-    next: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if current == next {
-        return Ok(());
-    }
-    let participant = room.local_participant();
-    participant
-        .set_attributes(agent_state_attributes(participant.attributes(), next))
-        .await?;
-    current.clear();
-    current.push_str(next);
-    Ok(())
-}
-
-fn agent_state_attributes(
-    mut attributes: HashMap<String, String>,
-    state: &str,
-) -> HashMap<String, String> {
-    attributes.insert(LIVEKIT_AGENT_STATE.to_string(), state.to_string());
-    attributes
-}
-
-struct OutputAudio {
-    source: NativeAudioSource,
-    sample_rate: u32,
-    pending_bytes: Vec<u8>,
-    playout_deadline: Instant,
-    frames: mpsc::Sender<QueuedOutputFrame>,
-    output_cancellation: CancellationToken,
-}
-
-struct QueuedOutputFrame {
-    output_cancellation: CancellationToken,
-    samples: Vec<i16>,
-}
-
-impl OutputAudio {
-    fn interrupt(&mut self) {
-        self.output_cancellation.cancel();
-        self.output_cancellation = CancellationToken::new();
-        self.source.clear_buffer();
-        self.pending_bytes.clear();
-        self.playout_deadline = Instant::now();
-    }
-
-    fn is_playing(&self) -> bool {
-        Instant::now() < self.playout_deadline
-    }
-
-    /// Whether `capture` would queue anything for this chunk.
-    ///
-    /// Split out so the caller can ask before dropping a turn that is still
-    /// playing. Dropping first and then finding the new chunk unusable cuts the
-    /// interviewer off mid-sentence with nothing behind it.
-    fn accepts(&self, bytes: &[u8], mime_type: &str) -> bool {
-        !bytes.is_empty()
-            && audio_sample_rate(mime_type, self.sample_rate) == Some(self.sample_rate)
-    }
-
-    async fn capture(
-        &mut self,
-        bytes: &[u8],
-        mime_type: &str,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        if !self.accepts(bytes, mime_type) {
-            return Ok(false);
-        }
-        let mut queued = false;
-        for samples in take_pcm16_frames(
-            bytes,
-            self.sample_rate,
-            LIVEKIT_OUTPUT_CHANNELS,
-            &mut self.pending_bytes,
-        ) {
-            queued = true;
-            let samples_per_channel = samples.len() as u32 / LIVEKIT_OUTPUT_CHANNELS;
-            let frame_duration =
-                Duration::from_secs_f64(samples_per_channel as f64 / self.sample_rate as f64);
-            self.playout_deadline = self.playout_deadline.max(Instant::now()) + frame_duration;
-            self.frames
-                .try_send(QueuedOutputFrame {
-                    output_cancellation: self.output_cancellation.clone(),
-                    samples,
-                })
-                .map_err(|error| {
-                    std::io::Error::other(match error {
-                        mpsc::error::TrySendError::Full(_) => "output audio worker queue full",
-                        mpsc::error::TrySendError::Closed(_) => "output audio worker stopped",
-                    })
-                })?;
-        }
-        Ok(queued)
-    }
-}
-
-async fn output_audio_worker(
-    source: NativeAudioSource,
-    sample_rate: u32,
-    mut frames: mpsc::Receiver<QueuedOutputFrame>,
-) {
-    while let Some(frame) = frames.recv().await {
-        if frame.output_cancellation.is_cancelled() {
-            continue;
-        }
-        let cancelled = frame.output_cancellation.cancelled();
-        tokio::pin!(cancelled);
-        let samples_per_channel = frame.samples.len() as u32 / LIVEKIT_OUTPUT_CHANNELS;
-        let audio_frame = AudioFrame {
-            data: frame.samples.into(),
-            sample_rate,
-            num_channels: LIVEKIT_OUTPUT_CHANNELS,
-            samples_per_channel,
-        };
-        tokio::select! {
-            result = source.capture_frame(&audio_frame) => {
-                if let Err(error) = result {
-                    eprintln!("failed to publish output audio frame: {error}");
-                }
-            }
-            _ = &mut cancelled => {
-                source.clear_buffer();
-            }
-        }
-    }
-}
-
-async fn publish_output_audio(
-    room: &Room,
-    sample_rate: u32,
-) -> Result<OutputAudio, Box<dyn std::error::Error + Send + Sync>> {
-    let source = NativeAudioSource::new(
-        AudioSourceOptions::default(),
-        sample_rate,
-        LIVEKIT_OUTPUT_CHANNELS,
-        LIVEKIT_OUTPUT_QUEUE_MS,
-    );
-    let track = LocalAudioTrack::create_audio_track(
-        "interviewer-audio",
-        RtcAudioSource::Native(source.clone()),
-    );
-    room.local_participant()
-        .publish_track(
-            LocalTrack::Audio(track),
-            TrackPublishOptions {
-                source: TrackSource::Microphone,
-                ..Default::default()
-            },
-        )
-        .await?;
-    let (frames, queued_frames) = mpsc::channel(LIVEKIT_OUTPUT_FRAME_QUEUE);
-    tokio::spawn(output_audio_worker(
-        source.clone(),
-        sample_rate,
-        queued_frames,
-    ));
-    Ok(OutputAudio {
-        source,
-        sample_rate,
-        pending_bytes: Vec::new(),
-        playout_deadline: Instant::now(),
-        frames,
-        output_cancellation: CancellationToken::new(),
-    })
-}
-
-fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) -> serde_json::Value {
-    match call.name.as_str() {
-        TOOL_READ_EDITOR => serde_json::json!({
-            "result": read_editor_text(
-                &state.language,
-                &state.code,
-                state.last_test_run.as_ref(),
-                state.test_runs,
-            )
-        }),
-        TOOL_LOG_HINT => {
-            state.hints_used += 1;
-            serde_json::json!({ "result": log_hint_text(state.hints_used) })
-        }
-        name => serde_json::json!({ "error": format!("unknown tool: {name}") }),
-    }
-}
-
 /// Republishes each open turn once as final, so the browser can stop showing
 /// it as in-progress, then opens fresh segment ids for the next turn.
 async fn close_turns(
@@ -1897,338 +1754,340 @@ fn close_turn(turn: &mut SpeakerTurn, speaker: &str) -> Option<(String, String)>
     Some(closed)
 }
 
-async fn publish_transcript(
-    room: &Room,
-    text: &str,
-    segment_id: String,
-    final_segment: bool,
-    sender_identity: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    room.local_participant()
-        .send_text(
-            text,
-            transcript_stream_options(segment_id, final_segment, sender_identity),
-        )
-        .await?;
-    Ok(())
-}
-
-/// `lk.segment_id` is what lets the browser patch one row per turn instead of
-/// reassembling sentences from timestamps, and `lk.transcription_final` says
-/// whether the turn is still being spoken.
-fn transcript_stream_options(
-    segment_id: String,
-    final_segment: bool,
-    sender_identity: Option<&str>,
-) -> StreamTextOptions {
-    let options = StreamTextOptions::new_with_topic(TOPIC_TRANSCRIPTION)
-        .with_attribute("lk.segment_id", &segment_id)
-        .with_attribute(
-            "lk.transcription_final",
-            if final_segment { "true" } else { "false" },
-        );
-    match sender_identity {
-        Some(identity) => options.with_sender_identity(identity),
-        None => options,
+/// The room loop's event bundle, borrowed out of the turn state that owns most
+/// of it. Here rather than beside `TurnState` because `GeminiEventContext` is
+/// this module's type: the turn state is data the loop keeps, and this is the
+/// one place the two are stitched together.
+impl TurnState {
+    fn context<'a>(
+        &'a mut self,
+        output_audio: &'a mut OutputAudio,
+        gemini: &'a mut GeminiLiveSession,
+        candidate_identity: Option<&'a str>,
+    ) -> GeminiEventContext<'a> {
+        GeminiEventContext {
+            output_audio,
+            gemini,
+            state: &mut self.state,
+            agent_state: &mut self.agent_state,
+            activity: &mut self.activity,
+            turns: &mut self.turns,
+            candidate_identity,
+        }
     }
-}
-
-fn transcript_text(text: &str) -> Option<&str> {
-    let text = text.trim();
-    (!text.is_empty()).then_some(text)
-}
-
-fn append_pcm16_bytes(frame: &AudioFrame<'_>, bytes: &mut Vec<u8>) {
-    frame
-        .data
-        .iter()
-        .for_each(|sample| bytes.extend(sample.to_le_bytes()));
-}
-
-fn audio_sample_rate(mime_type: &str, default_pcm_rate: u32) -> Option<u32> {
-    mime_type
-        .split(';')
-        .find_map(|part| {
-            part.trim()
-                .strip_prefix("rate=")
-                .and_then(|rate| rate.parse().ok())
-        })
-        .or_else(|| (mime_type.trim() == "audio/pcm").then_some(default_pcm_rate))
-}
-
-fn take_pcm16_frames(
-    bytes: &[u8],
-    sample_rate: u32,
-    channels: u32,
-    pending: &mut Vec<u8>,
-) -> Vec<Vec<i16>> {
-    let frame_bytes = (sample_rate / 100 * channels) as usize * 2;
-    if frame_bytes == 0 {
-        return Vec::new();
-    }
-
-    pending.extend_from_slice(bytes);
-    let complete_len = pending.len() - pending.len() % frame_bytes;
-    let frames = pending[..complete_len]
-        .chunks_exact(frame_bytes)
-        .map(decode_pcm16)
-        .collect();
-    pending.drain(..complete_len);
-    frames
-}
-
-fn decode_pcm16(bytes: &[u8]) -> Vec<i16> {
-    bytes
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
-        .collect()
-}
-
-fn should_send_video_frame(elapsed: Duration) -> bool {
-    elapsed >= GEMINI_VIDEO_FRAME_INTERVAL
-}
-
-/// JPEG sides and RGBA byte count for a frame, or `None` when the dimensions
-/// are absurd. Both bounds live here because they answer one question and a
-/// frame that clears the pixel cap can still overflow a 16-bit JPEG side: the
-/// pixel cap is well past 8K and only exists so a bogus header cannot ask for a
-/// gigabyte, while a 100000x1 frame sits under it and still has no valid SOF.
-fn jpeg_frame_geometry(width: u32, height: u32) -> Option<(u16, u16, usize)> {
-    const MAX_PIXELS: u32 = 8192 * 8192;
-    let pixels = width.checked_mul(height)?;
-    (1..=MAX_PIXELS).contains(&pixels).then_some(())?;
-    Some((
-        u16::try_from(width).ok()?,
-        u16::try_from(height).ok()?,
-        pixels as usize * 4,
-    ))
-}
-
-/// Converts a frame to packed R, G, B, A bytes.
-///
-/// The format name is a trap. libyuv names its 32-bit formats after the
-/// little-endian word rather than the byte order, so `ABGR` is the variant that
-/// writes R, G, B, A into memory and `RGBA` writes A, B, G, R. Asking for
-/// `RGBA` pins the red channel to the alpha constant and transposes green and
-/// blue, which `channel_order_survives_the_libyuv_naming_trap` pins down.
-fn frame_to_rgba(frame: &BoxVideoFrame) -> Result<(Vec<u8>, u16, u16), String> {
-    let width = frame.buffer.as_ref().width();
-    let height = frame.buffer.as_ref().height();
-
-    // Remote-controlled dimensions: overflow here would panic in debug and
-    // under-allocate the buffer `to_argb` writes into in release.
-    let Some((jpeg_width, jpeg_height, rgba_len)) = jpeg_frame_geometry(width, height) else {
-        return Err(format!(
-            "frame {width}x{height} is outside JPEG limits (each side at most 65535, at most 8192x8192 pixels)"
-        ));
-    };
-    let mut rgba = vec![0; rgba_len];
-    frame.buffer.as_ref().to_argb(
-        VideoFormatType::ABGR,
-        &mut rgba,
-        width * 4,
-        width as i32,
-        height as i32,
-    );
-    Ok((rgba, jpeg_width, jpeg_height))
-}
-
-/// The compression on its own, so the caller can put it somewhere other than
-/// the executor. Owned pixels rather than the frame, because the frame does not
-/// cross a thread and this does.
-fn encode_rgba_jpeg(
-    rgba: &[u8],
-    jpeg_width: u16,
-    jpeg_height: u16,
-    quality: u8,
-) -> Result<Vec<u8>, String> {
-    // Chroma is subsampled 2x2 here, because that is what `Encoder::new` picks
-    // below quality 90 and nothing below overrides it. Deliberate: the source
-    // is I420, whose chroma is already 4:2:0, so encoding it at full resolution
-    // would spend about a fifth of the payload on interpolated values. The
-    // override, if a future frame source is not I420, is
-    // `set_sampling_factor(SamplingFactor::F_1_1)` before the call.
-    let mut jpeg = Vec::new();
-    Encoder::new(&mut jpeg, quality)
-        .encode(rgba, jpeg_width, jpeg_height, ColorType::Rgba)
-        .map_err(|error| error.to_string())?;
-    Ok(jpeg)
-}
-
-/// A frame to JPEG bytes, with the compression moved off the executor.
-///
-/// The colour conversion stays inline: it is libyuv, which is compiled
-/// optimized whatever profile this crate is built at, and the frame it borrows
-/// does not cross a thread. The JPEG pass is the one that costs, and it is pure
-/// Rust: measured at 6.8ms per 720p frame in release and 138ms in a dev build.
-/// It shares an executor with Gemini's audio events, so at a frame a second
-/// that stall lands in the middle of a conversation and the candidate hears it
-/// as the reply arriving late.
-async fn encode_video_frame_jpeg_off_thread(
-    frame: &BoxVideoFrame,
-    quality: u8,
-) -> Result<Vec<u8>, String> {
-    let (rgba, jpeg_width, jpeg_height) = frame_to_rgba(frame)?;
-    tokio::task::spawn_blocking(move || encode_rgba_jpeg(&rgba, jpeg_width, jpeg_height, quality))
-        .await
-        .map_err(|error| format!("jpeg encode task did not finish: {error}"))?
-}
-
-async fn publish_report(
-    room: &Room,
-    boot: &RuntimeBootstrap<'_>,
-    state: &RuntimeState,
-    reason: &str,
-    elapsed_min: f64,
-    api_key: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    room.local_participant()
-        .publish_data(report_packet(boot, state, reason, elapsed_min, api_key).await?)
-        .await?;
-    Ok(())
-}
-
-async fn report_packet(
-    boot: &RuntimeBootstrap<'_>,
-    state: &RuntimeState,
-    reason: &str,
-    elapsed_min: f64,
-    api_key: &str,
-) -> Result<DataPacket, Box<dyn std::error::Error + Send + Sync>> {
-    let report = match tokio::time::timeout(
-        REPORT_TIMEOUT,
-        generate_report(
-            api_key,
-            boot.report_model,
-            &report_prompt_text(boot, state, elapsed_min),
-        ),
-    )
-    .await
-    {
-        Ok(Ok(raw)) => final_report(Some(&raw), state.hints_used, None),
-        Ok(Err(error)) => final_report(
-            None,
-            state.hints_used,
-            Some(&report_error_note(
-                boot,
-                state,
-                reason,
-                error.as_ref(),
-                api_key,
-            )),
-        ),
-        Err(error) => final_report(
-            None,
-            state.hints_used,
-            Some(&report_error_note(boot, state, reason, &error, api_key)),
-        ),
-    };
-    Ok(report_data_packet(report_with_integrity_events(
-        report, state,
-    ))?)
-}
-
-fn report_with_integrity_events(
-    mut report: serde_json::Value,
-    state: &RuntimeState,
-) -> serde_json::Value {
-    if let Some(object) = report.as_object_mut() {
-        // The evidence, plus the heartbeats that bookend it, merged by sequence
-        // rather than appended: a reader goes down this list in the order the
-        // interview happened, and a device-state sample out of place reads as a
-        // fault rather than as a bookend.
-        let kept = state.integrity_events.len() as u64;
-        let liveness = state.integrity_first_heartbeat.iter();
-        let liveness = liveness.chain(state.integrity_last_heartbeat.iter());
-        let samples = liveness.clone().count() as u64;
-        let mut events = state.integrity_events.clone();
-        events.extend(liveness.cloned());
-        events.sort_by_key(|event| event["seq"].as_u64().unwrap_or(0));
-        object.insert(
-            "integrityEvents".to_string(),
-            serde_json::Value::Array(events),
-        );
-
-        // How far verification got, and how much of it this report is not
-        // showing. The array above is a subsequence, so its links cannot be
-        // recomputed by whoever holds the report; without these a reader cannot
-        // tell a retention gap from a deleted row, which is the distinction the
-        // chain exists to make visible.
-        //
-        // The dropped count is derived rather than tallied. Every accepted
-        // event is in the evidence, held as a sample, or gone, and the cursor
-        // counts acceptances, so a counter would have been a fourth place for
-        // the same fact to be wrong.
-        let verified = state.integrity_chain.as_ref().map(|(seq, _)| *seq);
-        object.insert("integrityChainSeq".to_string(), serde_json::json!(verified));
-        object.insert(
-            "integrityDropped".to_string(),
-            serde_json::json!(verified.map(|seq| seq.saturating_sub(kept + samples))),
-        );
-    }
-    report
-}
-
-fn should_send_wrap_up(reason: &str) -> bool {
-    reason != "candidate_ended"
-}
-
-fn report_prompt_text(
-    boot: &RuntimeBootstrap<'_>,
-    state: &RuntimeState,
-    elapsed_min: f64,
-) -> String {
-    let transcript = transcript_for_report(&state.transcript);
-    let test_summary = format_test_run(state.last_test_run.as_ref(), state.test_runs);
-    report_prompt(ReportPromptInput {
-        problem: boot.problem,
-        transcript: &transcript,
-        final_code: &state.code,
-        language: &state.language,
-        hints_used: state.hints_used,
-        duration_min: boot.duration_min,
-        elapsed_min,
-        test_summary: &test_summary,
-    })
-}
-
-/// This note is published to the candidate's browser and rendered in the report
-/// card, so `api_key` is not decoration: an error carrying a credentialed URL
-/// would otherwise hand the server's Google key to whoever is taking the
-/// interview.
-fn report_error_note(
-    boot: &RuntimeBootstrap<'_>,
-    state: &RuntimeState,
-    reason: &str,
-    error: &(dyn std::error::Error + 'static),
-    api_key: &str,
-) -> String {
-    let detail = redact_api_key(&error.to_string(), api_key);
-    format!(
-        "Rust LiveKit runner ended ({reason}) but Gemini report generation failed for model {} on {}. Final editor state: {} bytes of {}. Error: {detail}",
-        boot.report_model,
-        boot.problem.id,
-        state.code.len(),
-        state.language
-    )
-}
-
-fn report_data_packet(report: serde_json::Value) -> Result<DataPacket, serde_json::Error> {
-    Ok(DataPacket {
-        payload: serde_json::to_vec(&report)?,
-        topic: Some(TOPIC_REPORT.to_string()),
-        reliable: true,
-        ..Default::default()
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ::livekit::webrtc::audio_frame::AudioFrame;
+    use ::livekit::webrtc::audio_source::AudioSourceOptions;
+    use ::livekit::webrtc::audio_source::native::NativeAudioSource;
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+
     use crate::config::load_from_pairs;
     use ::livekit::webrtc::video_frame::{I420Buffer, VideoBuffer, VideoFrame, VideoRotation};
+
+    /// The interview starts from the plan its token was minted for.
+    ///
+    /// None of this can be recovered once it is missed: the clock the round
+    /// boundary is measured against, the loop that decides whether there is a
+    /// behavioral round at all, and the budgets the report divides the session
+    /// into. A field dropped here is a default carried for the whole hour.
+    #[test]
+    fn the_interview_begins_from_the_plan_it_was_booked_with() {
+        let config = load_from_pairs([
+            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+            ("LIVEKIT_API_KEY", "devkey"),
+            ("LIVEKIT_API_SECRET", "devsecret"),
+            ("GOOGLE_API_KEY", "google-key"),
+        ])
+        .unwrap();
+
+        // A plan that differs from the default in every field, because the
+        // default is the forty-five minute two-round one: booked with that, a
+        // field dropped here still reads correctly and the test proves nothing.
+        let boot = crate::runtime::bootstrap_with_rounds(
+            &config,
+            "interview-fixed",
+            Some("two-sum"),
+            30,
+            crate::runtime::RuntimeOptions {
+                interview_loop: crate::agent::InterviewLoop::CodingOnly,
+                ..crate::runtime::RuntimeOptions::default()
+            },
+        );
+        let untouched = RuntimeState::default();
+        for (named, same) in [
+            (
+                "interview_loop",
+                boot.interview_loop == untouched.interview_loop,
+            ),
+            (
+                "coding_minutes",
+                boot.coding_minutes == untouched.coding_minutes,
+            ),
+            (
+                "behavioral_minutes",
+                boot.behavioral_minutes == untouched.behavioral_minutes,
+            ),
+        ] {
+            assert!(
+                !same,
+                "{named} matches the default, so dropping it is invisible"
+            );
+        }
+
+        let started_at = Instant::now() - Duration::from_secs(300);
+        let state = initial_runtime_state(&boot, started_at);
+
+        assert_eq!(
+            state.started_at, started_at,
+            "the clock is the room's, not now"
+        );
+        assert_eq!(state.interview_loop, boot.interview_loop);
+        assert_eq!(state.coding_minutes, boot.coding_minutes);
+        assert_eq!(state.behavioral_minutes, boot.behavioral_minutes);
+    }
+
+    /// Closing a turn yields what to publish, once, and only for an open one.
+    ///
+    /// The pair is the line and the segment it replaces, so an empty text or a
+    /// borrowed id publishes a turn that says nothing or overwrites another
+    /// one. Closing a turn nobody opened would publish a blank line for a
+    /// speaker who has not spoken.
+    #[test]
+    fn a_turn_closes_once_and_only_when_it_was_open() {
+        let mut unopened = SpeakerTurn::default();
+        assert!(
+            close_turn(&mut unopened, "Candidate").is_none(),
+            "a speaker who has not spoken has no line to publish"
+        );
+
+        let mut turn = SpeakerTurn::default();
+        turn.record(&mut Vec::new(), "Candidate", "I will use a hash map.");
+        let open_segment = turn.segment_id("Candidate");
+        let (text, segment) = close_turn(&mut turn, "Candidate").expect("an open turn closes");
+        assert_eq!(text, "I will use a hash map.");
+        assert_eq!(
+            segment, open_segment,
+            "the id names the segment being replaced, not the one after it"
+        );
+        assert_ne!(
+            turn.segment_id("Candidate"),
+            open_segment,
+            "and the next line is a new segment, not an overwrite of this one"
+        );
+
+        assert!(
+            close_turn(&mut turn, "Candidate").is_none(),
+            "a closed turn closes once; publishing it again repeats the line"
+        );
+    }
+
+    /// The report says which rounds actually completed, from banked evidence.
+    ///
+    /// Two gates, and both are the same shape: every phase of the round needs
+    /// evidence that is not a skip. Loosened to "any phase" or to "including
+    /// skips", a candidate who ran out of time reads as one who finished.
+    #[test]
+    fn the_rounds_a_report_calls_complete_are_the_ones_with_evidence() {
+        let rounds = |state: &RuntimeState| {
+            report_with_integrity_events(serde_json::json!({}), state)["rounds"].clone()
+        };
+        let bank = |state: &mut RuntimeState, phase: &str, kind: &str| {
+            crate::agent::record_framework_evidence(
+                state,
+                &serde_json::json!({
+                    "phase": phase, "source": if kind == "skipped" { "session_timing" }
+                        else { "candidate_speech" },
+                    "kind": kind, "confidence": 90,
+                    "summary": format!("candidate {kind} {phase}"),
+                }),
+            )
+            .expect("evidence should record");
+        };
+
+        // Nothing banked: neither round is claimed.
+        let bare = RuntimeState {
+            interview_loop: crate::agent::InterviewLoop::CodingBehavioral,
+            ..RuntimeState::default()
+        };
+        assert_eq!(rounds(&bare)[0]["status"], "incomplete");
+        assert_eq!(rounds(&bare)[1]["status"], "skipped");
+
+        // Evidence for some other phase is evidence for neither of these.
+        // Asking whether any banked phase is not Test answers yes for a
+        // candidate who only restated the problem, and calls the round done.
+        let mut elsewhere = bare.clone();
+        bank(&mut elsewhere, "repeat", "observed");
+        assert_eq!(
+            rounds(&elsewhere)[0]["status"],
+            "incomplete",
+            "restating the problem is not having tested or optimized it"
+        );
+
+        // One of the two coding phases is not both of them.
+        let mut half = bare.clone();
+        bank(&mut half, "test", "observed");
+        assert_eq!(
+            rounds(&half)[0]["status"],
+            "incomplete",
+            "one phase is not the gate"
+        );
+
+        // A skip is the record of not reaching it, so it cannot complete it.
+        let mut skipped = half.clone();
+        bank(&mut skipped, "optimizations", "skipped");
+        assert_eq!(
+            rounds(&skipped)[0]["status"],
+            "incomplete",
+            "running out of time is not finishing"
+        );
+
+        let mut coding_done = half.clone();
+        bank(&mut coding_done, "optimizations", "observed");
+        assert_eq!(rounds(&coding_done)[0]["status"], "complete");
+
+        // STAR needs the round to have started and all four phases banked.
+        let mut star = coding_done.clone();
+        for phase in ["situation", "task", "action", "result"] {
+            bank(&mut star, phase, "observed");
+        }
+        assert_eq!(
+            rounds(&star)[1]["status"],
+            "skipped",
+            "four phases without the round beginning is not a behavioral round"
+        );
+        star.behavioral_round_started = true;
+        assert_eq!(rounds(&star)[1]["status"], "complete");
+
+        // Begun but not finished. Evidence for one STAR phase is not evidence
+        // for the other three, and asking whether any banked phase is not Task
+        // answers yes as soon as anything else was said, which reports a
+        // behavioral round the candidate barely entered as one they completed.
+        let mut begun = coding_done.clone();
+        begun.behavioral_round_started = true;
+        bank(&mut begun, "situation", "observed");
+        assert_eq!(
+            rounds(&begun)[1]["status"],
+            "started",
+            "one STAR phase in is started, not complete"
+        );
+
+        // A coding-only interview reserves no behavioral round at all.
+        let mut coding_only = coding_done.clone();
+        coding_only.interview_loop = crate::agent::InterviewLoop::CodingOnly;
+        assert_eq!(rounds(&coding_only)[1]["status"], "not_configured");
+    }
+
+    /// A packet the browser never receives is the same as one never sent.
+    ///
+    /// The topic is the channel it listens on and reliability is whether a bad
+    /// network may drop it, and both were written out at each call site where
+    /// either could go missing on its own. The report and the control messages
+    /// differ only in which topic they name.
+    #[test]
+    fn a_published_packet_carries_its_topic_and_arrives_reliably() {
+        for topic in [TOPIC_CONTROL, TOPIC_REPORT] {
+            let packet = browser_packet(topic, &serde_json::json!({"type": "pause_state"}))
+                .expect("a json object serializes");
+            assert_eq!(
+                packet.topic.as_deref(),
+                Some(topic),
+                "no topic is a channel nobody is reading"
+            );
+            assert!(packet.reliable, "the browser only gets one of these");
+            let payload: serde_json::Value =
+                serde_json::from_slice(&packet.payload).expect("the payload is the message");
+            assert_eq!(payload["type"], "pause_state");
+        }
+    }
+
+    /// The interview starts once, when the candidate joined.
+    ///
+    /// Stamping a second `Instant::now()` after the room and the Gemini session
+    /// came up put this process a second or two behind the tab for the rest of
+    /// the interview, and the browser announces the round boundary exactly once
+    /// off its own clock. The gap has to be absorbed by a tolerance nobody can
+    /// justify, or removed here. Read as source because the two stamps are only
+    /// distinguishable in a room that really connected.
+    #[test]
+    fn the_interview_clock_starts_when_the_candidate_joined() {
+        let source = include_str!("livekit.rs");
+        let opener = source
+            .split("async fn open_session")
+            .nth(1)
+            .expect("open_session is still defined here");
+        let bound = opener
+            .split_once("let started_at =")
+            .expect("open_session still stamps the interview clock")
+            .1
+            .lines()
+            .next()
+            .unwrap_or_default();
+        assert!(
+            bound.contains("setup_began"),
+            "the clock must start where the candidate's does, not after setup: {bound}"
+        );
+    }
+
+    /// The checklist is redrawn for a change the candidate can see, and for
+    /// nothing else.
+    ///
+    /// Evidence for a phase they never reached is recorded but never shown, so
+    /// keying the publish on the evidence count sends a message whose phase
+    /// list is identical to the one already on screen. The browser unhides the
+    /// checklist on every `framework_state` it receives, so the first such
+    /// message reveals an empty, wholly unticked list before the candidate has
+    /// banked anything.
+    #[test]
+    fn the_checklist_is_republished_only_when_it_would_look_different() {
+        let mut state = RuntimeState::default();
+        let skip = serde_json::json!({
+            "phase": "optimizations",
+            "source": "session_timing",
+            "kind": "skipped",
+            "confidence": 0,
+            "summary": "the session ended before optimizations",
+        });
+
+        let shown_before = framework_progress(&state);
+        record_framework_evidence(&mut state, &skip).expect("evidence should record");
+        assert_eq!(
+            state.framework_evidence.len(),
+            1,
+            "the skip is still recorded for the report"
+        );
+        assert_eq!(
+            framework_progress(&state),
+            shown_before,
+            "a skip changes nothing on screen, so it must not trigger a redraw"
+        );
+
+        // And the rule the publish is keyed on, which the assertion above
+        // cannot see: same phases means no redraw, a new phase means one.
+        assert!(
+            !checklist_changed(&shown_before, &state),
+            "a skip leaves the checklist looking exactly as it did"
+        );
+        record_framework_evidence(
+            &mut state,
+            &serde_json::json!({
+                "phase": "repeat",
+                "source": "candidate_speech",
+                "kind": "observed",
+                "confidence": 80,
+                "summary": "restated the inputs and outputs",
+            }),
+        )
+        .expect("evidence should record");
+        assert!(
+            checklist_changed(&shown_before, &state),
+            "a phase the candidate reached is a new tick and has to be sent"
+        );
+    }
 
     #[test]
     fn only_the_interview_candidate_can_drive_the_runtime() {
@@ -2365,36 +2224,6 @@ mod tests {
     }
 
     #[test]
-    fn jpeg_frame_geometry_rejects_overflowing_and_empty_frames() {
-        assert_eq!(
-            jpeg_frame_geometry(640, 480),
-            Some((640, 480, 640 * 480 * 4))
-        );
-        assert_eq!(
-            jpeg_frame_geometry(8192, 8192),
-            Some((8192, 8192, 8192 * 8192 * 4))
-        );
-
-        // Would wrap a u32 multiply and under-allocate the buffer `to_argb`
-        // writes into.
-        assert_eq!(jpeg_frame_geometry(u32::MAX, 4), None);
-        assert_eq!(jpeg_frame_geometry(8193, 8192), None);
-        assert_eq!(jpeg_frame_geometry(0, 480), None);
-
-        // Clears the pixel cap and still has no representable JPEG side.
-        assert_eq!(jpeg_frame_geometry(100_000, 1), None);
-
-        // The exact boundary, in both directions, because 65535 is the largest
-        // side a JPEG SOF can carry and off-by-one here is a silent truncation.
-        assert_eq!(
-            jpeg_frame_geometry(65_535, 1),
-            Some((65_535, 1, 65_535 * 4))
-        );
-        assert_eq!(jpeg_frame_geometry(65_536, 1), None);
-        assert_eq!(jpeg_frame_geometry(1, 65_536), None);
-    }
-
-    #[test]
     fn candidate_bootstrap_uses_participant_metadata() {
         let config = load_from_pairs([
             ("LIVEKIT_URL", "wss://example.livekit.cloud"),
@@ -2407,49 +2236,18 @@ mod tests {
         let boot = candidate_bootstrap(
             &config,
             "interview-fixed",
-            Some(r#"{"problemId":"merge-intervals","durationMin":30}"#),
+            Some(
+                r#"{"problemId":"merge-intervals","durationMin":30,"interviewLoop":"coding_only","interviewProfile":{"role":"Platform engineer","seniority":"staff","targetCompany":"Example Co"}}"#,
+            ),
         );
 
         assert_eq!(boot.problem.id, "merge-intervals");
         assert_eq!(boot.duration_min, 30);
-    }
-
-    #[test]
-    fn candidate_video_frames_are_opt_in_for_gemini() {
-        let default_config = load_from_pairs([
-            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
-            ("LIVEKIT_API_KEY", "devkey"),
-            ("LIVEKIT_API_SECRET", "devsecret"),
-            ("GOOGLE_API_KEY", "google-key"),
-        ])
-        .unwrap();
-        let enabled_config = load_from_pairs([
-            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
-            ("LIVEKIT_API_KEY", "devkey"),
-            ("LIVEKIT_API_SECRET", "devsecret"),
-            ("GOOGLE_API_KEY", "google-key"),
-            ("CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED", "true"),
-        ])
-        .unwrap();
-
-        assert!(
-            !candidate_video_frames_go_to_gemini(
-                Some("candidate-fixed"),
-                "candidate-fixed",
-                default_config.gemini_candidate_video_enabled,
-            ),
-            "default integrity mode must not forward candidate video frames server-side"
-        );
-        assert!(candidate_video_frames_go_to_gemini(
-            Some("candidate-fixed"),
-            "candidate-fixed",
-            enabled_config.gemini_candidate_video_enabled,
-        ));
-        assert!(!candidate_video_frames_go_to_gemini(
-            Some("candidate-other"),
-            "candidate-fixed",
-            enabled_config.gemini_candidate_video_enabled,
-        ));
+        assert_eq!(boot.interview_loop, crate::agent::InterviewLoop::CodingOnly);
+        assert_eq!((boot.coding_minutes, boot.behavioral_minutes), (30, 0));
+        assert_eq!(boot.profile.role, "Platform engineer");
+        assert_eq!(boot.profile.target_company, "Example Co");
+        assert!(boot.instructions.contains("candidate selected staff"));
     }
 
     /// Losing the race with a duplicate agent that left on its own must not end
@@ -2599,6 +2397,20 @@ mod tests {
         assert_eq!(report["integrityEvents"][0]["type"], "SESSION_START");
     }
 
+    #[test]
+    fn the_server_overwrites_model_selected_contract_provenance() {
+        let mut report = serde_json::json!({
+            "decision": "HIRE",
+            "interviewContract": {"bundleVersion": 999}
+        });
+        stamp_report_contract(&mut report);
+        assert_eq!(report["interviewContract"], interview_contract_json());
+
+        let mut incomplete = serde_json::json!({"incomplete": true});
+        stamp_report_contract(&mut incomplete);
+        assert_eq!(incomplete["interviewContract"], interview_contract_json());
+    }
+
     /// The liveness pair bookends the evidence, and the closing sample is the
     /// one that says how the interview ended. Nothing covered this merge, so
     /// dropping it, duplicating it, or emitting it out of order was invisible.
@@ -2665,6 +2477,34 @@ mod tests {
     }
 
     #[test]
+    fn complete_and_incomplete_reports_carry_agent_owned_framework_evidence() {
+        let mut state = RuntimeState::default();
+        record_framework_evidence(
+            &mut state,
+            &serde_json::json!({
+                "phase":"result", "source":"session_timing", "kind":"skipped",
+                "confidence":100, "summary":"The cutoff prevented STAR assessment."
+            }),
+        )
+        .unwrap();
+        for report in [
+            serde_json::json!({"decision":"HIRE"}),
+            serde_json::json!({"incomplete":true}),
+        ] {
+            let report = report_with_integrity_events(report, &state);
+            assert_eq!(report["frameworkEvidence"][0]["phase"], "result");
+            assert_eq!(report["frameworkEvidence"][0]["kind"], "skipped");
+            assert_eq!(report["interviewLoop"], "coding_behavioral");
+            assert_eq!(report["rounds"][0]["budgetMin"], 37);
+            assert_eq!(report["rounds"][1]["status"], "skipped");
+            assert_eq!(
+                report["frameworkEvidence"][0]["frameworkVersion"],
+                crate::agent::FRAMEWORK_VERSION
+            );
+        }
+    }
+
+    #[test]
     fn execute_tool_call_reads_editor_and_tracks_hints() {
         let mut state = RuntimeState {
             code: "def two_sum(nums, target):\n    return [0, 1]".to_string(),
@@ -2695,6 +2535,17 @@ mod tests {
                 args: serde_json::json!({}),
             },
         );
+        let evidence = execute_tool_call(
+            &mut state,
+            &GeminiFunctionCall {
+                id: "3".to_string(),
+                name: TOOL_RECORD_FRAMEWORK_EVIDENCE.to_string(),
+                args: serde_json::json!({
+                    "phase":"algorithm", "source":"candidate_speech", "kind":"observed",
+                    "confidence":90, "summary":"Candidate explained the invariant."
+                }),
+            },
+        );
 
         assert!(
             editor["result"]
@@ -2710,6 +2561,8 @@ mod tests {
         );
         assert_eq!(hint["result"], "Recorded. Total hints so far: 1.");
         assert_eq!(state.hints_used, 1);
+        assert_eq!(evidence["result"]["phase"], "algorithm");
+        assert_eq!(state.framework_evidence.len(), 1);
     }
 
     #[test]
@@ -2796,12 +2649,6 @@ mod tests {
             .watch_prompt(&state, now)
             .expect("an edit exactly CODE_SETTLE old has settled; the review may take the floor");
         assert!(prompt.contains("Periodic editor snapshot"));
-    }
-
-    #[test]
-    fn candidate_exit_skips_wrap_up_before_report() {
-        assert!(!should_send_wrap_up("candidate_ended"));
-        assert!(should_send_wrap_up("time_up"));
     }
 
     #[test]
@@ -2924,16 +2771,6 @@ mod tests {
         append_pcm16_bytes(&frame, &mut bytes);
 
         assert_eq!(bytes, vec![1, 0, 254, 255, 0x34, 0x12]);
-    }
-
-    #[test]
-    fn audio_sample_rate_reads_pcm_mime_rate() {
-        assert_eq!(
-            audio_sample_rate("audio/pcm;rate=24000", 16_000),
-            Some(24_000)
-        );
-        assert_eq!(audio_sample_rate("audio/pcm", 24_000), Some(24_000));
-        assert_eq!(audio_sample_rate("audio/webm", 24_000), None);
     }
 
     /// The closing message is the one turn barge-in must not touch. Cutting it
@@ -3145,6 +2982,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn output_audio_interrupt_clears_partial_pcm_frame_and_cancels_old_queue() {
+        let (mut output_audio, _) = test_output_audio(vec![1, 2, 3]);
+        let old_cancellation = output_audio.output_cancellation.clone();
+        output_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
+
+        output_audio.interrupt();
+
+        assert!(output_audio.pending_bytes.is_empty());
+        assert!(old_cancellation.is_cancelled());
+        assert!(!output_audio.output_cancellation.is_cancelled());
+        assert!(!output_audio.is_playing());
+    }
+
     fn test_output_audio(
         pending_bytes: Vec<u8>,
     ) -> (OutputAudio, mpsc::Receiver<QueuedOutputFrame>) {
@@ -3183,24 +3034,23 @@ mod tests {
         let frame = queued_frames.try_recv().unwrap();
         assert!(!frame.output_cancellation.is_cancelled());
         assert_eq!(frame.samples.len(), 240);
-        assert!(output_audio.playout_deadline > start_deadline);
+
+        // By how much, not merely that it moved. The deadline is what paces
+        // playout, and ten milliseconds of audio buys ten milliseconds of it:
+        // arithmetic that divides where it should multiply still moves this
+        // forward, only by minutes or by nothing.
+        let advance = output_audio.playout_deadline - start_deadline;
+        assert!(
+            advance >= Duration::from_millis(10),
+            "240 samples at 24 kHz is ten milliseconds of playout, got {advance:?}"
+        );
+        assert!(
+            advance < Duration::from_millis(500),
+            "ten milliseconds of audio must not reserve more, got {advance:?}"
+        );
         output_audio.interrupt();
         assert!(frame.output_cancellation.is_cancelled());
         assert!(queued_frames.try_recv().is_err());
-    }
-
-    #[test]
-    fn output_audio_interrupt_clears_partial_pcm_frame_and_cancels_old_queue() {
-        let (mut output_audio, _) = test_output_audio(vec![1, 2, 3]);
-        let old_cancellation = output_audio.output_cancellation.clone();
-        output_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
-
-        output_audio.interrupt();
-
-        assert!(output_audio.pending_bytes.is_empty());
-        assert!(old_cancellation.is_cancelled());
-        assert!(!output_audio.output_cancellation.is_cancelled());
-        assert!(!output_audio.is_playing());
     }
 
     #[test]
@@ -3218,12 +3068,6 @@ mod tests {
         assert_eq!(frames[0].len(), 240);
         assert_eq!(frames[0][0], 1);
         assert_eq!(pending, vec![9, 0]);
-    }
-
-    #[test]
-    fn video_frame_throttle_matches_gemini_live_limit() {
-        assert!(!should_send_video_frame(Duration::from_millis(999)));
-        assert!(should_send_video_frame(Duration::from_secs(1)));
     }
 
     #[test]
@@ -3263,11 +3107,29 @@ mod tests {
         let (rgba, width, height) = frame_to_rgba(&frame).unwrap();
 
         assert_eq!((width, height), (16, 16));
-        let pixel = &rgba[..4];
-        assert!(pixel[0] > 200, "red belongs in byte 0, got {pixel:?}");
-        assert!(pixel[1] < 60, "green belongs in byte 1, got {pixel:?}");
-        assert!(pixel[2] < 60, "blue belongs in byte 2, got {pixel:?}");
-        assert_eq!(pixel[3], 255, "alpha belongs in byte 3, got {pixel:?}");
+
+        // Checked on the first pixel and on the last. The first is right
+        // whatever the row stride is, because row zero starts at offset zero,
+        // so a stride computed any other way still paints it correctly and
+        // leaves the bottom of the image as the zeroes it was allocated with.
+        for (where_, pixel) in [("first", &rgba[..4]), ("last", &rgba[rgba.len() - 4..])] {
+            assert!(
+                pixel[0] > 200,
+                "red belongs in byte 0 of the {where_}, got {pixel:?}"
+            );
+            assert!(
+                pixel[1] < 60,
+                "green belongs in byte 1 of the {where_}, got {pixel:?}"
+            );
+            assert!(
+                pixel[2] < 60,
+                "blue belongs in byte 2 of the {where_}, got {pixel:?}"
+            );
+            assert_eq!(
+                pixel[3], 255,
+                "alpha belongs in byte 3 of the {where_}, got {pixel:?}"
+            );
+        }
     }
 }
 /// The ceiling is a boundary, so both sides of it are named. One attempt short

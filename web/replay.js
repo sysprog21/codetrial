@@ -11,7 +11,7 @@
 // section it already serves.
 
 import { reportMarkup } from "/render.js";
-import { sanitizeReport } from "/lib.js";
+import { modeLabel, sanitizeReport } from "/lib.js";
 
 const nodes = {
   list: document.querySelector("#replay-list"),
@@ -183,6 +183,16 @@ async function loadEvents(recordingId) {
 /// replaces the last one. Every snapshot keeps its time, so a moment can be
 /// opened rather than scrubbed to.
 export function render(events) {
+  const stage = events.findLast((event) => event.kind === "stage");
+  // Only where the recording actually carried one. Reading it unconditionally
+  // floored `undefined` to "Scored" and announced a distinction that no longer
+  // exists on every replay made since the practice mode was removed.
+  const mode = stage?.payload?.mode === undefined ? "" : modeLabel(stage.payload.mode);
+  if (mode) {
+    nodes.status.textContent = nodes.status.textContent
+      ? `${nodes.status.textContent} · ${mode}`
+      : mode;
+  }
   const moments = [];
   for (const event of events) {
     if (event.kind === "transcript") {

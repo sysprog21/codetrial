@@ -33,5 +33,47 @@
     "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** kSmallestPairs(int* nums1, int nums1Size, int* nums2, int nums2Size, int k, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
     "cpp": "class Solution {\npublic:\n    vector<vector<int>> kSmallestPairs(vector<int>& nums1, vector<int>& nums2, int k) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
     "java": "class Solution {\n    public List<List<Integer>> kSmallestPairs(int[] nums1, int[] nums2, int k) {\n        // Think out loud as you go!\n        return List.of();\n    }\n}\n"
+  },
+  "interviewMetadata": {
+    "difficulty": "Medium",
+    "competencies": [
+      "Array",
+      "Heap",
+      "Priority Queue"
+    ],
+    "reactoStages": [
+      "repeat",
+      "example",
+      "algorithm",
+      "coding",
+      "test",
+      "optimizations"
+    ],
+    "followUpDirections": [
+      {
+        "stage": "repeat",
+        "direction": "Ask the candidate to restate the inputs, outputs, constraints, and ambiguities."
+      },
+      {
+        "stage": "example",
+        "direction": "Ask the candidate to choose and trace an ordinary example and a boundary case."
+      },
+      {
+        "stage": "algorithm",
+        "direction": "Ask for the candidate's approach, correctness argument, and complexity."
+      },
+      {
+        "stage": "coding",
+        "direction": "Ask the candidate to implement their stated approach and explain major decisions."
+      },
+      {
+        "stage": "test",
+        "direction": "Ask the candidate to predict useful cases and expected results before running them."
+      },
+      {
+        "stage": "optimizations",
+        "direction": "Ask for complexity, an uncovered edge case, and a justified optimization or cleanup."
+      }
+    ]
   }
 }

@@ -1,0 +1,250 @@
+{
+  "properties": {
+    "codingFeedback": {
+      "properties": {
+        "improvements": {
+          "items": {
+            "type": "STRING"
+          },
+          "maxItems": 4,
+          "minItems": 2,
+          "type": "ARRAY"
+        },
+        "strengths": {
+          "items": {
+            "type": "STRING"
+          },
+          "maxItems": 4,
+          "minItems": 2,
+          "type": "ARRAY"
+        }
+      },
+      "propertyOrdering": [
+        "strengths",
+        "improvements"
+      ],
+      "required": [
+        "strengths",
+        "improvements"
+      ],
+      "type": "OBJECT"
+    },
+    "codingScore": {
+      "maximum": 100,
+      "minimum": 0,
+      "type": "INTEGER"
+    },
+    "communicationFeedback": {
+      "properties": {
+        "improvements": {
+          "items": {
+            "type": "STRING"
+          },
+          "maxItems": 4,
+          "minItems": 2,
+          "type": "ARRAY"
+        },
+        "strengths": {
+          "items": {
+            "type": "STRING"
+          },
+          "maxItems": 4,
+          "minItems": 2,
+          "type": "ARRAY"
+        }
+      },
+      "propertyOrdering": [
+        "strengths",
+        "improvements"
+      ],
+      "required": [
+        "strengths",
+        "improvements"
+      ],
+      "type": "OBJECT"
+    },
+    "communicationScore": {
+      "maximum": 100,
+      "minimum": 0,
+      "type": "INTEGER"
+    },
+    "decision": {
+      "enum": [
+        "HIRE",
+        "NO_HIRE"
+      ],
+      "type": "STRING"
+    },
+    "frameworkAssessment": {
+      "properties": {
+        "phases": {
+          "items": {
+            "properties": {
+              "phase": {
+                "enum": [
+                  "Repeat",
+                  "Example",
+                  "Algorithm",
+                  "Coding",
+                  "Test",
+                  "Optimizations",
+                  "Situation",
+                  "Task",
+                  "Action",
+                  "Result"
+                ],
+                "type": "STRING"
+              },
+              "score": {
+                "maximum": 100,
+                "minimum": 0,
+                "nullable": true,
+                "type": "INTEGER"
+              },
+              "weaknessTags": {
+                "items": {
+                  "type": "STRING"
+                },
+                "maxItems": 4,
+                "minItems": 0,
+                "type": "ARRAY"
+              }
+            },
+            "propertyOrdering": [
+              "phase",
+              "score",
+              "weaknessTags"
+            ],
+            "required": [
+              "phase",
+              "score",
+              "weaknessTags"
+            ],
+            "type": "OBJECT"
+          },
+          "maxItems": 10,
+          "minItems": 10,
+          "type": "ARRAY"
+        },
+        "rubricVersion": {
+          "maximum": 1,
+          "minimum": 1,
+          "type": "INTEGER"
+        }
+      },
+      "propertyOrdering": [
+        "rubricVersion",
+        "phases"
+      ],
+      "required": [
+        "rubricVersion",
+        "phases"
+      ],
+      "type": "OBJECT"
+    },
+    "improvementPlan": {
+      "items": {
+        "properties": {
+          "drill": {
+            "type": "STRING"
+          },
+          "durationMin": {
+            "maximum": 30,
+            "minimum": 1,
+            "type": "INTEGER"
+          },
+          "frequency": {
+            "maximum": 99,
+            "minimum": 1,
+            "type": "INTEGER"
+          },
+          "impact": {
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "type": "STRING"
+          },
+          "phase": {
+            "enum": [
+              "Repeat",
+              "Example",
+              "Algorithm",
+              "Coding",
+              "Test",
+              "Optimizations",
+              "Situation",
+              "Task",
+              "Action",
+              "Result"
+            ],
+            "type": "STRING"
+          },
+          "selfReview": {
+            "items": {
+              "type": "STRING"
+            },
+            "maxItems": 4,
+            "minItems": 1,
+            "type": "ARRAY"
+          },
+          "successCriterion": {
+            "type": "STRING"
+          },
+          "weakness": {
+            "type": "STRING"
+          }
+        },
+        "propertyOrdering": [
+          "phase",
+          "weakness",
+          "impact",
+          "frequency",
+          "drill",
+          "durationMin",
+          "successCriterion",
+          "selfReview"
+        ],
+        "required": [
+          "phase",
+          "weakness",
+          "impact",
+          "frequency",
+          "drill",
+          "durationMin",
+          "successCriterion",
+          "selfReview"
+        ],
+        "type": "OBJECT"
+      },
+      "maxItems": 8,
+      "minItems": 0,
+      "type": "ARRAY"
+    },
+    "summary": {
+      "type": "STRING"
+    }
+  },
+  "propertyOrdering": [
+    "codingScore",
+    "communicationScore",
+    "decision",
+    "summary",
+    "codingFeedback",
+    "communicationFeedback",
+    "improvementPlan",
+    "frameworkAssessment"
+  ],
+  "required": [
+    "codingScore",
+    "communicationScore",
+    "decision",
+    "summary",
+    "codingFeedback",
+    "communicationFeedback",
+    "improvementPlan",
+    "frameworkAssessment"
+  ],
+  "type": "OBJECT"
+}

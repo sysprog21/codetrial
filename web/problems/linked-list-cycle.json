@@ -36,5 +36,47 @@
     "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nbool hasCycle(struct ListNode *head) {\n    // Think out loud as you go!\n    return false;\n}\n",
     "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode(int x) : val(x), next(NULL) {}\n * };\n */\nclass Solution {\npublic:\n    bool hasCycle(ListNode *head) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
     "java": "/**\n * Definition for singly-linked list.\n * class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode(int x) {\n *         val = x;\n *         next = null;\n *     }\n * }\n */\npublic class Solution {\n    public boolean hasCycle(ListNode head) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+  },
+  "interviewMetadata": {
+    "difficulty": "Easy",
+    "competencies": [
+      "Hash Table",
+      "Linked List",
+      "Two Pointers"
+    ],
+    "reactoStages": [
+      "repeat",
+      "example",
+      "algorithm",
+      "coding",
+      "test",
+      "optimizations"
+    ],
+    "followUpDirections": [
+      {
+        "stage": "repeat",
+        "direction": "Ask the candidate to restate the inputs, outputs, constraints, and ambiguities."
+      },
+      {
+        "stage": "example",
+        "direction": "Ask the candidate to choose and trace an ordinary example and a boundary case."
+      },
+      {
+        "stage": "algorithm",
+        "direction": "Ask for the candidate's approach, correctness argument, and complexity."
+      },
+      {
+        "stage": "coding",
+        "direction": "Ask the candidate to implement their stated approach and explain major decisions."
+      },
+      {
+        "stage": "test",
+        "direction": "Ask the candidate to predict useful cases and expected results before running them."
+      },
+      {
+        "stage": "optimizations",
+        "direction": "Ask for complexity, an uncovered edge case, and a justified optimization or cleanup."
+      }
+    ]
   }
 }

@@ -320,9 +320,128 @@ export async function integrityEventPayload(input, previous = { seq: 0, hash: ""
   return event;
 }
 
+/// The two frameworks, kept apart on purpose.
+///
+/// A candidate in the coding round is working through REACTO and has no use for
+/// the four behavioral steps; showing all ten at once was the confusion this
+/// replaced. Ids match the `phase` spelling the interviewer records evidence
+/// under, so a tick is a lookup rather than a translation.
+export const FRAMEWORKS = {
+  coding: {
+    name: "REACTO",
+    scenario: "Working a problem: what was asked for at each step of the coding round",
+    // One clause each, written for someone reading it once while waiting for
+    // the interviewer to speak. Long enough to act on, short enough that the
+    // whole flow is legible before the card goes away.
+    steps: [
+      { id: "repeat", label: "Repeat", hint: "say the problem back in your own words" },
+      { id: "example", label: "Example", hint: "walk one ordinary case and one edge case" },
+      { id: "algorithm", label: "Algorithm", hint: "explain the approach and its cost before you type" },
+      { id: "coding", label: "Coding", hint: "write what you just described" },
+      { id: "test", label: "Test", hint: "predict what should happen, then run it" },
+      { id: "optimizations", label: "Optimizations", hint: "confirm the complexity and name one improvement" },
+    ],
+  },
+  behavioral: {
+    name: "STAR",
+    scenario: "Recounting past work: what a behavioral answer is listened for",
+    steps: [
+      { id: "situation", label: "Situation", hint: "where you were and what was going on" },
+      { id: "task", label: "Task", hint: "what you were responsible for" },
+      { id: "action", label: "Action", hint: "what you personally did, not the team" },
+      { id: "result", label: "Result", hint: "how it turned out, and what you took from it" },
+    ],
+  },
+};
+
 // The report arrives over a LiveKit data channel, so treat every field as
 // untrusted: scores are rendered into innerHTML and must not carry markup.
+/// The ten REACTO and STAR phases, in the order src/agent.rs IMPROVEMENT_PHASES
+/// and validate_framework_assessment require. Written once: it was three
+/// literals here and in progress.js, and a phase added to one of them would have
+/// been silently unassessed by the others.
+export const frameworkPhases = Object.values(FRAMEWORKS).flatMap((framework) =>
+  framework.steps.map((step) => step.label));
+
+/// The two closed enums the server owns (InterviewMode::parse and
+/// InterviewLoop::parse in src/agent.rs). Anything else is the default, which is
+/// what makes a legacy or hostile value safe rather than an error. Stated once
+/// here because seven modules were each restating the same ternary.
+
+
+/// The steps of one round, each marked done or not.
+///
+/// Anything the interviewer sends that is not a known id is dropped rather than
+/// rendered: the packet is untrusted like every other, and an unknown phase is
+/// either a version skew or someone else's idea of a step.
+export function frameworkChecklist(round, phases) {
+  const framework = FRAMEWORKS[round] || FRAMEWORKS.coding;
+  const done = new Set(Array.isArray(phases) ? phases.filter((phase) => typeof phase === "string") : []);
+  return {
+    name: framework.name,
+    steps: framework.steps.map((step) => ({ ...step, done: done.has(step.id) })),
+  };
+}
+
+function interviewMode(value) {
+  return value === "practice" ? "practice" : "scored";
+}
+
+export function codingLoop(value) {
+  return value === "coding_only" ? "coding_only" : "coding_behavioral";
+}
+
+/// Reports written before the practice/scored split was removed still carry a
+/// mode, and the viewer shows what they say. Nothing produces one any more.
+export function modeLabel(value) {
+  return interviewMode(value) === "practice" ? "Practice" : "Scored";
+}
+
+export function loopLabel(value) {
+  return codingLoop(value) === "coding_only" ? "Coding only" : "Coding + behavioral";
+}
+
+const textEncoder = new TextEncoder();
+
 export function sanitizeReport(raw) {
+  const activeContract = { bundleVersion: 4, livePromptVersion: 1, reportPromptVersion: 4, reportSchemaVersion: 1, rubricVersion: 1 };
+  const contractKeys = Object.keys(activeContract);
+  const candidateContract = raw?.interviewContract;
+  const contractValues = candidateContract && typeof candidateContract === "object" && !Array.isArray(candidateContract)
+    ? Object.keys(candidateContract).sort().join(",") === [...contractKeys].sort().join(",")
+      && contractKeys.every((key) => Number.isSafeInteger(candidateContract[key])
+        && candidateContract[key] >= 1 && candidateContract[key] <= 999)
+      ? Object.fromEntries(contractKeys.map((key) => [key, candidateContract[key]])) : null
+    : null;
+  const interviewContract = candidateContract === undefined ? null : contractValues;
+  const unsupportedContract = candidateContract !== undefined
+    && (interviewContract === null || contractKeys.some((key) => interviewContract[key] !== activeContract[key]));
+  // Only what the report actually recorded. Defaulting this to "scored" put a
+  // mode on every new report and made the header announce a distinction that no
+  // longer exists; a report written before the split still says what it was.
+  const mode = raw?.mode === undefined ? undefined : interviewMode(raw.mode);
+  // Defaulted for the round arithmetic below, which has always assumed the
+  // two-round shape, but reported only where the report recorded it. Naming a
+  // loop on a report written before loops existed describes a session that
+  // never ran, the same way defaulting the mode did.
+  const interviewLoop = codingLoop(raw?.interviewLoop);
+  const recordedLoop = raw?.interviewLoop === undefined ? undefined : interviewLoop;
+  const roundKinds = ["coding", "behavioral"];
+  const codingStatuses = new Set(["complete", "incomplete"]);
+  const behavioralStatuses = new Set(["complete", "started", "skipped", "not_configured"]);
+  const rounds = Array.isArray(raw?.rounds) && raw.rounds.length === 2
+    ? raw.rounds.map((round, index) => round?.kind === roundKinds[index]
+      && Number.isInteger(round.budgetMin) && round.budgetMin >= 0 && round.budgetMin <= 90
+      && (index === 0 ? codingStatuses : behavioralStatuses).has(round.status)
+      ? { kind: round.kind, budgetMin: round.budgetMin, status: round.status } : null)
+    : [];
+  const roundSummary = rounds.length === 2 && rounds.every(Boolean)
+    && rounds[0].budgetMin + rounds[1].budgetMin >= 10
+    && rounds[0].budgetMin + rounds[1].budgetMin <= 90
+    && (interviewLoop === "coding_only"
+      ? rounds[1].budgetMin === 0 && rounds[1].status === "not_configured"
+      : rounds[1].budgetMin === 8 && rounds[1].status !== "not_configured")
+    ? rounds : [];
   const bounded = (value, max) => {
     const number = Math.trunc(Number(value));
     return Number.isFinite(number) ? clamp(number, 0, max) : 0;
@@ -348,27 +467,179 @@ export function sanitizeReport(raw) {
     strengths: stringList(section?.strengths),
     improvements: stringList(section?.improvements),
   });
+  const codingFeedback = feedback(raw?.codingFeedback);
+  const communicationFeedback = feedback(raw?.communicationFeedback);
+  const weaknesses = new Set([...codingFeedback.improvements, ...communicationFeedback.improvements]);
+  const phases = new Set(frameworkPhases);
+  const plannedWeaknesses = new Set();
+  const impactRank = { high: 3, medium: 2, low: 1 };
+  const candidatePlan = (Array.isArray(raw?.improvementPlan) ? raw.improvementPlan : [])
+    .slice(0, 16)
+    .map((item) => {
+      const phase = typeof item?.phase === "string" ? item.phase : "";
+      const weakness = typeof item?.weakness === "string" ? boundedText(item.weakness, 400).trim() : "";
+      const impact = typeof item?.impact === "string" ? item.impact : "";
+      const drill = typeof item?.drill === "string" ? boundedText(item.drill, 400).trim() : "";
+      const successCriterion = typeof item?.successCriterion === "string"
+        ? boundedText(item.successCriterion, 400).trim() : "";
+      const frequency = Math.trunc(Number(item?.frequency));
+      const durationMin = Math.trunc(Number(item?.durationMin));
+      const selfReview = Array.isArray(item?.selfReview)
+        ? item.selfReview.slice(0, 4).map((check) => boundedText(check, 240).trim()).filter(Boolean)
+        : [];
+      if (!phases.has(phase) || plannedWeaknesses.has(weakness) || !weaknesses.has(weakness)
+        || !impactRank[impact] || !Number.isFinite(frequency) || frequency < 1
+        || !Number.isFinite(durationMin) || durationMin < 1 || !drill
+        || !successCriterion || selfReview.length === 0) return null;
+      plannedWeaknesses.add(weakness);
+      return {
+        phase,
+        weakness,
+        impact,
+        frequency: clamp(frequency, 1, 99),
+        drill,
+        durationMin: clamp(durationMin, 1, 30),
+        successCriterion,
+        selfReview,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => impactRank[right.impact] - impactRank[left.impact]
+      || right.frequency - left.frequency)
+    .slice(0, 8);
+  const improvementPlan = plannedWeaknesses.size === weaknesses.size
+    && [...weaknesses].every((weakness) => plannedWeaknesses.has(weakness))
+    ? candidatePlan
+    : [];
+  const assessmentPhases = [...phases];
+  const candidateAssessment = raw?.frameworkAssessment;
+  const assessmentRows = Array.isArray(candidateAssessment?.phases)
+    ? candidateAssessment.phases : [];
+  const seenAssessmentPhases = new Set();
+  const normalizedAssessment = new Map();
+  const assessmentVersion = candidateAssessment?.rubricVersion;
+  let assessmentValid = Number.isSafeInteger(assessmentVersion) && assessmentVersion >= 1
+    && assessmentRows.length === assessmentPhases.length
+    && (!interviewContract || assessmentVersion === interviewContract.rubricVersion);
+  for (const item of assessmentRows) {
+    const phase = typeof item?.phase === "string" ? item.phase : "";
+    const score = item?.score;
+    const scoreValid = score === null
+      || (typeof score === "number" && Number.isInteger(score) && score >= 0 && score <= 100);
+    if (!phases.has(phase) || seenAssessmentPhases.has(phase) || !scoreValid
+      || !Array.isArray(item?.weaknessTags)) {
+      assessmentValid = false;
+      continue;
+    }
+    seenAssessmentPhases.add(phase);
+    const allowedTags = new Set(improvementPlan
+      .filter((entry) => entry.phase === phase)
+      .map((entry) => entry.weakness));
+    const weaknessTags = [...new Set(item.weaknessTags
+      .filter((tag) => typeof tag === "string")
+      .map((tag) => boundedText(tag, 400).trim())
+      .filter((tag) => tag && allowedTags.has(tag)))]
+      .slice(0, 4);
+    normalizedAssessment.set(phase, { phase, score, weaknessTags });
+  }
+  const frameworkAssessment = assessmentValid
+    && seenAssessmentPhases.size === assessmentPhases.length
+    ? {
+      rubricVersion: assessmentVersion,
+      phases: assessmentPhases.map((phase) => normalizedAssessment.get(phase)),
+    }
+    : null;
+  const knownEvidenceFields = new Set([
+    "atMs", "phase", "source", "kind", "confidence", "summary", "frameworkVersion",
+  ]);
+  const evidencePhases = new Set(frameworkPhases.map((phase) => phase.toLowerCase()));
+  const frameworkSources = new Set(["candidate_speech", "editor_snapshot", "test_event", "session_timing"]);
+  const frameworkKinds = new Set(["observed", "inferred", "skipped"]);
+  const frameworkEvidence = (Array.isArray(raw?.frameworkEvidence) ? raw.frameworkEvidence : [])
+    .map((item) => {
+      const phase = typeof item?.phase === "string" ? item.phase : "";
+      const source = typeof item?.source === "string" ? item.source : "";
+      const kind = typeof item?.kind === "string" ? item.kind : "";
+      const atMs = Math.trunc(Number(item?.atMs));
+      const confidence = Math.trunc(Number(item?.confidence));
+      const frameworkVersion = Math.trunc(Number(item?.frameworkVersion));
+      const summary = typeof item?.summary === "string" ? boundedText(item.summary, 240).trim() : "";
+      if (!evidencePhases.has(phase) || !frameworkSources.has(source) || !frameworkKinds.has(kind)
+        || (source === "session_timing") !== (kind === "skipped")
+        || !Number.isFinite(atMs) || atMs < 0 || !Number.isFinite(confidence)
+        || confidence < 0 || confidence > 100 || !Number.isFinite(frameworkVersion)
+        || frameworkVersion < 1 || !summary) return null;
+      // Unknown fields round-trip, so a newer report re-saved by an older
+      // client does not quietly lose what that client could not name. They
+      // are also the only part of an evidence row with no size of its own,
+      // and the whole report has to fit what the account sync accepts, which
+      // refuses the request rather than trimming it: over that, the candidate
+      // keeps the local copy and the account copy simply never arrives. So
+      // they are carried while they are a field rather than a payload.
+      // The common row has nothing unknown on it, and this runs over whatever
+      // length arrived from storage or the wire, before the cap below trims
+      // it. Counting the keys is one comparison; building and serializing an
+      // empty object to learn the same thing is five allocations a row.
+      const extras = Object.keys(item).length === knownEvidenceFields.size
+        ? {}
+        : Object.fromEntries(
+          Object.entries(item).filter(([key]) => !knownEvidenceFields.has(key)),
+        );
+      const carried = textEncoder.encode(JSON.stringify(extras)).length <= 512 ? extras : {};
+      return {
+        ...carried,
+        // A year, which no interview approaches: this is a sanity bound on a
+        // timestamp that arrives as untrusted JSON, not a statement about how
+        // long a session runs.
+        atMs: clamp(atMs, 0, 31_536_000_000),
+        phase,
+        source,
+        kind,
+        confidence,
+        summary,
+        frameworkVersion,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 64)
+    .sort((left, right) => left.atMs - right.atMs);
   // A report with nothing in it must survive normalization as a report with
   // nothing in it. Falling through to the fields below would score the missing
   // numbers as 0 and coerce the missing decision to NO_HIRE, which is how a
   // candidate who never spoke got a rejection in the first place; doing it
   // again on the way out of storage would just move the fabrication later.
-  if (raw?.incomplete) {
+  if (raw?.incomplete || unsupportedContract) {
     return {
+      interviewContract,
+      mode,
+      interviewLoop: recordedLoop,
+      rounds: roundSummary,
       incomplete: true,
-      summary: typeof raw?.summary === "string" ? boundedText(raw.summary) : "",
+      summary: unsupportedContract
+        ? "This report uses an unsupported or malformed interview contract and cannot be scored by this version of CodeTrial."
+        : typeof raw?.summary === "string" ? boundedText(raw.summary) : "",
       integrityEvents: integrityEvents(raw?.integrityEvents),
       ...checkpoint(raw),
       hintsUsed: bounded(raw?.hintsUsed, 99),
+      improvementPlan: [],
+      frameworkAssessment: null,
+      frameworkEvidence,
     };
   }
   return {
+    interviewContract,
+    mode,
+    interviewLoop: recordedLoop,
+    rounds: roundSummary,
     codingScore: score(raw?.codingScore),
     communicationScore: score(raw?.communicationScore),
     decision: raw?.decision === "HIRE" ? "HIRE" : "NO_HIRE",
     summary: typeof raw?.summary === "string" ? boundedText(raw.summary) : "",
-    codingFeedback: feedback(raw?.codingFeedback),
-    communicationFeedback: feedback(raw?.communicationFeedback),
+    codingFeedback,
+    communicationFeedback,
+    improvementPlan,
+    frameworkAssessment,
+    frameworkEvidence,
     integrityEvents: integrityEvents(raw?.integrityEvents),
     ...checkpoint(raw),
     // Bounded like the scores: `JSON.parse` turns 1e999 into Infinity, which
@@ -458,13 +729,14 @@ export function countdown(previous, endsAt, now) {
   };
 }
 
-/// Whether this browser is allowed to score anybody, and what to say if not.
+/// The browser never scores anybody; this decides which honest incomplete
+/// summary describes the provider state and locally observed activity.
 ///
 /// A session that reached a real interviewer is graded by that interviewer or
 /// not at all. Asking whether the socket is open right now is the wrong
 /// question, and was asked here for one round: a dropped connection nulls the
-/// room, which routed a candidate who had passed their tests straight into
-/// `offlineReport` and rendered a green HIRE badge for a network failure, saved
+/// room, which routed a candidate who had passed their tests straight into a
+/// local scorer and rendered a green HIRE badge for a network failure, saved
 /// it to localStorage and POSTed it to `/api/reports`. Whether an interviewer
 /// was ever present is a different fact from whether the connection survived,
 /// and only the first one decides this.
@@ -478,38 +750,11 @@ export function sessionReport({ joinedRoom, passed, total, candidateTurns }) {
     };
   }
 
-  // Nothing ran and nobody spoke, so there is nothing to score even offline.
-  if (!total && !candidateTurns) {
-    return {
-      incomplete: true,
-      summary:
-        "No interviewer joined and this session produced no evaluation. Nothing you did was assessed, and no result was recorded.",
-      hintsUsed: 0,
-    };
-  }
-
-  return offlineReport({ passed, total, candidateTurns });
-}
-
-/// The offline-practice scores. Not an evaluation of the candidate by anyone,
-/// which is why the only path that reaches it is `sessionReport` deciding that
-/// tests actually ran or the candidate actually spoke. Unexported for that
-/// reason: reaching it directly would skip the decision that guards it.
-function offlineReport({ passed, total, candidateTurns }) {
-  const score = total ? Math.round((passed / total) * 100) : 40;
   return {
-    codingScore: score,
-    communicationScore: candidateTurns ? 70 : 45,
-    decision: score >= 70 ? "HIRE" : "NO_HIRE",
-    summary: total ? `${passed}/${total} test cases passed in offline practice mode.` : "Offline practice ended before tests were run.",
-    codingFeedback: {
-      strengths: passed > 0 ? ["Made measurable progress against the test cases."] : [],
-      improvements: passed === total && total > 0 ? [] : ["Use the failing cases to tighten the implementation."],
-    },
-    communicationFeedback: {
-      strengths: candidateTurns ? ["Kept the session moving."] : [],
-      improvements: ["Narrate tradeoffs and edge cases as you code."],
-    },
+    incomplete: true,
+    summary: total || candidateTurns
+      ? `Offline mode recorded local activity${total ? ` and ${passed}/${total} browser test cases passed` : ""}. No live interviewer assessed it, so no personalized scores, verdict, or feedback were created.`
+      : "No interviewer joined and this session produced no evaluation. Nothing you did was assessed, and no result was recorded.",
     hintsUsed: 0,
   };
 }
@@ -561,4 +806,25 @@ export function captionWindow(text, maxChars) {
   // its own case because `slice(-0)` is `slice(0)`, which returns everything.
   if (maxChars < 4) return maxChars > 0 ? text.slice(-maxChars) : "";
   return `...${text.slice(-(maxChars - 3))}`;
+}
+
+export function providerUiState(kind, detail = "") {
+  const detailText = String(detail).toLowerCase();
+  const reason = /429|rate limit|too many|busy|capacity/.test(detailText)
+    ? "The live interview service is busy or rate limited."
+    : /quota|connection minutes/.test(detailText)
+      ? "The live interview provider has no available session capacity."
+      : /microphone|publish/.test(detailText)
+        ? "The microphone could not be connected to the live interview."
+        : "The live interview provider could not be reached.";
+  const states = {
+    connecting: { label: "Connecting", message: "Connecting to the live interviewer.", personalized: false, retry: false },
+    live: { label: "Live", message: "The live interviewer is connected.", personalized: true, retry: false },
+    reconnecting: { label: "Reconnecting", message: "Reconnecting to the interviewer. Keep working; your code is safe.", personalized: true, retry: false },
+    degraded: { label: "Offline", message: `${reason} You can still work the problem, but it will not create a personalized evaluation.`, personalized: false, retry: true },
+    report_generating: { label: "Preparing report", message: "Preparing your personalized report. A slow grader can take up to a minute.", personalized: true, retry: false },
+    incomplete_report: { label: "Incomplete report", message: "The provider could not produce a valid personalized evaluation. No scores or verdict were created.", personalized: false, retry: true },
+    retry_ready: { label: "Retry available", message: "The report is still unavailable. Leave safely, then retry the interview when the provider recovers.", personalized: false, retry: true },
+  };
+  return states[kind] || states.degraded;
 }

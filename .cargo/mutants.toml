@@ -37,6 +37,47 @@
 # entered the diff when `select_provider` lost its `strict` argument, which is
 # how a function nothing can test came to be scored.
 #
+# `handle_data_packet` and `handle_gemini_event` are the body of `run_room`'s
+# loop, lifted out of it when that function was split. Both take `&Room` and
+# answer by publishing on it, so every mutant in them is the `run_room` case
+# under a new name: deleting a field from a `DataPacket`, or an arm that
+# decides what to do with a Gemini event, cannot be observed without a room to
+# publish into. They entered the diff by being moved, not by being written,
+# which is how code nothing can test came to be scored. The decisions they make
+# before they publish are tested: `apply_data_event` in tests/agent.rs, and
+# `checklist_changed` beside it in livekit.rs.
+#
+# `publish_output_audio` and `output_audio_worker` are the two ends of playout.
+# The first publishes a track to a room. The second hands frames to a
+# `NativeAudioSource`, which is libwebrtc: it returns nothing a test can read,
+# so replacing the worker with nothing at all looks the same from outside as
+# playing the audio. What can be checked is checked, in `OutputAudio::capture`,
+# which is where the framing and the playout pacing are decided.
+#
+# The rest of the room loop's helpers are here for the same reason: every one
+# of them takes `&Room` or the live Gemini session and answers by writing to it.
+# `publish_framework_progress`, `send_wrap_up_and_wait`, `drop_stale_playout`
+# and `close_turns` publish; `generate_report` and the two transport functions
+# under it post to Google and would need an API key to reach a single line.
+# What they decide before they write is tested on its own: `close_turn` and
+# `checklist_changed` in livekit.rs, `browser_packet` beside them, and
+# `parse_and_validate_report` in gemini.rs, which is the half of report
+# generation that does not need a network.
+#
+# `report_packet` is `generate_report` with a timeout and an envelope around
+# it, so reaching any line of it means posting to Google with a real key. What
+# it builds is `browser_packet`, which is tested, and what it validates is
+# `parse_and_validate_report`, which is tested; the wait in between is the part
+# that needs the network.
+#
+# The media helpers are the same shape one layer down. `handle_media_event`
+# and `attach_audio` take a LiveKit participant, `next_audio_frame` and
+# `next_video_frame` poll a track, and `pump_video` and
+# `encode_video_frame_jpeg_off_thread` need a subscribed video track to have
+# anything to do. Their decisions are tested where they are made:
+# `is_interview_participant`, `candidate_video_frames_go_to_gemini`,
+# `should_send_video_frame`, `frame_to_rgba` and `encode_rgba_jpeg`.
+#
 # Keep this list short and each entry justified. An entry that is really "we
 # never got around to testing this" belongs in a test, not here.
 exclude_re = [
@@ -45,4 +86,20 @@ exclude_re = [
     "run_gemini_check",
     "run_livekit",
     "replace web_router",
+    "handle_data_packet",
+    "handle_gemini_event",
+    "publish_output_audio",
+    "output_audio_worker",
+    "publish_framework_progress",
+    "send_wrap_up_and_wait",
+    "drop_stale_playout",
+    "close_turns",
+    "generate_report",
+    "report_packet",
+    "handle_media_event",
+    "attach_audio",
+    "next_audio_frame",
+    "next_video_frame",
+    "pump_video",
+    "encode_video_frame_jpeg_off_thread",
 ]

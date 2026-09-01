@@ -22,8 +22,9 @@ use codetrial::token::{
     livekit_token,
 };
 use codetrial::web::{
-    MAX_BODY_BYTES, MAX_REPORT_BYTES, RoomDispatcher, TOKEN_RATE_LIMIT, TokenConfig,
-    WebServerConfig, initialize_account_database, login_config, static_file_meta, token_response,
+    MAX_BODY_BYTES, MAX_REPORT_BYTES, REPLAY_RATE_LIMIT, RoomDispatcher, TOKEN_RATE_LIMIT,
+    TokenConfig, WebServerConfig, initialize_account_database, login_config, static_file_meta,
+    token_response,
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -149,8 +150,144 @@ fn token_response_matches_frontend_contract() {
     assert_eq!(claims["video"]["room"], response.room_name);
     assert_eq!(
         claims["metadata"],
-        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90,"candidateIdentity":"candidate-fixed"})).unwrap()
+        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90,"interviewLoop":"coding_behavioral","interviewProfile":{"role":"","seniority":null,"targetCompany":""},"candidateIdentity":"candidate-fixed"})).unwrap()
     );
+}
+
+/// There is one interview now, so a mode is not a thing a browser can ask for.
+///
+/// A stale page or a hand-rolled client can still send one. It must not reach
+/// the participant metadata under any spelling, because the agent no longer
+/// reads it and a value sitting there would read as a setting that does
+/// something.
+#[test]
+fn token_ignores_a_mode_a_stale_client_still_sends() {
+    let config = TokenConfig {
+        api_key: "devkey",
+        api_secret: "devsecret",
+        server_url: "wss://example.livekit.cloud",
+        recording_max_min: None,
+    };
+    for body in [
+        br#"{"mode":"practice"}"#.as_slice(),
+        br#"{"mode":"scored"}"#.as_slice(),
+        br#"{"mode":"forged"}"#.as_slice(),
+        br#"{}"#.as_slice(),
+    ] {
+        let response = token_response(&config, body, "room", "candidate", 2_000).unwrap();
+        let claims = claims(&response.token);
+        let metadata: Value = serde_json::from_str(claims["metadata"].as_str().unwrap()).unwrap();
+        assert!(
+            metadata.get("mode").is_none(),
+            "a mode reached the metadata for {body:?}"
+        );
+    }
+}
+
+#[test]
+fn token_interview_loop_is_allowlisted_and_defaults_to_combined() {
+    let config = TokenConfig {
+        api_key: "key",
+        api_secret: "secret",
+        server_url: "wss://example.test",
+        recording_max_min: None,
+    };
+    for (body, expected) in [
+        (
+            br#"{"interviewLoop":"coding_only"}"#.as_slice(),
+            "coding_only",
+        ),
+        (
+            br#"{"interviewLoop":"system_design"}"#.as_slice(),
+            "coding_behavioral",
+        ),
+        (br#"{}"#.as_slice(), "coding_behavioral"),
+    ] {
+        let response = token_response(&config, body, "room", "candidate", 2_000).unwrap();
+        let metadata: Value =
+            serde_json::from_str(claims(&response.token)["metadata"].as_str().unwrap()).unwrap();
+        assert_eq!(metadata["interviewLoop"], expected);
+    }
+}
+
+#[test]
+fn token_profile_is_bounded_and_enum_validated_before_signed_metadata() {
+    let response = token_response(
+        &TokenConfig {
+            api_key: "key",
+            api_secret: "secret",
+            server_url: "wss://example.test",
+            recording_max_min: None,
+        },
+        serde_json::to_string(&json!({"interviewProfile": {
+            "role": format!("  {}\n", "r".repeat(100)),
+            "seniority": "staff",
+            "targetCompany": "Example\u{0000} Co"
+        }}))
+        .unwrap()
+        .as_bytes(),
+        "room",
+        "candidate",
+        2_000,
+    )
+    .unwrap();
+    let token_claims = claims(&response.token);
+    let metadata: Value = serde_json::from_str(token_claims["metadata"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        metadata["interviewProfile"]["role"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count(),
+        80
+    );
+    assert_eq!(metadata["interviewProfile"]["seniority"], "staff");
+    assert_eq!(metadata["interviewProfile"]["targetCompany"], "Example Co");
+
+    let invalid = token_response(
+        &TokenConfig {
+            api_key: "key",
+            api_secret: "secret",
+            server_url: "wss://example.test",
+            recording_max_min: None,
+        },
+        br#"{"interviewProfile":{"seniority":"founder","role":4}}"#,
+        "room",
+        "candidate",
+        2_000,
+    )
+    .unwrap();
+    let metadata: Value =
+        serde_json::from_str(claims(&invalid.token)["metadata"].as_str().unwrap()).unwrap();
+    assert!(metadata["interviewProfile"]["seniority"].is_null());
+    assert_eq!(metadata["interviewProfile"]["role"], "");
+}
+
+#[test]
+fn token_grounding_is_signed_only_after_valid_consent_and_shape() {
+    let config = TokenConfig {
+        api_key: "key",
+        api_secret: "secret",
+        server_url: "wss://example.test",
+        recording_max_min: None,
+    };
+    let signed = token_response(&config, br#"{"interviewGrounding":{"consentVersion":1,"requirements":["Must know Rust"],"skills":["Rust"],"anchors":["Built a parser"]}}"#, "room", "candidate", 2_000).unwrap();
+    let metadata: Value =
+        serde_json::from_str(claims(&signed.token)["metadata"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        metadata["interviewGrounding"]["anchors"][0],
+        "Built a parser"
+    );
+
+    for body in [
+        br#"{"interviewGrounding":{"requirements":[],"skills":[],"anchors":[]}}"#.as_slice(),
+        br#"{"interviewGrounding":{"consentVersion":2,"requirements":[],"skills":[],"anchors":[]}}"#.as_slice(),
+        br#"{"interviewGrounding":{"consentVersion":1,"requirements":"bad","skills":[],"anchors":[]}}"#.as_slice(),
+    ] {
+        let response = token_response(&config, body, "room", "candidate", 2_000).unwrap();
+        let metadata: Value = serde_json::from_str(claims(&response.token)["metadata"].as_str().unwrap()).unwrap();
+        assert!(metadata.get("interviewGrounding").is_none());
+    }
 }
 
 #[test]
@@ -257,9 +394,9 @@ fn token_duration_preserves_fractional_frontend_metadata() {
 #[test]
 fn token_duration_stops_at_the_recording_cap() {
     for (recording_max_min, requested, expected) in [
-        // The lobby offers sixty. A deployment recording at the default cap
-        // has `stale_after` reap the recording at fifty, so the last ten
-        // minutes are interview no artifact survives to cover.
+        // The lobby offers sixty. A deployment recording at the default cap has
+        // `stale_after` reap the recording at fifty, so the last ten minutes
+        // are interview no artifact survives to cover.
         (Some(45), json!(60), json!(45)),
         // Under the cap is nobody's problem and stays untouched.
         (Some(45), json!(30), json!(30)),
@@ -1152,7 +1289,10 @@ fn static_interview_script_keeps_transcript_and_report_contract() {
 fn static_interview_script_leaves_candidate_identity_to_the_server() {
     let source = fs::read_to_string("web/interview.js").unwrap();
 
-    assert!(source.contains("JSON.stringify({ problemId: problem.id, durationMin, interviewId })"));
+    assert!(
+        source
+            .contains("JSON.stringify({ problemId: problem.id, durationMin, interviewId, interviewLoop, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) })")
+    );
     assert!(!source.contains("candidateIdentity"));
 }
 
@@ -1827,8 +1967,9 @@ fn static_interview_script_marks_agent_ready_visually() {
     assert!(source.contains("function setAgentStateLabel"));
     assert!(source.contains(r#"setAgentStateLabel("Waiting", false)"#));
     assert!(
-        source
-            .contains(r#"setAgentStateLabel(labels[value] || "Listening", value === "listening")"#)
+        source.contains(
+            r#"setAgentStateLabel(labels[value] || providerUiState("live").label, value === "listening")"#
+        )
     );
     assert!(source.contains(r#"classList.toggle("ready", ready)"#));
     assert!(styles.contains(".agent-pill.ready"));
@@ -4427,10 +4568,9 @@ async fn consent_withdrawal_stops_egress() {
 /// pass while an ingest route sat beside the ones it named.
 ///
 /// Read as text out of `src/web/mod.rs` because axum does not hand back the
-/// routes
-/// it was given. That makes this a tripwire on the source rather than on the
-/// running router, which is the trade the whole file already makes for the
-/// browser side.
+/// routes it was given. That makes this a tripwire on the source rather than
+/// on the running router, which is the trade the whole file already makes for
+/// the browser side.
 ///
 /// The ceiling, stated because the name overpromises otherwise: this compares
 /// paths. It does not read methods, and it cannot see what a handler does with
@@ -4893,6 +5033,62 @@ async fn the_recording_template_is_reachable_under_a_policy_that_permits_its_roo
     );
 
     server.abort();
+}
+
+/// The per-batch caps bound one request and the stored quota bounds what an
+/// interview keeps. Neither bounds how often one account may ask, and an ask
+/// that is not refused before the body is a parse and a stored batch. This is
+/// the refusal.
+#[tokio::test]
+async fn replay_ingestion_rate_limits_a_looping_client() {
+    let (base, server, path, client, cookie) = recorded_server("replay-rate-limit").await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    let url = format!("{base}/api/interviews/{interview}/events");
+    let batch = json!({
+        "events": [{
+            "v": codetrial::recording::REPLAY_VERSION,
+            "kind": "transcript",
+            "at": 1_770_000_000_000i64,
+            "payload": { "text": "hello" }
+        }]
+    });
+
+    for attempt in 1..=REPLAY_RATE_LIMIT {
+        let response = client
+            .post(&url)
+            .header("cookie", &cookie)
+            .json(&batch)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "batch {attempt} should be allowed");
+    }
+
+    let blocked = client
+        .post(&url)
+        .header("cookie", &cookie)
+        .json(&batch)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(blocked.status(), 429);
+    assert_eq!(blocked.headers().get("retry-after").unwrap(), "60");
+
+    // Refused before the body, so the refused batch stored nothing. A limiter
+    // that ran after the insert would answer 429 to a client whose events it
+    // had already kept.
+    let stored: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM replay_events WHERE interview_id = ?1",
+            [&interview],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, i64::from(REPLAY_RATE_LIMIT));
+
+    server.abort();
+    remove_database(path);
 }
 
 /// The replay is the account's own, and only the account's.

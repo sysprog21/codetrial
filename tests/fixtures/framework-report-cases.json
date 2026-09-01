@@ -1,0 +1,44 @@
+[
+  {
+    "name": "complete-reacto-star",
+    "transcript": "Interviewer: Walk me through the problem.\nCandidate: I need two distinct indices whose values sum to the target. For [2,7,11,15] and 9, I return [0,1]; duplicates such as [3,3] must work. I will scan once and store prior values by index, which is linear time and linear space.\nCandidate: I expect the ordinary and duplicate cases to pass.\nInterviewer: Tell me about a debugging disagreement.\nCandidate: On a release, I owned a failing cache test. I reproduced it, proposed invalidation on writes, and paired with my teammate to test it. The incidents stopped in the following releases.",
+    "finalCode": "def two_sum(nums, target):\n    seen = {}\n    for i, value in enumerate(nums):\n        if target - value in seen:\n            return [seen[target - value], i]\n        seen[value] = i",
+    "testSummary": "Latest test run: 3/3 cases passed.",
+    "behavioralAsked": true
+  },
+  {
+    "name": "out-of-order-complete-reacto",
+    "transcript": "Candidate: I will use a one-pass map in linear time. Before coding, [3,3] with target 6 should return both distinct positions. Restating the goal, I return indices, not values. After coding I would also test a negative target; the approach is already asymptotically optimal.",
+    "finalCode": "def two_sum(nums, target):\n    seen = {}\n    for i, value in enumerate(nums):\n        if target - value in seen: return [seen[target - value], i]\n        seen[value] = i",
+    "testSummary": "No test run was recorded.",
+    "behavioralAsked": false
+  },
+  {
+    "name": "failed-test-recovery",
+    "transcript": "Candidate: The duplicate case failed because I inserted before checking and reused one index. I will reverse those operations and rerun it.",
+    "finalCode": "def two_sum(nums, target):\n    seen = {}\n    for i, value in enumerate(nums):\n        if target - value in seen: return [seen[target - value], i]\n        seen[value] = i",
+    "testSummary": "Run 1: 2/3 passed. Run 2: 3/3 passed.",
+    "behavioralAsked": false
+  },
+  {
+    "name": "skipped-star",
+    "transcript": "Candidate: I am finishing the implementation and checking the duplicate case now.",
+    "finalCode": "def two_sum(nums, target): return []",
+    "testSummary": "Latest test run: 1/3 cases passed.",
+    "behavioralAsked": false
+  },
+  {
+    "name": "star-we-without-personal-action",
+    "transcript": "Interviewer: Tell me about a production bug your team handled.\nCandidate: We had an outage and we fixed it quickly. The service recovered.",
+    "finalCode": "def two_sum(nums, target): return []",
+    "testSummary": "No test run was recorded.",
+    "behavioralAsked": true
+  },
+  {
+    "name": "star-qualitative-result",
+    "transcript": "Interviewer: Tell me about learning from a mistake.\nCandidate: During a migration I owned the rollout checklist but missed a rollback check. I added a dry-run review and practiced it with the team. We had no numeric metric, but later migrations had a clear rollback owner and the team caught mistakes before deployment.",
+    "finalCode": "def two_sum(nums, target): return []",
+    "testSummary": "No test run was recorded.",
+    "behavioralAsked": true
+  }
+]

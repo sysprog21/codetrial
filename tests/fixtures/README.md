@@ -51,3 +51,12 @@ failure naming what the two sides now disagree about.
 
 `visual-shift.css` is not a wire fixture. It is a deliberate layout break used
 by `scripts/visual-parity-check.sh` to prove the visual check can fail.
+
+`framework-evaluation-cases.json` is a versioned product-policy corpus rather
+than producer output. Each closed-shape scenario names its coverage, production
+reaction path, required and forbidden policy phrases, trusted framework evidence,
+hint count, round-gate result, and assessable phases. Add a scenario only when its
+reaction assertions would fail for the wrong interviewer behavior and its evidence
+assertions pass through `record_framework_evidence` and `final_report`; never paste
+model-generated scores into this fixture. Run `cargo test --test agent
+framework_evaluation_scenarios` to review it locally.

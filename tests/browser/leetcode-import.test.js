@@ -30,3 +30,24 @@ test("leetcode fetcher never asks GraphQL for statement prose", async () => {
   assert.match(query, /exampleTestcases/);
   assert.match(query, /metaData/);
 });
+
+test("all browser problems expose only ordered neutral interview metadata", async () => {
+  const bank = JSON.parse(await readFile(repoFile("problem-bank/problems.json"), "utf8"));
+  const stages = ["repeat", "example", "algorithm", "coding", "test", "optimizations"];
+  const allowed = ["competencies", "difficulty", "followUpDirections", "reactoStages"];
+
+  for (const source of bank) {
+    const problem = JSON.parse(await readFile(repoFile(`web/problems/${source.id}.json`), "utf8"));
+    const metadata = problem.interviewMetadata;
+    assert.deepEqual(Object.keys(metadata).sort(), allowed);
+    assert.equal(metadata.difficulty, source.difficulty);
+    assert.deepEqual(metadata.competencies, source.topics);
+    assert.deepEqual(metadata.reactoStages, stages);
+    assert.deepEqual(metadata.followUpDirections.map(({ stage }) => stage), stages);
+    assert.ok(metadata.followUpDirections.every(({ direction }) =>
+      direction.startsWith("Ask ") && !/hash|stack|tree|sort|pointer|dynamic programming/i.test(direction)));
+    assert.equal("optimal" in metadata, false);
+    assert.equal("pitfalls" in metadata, false);
+    assert.equal("hintLadder" in metadata, false);
+  }
+});

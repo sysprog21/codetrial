@@ -645,6 +645,39 @@
         </section>
       </details>
 
+      <details class="interview-context">
+        <summary>Optional interview context</summary>
+        <fieldset>
+          <legend>Tailor the behavioral question</legend>
+          <p class="muted small">Skip any or all fields. Coding correctness is unchanged.</p>
+          <label>Target role <input id="profile-role" type="text" maxlength="80" autocomplete="organization-title"></label>
+          <label>Seniority
+            <select id="profile-seniority">
+              <option value="">Not specified</option>
+              <option value="intern">Intern</option>
+              <option value="junior">Junior</option>
+              <option value="mid">Mid-level</option>
+              <option value="senior">Senior</option>
+              <option value="staff">Staff+</option>
+              <option value="manager">Engineering manager</option>
+            </select>
+          </label>
+          <label>Target company <input id="profile-company" type="text" maxlength="80" autocomplete="organization"></label>
+        </fieldset>
+        <fieldset>
+          <legend>Ground questions in selected document snippets</legend>
+          <p class="muted small">Optional. Files stay in this browser. Nothing is selected or sent automatically.</p>
+          <label>Job description (.txt, up to 64 KiB) <input id="grounding-jd" type="file" accept=".txt,text/plain"></label>
+          <p id="grounding-jd-status" class="muted small" role="status"></p>
+          <label>Resume (.txt, up to 64 KiB) <input id="grounding-resume" type="file" accept=".txt,text/plain"></label>
+          <p id="grounding-resume-status" class="muted small" role="status"></p>
+          <div id="grounding-choices"></div>
+          <label><input id="grounding-consent" type="checkbox"> Send only my selected snippets to the AI interviewer.</label>
+          <button id="grounding-clear" type="button">Clear document grounding</button>
+          <p id="grounding-error" role="alert"></p>
+        </fieldset>
+      </details>
+
       <section class="duration-row" aria-label="Duration">
         <button class="duration-button" type="button" data-duration="30">30 min</button>
         <button class="duration-button selected" type="button" data-duration="45">45 min</button>
@@ -655,6 +688,10 @@
            this deployment cannot record is disabled with the reason beside it
            rather than silently shortened after the candidate presses start. -->
       <p id="duration-note" class="duration-note" aria-live="polite" hidden></p>
+      <section class="duration-row" aria-label="Interview loop">
+        <button class="duration-button" type="button" data-loop="coding_only">Coding only</button>
+        <button class="duration-button selected" type="button" data-loop="coding_behavioral">Coding + behavioral</button>
+      </section>
 
       <section class="start-row">
         <!-- Enabled by app.js once a problem is chosen, so the button cannot
@@ -662,7 +699,21 @@
         <button id="start" class="start-button" type="button" disabled>Start interview</button>
       </section>
 
-      <section id="history" class="history" hidden></section>
+      <section id="history" class="history" aria-labelledby="progress-title" hidden>
+        <h2 id="progress-title">Interview progress</h2>
+        <fieldset class="progress-filters">
+          <legend>Filter attempts</legend>
+          <label>Difficulty <select id="progress-difficulty"><option value="all">All</option></select></label>
+          <label>Language <select id="progress-language"><option value="all">All</option></select></label>
+          <label>Duration <select id="progress-duration"><option value="all">All</option></select></label>
+        </fieldset>
+        <p id="progress-summary" aria-live="polite"></p>
+        <div id="progress-trends" class="progress-trends"></div>
+        <section aria-labelledby="progress-weakness-title">
+          <h3 id="progress-weakness-title">Recurring weaknesses</h3>
+          <ol id="progress-weaknesses"></ol>
+        </section>
+      </section>
 
       <!-- The interviewer model's own metadata sets "creditNotation":
            "required", so naming its author is a license term rather than a

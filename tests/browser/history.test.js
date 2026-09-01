@@ -153,3 +153,35 @@ test("replay renders moments, not media", () => {
   assert.ok(code.includes("Could not load the report."));
   assert.ok(code.includes("No report was saved for this interview."));
 });
+
+test("a replay with no recorded mode shows no dangling separator", () => {
+  // select() sets the status text before render() runs, so the status node is
+  // always truthy by the time the mode is appended. Every recording made since
+  // the mode was removed has an empty mode, and appending it unconditionally
+  // left the status reading "Recording ready · " with nothing after the dot.
+  // The append has to sit inside the guard, not merely somewhere near it.
+  const render = functionBody(code, "render");
+  assert.match(render, /if \(mode\) \{\s*nodes\.status\.textContent =/);
+});
+
+test("a rate-limited replay batch is kept, not dropped", () => {
+  // The batch is spliced off the queue before the request, so a status nobody
+  // handles loses that stretch of the interview for good. Rate limiting bounds
+  // how often a browser may ask; it is not a decision about which evidence
+  // survives, which is what silently discarding the batch made it.
+  const feed = withoutComments(read("web/replay-feed.js"));
+  const send = functionBody(feed, "sendQueuedBatch");
+  assert.match(send, /=== 429/, "429 has to be handled at all");
+  assert.match(send, /429[\s\S]*replayQueue\.unshift\(\.\.\.batch\)/, "and handled by keeping it");
+
+  // Keeping it is only half the answer. Putting the batch back leaves the
+  // queue at the size that makes recordReplay flush on sight, so a limit
+  // answered without a wait becomes a request per event for the rest of the
+  // window: every event asks again, and every one earns another refusal.
+  assert.match(send, /429[\s\S]*retryAfter =/, "and by waiting out the window");
+  assert.match(
+    functionBody(feed, "recordReplay"),
+    /REPLAY_MAX_BATCH && Date\.now\(\) >= retryAfter/,
+    "the fill trigger has to respect the wait, or nothing does",
+  );
+});

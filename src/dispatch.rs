@@ -31,33 +31,18 @@ pub struct LocalDispatcher {
 
 impl RoomDispatcher for LocalDispatcher {
     fn ensure_agent(&self, room_name: &str, provider: &Provider) -> bool {
-        {
-            let mut live = self.live.lock().unwrap_or_else(|error| error.into_inner());
-
-            // A reload mints a token for the same fixed room in local mode, and
-            // two agents in one room evict each other.
-            if live.contains(room_name) {
-                return true;
-            }
-            if live.len() >= self.max_concurrent {
+        let slot = match self.reserve(room_name) {
+            Reservation::Existing => return true,
+            Reservation::Full => {
                 eprintln!(
                     "codetrial dispatch_refused room={room_name} reason=at_capacity limit={}",
                     self.max_concurrent
                 );
                 return false;
             }
-            live.insert(room_name.to_string());
-        }
-        let config = agent_config_for(&self.config, provider);
-
-        // Released by dropping, not by a line at the end of the task: a panic
-        // in the interview would otherwise skip that line and burn the slot for
-        // the life of the process, and a cap's worth of those refuse every
-        // interview after them.
-        let slot = Slot {
-            live: Arc::clone(&self.live),
-            room_name: room_name.to_string(),
+            Reservation::New(slot) => slot,
         };
+        let config = agent_config_for(&self.config, provider);
 
         // Spawned, not awaited: this runs on the request path, and the task
         // outlives the response by the length of the interview.
@@ -74,6 +59,32 @@ impl RoomDispatcher for LocalDispatcher {
             }
         });
         true
+    }
+}
+
+enum Reservation {
+    Existing,
+    New(Slot),
+    Full,
+}
+
+impl LocalDispatcher {
+    fn reserve(&self, room_name: &str) -> Reservation {
+        let mut live = self.live.lock().unwrap_or_else(|error| error.into_inner());
+
+        // A reload mints a token for the same fixed room in local mode, and two
+        // agents in one room evict each other.
+        if live.contains(room_name) {
+            return Reservation::Existing;
+        }
+        if live.len() >= self.max_concurrent {
+            return Reservation::Full;
+        }
+        live.insert(room_name.to_string());
+        Reservation::New(Slot {
+            live: Arc::clone(&self.live),
+            room_name: room_name.to_string(),
+        })
     }
 }
 
@@ -168,6 +179,65 @@ mod tests {
         // The room already running is still admitted, because a reload asks for
         // the same room and refusing it would break the page that is open.
         assert!(dispatcher.ensure_agent("interview-first", &provider));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_concurrent_burst_never_overbooks_and_released_capacity_returns() {
+        let live = Arc::new(Mutex::new(HashSet::new()));
+        let dispatcher = LocalDispatcher {
+            config: crate::config::load_from_pairs([
+                ("LIVEKIT_URL", "wss://primary.example"),
+                ("LIVEKIT_API_KEY", "primary-key"),
+                ("LIVEKIT_API_SECRET", "primary-secret"),
+                ("GOOGLE_API_KEY", "primary-google"),
+            ])
+            .unwrap(),
+            runtime: tokio::runtime::Handle::current(),
+            live: Arc::clone(&live),
+            max_concurrent: 8,
+        };
+
+        // Reserved from concurrent tasks released together, not in a loop: the
+        // cap is a check and an insert under one lock, and a serial caller
+        // cannot tell that apart from a version that overbooks when a hundred
+        // requests arrive at once.
+        let dispatcher = Arc::new(dispatcher);
+        let gate = Arc::new(tokio::sync::Barrier::new(100));
+        let mut tasks = Vec::new();
+        for index in 0..100 {
+            let dispatcher = Arc::clone(&dispatcher);
+            let gate = Arc::clone(&gate);
+            tasks.push(tokio::spawn(async move {
+                gate.wait().await;
+                match dispatcher.reserve(&format!("interview-burst-{index}")) {
+                    Reservation::New(slot) => Some(slot),
+                    Reservation::Full => None,
+                    Reservation::Existing => panic!("burst ids are unique"),
+                }
+            }));
+        }
+        let mut held = Vec::new();
+        for task in tasks {
+            held.extend(task.await.unwrap());
+        }
+        assert_eq!(held.len(), 8);
+        assert_eq!(live.lock().unwrap().len(), 8);
+
+        // Named from a slot that actually won: which eight of the hundred get
+        // in is up to the scheduler, so the serial loop's assumption that it is
+        // the first eight does not survive running them at once.
+        let winner = held[0].room_name.clone();
+        assert!(matches!(dispatcher.reserve(&winner), Reservation::Existing));
+        held.truncate(3);
+        assert_eq!(live.lock().unwrap().len(), 3);
+        for index in 100..105 {
+            assert!(matches!(
+                dispatcher.reserve(&format!("interview-burst-{index}")),
+                Reservation::New(_)
+            ));
+        }
+        // The temporary slots above drop at the end of each assertion.
+        assert_eq!(live.lock().unwrap().len(), 3);
     }
 
     /// A provider's own Google key wins, and an empty one leaves the base key

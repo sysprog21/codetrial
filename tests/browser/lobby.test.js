@@ -19,7 +19,7 @@ import { createServer } from "node:http";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { launchChromium, read, root } from "./source.js";
+import { functionBody, launchChromium, read, root } from "./source.js";
 
 const web = join(root, "web");
 
@@ -841,4 +841,14 @@ lobbyTest("a cap under every length on offer leaves the row alone", async (page)
 
   assert.deepEqual(state.durationsOff, []);
   assert.equal(state.durationNote, "");
+});
+
+test("a failed history load leaves no other account's attempts behind", () => {
+  // reports and progressEntries outlive the panel: recommendations and every
+  // filter change read them again. Clearing only the DOM left the lobby
+  // answering from whichever history it had last loaded successfully, which
+  // after a sign-out is a different person's.
+  const shown = functionBody(read("web/app.js"), "showProgressError");
+  assert.match(shown, /reports = \[\]/);
+  assert.match(shown, /progressEntries = \[\]/);
 });

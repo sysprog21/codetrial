@@ -31,5 +31,47 @@
     "c": "typedef struct {\n    // Think out loud as you go!\n} LRUCache;\n\nLRUCache* lRUCacheCreate(int capacity) {\n    return NULL;\n}\n\nint lRUCacheGet(LRUCache* obj, int key) {\n    return -1;\n}\n\nvoid lRUCachePut(LRUCache* obj, int key, int value) {\n}\n\nvoid lRUCacheFree(LRUCache* obj) {\n}\n",
     "cpp": "class LRUCache {\npublic:\n    LRUCache(int capacity) {\n    }\n\n    int get(int key) {\n        return -1;\n    }\n\n    void put(int key, int value) {\n    }\n};\n",
     "java": "class LRUCache {\n    public LRUCache(int capacity) {\n    }\n\n    public int get(int key) {\n        return -1;\n    }\n\n    public void put(int key, int value) {\n    }\n}\n"
+  },
+  "interviewMetadata": {
+    "difficulty": "Medium",
+    "competencies": [
+      "Hash Table",
+      "Linked List",
+      "Design"
+    ],
+    "reactoStages": [
+      "repeat",
+      "example",
+      "algorithm",
+      "coding",
+      "test",
+      "optimizations"
+    ],
+    "followUpDirections": [
+      {
+        "stage": "repeat",
+        "direction": "Ask the candidate to restate the inputs, outputs, constraints, and ambiguities."
+      },
+      {
+        "stage": "example",
+        "direction": "Ask the candidate to choose and trace an ordinary example and a boundary case."
+      },
+      {
+        "stage": "algorithm",
+        "direction": "Ask for the candidate's approach, correctness argument, and complexity."
+      },
+      {
+        "stage": "coding",
+        "direction": "Ask the candidate to implement their stated approach and explain major decisions."
+      },
+      {
+        "stage": "test",
+        "direction": "Ask the candidate to predict useful cases and expected results before running them."
+      },
+      {
+        "stage": "optimizations",
+        "direction": "Ask for complexity, an uncovered edge case, and a justified optimization or cleanup."
+      }
+    ]
   }
 }

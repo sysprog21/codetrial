@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "contract": {
+    "bundleVersion": 4,
+    "reportPromptVersion": 4,
+    "rubricVersion": 1,
+    "reportSchemaVersion": 1,
+    "model": "FILL-ME"
+  },
+  "samples": []
+}

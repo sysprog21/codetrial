@@ -1,0 +1,1602 @@
+{
+  "version": 1,
+  "contract": {
+    "bundleVersion": 4,
+    "reportPromptVersion": 4,
+    "rubricVersion": 1,
+    "reportSchemaVersion": 1,
+    "model": "synthetic-test-only"
+  },
+  "samples": [
+    {
+      "id": "blind-001",
+      "difficulty": "Easy",
+      "language": "python",
+      "loop": "coding_only",
+      "hintsUsed": 0,
+      "transcriptQuality": "clear",
+      "accentCohort": "cohort-a",
+      "modelScores": {
+        "Repeat": 30,
+        "Example": 30,
+        "Algorithm": 30,
+        "Coding": 30,
+        "Test": 30,
+        "Optimizations": 30,
+        "Situation": null,
+        "Task": null,
+        "Action": null,
+        "Result": null
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 29,
+            "Example": 29,
+            "Algorithm": 29,
+            "Coding": 29,
+            "Test": 29,
+            "Optimizations": 29,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 31,
+            "Example": 31,
+            "Algorithm": 31,
+            "Coding": 31,
+            "Test": 31,
+            "Optimizations": 31,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-001",
+      "difficulty": "Medium",
+      "language": "javascript",
+      "loop": "coding_behavioral",
+      "hintsUsed": 1,
+      "transcriptQuality": "degraded",
+      "accentCohort": "cohort-b",
+      "modelScores": {
+        "Repeat": 50,
+        "Example": 50,
+        "Algorithm": 50,
+        "Coding": 50,
+        "Test": 50,
+        "Optimizations": 50,
+        "Situation": 50,
+        "Task": 50,
+        "Action": 50,
+        "Result": 50
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 49,
+            "Example": 49,
+            "Algorithm": 49,
+            "Coding": 49,
+            "Test": 49,
+            "Optimizations": 49,
+            "Situation": 49,
+            "Task": 49,
+            "Action": 49,
+            "Result": 49
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 51,
+            "Example": 51,
+            "Algorithm": 51,
+            "Coding": 51,
+            "Test": 51,
+            "Optimizations": 51,
+            "Situation": 51,
+            "Task": 51,
+            "Action": 51,
+            "Result": 51
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-003",
+      "difficulty": "Hard",
+      "language": "cpp",
+      "loop": "coding_only",
+      "hintsUsed": 2,
+      "transcriptQuality": "missing",
+      "accentCohort": "cohort-c",
+      "modelScores": {
+        "Repeat": 68,
+        "Example": 68,
+        "Algorithm": 68,
+        "Coding": 68,
+        "Test": 68,
+        "Optimizations": 68,
+        "Situation": null,
+        "Task": null,
+        "Action": null,
+        "Result": null
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 67,
+            "Example": 67,
+            "Algorithm": 67,
+            "Coding": 67,
+            "Test": 67,
+            "Optimizations": 67,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 69,
+            "Example": 69,
+            "Algorithm": 69,
+            "Coding": 69,
+            "Test": 69,
+            "Optimizations": 69,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-004",
+      "difficulty": "Easy",
+      "language": "python",
+      "loop": "coding_behavioral",
+      "hintsUsed": 0,
+      "transcriptQuality": "clear",
+      "accentCohort": "cohort-a",
+      "modelScores": {
+        "Repeat": 82,
+        "Example": 82,
+        "Algorithm": 82,
+        "Coding": 82,
+        "Test": 82,
+        "Optimizations": 82,
+        "Situation": 82,
+        "Task": 82,
+        "Action": 82,
+        "Result": 82
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 81,
+            "Example": 81,
+            "Algorithm": 81,
+            "Coding": 81,
+            "Test": 81,
+            "Optimizations": 81,
+            "Situation": 81,
+            "Task": 81,
+            "Action": 81,
+            "Result": 81
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 83,
+            "Example": 83,
+            "Algorithm": 83,
+            "Coding": 83,
+            "Test": 83,
+            "Optimizations": 83,
+            "Situation": 83,
+            "Task": 83,
+            "Action": 83,
+            "Result": 83
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-005",
+      "difficulty": "Medium",
+      "language": "javascript",
+      "loop": "coding_only",
+      "hintsUsed": 1,
+      "transcriptQuality": "degraded",
+      "accentCohort": "cohort-b",
+      "modelScores": {
+        "Repeat": 95,
+        "Example": 95,
+        "Algorithm": 95,
+        "Coding": 95,
+        "Test": 95,
+        "Optimizations": 95,
+        "Situation": null,
+        "Task": null,
+        "Action": null,
+        "Result": null
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 94,
+            "Example": 94,
+            "Algorithm": 94,
+            "Coding": 94,
+            "Test": 94,
+            "Optimizations": 94,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 96,
+            "Example": 96,
+            "Algorithm": 96,
+            "Coding": 96,
+            "Test": 96,
+            "Optimizations": 96,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-006",
+      "difficulty": "Hard",
+      "language": "cpp",
+      "loop": "coding_behavioral",
+      "hintsUsed": 2,
+      "transcriptQuality": "missing",
+      "accentCohort": "cohort-c",
+      "modelScores": {
+        "Repeat": 30,
+        "Example": 30,
+        "Algorithm": 30,
+        "Coding": 30,
+        "Test": 30,
+        "Optimizations": 30,
+        "Situation": 30,
+        "Task": 30,
+        "Action": 30,
+        "Result": 30
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 29,
+            "Example": 29,
+            "Algorithm": 29,
+            "Coding": 29,
+            "Test": 29,
+            "Optimizations": 29,
+            "Situation": 29,
+            "Task": 29,
+            "Action": 29,
+            "Result": 29
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 31,
+            "Example": 31,
+            "Algorithm": 31,
+            "Coding": 31,
+            "Test": 31,
+            "Optimizations": 31,
+            "Situation": 31,
+            "Task": 31,
+            "Action": 31,
+            "Result": 31
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-007",
+      "difficulty": "Easy",
+      "language": "python",
+      "loop": "coding_only",
+      "hintsUsed": 0,
+      "transcriptQuality": "clear",
+      "accentCohort": "cohort-a",
+      "modelScores": {
+        "Repeat": 50,
+        "Example": 50,
+        "Algorithm": 50,
+        "Coding": 50,
+        "Test": 50,
+        "Optimizations": 50,
+        "Situation": null,
+        "Task": null,
+        "Action": null,
+        "Result": null
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 49,
+            "Example": 49,
+            "Algorithm": 49,
+            "Coding": 49,
+            "Test": 49,
+            "Optimizations": 49,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 51,
+            "Example": 51,
+            "Algorithm": 51,
+            "Coding": 51,
+            "Test": 51,
+            "Optimizations": 51,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-008",
+      "difficulty": "Medium",
+      "language": "javascript",
+      "loop": "coding_behavioral",
+      "hintsUsed": 1,
+      "transcriptQuality": "degraded",
+      "accentCohort": "cohort-b",
+      "modelScores": {
+        "Repeat": 68,
+        "Example": 68,
+        "Algorithm": 68,
+        "Coding": 68,
+        "Test": 68,
+        "Optimizations": 68,
+        "Situation": 68,
+        "Task": 68,
+        "Action": 68,
+        "Result": 68
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 67,
+            "Example": 67,
+            "Algorithm": 67,
+            "Coding": 67,
+            "Test": 67,
+            "Optimizations": 67,
+            "Situation": 67,
+            "Task": 67,
+            "Action": 67,
+            "Result": 67
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 69,
+            "Example": 69,
+            "Algorithm": 69,
+            "Coding": 69,
+            "Test": 69,
+            "Optimizations": 69,
+            "Situation": 69,
+            "Task": 69,
+            "Action": 69,
+            "Result": 69
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-009",
+      "difficulty": "Hard",
+      "language": "cpp",
+      "loop": "coding_only",
+      "hintsUsed": 2,
+      "transcriptQuality": "missing",
+      "accentCohort": "cohort-c",
+      "modelScores": {
+        "Repeat": 82,
+        "Example": 82,
+        "Algorithm": 82,
+        "Coding": 82,
+        "Test": 82,
+        "Optimizations": 82,
+        "Situation": null,
+        "Task": null,
+        "Action": null,
+        "Result": null
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 81,
+            "Example": 81,
+            "Algorithm": 81,
+            "Coding": 81,
+            "Test": 81,
+            "Optimizations": 81,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 83,
+            "Example": 83,
+            "Algorithm": 83,
+            "Coding": 83,
+            "Test": 83,
+            "Optimizations": 83,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-010",
+      "difficulty": "Easy",
+      "language": "python",
+      "loop": "coding_behavioral",
+      "hintsUsed": 0,
+      "transcriptQuality": "clear",
+      "accentCohort": "cohort-a",
+      "modelScores": {
+        "Repeat": 95,
+        "Example": 95,
+        "Algorithm": 95,
+        "Coding": 95,
+        "Test": 95,
+        "Optimizations": 95,
+        "Situation": 95,
+        "Task": 95,
+        "Action": 95,
+        "Result": 95
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 94,
+            "Example": 94,
+            "Algorithm": 94,
+            "Coding": 94,
+            "Test": 94,
+            "Optimizations": 94,
+            "Situation": 94,
+            "Task": 94,
+            "Action": 94,
+            "Result": 94
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 96,
+            "Example": 96,
+            "Algorithm": 96,
+            "Coding": 96,
+            "Test": 96,
+            "Optimizations": 96,
+            "Situation": 96,
+            "Task": 96,
+            "Action": 96,
+            "Result": 96
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-011",
+      "difficulty": "Medium",
+      "language": "javascript",
+      "loop": "coding_only",
+      "hintsUsed": 1,
+      "transcriptQuality": "degraded",
+      "accentCohort": "cohort-b",
+      "modelScores": {
+        "Repeat": 30,
+        "Example": 30,
+        "Algorithm": 30,
+        "Coding": 30,
+        "Test": 30,
+        "Optimizations": 30,
+        "Situation": null,
+        "Task": null,
+        "Action": null,
+        "Result": null
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 29,
+            "Example": 29,
+            "Algorithm": 29,
+            "Coding": 29,
+            "Test": 29,
+            "Optimizations": 29,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 31,
+            "Example": 31,
+            "Algorithm": 31,
+            "Coding": 31,
+            "Test": 31,
+            "Optimizations": 31,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-012",
+      "difficulty": "Hard",
+      "language": "cpp",
+      "loop": "coding_behavioral",
+      "hintsUsed": 2,
+      "transcriptQuality": "missing",
+      "accentCohort": "cohort-c",
+      "modelScores": {
+        "Repeat": 50,
+        "Example": 50,
+        "Algorithm": 50,
+        "Coding": 50,
+        "Test": 50,
+        "Optimizations": 50,
+        "Situation": 50,
+        "Task": 50,
+        "Action": 50,
+        "Result": 50
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 49,
+            "Example": 49,
+            "Algorithm": 49,
+            "Coding": 49,
+            "Test": 49,
+            "Optimizations": 49,
+            "Situation": 49,
+            "Task": 49,
+            "Action": 49,
+            "Result": 49
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 51,
+            "Example": 51,
+            "Algorithm": 51,
+            "Coding": 51,
+            "Test": 51,
+            "Optimizations": 51,
+            "Situation": 51,
+            "Task": 51,
+            "Action": 51,
+            "Result": 51
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-013",
+      "difficulty": "Easy",
+      "language": "python",
+      "loop": "coding_only",
+      "hintsUsed": 0,
+      "transcriptQuality": "clear",
+      "accentCohort": "cohort-a",
+      "modelScores": {
+        "Repeat": 68,
+        "Example": 68,
+        "Algorithm": 68,
+        "Coding": 68,
+        "Test": 68,
+        "Optimizations": 68,
+        "Situation": null,
+        "Task": null,
+        "Action": null,
+        "Result": null
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 67,
+            "Example": 67,
+            "Algorithm": 67,
+            "Coding": 67,
+            "Test": 67,
+            "Optimizations": 67,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 69,
+            "Example": 69,
+            "Algorithm": 69,
+            "Coding": 69,
+            "Test": 69,
+            "Optimizations": 69,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-014",
+      "difficulty": "Medium",
+      "language": "javascript",
+      "loop": "coding_behavioral",
+      "hintsUsed": 1,
+      "transcriptQuality": "degraded",
+      "accentCohort": "cohort-b",
+      "modelScores": {
+        "Repeat": 82,
+        "Example": 82,
+        "Algorithm": 82,
+        "Coding": 82,
+        "Test": 82,
+        "Optimizations": 82,
+        "Situation": 82,
+        "Task": 82,
+        "Action": 82,
+        "Result": 82
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 81,
+            "Example": 81,
+            "Algorithm": 81,
+            "Coding": 81,
+            "Test": 81,
+            "Optimizations": 81,
+            "Situation": 81,
+            "Task": 81,
+            "Action": 81,
+            "Result": 81
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 83,
+            "Example": 83,
+            "Algorithm": 83,
+            "Coding": 83,
+            "Test": 83,
+            "Optimizations": 83,
+            "Situation": 83,
+            "Task": 83,
+            "Action": 83,
+            "Result": 83
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-015",
+      "difficulty": "Hard",
+      "language": "cpp",
+      "loop": "coding_only",
+      "hintsUsed": 2,
+      "transcriptQuality": "missing",
+      "accentCohort": "cohort-c",
+      "modelScores": {
+        "Repeat": 95,
+        "Example": 95,
+        "Algorithm": 95,
+        "Coding": 95,
+        "Test": 95,
+        "Optimizations": 95,
+        "Situation": null,
+        "Task": null,
+        "Action": null,
+        "Result": null
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 94,
+            "Example": 94,
+            "Algorithm": 94,
+            "Coding": 94,
+            "Test": 94,
+            "Optimizations": 94,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 96,
+            "Example": 96,
+            "Algorithm": 96,
+            "Coding": 96,
+            "Test": 96,
+            "Optimizations": 96,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-016",
+      "difficulty": "Easy",
+      "language": "python",
+      "loop": "coding_behavioral",
+      "hintsUsed": 0,
+      "transcriptQuality": "clear",
+      "accentCohort": "cohort-a",
+      "modelScores": {
+        "Repeat": 30,
+        "Example": 30,
+        "Algorithm": 30,
+        "Coding": 30,
+        "Test": 30,
+        "Optimizations": 30,
+        "Situation": 30,
+        "Task": 30,
+        "Action": 30,
+        "Result": 30
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 29,
+            "Example": 29,
+            "Algorithm": 29,
+            "Coding": 29,
+            "Test": 29,
+            "Optimizations": 29,
+            "Situation": 29,
+            "Task": 29,
+            "Action": 29,
+            "Result": 29
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 31,
+            "Example": 31,
+            "Algorithm": 31,
+            "Coding": 31,
+            "Test": 31,
+            "Optimizations": 31,
+            "Situation": 31,
+            "Task": 31,
+            "Action": 31,
+            "Result": 31
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-017",
+      "difficulty": "Medium",
+      "language": "javascript",
+      "loop": "coding_only",
+      "hintsUsed": 1,
+      "transcriptQuality": "degraded",
+      "accentCohort": "cohort-b",
+      "modelScores": {
+        "Repeat": 50,
+        "Example": 50,
+        "Algorithm": 50,
+        "Coding": 50,
+        "Test": 50,
+        "Optimizations": 50,
+        "Situation": null,
+        "Task": null,
+        "Action": null,
+        "Result": null
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 49,
+            "Example": 49,
+            "Algorithm": 49,
+            "Coding": 49,
+            "Test": 49,
+            "Optimizations": 49,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 51,
+            "Example": 51,
+            "Algorithm": 51,
+            "Coding": 51,
+            "Test": 51,
+            "Optimizations": 51,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-018",
+      "difficulty": "Hard",
+      "language": "cpp",
+      "loop": "coding_behavioral",
+      "hintsUsed": 2,
+      "transcriptQuality": "missing",
+      "accentCohort": "cohort-c",
+      "modelScores": {
+        "Repeat": 68,
+        "Example": 68,
+        "Algorithm": 68,
+        "Coding": 68,
+        "Test": 68,
+        "Optimizations": 68,
+        "Situation": 68,
+        "Task": 68,
+        "Action": 68,
+        "Result": 68
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 67,
+            "Example": 67,
+            "Algorithm": 67,
+            "Coding": 67,
+            "Test": 67,
+            "Optimizations": 67,
+            "Situation": 67,
+            "Task": 67,
+            "Action": 67,
+            "Result": 67
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 69,
+            "Example": 69,
+            "Algorithm": 69,
+            "Coding": 69,
+            "Test": 69,
+            "Optimizations": 69,
+            "Situation": 69,
+            "Task": 69,
+            "Action": 69,
+            "Result": 69
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-019",
+      "difficulty": "Easy",
+      "language": "python",
+      "loop": "coding_only",
+      "hintsUsed": 0,
+      "transcriptQuality": "clear",
+      "accentCohort": "cohort-a",
+      "modelScores": {
+        "Repeat": 82,
+        "Example": 82,
+        "Algorithm": 82,
+        "Coding": 82,
+        "Test": 82,
+        "Optimizations": 82,
+        "Situation": null,
+        "Task": null,
+        "Action": null,
+        "Result": null
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 81,
+            "Example": 81,
+            "Algorithm": 81,
+            "Coding": 81,
+            "Test": 81,
+            "Optimizations": 81,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 83,
+            "Example": 83,
+            "Algorithm": 83,
+            "Coding": 83,
+            "Test": 83,
+            "Optimizations": 83,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-020",
+      "difficulty": "Medium",
+      "language": "javascript",
+      "loop": "coding_behavioral",
+      "hintsUsed": 1,
+      "transcriptQuality": "degraded",
+      "accentCohort": "cohort-b",
+      "modelScores": {
+        "Repeat": 95,
+        "Example": 95,
+        "Algorithm": 95,
+        "Coding": 95,
+        "Test": 95,
+        "Optimizations": 95,
+        "Situation": 95,
+        "Task": 95,
+        "Action": 95,
+        "Result": 95
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 94,
+            "Example": 94,
+            "Algorithm": 94,
+            "Coding": 94,
+            "Test": 94,
+            "Optimizations": 94,
+            "Situation": 94,
+            "Task": 94,
+            "Action": 94,
+            "Result": 94
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 96,
+            "Example": 96,
+            "Algorithm": 96,
+            "Coding": 96,
+            "Test": 96,
+            "Optimizations": 96,
+            "Situation": 96,
+            "Task": 96,
+            "Action": 96,
+            "Result": 96
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-021",
+      "difficulty": "Hard",
+      "language": "cpp",
+      "loop": "coding_only",
+      "hintsUsed": 2,
+      "transcriptQuality": "missing",
+      "accentCohort": "cohort-c",
+      "modelScores": {
+        "Repeat": 30,
+        "Example": 30,
+        "Algorithm": 30,
+        "Coding": 30,
+        "Test": 30,
+        "Optimizations": 30,
+        "Situation": null,
+        "Task": null,
+        "Action": null,
+        "Result": null
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 29,
+            "Example": 29,
+            "Algorithm": 29,
+            "Coding": 29,
+            "Test": 29,
+            "Optimizations": 29,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 31,
+            "Example": 31,
+            "Algorithm": 31,
+            "Coding": 31,
+            "Test": 31,
+            "Optimizations": 31,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-022",
+      "difficulty": "Easy",
+      "language": "python",
+      "loop": "coding_behavioral",
+      "hintsUsed": 0,
+      "transcriptQuality": "clear",
+      "accentCohort": "cohort-a",
+      "modelScores": {
+        "Repeat": 50,
+        "Example": 50,
+        "Algorithm": 50,
+        "Coding": 50,
+        "Test": 50,
+        "Optimizations": 50,
+        "Situation": 50,
+        "Task": 50,
+        "Action": 50,
+        "Result": 50
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 49,
+            "Example": 49,
+            "Algorithm": 49,
+            "Coding": 49,
+            "Test": 49,
+            "Optimizations": 49,
+            "Situation": 49,
+            "Task": 49,
+            "Action": 49,
+            "Result": 49
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 51,
+            "Example": 51,
+            "Algorithm": 51,
+            "Coding": 51,
+            "Test": 51,
+            "Optimizations": 51,
+            "Situation": 51,
+            "Task": 51,
+            "Action": 51,
+            "Result": 51
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-023",
+      "difficulty": "Medium",
+      "language": "javascript",
+      "loop": "coding_only",
+      "hintsUsed": 1,
+      "transcriptQuality": "degraded",
+      "accentCohort": "cohort-b",
+      "modelScores": {
+        "Repeat": 68,
+        "Example": 68,
+        "Algorithm": 68,
+        "Coding": 68,
+        "Test": 68,
+        "Optimizations": 68,
+        "Situation": null,
+        "Task": null,
+        "Action": null,
+        "Result": null
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 67,
+            "Example": 67,
+            "Algorithm": 67,
+            "Coding": 67,
+            "Test": 67,
+            "Optimizations": 67,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 69,
+            "Example": 69,
+            "Algorithm": 69,
+            "Coding": 69,
+            "Test": 69,
+            "Optimizations": 69,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-024",
+      "difficulty": "Hard",
+      "language": "cpp",
+      "loop": "coding_behavioral",
+      "hintsUsed": 2,
+      "transcriptQuality": "missing",
+      "accentCohort": "cohort-c",
+      "modelScores": {
+        "Repeat": 82,
+        "Example": 82,
+        "Algorithm": 82,
+        "Coding": 82,
+        "Test": 82,
+        "Optimizations": 82,
+        "Situation": 82,
+        "Task": 82,
+        "Action": 82,
+        "Result": 82
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 81,
+            "Example": 81,
+            "Algorithm": 81,
+            "Coding": 81,
+            "Test": 81,
+            "Optimizations": 81,
+            "Situation": 81,
+            "Task": 81,
+            "Action": 81,
+            "Result": 81
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 83,
+            "Example": 83,
+            "Algorithm": 83,
+            "Coding": 83,
+            "Test": 83,
+            "Optimizations": 83,
+            "Situation": 83,
+            "Task": 83,
+            "Action": 83,
+            "Result": 83
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-025",
+      "difficulty": "Easy",
+      "language": "python",
+      "loop": "coding_only",
+      "hintsUsed": 0,
+      "transcriptQuality": "clear",
+      "accentCohort": "cohort-a",
+      "modelScores": {
+        "Repeat": 95,
+        "Example": 95,
+        "Algorithm": 95,
+        "Coding": 95,
+        "Test": 95,
+        "Optimizations": 95,
+        "Situation": null,
+        "Task": null,
+        "Action": null,
+        "Result": null
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 94,
+            "Example": 94,
+            "Algorithm": 94,
+            "Coding": 94,
+            "Test": 94,
+            "Optimizations": 94,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 96,
+            "Example": 96,
+            "Algorithm": 96,
+            "Coding": 96,
+            "Test": 96,
+            "Optimizations": 96,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-026",
+      "difficulty": "Medium",
+      "language": "javascript",
+      "loop": "coding_behavioral",
+      "hintsUsed": 1,
+      "transcriptQuality": "degraded",
+      "accentCohort": "cohort-b",
+      "modelScores": {
+        "Repeat": 30,
+        "Example": 30,
+        "Algorithm": 30,
+        "Coding": 30,
+        "Test": 30,
+        "Optimizations": 30,
+        "Situation": 30,
+        "Task": 30,
+        "Action": 30,
+        "Result": 30
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 29,
+            "Example": 29,
+            "Algorithm": 29,
+            "Coding": 29,
+            "Test": 29,
+            "Optimizations": 29,
+            "Situation": 29,
+            "Task": 29,
+            "Action": 29,
+            "Result": 29
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 31,
+            "Example": 31,
+            "Algorithm": 31,
+            "Coding": 31,
+            "Test": 31,
+            "Optimizations": 31,
+            "Situation": 31,
+            "Task": 31,
+            "Action": 31,
+            "Result": 31
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-027",
+      "difficulty": "Hard",
+      "language": "cpp",
+      "loop": "coding_only",
+      "hintsUsed": 2,
+      "transcriptQuality": "missing",
+      "accentCohort": "cohort-c",
+      "modelScores": {
+        "Repeat": 50,
+        "Example": 50,
+        "Algorithm": 50,
+        "Coding": 50,
+        "Test": 50,
+        "Optimizations": 50,
+        "Situation": null,
+        "Task": null,
+        "Action": null,
+        "Result": null
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 49,
+            "Example": 49,
+            "Algorithm": 49,
+            "Coding": 49,
+            "Test": 49,
+            "Optimizations": 49,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 51,
+            "Example": 51,
+            "Algorithm": 51,
+            "Coding": 51,
+            "Test": 51,
+            "Optimizations": 51,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-028",
+      "difficulty": "Easy",
+      "language": "python",
+      "loop": "coding_behavioral",
+      "hintsUsed": 0,
+      "transcriptQuality": "clear",
+      "accentCohort": "cohort-a",
+      "modelScores": {
+        "Repeat": 68,
+        "Example": 68,
+        "Algorithm": 68,
+        "Coding": 68,
+        "Test": 68,
+        "Optimizations": 68,
+        "Situation": 68,
+        "Task": 68,
+        "Action": 68,
+        "Result": 68
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 67,
+            "Example": 67,
+            "Algorithm": 67,
+            "Coding": 67,
+            "Test": 67,
+            "Optimizations": 67,
+            "Situation": 67,
+            "Task": 67,
+            "Action": 67,
+            "Result": 67
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 69,
+            "Example": 69,
+            "Algorithm": 69,
+            "Coding": 69,
+            "Test": 69,
+            "Optimizations": 69,
+            "Situation": 69,
+            "Task": 69,
+            "Action": 69,
+            "Result": 69
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-029",
+      "difficulty": "Medium",
+      "language": "javascript",
+      "loop": "coding_only",
+      "hintsUsed": 1,
+      "transcriptQuality": "degraded",
+      "accentCohort": "cohort-b",
+      "modelScores": {
+        "Repeat": 82,
+        "Example": 82,
+        "Algorithm": 82,
+        "Coding": 82,
+        "Test": 82,
+        "Optimizations": 82,
+        "Situation": null,
+        "Task": null,
+        "Action": null,
+        "Result": null
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 81,
+            "Example": 81,
+            "Algorithm": 81,
+            "Coding": 81,
+            "Test": 81,
+            "Optimizations": 81,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 83,
+            "Example": 83,
+            "Algorithm": 83,
+            "Coding": 83,
+            "Test": 83,
+            "Optimizations": 83,
+            "Situation": null,
+            "Task": null,
+            "Action": null,
+            "Result": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "blind-030",
+      "difficulty": "Hard",
+      "language": "cpp",
+      "loop": "coding_behavioral",
+      "hintsUsed": 2,
+      "transcriptQuality": "missing",
+      "accentCohort": "cohort-c",
+      "modelScores": {
+        "Repeat": 95,
+        "Example": 95,
+        "Algorithm": 95,
+        "Coding": 95,
+        "Test": 95,
+        "Optimizations": 95,
+        "Situation": 95,
+        "Task": 95,
+        "Action": 95,
+        "Result": 95
+      },
+      "humanRatings": [
+        {
+          "reviewerId": "reviewer-a",
+          "scores": {
+            "Repeat": 94,
+            "Example": 94,
+            "Algorithm": 94,
+            "Coding": 94,
+            "Test": 94,
+            "Optimizations": 94,
+            "Situation": 94,
+            "Task": 94,
+            "Action": 94,
+            "Result": 94
+          }
+        },
+        {
+          "reviewerId": "reviewer-b",
+          "scores": {
+            "Repeat": 96,
+            "Example": 96,
+            "Algorithm": 96,
+            "Coding": 96,
+            "Test": 96,
+            "Optimizations": 96,
+            "Situation": 96,
+            "Task": 96,
+            "Action": 96,
+            "Result": 96
+          }
+        }
+      ]
+    }
+  ]
+}

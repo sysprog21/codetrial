@@ -5,16 +5,18 @@
 //! behavior rather than data.
 
 mod integrity;
+mod problem_topics;
 mod problems;
 mod prompts;
 
 use integrity::integrity_hash;
 pub use integrity::{sanitize_integrity_event, sanitize_test_run};
-pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, get_problem};
+pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, get_problem, topics_for};
 pub use prompts::{
-    ReportPromptInput, build_instructions, format_test_run, greeting, language_choice,
-    log_hint_text, numbered, proactive_review, read_editor_text, report_prompt, significant_change,
-    silence_nudge, spoken_language, test_results_reaction, time_warning, wrap_up,
+    LanguageChoiceContext, ReportPromptInput, build_instructions_for_plan, format_test_run,
+    greeting, language_choice, log_hint_text, numbered, proactive_review, read_editor_text,
+    report_prompt, significant_change, silence_nudge, spoken_language, test_results_reaction,
+    time_warning, wrap_up,
 };
 
 use crate::config::{DEFAULT_DURATION_MIN, MAX_DURATION_MIN, MIN_DURATION_MIN};
@@ -59,6 +61,33 @@ pub const REVIEW_INTERVAL_S: f64 = 30.0;
 pub const INTERJECTION_COOLDOWN_S: f64 = 45.0;
 pub const SPEECH_SETTLE_S: f64 = 4.0;
 
+/// How far ahead of this process's clock a round transition may legitimately
+/// claim to be.
+///
+/// Both sides now count from the moment the candidate joined, so what is left
+/// is the trip the message makes and the second the browser rounds its
+/// countdown to, not the setup time this used to have to cover. It cannot be
+/// zero: the browser announces the transition exactly once, and refusing it to
+/// the second means the behavioral round never begins at all. What the gate is
+/// for is a forged jump past the coding round, which is minutes early.
+const ROUND_TRANSITION_SKEW: std::time::Duration = std::time::Duration::from_secs(10);
+
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 4;
+pub const LIVE_PROMPT_VERSION: u32 = 1;
+pub const REPORT_PROMPT_VERSION: u32 = 4;
+pub const RUBRIC_VERSION: u32 = 1;
+pub const REPORT_SCHEMA_VERSION: u32 = 1;
+
+pub fn interview_contract_json() -> serde_json::Value {
+    serde_json::json!({
+        "bundleVersion": INTERVIEW_CONTRACT_BUNDLE_VERSION,
+        "livePromptVersion": LIVE_PROMPT_VERSION,
+        "reportPromptVersion": REPORT_PROMPT_VERSION,
+        "rubricVersion": RUBRIC_VERSION,
+        "reportSchemaVersion": REPORT_SCHEMA_VERSION,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Problem {
     pub id: &'static str,
@@ -68,6 +97,299 @@ pub struct Problem {
     pub optimal: &'static str,
     pub pitfalls: &'static str,
     pub hint_ladder: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReactoStage {
+    Repeat,
+    Example,
+    Algorithm,
+    Coding,
+    Test,
+    Optimizations,
+}
+
+impl ReactoStage {
+    pub const ALL: [Self; 6] = [
+        Self::Repeat,
+        Self::Example,
+        Self::Algorithm,
+        Self::Coding,
+        Self::Test,
+        Self::Optimizations,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Repeat => "repeat",
+            Self::Example => "example",
+            Self::Algorithm => "algorithm",
+            Self::Coding => "coding",
+            Self::Test => "test",
+            Self::Optimizations => "optimizations",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FollowUpDirection {
+    pub stage: ReactoStage,
+    pub direction: &'static str,
+}
+
+pub const NEUTRAL_FOLLOW_UPS: [FollowUpDirection; 6] = [
+    FollowUpDirection {
+        stage: ReactoStage::Repeat,
+        direction: "Ask the candidate to restate the inputs, outputs, constraints, and ambiguities.",
+    },
+    FollowUpDirection {
+        stage: ReactoStage::Example,
+        direction: "Ask the candidate to choose and trace an ordinary example and a boundary case.",
+    },
+    FollowUpDirection {
+        stage: ReactoStage::Algorithm,
+        direction: "Ask for the candidate's approach, correctness argument, and complexity.",
+    },
+    FollowUpDirection {
+        stage: ReactoStage::Coding,
+        direction: "Ask the candidate to implement their stated approach and explain major decisions.",
+    },
+    FollowUpDirection {
+        stage: ReactoStage::Test,
+        direction: "Ask the candidate to predict useful cases and expected results before running them.",
+    },
+    FollowUpDirection {
+        stage: ReactoStage::Optimizations,
+        direction: "Ask for complexity, an uncovered edge case, and a justified optimization or cleanup.",
+    },
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuestionMetadata<'a> {
+    pub difficulty: &'static str,
+    pub competencies: &'static [&'static str],
+    pub reacto_stages: &'static [ReactoStage],
+    pub follow_up_directions: &'static [FollowUpDirection],
+    /// Private rubric material. This type is constructed only on the server.
+    pub expected_discussion_points: [&'a str; 3],
+}
+
+impl Problem {
+    pub fn question_metadata(&self) -> QuestionMetadata<'_> {
+        QuestionMetadata {
+            difficulty: self.difficulty,
+            competencies: topics_for(self.id).unwrap_or(&[]),
+            reacto_stages: &ReactoStage::ALL,
+            follow_up_directions: &NEUTRAL_FOLLOW_UPS,
+            expected_discussion_points: [self.summary, self.optimal, self.pitfalls],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InterviewLoop {
+    CodingOnly,
+    #[default]
+    CodingBehavioral,
+}
+
+impl InterviewLoop {
+    pub fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("coding_only") => Self::CodingOnly,
+            _ => Self::CodingBehavioral,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CodingOnly => "coding_only",
+            Self::CodingBehavioral => "coding_behavioral",
+        }
+    }
+
+    pub const fn behavioral_minutes(self) -> u32 {
+        match self {
+            Self::CodingOnly => 0,
+            Self::CodingBehavioral => 8,
+        }
+    }
+}
+
+pub const MAX_PROFILE_TEXT_CHARS: usize = 80;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InterviewProfile {
+    pub role: String,
+    pub seniority: Option<Seniority>,
+    pub target_company: String,
+}
+
+pub const MAX_GROUNDING_TEXT_CHARS: usize = 240;
+pub const MAX_GROUNDING_TEXT_BYTES: usize = 6 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InterviewGrounding {
+    pub requirements: Vec<String>,
+    pub skills: Vec<String>,
+    pub anchors: Vec<String>,
+}
+
+impl InterviewGrounding {
+    pub fn is_empty(&self) -> bool {
+        self.requirements.is_empty() && self.skills.is_empty() && self.anchors.is_empty()
+    }
+}
+
+pub fn sanitize_interview_grounding(value: Option<&serde_json::Value>) -> InterviewGrounding {
+    let Some(object) = value.and_then(serde_json::Value::as_object) else {
+        return InterviewGrounding::default();
+    };
+    if object
+        .get("consentVersion")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+    {
+        return InterviewGrounding::default();
+    }
+    let Some(requirements) = grounding_array(object.get("requirements"), 8) else {
+        return InterviewGrounding::default();
+    };
+    let Some(skills) = grounding_array(object.get("skills"), 8) else {
+        return InterviewGrounding::default();
+    };
+    let Some(anchors) = grounding_array(object.get("anchors"), 6) else {
+        return InterviewGrounding::default();
+    };
+
+    // Per-item limits alone still admit 22 items of 240 characters, which is
+    // four times this much once they are multi-byte. The budget is what the
+    // prompt can afford to carry, so it is a property of the whole packet.
+    if requirements
+        .iter()
+        .chain(&skills)
+        .chain(&anchors)
+        .map(String::len)
+        .sum::<usize>()
+        > MAX_GROUNDING_TEXT_BYTES
+    {
+        return InterviewGrounding::default();
+    }
+    InterviewGrounding {
+        requirements,
+        skills,
+        anchors,
+    }
+}
+
+fn grounding_array(value: Option<&serde_json::Value>, max: usize) -> Option<Vec<String>> {
+    let values = value?.as_array()?;
+    if values.len() > max {
+        return None;
+    }
+    let mut result = Vec::with_capacity(values.len());
+    for value in values {
+        let raw = value.as_str()?;
+        if raw.is_empty() || raw.chars().count() > MAX_GROUNDING_TEXT_CHARS {
+            return None;
+        }
+        let normalized = raw
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if normalized.is_empty() || result.contains(&normalized) {
+            return None;
+        }
+        result.push(normalized);
+    }
+    Some(result)
+}
+
+pub fn interview_grounding_json(grounding: &InterviewGrounding) -> serde_json::Value {
+    serde_json::json!({
+        "consentVersion": 1,
+        "requirements": grounding.requirements,
+        "skills": grounding.skills,
+        "anchors": grounding.anchors,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seniority {
+    Intern,
+    Junior,
+    Mid,
+    Senior,
+    Staff,
+    Manager,
+}
+
+impl Seniority {
+    pub fn parse(value: Option<&str>) -> Option<Self> {
+        match value {
+            Some("intern") => Some(Self::Intern),
+            Some("junior") => Some(Self::Junior),
+            Some("mid") => Some(Self::Mid),
+            Some("senior") => Some(Self::Senior),
+            Some("staff") => Some(Self::Staff),
+            Some("manager") => Some(Self::Manager),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Intern => "intern",
+            Self::Junior => "junior",
+            Self::Mid => "mid",
+            Self::Senior => "senior",
+            Self::Staff => "staff",
+            Self::Manager => "manager",
+        }
+    }
+}
+
+pub fn sanitize_interview_profile(value: Option<&serde_json::Value>) -> InterviewProfile {
+    let value = value.and_then(serde_json::Value::as_object);
+    InterviewProfile {
+        role: profile_text(value.and_then(|item| item.get("role"))),
+        seniority: Seniority::parse(
+            value
+                .and_then(|item| item.get("seniority"))
+                .and_then(serde_json::Value::as_str),
+        ),
+        target_company: profile_text(value.and_then(|item| item.get("targetCompany"))),
+    }
+}
+
+pub fn interview_profile_json(profile: &InterviewProfile) -> serde_json::Value {
+    serde_json::json!({
+        "role": profile.role,
+        "seniority": profile.seniority.map(Seniority::as_str),
+        "targetCompany": profile.target_company,
+    })
+}
+
+fn profile_text(value: Option<&serde_json::Value>) -> String {
+    let normalized = value
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    normalized.chars().take(MAX_PROFILE_TEXT_CHARS).collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,6 +493,25 @@ impl SpeakerTurn {
 
     /// Stable for the life of one turn, so the browser patches one row instead
     /// of appending a new one per fragment.
+    /// The tail of what this speaker has said in the turn so far.
+    ///
+    /// For the log only, and bounded: a cut turn is diagnosable from what the
+    /// candidate was heard saying at the moment it was cut, and a full turn in
+    /// a log line is not.
+    pub fn tail(&self, max: usize) -> &str {
+        let text = self.text.trim();
+
+        // No length test beside this. `nth_back` already answers it: it yields
+        // nothing when there are fewer than `max` characters, and when there
+        // are exactly `max` it lands on the first one, so the slice is the
+        // whole string either way. The condition that used to be here could be
+        // written as `>` or `>=` without changing a single result.
+        match text.char_indices().nth_back(max.saturating_sub(1)) {
+            Some((start, _)) => &text[start..],
+            None => text,
+        }
+    }
+
     pub fn segment_id(&self, speaker: &str) -> String {
         format!("{speaker}-{}", self.index)
     }
@@ -206,7 +547,18 @@ impl SpeakerTurn {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeState {
+    pub started_at: std::time::Instant,
+    pub interview_loop: InterviewLoop,
+    pub coding_minutes: u32,
+    pub behavioral_minutes: u32,
+    pub round_transition_seen: bool,
+    pub behavioral_round_started: bool,
+    pub paused: bool,
+    pub framework_evidence: Vec<FrameworkEvidence>,
     pub code: String,
+    /// Whether the candidate has typed, as opposed to the browser having
+    /// published a template. See `apply_code_update`.
+    pub code_edited: bool,
     pub language: String,
     pub transcript: Vec<String>,
     pub last_test_run: Option<serde_json::Value>,
@@ -240,7 +592,16 @@ pub struct RuntimeState {
 impl Default for RuntimeState {
     fn default() -> Self {
         Self {
+            started_at: std::time::Instant::now(),
+            interview_loop: InterviewLoop::CodingBehavioral,
+            coding_minutes: 37,
+            behavioral_minutes: 8,
+            round_transition_seen: false,
+            behavioral_round_started: false,
+            paused: false,
+            framework_evidence: Vec::new(),
             code: String::new(),
+            code_edited: false,
             language: "python".to_string(),
             transcript: Vec::new(),
             last_test_run: None,
@@ -255,10 +616,205 @@ impl Default for RuntimeState {
     }
 }
 
+pub const FRAMEWORK_VERSION: u32 = 1;
+pub const MAX_FRAMEWORK_EVIDENCE: usize = 64;
+const MAX_FRAMEWORK_SUMMARY_CHARS: usize = 240;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameworkPhase {
+    Repeat,
+    Example,
+    Algorithm,
+    Coding,
+    Test,
+    Optimizations,
+    Situation,
+    Task,
+    Action,
+    Result,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceSource {
+    CandidateSpeech,
+    EditorSnapshot,
+    TestEvent,
+    SessionTiming,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceKind {
+    Observed,
+    Inferred,
+    Skipped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameworkEvidence {
+    pub at_ms: u64,
+    pub phase: FrameworkPhase,
+    pub source: EvidenceSource,
+    pub kind: EvidenceKind,
+    pub confidence: u8,
+    pub summary: String,
+    pub framework_version: u32,
+}
+
+pub fn record_framework_evidence(
+    state: &mut RuntimeState,
+    args: &serde_json::Value,
+) -> Result<FrameworkEvidence, &'static str> {
+    let phase = match args.get("phase").and_then(serde_json::Value::as_str) {
+        Some("repeat") => FrameworkPhase::Repeat,
+        Some("example") => FrameworkPhase::Example,
+        Some("algorithm") => FrameworkPhase::Algorithm,
+        Some("coding") => FrameworkPhase::Coding,
+        Some("test") => FrameworkPhase::Test,
+        Some("optimizations") => FrameworkPhase::Optimizations,
+        Some("situation") => FrameworkPhase::Situation,
+        Some("task") => FrameworkPhase::Task,
+        Some("action") => FrameworkPhase::Action,
+        Some("result") => FrameworkPhase::Result,
+        _ => return Err("invalid phase"),
+    };
+    let source = match args.get("source").and_then(serde_json::Value::as_str) {
+        Some("candidate_speech") => EvidenceSource::CandidateSpeech,
+        Some("editor_snapshot") => EvidenceSource::EditorSnapshot,
+        Some("test_event") => EvidenceSource::TestEvent,
+        Some("session_timing") => EvidenceSource::SessionTiming,
+        _ => return Err("invalid source"),
+    };
+    let kind = match args.get("kind").and_then(serde_json::Value::as_str) {
+        Some("observed") => EvidenceKind::Observed,
+        Some("inferred") => EvidenceKind::Inferred,
+        Some("skipped") => EvidenceKind::Skipped,
+        _ => return Err("invalid kind"),
+    };
+    if (source == EvidenceSource::SessionTiming) != (kind == EvidenceKind::Skipped) {
+        return Err("session_timing is only valid for skipped evidence");
+    }
+    let confidence = args
+        .get("confidence")
+        .and_then(json_int)
+        .ok_or("invalid confidence")?;
+    if !(0..=100).contains(&confidence) {
+        return Err("invalid confidence");
+    }
+    let summary = args
+        .get("summary")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+        .ok_or("invalid summary")?
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_FRAMEWORK_SUMMARY_CHARS)
+        .collect::<String>();
+    if let Some(index) = state.framework_evidence.iter().position(|item| {
+        item.phase == phase && item.source == source && item.kind == kind && item.summary == summary
+    }) {
+        return Ok(state.framework_evidence[index].clone());
+    }
+    if state.framework_evidence.len() == MAX_FRAMEWORK_EVIDENCE {
+        state.framework_evidence.remove(0);
+    }
+    state.framework_evidence.push(FrameworkEvidence {
+        at_ms: state
+            .started_at
+            .elapsed()
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64,
+        phase,
+        source,
+        kind,
+        confidence: confidence as u8,
+        summary,
+        framework_version: FRAMEWORK_VERSION,
+    });
+    Ok(state
+        .framework_evidence
+        .last()
+        .expect("just appended evidence")
+        .clone())
+}
+
+/// The phases this interview has evidence for, in the id spelling the browser
+/// ticks off.
+///
+/// Derived rather than accumulated: the evidence list is already the record,
+/// and a second counter beside it would be one restart away from disagreeing
+/// with the report built from the same list. Carries no summary, confidence or
+/// source, because this is the only framework state the candidate is allowed to
+/// see and any of those would leak how they are being read.
+pub fn framework_progress(state: &RuntimeState) -> Vec<&'static str> {
+    let mut phases = Vec::new();
+    for evidence in &state.framework_evidence {
+        // Skipped is the record of a phase the candidate never reached, which a
+        // session that times out writes for everything still outstanding.
+        // Ticking those would hand out a full checklist for running out of
+        // time, which is the opposite of what the marks are for.
+        if evidence.kind == EvidenceKind::Skipped {
+            continue;
+        }
+        let phase = phase_id(evidence.phase);
+        if !phases.contains(&phase) {
+            phases.push(phase);
+        }
+    }
+    phases
+}
+
+const fn phase_id(phase: FrameworkPhase) -> &'static str {
+    match phase {
+        FrameworkPhase::Repeat => "repeat",
+        FrameworkPhase::Example => "example",
+        FrameworkPhase::Algorithm => "algorithm",
+        FrameworkPhase::Coding => "coding",
+        FrameworkPhase::Test => "test",
+        FrameworkPhase::Optimizations => "optimizations",
+        FrameworkPhase::Situation => "situation",
+        FrameworkPhase::Task => "task",
+        FrameworkPhase::Action => "action",
+        FrameworkPhase::Result => "result",
+    }
+}
+
+pub fn framework_evidence_json(evidence: &FrameworkEvidence) -> serde_json::Value {
+    let phase = phase_id(evidence.phase);
+    let source = match evidence.source {
+        EvidenceSource::CandidateSpeech => "candidate_speech",
+        EvidenceSource::EditorSnapshot => "editor_snapshot",
+        EvidenceSource::TestEvent => "test_event",
+        EvidenceSource::SessionTiming => "session_timing",
+    };
+    let kind = match evidence.kind {
+        EvidenceKind::Observed => "observed",
+        EvidenceKind::Inferred => "inferred",
+        EvidenceKind::Skipped => "skipped",
+    };
+    serde_json::json!({
+        "atMs": evidence.at_ms,
+        "phase": phase,
+        "source": source,
+        "kind": kind,
+        "confidence": evidence.confidence,
+        "summary": evidence.summary,
+        "frameworkVersion": evidence.framework_version,
+    })
+}
+
+pub fn record_hint(state: &mut RuntimeState) -> String {
+    state.hints_used = state.hints_used.saturating_add(1);
+    log_hint_text(state.hints_used)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetadataConfig {
     pub problem: &'static Problem,
     pub duration_min: u32,
+    pub interview_loop: InterviewLoop,
+    pub profile: InterviewProfile,
+    pub grounding: InterviewGrounding,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -299,6 +855,11 @@ pub struct DataEventResult {
     pub update_last_interjection: bool,
     pub generate_reply: Option<String>,
     pub finish_interview: Option<String>,
+    /// Some only when the pause state genuinely changed, so a browser asking
+    /// twice for what it already has publishes nothing.
+    pub pause_changed: Option<bool>,
+    /// Agent-owned round transition result: `started` or `skipped`.
+    pub round_changed: Option<&'static str>,
 }
 
 /// How much conversation the report prompt may carry. A 90-minute interview
@@ -362,30 +923,612 @@ pub fn format_transcript(items: &[TranscriptItem<'_>]) -> String {
 /// that travelled beside it reached no consumer and was a second name for the
 /// same fact.
 pub fn fallback_report(hints_used: u32, note: &str) -> serde_json::Value {
+    let note = note.chars().take(240).collect::<String>();
     serde_json::json!({
         "incomplete": true,
         "summary": format!(
             "The automatic evaluation could not be completed: {note}. Your session ran end-to-end, but no scores were produced, so nothing here is an assessment of your work. Check the agent logs and GOOGLE_API_KEY, then try again."
         ),
+        "improvementPlan": [],
+        "frameworkAssessment": null,
         "hintsUsed": hints_used,
     })
 }
 
-pub fn sanitize_report(raw: &serde_json::Value, hints_used: u32) -> serde_json::Value {
-    serde_json::json!({
-        "codingScore": clamp_score(raw.get("codingScore")),
-        "communicationScore": clamp_score(raw.get("communicationScore")),
-        "decision": if raw.get("decision").and_then(serde_json::Value::as_str) == Some("HIRE") {
-            "HIRE"
-        } else {
-            "NO_HIRE"
+pub fn report_response_schema() -> serde_json::Value {
+    // `responseSchema` accepts only Gemini's OpenAPI subset, which has no
+    // `additionalProperties`: sending it fails the whole call with a 400 naming
+    // an unknown field, so every report came back as the incomplete fallback.
+    // Object closure is enforced on the response instead, by the `unknown
+    // field` arm of `validate_report_candidate`. Array and numeric bounds are
+    // in the subset and are still sent.
+    let text = || serde_json::json!({ "type": "STRING" });
+    let strings = |min: u32, max: u32| {
+        serde_json::json!({
+            "type": "ARRAY", "minItems": min, "maxItems": max,
+            "items": { "type": "STRING" }
+        })
+    };
+    let feedback = serde_json::json!({
+        "type": "OBJECT",
+        "propertyOrdering": ["strengths", "improvements"],
+        "properties": { "strengths": strings(2, 4), "improvements": strings(2, 4) },
+        "required": ["strengths", "improvements"]
+    });
+    let plan = serde_json::json!({
+        "type": "OBJECT",
+        "propertyOrdering": ["phase", "weakness", "impact", "frequency", "drill", "durationMin", "successCriterion", "selfReview"],
+        "properties": {
+            "phase": { "type": "STRING", "enum": IMPROVEMENT_PHASES },
+            "weakness": text(), "impact": { "type": "STRING", "enum": ["high", "medium", "low"] },
+            "frequency": { "type": "INTEGER", "minimum": 1, "maximum": 99 },
+            "drill": text(), "durationMin": { "type": "INTEGER", "minimum": 1, "maximum": 30 },
+            "successCriterion": text(), "selfReview": strings(1, 4)
         },
-        "summary": value_string(raw.get("summary")).unwrap_or_default(),
-        "codingFeedback": feedback(raw.get("codingFeedback")),
-        "communicationFeedback": feedback(raw.get("communicationFeedback")),
-        "hintsUsed": hints_used,
+        "required": ["phase", "weakness", "impact", "frequency", "drill", "durationMin", "successCriterion", "selfReview"]
+    });
+    let assessment_row = serde_json::json!({
+        "type": "OBJECT", "propertyOrdering": ["phase", "score", "weaknessTags"],
+        "properties": {
+            "phase": { "type": "STRING", "enum": IMPROVEMENT_PHASES },
+            "score": { "type": "INTEGER", "minimum": 0, "maximum": 100, "nullable": true },
+            "weaknessTags": strings(0, 4)
+        },
+        "required": ["phase", "score", "weaknessTags"]
+    });
+    serde_json::json!({
+        "type": "OBJECT",
+        "propertyOrdering": ["codingScore", "communicationScore", "decision", "summary", "codingFeedback", "communicationFeedback", "improvementPlan", "frameworkAssessment"],
+        "properties": {
+            "codingScore": { "type": "INTEGER", "minimum": 0, "maximum": 100 },
+            "communicationScore": { "type": "INTEGER", "minimum": 0, "maximum": 100 },
+            "decision": { "type": "STRING", "enum": ["HIRE", "NO_HIRE"] },
+            "summary": text(), "codingFeedback": feedback.clone(), "communicationFeedback": feedback,
+            "improvementPlan": { "type": "ARRAY", "minItems": 0, "maxItems": 8, "items": plan },
+            "frameworkAssessment": {
+                "type": "OBJECT", "propertyOrdering": ["rubricVersion", "phases"],
+                "properties": {
+                    // No `enum` here. Gemini's subset types `Schema.enum` as
+                    // repeated string, so an integer entry fails the whole
+                    // request with "Invalid value ... (TYPE_STRING)". The exact
+                    // value is pinned on the response by `strict_integer`.
+                    "rubricVersion": {
+                        "type": "INTEGER",
+                        "minimum": RUBRIC_VERSION,
+                        "maximum": RUBRIC_VERSION
+                    },
+                    "phases": { "type": "ARRAY", "minItems": 10, "maxItems": 10, "items": assessment_row }
+                },
+                "required": ["rubricVersion", "phases"]
+            }
+        },
+        "required": ["codingScore", "communicationScore", "decision", "summary", "codingFeedback", "communicationFeedback", "improvementPlan", "frameworkAssessment"]
     })
 }
+
+pub fn validate_report(
+    raw: &serde_json::Value,
+    hints_used: u32,
+) -> Result<serde_json::Value, Vec<String>> {
+    let mut report = validate_report_candidate(raw)?;
+    report
+        .as_object_mut()
+        .expect("validated object")
+        .insert("hintsUsed".to_string(), serde_json::json!(hints_used));
+    Ok(report)
+}
+
+pub fn validate_report_candidate(
+    raw: &serde_json::Value,
+) -> Result<serde_json::Value, Vec<String>> {
+    let mut errors = Vec::new();
+    let Some(object) = raw.as_object() else {
+        return Err(vec!["$: expected object".to_string()]);
+    };
+    exact_keys(
+        object,
+        &[
+            "codingScore",
+            "communicationScore",
+            "decision",
+            "summary",
+            "codingFeedback",
+            "communicationFeedback",
+            "improvementPlan",
+            "frameworkAssessment",
+        ],
+        "$",
+        &mut errors,
+    );
+    strict_integer(
+        object.get("codingScore"),
+        0,
+        100,
+        "$.codingScore",
+        &mut errors,
+    );
+    strict_integer(
+        object.get("communicationScore"),
+        0,
+        100,
+        "$.communicationScore",
+        &mut errors,
+    );
+    strict_enum(
+        object.get("decision"),
+        &["HIRE", "NO_HIRE"],
+        "$.decision",
+        &mut errors,
+    );
+    strict_text(object.get("summary"), 1200, "$.summary", &mut errors);
+    for key in ["codingFeedback", "communicationFeedback"] {
+        validate_feedback(object.get(key), &format!("$.{key}"), &mut errors);
+    }
+    let improvements = object
+        .get("codingFeedback")
+        .and_then(|v| v.get("improvements"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .chain(
+            object
+                .get("communicationFeedback")
+                .and_then(|v| v.get("improvements"))
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten(),
+        )
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    validate_improvement_plan(object.get("improvementPlan"), &improvements, &mut errors);
+    validate_framework_assessment(
+        object.get("frameworkAssessment"),
+        object.get("improvementPlan"),
+        &mut errors,
+    );
+    for key in [
+        "summary",
+        "codingFeedback",
+        "communicationFeedback",
+        "improvementPlan",
+    ] {
+        if let Some(value) = object.get(key) {
+            validate_observable_judgments(value, &format!("$.{key}"), &mut errors);
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    Ok(raw.clone())
+}
+
+fn validate_observable_judgments(value: &serde_json::Value, path: &str, errors: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(text) => {
+            let normalized = text
+                .chars()
+                .map(|character| {
+                    if character.is_alphanumeric() {
+                        character.to_ascii_lowercase()
+                    } else {
+                        ' '
+                    }
+                })
+                .collect::<String>()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let padded = format!(" {normalized} ");
+            const UNSUPPORTED: &[&str] = &[
+                " accent ",
+                " accents ",
+                " dialect ",
+                " dialects ",
+                " typing speed ",
+                " typing pace ",
+                " typed slowly ",
+                " typed quickly ",
+                " type slowly ",
+                " type quickly ",
+                " speech rate ",
+                " filler word ",
+                " filler words ",
+                " disfluency ",
+                " disfluencies ",
+                " eye contact ",
+                " posture ",
+                " body language ",
+                " facial expression ",
+                " facial expressions ",
+                " voice tone ",
+                " vocal tone ",
+                " tone of voice ",
+                " attractiveness ",
+                " physical appearance ",
+                " nervous demeanor ",
+                " confident demeanor ",
+                " personality ",
+                " introvert ",
+                " extrovert ",
+                " charisma ",
+                " appeared nervous ",
+                " appears nervous ",
+                " seemed nervous ",
+                " looked nervous ",
+                " sounded nervous ",
+                " come across as nervous ",
+                " comes across as nervous ",
+                " appeared confident ",
+                " appears confident ",
+                " seemed confident ",
+                " looked confident ",
+                " sounded confident ",
+                " come across as confident ",
+                " comes across as confident ",
+            ];
+            if UNSUPPORTED.iter().any(|phrase| padded.contains(phrase)) {
+                errors.push(format!(
+                    "{path}: unsupported delivery or personality judgment"
+                ));
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                validate_observable_judgments(item, &format!("{path}[{index}]"), errors);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            for (key, item) in object {
+                validate_observable_judgments(item, &format!("{path}.{key}"), errors);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn exact_keys(
+    object: &serde_json::Map<String, serde_json::Value>,
+    expected: &[&str],
+    path: &str,
+    errors: &mut Vec<String>,
+) {
+    for key in expected {
+        if !object.contains_key(*key) {
+            errors.push(format!("{path}.{key}: required"));
+        }
+    }
+    for key in object.keys() {
+        if !expected.contains(&key.as_str()) {
+            errors.push(format!("{path}.{key}: unknown field"));
+        }
+    }
+}
+
+fn strict_integer(
+    value: Option<&serde_json::Value>,
+    min: i64,
+    max: i64,
+    path: &str,
+    errors: &mut Vec<String>,
+) -> Option<i64> {
+    match value
+        .and_then(serde_json::Value::as_i64)
+        .filter(|v| (min..=max).contains(v))
+    {
+        Some(value) => Some(value),
+        None => {
+            errors.push(format!("{path}: expected integer {min}..={max}"));
+            None
+        }
+    }
+}
+
+fn strict_enum<'a>(
+    value: Option<&'a serde_json::Value>,
+    allowed: &[&str],
+    path: &str,
+    errors: &mut Vec<String>,
+) -> Option<&'a str> {
+    match value
+        .and_then(serde_json::Value::as_str)
+        .filter(|v| allowed.contains(v))
+    {
+        Some(value) => Some(value),
+        None => {
+            errors.push(format!("{path}: invalid enum"));
+            None
+        }
+    }
+}
+
+fn strict_text(
+    value: Option<&serde_json::Value>,
+    max: usize,
+    path: &str,
+    errors: &mut Vec<String>,
+) -> Option<String> {
+    match value
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty() && value.chars().count() <= max)
+    {
+        Some(value) => Some(value.trim().to_string()),
+        None => {
+            errors.push(format!(
+                "{path}: expected non-empty string of at most {max} characters"
+            ));
+            None
+        }
+    }
+}
+
+fn validate_string_array(
+    value: Option<&serde_json::Value>,
+    min: usize,
+    max: usize,
+    text_max: usize,
+    path: &str,
+    errors: &mut Vec<String>,
+) {
+    let Some(items) = value.and_then(serde_json::Value::as_array) else {
+        errors.push(format!("{path}: expected array"));
+        return;
+    };
+    if !(min..=max).contains(&items.len()) {
+        errors.push(format!("{path}: expected {min}..={max} items"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for (index, item) in items.iter().take(max.saturating_add(1)).enumerate() {
+        if let Some(text) = strict_text(Some(item), text_max, &format!("{path}[{index}]"), errors)
+            && !seen.insert(text)
+        {
+            errors.push(format!("{path}[{index}]: duplicate"));
+        }
+    }
+}
+
+fn validate_feedback(value: Option<&serde_json::Value>, path: &str, errors: &mut Vec<String>) {
+    let Some(object) = value.and_then(serde_json::Value::as_object) else {
+        errors.push(format!("{path}: expected object"));
+        return;
+    };
+    exact_keys(object, &["strengths", "improvements"], path, errors);
+    validate_string_array(
+        object.get("strengths"),
+        2,
+        4,
+        400,
+        &format!("{path}.strengths"),
+        errors,
+    );
+    validate_string_array(
+        object.get("improvements"),
+        2,
+        4,
+        400,
+        &format!("{path}.improvements"),
+        errors,
+    );
+}
+
+fn validate_improvement_plan(
+    value: Option<&serde_json::Value>,
+    weaknesses: &[&str],
+    errors: &mut Vec<String>,
+) {
+    let Some(items) = value.and_then(serde_json::Value::as_array) else {
+        errors.push("$.improvementPlan: expected array".to_string());
+        return;
+    };
+    if items.len() > 8 {
+        errors.push("$.improvementPlan: expected at most 8 items".to_string());
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut previous_order = None;
+    for (index, item) in items.iter().take(9).enumerate() {
+        let path = format!("$.improvementPlan[{index}]");
+        let Some(object) = item.as_object() else {
+            errors.push(format!("{path}: expected object"));
+            continue;
+        };
+        exact_keys(
+            object,
+            &[
+                "phase",
+                "weakness",
+                "impact",
+                "frequency",
+                "drill",
+                "durationMin",
+                "successCriterion",
+                "selfReview",
+            ],
+            &path,
+            errors,
+        );
+        strict_enum(
+            object.get("phase"),
+            &IMPROVEMENT_PHASES,
+            &format!("{path}.phase"),
+            errors,
+        );
+        let weakness = strict_text(
+            object.get("weakness"),
+            400,
+            &format!("{path}.weakness"),
+            errors,
+        );
+        if let Some(weakness) = weakness {
+            if !weaknesses.contains(&weakness.as_str()) {
+                errors.push(format!(
+                    "{path}.weakness: must exactly reference a feedback improvement"
+                ));
+            }
+            if !seen.insert(weakness) {
+                errors.push(format!("{path}.weakness: duplicate"));
+            }
+        }
+        let impact = strict_enum(
+            object.get("impact"),
+            &["high", "medium", "low"],
+            &format!("{path}.impact"),
+            errors,
+        );
+        let frequency = strict_integer(
+            object.get("frequency"),
+            1,
+            99,
+            &format!("{path}.frequency"),
+            errors,
+        );
+        if let (Some(impact), Some(frequency)) = (impact, frequency) {
+            let rank = match impact {
+                "high" => 3,
+                "medium" => 2,
+                _ => 1,
+            };
+            let order = (rank, frequency);
+            if previous_order.is_some_and(|previous| previous < order) {
+                errors.push(format!(
+                    "{path}: items must be sorted by impact then frequency descending"
+                ));
+            }
+            previous_order = Some(order);
+        }
+        strict_text(object.get("drill"), 400, &format!("{path}.drill"), errors);
+        strict_integer(
+            object.get("durationMin"),
+            1,
+            30,
+            &format!("{path}.durationMin"),
+            errors,
+        );
+        strict_text(
+            object.get("successCriterion"),
+            400,
+            &format!("{path}.successCriterion"),
+            errors,
+        );
+        validate_string_array(
+            object.get("selfReview"),
+            1,
+            4,
+            240,
+            &format!("{path}.selfReview"),
+            errors,
+        );
+    }
+    let expected = weaknesses
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let actual = seen
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    if actual != expected {
+        errors.push(
+            "$.improvementPlan: must contain exactly one item for every feedback improvement"
+                .to_string(),
+        );
+    }
+}
+
+fn validate_framework_assessment(
+    value: Option<&serde_json::Value>,
+    plan: Option<&serde_json::Value>,
+    errors: &mut Vec<String>,
+) {
+    let Some(object) = value.and_then(serde_json::Value::as_object) else {
+        errors.push("$.frameworkAssessment: expected object".to_string());
+        return;
+    };
+    exact_keys(
+        object,
+        &["rubricVersion", "phases"],
+        "$.frameworkAssessment",
+        errors,
+    );
+    strict_integer(
+        object.get("rubricVersion"),
+        i64::from(RUBRIC_VERSION),
+        i64::from(RUBRIC_VERSION),
+        "$.frameworkAssessment.rubricVersion",
+        errors,
+    );
+    let Some(rows) = object.get("phases").and_then(serde_json::Value::as_array) else {
+        errors.push("$.frameworkAssessment.phases: expected array".to_string());
+        return;
+    };
+    if rows.len() != IMPROVEMENT_PHASES.len() {
+        errors.push("$.frameworkAssessment.phases: expected exactly 10 ordered phases".to_string());
+    }
+    let plan = plan
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    for (index, expected_phase) in IMPROVEMENT_PHASES.iter().enumerate() {
+        let path = format!("$.frameworkAssessment.phases[{index}]");
+        let Some(row) = rows.get(index).and_then(serde_json::Value::as_object) else {
+            errors.push(format!("{path}: expected object"));
+            continue;
+        };
+        exact_keys(row, &["phase", "score", "weaknessTags"], &path, errors);
+        if row.get("phase").and_then(serde_json::Value::as_str) != Some(*expected_phase) {
+            errors.push(format!("{path}.phase: expected {expected_phase}"));
+        }
+        if row.get("score") != Some(&serde_json::Value::Null) {
+            strict_integer(row.get("score"), 0, 100, &format!("{path}.score"), errors);
+        }
+        validate_string_array(
+            row.get("weaknessTags"),
+            0,
+            4,
+            400,
+            &format!("{path}.weaknessTags"),
+            errors,
+        );
+        if let Some(tags) = row
+            .get("weaknessTags")
+            .and_then(serde_json::Value::as_array)
+        {
+            // Trimmed on both sides, like every other comparison in this
+            // module: `validate_improvement_plan` matches a plan weakness to a
+            // feedback improvement after trimming, so a tag that is an exact
+            // copy of an accepted weakness apart from surrounding whitespace
+            // has to be accepted here too. Comparing raw rejected the whole
+            // report over a trailing space and spent the one repair on it.
+            let allowed = plan
+                .iter()
+                .filter(|item| {
+                    item.get("phase").and_then(serde_json::Value::as_str) == Some(*expected_phase)
+                })
+                .filter_map(|item| item.get("weakness").and_then(serde_json::Value::as_str))
+                .map(str::trim)
+                .collect::<std::collections::HashSet<_>>();
+            for tag in tags.iter().filter_map(serde_json::Value::as_str) {
+                if !allowed.contains(tag.trim()) {
+                    errors.push(format!(
+                        "{path}.weaknessTags: tag has no same-phase improvement"
+                    ));
+                }
+            }
+        }
+    }
+}
+
+const IMPROVEMENT_PHASES: [&str; 10] = [
+    "Repeat",
+    "Example",
+    "Algorithm",
+    "Coding",
+    "Test",
+    "Optimizations",
+    "Situation",
+    "Task",
+    "Action",
+    "Result",
+];
 
 pub fn spoken_minutes_from_remaining_seconds(remaining_seconds: i64) -> i64 {
     ((remaining_seconds as f64) / 60.0)
@@ -399,10 +1542,20 @@ pub fn parse_participant_metadata(metadata: Option<&str>) -> MetadataConfig {
         .unwrap_or_else(|| serde_json::json!({}));
     let problem = get_problem(value.get("problemId").and_then(serde_json::Value::as_str));
     let duration_min = duration_from_metadata(value.get("durationMin"));
+    let interview_loop = InterviewLoop::parse(
+        value
+            .get("interviewLoop")
+            .and_then(serde_json::Value::as_str),
+    );
+    let profile = sanitize_interview_profile(value.get("interviewProfile"));
+    let grounding = sanitize_interview_grounding(value.get("interviewGrounding"));
 
     MetadataConfig {
         problem,
         duration_min,
+        interview_loop,
+        profile,
+        grounding,
     }
 }
 
@@ -463,6 +1616,12 @@ pub fn apply_data_event(
     payload: &serde_json::Value,
     since_last_test_reaction_seconds: f64,
 ) -> DataEventResult {
+    if state.behavioral_round_started && matches!(topic, TOPIC_CODE_UPDATE | TOPIC_TEST_RESULTS) {
+        return DataEventResult::default();
+    }
+    if state.paused && matches!(topic, TOPIC_CODE_UPDATE | TOPIC_TEST_RESULTS) {
+        return DataEventResult::default();
+    }
     match topic {
         TOPIC_CODE_UPDATE => apply_code_update(state, payload),
         TOPIC_TEST_RESULTS => apply_test_results(state, payload, since_last_test_reaction_seconds),
@@ -472,15 +1631,39 @@ pub fn apply_data_event(
     }
 }
 
+/// The report, or a stub saying why there is none.
+///
+/// Every fallback is logged, because the note it carries reaches the candidate
+/// and nobody else. A schema the provider refused answered 400 on every
+/// interview for the life of a branch while the suite stayed green, and the
+/// only place that was visible was a sentence in the candidate's own report.
+/// An operator reading the log sees it now, on the line that produced it, with
+/// the validation errors rather than only the fact that there were some: which
+/// field the model got wrong is the whole diagnostic, and the stub the
+/// candidate receives cannot carry it.
 pub fn final_report(
     raw_report: Option<&serde_json::Value>,
     hints_used: u32,
     error_note: Option<&str>,
 ) -> serde_json::Value {
-    match (raw_report, error_note) {
-        (Some(raw_report), None) => sanitize_report(raw_report, hints_used),
-        _ => fallback_report(hints_used, error_note.unwrap_or("report generation failed")),
-    }
+    let (reason, errors) = match (raw_report, error_note) {
+        (Some(raw_report), None) => match validate_report(raw_report, hints_used) {
+            Ok(report) => return report,
+            Err(errors) => ("report schema validation failed", errors),
+        },
+        _ => (error_note.unwrap_or("report generation failed"), Vec::new()),
+    };
+    eprintln!(
+        "codetrial report_incomplete reason={reason}{}",
+        // Bounded, because a wholly wrong shape produces one per field and this
+        // is a log line, not the report.
+        errors
+            .iter()
+            .take(5)
+            .map(|error| format!(" | {error}"))
+            .collect::<String>()
+    );
+    fallback_report(hints_used, reason)
 }
 
 /// The id and its spoken form, or nothing at all when the browser sent
@@ -497,6 +1680,7 @@ fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> D
 
     // Editor packets arrive several times a second and are usually identical to
     // the last one, so only touch the buffer when the text actually moved.
+    let first_code_packet = state.code.is_empty();
     let update_last_code_change = new_code.is_some_and(|code| code != state.code);
     if let Some(code) = new_code.filter(|_| update_last_code_change) {
         state.code.clear();
@@ -514,15 +1698,36 @@ fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> D
     // change the state or reach a prompt. The id comes from the candidate's
     // browser and is interpolated into Gemini's instructions, so an unvalidated
     // one is a way to write into them.
-    let mut language_changed = None;
-    if let Some(spoken) = payload
+    let switching = payload
         .get("language")
         .and_then(serde_json::Value::as_str)
         .filter(|language| *language != state.language)
-        .and_then(offered_language)
-    {
+        .and_then(offered_language);
+
+    // A non-empty buffer is not evidence that the candidate has done anything.
+    // The browser publishes the starter template on connect and publishes the
+    // next language's template on every switch, in the same packet as the
+    // switch, so the buffer is a template from the first second of the
+    // interview onward. What separates work from a template is a change that
+    // arrived without a language switch, which is a keystroke.
+    if update_last_code_change && !first_code_packet && switching.is_none() {
+        state.code_edited = true;
+    }
+
+    let mut language_changed = None;
+    if let Some(spoken) = switching {
         state.language = spoken.0.to_string();
-        language_changed = Some(language_choice(spoken.1));
+
+        // Reading the buffer here instead asked Gemini not to make a candidate
+        // "restate work they already completed" for a template they had not
+        // touched, which skipped the restatement the whole REACTO opening is
+        // built on for anyone who picked a language before speaking.
+        let context = if state.code_edited {
+            LanguageChoiceContext::SwitchWithCode
+        } else {
+            LanguageChoiceContext::Start
+        };
+        language_changed = Some(language_choice(spoken.1, context));
     }
 
     DataEventResult {
@@ -593,25 +1798,87 @@ fn apply_test_results(
         update_last_interjection: true,
         generate_reply: Some(test_results_reaction(&summary, all_passed)),
         finish_interview: None,
+        ..DataEventResult::default()
     }
 }
 
 fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataEventResult {
     match payload.get("type").and_then(serde_json::Value::as_str) {
-        Some("time_warning") if !state.ended => {
+        // Pause used to be a practice-only affordance, and practice is gone.
+        // Left working for everyone rather than deleted with the mode: a
+        // candidate whose machine or network interrupts them mid-interview can
+        // at least stop the interviewer talking into an empty room. It stops
+        // the conversation, not the deadline, which runs on wall clock either
+        // way. It is recorded, so a paused stretch is visible in the report.
+        Some("pause_interview") if !state.ended => {
+            let paused = payload
+                .get("paused")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if paused == state.paused {
+                return DataEventResult::default();
+            }
+            state.paused = paused;
+            DataEventResult {
+                pause_changed: Some(paused),
+                generate_reply: (!paused).then(|| {
+                    "The interview has resumed. Continue with your REACTO step.".to_string()
+                }),
+                ..DataEventResult::default()
+            }
+        }
+        Some("round_transition")
+            if !state.ended
+                && !state.paused
+                && state.interview_loop == InterviewLoop::CodingBehavioral
+                && !state.round_transition_seen
+                && payload.get("round").and_then(serde_json::Value::as_str)
+                    == Some("behavioral")
+                && state.started_at.elapsed() + ROUND_TRANSITION_SKEW
+                    >= std::time::Duration::from_secs(u64::from(state.coding_minutes) * 60) =>
+        {
+            state.round_transition_seen = true;
+            let completed = |phase| {
+                state
+                    .framework_evidence
+                    .iter()
+                    .any(|item| item.phase == phase && item.kind != EvidenceKind::Skipped)
+            };
+            if completed(FrameworkPhase::Test) && completed(FrameworkPhase::Optimizations) {
+                state.behavioral_round_started = true;
+                DataEventResult {
+                    round_changed: Some("started"),
+                    generate_reply: Some("[SYSTEM EVENT] The trusted coding completion gate passed: Test and Optimizations both have candidate evidence. The coding round is closed. Begin the reserved behavioral round now with exactly one concise question under the private STAR, profile, and document-grounding policies. Use prior candidate answers only to deepen the follow-up; do not repeat them and do not return to coding.".to_string()),
+                    ..DataEventResult::default()
+                }
+            } else {
+                DataEventResult {
+                    round_changed: Some("skipped"),
+                    generate_reply: Some("[SYSTEM EVENT] The behavioral reserve began, but the trusted coding completion gate did not pass because Test or Optimizations evidence is absent. Do not start STAR. Keep the candidate focused on a testable solution, highest-value tests, and justified complexity until the session ends; missing STAR phases will be marked skipped.".to_string()),
+                    ..DataEventResult::default()
+                }
+            }
+        }
+        Some("time_warning") if !state.ended && !state.paused => {
             let remaining_seconds = payload
                 .get("remainingSeconds")
                 .and_then(json_int)
                 .unwrap_or(300);
+            let minutes = spoken_minutes_from_remaining_seconds(remaining_seconds) as u32;
             DataEventResult {
-                generate_reply: Some(time_warning(spoken_minutes_from_remaining_seconds(
-                    remaining_seconds,
-                ) as u32)),
+                generate_reply: Some(if state.behavioral_round_started {
+                    format!(
+                        "[SYSTEM EVENT] Exactly {minutes} minutes remain in the active behavioral round. Do not return to coding or ask a new question. Let the candidate finish the current answer, ask at most the one permitted neutral missing-STAR follow-up, then close naturally."
+                    )
+                } else {
+                    time_warning(minutes)
+                }),
                 ..DataEventResult::default()
             }
         }
         Some("end_interview") if !state.ended => {
-            if !payload.get("code").is_some_and(serde_json::Value::is_null)
+            if !state.behavioral_round_started
+                && !payload.get("code").is_some_and(serde_json::Value::is_null)
                 && let Some(code) = payload.get("code").and_then(serde_json::Value::as_str)
             {
                 state.code = code.to_string();
@@ -622,10 +1889,11 @@ fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
             // report prompt was then written against whatever language the
             // session last happened to record. Validated for the same reason as
             // the code path: this string reaches the report prompt.
-            if let Some((id, _)) = payload
-                .get("language")
-                .and_then(serde_json::Value::as_str)
-                .and_then(offered_language)
+            if !state.behavioral_round_started
+                && let Some((id, _)) = payload
+                    .get("language")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(offered_language)
             {
                 state.language = id.to_string();
             }
@@ -786,25 +2054,6 @@ pub fn json_number(value: &serde_json::Value) -> Option<f64> {
 
 pub(crate) fn json_int(value: &serde_json::Value) -> Option<i64> {
     json_number(value).map(|number| number as i64)
-}
-
-pub(crate) fn feedback(value: Option<&serde_json::Value>) -> serde_json::Value {
-    let object = value.and_then(serde_json::Value::as_object);
-    serde_json::json!({
-        "strengths": string_list(object.and_then(|object| object.get("strengths"))),
-        "improvements": string_list(object.and_then(|object| object.get("improvements"))),
-    })
-}
-
-pub(crate) fn string_list(value: Option<&serde_json::Value>) -> Vec<String> {
-    value
-        .and_then(serde_json::Value::as_array)
-        .map(|items| items.iter().take(4).map(python_string).collect())
-        .unwrap_or_default()
-}
-
-pub(crate) fn clamp_score(value: Option<&serde_json::Value>) -> i64 {
-    value.and_then(json_int).unwrap_or(0).clamp(0, 100)
 }
 
 pub(crate) fn truthy_string(value: Option<&serde_json::Value>) -> Option<String> {

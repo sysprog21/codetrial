@@ -8,6 +8,12 @@
 
 use super::Problem;
 
+pub fn topics_for(problem_id: &str) -> Option<&'static [&'static str]> {
+    super::problem_topics::PROBLEM_TOPICS
+        .iter()
+        .find_map(|(id, topics)| (*id == problem_id).then_some(*topics))
+}
+
 pub const DEFAULT_PROBLEM_ID: &str = "two-sum";
 
 pub const PROBLEMS: &[Problem] = &[

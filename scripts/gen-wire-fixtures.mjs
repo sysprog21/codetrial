@@ -192,7 +192,7 @@ const INTEGRITY_INPUTS = [
   {
     type: "MEDIA_PREFLIGHT_PASSED", source: "preflight", severity: "info",
     at: "2026-08-18T06:39:52.400Z",
-    detail: `camera=FaceTime HD \u30AB\u30E1\u30E9 \u0645\u06CC\u200C\u0631 \u202Egnitautis\u200B (05AC:8514)`,
+    detail: `camera=FaceTime HD \u039A\u03AC\u03BC\u03B5\u03C1\u03B1 \u0645\u06CC\u200C\u0631 \u202Egnitautis\u200B (05AC:8514)`,
   },
   // The only input carrying sourceEventIds, so the conditional key in
   // `integrityEventPayload` (`if (event.sourceEventIds.length)`) and its mirror

@@ -6,6 +6,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  FRAMEWORKS,
+  frameworkChecklist,
   captionWindow,
   TIME_WARNING_S,
   acceptsReport,
@@ -22,6 +24,7 @@ import {
   integrityEventPayload,
   normalize,
   orPlaceholder,
+  providerUiState,
   renderValue,
   sanitizeReport,
   sessionReport,
@@ -29,6 +32,26 @@ import {
   timeWarningPayload,
   topics,
 } from "../../web/lib.js";
+
+test("provider degradation states distinguish availability and evaluation truth", () => {
+  const expected = {
+    connecting: [false, false], live: [true, false], reconnecting: [true, false],
+    degraded: [false, true], report_generating: [true, false],
+    incomplete_report: [false, true], retry_ready: [false, true],
+  };
+  for (const [kind, [personalized, retry]] of Object.entries(expected)) {
+    const state = providerUiState(kind, "provider refused\nsecret");
+    assert.equal(state.personalized, personalized, kind);
+    assert.equal(state.retry, retry, kind);
+    assert.ok(state.label && state.message, kind);
+    assert.doesNotMatch(state.message, /\n/);
+  }
+  assert.match(providerUiState("degraded").message, /will not create a personalized evaluation/);
+  assert.doesNotMatch(providerUiState("degraded", "https:\/\/key:secret@example.test").message, /secret|example/);
+  assert.match(providerUiState("degraded", "429 Too Many Requests").message, /busy or rate limited/);
+  assert.match(providerUiState("incomplete_report").message, /No scores or verdict were created/);
+  assert.notEqual(providerUiState("live").message, providerUiState("reconnecting").message);
+});
 
 const twoSum = { checker: "twoSum" };
 const palindrome = { checker: "palindrome" };
@@ -260,9 +283,11 @@ test("a camera label is carried as detail without outgrowing the hashed bound", 
   // divergence is the entire reason `integrityDetail` uses `Array.from`. A label
   // that fits under the bound exercises none of it.
   // Placed so the emoji's two UTF-16 units straddle index 80: "camera=" is 7,
-  // the kana are 70, "ab" is 2, so the pair occupies units 79 and 80. A
-  // `.slice(0, 80)` keeps unit 79 and drops its partner.
-  const label = "仮想カメラ".repeat(14) + "ab\u{1F3A5}tail";
+  // the Greek is 70, "ab" is 2, so the pair occupies units 79 and 80. A
+  // `.slice(0, 80)` keeps unit 79 and drops its partner. The letters are a
+  // fixture chosen for byte and unit width, not for any language: each is one
+  // UTF-16 unit and two bytes, and the emoji is the pair that can be split.
+  const label = "αβγδε".repeat(14) + "ab\u{1F3A5}tail";
   const event = await integrityEventPayload({
     type: "MEDIA_PREFLIGHT_PASSED",
     source: "preflight",
@@ -275,7 +300,7 @@ test("a camera label is carried as detail without outgrowing the hashed bound", 
     !Array.from(event.detail).some((c) => c.length === 1 && c.charCodeAt(0) >= 0xd800 && c.charCodeAt(0) <= 0xdfff),
     "truncation split a surrogate pair",
   );
-  assert.ok(event.detail.startsWith("camera=仮想カメラ"), event.detail);
+  assert.ok(event.detail.startsWith("camera=αβγδε"), event.detail);
 });
 
 test("a device label cannot reorder or hide the report it is printed in", async () => {
@@ -460,6 +485,10 @@ test("sanitizeReport keeps an unevaluated session unevaluated", () => {
 
 test("sanitizeReport preserves a well-formed agent report", () => {
   const report = sanitizeReport({
+    // Every report the agent writes names its loop, so a well-formed one has
+    // it here. Absence means a report written before loops existed, and that
+    // is the one case sanitizeReport must not invent a value for.
+    interviewLoop: "coding_behavioral",
     codingScore: 82,
     communicationScore: 74,
     decision: "HIRE",
@@ -473,6 +502,10 @@ test("sanitizeReport preserves a well-formed agent report", () => {
   });
 
   assert.deepEqual(report, {
+    interviewContract: null,
+    mode: undefined,
+    interviewLoop: "coding_behavioral",
+    rounds: [],
     codingScore: 82,
     communicationScore: 74,
     decision: "HIRE",
@@ -485,7 +518,140 @@ test("sanitizeReport preserves a well-formed agent report", () => {
     integrityChainSeq: 412,
     integrityDropped: 380,
     hintsUsed: 2,
+    improvementPlan: [],
+    frameworkAssessment: null,
+    frameworkEvidence: [],
   });
+});
+
+test("report contract migration preserves legacy and rejects unknown provenance", () => {
+  const legacy = sanitizeReport({ incomplete: true, summary: "old report" });
+  assert.equal(legacy.interviewContract, null);
+  assert.equal(legacy.summary, "old report");
+
+  const active = {
+    bundleVersion: 4,
+    livePromptVersion: 1,
+    reportPromptVersion: 4,
+    rubricVersion: 1,
+    reportSchemaVersion: 1,
+  };
+  assert.deepEqual(sanitizeReport({ incomplete: true, interviewContract: active }).interviewContract, active);
+
+  for (const interviewContract of [
+    { ...active, reportSchemaVersion: 2 },
+    { ...active, rubricVersion: "1" },
+    { ...active, extra: 1 },
+    null,
+  ]) {
+    const report = sanitizeReport({ codingScore: 99, decision: "HIRE", interviewContract });
+    assert.equal(report.incomplete, true);
+    assert.match(report.summary, /unsupported or malformed interview contract/);
+    assert.equal("codingScore" in report, false);
+  }
+});
+
+test("round summaries require plan-consistent kinds budgets and statuses", () => {
+  const coding = sanitizeReport({ interviewLoop: "coding_only", rounds: [
+    { kind: "coding", budgetMin: 45, status: "complete" },
+    { kind: "behavioral", budgetMin: 0, status: "not_configured" },
+  ] });
+  assert.equal(coding.interviewLoop, "coding_only");
+  assert.equal(coding.rounds[0].status, "complete");
+  const combined = sanitizeReport({ rounds: [
+    { kind: "coding", budgetMin: 37, status: "incomplete" },
+    { kind: "behavioral", budgetMin: 8, status: "skipped" },
+  ] });
+  assert.equal(combined.rounds[1].status, "skipped");
+  for (const rounds of [
+    [{ kind: "behavioral", budgetMin: 8, status: "started" }, { kind: "coding", budgetMin: 37, status: "complete" }],
+    [{ kind: "coding", budgetMin: 37, status: "started" }, { kind: "behavioral", budgetMin: 8, status: "complete" }],
+    [{ kind: "coding", budgetMin: 37, status: "complete" }, { kind: "behavioral", budgetMin: 7, status: "complete" }],
+  ]) assert.deepEqual(sanitizeReport({ rounds }).rounds, []);
+});
+
+test("framework assessment requires ten unique scores or explicit gaps", () => {
+  const phases = ["Repeat", "Example", "Algorithm", "Coding", "Test", "Optimizations", "Situation", "Task", "Action", "Result"];
+  const base = {
+    codingFeedback: { improvements: ["Explain complexity"] },
+    communicationFeedback: { improvements: [] },
+    improvementPlan: [{ phase: "Algorithm", weakness: "Explain complexity", impact: "high", frequency: 1, drill: "Narrate", durationMin: 5, successCriterion: "Justify bounds", selfReview: ["time"] }],
+    frameworkAssessment: {
+      rubricVersion: 1,
+      phases: phases.map((phase) => ({ phase, score: phase === "Algorithm" ? 72 : null, weaknessTags: phase === "Algorithm" ? ["Explain complexity", "invented"] : [] })),
+    },
+  };
+  const assessment = sanitizeReport(base).frameworkAssessment;
+  assert.equal(assessment.phases[2].score, 72);
+  assert.deepEqual(assessment.phases[2].weaknessTags, ["Explain complexity"]);
+  assert.ok(assessment.phases.slice(6).every((row) => row.score === null));
+
+  const duplicate = structuredClone(base);
+  duplicate.frameworkAssessment.phases[9].phase = "Action";
+  assert.equal(sanitizeReport(duplicate).frameworkAssessment, null);
+  const hostile = structuredClone(base);
+  hostile.frameworkAssessment.phases[2].score = "72";
+  assert.equal(sanitizeReport(hostile).frameworkAssessment, null);
+});
+
+test("framework evidence preserves valid kinds and drops hostile or contradictory rows", () => {
+  const report = sanitizeReport({
+    frameworkEvidence: [
+      { atMs: 9000, phase: "algorithm", source: "candidate_speech", kind: "observed", confidence: 90, summary: "Explained invariant", frameworkVersion: 1, future: "ignored" },
+      { atMs: 4000, phase: "test", source: "test_event", kind: "inferred", confidence: 70, summary: "Predicted a boundary", frameworkVersion: 1 },
+      { atMs: 12000, phase: "result", source: "session_timing", kind: "skipped", confidence: 100, summary: "Cutoff prevented assessment", frameworkVersion: 1 },
+      { atMs: 1, phase: "<script>", source: "candidate_speech", kind: "observed", confidence: 100, summary: "bad", frameworkVersion: 1 },
+      { atMs: 2, phase: "action", source: "session_timing", kind: "observed", confidence: 100, summary: "contradiction", frameworkVersion: 1 },
+    ],
+  });
+  assert.deepEqual(report.frameworkEvidence.map((item) => item.kind), ["inferred", "observed", "skipped"]);
+  assert.equal(report.frameworkEvidence[1].future, "ignored", "unknown fields round-trip but are never rendered");
+
+  // Round-tripping them is for a newer client's fields, not for a payload.
+  // The account sync refuses an oversized report outright rather than
+  // trimming it, so one unbounded field here costs the whole account copy.
+  const huge = sanitizeReport({
+    frameworkEvidence: [{
+      atMs: 1000, phase: "algorithm", source: "candidate_speech", kind: "observed",
+      confidence: 90, summary: "Explained invariant", frameworkVersion: 1,
+      future: "x".repeat(4096),
+    }],
+  });
+  assert.equal(huge.frameworkEvidence.length, 1, "the row itself is still kept");
+  assert.equal(huge.frameworkEvidence[0].future, undefined, "the payload is not");
+  assert.equal(huge.frameworkEvidence[0].summary, "Explained invariant");
+  assert.deepEqual(sanitizeReport({}).frameworkEvidence, []);
+});
+
+test("invalid framework rows cannot crowd valid evidence out of the cap", () => {
+  const hostile = Array.from({ length: 64 }, () => ({ phase: "hostile" }));
+  const valid = { atMs: 1, phase: "repeat", source: "candidate_speech", kind: "observed", confidence: 80, summary: "Restated the problem", frameworkVersion: 1 };
+  assert.deepEqual(sanitizeReport({ frameworkEvidence: [...hostile, valid] }).frameworkEvidence, [valid]);
+});
+
+test("improvement plan drops unrelated and hostile items and ranks valid drills", () => {
+  const report = sanitizeReport({
+    codingFeedback: { improvements: ["Explain complexity", "Test boundaries"] },
+    communicationFeedback: { improvements: ["Name your action"] },
+    improvementPlan: [
+      { phase: "Test", weakness: "Test boundaries", impact: "low", frequency: 2, drill: "Build a test table", durationMin: 99, successCriterion: "Cover four classes", selfReview: ["boundary"] },
+      { phase: "Algorithm", weakness: "Explain complexity", impact: "high", frequency: 3, drill: "Narrate complexity", durationMin: 10, successCriterion: "Justify both bounds", selfReview: ["time", "space"] },
+      { phase: "Action", weakness: "Name your action", impact: "medium", frequency: 1, drill: "Rewrite my contribution", durationMin: 5, successCriterion: "Name my decision", selfReview: ["Uses I"] },
+      { phase: "Action", weakness: "unrelated", impact: "high", frequency: 9, drill: "bad", durationMin: 5, successCriterion: "bad", selfReview: ["bad"] },
+      { phase: "<script>", weakness: "Name your action", impact: "high", frequency: 1, drill: "bad", durationMin: 5, successCriterion: "bad", selfReview: ["bad"] },
+    ],
+  });
+  assert.deepEqual(report.improvementPlan.map((item) => item.phase), ["Algorithm", "Action", "Test"]);
+  assert.equal(report.improvementPlan[2].durationMin, 30);
+});
+
+test("a partial improvement plan is rejected instead of hiding an emitted weakness", () => {
+  const report = sanitizeReport({
+    codingFeedback: { improvements: ["Explain complexity", "Test boundaries"] },
+    communicationFeedback: { improvements: [] },
+    improvementPlan: [{ phase: "Algorithm", weakness: "Explain complexity", impact: "high", frequency: 1, drill: "Narrate", durationMin: 5, successCriterion: "Justify bounds", selfReview: ["time"] }],
+  });
+  assert.deepEqual(report.improvementPlan, []);
 });
 
 test("timer, clamp, and placeholder helpers", () => {
@@ -496,6 +662,16 @@ test("timer, clamp, and placeholder helpers", () => {
   assert.equal(clamp(500, 10, 90), 90);
   assert.deepEqual(orPlaceholder([]), ["(none captured)"]);
   assert.deepEqual(orPlaceholder(["kept"]), ["kept"]);
+});
+
+test("report mode is kept only where a report actually recorded one", () => {
+  // Reports written before the practice/scored split still say which they were
+  // and the viewer shows it. Nothing produces one now, so a report without one
+  // must not have a mode invented for it: the header would announce a
+  // distinction that no longer exists.
+  assert.equal(sanitizeReport({ incomplete: true, mode: "practice" }).mode, "practice");
+  assert.equal(sanitizeReport({ incomplete: true }).mode, undefined);
+  assert.equal(sanitizeReport({ incomplete: true, mode: "<script>" }).mode, "scored");
 });
 
 // The interview clock. Both assertions here are about a value that jumps: the
@@ -558,51 +734,30 @@ test("a session that reached an interviewer is never scored by the browser", () 
     /interviewer never returned a report/,
   );
 
-  assert.equal(sessionReport(scored).incomplete, undefined);
-  assert.equal(sessionReport(scored).decision, "HIRE");
+  const offline = sessionReport(scored);
+  assert.equal(offline.incomplete, true);
+  assert.equal(offline.decision, undefined);
+  assert.equal(offline.codingScore, undefined);
+  assert.equal(offline.frameworkAssessment, undefined);
+  assert.match(offline.summary, /no personalized scores, verdict, or feedback/);
 });
 
-test("offline practice scores only a session that actually did something", () => {
+test("offline practice reports local activity without fabricated evaluation", () => {
   // Nothing ran and nobody spoke: there is no evidence to score, so this is
   // reported as no evaluation rather than as a 40.
   const empty = sessionReport({ joinedRoom: false, passed: 0, total: 0, candidateTurns: 0 });
   assert.equal(empty.incomplete, true);
   assert.match(empty.summary, /No interviewer joined/);
 
-  // Either one alone is enough to have produced something worth reporting.
-  assert.equal(
-    sessionReport({ joinedRoom: false, passed: 0, total: 0, candidateTurns: 1 }).incomplete,
-    undefined,
-  );
-  assert.equal(
-    sessionReport({ joinedRoom: false, passed: 0, total: 3, candidateTurns: 0 }).incomplete,
-    undefined,
-  );
-});
-
-// Through sessionReport rather than the scorer directly: the guard and the
-// scores are one decision, and a test that reaches past the guard would keep
-// passing if the guard stopped calling it.
-test("the offline decision follows the test cases and speaking follows the turns", () => {
-  const at = (passed, total, candidateTurns) =>
-    sessionReport({ joinedRoom: false, passed, total, candidateTurns });
-
-  assert.equal(at(10, 10, 1).codingScore, 100);
-  assert.equal(at(10, 10, 1).decision, "HIRE");
-
-  // The boundary is inclusive, and it is the only place a pass is decided.
-  assert.equal(at(7, 10, 1).codingScore, 70);
-  assert.equal(at(7, 10, 1).decision, "HIRE");
-  assert.equal(at(69, 100, 1).decision, "NO_HIRE");
-
-  // Being greeted is not communicating: only the candidate's own turns count,
-  // which is why this reads turns rather than transcript length.
-  assert.equal(at(10, 10, 0).communicationScore, 45);
-  assert.equal(at(10, 10, 3).communicationScore, 70);
-
-  // No tests run at all is not a zero, which would read as a failed attempt.
-  assert.equal(at(0, 0, 2).codingScore, 40);
-  assert.match(at(0, 0, 2).summary, /ended before tests were run/);
+  for (const report of [
+    sessionReport({ joinedRoom: false, passed: 0, total: 0, candidateTurns: 1 }),
+    sessionReport({ joinedRoom: false, passed: 2, total: 3, candidateTurns: 0 }),
+  ]) {
+    assert.equal(report.incomplete, true);
+    for (const key of ["codingScore", "communicationScore", "decision", "codingFeedback", "communicationFeedback", "frameworkAssessment"]) {
+      assert.equal(report[key], undefined, `${key} must not be fabricated offline`);
+    }
+  }
 });
 
 test("the caption window opens at a sentence boundary, never mid-word", () => {
@@ -662,4 +817,46 @@ test("the caption window opens at a sentence boundary, never mid-word", () => {
     assert.ok(window.trim().length > 0, `blanked the bar on ${JSON.stringify(finished)}`);
     assert.ok(window.length <= budget, `${window.length} > ${budget}`);
   }
+});
+
+test("the two frameworks stay apart and tick only what the interviewer banked", () => {
+  // Never both at once. A candidate in the coding round is working through
+  // REACTO, and the four behavioral steps are not theirs to think about yet.
+  const coding = frameworkChecklist("coding", ["repeat", "algorithm"]);
+  assert.equal(coding.name, "REACTO");
+  assert.deepEqual(coding.steps.map((step) => step.id), ["repeat", "example", "algorithm", "coding", "test", "optimizations"]);
+  assert.deepEqual(coding.steps.filter((step) => step.done).map((step) => step.id), ["repeat", "algorithm"]);
+
+  const behavioral = frameworkChecklist("behavioral", ["situation", "result"]);
+  assert.equal(behavioral.name, "STAR");
+  assert.deepEqual(behavioral.steps.map((step) => step.id), ["situation", "task", "action", "result"]);
+  assert.deepEqual(behavioral.steps.filter((step) => step.done).map((step) => step.id), ["situation", "result"]);
+
+  // The packet is untrusted like every other. An unknown phase is a version
+  // skew or someone else's idea of a step, and neither belongs on screen.
+  const hostile = frameworkChecklist("coding", ["repeat", "situation", "<script>", 7, null]);
+  assert.deepEqual(hostile.steps.filter((step) => step.done).map((step) => step.id), ["repeat"]);
+
+  // An unknown round falls back rather than rendering an empty list, because a
+  // checklist with no steps reads as an interview with nothing to do.
+  assert.equal(frameworkChecklist("nonsense", []).name, "REACTO");
+  assert.deepEqual(frameworkChecklist("coding", "not-a-list").steps.filter((step) => step.done), []);
+
+  // Every step explains itself. The card is read once, while waiting, so a
+  // label with no clause behind it is a step the candidate cannot act on.
+  for (const framework of Object.values(FRAMEWORKS)) {
+    for (const step of framework.steps) {
+      assert.ok(step.hint && step.hint.length > 10, `${step.id} has no usable explanation`);
+    }
+  }
+
+  // Each framework says which exercise it is for, so a table of one can stand
+  // without borrowing context from a table of the other.
+  for (const framework of Object.values(FRAMEWORKS)) {
+    assert.ok(framework.scenario && framework.scenario.length > 20, `${framework.name} does not say what it scores`);
+  }
+
+  // No id appears in both, or a tick in one round would light up the other.
+  const ids = Object.values(FRAMEWORKS).flatMap((framework) => framework.steps.map((step) => step.id));
+  assert.equal(new Set(ids).size, ids.length);
 });
