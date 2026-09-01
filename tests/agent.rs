@@ -339,6 +339,12 @@ fn unsupported_delivery_and_personality_judgments_are_rejected_atomically() {
         "You come across as confident on camera.",
         "Your personality seems introverted.",
         "You lacked charisma.",
+        "Your nervousness showed.",
+        "You spoke nervously about the invariant.",
+        "You seemed anxious about the edge case.",
+        "Visible anxiety slowed the walkthrough.",
+        "You lacked confidence in the approach.",
+        "A lack-of-confidence came through.",
     ] {
         let mut report = valid_strict_report();
         report["summary"] = json!(claim);
