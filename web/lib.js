@@ -576,16 +576,20 @@ export function sanitizeReport(raw) {
       // refuses the request rather than trimming it: over that, the candidate
       // keeps the local copy and the account copy simply never arrives. So
       // they are carried while they are a field rather than a payload.
-      // The common row has nothing unknown on it, and this runs over whatever
-      // length arrived from storage or the wire, before the cap below trims
-      // it. Counting the keys is one comparison; building and serializing an
-      // empty object to learn the same thing is five allocations a row.
-      const extras = Object.keys(item).length === knownEvidenceFields.size
-        ? {}
-        : Object.fromEntries(
-          Object.entries(item).filter(([key]) => !knownEvidenceFields.has(key)),
-        );
-      const carried = textEncoder.encode(JSON.stringify(extras)).length <= 512 ? extras : {};
+      // The common row has nothing unknown on it and this runs over whatever
+      // length arrived from storage or the wire, before the cap below trims it,
+      // so that row allocates nothing and is never serialized to be measured.
+      // Null prototype, not `{}`: assigning a key named `__proto__` to a plain
+      // object runs the inherited setter, which ignores a string and drops the
+      // field. A newer client's field is not ours to name, so it cannot be ours
+      // to lose either.
+      let extras = null;
+      for (const key of Object.keys(item)) {
+        if (!knownEvidenceFields.has(key)) (extras ??= Object.create(null))[key] = item[key];
+      }
+      // Spreading null spreads nothing, which is what both the common row and
+      // an over-budget one want.
+      const carried = extras && textEncoder.encode(JSON.stringify(extras)).length <= 512 ? extras : null;
       return {
         ...carried,
         // A year, which no interview approaches: this is a sanity bound on a

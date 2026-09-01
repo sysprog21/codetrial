@@ -607,6 +607,14 @@ test("framework evidence preserves valid kinds and drops hostile or contradictor
   assert.deepEqual(report.frameworkEvidence.map((item) => item.kind), ["inferred", "observed", "skipped"]);
   assert.equal(report.frameworkEvidence[1].future, "ignored", "unknown fields round-trip but are never rendered");
 
+  const protoField = sanitizeReport(JSON.parse(`{"frameworkEvidence":[{
+    "atMs":1000,"phase":"algorithm","source":"candidate_speech","kind":"observed",
+    "confidence":90,"summary":"Explained invariant","frameworkVersion":1,
+    "__proto__":"newer report field"
+  }]}`)).frameworkEvidence[0];
+  assert.equal(Object.hasOwn(protoField, "__proto__"), true);
+  assert.equal(protoField.__proto__, "newer report field");
+
   // Round-tripping them is for a newer client's fields, not for a payload.
   // The account sync refuses an oversized report outright rather than
   // trimming it, so one unbounded field here costs the whole account copy.
