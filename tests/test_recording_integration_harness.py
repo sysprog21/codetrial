@@ -158,6 +158,17 @@ fi
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("exactly one expiring reader permission", result.stderr)
 
+    def test_delivery_refuses_a_permission_listing_it_cannot_see_the_end_of(self):
+        # Exactly one reader is an exactness claim, and a truncated listing
+        # cannot support one. A delivered file should never reach a page of
+        # permissions, so this is a refusal rather than a paging loop.
+        truncated = DELIVERED | {"permissions.json": {
+            "nextPageToken": "page-2", "permissions": [reader()],
+        }}
+        result, _ = self.run_harness(truncated, phase="delivery")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("more permissions than one page", result.stderr)
+
     def test_delivery_accepts_the_recipient_however_drive_folded_the_address(self):
         # Drive answers with the address it normalised, not the spelling the
         # operator exported, and a case difference is not a different person.

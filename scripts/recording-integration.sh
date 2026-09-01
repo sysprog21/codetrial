@@ -388,7 +388,7 @@ PY
   # of cleanup is that the grant has lapsed by then, so requiring a live one
   # would refuse to prove the deletion this pipeline exists to prove.
   if runs delivery; then
-    permission_query='supportsAllDrives=true&fields=permissions(id,type,role,emailAddress,expirationTime,deleted)'
+    permission_query='supportsAllDrives=true&pageSize=100&fields=nextPageToken,permissions(id,type,role,emailAddress,expirationTime,deleted)'
     drive_get "https://www.googleapis.com/drive/v3/files/$drive_file_id/permissions?$permission_query" >"$work/permissions.json"
     python3 - "$work/delivery.json" "$work/permissions.json" "$CODETRIAL_RECORDING_RECIPIENT_EMAIL" <<'PY'
 import datetime as dt
@@ -396,7 +396,10 @@ import json
 import sys
 
 delivery = json.load(open(sys.argv[1], encoding="utf-8"))
-permissions = json.load(open(sys.argv[2], encoding="utf-8")).get("permissions", [])
+listing = json.load(open(sys.argv[2], encoding="utf-8"))
+if listing.get("nextPageToken"):
+    raise SystemExit("the delivered file has more permissions than one page; exactly one reader is not observable")
+permissions = listing.get("permissions", [])
 
 
 def address(item):
