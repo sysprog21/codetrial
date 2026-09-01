@@ -198,25 +198,33 @@ ancestors_iam = read(ancestors_iam_path)
 bucket = read(bucket_path)
 drive = read(drive_path)
 
-def member_roles(policy):
-    roles = []
+def ensure_auditable(policy):
+    """Refuse a policy whose grants cannot be read exactly.
+
+    Whole-policy, not per-member: these identities either include every
+    authenticated service account or need a directory lookup to exclude this
+    one, so treating them as unrelated would turn the audit into a guess.
+    """
     for binding in policy.get("bindings", []):
-        members = binding.get("members", [])
-        # These identities either include every authenticated service account
-        # or need a separate directory lookup to exclude this one. Treating
-        # them as unrelated would turn an exact-access audit into a guess.
         if any(
             principal in {"allUsers", "allAuthenticatedUsers"}
             or principal.startswith(("group:", "domain:", "principalSet:"))
-            for principal in members
+            for principal in binding.get("members", [])
         ):
             raise SystemExit("IAM has public or indirect bindings; exact access is not auditable")
-        if member in members:
-            if binding.get("condition") is not None:
-                raise SystemExit(f"{member} has a conditional IAM binding; exact access is not auditable")
-            roles.append(binding.get("role"))
-    return roles
+        if member in binding.get("members", []) and binding.get("condition") is not None:
+            raise SystemExit(f"{member} has a conditional IAM binding; exact access is not auditable")
 
+
+def member_roles(policy):
+    """The roles this member holds, once the policy is known to be readable."""
+    return [
+        binding.get("role")
+        for binding in policy.get("bindings", [])
+        if member in binding.get("members", [])
+    ]
+
+ensure_auditable(bucket_iam)
 bucket_roles = member_roles(bucket_iam)
 if bucket_roles != ["roles/storage.objectAdmin"]:
     raise SystemExit(f"{member} bucket roles are {bucket_roles!r}, expected exactly ['roles/storage.objectAdmin']")
@@ -235,6 +243,7 @@ for entry in ancestors_iam:
     policy = entry.get("policy")
     if not isinstance(policy, dict):
         raise SystemExit(f"ancestor IAM policy for {label} is unreadable")
+    ensure_auditable(policy)
     roles = member_roles(policy)
     if roles:
         ancestor_roles.append((label, roles))
