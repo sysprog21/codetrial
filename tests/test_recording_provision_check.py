@@ -147,7 +147,7 @@ esac
                     {"role": "roles/storage.admin", "members": [principal]},
                 ]})
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("public or indirect", result.stderr)
+                self.assertIn("which may or may not contain", result.stderr)
 
     def test_empty_ancestor_response_is_refused(self):
         # The one shape that could pass by checking nothing: the role loop runs
@@ -177,7 +177,8 @@ esac
             {"role": "roles/storage.admin", "members": ["group:delivery@example.test"]},
         ]}}])
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("public or indirect", result.stderr)
+        self.assertIn("group:delivery@example.test", result.stderr)
+        self.assertIn("resolve the membership", result.stderr)
 
     def test_project_wide_role_is_refused(self):
         result = self.run_check(ancestors_iam=[{"resource": "projects/staging-project", "policy": {"bindings": [

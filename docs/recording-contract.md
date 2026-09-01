@@ -50,6 +50,16 @@ only in a private temporary directory, are removed from child-process
 environments where they are not needed, and do not replace a developer's active
 `gcloud` account.
 
+An indirect grant is refused rather than resolved. A role reaching the delivery
+account through allUsers, a group, a domain or a principal set cannot be ruled
+in or out without a directory lookup this script does not make, so it stops and
+names the binding. Most organizations carry at least one group binding
+somewhere in the ancestor chain, so expect this to fire on a real project and
+to need a decision: either grant that role directly, or accept a directory
+lookup as a new dependency of the audit. It is deliberately not a warning,
+because a gate that reports exact least privilege after skipping a binding it
+could not read is the failure this whole check exists to avoid.
+
 ### Recording 1 staging run
 
 Do not create a billable resource until every cell in this record is filled by

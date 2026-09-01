@@ -235,12 +235,21 @@ def ensure_auditable(policy):
     one, so treating them as unrelated would turn the audit into a guess.
     """
     for binding in policy.get("bindings", []):
-        if any(
-            principal in {"allUsers", "allAuthenticatedUsers"}
-            or principal.startswith(("group:", "domain:", "principalSet:"))
+        indirect = [
+            principal
             for principal in binding.get("members", [])
-        ):
-            raise SystemExit("IAM has public or indirect bindings; exact access is not auditable")
+            if principal in {"allUsers", "allAuthenticatedUsers"}
+            or principal.startswith(("group:", "domain:", "principalSet:"))
+        ]
+        if indirect:
+            # Named, because the operator has to go and look. Whether the
+            # delivery account is inside one of these is a directory question
+            # this script cannot ask, and a role granted here reaches the
+            # bucket whatever the bucket policy says.
+            raise SystemExit(
+                f"{binding.get('role')} is granted to {', '.join(indirect)}, which may or may not "
+                f"contain {member}; resolve the membership or grant the role directly"
+            )
         if member in binding.get("members", []) and binding.get("condition") is not None:
             raise SystemExit(f"{member} has a conditional IAM binding; exact access is not auditable")
 
