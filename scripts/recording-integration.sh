@@ -157,6 +157,7 @@ template_origin=${CODETRIAL_RECORDING_TEMPLATE_BASE_URL:-}
 template_origin=${template_origin%/}
 gcs_prefix=${CODETRIAL_RECORDING_GCS_PREFIX:-codetrial}
 while [ "${gcs_prefix%/}" != "$gcs_prefix" ]; do gcs_prefix=${gcs_prefix%/}; done
+umask 077
 work=$(mktemp -d)
 
 # One trap, on every exit, over what this script created: a temporary directory
