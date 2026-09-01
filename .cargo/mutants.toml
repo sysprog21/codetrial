@@ -37,6 +37,23 @@
 # entered the diff when `select_provider` lost its `strict` argument, which is
 # how a function nothing can test came to be scored.
 #
+# `handle_data_packet` and `handle_gemini_event` are the body of `run_room`'s
+# loop, lifted out of it when that function was split. Both take `&Room` and
+# answer by publishing on it, so every mutant in them is the `run_room` case
+# under a new name: deleting a field from a `DataPacket`, or an arm that
+# decides what to do with a Gemini event, cannot be observed without a room to
+# publish into. They entered the diff by being moved, not by being written,
+# which is how code nothing can test came to be scored. The decisions they make
+# before they publish are tested: `apply_data_event` in tests/agent.rs, and
+# `checklist_changed` beside it in livekit.rs.
+#
+# `publish_output_audio` and `output_audio_worker` are the two ends of playout.
+# The first publishes a track to a room. The second hands frames to a
+# `NativeAudioSource`, which is libwebrtc: it returns nothing a test can read,
+# so replacing the worker with nothing at all looks the same from outside as
+# playing the audio. What can be checked is checked, in `OutputAudio::capture`,
+# which is where the framing and the playout pacing are decided.
+#
 # Keep this list short and each entry justified. An entry that is really "we
 # never got around to testing this" belongs in a test, not here.
 exclude_re = [
@@ -45,4 +62,8 @@ exclude_re = [
     "run_gemini_check",
     "run_livekit",
     "replace web_router",
+    "handle_data_packet",
+    "handle_gemini_event",
+    "publish_output_audio",
+    "output_audio_worker",
 ]

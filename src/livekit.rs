@@ -1003,6 +1003,24 @@ struct InterviewContext<'a> {
 
 /// Applies one decoded data packet. `Break` means the interview is over and the
 /// report has been published.
+/// A packet for the browser, on the topic it is listening to.
+///
+/// The three fields here are what decide whether the message arrives at all:
+/// an unreliable one may be dropped on a bad network, and one with no topic
+/// lands on a channel nothing reads. Built in one place because it was written
+/// out at four call sites, where each field was free to go missing on its own.
+fn browser_packet(
+    topic: &str,
+    message: &serde_json::Value,
+) -> Result<DataPacket, serde_json::Error> {
+    Ok(DataPacket {
+        payload: serde_json::to_vec(message)?,
+        topic: Some(topic.to_string()),
+        reliable: true,
+        ..Default::default()
+    })
+}
+
 async fn handle_data_packet(
     room: &Room,
     context: &mut GeminiEventContext<'_>,
@@ -1027,14 +1045,10 @@ async fn handle_data_packet(
     }
     if let Some(paused) = result.pause_changed {
         room.local_participant()
-            .publish_data(DataPacket {
-                payload: serde_json::to_vec(
-                    &serde_json::json!({ "type": "pause_state", "paused": paused }),
-                )?,
-                topic: Some(TOPIC_CONTROL.to_string()),
-                reliable: true,
-                ..Default::default()
-            })
+            .publish_data(browser_packet(
+                TOPIC_CONTROL,
+                &serde_json::json!({ "type": "pause_state", "paused": paused }),
+            )?)
             .await?;
         if paused && context.activity.floor != Floor::Listening {
             context.activity.discarding_output =
@@ -1046,14 +1060,12 @@ async fn handle_data_packet(
     }
     if let Some(status) = result.round_changed {
         room.local_participant()
-            .publish_data(DataPacket {
-                payload: serde_json::to_vec(&serde_json::json!({
+            .publish_data(browser_packet(
+                TOPIC_CONTROL,
+                &serde_json::json!({
                     "type": "round_state", "round": "behavioral", "status": status
-                }))?,
-                topic: Some(TOPIC_CONTROL.to_string()),
-                reliable: true,
-                ..Default::default()
-            })
+                }),
+            )?)
             .await?;
     }
     if let Some(prompt) = result.generate_reply {
@@ -1347,15 +1359,13 @@ async fn publish_framework_progress(
     state: &RuntimeState,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     room.local_participant()
-        .publish_data(DataPacket {
-            payload: serde_json::to_vec(&serde_json::json!({
+        .publish_data(browser_packet(
+            TOPIC_CONTROL,
+            &serde_json::json!({
                 "type": "framework_state",
                 "phases": crate::agent::framework_progress(state),
-            }))?,
-            topic: Some(TOPIC_CONTROL.to_string()),
-            reliable: true,
-            ..Default::default()
-        })
+            }),
+        )?)
         .await?;
     Ok(())
 }
@@ -1585,12 +1595,7 @@ fn report_error_note(
 }
 
 fn report_data_packet(report: serde_json::Value) -> Result<DataPacket, serde_json::Error> {
-    Ok(DataPacket {
-        payload: serde_json::to_vec(&report)?,
-        topic: Some(TOPIC_REPORT.to_string()),
-        reliable: true,
-        ..Default::default()
-    })
+    browser_packet(TOPIC_REPORT, &report)
 }
 
 async fn send_wrap_up_and_wait(
@@ -1773,6 +1778,29 @@ mod tests {
 
     use crate::config::load_from_pairs;
     use ::livekit::webrtc::video_frame::{I420Buffer, VideoBuffer, VideoFrame, VideoRotation};
+
+    /// A packet the browser never receives is the same as one never sent.
+    ///
+    /// The topic is the channel it listens on and reliability is whether a bad
+    /// network may drop it, and both were written out at each call site where
+    /// either could go missing on its own. The report and the control messages
+    /// differ only in which topic they name.
+    #[test]
+    fn a_published_packet_carries_its_topic_and_arrives_reliably() {
+        for topic in [TOPIC_CONTROL, TOPIC_REPORT] {
+            let packet = browser_packet(topic, &serde_json::json!({"type": "pause_state"}))
+                .expect("a json object serializes");
+            assert_eq!(
+                packet.topic.as_deref(),
+                Some(topic),
+                "no topic is a channel nobody is reading"
+            );
+            assert!(packet.reliable, "the browser only gets one of these");
+            let payload: serde_json::Value =
+                serde_json::from_slice(&packet.payload).expect("the payload is the message");
+            assert_eq!(payload["type"], "pause_state");
+        }
+    }
 
     /// The interview starts once, when the candidate joined.
     ///
