@@ -606,6 +606,20 @@ test("framework evidence preserves valid kinds and drops hostile or contradictor
   });
   assert.deepEqual(report.frameworkEvidence.map((item) => item.kind), ["inferred", "observed", "skipped"]);
   assert.equal(report.frameworkEvidence[1].future, "ignored", "unknown fields round-trip but are never rendered");
+
+  // Round-tripping them is for a newer client's fields, not for a payload.
+  // The account sync refuses an oversized report outright rather than
+  // trimming it, so one unbounded field here costs the whole account copy.
+  const huge = sanitizeReport({
+    frameworkEvidence: [{
+      atMs: 1000, phase: "algorithm", source: "candidate_speech", kind: "observed",
+      confidence: 90, summary: "Explained invariant", frameworkVersion: 1,
+      future: "x".repeat(4096),
+    }],
+  });
+  assert.equal(huge.frameworkEvidence.length, 1, "the row itself is still kept");
+  assert.equal(huge.frameworkEvidence[0].future, undefined, "the payload is not");
+  assert.equal(huge.frameworkEvidence[0].summary, "Explained invariant");
   assert.deepEqual(sanitizeReport({}).frameworkEvidence, []);
 });
 

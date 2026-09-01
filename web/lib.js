@@ -547,6 +547,9 @@ export function sanitizeReport(raw) {
       phases: assessmentPhases.map((phase) => normalizedAssessment.get(phase)),
     }
     : null;
+  const knownEvidenceFields = new Set([
+    "atMs", "phase", "source", "kind", "confidence", "summary", "frameworkVersion",
+  ]);
   const evidencePhases = new Set(frameworkPhases.map((phase) => phase.toLowerCase()));
   const frameworkSources = new Set(["candidate_speech", "editor_snapshot", "test_event", "session_timing"]);
   const frameworkKinds = new Set(["observed", "inferred", "skipped"]);
@@ -564,8 +567,21 @@ export function sanitizeReport(raw) {
         || !Number.isFinite(atMs) || atMs < 0 || !Number.isFinite(confidence)
         || confidence < 0 || confidence > 100 || !Number.isFinite(frameworkVersion)
         || frameworkVersion < 1 || !summary) return null;
+      // Unknown fields round-trip, so a newer report re-saved by an older
+      // client does not quietly lose what that client could not name. They
+      // are also the only part of an evidence row with no size of its own,
+      // and the whole report has to fit what the account sync accepts, which
+      // refuses the request rather than trimming it: over that, the candidate
+      // keeps the local copy and the account copy simply never arrives. So
+      // they are carried while they are a field rather than a payload.
+      const extras = Object.fromEntries(
+        Object.entries(item).filter(([key]) => !knownEvidenceFields.has(key)),
+      );
+      const carried = new TextEncoder().encode(JSON.stringify(extras)).length <= 512
+        ? extras
+        : {};
       return {
-        ...item,
+        ...carried,
         // A year, which no interview approaches: this is a sanity bound on a
         // timestamp that arrives as untrusted JSON, not a statement about how
         // long a session runs.
