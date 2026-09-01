@@ -4568,10 +4568,9 @@ async fn consent_withdrawal_stops_egress() {
 /// pass while an ingest route sat beside the ones it named.
 ///
 /// Read as text out of `src/web/mod.rs` because axum does not hand back the
-/// routes
-/// it was given. That makes this a tripwire on the source rather than on the
-/// running router, which is the trade the whole file already makes for the
-/// browser side.
+/// routes it was given. That makes this a tripwire on the source rather than
+/// on the running router, which is the trade the whole file already makes for
+/// the browser side.
 ///
 /// The ceiling, stated because the name overpromises otherwise: this compares
 /// paths. It does not read methods, and it cannot see what a handler does with

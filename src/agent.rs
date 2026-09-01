@@ -742,9 +742,8 @@ pub fn record_framework_evidence(
 /// ticks off.
 ///
 /// Derived rather than accumulated: the evidence list is already the record,
-/// and
-/// a second counter beside it would be one restart away from disagreeing with
-/// the report built from the same list. Carries no summary, confidence or
+/// and a second counter beside it would be one restart away from disagreeing
+/// with the report built from the same list. Carries no summary, confidence or
 /// source, because this is the only framework state the candidate is allowed to
 /// see and any of those would leak how they are being read.
 pub fn framework_progress(state: &RuntimeState) -> Vec<&'static str> {
@@ -856,7 +855,8 @@ pub struct DataEventResult {
     pub update_last_interjection: bool,
     pub generate_reply: Option<String>,
     pub finish_interview: Option<String>,
-    /// Some only when a practice-mode pause state genuinely changed.
+    /// Some only when the pause state genuinely changed, so a browser asking
+    /// twice for what it already has publishes nothing.
     pub pause_changed: Option<bool>,
     /// Agent-owned round transition result: `started` or `skipped`.
     pub round_changed: Option<&'static str>,

@@ -404,8 +404,7 @@ impl AppState {
 /// The provider is handed over rather than looked up again from the room name.
 /// Re-deriving it is precisely the mistake `pool::room_and_provider` documents:
 /// two pools assembled by two directory scans can disagree, and the candidate
-/// then
-/// holds a token for one LiveKit project while the interviewer waits in
+/// then holds a token for one LiveKit project while the interviewer waits in
 /// another. There is one lookup, and this is its result.
 ///
 /// Returns `false` when no interviewer will come, so the caller can refuse
