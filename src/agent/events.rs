@@ -193,6 +193,12 @@ fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
                 generate_reply: (!paused).then(|| {
                     "The interview has resumed. Continue with your REACTO step.".to_string()
                 }),
+
+                // Resuming makes Jim speak, so it starts the interjection
+                // cooldown like every other reply here. Without this the timing
+                // loop could follow the resume line straight into a proactive
+                // review, talking twice over a candidate who just came back.
+                update_last_interjection: !paused,
                 ..DataEventResult::default()
             }
         }

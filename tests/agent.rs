@@ -4117,6 +4117,14 @@ fn control_events_respect_the_end_and_report_what_they_did() {
         resumed.generate_reply.is_some(),
         "resuming into silence leaves the candidate waiting on a turn nobody takes"
     );
+    assert!(
+        resumed.update_last_interjection,
+        "the resume line is a turn, so it starts the interjection cooldown like any other"
+    );
+    assert!(
+        !paused.update_last_interjection,
+        "pausing says nothing, so it starts no cooldown"
+    );
 
     // The coding gate wants both phases, and says which round it moved to
     // either way: the browser closes the editor on that answer.
