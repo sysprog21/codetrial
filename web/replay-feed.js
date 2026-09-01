@@ -24,6 +24,8 @@ export function initReplay(deps) {
 
 const REPLAY_FLUSH_MS = 1000;
 const REPLAY_MAX_BATCH = 32;
+const REPLAY_RETRY_MS = 60_000;
+const REPLAY_RETRY_MAX_MS = 120_000;
 
 /// How often the clock and the problem heading are restated.
 ///
@@ -34,6 +36,8 @@ const REPLAY_MAX_BATCH = 32;
 const REPLAY_STAGE_MS = 15000;
 
 let replayQueue = [];
+/// When the server's rate limit stops applying, as a wall-clock instant.
+let retryAfter = 0;
 let replayTimer = null;
 let replayClosed = false;
 let replayStageAt = 0;
@@ -47,11 +51,22 @@ let replayAvatarState = "";
 export function recordReplay(kind, payload) {
   if (!recordingEnabled || !state.interviewId || replayClosed) return;
   replayQueue.push({ v: replayVersion, kind, at: Date.now(), payload });
-  if (replayQueue.length >= REPLAY_MAX_BATCH) {
+  if (replayQueue.length >= REPLAY_MAX_BATCH && Date.now() >= retryAfter) {
     void flushReplay();
     return;
   }
   replayTimer ||= setTimeout(() => void flushReplay(), REPLAY_FLUSH_MS);
+}
+
+/// How long to wait after the server says it has heard enough for now.
+///
+/// Its own `Retry-After` when it sends one, because the server knows the width
+/// of its window and the browser is guessing. Bounded either way: a header
+/// asking for an hour would hold the rest of the interview in memory.
+function retryDelayMs(header) {
+  const seconds = Number(header);
+  const wanted = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : REPLAY_RETRY_MS;
+  return Math.min(wanted, REPLAY_RETRY_MAX_MS);
 }
 
 /// Stop producing, and forget what has not gone yet.
@@ -68,10 +83,11 @@ export function closeReplay() {
 
 /// Send what is queued.
 ///
-/// Dropped rather than retried on a failure. The events are a description of an
+/// Dropped rather than retried when the network fails. The events describe an
 /// interview that is still happening, and a queue that grew through an outage
 /// would deliver a burst of stale state after it, on top of the newer state
-/// that had already arrived.
+/// that had already arrived. A refusal to serve for a minute is not an outage:
+/// that batch is kept and sent when the minute is up.
 /// One flush at a time, in the order they were asked for.
 ///
 /// `recordReplay` starts one whenever the queue fills, and the interview's last
@@ -120,13 +136,19 @@ async function sendQueuedBatch() {
       if (code === "replay_quota_exceeded") closeReplay();
     }
     // Rate limiting says "not now", not "never", and the batch has already
-    // been taken off the queue. Dropping it here lost that stretch of the
-    // interview for good, which is the one outcome the limit is not meant to
-    // have: it exists to bound how often a browser may ask, not to decide
-    // which evidence survives. Put back at the front, because the feed is
-    // ordered by what the candidate did.
+    // been taken off the queue. Dropping it lost that stretch of the interview
+    // for good, which is the one outcome the limit is not meant to have: it
+    // bounds how often a browser may ask, it does not decide which evidence
+    // survives. Put back at the front, because the feed is ordered by what the
+    // candidate did.
+    //
+    // And held until the window the server named has passed. Putting the batch
+    // back leaves the queue at the size that makes `recordReplay` flush on
+    // sight, so without this the next event asks again, and so does every
+    // event after it: a limit answered by asking harder.
     if (response.status === 429) {
       replayQueue.unshift(...batch);
+      retryAfter = Date.now() + retryDelayMs(response.headers.get("Retry-After"));
     }
   } catch {
     // Offline. The interview is what matters and it is still running.

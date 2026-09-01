@@ -169,7 +169,19 @@ test("a rate-limited replay batch is kept, not dropped", () => {
   // handles loses that stretch of the interview for good. Rate limiting bounds
   // how often a browser may ask; it is not a decision about which evidence
   // survives, which is what silently discarding the batch made it.
-  const send = functionBody(withoutComments(read("web/replay-feed.js")), "sendQueuedBatch");
+  const feed = withoutComments(read("web/replay-feed.js"));
+  const send = functionBody(feed, "sendQueuedBatch");
   assert.match(send, /=== 429/, "429 has to be handled at all");
   assert.match(send, /429[\s\S]*replayQueue\.unshift\(\.\.\.batch\)/, "and handled by keeping it");
+
+  // Keeping it is only half the answer. Putting the batch back leaves the
+  // queue at the size that makes recordReplay flush on sight, so a limit
+  // answered without a wait becomes a request per event for the rest of the
+  // window: every event asks again, and every one earns another refusal.
+  assert.match(send, /429[\s\S]*retryAfter =/, "and by waiting out the window");
+  assert.match(
+    functionBody(feed, "recordReplay"),
+    /REPLAY_MAX_BATCH && Date\.now\(\) >= retryAfter/,
+    "the fill trigger has to respect the wait, or nothing does",
+  );
 });
