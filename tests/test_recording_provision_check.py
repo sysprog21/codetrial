@@ -20,7 +20,9 @@ DELIVERY_EMAIL = "codetrial-recording@staging-project.iam.gserviceaccount.com"
 # the absence of `iamConfiguration` and `lifecycle` is the whole point.
 STANDARDISED_BUCKET = {
     "uniform_bucket_level_access": True,
-    "lifecycle_config": {"rule": [{"action": {"type": "Delete"}, "condition": {"age": 1}}]},
+    "lifecycle_config": {
+        "rule": [{"action": {"type": "Delete"}, "condition": {"age": 1}}]
+    },
 }
 
 
@@ -32,7 +34,9 @@ def bucket_resource(**overrides):
     return {
         "projectNumber": PROJECT_NUMBER,
         "iamConfiguration": {"uniformBucketLevelAccess": {"enabled": True}},
-        "lifecycle": {"rule": [{"action": {"type": "Delete"}, "condition": {"age": 1}}]},
+        "lifecycle": {
+            "rule": [{"action": {"type": "Delete"}, "condition": {"age": 1}}]
+        },
     } | overrides
 
 
@@ -42,17 +46,44 @@ class ProvisionCheckTests(unittest.TestCase):
         path.write_text(contents)
         path.chmod(0o755)
 
-    def run_check(self, *, bucket_iam=None, ancestors_iam=None, bucket=None, drive=None, drive_page_2=None, fail="", delivery_email=DELIVERY_EMAIL, auditor_email="auditor@staging-project.iam.gserviceaccount.com", template_origin="https://1.1.1.1"):
+    def run_check(
+        self,
+        *,
+        bucket_iam=None,
+        ancestors_iam=None,
+        bucket=None,
+        drive=None,
+        drive_page_2=None,
+        fail="",
+        delivery_email=DELIVERY_EMAIL,
+        auditor_email="auditor@staging-project.iam.gserviceaccount.com",
+        template_origin="https://1.1.1.1",
+    ):
         if bucket_iam is None:
             bucket_iam = {
-                "bindings": [{"role": "roles/storage.objectAdmin", "members": [f"serviceAccount:{DELIVERY_EMAIL}"]}]
+                "bindings": [
+                    {
+                        "role": "roles/storage.objectAdmin",
+                        "members": [f"serviceAccount:{DELIVERY_EMAIL}"],
+                    }
+                ]
             }
         if ancestors_iam is None:
-            ancestors_iam = [{"resource": "projects/staging-project", "policy": {"bindings": []}}]
+            ancestors_iam = [
+                {"resource": "projects/staging-project", "policy": {"bindings": []}}
+            ]
         if bucket is None:
             bucket = bucket_resource()
         if drive is None:
-            drive = {"permissions": [{"emailAddress": DELIVERY_EMAIL, "type": "user", "role": "organizer"}]}
+            drive = {
+                "permissions": [
+                    {
+                        "emailAddress": DELIVERY_EMAIL,
+                        "type": "user",
+                        "role": "organizer",
+                    }
+                ]
+            }
         if drive_page_2 is not None:
             drive = drive | {"nextPageToken": "page-2"}
         else:
@@ -118,7 +149,13 @@ esac
                     {"project_id": "staging-project", "client_email": auditor_email}
                 ),
             }
-            return subprocess.run(["sh", SCRIPT], env=environment, text=True, capture_output=True, check=False)
+            return subprocess.run(
+                ["sh", SCRIPT],
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
 
     def test_exact_least_privilege_contract_passes(self):
         result = self.run_check()
@@ -132,20 +169,37 @@ esac
         self.assertIn("expected exactly", result.stderr)
 
     def test_extra_bucket_role_is_refused(self):
-        result = self.run_check(bucket_iam={"bindings": [
-            {"role": "roles/storage.objectAdmin", "members": [f"serviceAccount:{DELIVERY_EMAIL}"]},
-            {"role": "roles/storage.admin", "members": [f"serviceAccount:{DELIVERY_EMAIL}"]},
-        ]})
+        result = self.run_check(
+            bucket_iam={
+                "bindings": [
+                    {
+                        "role": "roles/storage.objectAdmin",
+                        "members": [f"serviceAccount:{DELIVERY_EMAIL}"],
+                    },
+                    {
+                        "role": "roles/storage.admin",
+                        "members": [f"serviceAccount:{DELIVERY_EMAIL}"],
+                    },
+                ]
+            }
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("bucket roles", result.stderr)
 
     def test_public_bucket_bindings_are_refused(self):
         for principal in ["allUsers", "allAuthenticatedUsers"]:
             with self.subTest(principal=principal):
-                result = self.run_check(bucket_iam={"bindings": [
-                    {"role": "roles/storage.objectAdmin", "members": [f"serviceAccount:{DELIVERY_EMAIL}"]},
-                    {"role": "roles/storage.admin", "members": [principal]},
-                ]})
+                result = self.run_check(
+                    bucket_iam={
+                        "bindings": [
+                            {
+                                "role": "roles/storage.objectAdmin",
+                                "members": [f"serviceAccount:{DELIVERY_EMAIL}"],
+                            },
+                            {"role": "roles/storage.admin", "members": [principal]},
+                        ]
+                    }
+                )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("which may or may not contain", result.stderr)
 
@@ -162,38 +216,79 @@ esac
     def test_conditional_binding_is_refused(self):
         # A condition can grant the role only inside a time window or a resource
         # prefix, so the binding no longer says what access the account has.
-        result = self.run_check(bucket_iam={"bindings": [
-            {
-                "role": "roles/storage.objectAdmin",
-                "members": [f"serviceAccount:{DELIVERY_EMAIL}"],
-                "condition": {"title": "window", "expression": "request.time < timestamp('2027-01-01T00:00:00Z')"},
-            },
-        ]})
+        result = self.run_check(
+            bucket_iam={
+                "bindings": [
+                    {
+                        "role": "roles/storage.objectAdmin",
+                        "members": [f"serviceAccount:{DELIVERY_EMAIL}"],
+                        "condition": {
+                            "title": "window",
+                            "expression": "request.time < timestamp('2027-01-01T00:00:00Z')",
+                        },
+                    },
+                ]
+            }
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("conditional IAM binding", result.stderr)
 
     def test_group_ancestor_binding_is_refused(self):
-        result = self.run_check(ancestors_iam=[{"resource": "projects/staging-project", "policy": {"bindings": [
-            {"role": "roles/storage.admin", "members": ["group:delivery@example.test"]},
-        ]}}])
+        result = self.run_check(
+            ancestors_iam=[
+                {
+                    "resource": "projects/staging-project",
+                    "policy": {
+                        "bindings": [
+                            {
+                                "role": "roles/storage.admin",
+                                "members": ["group:delivery@example.test"],
+                            },
+                        ]
+                    },
+                }
+            ]
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("group:delivery@example.test", result.stderr)
         self.assertIn("resolve the membership", result.stderr)
 
     def test_project_wide_role_is_refused(self):
-        result = self.run_check(ancestors_iam=[{"resource": "projects/staging-project", "policy": {"bindings": [
-            {"role": "roles/viewer", "members": [f"serviceAccount:{DELIVERY_EMAIL}"]},
-        ]}}])
+        result = self.run_check(
+            ancestors_iam=[
+                {
+                    "resource": "projects/staging-project",
+                    "policy": {
+                        "bindings": [
+                            {
+                                "role": "roles/viewer",
+                                "members": [f"serviceAccount:{DELIVERY_EMAIL}"],
+                            },
+                        ]
+                    },
+                }
+            ]
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("forbidden ancestor IAM roles", result.stderr)
 
     def test_inherited_organization_role_is_refused(self):
-        result = self.run_check(ancestors_iam=[
-            {"resource": "projects/staging-project", "policy": {"bindings": []}},
-            {"resource": "organizations/123", "policy": {"bindings": [
-                {"role": "roles/storage.admin", "members": [f"serviceAccount:{DELIVERY_EMAIL}"]},
-            ]}},
-        ])
+        result = self.run_check(
+            ancestors_iam=[
+                {"resource": "projects/staging-project", "policy": {"bindings": []}},
+                {
+                    "resource": "organizations/123",
+                    "policy": {
+                        "bindings": [
+                            {
+                                "role": "roles/storage.admin",
+                                "members": [f"serviceAccount:{DELIVERY_EMAIL}"],
+                            },
+                        ]
+                    },
+                },
+            ]
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("organizations/123", result.stderr)
 
@@ -202,18 +297,39 @@ esac
         # `resource`. The grant is what the audit refuses, not the spelling.
         for label in ["id", "resource"]:
             with self.subTest(label=label):
-                result = self.run_check(ancestors_iam=[
-                    {label: "organizations/123", "policy": {"bindings": [
-                        {"role": "roles/storage.admin", "members": [f"serviceAccount:{DELIVERY_EMAIL}"]},
-                    ]}},
-                ])
+                result = self.run_check(
+                    ancestors_iam=[
+                        {
+                            label: "organizations/123",
+                            "policy": {
+                                "bindings": [
+                                    {
+                                        "role": "roles/storage.admin",
+                                        "members": [f"serviceAccount:{DELIVERY_EMAIL}"],
+                                    },
+                                ]
+                            },
+                        },
+                    ]
+                )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("organizations/123", result.stderr)
 
     def test_ancestor_grant_is_refused_with_no_label_at_all(self):
-        result = self.run_check(ancestors_iam=[{"policy": {"bindings": [
-            {"role": "roles/storage.admin", "members": [f"serviceAccount:{DELIVERY_EMAIL}"]},
-        ]}}])
+        result = self.run_check(
+            ancestors_iam=[
+                {
+                    "policy": {
+                        "bindings": [
+                            {
+                                "role": "roles/storage.admin",
+                                "members": [f"serviceAccount:{DELIVERY_EMAIL}"],
+                            },
+                        ]
+                    }
+                }
+            ]
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("forbidden ancestor IAM roles", result.stderr)
 
@@ -232,18 +348,33 @@ esac
     def test_filtered_lifecycle_rule_is_refused(self):
         # Each of these deletes something at a day old while leaving other
         # objects behind, and nothing here says which prefix the recordings use.
-        for extra in [{"matchesPrefix": ["other/"]}, {"matchesStorageClass": ["NEARLINE"]},
-                      {"numNewerVersions": 2}]:
+        for extra in [
+            {"matchesPrefix": ["other/"]},
+            {"matchesStorageClass": ["NEARLINE"]},
+            {"numNewerVersions": 2},
+        ]:
             with self.subTest(extra=extra):
-                result = self.run_check(bucket=bucket_resource(
-                    lifecycle={"rule": [{"action": {"type": "Delete"},
-                                         "condition": {"age": 1, **extra}}]}))
+                result = self.run_check(
+                    bucket=bucket_resource(
+                        lifecycle={
+                            "rule": [
+                                {
+                                    "action": {"type": "Delete"},
+                                    "condition": {"age": 1, **extra},
+                                }
+                            ]
+                        }
+                    )
+                )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("unconditional 24-hour Delete lifecycle", result.stderr)
 
     def test_bucket_without_uniform_access_is_refused(self):
-        result = self.run_check(bucket=bucket_resource(
-            iamConfiguration={"uniformBucketLevelAccess": {"enabled": False}}))
+        result = self.run_check(
+            bucket=bucket_resource(
+                iamConfiguration={"uniformBucketLevelAccess": {"enabled": False}}
+            )
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Uniform Bucket-Level Access", result.stderr)
 
@@ -251,25 +382,39 @@ esac
         # A shared drive caps this listing at 100 per page. A second grant for
         # the delivery account landing on page two used to leave the count at
         # one, and the audit reported an exactness it had never seen.
-        result = self.run_check(drive_page_2={"permissions": [
-            {"emailAddress": DELIVERY_EMAIL, "type": "user", "role": "writer"},
-        ]})
+        result = self.run_check(
+            drive_page_2={
+                "permissions": [
+                    {"emailAddress": DELIVERY_EMAIL, "type": "user", "role": "writer"},
+                ]
+            }
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("exactly one active Shared Drive organizer", result.stderr)
 
     def test_a_sole_grant_on_the_second_page_is_still_found(self):
         result = self.run_check(
             drive={"permissions": []},
-            drive_page_2={"permissions": [
-                {"emailAddress": DELIVERY_EMAIL, "type": "user", "role": "organizer"},
-            ]},
+            drive_page_2={
+                "permissions": [
+                    {
+                        "emailAddress": DELIVERY_EMAIL,
+                        "type": "user",
+                        "role": "organizer",
+                    },
+                ]
+            },
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_non_organizer_drive_membership_is_refused(self):
-        result = self.run_check(drive={"permissions": [
-            {"emailAddress": DELIVERY_EMAIL, "type": "user", "role": "writer"},
-        ]})
+        result = self.run_check(
+            drive={
+                "permissions": [
+                    {"emailAddress": DELIVERY_EMAIL, "type": "user", "role": "writer"},
+                ]
+            }
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Shared Drive organizer", result.stderr)
 
