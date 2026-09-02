@@ -46,11 +46,29 @@ pub struct TokenConfig<'a> {
 /// credential a holder can join a room with, not a key that merely mints them.
 /// It is the shortest-lived secret here and the easiest to print by accident,
 /// because it looks like a response body rather than a key.
-#[derive(Clone, PartialEq, Eq)]
+///
+/// No `Eq`, because `duration_min` is a JSON number and one of those can be a
+/// float. Nothing compares these, and the alternative is rounding the value
+/// that has to reach the page exactly as the agent reads it.
+#[derive(Clone, PartialEq)]
 pub struct TokenResponse {
     pub token: String,
     pub server_url: String,
     pub room_name: String,
+    /// The length this interview actually runs for, which is not always the
+    /// length that was asked for: `token_duration_min` clamps to the range and,
+    /// where this server records, to the recording cap. The page runs its own
+    /// countdown and its own round split, so it has to be told the answer
+    /// rather than keep the question it asked.
+    ///
+    /// Read back out of the metadata with the agent's own
+    /// `duration_from_metadata`, rather than taken from the value that went in.
+    /// The metadata keeps a fractional request fractional and the agent
+    /// truncates it to whole minutes before it builds the deadline, so handing
+    /// the page the value as written would have it counting 42.8 minutes
+    /// against an interview the interviewer ends at 42. One function, so the
+    /// two cannot answer differently.
+    pub duration_min: Value,
 }
 
 /// `/api/token` mints a real LiveKit credential and is necessarily
@@ -216,7 +234,7 @@ pub fn token_response(
     let grounding = crate::agent::sanitize_interview_grounding(request.get("interviewGrounding"));
     let mut metadata = json!({
         "problemId": problem_id,
-        "durationMin": duration_min,
+        "durationMin": duration_min.clone(),
         "interviewLoop": interview_loop.as_str(),
         "interviewProfile": crate::agent::interview_profile_json(&profile),
         "candidateIdentity": default_identity,
@@ -245,6 +263,7 @@ pub fn token_response(
         })?,
         server_url: config.server_url.to_string(),
         room_name: room_name.to_string(),
+        duration_min: json!(crate::agent::duration_from_metadata(Some(&duration_min))),
     })
 }
 
@@ -474,7 +493,11 @@ pub(crate) async fn token_handler(
         json!({
             "token": response.token,
             "serverUrl": response.server_url,
-            "roomName": response.room_name
+            "roomName": response.room_name,
+            // The same number the token metadata carries, so the page counts
+            // down the interview the agent is running rather than the one the
+            // lobby asked for.
+            "durationMin": response.duration_min
         }),
     )
 }
