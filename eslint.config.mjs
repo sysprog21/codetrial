@@ -1,7 +1,7 @@
 import globals from "globals";
 
 // The Rust half of this repo is gated at `-D warnings` and carries four
-// `#[allow]`s in 45k lines, each with its reason on the same line. The
+// `#[allow]`s in 45k lines, each with a reason written beside it. The
 // JavaScript half had no static analysis at all, which is the largest asymmetry
 // in the project: a misspelled identifier in `web/interview.js` reaches a
 // candidate's browser, while the same mistake in `src/web/mod.rs` never leaves

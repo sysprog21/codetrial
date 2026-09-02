@@ -29,18 +29,26 @@ git diff --cached --name-only -z --diff-filter=ACMR \
     exit 1
 }
 
-# Config a checker looks for beside the files it reads. Present already if it is
-# itself staged, which is the case worth getting right: a commit that changes a
-# rule should be judged by the new rule.
+# Config a checker looks for beside the files it reads. Taken from the index
+# like everything else here: a staged rule change judges the files staged with
+# it, and an unstaged one decides nothing. `git show :path` fails for a file
+# that is not in the index at all, which is the case where there is nothing to
+# copy.
 for config in eslint.config.mjs .shellcheckrc .editorconfig; do
-    [ -e "$work/$config" ] || [ ! -e "$config" ] || cp "$config" "$work/$config"
+    [ -e "$work/$config" ] && continue
+    git show ":$config" > "$work/$config" 2> /dev/null || rm -f "$work/$config"
 done
 [ -d node_modules ] && ln -s "$ROOT/node_modules" "$work/node_modules"
 
-# Word splitting on the lists below is the point, so a path with a space in it
-# would be handed over as two paths. This tree has none, and git would quote
-# such a name here anyway, which the checkers would reject loudly rather than
-# skip quietly.
+# Word splitting on the lists below is the point, which makes a path containing
+# whitespace two paths and the check meaningless. Refuse it by name instead:
+# there are none in this tree, and a commit that adds one should hear why it was
+# not checked rather than be told everything passed.
+if printf '%s\n' "$staged" | grep -q '[[:blank:]]'; then
+    printf '%s\n' "$staged" | grep '[[:blank:]]' | sed 's/^/  /' >&2
+    echo "pre-commit: the staged paths above contain whitespace" >&2
+    exit 1
+fi
 matching()
 {
     printf '%s\n' "$staged" | grep -E "$1" | grep -vE '^web/vendor/'
@@ -65,7 +73,8 @@ have()
 # working without a manifest beside the staged copies.
 rs=$(matching '\.rs$')
 if [ -n "$rs" ] && have rustfmt; then
-    edition=$(sed -n 's/^edition *= *"\([0-9]*\)".*/\1/p' Cargo.toml | sed -n 1p)
+    edition=$(git show :Cargo.toml 2> /dev/null \
+        | sed -n 's/^edition *= *"\([0-9]*\)".*/\1/p' | sed -n 1p)
     # shellcheck disable=SC2086
     run_in_work rustfmt --edition "${edition:-2024}" --check $rs
 fi

@@ -55,9 +55,19 @@ fn install_git_hooks() {
     // a hook that comes back after somebody deletes it; `make hooks` is the
     // same install without the watch.
     println!("cargo:rerun-if-changed=scripts/install-git-hooks.sh");
-    let hooks = root.join(".git/hooks");
-    if hooks.is_dir() {
-        println!("cargo:rerun-if-changed=.git/hooks");
+
+    // Asked of git rather than assumed to be `.git/hooks`: a linked worktree
+    // keeps its hooks with the common directory, and core.hooksPath moves them
+    // anywhere. Watching the wrong directory is a watch that never fires.
+    //
+    // Not the whole of scripts/, though adding a hook there is the one change
+    // this does not notice. That directory holds every gate script in the
+    // repository and each edit to one would rebuild the binary; `make hooks`
+    // covers the rare case at no standing cost.
+    if let Some(hooks) = hooks_dir(&root)
+        && hooks.is_dir()
+    {
+        println!("cargo:rerun-if-changed={}", hooks.display());
     }
 
     let installer = root.join("scripts/install-git-hooks.sh");
@@ -94,6 +104,21 @@ fn install_git_hooks() {
         Ok(output) => warn_hooks(&String::from_utf8_lossy(&output.stderr)),
         Err(error) => warn_hooks(&error.to_string()),
     }
+}
+
+/// Where git keeps this checkout's hooks, which is `.git/hooks` only in the
+/// simple case.
+fn hooks_dir(root: &std::path::Path) -> Option<std::path::PathBuf> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-path", "hooks"])
+        .current_dir(root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8(output.stdout).ok()?;
+    Some(std::path::PathBuf::from(path.trim()))
 }
 
 fn warn_hooks(reason: &str) {

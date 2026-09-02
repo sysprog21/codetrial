@@ -30,7 +30,12 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     [ "$local_sha" != "$zero" ] || continue
     git cat-file -e "${local_sha}^{commit}" 2> /dev/null || continue
 
-    if [ "$remote_sha" = "$zero" ]; then
+    # The remote tip is whatever the other side advertised, which a clone that
+    # has not fetched since does not have. Judging what is unpublished anywhere
+    # is the same question asked a wider way, and it beats refusing the push
+    # over an object nobody here can read.
+    if [ "$remote_sha" = "$zero" ] \
+        || ! git cat-file -e "${remote_sha}^{commit}" 2> /dev/null; then
         commits=$(git rev-list --no-merges "$local_sha" --not "$published")
     else
         commits=$(git rev-list --no-merges "${remote_sha}..${local_sha}")

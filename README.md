@@ -49,7 +49,7 @@ license are recorded in that notice.
 | Phase | Required | Notes |
 |---|---|---|
 | Build time | Rust stable, `curl` or `wget`, and `sha256sum` or `shasum` | Cargo resolves application crates from `Cargo.lock`. `make build` fetches the checksum-pinned browser assets on the first build. |
-| Test time | Build-time tools, Node.js 18+, and Python 3 | Node runs browser and fixture checks; Python verifies generated problem-bank files. `npm ci` adds ESLint and Playwright for the full local browser gate. `ruff`, `shellcheck`, `shfmt`, `commentflow`, `actionlint`, and `cargo-audit` are optional: each gate reports that it skipped rather than failing without them. CI installs them, so nothing skips there. |
+| Test time | Build-time tools, Node.js 18+, and Python 3 | Node runs browser and fixture checks; Python verifies generated problem-bank files. `npm ci` adds ESLint and Playwright for the full local browser gate. `ruff`, `shellcheck`, `shfmt`, `commentflow`, `actionlint`, and `cargo-audit` are optional: each gate reports that it skipped rather than failing without them. CI installs all of them except `actionlint`, whose lane skips there too. |
 | Runtime | The compiled `codetrial` binary and a config file | No Node.js, Python, or `node_modules` is required. Rust dependencies are compiled into the binary; browser dependencies are vendored, checksum-pinned, and embedded, so a `web/` directory is optional and only overrides what is already inside. |
 
 Running an interview also requires a LiveKit Cloud project and a Google AI Studio

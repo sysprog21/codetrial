@@ -63,11 +63,15 @@ absent()
     fail "$label (unexpected /$pattern/ in $file)"
 }
 
-# Invoked through `expect`, which shellcheck cannot follow.
-# shellcheck disable=SC2329
+# Through the installed hook rather than the script it wraps, so a wrapper that
+# resolves the wrong path fails these cases instead of passing them.
+#
+# Invoked through `expect`, which shellcheck cannot follow. 0.9.0 calls that
+# SC2317 and newer versions SC2329, and CI runs the older one.
+# shellcheck disable=SC2317,SC2329
 message()
 {
-    printf '%s\n' "$1" | sh "$ROOT/scripts/git-commit-msg.sh" -
+    printf '%s\n' "$1" | "$hooks/commit-msg" -
 }
 
 # The scratch repository carries copies of the scripts, so the installer links
@@ -85,25 +89,33 @@ git config user.email hooks@test
 git config user.name "Hook Test"
 git config commit.gpgsign false
 
+# Asked of git, not spelled `.git/hooks`: a contributor with a global
+# core.hooksPath sends the installer somewhere else, and assertions against the
+# default path would then test a directory nothing writes to.
+hooks=$(git rev-parse --path-format=absolute --git-path hooks) || exit 1
+
 echo "  HOOKS   installer"
 expect 0 "installer installs the hooks" ./scripts/install-git-hooks.sh
 for hook in commit-msg pre-commit pre-push prepare-commit-msg; do
     cases=$((cases + 1))
-    [ -x ".git/hooks/$hook" ] && [ ! -L ".git/hooks/$hook" ] \
-        || fail "installer did not install $hook"
+    if [ ! -x "$hooks/$hook" ]; then
+        fail "installer did not install an executable $hook"
+    fi
 done
 expect 2 "installer rejects an unknown flag" ./scripts/install-git-hooks.sh --bogus
 
 # An installer that overwrites is an installer that deletes somebody's work, so
 # a name it wants but does not own has to come back as KEEP rather than a link.
-rm -f .git/hooks/pre-push
-printf '#!/bin/sh\nexit 0\n' > .git/hooks/pre-push
-chmod +x .git/hooks/pre-push
+rm -f "$hooks/pre-push"
+printf '#!/bin/sh\nexit 0\n' > "$hooks/pre-push"
+chmod +x "$hooks/pre-push"
 ./scripts/install-git-hooks.sh > "$work/install.out" 2>&1
 contains "installer keeps a hook it did not write" "$work/install.out" "KEEP"
 cases=$((cases + 1))
-[ -L .git/hooks/pre-push ] && fail "installer replaced a hook it did not write"
-rm -f .git/hooks/pre-push
+if [ ! -e "$hooks/pre-push" ]; then
+    fail "installer removed a hook it did not write"
+fi
+rm -f "$hooks/pre-push"
 ./scripts/install-git-hooks.sh > /dev/null 2>&1
 
 echo "  HOOKS   commit-msg"
@@ -155,8 +167,9 @@ expect 0 "a commit -v message gets the rules" \
 cases=$((cases + 1))
 rules_line=$(grep -n "Commit rules" "$work/scissors.msg" | cut -d: -f1)
 cut_line=$(grep -n ">8" "$work/scissors.msg" | cut -d: -f1)
-[ -n "$rules_line" ] && [ -n "$cut_line" ] && [ "$rules_line" -lt "$cut_line" ] \
-    || fail "the rules landed below the scissors line"
+if [ -z "$rules_line" ] || [ -z "$cut_line" ] || [ "$rules_line" -ge "$cut_line" ]; then
+    fail "the rules landed below the scissors line"
+fi
 contains "the diff survives" "$work/scissors.msg" "^diff --git"
 
 printf 'Already written\n' > "$work/written.msg"
@@ -171,7 +184,11 @@ expect 0 "a staged file the checkers accept" sh ./scripts/git-pre-commit.sh
 
 # The whole reason the hook checks out the index: an edit nobody staged must
 # neither fail this commit nor ride along in it.
-printf '#!/bin/sh\nif true; then\n  echo "two-space body"\nfi\n' > untidy.sh
+#
+# The defect is a syntax error rather than a formatting one, because `sh -n` is
+# always there while shfmt and shellcheck are lanes the hook skips when the tool
+# is missing. A case that needs an optional tool turns a laptop without it red.
+printf '#!/bin/sh\nif true; then\n  echo "no fi below me"\n' > untidy.sh
 expect 0 "an unstaged file is not judged" sh ./scripts/git-pre-commit.sh
 git add untidy.sh
 expect 1 "the same file once staged" sh ./scripts/git-pre-commit.sh
@@ -194,12 +211,14 @@ git worktree add -q -b linked "$work/linked" || exit 1
 (mkdir -p "$work/linked/scripts" \
     && cp scripts/git-*.sh scripts/install-git-hooks.sh "$work/linked/scripts/") \
     || exit 1
-rm -f .git/hooks/pre-commit
-ln -s "$PWD/scripts/git-pre-commit.sh" .git/hooks/pre-commit || exit 1
+rm -f "$hooks/pre-commit"
+ln -s "$PWD/scripts/git-pre-commit.sh" "$hooks/pre-commit" || exit 1
 (cd "$work/linked" && ./scripts/install-git-hooks.sh > "$work/linked.out") || exit 1
 absent "linked installer keeps no hook from another worktree" "$work/linked.out" "KEEP"
 cases=$((cases + 1))
-[ ! -L .git/hooks/pre-commit ] || fail "linked installer did not replace the old link"
+if [ -L "$hooks/pre-commit" ]; then
+    fail "linked installer did not replace the old link"
+fi
 printf '#!/bin/sh\nexit 1\n' > scripts/git-pre-commit.sh
 (cd "$work/linked" \
     && printf '#!/bin/sh\n\necho staged\n' > linked.sh \

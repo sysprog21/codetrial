@@ -40,8 +40,16 @@ fi
 
 # `git commit -v` puts the diff after a scissors line and drops it before the
 # message is stored, so the rules must not see it. Comments go the same way.
-message=$(sed '/-\{8,\}[[:space:]]*>8[[:space:]]*-\{8,\}/,$d' "$message_file" \
-    | git stripspace --strip-comments)
+# Under `commit.cleanup=verbatim` the comment lines are kept in the stored
+# message, so stripping them would judge a message nobody commits. Everything
+# below the scissors goes either way: git drops it before storing.
+cleanup=$(git config --get commit.cleanup 2> /dev/null) || cleanup=default
+message=$(sed '/-\{8,\}[[:space:]]*>8[[:space:]]*-\{8,\}/,$d' "$message_file")
+if [ "$cleanup" = verbatim ]; then
+    : # Kept as written, blank lines included: that is what verbatim means.
+else
+    message=$(printf '%s\n' "$message" | git stripspace --strip-comments)
+fi
 
 subject=$(printf '%s\n' "$message" | sed -n '1p')
 second=$(printf '%s\n' "$message" | sed -n '2p')

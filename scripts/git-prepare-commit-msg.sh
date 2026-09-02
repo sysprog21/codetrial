@@ -36,7 +36,8 @@ trap 'rm -f "$rules"' EXIT
     "$(git rev-parse --show-toplevel)/scripts/git-commit-msg.sh" --rules
     printf '\nStaged:\n'
     git diff --cached --name-only | sed 's/^/  /'
-} | sed "s/^/$comment_char /; s/[[:space:]]*$//" > "$rules"
+} | awk -v char="$comment_char" '{sub(/[[:space:]]+$/, ""); print char " " $0}' \
+    | sed 's/[[:space:]]*$//' > "$rules"
 
 # Appended after the scissors line the block would be stripped with the diff
 # that `git commit -v` puts there, so it is spliced in above it instead. An

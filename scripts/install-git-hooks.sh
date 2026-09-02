@@ -64,6 +64,11 @@ for hook in "$ROOT"/scripts/git-*.sh; do
     # An existing hook is somebody's, even when it looks like ours: overwriting
     # it is how a local workflow disappears without anyone noticing.
     if ours "$target" "$name"; then
+
+        # Content is not enough: git skips a hook without the executable bit and
+        # says nothing, so a wrapper that lost it reads as installed while
+        # nothing runs.
+        chmod +x "$target" || failed=1
         printf '  OK      %s\n' "$name"
     elif legacy_ours "$target" "$name" \
         && rm -f "$target" \

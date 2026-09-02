@@ -8,7 +8,7 @@ description: How a CodeTrial change is validated - scripts/test.sh as the offlin
 One gate runs offline and is the thing to run:
 
 ```sh
-./scripts/test.sh     # everything CI's `check` job runs
+./scripts/test.sh     # the gate CI's `check` job runs
 make check            # the same, plus a live Gemini credential check
 ```
 
@@ -16,10 +16,16 @@ make check            # the same, plus a live Gemini credential check
 one failure does not hide the next; the summary line names every gate that
 failed. It covers `cargo fmt --check`, `clippy -D warnings`, `cargo test`, the
 Python unittest suites, the Node browser tests, ESLint, `ruff check`,
-`shellcheck`, the generated-artifact drift checks, `cargo-audit` and
-`actionlint`. The last five tools are optional: a missing one prints that it
-skipped rather than failing,
-which is also why a green local run is weaker evidence than a green CI run.
+`shellcheck`, the generated-artifact drift checks, the hook suite, `cargo-audit`
+and `actionlint`.
+
+Five of those lanes are optional, and only those five: ESLint, `ruff`,
+`shellcheck`, `cargo-audit` and `actionlint` say they skipped when the tool is
+absent rather than failing. The drift checks sitting between them in the output
+always run. That skipping is why a green local run is weaker evidence than a
+green CI run, and so is what this script leaves out: CI also holds a pull
+request's own commit messages to the rules, mutation-tests the diff in its own
+job, and builds release binaries for three targets.
 
 The `indent` gate is the one that surprises people. `scripts/indent.sh --check`
 copies the tree, runs the whole formatter chain over the copy, and diffs:
