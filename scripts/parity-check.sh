@@ -3,13 +3,14 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 TMP=$(mktemp -d)
-cleanup() {
-  rm -r "$TMP" 2>/dev/null || true
+cleanup()
+{
+    rm -r "$TMP" 2> /dev/null || true
 }
 trap cleanup EXIT INT TERM
 
 if [ "${PARITY_CHECK_VALIDATE_FIXTURES_ONLY:-}" ]; then
-  PY_CAPTURE="$ROOT/tests/golden/browser-python.json" node <<'NODE'
+    PY_CAPTURE="$ROOT/tests/golden/browser-python.json" node << 'NODE'
 const fs = require("fs");
 const capture = JSON.parse(fs.readFileSync(process.env.PY_CAPTURE, "utf8"));
 function assert(condition, message) {
@@ -24,12 +25,12 @@ assert(capture.problemTitle === "Two Sum", "browser reference problem mismatch")
 assert(capture.firstTranscriptSpeaker === "alex", "browser reference speaker mismatch");
 assert(Number.isInteger(capture.transcriptSegmentCount) && capture.transcriptSegmentCount > 0, "browser reference missing transcript");
 NODE
-  exit 0
+    exit 0
 fi
 
 BROWSER_CHECK_AGENT=rust BROWSER_CHECK_CAPTURE="$TMP/rust.json" "$ROOT/scripts/browser-check.sh"
 
-PY_CAPTURE="$ROOT/tests/golden/browser-python.json" RUST_CAPTURE="$TMP/rust.json" node <<'NODE'
+PY_CAPTURE="$ROOT/tests/golden/browser-python.json" RUST_CAPTURE="$TMP/rust.json" node << 'NODE'
 const fs = require("fs");
 const python = JSON.parse(fs.readFileSync(process.env.PY_CAPTURE, "utf8"));
 const rust = JSON.parse(fs.readFileSync(process.env.RUST_CAPTURE, "utf8"));

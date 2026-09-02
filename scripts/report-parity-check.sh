@@ -3,13 +3,14 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 TMP=$(mktemp -d)
-cleanup() {
-  rm -r "$TMP" 2>/dev/null || true
+cleanup()
+{
+    rm -r "$TMP" 2> /dev/null || true
 }
 trap cleanup EXIT INT TERM
 
 if [ "${REPORT_PARITY_CHECK_VALIDATE_FIXTURES_ONLY:-}" ]; then
-  PY_CAPTURE="$ROOT/tests/golden/report-python.json" node <<'NODE'
+    PY_CAPTURE="$ROOT/tests/golden/report-python.json" node << 'NODE'
 const fs = require("fs");
 const capture = JSON.parse(fs.readFileSync(process.env.PY_CAPTURE, "utf8"));
 function assert(condition, message) {
@@ -25,29 +26,30 @@ for (const key of ["codingScore", "communicationScore", "decision", "summary", "
   assert(capture.reportKeys.includes(key), `report reference missing ${key}`);
 }
 NODE
-  exit 0
+    exit 0
 fi
 
-run_capture() {
-  output=$1
-  attempt=1
-  while [ "$attempt" -le 2 ]; do
+run_capture()
+{
+    output=$1
+    attempt=1
+    while [ "$attempt" -le 2 ]; do
 
-    # The `${...}` inside the single quotes is a JavaScript template literal
-    # that node expands, not a shell expansion this script wants back.
-    # shellcheck disable=SC2016
-    if BROWSER_CHECK_AGENT=rust BROWSER_CHECK_FLOW=report BROWSER_CHECK_CAPTURE="$output" "$ROOT/scripts/browser-check.sh" &&
-      CAPTURE="$output" node -e 'const c=JSON.parse(require("fs").readFileSync(process.env.CAPTURE,"utf8")); if (c.report?.error === true) { console.error(`rust report fallback: ${String(c.report.summary || "").slice(0, 240)}`); process.exit(1); }'; then
-      return 0
-    fi
-    attempt=$((attempt + 1))
-  done
-  return 1
+        # The `${...}` inside the single quotes is a JavaScript template literal
+        # that node expands, not a shell expansion this script wants back.
+        # shellcheck disable=SC2016
+        if BROWSER_CHECK_AGENT=rust BROWSER_CHECK_FLOW=report BROWSER_CHECK_CAPTURE="$output" "$ROOT/scripts/browser-check.sh" \
+            && CAPTURE="$output" node -e 'const c=JSON.parse(require("fs").readFileSync(process.env.CAPTURE,"utf8")); if (c.report?.error === true) { console.error(`rust report fallback: ${String(c.report.summary || "").slice(0, 240)}`); process.exit(1); }'; then
+            return 0
+        fi
+        attempt=$((attempt + 1))
+    done
+    return 1
 }
 
 run_capture "$TMP/rust.json"
 
-PY_CAPTURE="$ROOT/tests/golden/report-python.json" RUST_CAPTURE="$TMP/rust.json" node <<'NODE'
+PY_CAPTURE="$ROOT/tests/golden/report-python.json" RUST_CAPTURE="$TMP/rust.json" node << 'NODE'
 const fs = require("fs");
 const python = JSON.parse(fs.readFileSync(process.env.PY_CAPTURE, "utf8"));
 const rust = JSON.parse(fs.readFileSync(process.env.RUST_CAPTURE, "utf8"));

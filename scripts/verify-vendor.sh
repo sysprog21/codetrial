@@ -22,13 +22,19 @@ VENDOR="$ROOT/web/vendor"
 # Both read the same `hash name` lines, so SHA256SUMS needs no variant. Bind one
 # at startup so a machine with neither fails here rather than mid-walk.
 # sha256sum is tried first because shasum is a Perl script and slower.
-if command -v sha256sum >/dev/null 2>&1; then
-  sha256_check() { sha256sum -c SHA256SUMS; }
-elif command -v shasum >/dev/null 2>&1; then
-  sha256_check() { shasum -a 256 -c SHA256SUMS; }
+if command -v sha256sum > /dev/null 2>&1; then
+    sha256_check()
+    {
+        sha256sum -c SHA256SUMS
+    }
+elif command -v shasum > /dev/null 2>&1; then
+    sha256_check()
+    {
+        shasum -a 256 -c SHA256SUMS
+    }
 else
-  echo "verify-vendor: need sha256sum or shasum" >&2
-  exit 1
+    echo "verify-vendor: need sha256sum or shasum" >&2
+    exit 1
 fi
 
 status=0
@@ -48,17 +54,20 @@ status=0
 # The `||` has to stay out here rather than move into a helper the two walks
 # share: `exit` inside `$(...)` leaves the substitution, not the script, and the
 # silent pass is back.
-files=$(find "$VENDOR" -type f ! -path "$VENDOR/avatar/jim.vrm" ! -name SHA256SUMS ! -name FETCH ! -name 'README*' ! -name 'LICENSE*') ||
-  { echo "verify-vendor: cannot scan ${VENDOR#"$ROOT"/}" >&2; exit 1; }
+files=$(find "$VENDOR" -type f ! -path "$VENDOR/avatar/jim.vrm" ! -name SHA256SUMS ! -name FETCH ! -name 'README*' ! -name 'LICENSE*') \
+    || {
+        echo "verify-vendor: cannot scan ${VENDOR#"$ROOT"/}" >&2
+        exit 1
+    }
 
 while read -r file; do
-  [ -n "$file" ] || continue
-  sums=$(dirname "$file")/SHA256SUMS
-  if [ ! -f "$sums" ] || ! grep -qF "  $(basename "$file")" "$sums"; then
-    echo "unpinned vendored file: ${file#"$ROOT"/}" >&2
-    status=1
-  fi
-done <<EOF
+    [ -n "$file" ] || continue
+    sums=$(dirname "$file")/SHA256SUMS
+    if [ ! -f "$sums" ] || ! grep -qF "  $(basename "$file")" "$sums"; then
+        echo "unpinned vendored file: ${file#"$ROOT"/}" >&2
+        status=1
+    fi
+done << EOF
 $files
 EOF
 
@@ -67,13 +76,16 @@ EOF
 # Then verify the recorded hashes still match the bytes on disk. Every directory
 # is checked even after one fails, so a bad checkout reports all of its damage
 # in one run instead of one bad file per rerun.
-sums_files=$(find "$VENDOR" -name SHA256SUMS) ||
-  { echo "verify-vendor: cannot scan ${VENDOR#"$ROOT"/}" >&2; exit 1; }
+sums_files=$(find "$VENDOR" -name SHA256SUMS) \
+    || {
+        echo "verify-vendor: cannot scan ${VENDOR#"$ROOT"/}" >&2
+        exit 1
+    }
 
 while read -r sums; do
-  [ -n "$sums" ] || continue
-  (cd "$(dirname "$sums")" && sha256_check) || status=1
-done <<EOF
+    [ -n "$sums" ] || continue
+    (cd "$(dirname "$sums")" && sha256_check) || status=1
+done << EOF
 $sums_files
 EOF
 

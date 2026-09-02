@@ -5,20 +5,21 @@ set -eu
 # resource identifiers in the checkout. The auditor reads IAM policies; the
 # delivery account only proves access to the bucket and Shared Drive it uses.
 
-need() {
-  name=$1
-  value=$2
-  [ -n "$value" ] || {
-    echo "missing required environment variable: $name" >&2
-    exit 2
-  }
+need()
+{
+    name=$1
+    value=$2
+    [ -n "$value" ] || {
+        echo "missing required environment variable: $name" >&2
+        exit 2
+    }
 }
 
 for tool in gcloud curl mktemp python3; do
-  command -v "$tool" >/dev/null 2>&1 || {
-    echo "required command is unavailable: $tool" >&2
-    exit 2
-  }
+    command -v "$tool" > /dev/null 2>&1 || {
+        echo "required command is unavailable: $tool" >&2
+        exit 2
+    }
 done
 
 need CODETRIAL_RECORDING_PROJECT "${CODETRIAL_RECORDING_PROJECT:-}"
@@ -37,55 +38,55 @@ template_origin=${CODETRIAL_RECORDING_TEMPLATE_BASE_URL%/}
 unset CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON CODETRIAL_RECORDING_IAM_AUDITOR_JSON
 
 case "$project" in
-  *[!A-Za-z0-9-]*)
-    echo "CODETRIAL_RECORDING_PROJECT has an invalid project id" >&2
-    exit 2
-    ;;
+    *[!A-Za-z0-9-]*)
+        echo "CODETRIAL_RECORDING_PROJECT has an invalid project id" >&2
+        exit 2
+        ;;
 esac
 case "$bucket" in
-  *[!a-z0-9._-]*)
-    echo "CODETRIAL_RECORDING_GCS_BUCKET has an invalid bucket name" >&2
-    exit 2
-    ;;
+    *[!a-z0-9._-]*)
+        echo "CODETRIAL_RECORDING_GCS_BUCKET has an invalid bucket name" >&2
+        exit 2
+        ;;
 esac
 case "$drive_id" in
-  *[!A-Za-z0-9_-]*)
-    echo "CODETRIAL_RECORDING_DRIVE_ID has an invalid Drive id" >&2
-    exit 2
-    ;;
+    *[!A-Za-z0-9_-]*)
+        echo "CODETRIAL_RECORDING_DRIVE_ID has an invalid Drive id" >&2
+        exit 2
+        ;;
 esac
 case "$template_origin" in
-  https://*) ;;
-  *)
-    echo "template base URL must be an https origin" >&2
-    exit 2
-    ;;
+    https://*) ;;
+    *)
+        echo "template base URL must be an https origin" >&2
+        exit 2
+        ;;
 esac
 template_host=${template_origin#https://}
 
 # Structure only. Which addresses the host stands for is settled below by
 # resolving it, so no spelling of a private address needs a pattern here.
 case "$template_host" in
-  '' | :* | */* | *\?* | *\#* | *@* | \[*)
-    echo "template base URL must be a bare https host with no path or userinfo" >&2
-    exit 2
-    ;;
-esac
-case "$template_host" in
-  *:*)
-    template_port=${template_host#*:}
-    case "$template_port" in
-      [1-9] | [1-9][0-9] | [1-9][0-9][0-9] | [1-9][0-9][0-9][0-9] | [1-9][0-9][0-9][0-9][0-9]) ;;
-      *)
-        echo "template base URL has an invalid port" >&2
+    '' | :* | */* | *\?* | *\#* | *@* | \[*)
+        echo "template base URL must be a bare https host with no path or userinfo" >&2
         exit 2
         ;;
-    esac
-    [ "$template_port" -le 65535 ] || {
-      echo "template base URL has an invalid port" >&2
-      exit 2
-    }
-    ;;
+esac
+case "$template_host" in
+    *:*)
+        template_port=${template_host#*:}
+        case "$template_port" in
+            [1-9] | [1-9][0-9] | [1-9][0-9][0-9] | [1-9][0-9][0-9][0-9] | [1-9][0-9][0-9][0-9][0-9]) ;;
+            *)
+                echo "template base URL has an invalid port" >&2
+                exit 2
+                ;;
+        esac
+        [ "$template_port" -le 65535 ] || {
+            echo "template base URL has an invalid port" >&2
+            exit 2
+        }
+        ;;
 esac
 
 # Egress fetches this origin from the public internet, so what matters is where
@@ -93,7 +94,7 @@ esac
 # 127.0.0.1 and neither looks private. Resolve it before either credential is
 # loaded and refuse any answer that is not globally routable.
 template_name=${template_host%%:*}
-python3 - "$template_name" <<'PY'
+python3 - "$template_name" << 'PY'
 import ipaddress
 import socket
 import sys
@@ -115,12 +116,13 @@ export CLOUDSDK_CONFIG="$work/gcloud"
 mkdir "$CLOUDSDK_CONFIG"
 delivery_key=$work/delivery-service-account.json
 auditor_key=$work/iam-auditor.json
-printf '%s' "$delivery_json" >"$delivery_key"
-printf '%s' "$auditor_json" >"$auditor_key"
+printf '%s' "$delivery_json" > "$delivery_key"
+printf '%s' "$auditor_json" > "$auditor_key"
 unset delivery_json auditor_json
 
-service_account_email() {
-  python3 - "$1" "$2" <<'PY'
+service_account_email()
+{
+    python3 - "$1" "$2" << 'PY'
 import json
 import sys
 
@@ -144,29 +146,29 @@ delivery_email=$(service_account_email "$delivery_key" "delivery service-account
 auditor_email=$(service_account_email "$auditor_key" "IAM auditor JSON")
 expected_delivery_email="codetrial-recording@$project.iam.gserviceaccount.com"
 [ "$delivery_email" = "$expected_delivery_email" ] || {
-  echo "delivery service account must be $expected_delivery_email" >&2
-  exit 2
+    echo "delivery service account must be $expected_delivery_email" >&2
+    exit 2
 }
 [ "$delivery_email" != "$auditor_email" ] || {
-  echo "CODETRIAL_RECORDING_IAM_AUDITOR_JSON must identify a different account" >&2
-  exit 2
+    echo "CODETRIAL_RECORDING_IAM_AUDITOR_JSON must identify a different account" >&2
+    exit 2
 }
 
 # Policy reads must use the independent auditor. A failed read is a failed
 # check, not a reason to assume the delivery account has no broader grant.
-gcloud auth activate-service-account --key-file="$auditor_key" --quiet >/dev/null
-gcloud storage buckets get-iam-policy "gs://$bucket" --format=json >"$work/bucket-iam.json"
+gcloud auth activate-service-account --key-file="$auditor_key" --quiet > /dev/null
+gcloud storage buckets get-iam-policy "gs://$bucket" --format=json > "$work/bucket-iam.json"
 
 # A project policy cannot show grants inherited from folders or the
 # organization. This command returns the complete ancestor chain, and failure is
 # a failed audit rather than a reason to assume there are no broad grants.
-gcloud projects get-ancestors-iam-policy "$project" --format=json >"$work/ancestors-iam.json"
+gcloud projects get-ancestors-iam-policy "$project" --format=json > "$work/ancestors-iam.json"
 
 # --raw, because the checks below read the JSON API's own field names. Without
 # it gcloud standardises the resource into uniform_bucket_level_access and
 # lifecycle_config, and both reads come back empty against a bucket that is
 # configured correctly.
-gcloud storage buckets describe "gs://$bucket" --raw --format=json >"$work/bucket.json"
+gcloud storage buckets describe "gs://$bucket" --raw --format=json > "$work/bucket.json"
 
 # The bucket name is configured on its own, so nothing so far ties it to the
 # project whose ancestor policies were just audited. A bucket owned elsewhere
@@ -174,7 +176,7 @@ gcloud storage buckets describe "gs://$bucket" --raw --format=json >"$work/bucke
 project_number=$(gcloud projects describe "$project" --format="value(projectNumber)")
 auditor_token=$(gcloud auth print-access-token)
 auditor_curl=$work/auditor-curl.conf
-printf 'header = "Authorization: Bearer %s"\n' "$auditor_token" >"$auditor_curl"
+printf 'header = "Authorization: Bearer %s"\n' "$auditor_token" > "$auditor_curl"
 
 # Follow the pages. A shared drive caps permissions.list at 100 per page, and
 # naming only permissions() in fields drops nextPageToken, so a truncated answer
@@ -184,20 +186,20 @@ drive_query="supportsAllDrives=true&pageSize=100&fields=nextPageToken,permission
 drive_url="https://www.googleapis.com/drive/v3/files/$drive_id/permissions?$drive_query"
 page=0
 while :; do
-  page=$((page + 1))
-  [ "$page" -le 50 ] || {
-    echo "Shared Drive permissions did not stop paging after $((page - 1)) pages" >&2
-    exit 1
-  }
-  curl --fail --silent --show-error --max-time 20 --config "$auditor_curl" \
-    "$drive_url" >"$work/drive-page-$page.json"
-  token=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("nextPageToken") or "")' \
-    "$work/drive-page-$page.json")
-  [ -n "$token" ] || break
-  drive_url="https://www.googleapis.com/drive/v3/files/$drive_id/permissions?$drive_query&pageToken=$token"
+    page=$((page + 1))
+    [ "$page" -le 50 ] || {
+        echo "Shared Drive permissions did not stop paging after $((page - 1)) pages" >&2
+        exit 1
+    }
+    curl --fail --silent --show-error --max-time 20 --config "$auditor_curl" \
+        "$drive_url" > "$work/drive-page-$page.json"
+    token=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("nextPageToken") or "")' \
+        "$work/drive-page-$page.json")
+    [ -n "$token" ] || break
+    drive_url="https://www.googleapis.com/drive/v3/files/$drive_id/permissions?$drive_query&pageToken=$token"
 done
 
-python3 - "$work/drive-permissions.json" "$work"/drive-page-*.json <<'PY_MERGE'
+python3 - "$work/drive-permissions.json" "$work"/drive-page-*.json << 'PY_MERGE'
 import json
 import sys
 
@@ -209,7 +211,7 @@ json.dump({"permissions": permissions}, open(out, "w", encoding="utf-8"))
 PY_MERGE
 
 python3 - "$delivery_email" "$work/bucket-iam.json" "$work/ancestors-iam.json" \
-  "$work/bucket.json" "$work/drive-permissions.json" "$project_number" <<'PY'
+    "$work/bucket.json" "$work/drive-permissions.json" "$project_number" << 'PY'
 import json
 import sys
 
@@ -318,17 +320,17 @@ echo "IAM, lifecycle, and Shared Drive membership are least-privilege"
 
 # Access is checked as the delivery account itself, not inferred from the
 # auditor's broad ability to inspect policy.
-gcloud auth activate-service-account --key-file="$delivery_key" --quiet >/dev/null
-gcloud storage ls "gs://$bucket" >/dev/null
+gcloud auth activate-service-account --key-file="$delivery_key" --quiet > /dev/null
+gcloud storage ls "gs://$bucket" > /dev/null
 echo "GCS bucket is accessible"
 delivery_token=$(gcloud auth print-access-token)
 delivery_curl=$work/delivery-curl.conf
-printf 'header = "Authorization: Bearer %s"\n' "$delivery_token" >"$delivery_curl"
+printf 'header = "Authorization: Bearer %s"\n' "$delivery_token" > "$delivery_curl"
 curl --fail --silent --show-error --max-time 20 --config "$delivery_curl" \
-  "https://www.googleapis.com/drive/v3/files?corpora=drive&driveId=$drive_id&includeItemsFromAllDrives=true&supportsAllDrives=true&pageSize=1&fields=files(id)" \
-  >/dev/null
+    "https://www.googleapis.com/drive/v3/files?corpora=drive&driveId=$drive_id&includeItemsFromAllDrives=true&supportsAllDrives=true&pageSize=1&fields=files(id)" \
+    > /dev/null
 echo "Shared Drive is accessible"
 
 curl --fail --silent --show-error --max-time 30 \
-  "$template_origin/recording/index.html" >/dev/null
+    "$template_origin/recording/index.html" > /dev/null
 echo "Recording template is publicly reachable"
