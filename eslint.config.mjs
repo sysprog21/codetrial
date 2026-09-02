@@ -1,10 +1,11 @@
 import globals from "globals";
 
-// The Rust half of this repo is gated at `-D warnings` and carries no
-// `#[allow]` anywhere. The JavaScript half had no static analysis at all, which
-// is the largest asymmetry in the project: a misspelled identifier in
-// `web/interview.js` reaches a candidate's browser, while the same mistake in
-// `src/web.rs` never leaves the developer's terminal.
+// The Rust half of this repo is gated at `-D warnings` and carries four
+// `#[allow]`s in 45k lines, each with its reason on the same line. The
+// JavaScript half had no static analysis at all, which is the largest asymmetry
+// in the project: a misspelled identifier in `web/interview.js` reaches a
+// candidate's browser, while the same mistake in `src/web/mod.rs` never leaves
+// the developer's terminal.
 //
 // This config is deliberately narrow. Run against the codebase as it stands it
 // finds almost nothing, because the code is already clean; every rule here is
