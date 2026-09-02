@@ -339,6 +339,16 @@ fn unsupported_delivery_and_personality_judgments_are_rejected_atomically() {
         "You come across as confident on camera.",
         "Your personality seems introverted.",
         "You lacked charisma.",
+        "Your nervousness showed.",
+        "You spoke nervously about the invariant.",
+        "You seemed anxious about the edge case.",
+        "Visible anxiety slowed the walkthrough.",
+        "You lacked confidence in the approach.",
+        "A lack-of-confidence came through.",
+        "You came across as nervous.",
+        "You were visibly nervous.",
+        "A nervous pause followed the question.",
+        "Your nervous energy showed.",
     ] {
         let mut report = valid_strict_report();
         report["summary"] = json!(claim);
@@ -2783,6 +2793,29 @@ fn browser_control_packets_all_reach_the_agent() {
     );
 }
 
+/// A run with no cases is not a run every case passed. `passed == total` holds
+/// at zero and zero, so the positive-count guard is the only thing standing
+/// between an empty run and the congratulation, and it is the same shape as the
+/// clamp that once mapped 100 of 150 onto 99 of 99.
+#[test]
+fn a_test_run_with_no_cases_is_not_congratulated() {
+    let mut state = RuntimeState::default();
+    let payload = json!({"language": "python", "passed": 0, "total": 0});
+    let result = apply_data_event(
+        &mut state,
+        TOPIC_TEST_RESULTS,
+        &payload,
+        TEST_REACTION_COOLDOWN_S,
+    );
+    let reply = result
+        .generate_reply
+        .expect("the agent reacts to the run it was handed");
+    assert!(
+        !reply.contains("every one passed"),
+        "a run with no cases was congratulated: {reply}"
+    );
+}
+
 /// The agent's reaction to a test run is chosen from `passed`, `total`, and
 /// `setupError`. A renamed field on the producer side does not fail anything;
 /// it congratulates a candidate whose tests failed.
@@ -3340,6 +3373,20 @@ fn heartbeats_are_evicted_before_evidence_and_do_not_break_the_chain() {
     assert_eq!(
         last["seq"], 82,
         "the closing sample is the most recent heartbeat"
+    );
+
+    // Filling the buffer exactly is not overflowing it. One event arrives per
+    // call, so the cap is reached before it is passed, and evicting on arrival
+    // at the cap would throw away evidence there was room for.
+    let mut exact = RuntimeState::default();
+    let mut exact_chain = Chain::new();
+    for _ in 0..MAX_INTEGRITY_EVENTS {
+        exact_chain.push(&mut exact, "CAMERA_STOPPED", "high");
+    }
+    assert_eq!(
+        exact.integrity_events.len(),
+        MAX_INTEGRITY_EVENTS,
+        "a full buffer is not an overflowing one"
     );
 
     // Evidence past the cap still evicts oldest-first, and that is now the only
@@ -4096,6 +4143,14 @@ fn control_events_respect_the_end_and_report_what_they_did() {
     assert!(
         resumed.generate_reply.is_some(),
         "resuming into silence leaves the candidate waiting on a turn nobody takes"
+    );
+    assert!(
+        resumed.update_last_interjection,
+        "the resume line is a turn, so it starts the interjection cooldown like any other"
+    );
+    assert!(
+        !paused.update_last_interjection,
+        "pausing says nothing, so it starts no cooldown"
     );
 
     // The coding gate wants both phases, and says which round it moved to

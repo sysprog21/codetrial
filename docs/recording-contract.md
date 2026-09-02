@@ -8,9 +8,11 @@ operator records the following values outside the repository and runs
 
 | Environment variable | Required value |
 |---|---|
+| `CODETRIAL_RECORDING_PROJECT` | Google Cloud project that owns the staging bucket |
 | `CODETRIAL_RECORDING_GCS_BUCKET` | Private staging bucket name |
 | `CODETRIAL_RECORDING_DRIVE_ID` | Platform-owned Shared Drive ID |
 | `CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON` | Service-account key JSON, supplied from a secret store |
+| `CODETRIAL_RECORDING_IAM_AUDITOR_JSON` | Different service-account key with read authority to audit the project, every ancestor policy, bucket, and Shared Drive |
 | `CODETRIAL_RECORDING_TEMPLATE_BASE_URL` | Public HTTPS origin that will serve `/recording/index.html` |
 
 Record the LiveKit Cloud project ID, service-account principal, its exact roles,
@@ -26,13 +28,65 @@ needed to create reader permissions and delete the delivered artifact. Do not
 grant it a project-wide Storage role, Workspace administrator privilege, or any
 other Shared Drive membership.
 
-The checker performs only a basic HTTPS-origin check (including no loopback or
-bracketed IPv6 host) and does not establish public reachability or fetch the
-path before task 8a creates it. The operator records that evidence separately;
-task 7a verifies the template URL in a real Egress run. The checker writes the
-supplied key and short-lived access-token header only to a private temporary
-directory, removes the key from its child-process environment, and does not
-replace a developer's active `gcloud` account.
+The staging bucket must enable Uniform Bucket-Level Access; legacy bucket and
+default-object ACLs are not an auditable least-privilege boundary. The checker
+reads that setting, and the lifecycle rule beside it, from the bucket resource
+as the JSON API returns it, which is why it asks gcloud for the raw form: the
+standardised form renames both fields and would refuse a bucket that is
+configured correctly.
+
+The checker authenticates the independent auditor first and refuses a delivery
+account other than the dedicated
+`codetrial-recording@<project-id>.iam.gserviceaccount.com` identity, an
+unreadable project, folder, or organization policy, a delivery grant at any
+ancestor scope, anything other than the exact bucket-scoped Storage role, a
+one-day Delete lifecycle rule carrying any filter beside the age, a bucket
+owned by a different project than the one whose ancestors it just walked, or
+anything other than one active organizer membership on the Shared Drive. It
+then authenticates the delivery account to prove its own bucket and Drive
+access, and fetches the recording template from the public, globally-routable
+HTTPS origin. The two supplied keys and short-lived access-token headers live
+only in a private temporary directory, are removed from child-process
+environments where they are not needed, and do not replace a developer's active
+`gcloud` account.
+
+An indirect grant is refused rather than resolved. A role reaching the delivery
+account through allUsers, a group, a domain or a principal set cannot be ruled
+in or out without a directory lookup this script does not make, so it stops and
+names the binding. Most organizations carry at least one group binding
+somewhere in the ancestor chain, so expect this to fire on a real project and
+to need a decision: either grant that role directly, or accept a directory
+lookup as a new dependency of the audit. It is deliberately not a warning,
+because a gate that reports exact least privilege after skipping a binding it
+could not read is the failure this whole check exists to avoid.
+
+### Recording 1 staging run
+
+Do not create a billable resource until every cell in this record is filled by
+the recording operations lead. It records owners and references, never keys,
+OAuth tokens, or raw media. The current `UNFILLED` values are an intentional
+stop condition, not defaults or estimates.
+
+| Field | Recorded value |
+|---|---|
+| Budget approver name | **UNFILLED — stop** |
+| Approval date | **UNFILLED — stop** |
+| Pricing-source URL | **UNFILLED — stop** |
+| Per-60-second-run estimate | **UNFILLED — stop** |
+| Google Cloud billing account and project | **UNFILLED — stop** |
+| LiveKit Cloud organization and region | **UNFILLED — stop** |
+| Workspace domain | **UNFILLED — stop** |
+| Key custodian | **UNFILLED — stop** |
+| Naming prefix | **UNFILLED — stop; use `codetrial-recording-staging-<date>`** |
+| Public template HTTPS origin | **UNFILLED — stop** |
+| DNS owner | **UNFILLED — stop** |
+| TLS owner | **UNFILLED — stop** |
+| IAM-audit observer and read authority | **UNFILLED — stop; must not be the delivery service account** |
+
+Once filled, record the LiveKit project ID, bucket name, Drive ID, grant dates,
+template curl result, and the deletion-run acceptance JSON in the private
+operations record named here. Do not commit credentials, raw media, or OAuth
+material with this document.
 
 ### Naming, without the identifiers
 
@@ -1070,6 +1124,41 @@ deadlines forward and writes `deleted_by = 'operator'` on them, so the sweeper
 deletes their media on its next pass and the tombstone says a person asked
 rather than that a deadline arrived. That is the third value `deleted_by` takes,
 and this is what produces it.
+
+### Disposable acceptance-retention trigger
+
+The credentialed Recording 1 run must not change the production retention
+constant. For its isolated staging database, run
+`./scripts/recording-cleanup.sh --db "$CODETRIAL_DB_PATH" --expire "$CODETRIAL_RECORDING_ID"`
+after delivery, with the server and its normal sweeper running. This writes the
+test row's deadline forward and labels the tombstone `operator`; it does not
+delete media itself. The delivery/cleanup harness then polls that exact Drive
+file and GCS object until both are absent. A back-dated row is an equivalent
+fixture-only trigger, but a global `RETENTION_SECONDS` override is not: it
+would change unrelated staging rows and no longer proves the named recording's
+cleanup path.
+
+The credentialed harness records one lifecycle document, not three unrelated
+passes. After the media phase has written it, run the delivery and cleanup
+phases with `CODETRIAL_RECORDING_RECIPIENT_EMAIL` set to the verified recipient
+address for delivery, and `CODETRIAL_DB_PATH` set to the isolated staging
+database for cleanup. Each phase asks only for what it reads: delivery opens no
+database, and cleanup judges no reader permission, because by the time cleanup
+runs that grant is meant to have lapsed. It finds exactly one
+`<recording_id>.mp4` in the Shared Drive and reads that recipient's single
+reader permission, whose expiry must still be active and be no more than 24
+hours from verification. That reader must also be the file's only one: counting
+the recipient's permissions alone would call a file with a second reader on it
+a correctly scoped delivery. The server sets the expiry from its post-upload
+clock; comparing it to Drive's earlier `createdTime` would reject valid 24-hour
+grants. Cleanup success means both the exact Drive file and GCS object return
+HTTP 404 after the server-owned sweeper runs; any other status remains a
+failure.
+
+The completed document is judged by `cargo test --test recording_integration
+lifecycle_acceptance`, which runs only with `CODETRIAL_RECORDING_INTEGRATION=1`
+and `CODETRIAL_RECORDING_LIFECYCLE_ACCEPTANCE=1` set. Both are opt-in because a
+media-only pass has no Drive file or cleanup result to judge yet.
 
 The script does not talk to Drive or GCS itself, because a second
 implementation of a deletion is a second thing that can be wrong about what it

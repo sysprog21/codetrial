@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://codetrial.example/media-output.schema.json",
   "title": "Recording media acceptance",
-  "description": "What ./scripts/recording-integration.sh --phase=media emits after ffprobe, and what tests/recording_integration.rs checks. Every field is measured from the produced file or from the run that produced it; nothing here is copied from configuration.",
+  "description": "The staged document ./scripts/recording-integration.sh emits. The media phase writes file and presentation facts, the attested ones marked by x-codetrial-evidence; delivery and cleanup append their provider facts. Rust lifecycle_acceptance requires the completed document.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -23,11 +23,26 @@
       "minLength": 1,
       "description": "The row this file belongs to, so a failed run names something an operator can look up."
     },
-    "width": { "type": "integer", "minimum": 1 },
-    "height": { "type": "integer", "minimum": 1 },
-    "fps": { "type": "number", "exclusiveMinimum": 0 },
-    "bitrate_kbps": { "type": "number", "exclusiveMinimum": 0 },
-    "duration_seconds": { "type": "number", "exclusiveMinimum": 0 },
+    "width": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "height": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "fps": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "bitrate_kbps": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "duration_seconds": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
     "expected_duration_seconds": {
       "type": "number",
       "exclusiveMinimum": 0,
@@ -36,16 +51,56 @@
     "candidate_video_seconds": {
       "type": "number",
       "minimum": 0,
-      "description": "How long the candidate's camera was on screen in the template, measured by the template rather than inferred from the file: an MP4 of a composited page cannot say whose face was in it."
+      "x-codetrial-evidence": "operator-attestation",
+      "description": "Operator-attested seconds that the candidate camera was visible in the template. An MP4 of a composited page cannot identify whose face was present."
     },
     "audio_tracks": {
       "type": "integer",
       "minimum": 0,
-      "description": "Distinct audio sources heard in the room, the candidate and the interviewer."
+      "x-codetrial-evidence": "operator-attestation",
+      "description": "Operator-attested count of distinct candidate and interviewer audio sources heard in the room."
     },
     "avatar_rendered": {
       "type": "boolean",
-      "description": "Whether the template's own VRM render was running. False until a model is published, which is what makes this acceptance blocked on the avatar work rather than on this pipeline."
+      "x-codetrial-evidence": "operator-attestation",
+      "description": "Operator attestation that the template's production VRM render was running. False until a model is published, which keeps this acceptance blocked on avatar work."
+    },
+    "drive_file_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The one Shared Drive file whose name is the recording ID plus .mp4."
+    },
+    "delivery_created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Drive-created time for the delivered file; the reader permission must expire after it."
+    },
+    "permission_expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Expiry of the named recipient's active reader permission on the delivered file."
+    },
+    "delivery_verified_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Harness time when it read the reader permission; it bounds its remaining lifetime."
+    },
+    "cleanup_status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "drive_file_absent",
+        "gcs_object_absent"
+      ],
+      "properties": {
+        "drive_file_absent": {
+          "const": true
+        },
+        "gcs_object_absent": {
+          "const": true
+        }
+      },
+      "description": "Both provider lookups returned absence after the server-owned retention path ran."
     }
   }
 }

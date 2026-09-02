@@ -503,15 +503,19 @@ fn contract_invalid_signature() {
     );
 }
 
+fn contract_document() -> String {
+    std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/recording-contract.md"),
+    )
+    .expect("the contract document should be readable")
+}
+
 /// The three strings that must have exactly one owner. A test asserting the
 /// document repeats the constants is the only thing standing between "fixed
 /// here and nowhere else" and a second spelling arriving in a later task.
 #[test]
 fn contract_document_pins_the_fixed_strings() {
-    let contract = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/recording-contract.md"),
-    )
-    .expect("the contract document should be readable");
+    let contract = contract_document();
 
     for pinned in [
         recording::WEBHOOK_ROUTE,
@@ -526,6 +530,30 @@ fn contract_document_pins_the_fixed_strings() {
             "docs/recording-contract.md should name {pinned}"
         );
     }
+}
+
+/// The staging record is a stop condition, not a form. A missing owner or
+/// price has to block provisioning, because the alternative is a plausible
+/// guess that nobody agreed to pay for.
+#[test]
+fn staging_run_record_refuses_to_invent_operational_inputs() {
+    let contract = contract_document();
+
+    for field in [
+        "Budget approver name",
+        "Pricing-source URL",
+        "Public template HTTPS origin",
+        "IAM-audit observer and read authority",
+    ] {
+        assert!(
+            contract.contains(field),
+            "the staging record must name {field} before provisioning"
+        );
+    }
+    assert!(
+        contract.contains("**UNFILLED — stop**"),
+        "missing operational data must stop provisioning rather than become a guess"
+    );
 }
 
 fn authorization_for<'a>(cases: &'a Value, name: &str) -> &'a str {

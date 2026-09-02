@@ -327,6 +327,11 @@ lobby offers, described under [Interview length](#interview-length). The full
 configuration, lifecycle, retention policy, and credentialed acceptance check
 are in [docs/recording-contract.md](docs/recording-contract.md).
 
+The credentialed recording acceptance records frame dimensions, rate, bitrate,
+and duration from `ffprobe`. Candidate-visible seconds, audio-source count, and
+production-avatar rendering are operator attestations until recorder-side
+telemetry exists; they are not presented as measurements.
+
 ## Further documentation
 
 | Document | Covers |

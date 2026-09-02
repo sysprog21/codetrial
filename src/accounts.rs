@@ -1978,6 +1978,7 @@ mod migration_tests {
                 .map(|report| report["id"].as_str().unwrap().to_string())
                 .collect()
         };
+
         // The tie-break named, not merely "the same twice": SQLite happens to
         // return small tables in insertion order, so asserting only that two
         // reads agree passes just as well with no third sort key at all.

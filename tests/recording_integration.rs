@@ -14,6 +14,7 @@
 
 use std::path::Path;
 
+use chrono::{DateTime, Duration, Utc};
 use serde_json::{Value, json};
 
 /// The 720p30 the contract fixes, and the tolerances around the rest.
@@ -35,8 +36,8 @@ const MIN_CANDIDATE_SECONDS: f64 = 5.0;
 /// themselves.
 const EXPECTED_AUDIO_TRACKS: i64 = 2;
 
-/// Every field the schema requires, in the order it lists them.
-const REQUIRED: [&str; 10] = [
+/// Fields a `--phase=media` run can prove on its own.
+const MEDIA_REQUIRED: [&str; 10] = [
     "recording_id",
     "width",
     "height",
@@ -49,14 +50,39 @@ const REQUIRED: [&str; 10] = [
     "avatar_rendered",
 ];
 
-/// What is wrong with this run, or nothing.
+/// The presentation fields no file can answer for, named once.
 ///
-/// Every failure, not the first: an operator reading a failed acceptance wants
-/// the whole list, because a second credentialed run costs minutes and a
-/// provisioned project.
-fn media_faults(document: &Value) -> Vec<String> {
+/// The schema annotates these three and requires the document to declare them,
+/// and the checker refuses a document that claims any of them was measured.
+/// Three statements of one set, so the set is written here and asserted equal
+/// to the schema rather than typed out again beside it.
+const ATTESTED: [&str; 3] = ["candidate_video_seconds", "audio_tracks", "avatar_rendered"];
+
+/// Fields only a delivery-and-cleanup run can add.
+const DELIVERY_REQUIRED: [&str; 5] = [
+    "drive_file_id",
+    "delivery_created_at",
+    "permission_expires_at",
+    "delivery_verified_at",
+    "cleanup_status",
+];
+
+/// Every field a completed lifecycle document carries, in schema order.
+///
+/// Derived rather than written out again: the two lists share eleven names, and
+/// a second copy is a second place for a new field to be forgotten.
+fn lifecycle_required() -> impl Iterator<Item = &'static str> {
+    MEDIA_REQUIRED.into_iter().chain(DELIVERY_REQUIRED)
+}
+
+/// Missing and unknown fields, independent of the acceptance phase.
+///
+/// The document is staged: delivery and cleanup append their facts to the
+/// media document. A media test must accept that earlier stage while a
+/// lifecycle test requires all of it.
+fn field_faults(document: &Value, required: &[&str]) -> Vec<String> {
     let mut faults = Vec::new();
-    for field in REQUIRED {
+    for field in required {
         if document.get(field).is_none() {
             faults.push(format!("{field} is missing"));
         }
@@ -71,14 +97,16 @@ fn media_faults(document: &Value) -> Vec<String> {
         .flatten()
         .map(|(key, _)| key)
     {
-        if !REQUIRED.contains(&field.as_str()) {
+        if !lifecycle_required().any(|known| known == field) {
             faults.push(format!("{field} is not a field of this document"));
         }
     }
-    if !faults.is_empty() {
-        return faults;
-    }
+    faults
+}
 
+/// What the media values are wrong about, assuming every field is present.
+fn media_value_faults(document: &Value) -> Vec<String> {
+    let mut faults = Vec::new();
     let integer = |field: &str| document[field].as_i64();
     let number = |field: &str| document[field].as_f64();
 
@@ -135,6 +163,78 @@ fn media_faults(document: &Value) -> Vec<String> {
     faults
 }
 
+/// What the delivery values are wrong about, assuming every field is present.
+fn delivery_value_faults(document: &Value) -> Vec<String> {
+    let mut faults = Vec::new();
+    if document["drive_file_id"]
+        .as_str()
+        .unwrap_or_default()
+        .is_empty()
+    {
+        faults.push("the Drive file id is empty".to_string());
+    }
+    let parse_time = |field: &str| {
+        document[field]
+            .as_str()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&Utc))
+    };
+    match (
+        parse_time("delivery_created_at"),
+        parse_time("permission_expires_at"),
+        parse_time("delivery_verified_at"),
+    ) {
+        (Some(delivered), Some(expires), Some(verified))
+            if expires > delivered
+                && expires > verified
+                && expires <= verified + Duration::hours(24) => {}
+        (delivered, expires, verified) => faults.push(format!(
+            "permission expiry is {expires:?} for delivery {delivered:?} and verification {verified:?}, not active and within 24 hours of verification"
+        )),
+    }
+    let expected_cleanup = json!({"drive_file_absent": true, "gcs_object_absent": true});
+    if document["cleanup_status"] != expected_cleanup {
+        faults.push("cleanup did not prove both provider artifacts absent".to_string());
+    }
+    faults
+}
+
+/// What is wrong with a media-only acceptance, or nothing.
+fn media_faults(document: &Value) -> Vec<String> {
+    let faults = field_faults(document, &MEDIA_REQUIRED);
+    if !faults.is_empty() {
+        return faults;
+    }
+    media_value_faults(document)
+}
+
+/// What is wrong with a completed lifecycle acceptance, or nothing.
+///
+/// A missing field stops the run, because the value checks below would then be
+/// reading a default rather than a measurement. Once the fields are there, both
+/// sets of values are reported: an operator who has paid for a credentialed run
+/// wants every fault in it, not the first one.
+fn lifecycle_faults(document: &Value) -> Vec<String> {
+    let faults = field_faults(document, &lifecycle_required().collect::<Vec<_>>());
+    if !faults.is_empty() {
+        return faults;
+    }
+    let mut faults = media_value_faults(document);
+    faults.extend(delivery_value_faults(document));
+    faults
+}
+
+/// The document the harness staged, from wherever it was told to write it.
+fn acceptance_document() -> Value {
+    let path = std::env::var("CODETRIAL_RECORDING_ACCEPTANCE_JSON")
+        .unwrap_or_else(|_| "target/recording-acceptance.json".to_string());
+    serde_json::from_str(
+        &std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("no acceptance document at {path}: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("the acceptance document at {path} is not JSON: {error}"))
+}
+
 /// A run this repository would accept.
 fn passing_document() -> Value {
     json!({
@@ -147,13 +247,18 @@ fn passing_document() -> Value {
         "expected_duration_seconds": 60.0,
         "candidate_video_seconds": 47.5,
         "audio_tracks": 2,
-        "avatar_rendered": true
+        "avatar_rendered": true,
+        "drive_file_id": "drive-file-123",
+        "delivery_created_at": "2026-09-01T10:00:00Z",
+        "permission_expires_at": "2026-09-02T10:00:00Z",
+        "delivery_verified_at": "2026-09-01T10:00:00Z",
+        "cleanup_status": {"drive_file_absent": true, "gcs_object_absent": true}
     })
 }
 
 #[test]
 fn a_good_run_is_accepted() {
-    assert_eq!(media_faults(&passing_document()), Vec::<String>::new());
+    assert_eq!(lifecycle_faults(&passing_document()), Vec::<String>::new());
 }
 
 #[test]
@@ -182,6 +287,72 @@ fn every_threshold_can_fail() {
 }
 
 #[test]
+fn a_media_phase_document_needs_no_delivery_or_cleanup_facts() {
+    let mut document = passing_document();
+    for field in DELIVERY_REQUIRED {
+        document.as_object_mut().unwrap().remove(field);
+    }
+    assert_eq!(media_faults(&document), Vec::<String>::new());
+    assert_eq!(
+        lifecycle_faults(&document),
+        vec![
+            "drive_file_id is missing",
+            "delivery_created_at is missing",
+            "permission_expires_at is missing",
+            "delivery_verified_at is missing",
+            "cleanup_status is missing",
+        ]
+    );
+}
+
+#[test]
+fn delivery_and_cleanup_evidence_cannot_overstate_the_provider_result() {
+    let mut document = passing_document();
+    document["drive_file_id"] = json!("");
+    assert!(
+        lifecycle_faults(&document)
+            .iter()
+            .any(|fault| fault.contains("Drive file id"))
+    );
+
+    let mut document = passing_document();
+    document["permission_expires_at"] = json!("2026-09-02T10:00:01Z");
+    assert!(
+        lifecycle_faults(&document)
+            .iter()
+            .any(|fault| fault.contains("active and within 24 hours of verification"))
+    );
+
+    let mut document = passing_document();
+    document["permission_expires_at"] = json!("2026-09-01T10:00:00Z");
+    assert!(
+        lifecycle_faults(&document)
+            .iter()
+            .any(|fault| fault.contains("active and within 24 hours of verification"))
+    );
+
+    // Expired between delivery and the read, which only the liveness half of
+    // the rule can see: this is still after `delivery_created_at` and still
+    // inside the 24-hour ceiling, so both other bounds accept it.
+    let mut document = passing_document();
+    document["delivery_verified_at"] = json!("2026-09-01T20:00:00Z");
+    document["permission_expires_at"] = json!("2026-09-01T15:00:00Z");
+    assert!(
+        lifecycle_faults(&document)
+            .iter()
+            .any(|fault| fault.contains("active and within 24 hours of verification"))
+    );
+
+    let mut document = passing_document();
+    document["cleanup_status"]["gcs_object_absent"] = json!(false);
+    assert!(
+        lifecycle_faults(&document)
+            .iter()
+            .any(|fault| fault.contains("both provider artifacts"))
+    );
+}
+
+#[test]
 fn a_field_nobody_declared_is_refused() {
     let mut document = passing_document();
     document["notes"] = json!("a run somebody annotated");
@@ -196,10 +367,10 @@ fn a_field_nobody_declared_is_refused() {
 fn a_missing_field_is_named_rather_than_defaulted() {
     // A document with a field missing used to read as a zero, which passed the
     // audio check by counting no tracks as none expected.
-    for field in REQUIRED {
+    for field in lifecycle_required() {
         let mut document = passing_document();
         document.as_object_mut().unwrap().remove(field);
-        let faults = media_faults(&document);
+        let faults = lifecycle_faults(&document);
         assert_eq!(faults, vec![format!("{field} is missing")]);
     }
 }
@@ -219,18 +390,42 @@ fn the_schema_and_the_checker_agree_on_the_fields() {
         .iter()
         .map(|field| field.as_str().unwrap().to_string())
         .collect::<Vec<_>>();
-    assert_eq!(required, REQUIRED.map(str::to_string).to_vec());
+    assert_eq!(required, MEDIA_REQUIRED.map(str::to_string).to_vec());
 
     let properties = schema["properties"].as_object().unwrap();
-    for field in REQUIRED {
+    for field in lifecycle_required() {
         assert!(properties.contains_key(field), "{field} has no schema");
     }
     assert_eq!(
         properties.len(),
-        REQUIRED.len(),
+        lifecycle_required().count(),
         "the schema describes a field the checker does not know about"
     );
     assert_eq!(schema["additionalProperties"], json!(false));
+
+    // The attested set, twice: whichever properties the schema annotates, and
+    // the ones this checker knows cannot be measured. `properties` orders its
+    // keys rather than keeping the file's order, so both sides are sorted.
+    let mut expected = ATTESTED;
+    expected.sort_unstable();
+    let annotated = properties
+        .iter()
+        .filter(|(_, schema)| schema["x-codetrial-evidence"] == json!("operator-attestation"))
+        .map(|(field, _)| field.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(annotated, expected, "the schema annotates a different set");
+
+    // The document the script emits is the third copy of the field list and the
+    // only one no gate reads. Catching a drifted key here costs a grep;
+    // catching it in the acceptance costs a provisioned project and a sat
+    // interview.
+    let emitter = std::fs::read_to_string("scripts/recording-integration.sh").unwrap();
+    for field in MEDIA_REQUIRED {
+        assert!(
+            emitter.contains(&format!("\"{field}\":")),
+            "scripts/recording-integration.sh never writes {field}"
+        );
+    }
 }
 
 #[test]
@@ -286,17 +481,37 @@ fn media_acceptance() {
     // The document the script left behind, not a run this test performs. The
     // script owns the provider calls and the cleanup trap; this owns the
     // judgement, which is the half that can be wrong without anybody noticing.
-    let path = std::env::var("CODETRIAL_RECORDING_ACCEPTANCE_JSON")
-        .unwrap_or_else(|_| "target/recording-acceptance.json".to_string());
-    let document: Value = serde_json::from_str(
-        &std::fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("no acceptance document at {path}: {error}")),
-    )
-    .unwrap_or_else(|error| panic!("the acceptance document at {path} is not JSON: {error}"));
+    let document = acceptance_document();
 
     let faults = media_faults(&document);
     assert!(
         faults.is_empty(),
         "the recording was not acceptable: {faults:?}"
+    );
+}
+
+/// The completed, credentialed lifecycle acceptance.
+///
+/// This is opt-in separately from the media check because a media phase has no
+/// Drive file or cleanup result yet. The all-phases procedure enables it only
+/// after the script has appended those provider facts.
+#[test]
+fn lifecycle_acceptance() {
+    if std::env::var("CODETRIAL_RECORDING_INTEGRATION").as_deref() != Ok("1")
+        || std::env::var("CODETRIAL_RECORDING_LIFECYCLE_ACCEPTANCE").as_deref() != Ok("1")
+    {
+        eprintln!(
+            "skipping the recording lifecycle acceptance: set CODETRIAL_RECORDING_INTEGRATION=1 \
+             CODETRIAL_RECORDING_LIFECYCLE_ACCEPTANCE=1 after every lifecycle phase"
+        );
+        return;
+    }
+
+    let document = acceptance_document();
+
+    let faults = lifecycle_faults(&document);
+    assert!(
+        faults.is_empty(),
+        "the completed recording lifecycle was not acceptable: {faults:?}"
     );
 }
