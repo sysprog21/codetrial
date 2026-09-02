@@ -49,7 +49,7 @@ license are recorded in that notice.
 | Phase | Required | Notes |
 |---|---|---|
 | Build time | Rust stable, `curl` or `wget`, and `sha256sum` or `shasum` | Cargo resolves application crates from `Cargo.lock`. `make build` fetches the checksum-pinned browser assets on the first build. |
-| Test time | Build-time tools, Node.js 18+, and Python 3 | Node runs browser and fixture checks; Python verifies generated problem-bank files. `npm ci` adds ESLint and Playwright for the full local browser gate. `shellcheck`, `actionlint`, and `cargo-audit` are optional: each gate reports that it skipped rather than failing without them. |
+| Test time | Build-time tools, Node.js 18+, and Python 3 | Node runs browser and fixture checks; Python verifies generated problem-bank files. `npm ci` adds ESLint and Playwright for the full local browser gate. `ruff`, `shellcheck`, `shfmt`, `commentflow`, `actionlint`, and `cargo-audit` are optional: each gate reports that it skipped rather than failing without them. CI installs all of them except `actionlint`, whose lane skips there too. |
 | Runtime | The compiled `codetrial` binary and a config file | No Node.js, Python, or `node_modules` is required. Rust dependencies are compiled into the binary; browser dependencies are vendored, checksum-pinned, and embedded, so a `web/` directory is optional and only overrides what is already inside. |
 
 Running an interview also requires a LiveKit Cloud project and a Google AI Studio
@@ -213,13 +213,35 @@ than rendering a page with nothing to press.
 ```bash
 make build           # release build
 make web             # run the server
-make indent          # format Rust; the gate runs cargo fmt --check
+make indent          # run the formatters; the gate checks their result
 make clean           # remove build output
 make fetch-vendor    # fetch pinned browser assets
 make verify-vendor   # verify vendor checksums
 make check           # test gate plus live Gemini credential check
+make hooks           # install the git hooks; uninstall-hooks removes them
 ./scripts/test.sh    # credential-free CI gate
 ```
+
+`scripts/indent.sh` holds the formatter chain: comment reflow with
+`commentflow`, then `cargo fmt`, `ruff format` and `shfmt`, in that order
+because the formatters have to have the last word over the reflow. `make
+indent` runs it with `--write` and the gate runs it with `--check`, against a
+copy of the tree so a check never rewrites what it is judging. `shfmt` takes
+its style from `.editorconfig` and is passed no style flags anywhere.
+
+`scripts/test-git-hooks.sh` drives all four hooks against a scratch repository
+and runs in the gate, so a hook that stops rejecting fails here rather than on
+somebody's next commit.
+
+`make hooks` installs wrappers in `.git/hooks` that resolve the active
+worktree's `scripts/git-*.sh`. The pre-commit hook
+runs `rustfmt`, ESLint, `ruff`, `shellcheck`, `shfmt` and `commentflow` over a
+checkout of the index, so an unstaged edit neither fails a commit nor passes
+one; the commit-msg hook
+holds the subject to 50 characters and the body to 72, imperative and ASCII.
+Whatever is missing locally reports itself as skipped. The pre-push hook
+replays the same message rules over commits a rebase or an amend rewrote after
+the fact, and CI runs them over a pull request's own commits.
 
 The [prerelease](#prebuilt-binaries) is published by the `build` and `release`
 jobs in `.github/workflows/check.yml`, which run only on a push to `main`. No

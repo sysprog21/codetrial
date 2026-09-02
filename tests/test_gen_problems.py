@@ -7,7 +7,9 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("gen_problems", ROOT / "scripts/gen-problems.py")
+SPEC = importlib.util.spec_from_file_location(
+    "gen_problems", ROOT / "scripts/gen-problems.py"
+)
 GEN = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader
 SPEC.loader.exec_module(GEN)

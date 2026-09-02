@@ -8,13 +8,27 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tests" / "fixtures" / "calibration"
-PHASES = ("Repeat", "Example", "Algorithm", "Coding", "Test", "Optimizations",
-          "Situation", "Task", "Action", "Result")
+PHASES = (
+    "Repeat",
+    "Example",
+    "Algorithm",
+    "Coding",
+    "Test",
+    "Optimizations",
+    "Situation",
+    "Task",
+    "Action",
+    "Result",
+)
 
 
 def scores(base, coding_only=False):
-    return {phase: None if coding_only and phase in ("Situation", "Task", "Action", "Result")
-            else base for phase in PHASES}
+    return {
+        phase: None
+        if coding_only and phase in ("Situation", "Task", "Action", "Result")
+        else base
+        for phase in PHASES
+    }
 
 
 def corpus():
@@ -24,23 +38,39 @@ def corpus():
         coding_only = index % 2 == 0
         base = bases[index % len(bases)]
         model = scores(base, coding_only)
-        samples.append({
-            "id": f"blind-{index + 1:03d}",
-            "difficulty": ("Easy", "Medium", "Hard")[index % 3],
-            "language": ("python", "javascript", "cpp")[index % 3],
-            "loop": "coding_only" if coding_only else "coding_behavioral",
-            "hintsUsed": index % 3,
-            "transcriptQuality": ("clear", "degraded", "missing")[index % 3],
-            "accentCohort": ("cohort-a", "cohort-b", "cohort-c")[index % 3],
-            "modelScores": model,
-            "humanRatings": [
-                {"reviewerId": "reviewer-a", "scores": scores(max(0, base - 1), coding_only)},
-                {"reviewerId": "reviewer-b", "scores": scores(min(100, base + 1), coding_only)},
-            ],
-        })
-    return {"version": 1, "contract": {"bundleVersion": 4, "reportPromptVersion": 4,
-            "rubricVersion": 1, "reportSchemaVersion": 1, "model": "synthetic-test-only"},
-            "samples": samples}
+        samples.append(
+            {
+                "id": f"blind-{index + 1:03d}",
+                "difficulty": ("Easy", "Medium", "Hard")[index % 3],
+                "language": ("python", "javascript", "cpp")[index % 3],
+                "loop": "coding_only" if coding_only else "coding_behavioral",
+                "hintsUsed": index % 3,
+                "transcriptQuality": ("clear", "degraded", "missing")[index % 3],
+                "accentCohort": ("cohort-a", "cohort-b", "cohort-c")[index % 3],
+                "modelScores": model,
+                "humanRatings": [
+                    {
+                        "reviewerId": "reviewer-a",
+                        "scores": scores(max(0, base - 1), coding_only),
+                    },
+                    {
+                        "reviewerId": "reviewer-b",
+                        "scores": scores(min(100, base + 1), coding_only),
+                    },
+                ],
+            }
+        )
+    return {
+        "version": 1,
+        "contract": {
+            "bundleVersion": 4,
+            "reportPromptVersion": 4,
+            "rubricVersion": 1,
+            "reportSchemaVersion": 1,
+            "model": "synthetic-test-only",
+        },
+        "samples": samples,
+    }
 
 
 def content():
@@ -53,11 +83,23 @@ def content():
                     sample["modelScores"][phase] = min(100, value + 30)
     malformed = copy.deepcopy(passing)
     malformed["samples"][1]["id"] = malformed["samples"][0]["id"]
-    template = {"version": 1, "contract": {"bundleVersion": 4, "reportPromptVersion": 4,
-                "rubricVersion": 1, "reportSchemaVersion": 1, "model": "FILL-ME"},
-                "samples": []}
-    return {"passing-synthetic.json": passing, "failing-synthetic.json": failing,
-            "malformed-synthetic.json": malformed, "blinded-review-template.json": template}
+    template = {
+        "version": 1,
+        "contract": {
+            "bundleVersion": 4,
+            "reportPromptVersion": 4,
+            "rubricVersion": 1,
+            "reportSchemaVersion": 1,
+            "model": "FILL-ME",
+        },
+        "samples": [],
+    }
+    return {
+        "passing-synthetic.json": passing,
+        "failing-synthetic.json": failing,
+        "malformed-synthetic.json": malformed,
+        "blinded-review-template.json": template,
+    }
 
 
 def main():

@@ -54,6 +54,13 @@ env:
   CARGO_AUDIT_VERSION: 0.22.2
   CARGO_MUTANTS_VERSION: 27.1.0
 
+  # Pinned for the same reason the two above are: a linter that moves under you
+  # turns an unrelated push red, and the fix is then a version bump nobody chose
+  # to make. Kept in step with whatever contributors run locally, which is
+  # whatever `ruff` is on their PATH; the gate skips rather than fails when they
+  # have none.
+  RUFF_VERSION: 0.15.2
+
 jobs:
   check:
     # Pinned rather than `ubuntu-latest`: that label moves to a new image on
@@ -77,6 +84,36 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The commit-msg hook binds whoever installed it. This binds everyone
+      # else: a rebase, an amend, `--no-verify`, or a subject typed into the
+      # GitHub merge box all reach the branch unread otherwise. It runs the same
+      # script the pre-push hook runs, so a contributor with hooks and a
+      # contributor without are judged by one list.
+      #
+      # Pull requests only, and deliberately. `base.sha..HEAD` is the work being
+      # proposed, which is the thing these rules are about. The push event's
+      # range is not: a merge to main replays every commit of the merged branch,
+      # so a rule this log only started following recently would reject history
+      # rather than the change in front of it.
+      #
+      # First among the steps, because it costs a second and the rest of this
+      # job costs minutes.
+      - name: Check the commit messages
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          # An unfetched base is not an empty range. Say which one this is
+          # rather than reporting "nothing to check" for a check that could not
+          # run.
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "base commit $BASE_SHA is not in this checkout" >&2
+            exit 1
+          fi
+          git rev-list --no-merges "$BASE_SHA..HEAD" | ./scripts/check-commit-log.sh
+
       # This job ran out of disk on main before it ran out of disk here: the
       # LiveKit SDK and libwebrtc build to a target/ measured in gigabytes, the
       # cache restores another copy of the registry beside it, Chromium and the
@@ -94,11 +131,13 @@ jobs:
             "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}"
           df -h /
 
-      # shellcheck rides along on an apt call this job already makes. The runner
-      # image ships it today, but the shell gate skips itself when it is absent,
-      # and a gate that stops running quietly is the thing it guards against.
+      # shellcheck and shfmt ride along on an apt call this job already makes.
+      # The runner image ships shellcheck today, but both gates skip themselves
+      # when the tool is absent, and a gate that stops running quietly is the
+      # thing it guards against. shfmt takes its style from .editorconfig, so
+      # installing it here is the whole configuration.
       - name: Install native build dependency
-        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev mold shellcheck
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev mold shellcheck shfmt
 
       # The runner image ships a stable toolchain, but not necessarily one new
       # enough for edition 2024, and clippy and rustfmt are gates rather than
@@ -216,6 +255,60 @@ jobs:
         run: |
           cargo-audit --version 2>/dev/null | grep -qF " $CARGO_AUDIT_VERSION" \
             || cargo install cargo-audit --locked --version "$CARGO_AUDIT_VERSION" --force
+
+      # The Python here generates the problem bank and drives two integration
+      # harnesses, and `ruff check` is its only linter. The gate skips when the
+      # binary is missing, which is right on a laptop and wrong here. pipx is on
+      # the image and installs into its own environment, so this does not fight
+      # the runner's externally-managed Python.
+      - name: Install ruff
+        run: pipx install "ruff==$RUFF_VERSION"
+
+      # commentflow settles comment width, which no other formatter here does:
+      # rustfmt leaves a short-wrapped comment short and shfmt does not touch
+      # comment text at all. The indent gate skips its reflow lane when the
+      # binary is missing, which is right on a laptop and wrong here, so it is
+      # installed ahead of the gate.
+      #
+      # It ships as a release binary rather than an apt package, and its only
+      # tag is a rolling "latest", so the asset moves under a fixed URL. The
+      # bytes are checked against the sha256 GitHub records for the asset,
+      # read from the API in this same step rather than copied into this file:
+      # a hash written here has to be recomputed by hand on every upstream
+      # republish, and it fails as two hex strings that differ, which says
+      # nothing about what moved.
+      #
+      # What that buys and does not: it catches a truncated or tampered
+      # transfer, since the digest comes from the API rather than the CDN path
+      # the tarball travels. It does not freeze the version, so a republished
+      # "latest" is picked up silently. Comment reflow is a formatting gate, so
+      # the failure mode is a diff in the indent check rather than a wrong
+      # binary running against the tree, and that diff is what surfaces it.
+      - name: Install commentflow
+        env:
+          COMMENTFLOW_REPO: sysprog21/commentflow
+          COMMENTFLOW_ASSET: commentflow-x86_64-unknown-linux-gnu.tar.gz
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          meta=$(gh api "repos/$COMMENTFLOW_REPO/releases/tags/latest")
+
+          # An absent digest means the release predates the field. A download
+          # nothing verifies is not worth having, so stop rather than install
+          # bytes this step cannot check.
+          digest=$(jq -r --arg n "$COMMENTFLOW_ASSET" \
+            '.assets[] | select(.name == $n) | .digest // ""' <<< "$meta")
+          url=$(jq -r --arg n "$COMMENTFLOW_ASSET" \
+            '.assets[] | select(.name == $n) | .browser_download_url // ""' \
+            <<< "$meta")
+          if [ -z "$digest" ] || [ -z "$url" ]; then
+            echo "no digest or download URL recorded for $COMMENTFLOW_ASSET" >&2
+            exit 1
+          fi
+
+          curl -fsSL -o /tmp/commentflow.tar.gz "$url"
+          echo "${digest#sha256:}  /tmp/commentflow.tar.gz" | sha256sum -c -
+          sudo tar -xzf /tmp/commentflow.tar.gz -C /usr/local/bin commentflow
 
       - name: Run gates
         run: ./scripts/test.sh

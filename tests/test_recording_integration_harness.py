@@ -19,16 +19,30 @@ RECIPIENT = "candidate@example.test"
 def reader(hours=23, **overrides):
     """The recipient's live reader grant, with only what a test varies replaced."""
     return {
-        "id": "permission-1", "type": "user", "role": "reader", "emailAddress": RECIPIENT,
-        "expirationTime": (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat(),
+        "id": "permission-1",
+        "type": "user",
+        "role": "reader",
+        "emailAddress": RECIPIENT,
+        "expirationTime": (
+            datetime.now(timezone.utc) + timedelta(hours=hours)
+        ).isoformat(),
     } | overrides
 
 
 # One recording, delivered and readable by its recipient. Every test starts here
 # and names only what it changes.
 DELIVERED = {
-    "files.json": {"files": [{"id": "file-1", "name": f"{RECORDING_ID}.mp4",
-                              "createdTime": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()}]},
+    "files.json": {
+        "files": [
+            {
+                "id": "file-1",
+                "name": f"{RECORDING_ID}.mp4",
+                "createdTime": (
+                    datetime.now(timezone.utc) - timedelta(minutes=5)
+                ).isoformat(),
+            }
+        ]
+    },
     "permissions.json": {"permissions": [reader()]},
 }
 
@@ -39,7 +53,18 @@ class RecordingHarnessTests(unittest.TestCase):
         path.write_text(text)
         path.chmod(0o755)
 
-    def run_harness(self, files=None, *, phase="delivery,cleanup", include_db=True, include_recipient=True, cleanup_timeout="1", cleanup_drive_status="404", cleanup_gcs_status="404", gcs_prefix=None):
+    def run_harness(
+        self,
+        files=None,
+        *,
+        phase="delivery,cleanup",
+        include_db=True,
+        include_recipient=True,
+        cleanup_timeout="1",
+        cleanup_drive_status="404",
+        cleanup_gcs_status="404",
+        gcs_prefix=None,
+    ):
         files = files or DELIVERED
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -47,16 +72,23 @@ class RecordingHarnessTests(unittest.TestCase):
             bin_dir.mkdir()
             for name, value in files.items():
                 (root / name).write_text(json.dumps(value))
-            self.executable(bin_dir, "gcloud", """#!/bin/sh
+            self.executable(
+                bin_dir,
+                "gcloud",
+                """#!/bin/sh
 case "$*" in
   *'activate-service-account'*) exit 0 ;;
   *'print-access-token'*) echo token ;;
   *) exit 0 ;;
 esac
-""")
+""",
+            )
             self.executable(bin_dir, "ffprobe", "#!/bin/sh\nexit 0\n")
             self.executable(bin_dir, "sqlite3", "#!/bin/sh\necho 1\n")
-            self.executable(bin_dir, "curl", r"""#!/bin/sh
+            self.executable(
+                bin_dir,
+                "curl",
+                r"""#!/bin/sh
 args="$*"
 if echo "$args" | grep -q '%{http_code}'; then
   if echo "$args" | grep -q 'storage.googleapis.com'; then
@@ -70,17 +102,25 @@ elif echo "$args" | grep -q '/permissions?'; then cat "$FAKE_ROOT/permissions.js
 elif echo "$args" | grep -q '/drive/v3/files?'; then cat "$FAKE_ROOT/files.json"
 else exit 1
 fi
-""")
+""",
+            )
             acceptance = root / "acceptance.json"
             acceptance.write_text(json.dumps({"recording_id": RECORDING_ID}))
             (root / "db.sqlite").touch()
             env = os.environ | {
-                "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE_ROOT": str(root),
-                "CODETRIAL_RECORDING_INTEGRATION": "1", "CODETRIAL_RECORDING_GCS_BUCKET": "bucket",
-                "CODETRIAL_RECORDING_DRIVE_ID": "drive", "CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON": "{}",
-                "CODETRIAL_RECORDING_TEMPLATE_BASE_URL": "https://recording.example", "LIVEKIT_URL": "wss://livekit.example",
-                "LIVEKIT_API_KEY": "key", "LIVEKIT_API_SECRET": "secret", "CODETRIAL_RECORDING_ID": RECORDING_ID,
-                "CODETRIAL_RECORDING_RECIPIENT_EMAIL": RECIPIENT, "CODETRIAL_DB_PATH": str(root / "db.sqlite"),
+                "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                "FAKE_ROOT": str(root),
+                "CODETRIAL_RECORDING_INTEGRATION": "1",
+                "CODETRIAL_RECORDING_GCS_BUCKET": "bucket",
+                "CODETRIAL_RECORDING_DRIVE_ID": "drive",
+                "CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON": "{}",
+                "CODETRIAL_RECORDING_TEMPLATE_BASE_URL": "https://recording.example",
+                "LIVEKIT_URL": "wss://livekit.example",
+                "LIVEKIT_API_KEY": "key",
+                "LIVEKIT_API_SECRET": "secret",
+                "CODETRIAL_RECORDING_ID": RECORDING_ID,
+                "CODETRIAL_RECORDING_RECIPIENT_EMAIL": RECIPIENT,
+                "CODETRIAL_DB_PATH": str(root / "db.sqlite"),
                 "CODETRIAL_RECORDING_ACCEPTANCE_JSON": str(acceptance),
                 "CODETRIAL_RECORDING_CLEANUP_TIMEOUT_SECONDS": cleanup_timeout,
                 "FAKE_CLEANUP_DRIVE_STATUS": cleanup_drive_status,
@@ -92,20 +132,43 @@ fi
                 env.pop("CODETRIAL_RECORDING_RECIPIENT_EMAIL")
             if gcs_prefix is not None:
                 env["CODETRIAL_RECORDING_GCS_PREFIX"] = gcs_prefix
-            result = subprocess.run(["sh", SCRIPT, f"--phase={phase}"], env=env, text=True, capture_output=True)
+            result = subprocess.run(
+                ["sh", SCRIPT, f"--phase={phase}"],
+                env=env,
+                text=True,
+                capture_output=True,
+            )
             return result, json.loads(acceptance.read_text())
 
     def test_delivery_and_cleanup_write_the_same_lifecycle_document(self):
         result, document = self.run_harness()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(document["drive_file_id"], "file-1")
-        self.assertEqual(document["cleanup_status"], {"drive_file_absent": True, "gcs_object_absent": True})
+        self.assertEqual(
+            document["cleanup_status"],
+            {"drive_file_absent": True, "gcs_object_absent": True},
+        )
 
     def test_delivery_refuses_a_non_unique_drive_file(self):
-        result, _ = self.run_harness({
-            "files.json": {"files": [{"id": "one", "name": f"{RECORDING_ID}.mp4", "createdTime": "2026-09-01T10:00:00Z"}, {"id": "two", "name": f"{RECORDING_ID}.mp4", "createdTime": "2026-09-01T10:00:00Z"}]},
-            "permissions.json": {"permissions": []},
-        })
+        result, _ = self.run_harness(
+            {
+                "files.json": {
+                    "files": [
+                        {
+                            "id": "one",
+                            "name": f"{RECORDING_ID}.mp4",
+                            "createdTime": "2026-09-01T10:00:00Z",
+                        },
+                        {
+                            "id": "two",
+                            "name": f"{RECORDING_ID}.mp4",
+                            "createdTime": "2026-09-01T10:00:00Z",
+                        },
+                    ]
+                },
+                "permissions.json": {"permissions": []},
+            }
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("exactly one Drive file", result.stderr)
 
@@ -141,7 +204,8 @@ fi
         ]:
             with self.subTest(label=label):
                 result, _ = self.run_harness(
-                    DELIVERED | {"permissions.json": {"permissions": permissions}}, phase="delivery"
+                    DELIVERED | {"permissions.json": {"permissions": permissions}},
+                    phase="delivery",
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("exactly one expiring reader permission", result.stderr)
@@ -153,7 +217,8 @@ fi
         grant = reader()
         stranger = reader(id="permission-2", emailAddress="stranger@example.test")
         result, _ = self.run_harness(
-            DELIVERED | {"permissions.json": {"permissions": [grant, stranger]}}, phase="delivery"
+            DELIVERED | {"permissions.json": {"permissions": [grant, stranger]}},
+            phase="delivery",
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("exactly one expiring reader permission", result.stderr)
@@ -162,9 +227,12 @@ fi
         # Exactly one reader is an exactness claim, and a truncated listing
         # cannot support one. A delivered file should never reach a page of
         # permissions, so this is a refusal rather than a paging loop.
-        truncated = DELIVERED | {"permissions.json": {
-            "nextPageToken": "page-2", "permissions": [reader()],
-        }}
+        truncated = DELIVERED | {
+            "permissions.json": {
+                "nextPageToken": "page-2",
+                "permissions": [reader()],
+            }
+        }
         result, _ = self.run_harness(truncated, phase="delivery")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("more permissions than one page", result.stderr)
@@ -191,9 +259,14 @@ fi
         # Cleanup runs after the grant has lapsed, which is the state it exists
         # to prove. Demanding a live one would refuse to verify the deletion.
         expired = DELIVERED | {"permissions.json": {"permissions": [reader(hours=-1)]}}
-        result, document = self.run_harness(expired, phase="cleanup", include_recipient=False)
+        result, document = self.run_harness(
+            expired, phase="cleanup", include_recipient=False
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(document["cleanup_status"], {"drive_file_absent": True, "gcs_object_absent": True})
+        self.assertEqual(
+            document["cleanup_status"],
+            {"drive_file_absent": True, "gcs_object_absent": True},
+        )
         self.assertNotIn("permission_expires_at", document)
 
     def test_cleanup_refuses_to_claim_success_while_an_artifact_remains(self):

@@ -9,26 +9,28 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 failed=""
 
-gate() {
-  name=$1
-  shift
-  if "$@"; then
-    return 0
-  fi
-  failed="$failed $name"
+gate()
+{
+    name=$1
+    shift
+    if "$@"; then
+        return 0
+    fi
+    failed="$failed $name"
 }
 
 # `node --test` exits 0 when its path arguments match nothing, so an unexpanded
 # glob is a green gate reporting zero tests. Renaming the suffix or moving the
 # directory would have silently dropped the whole browser suite from `make
 # check`, which is the failure this file was rewritten to prevent.
-browser_tests() {
-  set -- "$ROOT"/tests/browser/*.test.js
-  if [ ! -e "$1" ]; then
-    echo "no browser tests matched $ROOT/tests/browser/*.test.js" >&2
-    return 1
-  fi
-  node --test "$@"
+browser_tests()
+{
+    set -- "$ROOT"/tests/browser/*.test.js
+    if [ ! -e "$1" ]; then
+        echo "no browser tests matched $ROOT/tests/browser/*.test.js" >&2
+        return 1
+    fi
+    node --test "$@"
 }
 
 # The Rust half of this repo runs clippy at `-D warnings`; this is the other
@@ -36,18 +38,20 @@ browser_tests() {
 # a checkout that never ran `npm install` says so and moves on rather than
 # failing a gate it has no way to run. That is the same contract the browser
 # tier above already works under.
-eslint_gate() {
-  if [ ! -x "$ROOT/node_modules/.bin/eslint" ]; then
-    echo "skipping eslint: run \`npm install\` to enable it locally" >&2
-    return 0
-  fi
+eslint_gate()
+{
+    if [ ! -x "$ROOT/node_modules/.bin/eslint" ]; then
+        echo "skipping eslint: run \`npm install\` to enable it locally" >&2
+        return 0
+    fi
 
-  # Run from $ROOT. eslint resolves both eslint.config.mjs and the ignore
-  # patterns in it against the working directory, not against the paths it is
-  # handed, so pointing it at "$ROOT" from anywhere else fails with "all of the
-  # files are ignored". Every other gate here works from any directory and this
-  # one has to as well. Subshell, so the cd does not leak into the gates below.
-  (cd "$ROOT" && ./node_modules/.bin/eslint .)
+    # Run from $ROOT. eslint resolves both eslint.config.mjs and the ignore
+    # patterns in it against the working directory, not against the paths it is
+    # handed, so pointing it at "$ROOT" from anywhere else fails with "all of
+    # the files are ignored". Every other gate here works from any directory and
+    # this one has to as well. Subshell, so the cd does not leak into the gates
+    # below.
+    (cd "$ROOT" && ./node_modules/.bin/eslint .)
 }
 
 # The workflow is code and has been wrong in ways review did not catch: a
@@ -59,22 +63,38 @@ eslint_gate() {
 # Skipped when absent, like eslint above. It is a single Go binary rather than
 # something `npm ci` brings in, and a checkout without it should say so and move
 # on rather than fail a gate it cannot run.
-actionlint_gate() {
-  if ! command -v actionlint >/dev/null 2>&1; then
-    echo "skipping actionlint: install it to check .github/workflows locally" >&2
-    return 0
-  fi
+actionlint_gate()
+{
+    if ! command -v actionlint > /dev/null 2>&1; then
+        echo "skipping actionlint: install it to check .github/workflows locally" >&2
+        return 0
+    fi
 
-  (cd "$ROOT" && actionlint)
+    (cd "$ROOT" && actionlint)
 }
 
-cargo_audit_gate() {
-  if ! command -v cargo-audit >/dev/null 2>&1; then
-    echo "skipping cargo-audit: run \`cargo install cargo-audit\` to enable it locally" >&2
-    return 0
-  fi
+cargo_audit_gate()
+{
+    if ! command -v cargo-audit > /dev/null 2>&1; then
+        echo "skipping cargo-audit: run \`cargo install cargo-audit\` to enable it locally" >&2
+        return 0
+    fi
 
-  cargo audit --file "$ROOT/Cargo.lock"
+    cargo audit --file "$ROOT/Cargo.lock"
+}
+
+# The Python here is not incidental: it generates the problem bank, checks the
+# study plan and drives two integration harnesses. It had unittest suites and no
+# linter, which is how an unused import or a name that does not exist survives
+# until the script runs. Optional the way shellcheck is, for the same reason.
+ruff_gate()
+{
+    if ! command -v ruff > /dev/null 2>&1; then
+        echo "skipping ruff: install it to lint the Python locally" >&2
+        return 0
+    fi
+
+    (cd "$ROOT" && ruff check scripts tests)
 }
 
 # `sh -n` says whether a script parses. shellcheck says whether it means what it
@@ -84,19 +104,20 @@ cargo_audit_gate() {
 #
 # Optional the way cargo-audit is: CI installs it, and a contributor without it
 # gets a note rather than a failure they cannot act on.
-shell_syntax() {
-  status=0
-  for script in "$ROOT"/scripts/*.sh; do
-    sh -n "$script" || status=1
-  done
+shell_syntax()
+{
+    status=0
+    for script in "$ROOT"/scripts/*.sh; do
+        sh -n "$script" || status=1
+    done
 
-  if command -v shellcheck >/dev/null 2>&1; then
-    (cd "$ROOT" && shellcheck scripts/*.sh) || status=1
-  else
-    echo "skipping shellcheck: install it to enable the rest of this gate locally" >&2
-  fi
+    if command -v shellcheck > /dev/null 2>&1; then
+        (cd "$ROOT" && shellcheck scripts/*.sh) || status=1
+    else
+        echo "skipping shellcheck: install it to enable the rest of this gate locally" >&2
+    fi
 
-  return "$status"
+    return "$status"
 }
 
 gate fetch-vendor "$ROOT/scripts/fetch-vendor.sh"
@@ -107,6 +128,13 @@ gate verify-vendor "$ROOT/scripts/verify-vendor.sh"
 # built while the lockfile in the repo keeps claiming otherwise. `cargo fmt`
 # does not take the flag because it never touches the graph.
 gate fmt cargo fmt --check --manifest-path "$ROOT/Cargo.toml"
+
+# Comment reflow and shell formatting, checked against a copy of the tree so a
+# gate never rewrites what it is judging. Both tools are optional locally and
+# installed in CI, so the check skips a lane rather than failing on a missing
+# tool; overlapping with the fmt gate above costs nothing and reads better when
+# it is `cargo fmt` alone that drifted.
+gate indent "$ROOT/scripts/indent.sh" --check
 gate clippy cargo clippy --locked --all-targets --manifest-path "$ROOT/Cargo.toml" -- -D warnings
 gate cargo-test cargo test --locked --manifest-path "$ROOT/Cargo.toml"
 
@@ -126,6 +154,12 @@ gate cargo-audit cargo_audit_gate
 gate actionlint actionlint_gate
 
 gate browser-check-syntax node --check "$ROOT/scripts/browser-check.cjs"
+gate ruff ruff_gate
+
+# The hooks are the one part of this tree that runs on a contributor's machine
+# rather than here, so nothing else notices when one stops rejecting. The suite
+# builds a scratch repository, installs the hooks into it and drives them.
+gate git-hooks "$ROOT/scripts/test-git-hooks.sh"
 gate shell-syntax shell_syntax
 gate browser-check-env env BROWSER_CHECK_VALIDATE_ENV_ONLY=1 sh "$ROOT/scripts/browser-check.sh"
 
@@ -137,6 +171,6 @@ gate browser-check-env env BROWSER_CHECK_VALIDATE_ENV_ONLY=1 sh "$ROOT/scripts/b
 gate report-parity-fixtures env REPORT_PARITY_CHECK_VALIDATE_FIXTURES_ONLY=1 sh "$ROOT/scripts/report-parity-check.sh"
 
 [ -z "$failed" ] || {
-  echo "failed gates:$failed" >&2
-  exit 1
+    echo "failed gates:$failed" >&2
+    exit 1
 }

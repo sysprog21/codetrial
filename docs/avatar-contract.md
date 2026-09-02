@@ -66,7 +66,7 @@ Its components, licenses, and reproducible source details are listed in
 `@pixiv/three-vrm` and `GLTFLoader.js` import `three` by bare specifier. A
 browser resolves that only through an import map, import maps cannot be loaded
 from a `src` URL, and so one would have to be inlined into
-`web/interview.html`. `src/web.rs` sets `script-src 'self'` with no
+`web/interview.html`. `src/web/policy.rs` sets `script-src 'self'` with no
 `'unsafe-inline'` and no nonce, so an inline import map would be blocked, and
 the alternative is loosening the page's script policy for a build-time
 convenience. Bundling resolves the specifiers at vendor time and leaves the CSP

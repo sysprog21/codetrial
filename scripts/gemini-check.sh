@@ -9,7 +9,7 @@ ENV_FILE="${CODETRIAL_ENV:-$ROOT/config/codetrial.env.local}"
 # would leave `CODETRIAL_ENV` pointing somewhere the binary never looks. When it
 # is absent the binary runs its own search and reports the miss.
 if [ -f "$ENV_FILE" ]; then
-  set -- --config "$ENV_FILE" "$@"
+    set -- --config "$ENV_FILE" "$@"
 fi
 
 cargo run --manifest-path "$ROOT/Cargo.toml" -- check-gemini "$@"

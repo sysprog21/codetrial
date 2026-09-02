@@ -465,6 +465,7 @@ fn token_response_reports_the_length_it_granted() {
             response.duration_min, expected,
             "asked for {requested} under a cap of {recording_max_min:?}"
         );
+
         // Whole minutes always, whatever was asked for: a length the agent
         // cannot enforce is a countdown that disagrees with the interview.
         assert!(
@@ -3766,11 +3767,11 @@ fn browser_number(source: &str, after: &str, until: char) -> u32 {
         .unwrap_or_else(|error| panic!("{after} is not a number: {error}"))
 }
 
-/// The clamp above is the fallback, not the authority. `token_duration_min` also
-/// bounds the length by the recording cap, which is per deployment and so cannot
-/// be pinned by a constant the way the range is: the only way the page can know
-/// it is to be told, and the only way it stays told is to read the answer rather
-/// than the request.
+/// The clamp above is the fallback, not the authority. `token_duration_min`
+/// also bounds the length by the recording cap, which is per deployment and
+/// so cannot be pinned by a constant the way the range is: the only way the
+/// page can know it is to be told, and the only way it stays told is to read
+/// the answer rather than the request.
 #[test]
 fn browser_interview_takes_the_length_the_server_granted() {
     let interview = fs::read_to_string("web/interview.js").unwrap();

@@ -12,16 +12,17 @@ LOGIN_DB_PATH="$TMP/accounts.db"
 LOGIN_SESSION_SECRET=visual-parity-session
 CONFIG_PATH="$TMP/codetrial.env.local"
 printf '%s\n' \
-  'LIVEKIT_URL=wss://example.livekit.cloud' \
-  'LIVEKIT_API_KEY=visual-parity-key' \
-  'LIVEKIT_API_SECRET=visual-parity-secret' >"$CONFIG_PATH"
+    'LIVEKIT_URL=wss://example.livekit.cloud' \
+    'LIVEKIT_API_KEY=visual-parity-key' \
+    'LIVEKIT_API_SECRET=visual-parity-secret' > "$CONFIG_PATH"
 
-cleanup() {
-  if [ "${SERVER_PID:-}" ]; then
-    kill "$SERVER_PID" 2>/dev/null || true
-    wait "$SERVER_PID" 2>/dev/null || true
-  fi
-  rm -r "$TMP" 2>/dev/null || true
+cleanup()
+{
+    if [ "${SERVER_PID:-}" ]; then
+        kill "$SERVER_PID" 2> /dev/null || true
+        wait "$SERVER_PID" 2> /dev/null || true
+    fi
+    rm -r "$TMP" 2> /dev/null || true
 }
 trap cleanup EXIT INT TERM
 
@@ -29,60 +30,60 @@ trap cleanup EXIT INT TERM
 # `npm install` with no environment variable. PLAYWRIGHT_PATH stays an override
 # for a Playwright installed elsewhere.
 if [ -z "${PLAYWRIGHT_PATH:-}" ]; then
-  PLAYWRIGHT_PATH=$(node -e "console.log(require.resolve('playwright', { paths: ['$ROOT'] }))" 2>/dev/null || true)
+    PLAYWRIGHT_PATH=$(node -e "console.log(require.resolve('playwright', { paths: ['$ROOT'] }))" 2> /dev/null || true)
 fi
 if [ -z "$PLAYWRIGHT_PATH" ]; then
-  echo "Playwright is not installed. From the repo root:" >&2
-  echo "  npm install && npx playwright install chromium" >&2
-  echo "Or set PLAYWRIGHT_PATH to an existing Playwright module." >&2
-  exit 1
+    echo "Playwright is not installed. From the repo root:" >&2
+    echo "  npm install && npx playwright install chromium" >&2
+    echo "Or set PLAYWRIGHT_PATH to an existing Playwright module." >&2
+    exit 1
 fi
 
 PORT=${PORT:-}
 if [ -z "$PORT" ]; then
-  PORT=$(node -e "const s=require('net').createServer();s.listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close();});")
+    PORT=$(node -e "const s=require('net').createServer();s.listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close();});")
 fi
 BASE_URL="http://127.0.0.1:$PORT"
 
-if curl -fsS "$BASE_URL" >/dev/null 2>&1; then
-  echo "Port $PORT is already serving HTTP; set PORT to a free port." >&2
-  exit 1
+if curl -fsS "$BASE_URL" > /dev/null 2>&1; then
+    echo "Port $PORT is already serving HTTP; set PORT to a free port." >&2
+    exit 1
 fi
 
 mkdir -p "$GOLDEN_DIR" "$ARTIFACT_DIR"
 
 env -u LIVEKIT_URL -u LIVEKIT_API_KEY -u LIVEKIT_API_SECRET -u GOOGLE_API_KEY \
-  SESSION_SECRET="$LOGIN_SESSION_SECRET" \
-  CODETRIAL_DB_PATH="$LOGIN_DB_PATH" \
-  cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- web --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
-  >"$SERVER_LOG" 2>&1 &
+    SESSION_SECRET="$LOGIN_SESSION_SECRET" \
+    CODETRIAL_DB_PATH="$LOGIN_DB_PATH" \
+    cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- web --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
+    > "$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 
 i=0
-until curl -fsS "$BASE_URL" >/dev/null 2>&1; do
-  i=$((i + 1))
-  if [ "$i" -gt 90 ]; then
-    cat "$SERVER_LOG" >&2
-    exit 1
-  fi
-  sleep 1
+until curl -fsS "$BASE_URL" > /dev/null 2>&1; do
+    i=$((i + 1))
+    if [ "$i" -gt 90 ]; then
+        cat "$SERVER_LOG" >&2
+        exit 1
+    fi
+    sleep 1
 done
 
 echo "visual parity threshold: $THRESHOLD"
 
 SESSION_COOKIE=${VISUAL_PARITY_SESSION_COOKIE:-}
 if [ -z "$SESSION_COOKIE" ]; then
-  SESSION_COOKIE=$(login_session_cookie "$BASE_URL" visual-parity) || exit 2
+    SESSION_COOKIE=$(login_session_cookie "$BASE_URL" visual-parity) || exit 2
 fi
 
 BASE_URL="$BASE_URL" \
-  GOLDEN_DIR="$GOLDEN_DIR" \
-  ARTIFACT_DIR="$ARTIFACT_DIR" \
-  SESSION_COOKIE="$SESSION_COOKIE" \
-  PLAYWRIGHT_PATH="$PLAYWRIGHT_PATH" \
-  VISUAL_PARITY_CSS="${VISUAL_PARITY_CSS:-}" \
-  VISUAL_PARITY_THRESHOLD="$THRESHOLD" \
-  node <<'NODE'
+    GOLDEN_DIR="$GOLDEN_DIR" \
+    ARTIFACT_DIR="$ARTIFACT_DIR" \
+    SESSION_COOKIE="$SESSION_COOKIE" \
+    PLAYWRIGHT_PATH="$PLAYWRIGHT_PATH" \
+    VISUAL_PARITY_CSS="${VISUAL_PARITY_CSS:-}" \
+    VISUAL_PARITY_THRESHOLD="$THRESHOLD" \
+    node << 'NODE'
 const { chromium } = require(process.env.PLAYWRIGHT_PATH);
 const fs = require("fs");
 const path = require("path");

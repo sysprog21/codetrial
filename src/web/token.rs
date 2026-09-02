@@ -494,6 +494,7 @@ pub(crate) async fn token_handler(
             "token": response.token,
             "serverUrl": response.server_url,
             "roomName": response.room_name,
+
             // The same number the token metadata carries, so the page counts
             // down the interview the agent is running rather than the one the
             // lobby asked for.

@@ -287,6 +287,7 @@ pub(crate) async fn session_handler(
     // record a login at all, and telling the page to demand one anyway leaves
     // the candidate typing a username into an endpoint that answers 404.
     let login_required = state.accounts_required;
+
     // The lobby offers lengths this deployment may not be able to record, and
     // only the server knows the recording cap. Answered on both branches
     // because the duration row is live before anyone signs in.

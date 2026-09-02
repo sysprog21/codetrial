@@ -4,14 +4,18 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SPEC = importlib.util.spec_from_file_location("calibrate_framework", ROOT / "scripts" / "calibrate-framework.py")
+SPEC = importlib.util.spec_from_file_location(
+    "calibrate_framework", ROOT / "scripts" / "calibrate-framework.py"
+)
 CAL = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CAL)
 
 
 class CalibrationTests(unittest.TestCase):
     def fixture(self, name):
-        return json.loads((ROOT / "tests" / "fixtures" / "calibration" / name).read_text())
+        return json.loads(
+            (ROOT / "tests" / "fixtures" / "calibration" / name).read_text()
+        )
 
     def test_representative_synthetic_fixture_passes(self):
         result = CAL.analyze(self.fixture("passing-synthetic.json"))
@@ -23,7 +27,9 @@ class CalibrationTests(unittest.TestCase):
     def test_biased_fixture_fails_and_names_subgroup_gap(self):
         result = CAL.analyze(self.fixture("failing-synthetic.json"))
         self.assertEqual(result["status"], "NOT_CALIBRATED")
-        self.assertTrue(any("language MAE gap" in failure for failure in result["failures"]))
+        self.assertTrue(
+            any("language MAE gap" in failure for failure in result["failures"])
+        )
 
     def test_version_must_be_a_real_integer(self):
         # `True != 1` and `1.0 != 1` are both false, so a bare inequality
@@ -68,7 +74,10 @@ class CalibrationTests(unittest.TestCase):
     def test_checked_in_status_does_not_claim_real_calibration(self):
         status = (ROOT / "docs" / "rubric-calibration.md").read_text()
         self.assertIn("Status: **NOT CALIBRATED**", status)
-        self.assertIn("synthetic analyzer fixtures are tests, not evidence", " ".join(status.split()))
+        self.assertIn(
+            "synthetic analyzer fixtures are tests, not evidence",
+            " ".join(status.split()),
+        )
 
 
 if __name__ == "__main__":
