@@ -239,48 +239,13 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     // the number in their config file was ignored.
     let max_concurrent = read_max_concurrent(&values);
 
-    // Built straight from the values rather than through `load_from_pairs`:
-    // this mode serves HTTP and mints LiveKit tokens, and has no use for the
-    // Gemini key that a full agent config insists on. Demanding it here turned
-    // a web-only deployment into an empty pool, silently.
     let production = is_production(&values);
-    let mut pool = codetrial::config::ProviderPool::default();
-    let (url, api_key, api_secret) = match (
-        nonempty(&values, "LIVEKIT_URL"),
-        nonempty(&values, "LIVEKIT_API_KEY"),
-        nonempty(&values, "LIVEKIT_API_SECRET"),
-    ) {
-        (Some(url), Some(api_key), Some(api_secret)) => (url, api_key, api_secret),
+    let pool = web_provider_pool(&values, &options, production)?;
 
-        // Names the file that was actually read. A fixed `config/` in this
-        // message sends anyone running with `--config` or a bare
-        // `./codetrial.env.local` to edit a file the server never opened.
-        _ => {
-            return Err(format!(
-                "missing required LiveKit credentials: set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET in {}",
-                primary_config_path(&options)?.display()
-            ));
-        }
-    };
-    codetrial::config::validate_livekit_url(&url, production)?;
-    pool.providers.push(codetrial::config::Provider {
-        id: codetrial::config::PRIMARY_PROVIDER_ID.to_string(),
-        url,
-        api_key,
-        api_secret,
-        google_api_key: value_or(&values, "GOOGLE_API_KEY", ""),
-    });
-    extend_pool(
-        &mut pool,
-        production,
-        &provider_dir(&options),
-        &value_or(&values, codetrial::config::PROVIDER_ORDER_KEY, ""),
-    );
-
-    // After `extend_pool`, so the "is this project in the pool" check sees the
-    // pool the server will actually serve, and before the listener does any
-    // work: a half-configured recording block is a startup failure, never a
-    // surprise at the moment a candidate's interview ends.
+    // After the pool is complete, so the "is this project in the pool" check
+    // sees the pool the server will actually serve, and before the listener
+    // does any work: a half-configured recording block is a startup failure,
+    // never a surprise at the moment a candidate's interview ends.
     let recording = codetrial::config::load_recording(
         &values,
         &pool,
@@ -373,6 +338,52 @@ fn run_web(options: CliOptions) -> Result<(), String> {
             .await
         })
         .map_err(|error| format!("web server failed: {error}"))
+}
+
+/// The pool this deployment will serve.
+///
+/// Built straight from the values rather than through `load_from_pairs`: the
+/// web mode serves HTTP and mints LiveKit tokens, and has no use for the Gemini
+/// key that a full agent config insists on. Demanding it here turned a web-only
+/// deployment into an empty pool, silently.
+fn web_provider_pool(
+    values: &BTreeMap<String, String>,
+    options: &CliOptions,
+    production: bool,
+) -> Result<codetrial::config::ProviderPool, String> {
+    let mut pool = codetrial::config::ProviderPool::default();
+    let (url, api_key, api_secret) = match (
+        nonempty(values, "LIVEKIT_URL"),
+        nonempty(values, "LIVEKIT_API_KEY"),
+        nonempty(values, "LIVEKIT_API_SECRET"),
+    ) {
+        (Some(url), Some(api_key), Some(api_secret)) => (url, api_key, api_secret),
+
+        // Names the file that was actually read. A fixed `config/` in this
+        // message sends anyone running with `--config` or a bare
+        // `./codetrial.env.local` to edit a file the server never opened.
+        _ => {
+            return Err(format!(
+                "missing required LiveKit credentials: set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET in {}",
+                primary_config_path(options)?.display()
+            ));
+        }
+    };
+    codetrial::config::validate_livekit_url(&url, production)?;
+    pool.providers.push(codetrial::config::Provider {
+        id: codetrial::config::PRIMARY_PROVIDER_ID.to_string(),
+        url,
+        api_key,
+        api_secret,
+        google_api_key: value_or(values, "GOOGLE_API_KEY", ""),
+    });
+    extend_pool(
+        &mut pool,
+        production,
+        &provider_dir(options),
+        &value_or(values, codetrial::config::PROVIDER_ORDER_KEY, ""),
+    );
+    Ok(pool)
 }
 
 fn run_livekit(config: AgentConfig, room_name: &str) -> Result<(), String> {
