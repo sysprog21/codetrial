@@ -71,6 +71,13 @@ pub struct GitHubProfile {
 /// fresh SQLite handle, paying a file open and a schema read before doing any
 /// work. One connection also means `PRAGMA foreign_keys` is actually in force,
 /// which per-request handles never had, so `ON DELETE CASCADE` now applies.
+///
+/// The ceiling that buys: one connection behind a mutex serializes every
+/// account query, on the blocking pool rather than on an async worker. An
+/// interview is a handful of queries at its edges, so the queue is never the
+/// thing anyone waits for; a deployment running many concurrent interviews
+/// would want a pool here, and would find out by measuring rather than by
+/// reading this.
 pub struct Accounts {
     config: GitHubLoginConfig,
     connection: Mutex<rusqlite::Connection>,
