@@ -1226,6 +1226,81 @@ fn binary_web_reports_bind_failure_after_config_validation() {
     assert!(stderr.contains("failed to bind"), "{stderr}");
 }
 
+/// The console stays open now, but still needs to say where to look:
+/// stdout must name the URL.
+#[test]
+fn binary_web_prints_the_url_to_open_when_setup_starts_serving() {
+    let dir = temp_path("setup-prints-url");
+    std::fs::create_dir_all(&dir).unwrap();
+    let addr = free_addr();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_codetrial"))
+        .args(["web", "--web-addr", &addr])
+        .current_dir(&dir)
+        .env_remove("LIVEKIT_URL")
+        .env_remove("LIVEKIT_API_KEY")
+        .env_remove("LIVEKIT_API_SECRET")
+        .env_remove("GOOGLE_API_KEY")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("codetrial should start");
+
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let stdout_reader = thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stdout.read_to_string(&mut text);
+        text
+    });
+
+    let started = wait_for_http(&addr, &mut child);
+    stop_child(&mut child);
+    let _ = std::fs::remove_dir_all(&dir);
+    let output = stdout_reader.join().expect("stdout reader should finish");
+
+    assert!(started.is_ok(), "{started:?}");
+    assert!(output.contains(&addr), "{output}");
+}
+
+/// Same gap for an already-configured launch — reached via a config file
+/// instead of a missing one.
+#[test]
+fn binary_web_prints_the_url_to_open_for_the_full_app_too() {
+    let dir = temp_path("full-app-prints-url");
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("codetrial.env.local");
+    write_config(&config, &dir, "127.0.0.1:1");
+    let addr = free_addr();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_codetrial"))
+        .args([
+            "web",
+            "--web-addr",
+            &addr,
+            "--config",
+            config.to_str().unwrap(),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("codetrial should start");
+
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let stdout_reader = thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stdout.read_to_string(&mut text);
+        text
+    });
+
+    let started = wait_for_http(&addr, &mut child);
+    stop_child(&mut child);
+    let _ = std::fs::remove_dir_all(&dir);
+    let output = stdout_reader.join().expect("stdout reader should finish");
+
+    assert!(started.is_ok(), "{started:?}");
+    assert!(output.contains(&addr), "{output}");
+}
+
 #[test]
 fn binary_agent_modes_reject_usage_errors_with_exit_two() {
     for args in [

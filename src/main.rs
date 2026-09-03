@@ -307,6 +307,8 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     if let Some(refusal) = published_secret_refusal(&values, bound) {
         return Err(refusal);
     }
+    // Same reason `serve_setup` prints this: say where to go.
+    println!("codetrial: open http://{bound} in your browser");
 
     // Whether this process also hosts interviewers. A full agent config, which
     // is a Gemini key on top of what the web side needs, means yes; without it
@@ -409,6 +411,10 @@ fn is_cold_start(options: &CliOptions) -> bool {
 /// not a swappable router: the gap is milliseconds, worth one retry.
 fn serve_setup(options: &CliOptions) -> Result<(), String> {
     let listener = bind_web_listener(options.web_addr.as_deref().unwrap_or(DEFAULT_WEB_ADDR))?;
+    // The window stays open now, but still needs to say where to go.
+    if let Ok(bound) = listener.local_addr() {
+        println!("codetrial: open http://{bound} in your browser to continue setup");
+    }
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
     runtime
         .block_on(async {
