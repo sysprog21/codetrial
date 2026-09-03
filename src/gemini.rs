@@ -324,7 +324,7 @@ async fn generate_report_once(
     Ok(text)
 }
 
-async fn open_live_session_at(
+pub(crate) async fn open_live_session_at(
     url: &str,
     boot: &RuntimeBootstrap<'_>,
     resume: Option<&str>,
@@ -402,7 +402,7 @@ async fn open_live_session_at(
     })
 }
 
-fn gemini_live_websocket_url(api_key: &str) -> String {
+pub(crate) fn gemini_live_websocket_url(api_key: &str) -> String {
     format!(
         "{LIVE_WEBSOCKET_ENDPOINT}?key={}",
         percent_encode_query_value(api_key)

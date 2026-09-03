@@ -923,6 +923,34 @@ async fn livekit_room_service_request(
     parse_room_service_response(method, &text)
 }
 
+/// Proves credentials like `check-gemini` proves a Google key: the server
+/// must accept a signed request. `ListRooms` needs no room to exist.
+pub(crate) async fn validate_livekit_credentials(
+    url: &str,
+    api_key: &str,
+    api_secret: &str,
+    now_seconds: u64,
+) -> Result<(), String> {
+    let token = crate::token::livekit_room_list_token(api_key, api_secret, now_seconds)
+        .map_err(|error| error.to_string())?;
+    let endpoint = format!(
+        "{}/twirp/livekit.RoomService/ListRooms",
+        livekit_http_base(url)
+    );
+    let response = crate::http_client()
+        .post(endpoint)
+        .bearer_auth(token)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("LiveKit ListRooms failed: {}", response.status()))
+    }
+}
+
 fn livekit_http_base(url: &str) -> String {
     url.trim_end_matches('/')
         .replacen("wss://", "https://", 1)

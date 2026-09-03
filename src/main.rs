@@ -215,6 +215,11 @@ fn bind_web_listener(addr: &str) -> Result<std::net::TcpListener, String> {
 }
 
 fn run_web(options: CliOptions) -> Result<(), String> {
+    if is_cold_start(&options) {
+        // Falls through: once `serve_setup` returns, the config exists, so
+        // the rest of this function is an ordinary launch — same process.
+        serve_setup(&options)?;
+    }
     let values = load_values(&options)?;
 
     // The built-in default is a published string, so in production it is not a
@@ -385,6 +390,35 @@ fn web_provider_pool(
         &value_or(values, codetrial::config::PROVIDER_ORDER_KEY, ""),
     );
     Ok(pool)
+}
+
+/// The solo self-serve cold start: no `--config` given and none of the
+/// searched paths holds a file. A named-but-missing `--config` is an
+/// operator's mistake, not this.
+///
+/// The search order comes from `primary_config_path` rather than being
+/// written out again here. Spelled twice it was free to drift, and the drift
+/// is silent in the worst direction: a Setup page in front of someone whose
+/// config the rest of the process is about to read.
+fn is_cold_start(options: &CliOptions) -> bool {
+    options.config_path.is_none() && primary_config_path(options).is_err()
+}
+
+/// Serves Setup until a submission writes `codetrial.env.local`, then
+/// returns so `run_web` continues as an ordinary launch. Drop-and-rebind,
+/// not a swappable router: the gap is milliseconds, worth one retry.
+fn serve_setup(options: &CliOptions) -> Result<(), String> {
+    let listener = bind_web_listener(options.web_addr.as_deref().unwrap_or(DEFAULT_WEB_ADDR))?;
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
+    runtime
+        .block_on(async {
+            let ready = Arc::new(tokio::sync::Notify::new());
+            let listener = tokio::net::TcpListener::from_std(listener)?;
+            axum::serve(listener, codetrial::web::setup_service(ready.clone()))
+                .with_graceful_shutdown(async move { ready.notified().await })
+                .await
+        })
+        .map_err(|error| format!("web server failed: {error}"))
 }
 
 fn run_livekit(config: AgentConfig, room_name: &str) -> Result<(), String> {

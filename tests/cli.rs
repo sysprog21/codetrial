@@ -5,12 +5,15 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use futures_util::{SinkExt, StreamExt};
+use tokio_tungstenite::accept_async;
+
 fn run_cli_args(args: &[&str]) -> (i32, String, String) {
     run_cli_args_with_env(args, &[])
 }
 
 fn run_cli_args_with_env(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, String) {
-    let cwd = temp_path("empty-cwd");
+    let cwd = exe_temp_path("empty-cwd");
     std::fs::create_dir_all(&cwd).expect("empty cwd should create");
     let output = cli_command(args, envs, &cwd)
         .output()
@@ -40,7 +43,7 @@ fn run_cli_until_exit(args: &[&str]) -> (i32, String, String) {
     // whole helper exists to remove.
     const LIMIT: Duration = Duration::from_secs(10);
 
-    let cwd = temp_path("empty-cwd");
+    let cwd = exe_temp_path("empty-cwd");
     std::fs::create_dir_all(&cwd).expect("empty cwd should create");
     let mut child = cli_command(args, &[], &cwd)
         .spawn()
@@ -92,8 +95,12 @@ fn run_cli_until_exit(args: &[&str]) -> (i32, String, String) {
 /// environment the child inherits. The removals matter: a developer with
 /// `NODE_ENV` or `SESSION_SECRET` exported would otherwise change what these
 /// tests are testing.
+/// Runs a linked binary inside `cwd`, not the one in the target directory:
+/// the executable's own folder is a config search path and a place the Setup
+/// page writes, so a stray `codetrial.env.local` next to the real test binary
+/// would decide these tests.
 fn cli_command(args: &[&str], envs: &[(&str, &str)], cwd: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_codetrial"));
+    let mut command = Command::new(binary_beside(cwd));
     command
         .args(args)
         .current_dir(cwd)
@@ -510,14 +517,13 @@ fn binary_reads_a_config_file_beside_the_executable() {
 /// assertion is the same sentence three times, and a mode added to MODES that
 /// forgets this belongs in this list rather than in a fourth copy.
 ///
-/// `serve` is not here. It needs a free address to reach the same refusal, so
-/// it carries its own test below.
+/// `web` is not here: a missing config is a cold start for it, covered by
+/// `binary_web_serves_a_setup_page_when_no_config_exists`.
 #[test]
 fn binary_modes_that_read_configuration_require_a_primary_config_file() {
     for args in [
         &["run-livekit", "interview-fixed"][..],
         &["check-gemini"][..],
-        &["web"][..],
     ] {
         let (code, stdout, stderr) = run_cli_args(args);
 
@@ -528,18 +534,6 @@ fn binary_modes_that_read_configuration_require_a_primary_config_file() {
             "{args:?}: {stderr}"
         );
     }
-}
-
-#[test]
-fn binary_web_requires_a_primary_config_file() {
-    let (code, stdout, stderr) = with_free_addr(|addr| {
-        let result = run_cli_args(&["web", "--web-addr", addr]);
-        (!result.2.contains("failed to bind")).then_some(result)
-    });
-
-    assert_eq!(code, 1);
-    assert!(stdout.is_empty());
-    assert!(stderr.contains("required configuration file is missing"));
 }
 
 /// `--config` alone still leaves zero positionals but skips the cold-start
@@ -560,6 +554,474 @@ fn binary_with_no_arguments_defaults_to_web_mode() {
     assert!(
         stderr.contains("missing required LiveKit credentials"),
         "{stderr}"
+    );
+}
+
+/// The solo self-serve cold start: no config anywhere, so it serves the
+/// Setup page instead of refusing.
+#[test]
+fn binary_web_serves_a_setup_page_when_no_config_exists() {
+    let dir = exe_temp_path("cold-start");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+
+    let (addr, _server) = spawn_server(|addr| {
+        let mut command = Command::new(&exe);
+        command
+            .args(["web", "--web-addr", addr])
+            .current_dir(&dir)
+            .env_remove("LIVEKIT_URL")
+            .env_remove("LIVEKIT_API_KEY")
+            .env_remove("LIVEKIT_API_SECRET")
+            .env_remove("GOOGLE_API_KEY")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    });
+    let response = http_request(
+        &addr,
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(response.contains("Setup"), "{response}");
+}
+
+/// Field names are the contract with `submit_setup`'s JSON keys; pinned so
+/// page and handler can't drift apart.
+#[test]
+fn setup_page_renders_a_form_with_all_four_credential_fields() {
+    let dir = exe_temp_path("setup-form");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+
+    let (addr, _server) = spawn_server(|addr| {
+        let mut command = Command::new(&exe);
+        command
+            .args(["web", "--web-addr", addr])
+            .current_dir(&dir)
+            .env_remove("LIVEKIT_URL")
+            .env_remove("LIVEKIT_API_KEY")
+            .env_remove("LIVEKIT_API_SECRET")
+            .env_remove("GOOGLE_API_KEY")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    });
+    let response = http_request(
+        &addr,
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    for field in [
+        "livekitUrl",
+        "livekitApiKey",
+        "livekitApiSecret",
+        "googleApiKey",
+    ] {
+        assert!(
+            response.contains(&format!("name=\"{field}\"")),
+            "missing {field} field: {response}"
+        );
+    }
+    assert!(response.contains("/api/setup"), "{response}");
+}
+
+/// Accept, validate, write: the mocks answer as working credentials would —
+/// LiveKit's `ListRooms` with 200, Gemini's handshake with `setupComplete`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn setup_page_accepts_credentials_and_writes_the_primary_config_file() {
+    let dir = exe_temp_path("setup-submit");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+
+    let livekit_mock = TcpListener::bind("127.0.0.1:0").unwrap();
+    let livekit_addr = livekit_mock.local_addr().unwrap();
+    thread::spawn(move || {
+        if let Ok((mut socket, _)) = livekit_mock.accept() {
+            let mut buffer = [0u8; 1024];
+            let _ = socket.read(&mut buffer);
+            let _ = socket.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"rooms\":[]}",
+            );
+        }
+    });
+
+    let gemini_mock = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gemini_addr = gemini_mock.local_addr().unwrap();
+    tokio::spawn(async move {
+        if let Ok((socket, _)) = gemini_mock.accept().await
+            && let Ok(mut socket) = accept_async(socket).await
+        {
+            let _ = socket.next().await;
+            let _ = socket
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    r#"{"setupComplete":{}}"#.into(),
+                ))
+                .await;
+        }
+    });
+
+    let (addr, _server) = spawn_server(|addr| {
+        let mut command = Command::new(&exe);
+        command
+            .args(["web", "--web-addr", addr])
+            .current_dir(&dir)
+            .env("CODETRIAL_GEMINI_LIVE_URL", format!("ws://{gemini_addr}"))
+            .env_remove("LIVEKIT_URL")
+            .env_remove("LIVEKIT_API_KEY")
+            .env_remove("LIVEKIT_API_SECRET")
+            .env_remove("GOOGLE_API_KEY")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    });
+
+    let body = format!(
+        r#"{{"livekitUrl":"http://{livekit_addr}","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":"google"}}"#
+    );
+    let response = http_request(
+        &addr,
+        &format!(
+            "POST /api/setup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        ),
+    );
+
+    let written = std::fs::read_to_string(dir.join("codetrial.env.local"))
+        .expect("codetrial.env.local should have been written");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(
+        written.contains(&format!("LIVEKIT_URL=http://{livekit_addr}")),
+        "{written}"
+    );
+    assert!(written.contains("LIVEKIT_API_KEY=key"), "{written}");
+    assert!(written.contains("LIVEKIT_API_SECRET=secret"), "{written}");
+    assert!(written.contains("GOOGLE_API_KEY=google"), "{written}");
+}
+
+/// `googleApiKey` is optional, same as an operator's config file: omitting it
+/// writes an empty `GOOGLE_API_KEY` and skips the Gemini live check, so no
+/// Gemini mock is needed here.
+#[test]
+fn setup_page_accepts_credentials_without_a_google_api_key() {
+    let dir = exe_temp_path("setup-submit-no-google-key");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+
+    let livekit_mock = TcpListener::bind("127.0.0.1:0").unwrap();
+    let livekit_addr = livekit_mock.local_addr().unwrap();
+    thread::spawn(move || {
+        if let Ok((mut socket, _)) = livekit_mock.accept() {
+            let mut buffer = [0u8; 1024];
+            let _ = socket.read(&mut buffer);
+            let _ = socket.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"rooms\":[]}",
+            );
+        }
+    });
+
+    let (addr, _server) = spawn_server(|addr| {
+        let mut command = Command::new(&exe);
+        command
+            .args(["web", "--web-addr", addr])
+            .current_dir(&dir)
+            .env_remove("LIVEKIT_URL")
+            .env_remove("LIVEKIT_API_KEY")
+            .env_remove("LIVEKIT_API_SECRET")
+            .env_remove("GOOGLE_API_KEY")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    });
+
+    let body = format!(
+        r#"{{"livekitUrl":"http://{livekit_addr}","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":""}}"#
+    );
+    let response = http_request(
+        &addr,
+        &format!(
+            "POST /api/setup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        ),
+    );
+
+    let written = std::fs::read_to_string(dir.join("codetrial.env.local"))
+        .expect("codetrial.env.local should have been written");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(written.contains("GOOGLE_API_KEY=\n"), "{written}");
+}
+
+/// Drop-and-rebind means a brief gap, so this polls rather than asserting
+/// the next request lands immediately. `/api/session` only exists on the
+/// full app, so 200 there proves the switch happened.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn setup_page_continues_serving_the_full_app_after_a_successful_submission() {
+    let dir = exe_temp_path("setup-continue");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+
+    let livekit_mock = TcpListener::bind("127.0.0.1:0").unwrap();
+    let livekit_addr = livekit_mock.local_addr().unwrap();
+    thread::spawn(move || {
+        if let Ok((mut socket, _)) = livekit_mock.accept() {
+            let mut buffer = [0u8; 1024];
+            let _ = socket.read(&mut buffer);
+            let _ = socket.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"rooms\":[]}",
+            );
+        }
+    });
+
+    let gemini_mock = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gemini_addr = gemini_mock.local_addr().unwrap();
+    tokio::spawn(async move {
+        if let Ok((socket, _)) = gemini_mock.accept().await
+            && let Ok(mut socket) = accept_async(socket).await
+        {
+            let _ = socket.next().await;
+            let _ = socket
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    r#"{"setupComplete":{}}"#.into(),
+                ))
+                .await;
+        }
+    });
+
+    let (addr, _server) = spawn_server(|addr| {
+        let mut command = Command::new(&exe);
+        command
+            .args(["web", "--web-addr", addr])
+            .current_dir(&dir)
+            .env("CODETRIAL_GEMINI_LIVE_URL", format!("ws://{gemini_addr}"))
+            .env_remove("LIVEKIT_URL")
+            .env_remove("LIVEKIT_API_KEY")
+            .env_remove("LIVEKIT_API_SECRET")
+            .env_remove("GOOGLE_API_KEY")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    });
+
+    let body = format!(
+        r#"{{"livekitUrl":"http://{livekit_addr}","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":"google"}}"#
+    );
+    let submit_response = http_request(
+        &addr,
+        &format!(
+            "POST /api/setup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        ),
+    );
+    assert!(
+        submit_response.starts_with("HTTP/1.1 200 OK"),
+        "{submit_response}"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut response = String::new();
+    while Instant::now() < deadline {
+        if let Some(candidate) = try_http(
+            &addr,
+            "GET /api/session HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        ) {
+            response = candidate;
+            if response.starts_with("HTTP/1.1 200 OK") {
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(response.contains(r#""loginRequired":true"#), "{response}");
+}
+
+/// A missing field is refused before anything touches disk.
+#[test]
+fn setup_page_rejects_a_submission_missing_a_field() {
+    let dir = exe_temp_path("setup-missing-field");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+
+    let (addr, _server) = spawn_server(|addr| {
+        let mut command = Command::new(&exe);
+        command
+            .args(["web", "--web-addr", addr])
+            .current_dir(&dir)
+            .env_remove("LIVEKIT_URL")
+            .env_remove("LIVEKIT_API_KEY")
+            .env_remove("LIVEKIT_API_SECRET")
+            .env_remove("GOOGLE_API_KEY")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    });
+
+    // `livekitUrl` is absent entirely; the others are merely blank, so this
+    // exercises both ways a field can fail to be there.
+    let body = r#"{"livekitApiKey":"","livekitApiSecret":"secret","googleApiKey":"google"}"#;
+    let response = http_request(
+        &addr,
+        &format!(
+            "POST /api/setup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        ),
+    );
+
+    let written = dir.join("codetrial.env.local").exists();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        response.starts_with("HTTP/1.1 400 Bad Request"),
+        "{response}"
+    );
+    assert!(response.contains("livekitUrl"), "{response}");
+    assert!(
+        !written,
+        "a rejected submission must not write a config file"
+    );
+}
+
+/// `CODETRIAL_GEMINI_LIVE_URL` redirects validation to a local mock that
+/// never sends `setupComplete` — a rejected key. LiveKit's mock has to pass
+/// so this isolates the Gemini rejection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn setup_page_rejects_a_google_api_key_that_fails_live_validation() {
+    let dir = exe_temp_path("setup-bad-gemini-key");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+
+    let livekit_mock = TcpListener::bind("127.0.0.1:0").unwrap();
+    let livekit_addr = livekit_mock.local_addr().unwrap();
+    thread::spawn(move || {
+        if let Ok((mut socket, _)) = livekit_mock.accept() {
+            let mut buffer = [0u8; 1024];
+            let _ = socket.read(&mut buffer);
+            let _ = socket.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"rooms\":[]}",
+            );
+        }
+    });
+
+    let gemini_mock = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gemini_addr = gemini_mock.local_addr().unwrap();
+    tokio::spawn(async move {
+        if let Ok((socket, _)) = gemini_mock.accept().await
+            && let Ok(mut socket) = accept_async(socket).await
+        {
+            let _ = socket.close(None).await;
+        }
+    });
+
+    let (addr, _server) = spawn_server(|addr| {
+        let mut command = Command::new(&exe);
+        command
+            .args(["web", "--web-addr", addr])
+            .current_dir(&dir)
+            .env("CODETRIAL_GEMINI_LIVE_URL", format!("ws://{gemini_addr}"))
+            .env_remove("LIVEKIT_URL")
+            .env_remove("LIVEKIT_API_KEY")
+            .env_remove("LIVEKIT_API_SECRET")
+            .env_remove("GOOGLE_API_KEY")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    });
+
+    let body = format!(
+        r#"{{"livekitUrl":"http://{livekit_addr}","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":"bad-key"}}"#
+    );
+    let response = http_request(
+        &addr,
+        &format!(
+            "POST /api/setup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        ),
+    );
+
+    let written = dir.join("codetrial.env.local").exists();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        response.starts_with("HTTP/1.1 400 Bad Request"),
+        "{response}"
+    );
+    assert!(response.contains("googleApiKey"), "{response}");
+    assert!(!written, "a rejected key must not write a config file");
+}
+
+/// LiveKit is validated too, via `ListRooms`; the mock refuses every
+/// request, standing in for a wrong key/secret.
+#[test]
+fn setup_page_rejects_livekit_credentials_that_fail_live_validation() {
+    let dir = exe_temp_path("setup-bad-livekit");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+
+    let mock = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mock_addr = mock.local_addr().unwrap();
+    thread::spawn(move || {
+        if let Ok((mut socket, _)) = mock.accept() {
+            let mut buffer = [0u8; 1024];
+            let _ = socket.read(&mut buffer);
+            let _ = socket.write_all(
+                b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+
+    let (addr, _server) = spawn_server(|addr| {
+        let mut command = Command::new(&exe);
+        command
+            .args(["web", "--web-addr", addr])
+            .current_dir(&dir)
+            .env_remove("LIVEKIT_URL")
+            .env_remove("LIVEKIT_API_KEY")
+            .env_remove("LIVEKIT_API_SECRET")
+            .env_remove("GOOGLE_API_KEY")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    });
+
+    let body = format!(
+        r#"{{"livekitUrl":"http://{mock_addr}","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":"google"}}"#
+    );
+    let response = http_request(
+        &addr,
+        &format!(
+            "POST /api/setup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        ),
+    );
+
+    let written = dir.join("codetrial.env.local").exists();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        response.starts_with("HTTP/1.1 400 Bad Request"),
+        "{response}"
+    );
+    assert!(response.contains("livekitUrl"), "{response}");
+    assert!(
+        !written,
+        "a rejected LiveKit credential must not write a config file"
     );
 }
 
