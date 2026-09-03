@@ -1226,15 +1226,66 @@ fn binary_web_reports_bind_failure_after_config_validation() {
     assert!(stderr.contains("failed to bind"), "{stderr}");
 }
 
+/// The listener never bound, so there's no Setup page to show this either;
+/// `codetrial-error.log` is the fallback.
+#[test]
+fn binary_web_logs_a_cold_start_bind_failure_beside_the_exe() {
+    let occupied = TcpListener::bind("127.0.0.1:0").expect("occupied port should bind");
+    let addr = occupied.local_addr().unwrap().to_string();
+    let dir = exe_temp_path("cold-start-bind-failure");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let output = cli_command(&["web", "--web-addr", &addr], &[], &dir)
+        .output()
+        .expect("codetrial should exit");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+    let log = std::fs::read_to_string(dir.join("codetrial-error.log"));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("failed to bind"), "{stderr}");
+    let log = log.expect("codetrial-error.log should have been written");
+    assert!(log.contains("failed to bind"), "{log}");
+}
+
+/// Generalized past the cold start: an existing-but-invalid config fails
+/// through the ordinary `web` path, not `serve_setup`, and loses the reason
+/// the same way.
+#[test]
+fn binary_web_logs_any_startup_failure_not_just_a_cold_start_one() {
+    let dir = exe_temp_path("invalid-config-log");
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("codetrial.env.local");
+    std::fs::write(&config, "CODETRIAL_WEB_ADDR=127.0.0.1:1\n").unwrap();
+
+    let output = cli_command(&["web", "--config", config.to_str().unwrap()], &[], &dir)
+        .output()
+        .expect("codetrial should exit");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+    let log = std::fs::read_to_string(dir.join("codetrial-error.log"));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr.contains("missing required LiveKit credentials"),
+        "{stderr}"
+    );
+    let log = log.expect("codetrial-error.log should have been written");
+    assert!(
+        log.contains("missing required LiveKit credentials"),
+        "{log}"
+    );
+}
+
 /// The console stays open now, but still needs to say where to look:
 /// stdout must name the URL.
 #[test]
 fn binary_web_prints_the_url_to_open_when_setup_starts_serving() {
-    let dir = temp_path("setup-prints-url");
+    let dir = exe_temp_path("setup-prints-url");
     std::fs::create_dir_all(&dir).unwrap();
     let addr = free_addr();
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_codetrial"))
+    let mut child = Command::new(binary_beside(&dir))
         .args(["web", "--web-addr", &addr])
         .current_dir(&dir)
         .env_remove("LIVEKIT_URL")

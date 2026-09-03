@@ -28,7 +28,8 @@ struct CliOptions {
 /// check is a mode that silently ignores its extra arguments.
 const MODES: [(&str, usize, &str, ModeFn); 3] = [
     ("web", 1, "codetrial web [OPTIONS]", |_, options| {
-        run_web(options)
+        // Logged for `web` only: `run-livekit`/`check-gemini` are terminal-run tooling.
+        run_web(options).inspect_err(|error| log_web_error(error))
     }),
     (
         "run-livekit",
@@ -425,6 +426,19 @@ fn serve_setup(options: &CliOptions) -> Result<(), String> {
                 .await
         })
         .map_err(|error| format!("web server failed: {error}"))
+}
+
+/// Any `web` failure, not just a cold-start one. No attempt to tell a solo
+/// user's config apart from an operator's — the error text already says
+/// what's wrong. Best-effort: must not shadow the real error.
+///
+/// Beside the executable, where the config it just failed to read also
+/// lives. A double-clicked binary has no console to leave the reason in and
+/// no working directory anyone chose, so the folder it was unpacked into is
+/// the one place its owner knows to look.
+fn log_web_error(error: &str) {
+    let path = codetrial::exe_dir().join("codetrial-error.log");
+    let _ = std::fs::write(path, format!("{error}\n"));
 }
 
 fn run_livekit(config: AgentConfig, room_name: &str) -> Result<(), String> {
