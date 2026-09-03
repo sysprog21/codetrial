@@ -474,6 +474,27 @@ fn binary_web_requires_a_primary_config_file() {
     assert!(stderr.contains("required configuration file is missing"));
 }
 
+/// `--config` alone still leaves zero positionals but skips the cold-start
+/// path, so the credentials refusal proves `web` was picked, not
+/// `run-livekit`/`check-gemini`.
+#[test]
+fn binary_with_no_arguments_defaults_to_web_mode() {
+    let dir = temp_path("default-mode");
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("codetrial.env.local");
+    std::fs::write(&config, "CODETRIAL_WEB_ADDR=127.0.0.1:1\n").unwrap();
+
+    let (code, stdout, stderr) = run_cli_args(&["--config", config.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(dir);
+
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stdout.is_empty());
+    assert!(
+        stderr.contains("missing required LiveKit credentials"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn binary_web_refuses_a_public_listener_without_a_session_secret() {
     let config_dir = temp_path("serve-public-default-secret");

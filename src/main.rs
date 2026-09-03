@@ -79,17 +79,18 @@ fn run_agent_command(args: &[String]) -> i32 {
         }));
         return 0;
     }
-    let (positionals, options) = match parse_agent_args(args) {
+    let (mut positionals, options) = match parse_agent_args(args) {
         Ok(parsed) => parsed,
         Err(error) => {
             eprintln!("{error}");
             return 2;
         }
     };
-    let Some(mode) = positionals.first().map(String::as_str) else {
-        eprintln!("usage: codetrial MODE [OPTIONS]");
-        return 2;
-    };
+    // No console survives to show a usage line on double-click; default to `web`.
+    if positionals.is_empty() {
+        positionals.push("web".to_string());
+    }
+    let mode = positionals[0].as_str();
     let Some(&(_, arity, usage, run)) = MODES.iter().find(|(name, ..)| *name == mode) else {
         // The names, not just the refusal. A mode that was removed reaches this
         // line as an ordinary typo, and "unknown agent mode: serve" on its own
