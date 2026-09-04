@@ -385,6 +385,16 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
       await page.goto(process.env.BASE_URL, { waitUntil: "domcontentloaded" });
       await page.getByRole("heading", { name: "Practice a live technical interview" }).waitFor();
       await page.getByRole("button", { name: "Start interview" }).waitFor();
+
+      // Two things now stand between the page and a generated card, and this
+      // check knew about neither: the cards moved inside a collapsed <details>
+      // when the lobby started recommending a problem instead of listing all
+      // 150, and the picker only offers the difficulties the checkboxes select,
+      // which defaults to Medium alone. Valid Parentheses is Easy, so reach it
+      // the way a candidate does rather than waiting for a card the lobby is
+      // deliberately hiding.
+      await page.getByText("Choose a specific problem instead").click();
+      await page.getByRole("checkbox", { name: "Easy" }).check();
       await page.getByText("Valid Parentheses").waitFor();
       return;
     }
