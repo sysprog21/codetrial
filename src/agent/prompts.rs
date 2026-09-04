@@ -589,10 +589,18 @@ Return ONLY a valid JSON object, no markdown fences, exactly this shape:
   }}
 }}
 Each strengths/improvements list must contain 2 to 4 concrete, specific items
-grounded in the transcript and code — never generic filler.
+grounded in the transcript and code, never generic filler, and no item may
+repeat another in the same list. A session with little to praise still holds two
+distinct observations: a clarifying question asked, uncertainty admitted instead
+of guessed at, a decision explained, a boundary noticed, effort sustained under
+time pressure. Name two of those rather than saying one thing twice.
 
-For `improvementPlan`, emit exactly one item for every distinct feedback improvement
-(0 to 8 items); never add unrelated advice or duplicate a weakness. Sort high
+For `improvementPlan`, take every string in `codingFeedback.improvements` and
+`communicationFeedback.improvements` together and emit one item for each, so the
+plan holds exactly as many items as those two lists hold between them. Copy the
+improvement into `weakness` character for character: a paraphrase, a merge of
+two, or an improvement left without an item is a rejected report. Never add
+advice that is not one of those strings, and never repeat one. Sort high
 impact before medium before low, then higher observed frequency first. Choose from
 these small drills where applicable: problem restatement, edge-case enumeration,
 complexity narration, test-table construction, a 60-second STAR response,
@@ -611,8 +619,9 @@ assessed phase: 90–100 = complete, precise, and independent; 75–89 = sound w
 minor gap; 60–74 = partially demonstrated with a material gap; 40–59 = weak or
 substantially incomplete; 0–39 = directly observed incorrect or missing despite a
 clear opportunity. A zero is observed performance, never a substitute for `null`.
-Weakness tags must be exact copies of improvements assigned to that same phase in
-`improvementPlan`; otherwise use an empty list. Evidence confidence is not
+Weakness tags must be copied character for character from the `weakness` of an
+`improvementPlan` item whose `phase` is this phase; where no plan item names this
+phase, the list is empty. Evidence confidence is not
 performance and must never become a phase score."#,
         input.duration_min,
         input.elapsed_min,
