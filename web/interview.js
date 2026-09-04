@@ -1206,8 +1206,8 @@ function setLanguage(language) {
 /// another branch. The two-owner version this replaces needed a boolean lock, a
 /// deferred-text field that only one of the two owners got, and a lock-breaking
 /// special case for session-ending events.
-const BANNER_RANK = { session: 4, connection: 3, interviewer: 2, face: 1 };
-const banners = { session: "", connection: "", interviewer: "", face: "" };
+const BANNER_RANK = { session: 5, connection: 4, interviewer: 3, reconnect: 2, face: 1 };
+const banners = { session: "", connection: "", interviewer: "", reconnect: "", face: "" };
 
 function setBanner(source, text) {
   if (!nodes.presenceBanner) return;
@@ -1311,6 +1311,12 @@ function receiveControl(bytes) {
     const message = JSON.parse(new TextDecoder().decode(bytes));
     if (message.type === "pause_state" && typeof message.paused === "boolean") {
       applyPause(message.paused);
+    } else if (message.type === "interviewer_state" && typeof message.reconnecting === "boolean") {
+      // Gemini caps how long one connection lasts, so this arrives several
+      // times in a normal interview. It is the only notice the candidate gets
+      // that the interviewer went deaf: the agent stays in the room across it,
+      // so every other signal the page watches says nothing happened.
+      setBanner("reconnect", message.reconnecting ? providerUiState("interviewer_reconnecting").message : "");
     } else if (message.type === "framework_state" && Array.isArray(message.phases)) {
       frameworkPhases = message.phases;
       renderFrameworkProgress();
@@ -1627,7 +1633,11 @@ function updateAgentState() {
     // "Waiting" is honest but useless on its own: it looks identical whether
     // the interviewer has not arrived yet or arrived, greeted, and died. Once
     // Jim has been seen, his absence is a failure the candidate is entitled to
-    // know about, rather than a frozen page they keep talking into.
+    // know about, rather than a frozen page they keep talking into. It outranks
+    // the reconnect notice, which is the other thing that writes about the
+    // interviewer: one that left is not coming back on its own, so telling the
+    // candidate to hold a thought for it would be worse than telling them
+    // nothing.
     if (state.sawAgent) {
       setBanner("interviewer",
         "The interviewer disconnected. Nothing you typed is lost; end the interview to get your report.");

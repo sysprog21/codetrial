@@ -24,10 +24,10 @@ use integrity::integrity_hash;
 pub use integrity::{sanitize_integrity_event, sanitize_test_run};
 pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, get_problem, topics_for};
 pub use prompts::{
-    LanguageChoiceContext, ReportPromptInput, build_instructions_for_plan, format_test_run,
-    greeting, language_choice, log_hint_text, numbered, proactive_review, read_editor_text,
-    report_prompt, significant_change, silence_nudge, spoken_language, test_results_reaction,
-    time_warning, wrap_up,
+    LanguageChoiceContext, ReportPromptInput, build_instructions_for_plan, cold_restart,
+    format_test_run, greeting, language_choice, log_hint_text, numbered, proactive_review,
+    read_editor_text, report_prompt, significant_change, silence_nudge, spoken_language,
+    test_results_reaction, time_warning, wrap_up,
 };
 pub use report::{
     fallback_report, final_report, report_response_schema, validate_report,
@@ -588,6 +588,12 @@ pub struct RuntimeState {
     /// published a template. See `apply_code_update`.
     pub code_edited: bool,
     pub language: String,
+    /// Whether `language` is a choice the candidate made, as opposed to the
+    /// default this state starts in. The two are indistinguishable in the field
+    /// itself, and a cold-restarted interviewer that reads the default as a
+    /// choice tells a candidate who wanted C++ that they picked Python and is
+    /// forbidden from asking again.
+    pub language_chosen: bool,
     pub transcript: Vec<String>,
     pub last_test_run: Option<serde_json::Value>,
     pub test_runs: u32,
@@ -614,6 +620,15 @@ pub struct RuntimeState {
     /// nobody has to ask whether the two ends are the same event.
     pub integrity_first_heartbeat: Option<serde_json::Value>,
     pub integrity_last_heartbeat: Option<serde_json::Value>,
+    /// Whether the interviewer owes this candidate a cold-restart briefing.
+    ///
+    /// Set when a Gemini socket is replaced by a session that remembers nothing
+    /// while the interview is paused, which is the one moment the briefing
+    /// cannot simply be spoken: the reply would be discarded on the way out.
+    /// Resuming is what clears it, because that is when Jim speaks again, and
+    /// the line resuming sends otherwise assumes an interviewer who was here
+    /// for the whole interview.
+    pub needs_cold_brief: bool,
     pub ended: bool,
 }
 
@@ -631,6 +646,7 @@ impl Default for RuntimeState {
             code: String::new(),
             code_edited: false,
             language: "python".to_string(),
+            language_chosen: false,
             transcript: Vec::new(),
             last_test_run: None,
             test_runs: 0,
@@ -639,6 +655,7 @@ impl Default for RuntimeState {
             integrity_chain: None,
             integrity_first_heartbeat: None,
             integrity_last_heartbeat: None,
+            needs_cold_brief: false,
             ended: false,
         }
     }
@@ -791,6 +808,24 @@ pub fn framework_progress(state: &RuntimeState) -> Vec<&'static str> {
     }
     phases
 }
+
+/// The behavioral half of the phase ids, named here beside `phase_id` because
+/// that is where a reader renaming one of them will be standing.
+/// `star_complete`
+/// in livekit.rs asks the same question of the enum, which the compiler checks;
+/// this is for the callers that already hold the ids as strings.
+pub const STAR_PHASE_IDS: [&str; 4] = ["situation", "task", "action", "result"];
+
+/// The coding half, for the callers that need the same question the other way
+/// round.
+pub const REACTO_PHASE_IDS: [&str; 6] = [
+    "repeat",
+    "example",
+    "algorithm",
+    "coding",
+    "test",
+    "optimizations",
+];
 
 const fn phase_id(phase: FrameworkPhase) -> &'static str {
     match phase {

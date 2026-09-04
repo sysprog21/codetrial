@@ -825,6 +825,10 @@ export function providerUiState(kind, detail = "") {
     connecting: { label: "Connecting", message: "Connecting to the live interviewer.", personalized: false, retry: false },
     live: { label: "Live", message: "The live interviewer is connected.", personalized: true, retry: false },
     reconnecting: { label: "Reconnecting", message: "Reconnecting to the interviewer. Keep working; your code is safe.", personalized: true, retry: false },
+    // A different outage from the one above, and the one the candidate can act
+    // on: the room is fine and the interviewer is still in it, but its own
+    // session dropped and it cannot hear anything said until it is back.
+    interviewer_reconnecting: { label: "Reconnecting", message: "The interviewer is reconnecting and cannot hear you for a moment. Keep working; nothing is lost.", personalized: true, retry: false },
     degraded: { label: "Offline", message: `${reason} You can still work the problem, but it will not create a personalized evaluation.`, personalized: false, retry: true },
     report_generating: { label: "Preparing report", message: "Preparing your personalized report. A slow grader can take up to a minute.", personalized: true, retry: false },
     incomplete_report: { label: "Incomplete report", message: "The provider could not produce a valid personalized evaluation. No scores or verdict were created.", personalized: false, retry: true },

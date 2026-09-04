@@ -36,6 +36,7 @@ import {
 test("provider degradation states distinguish availability and evaluation truth", () => {
   const expected = {
     connecting: [false, false], live: [true, false], reconnecting: [true, false],
+    interviewer_reconnecting: [true, false],
     degraded: [false, true], report_generating: [true, false],
     incomplete_report: [false, true], retry_ready: [false, true],
   };

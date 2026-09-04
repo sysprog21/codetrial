@@ -64,6 +64,30 @@
 # `parse_and_validate_report` in gemini.rs, which is the half of report
 # generation that does not need a network.
 #
+# `open_live_session_at` is in the list for a different reason from everything
+# else here, and a smaller one: it is reachable, and `open_live_session_sends_
+# setup_and_waits_for_setup_complete` drives it against a local socket. It
+# generates one mutant, `Ok(Default::default())`, which cannot compile because
+# `GeminiLiveSession` owns a socket and has no `Default`. Listing it spends a
+# link per run to learn that again.
+#
+# `open_cold_session` is the retry around opening one, and the same case: every
+# line of it is a socket to Google or the sleep between two of them, and what it
+# decides in between is `take_restart_attempt`, which is tested.
+#
+# `restart_after_close` is the arm of the loop that puts the interview back on a
+# new Gemini socket. Every line of it either opens a socket to Google or writes
+# to a LiveKit room, so `Ok(ControlFlow::Continue(()))` looks the same from
+# outside as doing the work, for the reason `run_room` itself does. The one
+# decision it makes that is not a network call is `take_restart_attempt`, which
+# is a counter and a duration and is tested beside it.
+#
+# `leave_room` and `publish_interviewer_state` are its two writes, and the same
+# case as `publish_framework_progress` above: one disconnects the agent and the
+# other publishes a packet, and a test with no room cannot tell either from a
+# no-op. What `publish_interviewer_state` builds is `browser_packet`, which is
+# tested.
+#
 # `report_packet` is `generate_report` with a timeout and an envelope around
 # it, so reaching any line of it means posting to Google with a real key. What
 # it builds is `browser_packet`, which is tested, and what it validates is
@@ -96,6 +120,11 @@ exclude_re = [
     "close_turns",
     "generate_report",
     "report_packet",
+    "restart_after_close",
+    "open_cold_session",
+    "open_live_session_at",
+    "leave_room",
+    "publish_interviewer_state",
     "handle_media_event",
     "attach_audio",
     "next_audio_frame",

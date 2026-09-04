@@ -1,8 +1,12 @@
 # Provider cost and degradation controls
 
-Each admitted interview spends one LiveKit/Gemini live-session open and may spend
-at most 16 resumption opens after resumable disconnects. `GEMINI_RESUME_LIMIT` is
-consumed only with a server-issued handle. Final reporting has a separate hard
+Each admitted interview spends one LiveKit/Gemini live-session open, plus one
+open per Gemini socket close it survives. Gemini caps a single connection at
+around ten minutes, so a long interview spends several of these on its normal
+path; a close is resumed onto the same conversation when the server issued a
+handle and started cold when it did not. `GEMINI_RESTART_LIMIT` bounds a failing
+endpoint rather than a long interview: it allows 8 opens in a row, and any socket
+that lived past a minute clears the run. Final reporting has a separate hard
 budget of six Gemini HTTP calls: initial generation plus one semantic repair,
 with each generation allowing its first call and at most two transient retries.
 The counter is consumed immediately before the network request, so no future loop

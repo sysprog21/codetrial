@@ -7,10 +7,10 @@
 
 use super::{
     DataEventResult, EvidenceKind, FrameworkPhase, InterviewLoop, LanguageChoiceContext,
-    MAX_INTEGRITY_EVENTS, ROUND_TRANSITION_SKEW, RuntimeState, format_test_run, integrity_hash,
-    json_int, language_choice, python_truthy, sanitize_integrity_event, sanitize_test_run,
-    spoken_language, spoken_minutes_from_remaining_seconds, test_reaction_decision,
-    test_results_reaction, time_warning,
+    MAX_INTEGRITY_EVENTS, ROUND_TRANSITION_SKEW, RuntimeState, cold_restart, format_test_run,
+    integrity_hash, json_int, language_choice, python_truthy, sanitize_integrity_event,
+    sanitize_test_run, spoken_language, spoken_minutes_from_remaining_seconds,
+    test_reaction_decision, test_results_reaction, time_warning,
 };
 use crate::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
 
@@ -86,6 +86,7 @@ fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> D
     let mut language_changed = None;
     if let Some(spoken) = switching {
         state.language = spoken.0.to_string();
+        state.language_chosen = true;
 
         // Reading the buffer here instead asked Gemini not to make a candidate
         // "restate work they already completed" for a template they had not
@@ -186,10 +187,20 @@ fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
                 return DataEventResult::default();
             }
             state.paused = paused;
+
+            // A resumed interview whose interviewer was replaced mid-pause has
+            // to be re-grounded before it is told to carry on: the fixed line
+            // below assumes a Jim who remembers the conversation, and after a
+            // cold restart there is none to continue from.
+            let cold_brief = !paused && std::mem::take(&mut state.needs_cold_brief);
             DataEventResult {
                 pause_changed: Some(paused),
                 generate_reply: (!paused).then(|| {
-                    "The interview has resumed. Continue with your REACTO step.".to_string()
+                    if cold_brief {
+                        cold_restart(state)
+                    } else {
+                        "The interview has resumed. Continue with your REACTO step.".to_string()
+                    }
                 }),
 
                 // Resuming makes Jim speak, so it starts the interjection

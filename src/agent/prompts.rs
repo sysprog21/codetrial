@@ -6,7 +6,8 @@
 
 use super::{
     InterviewGrounding, InterviewLoop, InterviewProfile, MAX_TEST_FAILURES, Problem,
-    RUBRIC_VERSION, SILENCE_THRESHOLD_S, python_truthy, truthy_string, value_string,
+    REACTO_PHASE_IDS, RUBRIC_VERSION, RuntimeState, SILENCE_THRESHOLD_S, STAR_PHASE_IDS,
+    framework_progress, python_truthy, truthy_string, value_string,
 };
 use crate::runtime::AGENT_NAME;
 
@@ -359,6 +360,59 @@ pub fn language_choice(spoken: &str, context: LanguageChoiceContext) -> String {
     };
     format!(
         "[SYSTEM EVENT] The candidate just selected {spoken} using the language tabs. In one short sentence, confirm you have seen it by name. {next} Do not restate the problem, suggest an approach, or comment on whether {spoken} is a good choice."
+    )
+}
+
+/// Spoken when the interview lost its Gemini socket and could not resume onto
+/// the same conversation, so the interviewer that comes back has the problem
+/// and rubric but no memory of the last several minutes.
+///
+/// The editor snapshot goes with it because it is the one part of the lost
+/// conversation this process still holds, and it is what stops the recovered
+/// interviewer opening the problem again in front of a candidate who is halfway
+/// through solving it.
+///
+/// It does not tell the candidate anything happened. Nothing they can act on
+/// follows from it, and an interviewer announcing its own outage is a worse
+/// interview than one that picks up where the editor is.
+pub fn cold_restart(state: &RuntimeState) -> String {
+    let evidenced = |ids: &[&str]| {
+        let phases = framework_progress(state)
+            .into_iter()
+            .filter(|phase| ids.contains(phase))
+            .collect::<Vec<_>>();
+        if phases.is_empty() {
+            "none".to_string()
+        } else {
+            phases.join(", ")
+        }
+    };
+    let round = if state.behavioral_round_started {
+        format!(
+            "The behavioral round is active. Its one STAR question was already asked; do not ask a new question or return to coding. STAR parts already evidenced: {}. Continue with the candidate's answer and at most one neutral follow-up for a missing STAR part.",
+            evidenced(&STAR_PHASE_IDS)
+        )
+    } else {
+        format!(
+            "The coding round is active. REACTO steps already evidenced: {}. Do not re-run those, and pick up at the first step that is not among them unless the editor plainly shows it was done.",
+            evidenced(&REACTO_PHASE_IDS)
+        )
+    };
+
+    // The default is not a choice. Read as one, this sentence tells a candidate
+    // who never answered the opening question that they picked Python and
+    // forbids the interviewer from asking again.
+    let language = if state.language_chosen {
+        format!(
+            "The candidate selected {} in the editor; do not ask them to choose a language again.",
+            state.language
+        )
+    } else {
+        "The candidate has not chosen a programming language yet; ask which one they want before anything else.".to_string()
+    };
+    format!(
+        "[SYSTEM EVENT] Your connection dropped and everything said so far is gone from your memory. The interview is still running and the candidate is still here. {language} {round} Current editor contents:\n{}\nDo not mention the interruption, apologize, re-introduce yourself, restate the problem, or ask them to start over. If the coding round is active and the editor has code, ask ONE short question about what is already there and continue from that step. If the coding round is active and it is empty, ask what they have worked out so far and continue from their answer.",
+        numbered(&state.code),
     )
 }
 
