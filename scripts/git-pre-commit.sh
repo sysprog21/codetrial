@@ -23,21 +23,22 @@ work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
-git diff --cached --name-only -z --diff-filter=ACMR \
-    | git checkout-index --stdin -z -f --prefix="$work/" || {
+
+# The whole index, not only the staged paths, even though only the staged paths
+# are checked below. rustfmt follows `mod` declarations out of the file it is
+# given, so a commit that staged src/agent.rs without src/agent/integrity.rs
+# beside it failed here on a module that exists in the repository and was
+# missing only from this directory. It is also what puts eslint.config.mjs,
+# .shellcheckrc and .editorconfig where the linters look for them, which used to
+# need a copy loop of its own. Checking out everything costs a copy of a tree
+# that is already small, and it keeps the property this exists for: the content
+# judged is the index's, so an unstaged edit neither fails the commit nor rides
+# along in it.
+git checkout-index -a -f --prefix="$work/" || {
     echo "pre-commit: cannot read the staged content" >&2
     exit 1
 }
 
-# Config a checker looks for beside the files it reads. Taken from the index
-# like everything else here: a staged rule change judges the files staged with
-# it, and an unstaged one decides nothing. `git show :path` fails for a file
-# that is not in the index at all, which is the case where there is nothing to
-# copy.
-for config in eslint.config.mjs .shellcheckrc .editorconfig; do
-    [ -e "$work/$config" ] && continue
-    git show ":$config" > "$work/$config" 2> /dev/null || rm -f "$work/$config"
-done
 [ -d node_modules ] && ln -s "$ROOT/node_modules" "$work/node_modules"
 
 # Word splitting on the lists below is the point, which makes a path containing
