@@ -40,6 +40,12 @@ pub struct GeminiLiveSession {
     writer: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
     reader: JoinHandle<()>,
     events: Receiver<GeminiEvent>,
+    /// When this socket was opened, which is how the caller tells Gemini's
+    /// ordinary connection cap from an endpoint that will not stay up. It lives
+    /// here rather than in the loop that reconnects because it is a fact about
+    /// the socket: held there, it had to be reset by hand after every swap, and
+    /// the first one was seeded from the interview's clock instead.
+    opened_at: std::time::Instant,
     /// Shared with the reader task, which is the only writer. Held beside the
     /// event channel rather than sent through it because it is wanted at
     /// exactly the moment the channel is finished: after the socket closed and
@@ -82,6 +88,11 @@ impl GeminiLiveSession {
 
     pub async fn next_event(&mut self) -> Option<GeminiEvent> {
         self.events.recv().await
+    }
+
+    /// How long this socket has been up.
+    pub fn age(&self) -> Duration {
+        self.opened_at.elapsed()
     }
 
     /// The most recent resumable checkpoint the server offered, or `None` if
@@ -387,6 +398,7 @@ async fn open_live_session_at(
         reader,
         events,
         resumption,
+        opened_at: std::time::Instant::now(),
     })
 }
 
@@ -1358,6 +1370,44 @@ mod tests {
             setup["setup"]["generationConfig"]["responseModalities"][0],
             "AUDIO"
         );
+        session.close().await.unwrap();
+    }
+
+    /// The clock the restart budget reads. It has to start at the socket, not
+    /// at zero and not at the interview: a session that always reports no age
+    /// makes every close look like an endpoint that will not stay up, and the
+    /// ceiling then ends a healthy interview after eight of Gemini's ordinary
+    /// connection caps.
+    #[tokio::test]
+    async fn a_live_session_ages_from_the_moment_its_socket_opened() {
+        let config = live_config(&[]);
+        let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(socket).await.unwrap();
+            socket.next().await.unwrap().unwrap();
+            socket
+                .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+                .await
+                .unwrap();
+            socket
+        });
+
+        let session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+            .await
+            .unwrap();
+        let held = server.await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        assert!(
+            session.age() >= Duration::from_millis(20),
+            "a session that opened 20ms ago reported {:?}",
+            session.age()
+        );
+        drop(held);
         session.close().await.unwrap();
     }
 

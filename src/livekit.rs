@@ -75,11 +75,28 @@ use media::*;
 use turn::*;
 
 const GEMINI_OUTPUT_AUDIO_SAMPLE_RATE: u32 = 24_000;
-/// Gemini closes a connection roughly every ten minutes, so the longest
-/// interview this offers needs about nine resumptions. The ceiling is here to
-/// stop a socket that fails immediately from spinning, not to bound a healthy
-/// interview; past it the supervisor restart takes over as before.
-const GEMINI_RESUME_LIMIT: usize = 16;
+/// How many times in a row the interview may be put back on a fresh Gemini
+/// socket after a close that arrived too quickly to be Gemini's ordinary
+/// connection cap. In a row, because `take_restart_attempt` clears the count
+/// for any socket that lived past `HEALTHY_GEMINI_SOCKET`: this bounds a
+/// failing endpoint, not the length of an interview.
+const GEMINI_RESTART_LIMIT: usize = 8;
+
+/// Past this, a closed socket was a working one, whatever closed it. Gemini
+/// caps a connection at around ten minutes and a healthy interview crosses that
+/// cap several times, so the restart budget must not be spent on the crossings.
+const HEALTHY_GEMINI_SOCKET: Duration = Duration::from_secs(60);
+
+/// Waited between cold opens that did not reach Gemini at all.
+///
+/// Without it the retry is not a retry. A refused connection, a DNS miss and a
+/// 503 all come back in milliseconds, so the whole budget is spent inside one
+/// second, every attempt asks the same unavailable endpoint the same question,
+/// and the interview ends on an outage that would have cleared while the
+/// candidate was still mid-sentence. Two seconds spreads the budget over the
+/// dozen seconds such an outage actually lasts, and it costs nothing on the
+/// timeout path, where the attempt already took fifteen.
+const COLD_OPEN_BACKOFF: Duration = Duration::from_secs(2);
 const LIVEKIT_AGENT_STATE: &str = "lk.agent.state";
 const AGENT_STATE_LISTENING: &str = "listening";
 const AGENT_STATE_SPEAKING: &str = "speaking";
@@ -146,86 +163,196 @@ fn interview_packet<'a>(
     Some((topic, serde_json::from_slice(payload).ok()?))
 }
 
-/// Decides whether a closed Gemini socket may be continued, and spends one of
-/// the budgeted attempts when it may.
+/// Decides whether the interview may be put back on a fresh Gemini socket, and
+/// spends one of the budgeted attempts when it may.
 ///
-/// This is the half of resuming that can be judged. `cargo test` cannot open a
-/// Gemini session, but every rule about when not to try one is arithmetic over
-/// a counter and an `Option`, so it lives here where tests can reach it rather
+/// This is the half of restarting that can be judged. `cargo test` cannot open
+/// a Gemini session, but every rule about when not to try one is arithmetic
+/// over a counter and a clock, so it lives here where tests can reach it rather
 /// than inside the reconnect it authorises.
 ///
-/// Refuses when the server never offered a resumable checkpoint, and once the
-/// ceiling is reached. Both leave the caller to end the room, which is what
-/// happened for every close before resuming existed at all.
-fn take_resume_attempt(resumed: &mut usize, handle: Option<String>) -> Result<String, String> {
-    if *resumed >= GEMINI_RESUME_LIMIT {
-        return Err(format!("already resumed {resumed} times"));
+/// The budget counts restarts, not resumptions, and says nothing about whether
+/// a handle exists. Missing one costs the conversation so far, not the
+/// interview, so it is the caller's choice between two kinds of restart rather
+/// than a reason to stop.
+///
+/// The counter resets for a socket that lived a while, because the ceiling is
+/// there to stop a socket that fails instantly from spinning, and a socket that
+/// carried seven minutes of interview did not fail instantly. Counting those
+/// for the life of the session made the ceiling a limit on interview length: at
+/// Gemini's own connection cap a ninety-minute interview spends most of the
+/// budget before anything goes wrong, and whatever is left is what a network
+/// blip gets to consume.
+fn take_restart_attempt(restarts: &mut usize, socket_age: Duration) -> bool {
+    if socket_age >= HEALTHY_GEMINI_SOCKET {
+        *restarts = 0;
     }
-    let Some(handle) = handle else {
-        return Err("no resumption handle was offered".to_string());
-    };
+    if *restarts >= GEMINI_RESTART_LIMIT {
+        return false;
+    }
 
     // Spent before the reconnect rather than after it. A socket that fails to
     // come back is the case the ceiling exists for, and counting only the
     // successes would let an endpoint failing instantly be retried without
     // bound.
-    *resumed += 1;
-    Ok(handle)
+    *restarts += 1;
+    true
+}
+
+/// Opens a session that remembers nothing, retrying while the budget allows.
+///
+/// `None` is the budget running out, which is the caller's cue to end the
+/// interview. Split from `restart_after_close` because a loop with its own exit
+/// inside an arm of a match inside an arm of a match put the give-up path four
+/// levels deep in a function that is otherwise a sequence of steps.
+async fn open_cold_session(
+    interview: InterviewContext<'_>,
+    restarts: &mut usize,
+) -> Option<GeminiLiveSession> {
+    loop {
+        match open_live_session(&interview.config.google_api_key, interview.boot).await {
+            Ok(session) => return Some(session),
+            Err(error) if take_restart_attempt(restarts, Duration::ZERO) => {
+                eprintln!("Gemini could not be reached ({error}); retrying cold session");
+                tokio::time::sleep(COLD_OPEN_BACKOFF).await;
+            }
+            Err(error) => {
+                eprintln!("Gemini could not be reached ({error}); the budget is spent");
+                return None;
+            }
+        }
+    }
 }
 
 /// Puts the interview back on a new Gemini socket after the old one closed, or
 /// reports that it cannot be.
 ///
-/// `Break` means the caller ends the room and lets the supervisor restart.
-/// Every decision this makes is `take_resume_attempt`'s, which is tested; what
-/// is left here is two awaits nothing in `cargo test` can reach and the
-/// bookkeeping that has to follow a successful one.
+/// `Break` means the interview is over. Nothing restarts it: the dispatcher
+/// spawns one task per room and drops the slot when it returns, so this leaves
+/// the candidate in a live room with no interviewer, which is what the browser
+/// says when it sees the agent go.
+///
+/// That is why a missing or rejected resumption handle is not the end. Resuming
+/// keeps what was said; a cold session keeps only what the system instruction
+/// carries, which is the problem, the rubric and the round, plus the editor
+/// snapshot handed over below. Losing the conversation is a worse interview.
+/// Losing the interviewer is no interview.
 ///
 /// The reason the socket closed came over it and is logged by the reader task.
 /// The lines below tie that to the room.
-async fn resume_after_close(
+async fn restart_after_close(
     room: &Room,
     context: &mut GeminiEventContext<'_>,
     interview: InterviewContext<'_>,
-    resumed: &mut usize,
+    restarts: &mut usize,
 ) -> Result<ControlFlow<()>, Box<dyn std::error::Error + Send + Sync>> {
-    let attempt = match take_resume_attempt(resumed, context.gemini.resumption_handle()) {
-        Ok(handle) => {
-            // The socket is already gone; this closes the writer half and the
-            // reader task. A close on a dead socket errors, and that error says
-            // nothing the caller can act on.
-            let _ = context.gemini.shutdown().await;
+    if !take_restart_attempt(restarts, context.gemini.age()) {
+        eprintln!(
+            "Gemini closed {restarts} sockets in a row without one of them lasting; ending interview room={}",
+            interview.boot.room_name
+        );
+        leave_room(room).await;
+        return Ok(ControlFlow::Break(()));
+    }
+
+    // Said before the attempt, not after it: the whole point is to cover the
+    // gap, and the gap starts here. Connect and setup are bounded at fifteen
+    // seconds each, and for that long the candidate is talking to a socket that
+    // is gone.
+    publish_interviewer_state(room, true).await?;
+
+    // The socket is already gone; this closes the writer half and the reader
+    // task. A close on a dead socket errors, and that error says nothing the
+    // caller can act on.
+    let _ = context.gemini.shutdown().await;
+
+    // A handle is worth one try and no more: one the server refuses fails
+    // identically every time, so retrying it under the budget would spend the
+    // whole budget learning the same thing. Both ways of not having a resumable
+    // session -- no handle, and a handle that was refused -- leave a `None` for
+    // the cold start below to answer, which is why neither is a branch of its
+    // own here.
+    let resumed_session = match context.gemini.resumption_handle() {
+        Some(handle) => {
             resume_live_session(&interview.config.google_api_key, interview.boot, &handle)
                 .await
-                .map_err(|error| error.to_string())
+                .inspect_err(|error| {
+                    eprintln!(
+                        "Gemini refused to resume ({error}); starting a fresh session instead"
+                    );
+                })
+                .ok()
         }
-        Err(refused) => Err(refused),
+        None => None,
     };
 
-    let session = match attempt {
-        Ok(session) => session,
-        Err(error) => {
-            eprintln!(
-                "Gemini session ended and could not be resumed ({error}); ending interview room={} and letting the supervisor restart",
-                interview.boot.room_name
-            );
-            close_room(room).await;
-            return Ok(ControlFlow::Break(()));
-        }
+    let resumed = resumed_session.is_some();
+    let session = match resumed_session {
+        Some(session) => Some(session),
+        None => open_cold_session(interview, restarts).await,
+    };
+    let Some(session) = session else {
+        eprintln!(
+            "Gemini could not be reached; ending interview room={}",
+            interview.boot.room_name
+        );
+        leave_room(room).await;
+        return Ok(ControlFlow::Break(()));
     };
 
     *context.gemini = session;
-    eprintln!(
-        "Gemini session resumed ({resumed} so far); the interview continues where it left off"
-    );
 
     // Whatever was mid-flight died with the socket. The turn ids have to close
     // here for the same reason an interruption closes them: left open, the next
     // thing either party says appends to an utterance that was cut off, and the
     // panel and the report both read the two as one.
     cut_off_turn(context.activity, context.output_audio);
+
+    // The discard belonged to the socket that just died. It is set when a pause
+    // cuts a reply in flight and cleared by the `turnComplete` or `interrupted`
+    // that answers it, which a closed socket never sends, so a restart in that
+    // window left it set and the new session's first turn was dropped on the
+    // way out. That turn is the cold-restart briefing, which is the one turn
+    // this whole path exists to deliver.
+    context.activity.discarding_output = false;
     close_turns(room, context).await?;
     set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
+    publish_interviewer_state(room, false).await?;
+
+    if resumed {
+        eprintln!("Gemini session resumed; the interview continues where it left off");
+        return Ok(ControlFlow::Continue(()));
+    }
+
+    // A cold session has never heard this candidate. Without this it waits for
+    // someone to speak first, holding whatever they say against a rubric it
+    // thinks nobody has started yet, and the editor is the one part of the lost
+    // conversation that still exists in this process.
+    eprintln!("Gemini session restarted cold; the interview continues without what was said");
+
+    // Except while the interview is paused, which is the one state where making
+    // Jim talk is the wrong move: the reply would be discarded on the way out.
+    // The briefing is owed rather than skipped, and unpausing is what pays it,
+    // because that is the next moment Jim speaks at all.
+    if context.state.paused {
+        context.state.needs_cold_brief = true;
+        return Ok(ControlFlow::Continue(()));
+    }
+
+    // Not `?`, for the reason the watch loop already gives about writes to
+    // Gemini: a socket that came up and died again reports the close through
+    // `next_event`, where this arm is waiting to restart it. Propagating here
+    // would end the interview on the one write the restart exists to make, and
+    // the write most likely to meet a socket that is already gone.
+    if let Err(error) = context
+        .gemini
+        .send_text(&crate::agent::cold_restart(context.state))
+        .await
+    {
+        eprintln!("cold-restart briefing failed ({error}); waiting for the close to be reported");
+        return Ok(ControlFlow::Continue(()));
+    }
+    context.activity.mark_speaking();
     Ok(ControlFlow::Continue(()))
 }
 
@@ -385,7 +512,7 @@ pub async fn run_room(
         now_seconds,
     };
 
-    let mut resumed = 0usize;
+    let mut restarts = 0usize;
 
     let mut watch = tokio::time::interval(Duration::from_secs_f64(WATCH_TICK_S));
 
@@ -444,7 +571,7 @@ pub async fn run_room(
                     // candidate actually sees.
                     eprintln!("candidate did not return to room={room_name}; ending");
                     gemini.close().await?;
-                    close_room(&room).await;
+                    leave_room(&room).await;
                     return Ok(());
                 }
                 if let Some(prompt) = turn.activity.watch_prompt(&turn.state, Instant::now()) {
@@ -501,7 +628,7 @@ pub async fn run_room(
                     // session continues on a new socket instead of ending the
                     // interview.
                     let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
-                    if resume_after_close(&room, &mut context, interview, &mut resumed)
+                    if restart_after_close(&room, &mut context, interview, &mut restarts)
                         .await?
                         .is_break()
                     {
@@ -890,10 +1017,35 @@ fn is_duplicate_agent(participant: &RemoteParticipant, local_identity: &str) -> 
         && participant.identity().to_string() != local_identity
 }
 
-async fn close_room(room: &Room) {
+/// Disconnects this agent, which is all `Room::close` does: the room and the
+/// candidate in it outlive this by whatever LiveKit's own timeouts say. Named
+/// for what happens rather than for what the call is called, because every
+/// caller is deciding whether to abandon an interview, and "close the room"
+/// reads like the room goes with it.
+async fn leave_room(room: &Room) {
     if let Err(error) = room.close().await {
-        eprintln!("room close ignored: {error}");
+        eprintln!("leaving the room failed, ignoring: {error}");
     }
+}
+
+/// Whether the interviewer can hear the candidate right now.
+///
+/// The agent stays in the room across a Gemini restart, so nothing the browser
+/// watches changes: the participant is there, the audio track is published, and
+/// the candidate talks into a socket that is being rebuilt. Up to thirty
+/// seconds of that is possible, which is long enough that saying nothing reads
+/// as the interviewer ignoring them.
+async fn publish_interviewer_state(
+    room: &Room,
+    reconnecting: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    room.local_participant()
+        .publish_data(browser_packet(
+            TOPIC_CONTROL,
+            &serde_json::json!({ "type": "interviewer_state", "reconnecting": reconnecting }),
+        )?)
+        .await?;
+    Ok(())
 }
 
 /// What the interview needs from whoever joined. Assembled in one place because
@@ -1104,9 +1256,9 @@ async fn handle_data_packet(
     )
     .await?;
     context.gemini.shutdown().await?;
-    // Give the report packet a moment to leave before tearing the room down.
+    // Give the report packet a moment to leave before the agent goes.
     tokio::time::sleep(Duration::from_millis(250)).await;
-    close_room(room).await;
+    leave_room(room).await;
     Ok(ControlFlow::Break(()))
 }
 
@@ -2590,10 +2742,15 @@ mod tests {
             code: "def two_sum(nums, target):\n    return []".to_string(),
             ..RuntimeState::default()
         };
-        activity.last_code_change = now - Duration::from_secs(16);
-        activity.last_user_speech = now - Duration::from_secs(16);
-        activity.last_agent_speech = now - Duration::from_secs(16);
-        activity.last_nudge = now - Duration::from_secs(31);
+
+        // Derived, not typed out: this test froze the threshold at "16 seconds"
+        // and failed the day the threshold moved, which is the one change it
+        // has nothing to say about.
+        let past_silence = Duration::from_secs_f64(crate::agent::SILENCE_THRESHOLD_S + 1.0);
+        activity.last_code_change = now - past_silence;
+        activity.last_user_speech = now - past_silence;
+        activity.last_agent_speech = now - past_silence;
+        activity.last_nudge = now - Duration::from_secs_f64(crate::agent::SILENCE_COOLDOWN_S + 1.0);
 
         let prompt = activity.watch_prompt(&state, now).unwrap();
 
@@ -3133,57 +3290,73 @@ mod tests {
     }
 }
 /// The ceiling is a boundary, so both sides of it are named. One attempt short
-/// of the limit still resumes; the limit itself does not, and neither does the
+/// of the limit still restarts; the limit itself does not, and neither does the
 /// count past it that a wrong comparison would let through.
+///
+/// Every case here uses a socket that died young, because a socket that lived
+/// clears the counter and there would be no ceiling left to test.
 #[test]
-fn the_resume_ceiling_admits_the_last_attempt_and_refuses_the_one_after() {
-    let mut last = GEMINI_RESUME_LIMIT - 1;
-    assert_eq!(
-        take_resume_attempt(&mut last, Some("handle-abc".to_string())),
-        Ok("handle-abc".to_string()),
-        "the attempt below the ceiling is the one the longest interview needs"
-    );
-    assert_eq!(last, GEMINI_RESUME_LIMIT);
+fn the_restart_ceiling_admits_the_last_attempt_and_refuses_the_one_after() {
+    let young = Duration::from_secs(1);
 
-    let mut at_limit = GEMINI_RESUME_LIMIT;
-    assert!(take_resume_attempt(&mut at_limit, Some("handle-abc".to_string())).is_err());
+    let mut last = GEMINI_RESTART_LIMIT - 1;
+    assert!(
+        take_restart_attempt(&mut last, young),
+        "the attempt below the ceiling is the one a flaky endpoint gets"
+    );
+    assert_eq!(last, GEMINI_RESTART_LIMIT);
+
+    let mut at_limit = GEMINI_RESTART_LIMIT;
+    assert!(!take_restart_attempt(&mut at_limit, young));
     assert_eq!(
-        at_limit, GEMINI_RESUME_LIMIT,
+        at_limit, GEMINI_RESTART_LIMIT,
         "a refused attempt is not a spent one"
     );
 }
 
-/// A socket that never reached a resumable checkpoint cannot be continued, and
-/// asking anyway would restart the interview from the greeting. Refusing must
-/// also leave the budget alone, or a handleless close would eat the attempts a
-/// later one needs.
+/// The bug this exists for: Gemini's own connection cap closes a healthy socket
+/// every ten minutes or so, and counting those against the ceiling turned a
+/// budget for a failing endpoint into a limit on how long an interview could
+/// run. A socket that carried a working conversation costs nothing.
 #[test]
-fn a_missing_handle_refuses_without_spending_an_attempt() {
-    let mut resumed = 2;
+fn a_socket_that_lived_clears_what_earlier_failures_spent() {
+    let mut restarts = GEMINI_RESTART_LIMIT;
 
-    assert!(take_resume_attempt(&mut resumed, None).is_err());
+    assert!(take_restart_attempt(&mut restarts, HEALTHY_GEMINI_SOCKET));
 
-    assert_eq!(resumed, 2);
+    assert_eq!(
+        restarts, 1,
+        "the healthy socket resets the run, and this attempt is the first of the next one"
+    );
 }
 
-/// Exactly one attempt per resume. Started away from zero on purpose: at zero a
-/// counter that multiplied instead of adding would look identical to one that
+/// The boundary of that reset, from the other side. One second short of healthy
+/// is still a failing socket, and it must not refill the budget.
+#[test]
+fn a_socket_that_died_just_short_of_healthy_still_spends() {
+    let mut restarts = 3;
+
+    assert!(take_restart_attempt(
+        &mut restarts,
+        HEALTHY_GEMINI_SOCKET - Duration::from_secs(1)
+    ));
+
+    assert_eq!(restarts, 4);
+}
+
+/// Exactly one attempt per restart. Started away from zero on purpose: at zero
+/// a counter that multiplied instead of adding would look identical to one that
 /// added.
 #[test]
-fn each_resume_spends_one_attempt_and_hands_back_its_own_handle() {
-    let mut resumed = 3;
+fn each_restart_spends_one_attempt() {
+    let young = Duration::from_secs(1);
+    let mut restarts = 3;
 
-    assert_eq!(
-        take_resume_attempt(&mut resumed, Some("handle-first".to_string())),
-        Ok("handle-first".to_string())
-    );
-    assert_eq!(resumed, 4);
+    assert!(take_restart_attempt(&mut restarts, young));
+    assert_eq!(restarts, 4);
 
-    assert_eq!(
-        take_resume_attempt(&mut resumed, Some("handle-second".to_string())),
-        Ok("handle-second".to_string())
-    );
-    assert_eq!(resumed, 5);
+    assert!(take_restart_attempt(&mut restarts, young));
+    assert_eq!(restarts, 5);
 }
 
 #[test]

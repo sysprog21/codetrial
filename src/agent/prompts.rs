@@ -6,7 +6,8 @@
 
 use super::{
     InterviewGrounding, InterviewLoop, InterviewProfile, MAX_TEST_FAILURES, Problem,
-    RUBRIC_VERSION, SILENCE_THRESHOLD_S, python_truthy, truthy_string, value_string,
+    REACTO_PHASE_IDS, RUBRIC_VERSION, RuntimeState, SILENCE_THRESHOLD_S, STAR_PHASE_IDS,
+    framework_progress, python_truthy, truthy_string, value_string,
 };
 use crate::runtime::AGENT_NAME;
 
@@ -362,6 +363,59 @@ pub fn language_choice(spoken: &str, context: LanguageChoiceContext) -> String {
     )
 }
 
+/// Spoken when the interview lost its Gemini socket and could not resume onto
+/// the same conversation, so the interviewer that comes back has the problem
+/// and rubric but no memory of the last several minutes.
+///
+/// The editor snapshot goes with it because it is the one part of the lost
+/// conversation this process still holds, and it is what stops the recovered
+/// interviewer opening the problem again in front of a candidate who is halfway
+/// through solving it.
+///
+/// It does not tell the candidate anything happened. Nothing they can act on
+/// follows from it, and an interviewer announcing its own outage is a worse
+/// interview than one that picks up where the editor is.
+pub fn cold_restart(state: &RuntimeState) -> String {
+    let evidenced = |ids: &[&str]| {
+        let phases = framework_progress(state)
+            .into_iter()
+            .filter(|phase| ids.contains(phase))
+            .collect::<Vec<_>>();
+        if phases.is_empty() {
+            "none".to_string()
+        } else {
+            phases.join(", ")
+        }
+    };
+    let round = if state.behavioral_round_started {
+        format!(
+            "The behavioral round is active. Its one STAR question was already asked; do not ask a new question or return to coding. STAR parts already evidenced: {}. Continue with the candidate's answer and at most one neutral follow-up for a missing STAR part.",
+            evidenced(&STAR_PHASE_IDS)
+        )
+    } else {
+        format!(
+            "The coding round is active. REACTO steps already evidenced: {}. Do not re-run those, and pick up at the first step that is not among them unless the editor plainly shows it was done.",
+            evidenced(&REACTO_PHASE_IDS)
+        )
+    };
+
+    // The default is not a choice. Read as one, this sentence tells a candidate
+    // who never answered the opening question that they picked Python and
+    // forbids the interviewer from asking again.
+    let language = if state.language_chosen {
+        format!(
+            "The candidate selected {} in the editor; do not ask them to choose a language again.",
+            state.language
+        )
+    } else {
+        "The candidate has not chosen a programming language yet; ask which one they want before anything else.".to_string()
+    };
+    format!(
+        "[SYSTEM EVENT] Your connection dropped and everything said so far is gone from your memory. The interview is still running and the candidate is still here. {language} {round} Current editor contents:\n{}\nDo not mention the interruption, apologize, re-introduce yourself, restate the problem, or ask them to start over. If the coding round is active and the editor has code, ask ONE short question about what is already there and continue from that step. If the coding round is active and it is empty, ask what they have worked out so far and continue from their answer.",
+        numbered(&state.code),
+    )
+}
+
 pub fn silence_nudge(code_snapshot: &str) -> String {
     format!(
         "[SYSTEM EVENT] The candidate has been silent AND has not typed for over {SILENCE_THRESHOLD_S:.0} seconds. Current editor contents:\n{code_snapshot}\nStep in with ONE short, friendly question about their current decision. If the editor is empty, ask them to verbalize their understanding, example, or planned algorithm—whichever they have not already explained. If code is present, ask them to narrate or test what is there and reference a line only after reading it. Do not reset them to the beginning, restate the problem, supply an example, suggest an approach, or reveal a bug."
@@ -535,10 +589,18 @@ Return ONLY a valid JSON object, no markdown fences, exactly this shape:
   }}
 }}
 Each strengths/improvements list must contain 2 to 4 concrete, specific items
-grounded in the transcript and code — never generic filler.
+grounded in the transcript and code, never generic filler, and no item may
+repeat another in the same list. A session with little to praise still holds two
+distinct observations: a clarifying question asked, uncertainty admitted instead
+of guessed at, a decision explained, a boundary noticed, effort sustained under
+time pressure. Name two of those rather than saying one thing twice.
 
-For `improvementPlan`, emit exactly one item for every distinct feedback improvement
-(0 to 8 items); never add unrelated advice or duplicate a weakness. Sort high
+For `improvementPlan`, take every string in `codingFeedback.improvements` and
+`communicationFeedback.improvements` together and emit one item for each, so the
+plan holds exactly as many items as those two lists hold between them. Copy the
+improvement into `weakness` character for character: a paraphrase, a merge of
+two, or an improvement left without an item is a rejected report. Never add
+advice that is not one of those strings, and never repeat one. Sort high
 impact before medium before low, then higher observed frequency first. Choose from
 these small drills where applicable: problem restatement, edge-case enumeration,
 complexity narration, test-table construction, a 60-second STAR response,
@@ -557,8 +619,9 @@ assessed phase: 90–100 = complete, precise, and independent; 75–89 = sound w
 minor gap; 60–74 = partially demonstrated with a material gap; 40–59 = weak or
 substantially incomplete; 0–39 = directly observed incorrect or missing despite a
 clear opportunity. A zero is observed performance, never a substitute for `null`.
-Weakness tags must be exact copies of improvements assigned to that same phase in
-`improvementPlan`; otherwise use an empty list. Evidence confidence is not
+Weakness tags must be copied character for character from the `weakness` of an
+`improvementPlan` item whose `phase` is this phase; where no plan item names this
+phase, the list is empty. Evidence confidence is not
 performance and must never become a phase score."#,
         input.duration_min,
         input.elapsed_min,

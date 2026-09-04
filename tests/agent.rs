@@ -201,6 +201,10 @@ fn timing_constants_match_frozen_fixture() {
 /// regeneration path cannot drift apart.
 fn prompt_samples() -> Value {
     let problem = get_problem(Some("two-sum"));
+    let cold_state = RuntimeState {
+        code: "def two_sum(nums, target):".to_string(),
+        ..RuntimeState::default()
+    };
     json!({
         "instructions": instructions(problem, 45),
         "greeting": greeting(),
@@ -209,6 +213,8 @@ fn prompt_samples() -> Value {
         "silenceEmpty": silence_nudge("(the editor is currently empty)"),
         "silencePlan": silence_nudge("  1| # scan once with a map"),
         "silenceCode": silence_nudge("  1| def two_sum(nums, target):"),
+        "coldRestart": cold_restart(&cold_state),
+        "coldRestartEmpty": cold_restart(&RuntimeState::default()),
         "review": proactive_review("  1| seen = {}"),
         "time": time_warning(5),
         "wrapCandidate": wrap_up("candidate_ended"),
@@ -473,6 +479,195 @@ fn prompts_match_frozen_fixture() {
         samples.len(),
         expected.as_object().expect("fixture is an object").len(),
         "{path} has keys no prompt builder produces"
+    );
+}
+
+#[test]
+fn cold_restart_keeps_the_active_behavioral_round() {
+    let mut state = RuntimeState {
+        behavioral_round_started: true,
+        language: "javascript".to_string(),
+        language_chosen: true,
+        ..RuntimeState::default()
+    };
+
+    // The coding phase is recorded alongside the STAR ones on purpose. The list
+    // in this prompt is STAR-only, and an unfiltered one would hand the coding
+    // round's evidence to Jim as part of the behavioral answer, so he would
+    // stop asking for the STAR parts that are actually missing.
+    for phase in ["coding", "situation", "action"] {
+        record_framework_evidence(
+            &mut state,
+            &json!({
+                "phase": phase,
+                "source": "candidate_speech",
+                "kind": "observed",
+                "confidence": 100,
+                "summary": "Candidate covered this part."
+            }),
+        )
+        .unwrap();
+    }
+
+    let prompt = cold_restart(&state);
+    assert!(prompt.contains("selected javascript in the editor"));
+    assert!(prompt.contains("behavioral round is active"));
+    assert!(prompt.contains("do not ask a new question or return to coding"));
+    assert!(prompt.contains("STAR parts already evidenced: situation, action. Continue"));
+}
+
+/// A cold restart during a pause is owed a briefing, and unpausing is what
+/// pays it. Without this the resumed interview hands "continue with your REACTO
+/// step" to an interviewer that has never heard this candidate, which is the
+/// exact state `cold_restart` exists to prevent.
+#[test]
+fn unpausing_delivers_the_cold_brief_the_pause_deferred() {
+    let mut state = RuntimeState {
+        paused: true,
+        needs_cold_brief: true,
+        code: "def two_sum(nums, target):".to_string(),
+        ..RuntimeState::default()
+    };
+
+    let resumed = apply_data_event(
+        &mut state,
+        TOPIC_CONTROL,
+        &json!({ "type": "pause_interview", "paused": false }),
+        0.0,
+    );
+
+    let reply = resumed.generate_reply.expect("resuming makes Jim speak");
+    assert!(reply.contains("everything said so far is gone from your memory"));
+    assert!(reply.contains("def two_sum"));
+    assert!(
+        !state.needs_cold_brief,
+        "a briefing delivered once must not be delivered again on the next pause"
+    );
+}
+
+/// The ordinary pause, which is most of them: an interviewer that was here the
+/// whole time is told to carry on, not re-grounded from scratch.
+#[test]
+fn unpausing_without_a_cold_restart_keeps_the_short_resume_line() {
+    let mut state = RuntimeState {
+        paused: true,
+        ..RuntimeState::default()
+    };
+
+    let resumed = apply_data_event(
+        &mut state,
+        TOPIC_CONTROL,
+        &json!({ "type": "pause_interview", "paused": false }),
+        0.0,
+    );
+
+    assert_eq!(
+        resumed.generate_reply.as_deref(),
+        Some("The interview has resumed. Continue with your REACTO step.")
+    );
+}
+
+/// The other half of that fact, on the side that records it. A switch is the
+/// only evidence this process gets that the candidate answered the opening
+/// question, and the packet the browser sends on connect is not one: it carries
+/// the starter template for a language nobody picked.
+#[test]
+fn a_language_switch_is_recorded_as_a_choice_and_the_first_packet_is_not() {
+    let mut state = RuntimeState::default();
+
+    let opening = apply_data_event(
+        &mut state,
+        TOPIC_CODE_UPDATE,
+        &json!({"code":"def two_sum(nums, target):","language":"python"}),
+        99.0,
+    );
+
+    assert_eq!(opening.generate_reply, None, "nobody chose anything yet");
+    assert!(!state.language_chosen);
+
+    let switched = apply_data_event(
+        &mut state,
+        TOPIC_CODE_UPDATE,
+        &json!({"code":"int main() {}","language":"cpp"}),
+        99.0,
+    );
+
+    assert!(
+        switched
+            .generate_reply
+            .is_some_and(|reply| reply.contains("C++")),
+        "a switch is what the interviewer acknowledges"
+    );
+    assert!(state.language_chosen);
+    assert_eq!(state.language, "cpp");
+}
+
+/// The default language is not a choice the candidate made. Told otherwise, a
+/// cold-restarted interviewer pins someone who wanted C++ to Python and is
+/// forbidden from asking, which is the one question the greeting exists to ask.
+#[test]
+fn cold_restart_asks_for_a_language_the_candidate_never_chose() {
+    let unchosen = RuntimeState::default();
+    assert!(cold_restart(&unchosen).contains("has not chosen a programming language yet"));
+
+    let chosen = RuntimeState {
+        language: "cpp".to_string(),
+        language_chosen: true,
+        ..RuntimeState::default()
+    };
+    let prompt = cold_restart(&chosen);
+    assert!(prompt.contains("selected cpp in the editor"));
+    assert!(prompt.contains("do not ask them to choose a language again"));
+}
+
+/// What the coding round is owed. The briefing used to say that anything the
+/// interviewer could not see had been covered, which skips REACTO steps the
+/// candidate never reached: a socket that dies during the restatement came back
+/// to an interviewer that believed the algorithm had been agreed.
+#[test]
+fn cold_restart_names_the_reacto_steps_evidenced_rather_than_assuming_them() {
+    let mut state = RuntimeState::default();
+    assert!(cold_restart(&state).contains("REACTO steps already evidenced: none"));
+
+    for phase in ["repeat", "example", "situation"] {
+        record_framework_evidence(
+            &mut state,
+            &json!({
+                "phase": phase,
+                "source": "candidate_speech",
+                "kind": "observed",
+                "confidence": 100,
+                "summary": "Candidate covered this part."
+            }),
+        )
+        .unwrap();
+    }
+
+    // The STAR phase is filtered out for the same reason the behavioral branch
+    // filters the coding ones: a step from the other round is not progress
+    // through this one.
+    assert!(
+        cold_restart(&state).contains("REACTO steps already evidenced: repeat, example. Do not"),
+        "{}",
+        cold_restart(&state)
+    );
+}
+
+/// The other end of that list. A socket can die in the seconds between the
+/// round starting and the candidate answering, and the sentence still has to
+/// say something: an empty one reads as a truncated instruction, and Jim
+/// treating it as "all four are covered" is the one reading that skips the
+/// whole behavioral round.
+#[test]
+fn cold_restart_says_none_when_the_behavioral_round_has_no_evidence_yet() {
+    let state = RuntimeState {
+        behavioral_round_started: true,
+        ..RuntimeState::default()
+    };
+
+    assert!(
+        cold_restart(&state).contains("STAR parts already evidenced: none. Continue"),
+        "an empty list has to be spelled, not left blank"
     );
 }
 
@@ -1821,26 +2016,30 @@ fn timing_decision_applies_watch_loop_gates() {
         sync_code_at_last_review: true,
     };
 
+    // Both sides of the threshold, named by the constant. The numbers used to
+    // be spelled out, so tuning the threshold for candidates who think in a
+    // second language failed a test that is about the comparison, not the
+    // value.
     assert_eq!(
         timing_decision(&TimingInput {
-            idle_seconds: 14.9,
-            since_last_nudge_seconds: 30.0,
+            idle_seconds: SILENCE_THRESHOLD_S - 0.1,
+            since_last_nudge_seconds: SILENCE_COOLDOWN_S,
             ..TimingInput::default()
         }),
         none
     );
     assert_eq!(
         timing_decision(&TimingInput {
-            idle_seconds: 15.0,
-            since_last_nudge_seconds: 29.9,
+            idle_seconds: SILENCE_THRESHOLD_S,
+            since_last_nudge_seconds: SILENCE_COOLDOWN_S - 0.1,
             ..TimingInput::default()
         }),
         none
     );
     assert_eq!(
         timing_decision(&TimingInput {
-            idle_seconds: 15.0,
-            since_last_nudge_seconds: 30.0,
+            idle_seconds: SILENCE_THRESHOLD_S,
+            since_last_nudge_seconds: SILENCE_COOLDOWN_S,
             ..TimingInput::default()
         }),
         silence
@@ -1868,19 +2067,19 @@ fn timing_decision_applies_watch_loop_gates() {
     assert_eq!(
         timing_decision(&TimingInput {
             agent_busy: true,
-            idle_seconds: 15.0,
-            since_last_nudge_seconds: 30.0,
+            idle_seconds: SILENCE_THRESHOLD_S,
+            since_last_nudge_seconds: SILENCE_COOLDOWN_S,
             ..TimingInput::default()
         }),
         none
     );
     assert_eq!(
         timing_decision(&TimingInput {
-            idle_seconds: 15.0,
-            since_last_nudge_seconds: 30.0,
-            since_last_review_seconds: 30.0,
-            since_last_interjection_seconds: 45.0,
-            speech_gap_seconds: 4.0,
+            idle_seconds: SILENCE_THRESHOLD_S,
+            since_last_nudge_seconds: SILENCE_COOLDOWN_S,
+            since_last_review_seconds: REVIEW_INTERVAL_S,
+            since_last_interjection_seconds: INTERJECTION_COOLDOWN_S,
+            speech_gap_seconds: SPEECH_SETTLE_S,
             significant_change: true,
             ..TimingInput::default()
         }),
