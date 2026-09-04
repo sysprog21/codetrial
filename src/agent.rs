@@ -70,7 +70,19 @@ const MAX_TEST_CASES: i64 = 99;
 /// simply has the extra dropped here, and no same-number test is owed.
 const MAX_TEST_FAILURES: usize = 4;
 pub const WATCH_TICK_S: f64 = 2.0;
-pub const SILENCE_THRESHOLD_S: f64 = 15.0;
+/// How long the candidate has to be both silent and not typing before the
+/// interviewer steps in with a question.
+///
+/// Sized for a candidate composing an answer in a second language, which is
+/// most of them here. At fifteen seconds this fired while people were still
+/// thinking, and being asked a new question is the most expensive possible
+/// interruption of someone assembling a sentence. The cost of the other
+/// mistake is ten more seconds of silence for a candidate who really is stuck,
+/// and `SILENCE_COOLDOWN_S` already says they will be asked again.
+///
+/// Interpolated into the prompt by `silence_nudge`, so the number Jim is told
+/// and the number that fires cannot drift apart.
+pub const SILENCE_THRESHOLD_S: f64 = 25.0;
 pub const TEST_REACTION_COOLDOWN_S: f64 = 20.0;
 pub const SILENCE_COOLDOWN_S: f64 = 30.0;
 pub const REVIEW_INTERVAL_S: f64 = 30.0;

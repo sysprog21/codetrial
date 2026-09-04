@@ -2590,10 +2590,15 @@ mod tests {
             code: "def two_sum(nums, target):\n    return []".to_string(),
             ..RuntimeState::default()
         };
-        activity.last_code_change = now - Duration::from_secs(16);
-        activity.last_user_speech = now - Duration::from_secs(16);
-        activity.last_agent_speech = now - Duration::from_secs(16);
-        activity.last_nudge = now - Duration::from_secs(31);
+
+        // Derived, not typed out: this test froze the threshold at "16 seconds"
+        // and failed the day the threshold moved, which is the one change it
+        // has nothing to say about.
+        let past_silence = Duration::from_secs_f64(crate::agent::SILENCE_THRESHOLD_S + 1.0);
+        activity.last_code_change = now - past_silence;
+        activity.last_user_speech = now - past_silence;
+        activity.last_agent_speech = now - past_silence;
+        activity.last_nudge = now - Duration::from_secs_f64(crate::agent::SILENCE_COOLDOWN_S + 1.0);
 
         let prompt = activity.watch_prompt(&state, now).unwrap();
 

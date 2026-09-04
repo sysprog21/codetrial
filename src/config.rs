@@ -15,7 +15,15 @@ pub const DEFAULT_GEMINI_LIVE_MODEL: &str = "gemini-3.1-flash-live-preview";
 /// room and the speaker, not of the code. Someone who pauses mid-sentence to
 /// think needs a longer window than someone who does not, and cutting it too
 /// short interrupts people while they are still talking.
-pub const DEFAULT_GEMINI_SILENCE_MS: u32 = 700;
+///
+/// The default is sized for the speaker this is actually pointed at, who is
+/// composing an answer in a second language. 700ms was measured against a
+/// fluent speaker and is inside the pause such a candidate takes to find the
+/// next word: Gemini called the turn over, Jim answered, and the candidate was
+/// still mid-sentence. The cost of the other mistake is that every reply now
+/// starts about eight tenths of a second later, which nobody reports as a
+/// broken interview.
+pub const DEFAULT_GEMINI_SILENCE_MS: u32 = 1_500;
 
 /// How readily Gemini decides the candidate has started speaking, and so how
 /// readily it abandons a reply it is part way through delivering.

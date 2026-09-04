@@ -1821,26 +1821,30 @@ fn timing_decision_applies_watch_loop_gates() {
         sync_code_at_last_review: true,
     };
 
+    // Both sides of the threshold, named by the constant. The numbers used to
+    // be spelled out, so tuning the threshold for candidates who think in a
+    // second language failed a test that is about the comparison, not the
+    // value.
     assert_eq!(
         timing_decision(&TimingInput {
-            idle_seconds: 14.9,
-            since_last_nudge_seconds: 30.0,
+            idle_seconds: SILENCE_THRESHOLD_S - 0.1,
+            since_last_nudge_seconds: SILENCE_COOLDOWN_S,
             ..TimingInput::default()
         }),
         none
     );
     assert_eq!(
         timing_decision(&TimingInput {
-            idle_seconds: 15.0,
-            since_last_nudge_seconds: 29.9,
+            idle_seconds: SILENCE_THRESHOLD_S,
+            since_last_nudge_seconds: SILENCE_COOLDOWN_S - 0.1,
             ..TimingInput::default()
         }),
         none
     );
     assert_eq!(
         timing_decision(&TimingInput {
-            idle_seconds: 15.0,
-            since_last_nudge_seconds: 30.0,
+            idle_seconds: SILENCE_THRESHOLD_S,
+            since_last_nudge_seconds: SILENCE_COOLDOWN_S,
             ..TimingInput::default()
         }),
         silence
@@ -1868,19 +1872,19 @@ fn timing_decision_applies_watch_loop_gates() {
     assert_eq!(
         timing_decision(&TimingInput {
             agent_busy: true,
-            idle_seconds: 15.0,
-            since_last_nudge_seconds: 30.0,
+            idle_seconds: SILENCE_THRESHOLD_S,
+            since_last_nudge_seconds: SILENCE_COOLDOWN_S,
             ..TimingInput::default()
         }),
         none
     );
     assert_eq!(
         timing_decision(&TimingInput {
-            idle_seconds: 15.0,
-            since_last_nudge_seconds: 30.0,
-            since_last_review_seconds: 30.0,
-            since_last_interjection_seconds: 45.0,
-            speech_gap_seconds: 4.0,
+            idle_seconds: SILENCE_THRESHOLD_S,
+            since_last_nudge_seconds: SILENCE_COOLDOWN_S,
+            since_last_review_seconds: REVIEW_INTERVAL_S,
+            since_last_interjection_seconds: INTERJECTION_COOLDOWN_S,
+            speech_gap_seconds: SPEECH_SETTLE_S,
             significant_change: true,
             ..TimingInput::default()
         }),

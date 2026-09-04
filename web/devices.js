@@ -13,6 +13,17 @@
 
 const RETRY_MS = 2000;
 
+// Named rather than left to the browser's defaults. The interviewer interrupts
+// itself on the candidate's voice activity, so a laptop speaker feeding the
+// microphone is heard as the candidate starting to talk and the reply is
+// abandoned mid-sentence. Every engine enables echo cancellation for a bare
+// `audio: true` today, which is exactly why asking for it costs nothing and
+// stops a future default from moving under us.
+const CONSTRAINTS = {
+  audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  video: true,
+};
+
 // `schedule` is injected so a test can fire the retry rather than wait for it.
 // The bug this guards -- two timers where there should be one -- only shows up
 // as a count of requests, and a count read off a sleep is a count read off how
@@ -31,7 +42,7 @@ export function createDevicePool({
 
   const device = (kind) => ({
     kind,
-    constraints: { [kind]: true },
+    constraints: { [kind]: CONSTRAINTS[kind] },
     pending: false,
     error: null,
     accept: () => true,
