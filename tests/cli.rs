@@ -153,6 +153,33 @@ fn with_free_addr<T>(attempt: impl Fn(&str) -> Option<T>) -> T {
 /// both the same directory, and the first one to finish deletes the other's web
 /// root out from under a live server.
 fn temp_path(name: &str) -> PathBuf {
+    temp_path_in(std::env::temp_dir(), name)
+}
+
+/// Under the target directory rather than the system temp one, because
+/// `binary_beside` hard-links the test binary in and a hard link needs both
+/// ends on one filesystem.
+fn exe_temp_path(name: &str) -> PathBuf {
+    temp_path_in(PathBuf::from(env!("CARGO_TARGET_TMPDIR")), name)
+}
+
+/// The binary itself, linked so that `current_exe` names a path inside `dir`:
+/// these tests are about the folder the executable sits in. A hard link and
+/// not a copy, which would be a 300 MB debug build per test, and not a
+/// symlink, which `current_exe` resolves back to the original.
+fn binary_beside(dir: &Path) -> PathBuf {
+    let name = if cfg!(windows) {
+        "codetrial.exe"
+    } else {
+        "codetrial"
+    };
+    let exe = dir.join(name);
+    std::fs::hard_link(env!("CARGO_BIN_EXE_codetrial"), &exe)
+        .expect("the test binary should link into the target directory");
+    exe
+}
+
+fn temp_path_in(base: PathBuf, name: &str) -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     let nanos = SystemTime::now()
@@ -160,7 +187,7 @@ fn temp_path(name: &str) -> PathBuf {
         .unwrap()
         .as_nanos();
     let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
+    base.join(format!(
         "codetrial-cli-{}-{nanos}-{unique}-{name}",
         std::process::id()
     ))
@@ -435,6 +462,47 @@ fn binary_web_names_the_config_it_read_when_credentials_are_missing() {
         "{stderr}"
     );
     assert!(stderr.contains(config.to_str().unwrap()), "{stderr}");
+}
+
+/// A release binary is unpacked into a folder of its own and keeps its config
+/// there, so the file has to be found from a shortcut or a terminal opened
+/// somewhere else and not only from a double-click, where the working
+/// directory happens to be the same folder.
+#[test]
+fn binary_reads_a_config_file_beside_the_executable() {
+    let dir = exe_temp_path("config-beside-exe");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+    let config = dir.join("codetrial.env.local");
+    std::fs::write(&config, "CODETRIAL_WEB_ADDR=127.0.0.1:1\n").unwrap();
+
+    // An empty working directory, so nothing but the executable's own folder
+    // can be what answered.
+    let cwd = temp_path("elsewhere");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let output = Command::new(&exe)
+        .arg("web")
+        .current_dir(&cwd)
+        .env_remove("LIVEKIT_URL")
+        .env_remove("LIVEKIT_API_KEY")
+        .env_remove("LIVEKIT_API_SECRET")
+        .env_remove("GOOGLE_API_KEY")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("codetrial should exit");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&cwd);
+
+    assert!(
+        !stderr.contains("required configuration file is missing"),
+        "the file beside the executable should have answered: {stderr}"
+    );
+    assert!(
+        stderr.contains(config.to_str().unwrap()),
+        "and it should be the file the error names: {stderr}"
+    );
 }
 
 /// Every mode that reads configuration refuses without a file, and says which

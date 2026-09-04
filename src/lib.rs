@@ -20,6 +20,20 @@ pub fn current_epoch_seconds() -> u64 {
         .as_secs()
 }
 
+/// The folder the executable itself sits in, which is where anything
+/// `codetrial` writes or looks for without being told a path belongs. A
+/// released binary is unpacked into a folder of its own and everything it
+/// needs ends up there, whatever directory it was launched from: a
+/// double-click makes the two the same, a shortcut or a terminal elsewhere
+/// does not. Falls back to the working directory when the path cannot be
+/// resolved, which leaves the old behaviour rather than no behaviour.
+pub fn exe_dir() -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
 /// One shared client so repeated Gemini and LiveKit RoomService calls reuse
 /// connections instead of renegotiating TLS per request. `reqwest::Client` is
 /// already an `Arc` internally and is meant to be reused.

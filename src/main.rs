@@ -507,9 +507,15 @@ fn primary_config_path(options: &CliOptions) -> Result<PathBuf, String> {
         }
         return Ok(path);
     }
+    // The working directory first, which is a checkout's `config/` and an
+    // operator's deployment directory, then the folder the executable sits in.
+    // A release binary is unpacked into a folder of its own and its config is
+    // written there, so it has to be findable from a shortcut or a terminal
+    // opened somewhere else, not only from a double-click.
     for path in [
         PathBuf::from(DEFAULT_CONFIG_PATH),
         PathBuf::from("codetrial.env.local"),
+        codetrial::exe_dir().join("codetrial.env.local"),
     ] {
         if path.is_file() {
             return Ok(path);
@@ -522,7 +528,8 @@ fn primary_config_path(options: &CliOptions) -> Result<PathBuf, String> {
     // sends them looking for a file they were never given. Naming what the file
     // must contain is an instruction both audiences can act on.
     Err(format!(
-        "required configuration file is missing: ./{DEFAULT_CONFIG_PATH} or ./codetrial.env.local; \
+        "required configuration file is missing: ./{DEFAULT_CONFIG_PATH}, \
+         ./codetrial.env.local, or codetrial.env.local beside the executable; \
          write one with LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET \
          (config/codetrial.env.example lists the optional keys in a checkout)"
     ))
