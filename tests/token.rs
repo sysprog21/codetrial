@@ -5,8 +5,9 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use codetrial::token::{
     LivekitTokenInput, TOKEN_TTL_SECONDS, WebhookRejection, livekit_egress_token,
-    livekit_observer_token, livekit_room_admin_token, livekit_room_from_token, livekit_token,
-    livekit_token_issuer, sign_hs256, verify_hs256, verify_livekit_webhook,
+    livekit_observer_token, livekit_room_admin_token, livekit_room_from_token,
+    livekit_room_list_token, livekit_token, livekit_token_issuer, sign_hs256, verify_hs256,
+    verify_livekit_webhook,
 };
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -127,6 +128,18 @@ fn each_token_carries_only_the_grant_its_purpose_needs() {
     let egress = claims_of(&livekit_egress_token(KEY, SECRET, "interview-a1b2c3d4", NOW).unwrap());
     assert_eq!(egress["video"]["roomRecord"], json!(true));
     assert_eq!(egress["video"]["roomAdmin"], Value::Null);
+
+    // Named no room, and cannot be given one after the fact: the Setup page
+    // signs this with credentials nobody has verified yet, only to learn from
+    // LiveKit whether they are real. Listing is the least it can ask for and
+    // still get an answer.
+    let list = claims_of(&livekit_room_list_token(KEY, SECRET, NOW).unwrap());
+    assert_eq!(list["iss"], json!(KEY));
+    assert_eq!(list["video"]["roomList"], json!(true));
+    assert_eq!(list["video"]["room"], Value::Null);
+    assert_eq!(list["video"]["roomJoin"], Value::Null);
+    assert_eq!(list["video"]["roomAdmin"], Value::Null);
+    assert_eq!(list["video"]["roomRecord"], Value::Null);
 }
 
 #[test]
@@ -146,6 +159,7 @@ fn every_token_expires() {
         livekit_observer_token(KEY, SECRET, "observer-1", "interview-a1b2c3d4", NOW).unwrap(),
         livekit_room_admin_token(KEY, SECRET, "interview-a1b2c3d4", NOW).unwrap(),
         livekit_egress_token(KEY, SECRET, "interview-a1b2c3d4", NOW).unwrap(),
+        livekit_room_list_token(KEY, SECRET, NOW).unwrap(),
     ];
     for token in tokens {
         let claims = claims_of(&token);
