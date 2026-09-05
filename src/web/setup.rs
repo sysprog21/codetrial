@@ -201,7 +201,7 @@ const SETUP_PAGE: &str = r#"<!doctype html>
 /// for: the file has to be found again on the next launch, from whatever
 /// directory that launch happens to start in.
 ///
-/// Parsed as `Value`, not a derived struct — this crate has no `serde`
+/// Parsed as `Value`, not a derived struct: this crate has no `serde`
 /// derive dependency, and a missing field reads as empty rather than a
 /// parse error.
 async fn submit_setup(
@@ -369,10 +369,14 @@ async fn submit_setup(
                 let _ = session.close().await;
             }
             Err(error) => {
-                return super::json_response(
-                    StatusCode::BAD_REQUEST,
-                    json!({ "error": format!("googleApiKey did not work: {error}") }),
+                // Redacted like every other caller of this chain. The close
+                // frame's reason is folded in at the bottom of it, so the text
+                // here is partly Gemini's, and the key was sent in the URL.
+                let reason = crate::gemini::redact_api_key(
+                    &format!("googleApiKey did not work: {error}"),
+                    &google_api_key,
                 );
+                return super::json_response(StatusCode::BAD_REQUEST, json!({ "error": reason }));
             }
         }
     }

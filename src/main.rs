@@ -553,14 +553,13 @@ fn public_setup_refusal(
     values: &BTreeMap<String, String>,
     bound: std::net::SocketAddr,
 ) -> Option<String> {
-    let reason = if !bound.ip().to_canonical().is_loopback() {
-        format!("it is bound to {bound}, which is not a loopback address")
-    } else if trusted_proxy_hops(values) > 0 {
-        "CODETRIAL_TRUSTED_PROXY_HOPS says something in front of it forwards \
-         requests from elsewhere"
-            .to_string()
-    } else {
-        return None;
+    let reason = match reachable_from_elsewhere(values, bound)? {
+        Reachable::Address => {
+            format!("it is bound to {bound}, which is not a loopback address")
+        }
+        Reachable::DeclaredProxy => "CODETRIAL_TRUSTED_PROXY_HOPS says something in front of \
+             it forwards requests from elsewhere"
+            .to_string(),
     };
 
     Some(format!(
@@ -573,7 +572,7 @@ fn public_setup_refusal(
 }
 
 /// Any `web` failure, not just a cold-start one. No attempt to tell a solo
-/// user's config apart from an operator's — the error text already says
+/// user's config apart from an operator's: the error text already says
 /// what's wrong. Best-effort: must not shadow the real error.
 ///
 /// Beside the executable, where the config it just failed to read also
@@ -986,6 +985,36 @@ fn relaxed_for_local_use(values: &BTreeMap<String, String>) -> Vec<String> {
 /// `::1` and of nothing else: a dual-stack socket that landed on
 /// `::ffff:127.0.0.1`, which is a name for the same interface, would otherwise
 /// be refused an address only this machine can reach.
+/// How a listener on `bound` can be reached from somewhere other than this
+/// machine, or `None` where it cannot.
+///
+/// Shared, because two guards ask it and a third answer added to one of them
+/// would drift silently -- in the direction that leaves the page taking
+/// credentials open. What each guard says about it is not shared: the remedies
+/// differ, an address is passed on the command line and a declared proxy is a
+/// variable in the environment.
+enum Reachable {
+    /// The bind address is not loopback.
+    Address,
+    /// `CODETRIAL_TRUSTED_PROXY_HOPS` is the operator saying requests arrive
+    /// through something in front, which is the same admission: a server on
+    /// loopback behind nginx or a tunnel is as public as one on `0.0.0.0`.
+    DeclaredProxy,
+}
+
+fn reachable_from_elsewhere(
+    values: &BTreeMap<String, String>,
+    bound: std::net::SocketAddr,
+) -> Option<Reachable> {
+    if !bound.ip().to_canonical().is_loopback() {
+        Some(Reachable::Address)
+    } else if trusted_proxy_hops(values) > 0 {
+        Some(Reachable::DeclaredProxy)
+    } else {
+        None
+    }
+}
+
 fn published_secret_refusal(
     values: &BTreeMap<String, String>,
     bound: std::net::SocketAddr,
@@ -999,16 +1028,9 @@ fn published_secret_refusal(
         return None;
     }
 
-    // Two ways to be reachable, and the second is the one a bind address cannot
-    // see: a server on loopback behind nginx or a tunnel is as public as one on
-    // `0.0.0.0`. `CODETRIAL_TRUSTED_PROXY_HOPS` is the operator saying requests
-    // arrive through something in front, which is the same admission.
-    let reason = if !bound.ip().to_canonical().is_loopback() {
-        format!("bind {bound}")
-    } else if trusted_proxy_hops(values) > 0 {
-        "serve from behind a declared proxy".to_string()
-    } else {
-        return None;
+    let reason = match reachable_from_elsewhere(values, bound)? {
+        Reachable::Address => format!("bind {bound}"),
+        Reachable::DeclaredProxy => "serve from behind a declared proxy".to_string(),
     };
 
     Some(format!(

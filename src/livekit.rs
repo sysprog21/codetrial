@@ -892,6 +892,25 @@ fn is_participant_gone(error: &str) -> bool {
     error.contains("RemoveParticipant") && error.contains("404") && error.contains("not_found")
 }
 
+/// The Twirp POST both RoomService callers make. Only the token and the base
+/// differ, and both are strings; the body comes back with the status because a
+/// refusal explains itself there and not in the code.
+async fn post_room_service(
+    base: &str,
+    token: &str,
+    method: &str,
+    body: &serde_json::Value,
+) -> Result<(reqwest::StatusCode, String), Box<dyn std::error::Error + Send + Sync>> {
+    let response = crate::http_client()
+        .post(format!("{base}/twirp/livekit.RoomService/{method}"))
+        .bearer_auth(token)
+        .json(body)
+        .send()
+        .await?;
+    let status = response.status();
+    Ok((status, response.text().await?))
+}
+
 async fn livekit_room_service_request(
     config: &AgentConfig,
     room_name: &str,
@@ -905,18 +924,13 @@ async fn livekit_room_service_request(
         room_name,
         now_seconds,
     )?;
-    let url = format!(
-        "{}/twirp/livekit.RoomService/{method}",
-        livekit_http_base(&config.livekit_url)
-    );
-    let response = crate::http_client()
-        .post(url)
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .await?;
-    let status = response.status();
-    let text = response.text().await?;
+    let (status, text) = post_room_service(
+        &livekit_http_base(&config.livekit_url),
+        &token,
+        method,
+        &body,
+    )
+    .await?;
     if !status.is_success() {
         return Err(format!("LiveKit RoomService {method} failed: {status} {text}").into());
     }
@@ -933,22 +947,32 @@ pub(crate) async fn validate_livekit_credentials(
 ) -> Result<(), String> {
     let token = crate::token::livekit_room_list_token(api_key, api_secret, now_seconds)
         .map_err(|error| error.to_string())?;
-    let endpoint = format!(
-        "{}/twirp/livekit.RoomService/ListRooms",
-        livekit_http_base(url)
-    );
-    let response = crate::http_client()
-        .post(endpoint)
-        .bearer_auth(token)
-        .json(&serde_json::json!({}))
-        .send()
-        .await
-        .map_err(|error| error.to_string())?;
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        Err(format!("LiveKit ListRooms failed: {}", response.status()))
+    let (status, text) = post_room_service(
+        &livekit_http_base(url),
+        &token,
+        "ListRooms",
+        &serde_json::json!({}),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    if status.is_success() {
+        return Ok(());
     }
+
+    // The body, because it is LiveKit's own account of the refusal and the
+    // Setup form is the one place a reader can act on it: a status alone says
+    // "did not work" to someone who already knows that. Bounded, because a
+    // wrong host answers with an HTML page and the form is one line.
+    const REASON_LIMIT: usize = 200;
+    let reason: String = text.chars().take(REASON_LIMIT).collect();
+    let ellipsis = if text.chars().count() > REASON_LIMIT {
+        "..."
+    } else {
+        ""
+    };
+    Err(format!(
+        "LiveKit ListRooms failed: {status} {reason}{ellipsis}"
+    ))
 }
 
 /// The RoomService origin for a LiveKit URL: the same host, over the scheme an

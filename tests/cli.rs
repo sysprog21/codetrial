@@ -641,7 +641,7 @@ fn setup_page_renders_a_form_with_all_four_credential_fields() {
     assert!(response.contains("/api/setup"), "{response}");
 }
 
-/// Accept, validate, write: the mocks answer as working credentials would —
+/// Accept, validate, write: the mocks answer as working credentials would,
 /// LiveKit's `ListRooms` with 200, Gemini's handshake with `setupComplete`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn setup_page_accepts_credentials_and_writes_the_primary_config_file() {
@@ -1446,7 +1446,7 @@ fn setup_page_rejects_a_submission_missing_a_field() {
 }
 
 /// `CODETRIAL_GEMINI_LIVE_URL` redirects validation to a local mock that
-/// never sends `setupComplete` — a rejected key. LiveKit's mock has to pass
+/// never sends `setupComplete`, which is a rejected key. LiveKit's mock passes
 /// so this isolates the Gemini rejection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn setup_page_rejects_a_google_api_key_that_fails_live_validation() {
@@ -1845,7 +1845,7 @@ fn binary_web_prints_the_url_to_open_when_setup_starts_serving() {
     assert!(output.contains(&addr), "{output}");
 }
 
-/// Same gap for an already-configured launch — reached via a config file
+/// Same gap for an already-configured launch, reached via a config file
 /// instead of a missing one.
 #[test]
 fn binary_web_prints_the_url_to_open_for_the_full_app_too() {
