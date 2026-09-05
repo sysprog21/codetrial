@@ -48,7 +48,7 @@ import { installDocument, importWithout } from "./dom.js";
 const dom = installDocument(read("web/replay.html"));
 const { render, momentTime } = await import("/replay.js");
 const { reportMarkup } = await import("/render.js");
-const { sanitizeReport, frameworkPhases } = await import("/lib.js");
+const { sanitizeReport, frameworkPhases, ACTIVE_CONTRACT } = await import("/lib.js");
 
 /// Every value the server supplies, as a token nothing else could produce. A
 /// rendered string is then either first-party copy, a sentinel, or a clock.
@@ -399,15 +399,7 @@ test("the report card this page renders names no finding either", () => {
     // active one or the card says the report is unsupported instead, so both
     // shapes are here: they render different sentences.
     { mode: "practice", interviewLoop: "coding_only" },
-    {
-      interviewContract: {
-        bundleVersion: 4,
-        livePromptVersion: 1,
-        reportPromptVersion: 4,
-        reportSchemaVersion: 1,
-        rubricVersion: 1,
-      },
-    },
+    { interviewContract: { ...ACTIVE_CONTRACT } },
     { interviewContract: { bundleVersion: 1 } },
     {
       // Every phase, or `sanitizeReport` drops the assessment and the

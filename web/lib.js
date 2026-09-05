@@ -403,19 +403,139 @@ export function loopLabel(value) {
 
 const textEncoder = new TextEncoder();
 
+/// The five versions this build renders, and the only bundle it will score.
+///
+/// Here rather than inside `sanitizeReport` so a test can read it. While it was
+/// function-local, moving it left the whole suite green with the supported-card
+/// branch no longer rendering, which is the defect a local constant invites.
+export const ACTIVE_CONTRACT = {
+  bundleVersion: 4,
+  livePromptVersion: 1,
+  reportPromptVersion: 4,
+  reportSchemaVersion: 1,
+  rubricVersion: 1,
+};
+
+/// The report's contract bundle, and whether this build can score against it.
+///
+/// Two answers rather than one, because they are not the same question. The
+/// bundle is what the report claims and is kept whenever it is well formed, so
+/// a reader is told which rubric produced it. Supported is whether every version
+/// matches this build, and only that decides whether the scores below are shown.
+/// A report with no bundle at all predates the contract and is neither.
+function reportContract(raw) {
+  const keys = Object.keys(ACTIVE_CONTRACT);
+  const claimed = raw?.interviewContract;
+  const wellFormed = claimed && typeof claimed === "object" && !Array.isArray(claimed)
+    && Object.keys(claimed).sort().join(",") === [...keys].sort().join(",")
+    && keys.every((key) => Number.isSafeInteger(claimed[key]) && claimed[key] >= 1 && claimed[key] <= 999);
+  const interviewContract = claimed === undefined
+    ? null
+    : wellFormed ? Object.fromEntries(keys.map((key) => [key, claimed[key]])) : null;
+  const unsupported = claimed !== undefined
+    && (interviewContract === null || keys.some((key) => interviewContract[key] !== ACTIVE_CONTRACT[key]));
+  return { interviewContract, unsupported };
+}
+
+/// The framework evidence rows, bounded and ordered.
+///
+/// Its own function because it is the one part of a report that carries fields
+/// this build has never heard of. Everything else here is a closed shape read
+/// key by key; this one round-trips the unknown, and the rules that make that
+/// safe, a byte ceiling and a null prototype, are easier to hold in one place
+/// than in the middle of the rest.
+function reportEvidence(raw) {
+  const knownEvidenceFields = new Set([
+    "atMs", "phase", "source", "kind", "confidence", "summary", "frameworkVersion",
+  ]);
+  const evidencePhases = new Set(frameworkPhases.map((phase) => phase.toLowerCase()));
+  const frameworkSources = new Set(["candidate_speech", "editor_snapshot", "test_event", "session_timing"]);
+  const frameworkKinds = new Set(["observed", "inferred", "skipped"]);
+  return (Array.isArray(raw?.frameworkEvidence) ? raw.frameworkEvidence : [])
+    .map((item) => {
+      const phase = typeof item?.phase === "string" ? item.phase : "";
+      const source = typeof item?.source === "string" ? item.source : "";
+      const kind = typeof item?.kind === "string" ? item.kind : "";
+      const atMs = Math.trunc(Number(item?.atMs));
+      const confidence = Math.trunc(Number(item?.confidence));
+      const frameworkVersion = Math.trunc(Number(item?.frameworkVersion));
+      const summary = typeof item?.summary === "string" ? boundedText(item.summary, 240).trim() : "";
+      if (!evidencePhases.has(phase) || !frameworkSources.has(source) || !frameworkKinds.has(kind)
+        || (source === "session_timing") !== (kind === "skipped")
+        || !Number.isFinite(atMs) || atMs < 0 || !Number.isFinite(confidence)
+        || confidence < 0 || confidence > 100 || !Number.isFinite(frameworkVersion)
+        || frameworkVersion < 1 || !summary) return null;
+      // Unknown fields round-trip, so a newer report re-saved by an older
+      // client does not quietly lose what that client could not name. They
+      // are also the only part of an evidence row with no size of its own,
+      // and the whole report has to fit what the account sync accepts, which
+      // refuses the request rather than trimming it: over that, the candidate
+      // keeps the local copy and the account copy simply never arrives. So
+      // they are carried while they are a field rather than a payload.
+      // The common row has nothing unknown on it and this runs over whatever
+      // length arrived from storage or the wire, before the cap below trims it,
+      // so that row allocates nothing and is never serialized to be measured.
+      // Null prototype, not `{}`: assigning a key named `__proto__` to a plain
+      // object runs the inherited setter, which ignores a string and drops the
+      // field. A newer client's field is not ours to name, so it cannot be ours
+      // to lose either.
+      let extras = null;
+      for (const key of Object.keys(item)) {
+        if (!knownEvidenceFields.has(key)) (extras ??= Object.create(null))[key] = item[key];
+      }
+      // Spreading null spreads nothing, which is what both the common row and
+      // an over-budget one want.
+      const carried = extras && textEncoder.encode(JSON.stringify(extras)).length <= 512 ? extras : null;
+      return {
+        ...carried,
+        // A year, which no interview approaches: this is a sanity bound on a
+        // timestamp that arrives as untrusted JSON, not a statement about how
+        // long a session runs.
+        atMs: clamp(atMs, 0, 31_536_000_000),
+        phase,
+        source,
+        kind,
+        confidence,
+        summary,
+        frameworkVersion,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 64)
+    .sort((left, right) => left.atMs - right.atMs);
+}
+
+/// The two rounds an interview is made of, or nothing.
+///
+/// All or nothing on purpose: the pair is one statement about how the time was
+/// divided, and half of it is not a shorter version of that statement, it is a
+/// different and unsupported one. So a round that fails any of its own rules,
+/// or a pair whose budgets do not add up to a length this product offers, or a
+/// behavioral round that disagrees with the loop the report recorded, returns
+/// the empty list rather than the half that parsed.
+function reportRounds(raw, interviewLoop) {
+  const kinds = ["coding", "behavioral"];
+  const codingStatuses = new Set(["complete", "incomplete"]);
+  const behavioralStatuses = new Set(["complete", "started", "skipped", "not_configured"]);
+  const rounds = Array.isArray(raw?.rounds) && raw.rounds.length === 2
+    ? raw.rounds.map((round, index) => round?.kind === kinds[index]
+      && Number.isInteger(round.budgetMin) && round.budgetMin >= 0 && round.budgetMin <= 90
+      && (index === 0 ? codingStatuses : behavioralStatuses).has(round.status)
+      ? { kind: round.kind, budgetMin: round.budgetMin, status: round.status } : null)
+    : [];
+  // `[].every(Boolean)` is true, so the pair has to be proved present before
+  // anything reads into it. Writing the length test second cost an exception on
+  // every report with no rounds at all, which is most of them.
+  if (rounds.length !== 2 || !rounds.every(Boolean)) return [];
+  const total = rounds[0].budgetMin + rounds[1].budgetMin;
+  const behavioralFits = interviewLoop === "coding_only"
+    ? rounds[1].budgetMin === 0 && rounds[1].status === "not_configured"
+    : rounds[1].budgetMin === 8 && rounds[1].status !== "not_configured";
+  return total >= 10 && total <= 90 && behavioralFits ? rounds : [];
+}
+
 export function sanitizeReport(raw) {
-  const activeContract = { bundleVersion: 4, livePromptVersion: 1, reportPromptVersion: 4, reportSchemaVersion: 1, rubricVersion: 1 };
-  const contractKeys = Object.keys(activeContract);
-  const candidateContract = raw?.interviewContract;
-  const contractValues = candidateContract && typeof candidateContract === "object" && !Array.isArray(candidateContract)
-    ? Object.keys(candidateContract).sort().join(",") === [...contractKeys].sort().join(",")
-      && contractKeys.every((key) => Number.isSafeInteger(candidateContract[key])
-        && candidateContract[key] >= 1 && candidateContract[key] <= 999)
-      ? Object.fromEntries(contractKeys.map((key) => [key, candidateContract[key]])) : null
-    : null;
-  const interviewContract = candidateContract === undefined ? null : contractValues;
-  const unsupportedContract = candidateContract !== undefined
-    && (interviewContract === null || contractKeys.some((key) => interviewContract[key] !== activeContract[key]));
+  const { interviewContract, unsupported: unsupportedContract } = reportContract(raw);
   // Only what the report actually recorded. Defaulting this to "scored" put a
   // mode on every new report and made the header announce a distinction that no
   // longer exists; a report written before the split still says what it was.
@@ -426,22 +546,7 @@ export function sanitizeReport(raw) {
   // never ran, the same way defaulting the mode did.
   const interviewLoop = codingLoop(raw?.interviewLoop);
   const recordedLoop = raw?.interviewLoop === undefined ? undefined : interviewLoop;
-  const roundKinds = ["coding", "behavioral"];
-  const codingStatuses = new Set(["complete", "incomplete"]);
-  const behavioralStatuses = new Set(["complete", "started", "skipped", "not_configured"]);
-  const rounds = Array.isArray(raw?.rounds) && raw.rounds.length === 2
-    ? raw.rounds.map((round, index) => round?.kind === roundKinds[index]
-      && Number.isInteger(round.budgetMin) && round.budgetMin >= 0 && round.budgetMin <= 90
-      && (index === 0 ? codingStatuses : behavioralStatuses).has(round.status)
-      ? { kind: round.kind, budgetMin: round.budgetMin, status: round.status } : null)
-    : [];
-  const roundSummary = rounds.length === 2 && rounds.every(Boolean)
-    && rounds[0].budgetMin + rounds[1].budgetMin >= 10
-    && rounds[0].budgetMin + rounds[1].budgetMin <= 90
-    && (interviewLoop === "coding_only"
-      ? rounds[1].budgetMin === 0 && rounds[1].status === "not_configured"
-      : rounds[1].budgetMin === 8 && rounds[1].status !== "not_configured")
-    ? rounds : [];
+  const roundSummary = reportRounds(raw, interviewLoop);
   const bounded = (value, max) => {
     const number = Math.trunc(Number(value));
     return Number.isFinite(number) ? clamp(number, 0, max) : 0;
@@ -549,64 +654,8 @@ export function sanitizeReport(raw) {
       phases: assessmentPhases.map((phase) => normalizedAssessment.get(phase)),
     }
     : null;
-  const knownEvidenceFields = new Set([
-    "atMs", "phase", "source", "kind", "confidence", "summary", "frameworkVersion",
-  ]);
-  const evidencePhases = new Set(frameworkPhases.map((phase) => phase.toLowerCase()));
-  const frameworkSources = new Set(["candidate_speech", "editor_snapshot", "test_event", "session_timing"]);
-  const frameworkKinds = new Set(["observed", "inferred", "skipped"]);
-  const frameworkEvidence = (Array.isArray(raw?.frameworkEvidence) ? raw.frameworkEvidence : [])
-    .map((item) => {
-      const phase = typeof item?.phase === "string" ? item.phase : "";
-      const source = typeof item?.source === "string" ? item.source : "";
-      const kind = typeof item?.kind === "string" ? item.kind : "";
-      const atMs = Math.trunc(Number(item?.atMs));
-      const confidence = Math.trunc(Number(item?.confidence));
-      const frameworkVersion = Math.trunc(Number(item?.frameworkVersion));
-      const summary = typeof item?.summary === "string" ? boundedText(item.summary, 240).trim() : "";
-      if (!evidencePhases.has(phase) || !frameworkSources.has(source) || !frameworkKinds.has(kind)
-        || (source === "session_timing") !== (kind === "skipped")
-        || !Number.isFinite(atMs) || atMs < 0 || !Number.isFinite(confidence)
-        || confidence < 0 || confidence > 100 || !Number.isFinite(frameworkVersion)
-        || frameworkVersion < 1 || !summary) return null;
-      // Unknown fields round-trip, so a newer report re-saved by an older
-      // client does not quietly lose what that client could not name. They
-      // are also the only part of an evidence row with no size of its own,
-      // and the whole report has to fit what the account sync accepts, which
-      // refuses the request rather than trimming it: over that, the candidate
-      // keeps the local copy and the account copy simply never arrives. So
-      // they are carried while they are a field rather than a payload.
-      // The common row has nothing unknown on it and this runs over whatever
-      // length arrived from storage or the wire, before the cap below trims it,
-      // so that row allocates nothing and is never serialized to be measured.
-      // Null prototype, not `{}`: assigning a key named `__proto__` to a plain
-      // object runs the inherited setter, which ignores a string and drops the
-      // field. A newer client's field is not ours to name, so it cannot be ours
-      // to lose either.
-      let extras = null;
-      for (const key of Object.keys(item)) {
-        if (!knownEvidenceFields.has(key)) (extras ??= Object.create(null))[key] = item[key];
-      }
-      // Spreading null spreads nothing, which is what both the common row and
-      // an over-budget one want.
-      const carried = extras && textEncoder.encode(JSON.stringify(extras)).length <= 512 ? extras : null;
-      return {
-        ...carried,
-        // A year, which no interview approaches: this is a sanity bound on a
-        // timestamp that arrives as untrusted JSON, not a statement about how
-        // long a session runs.
-        atMs: clamp(atMs, 0, 31_536_000_000),
-        phase,
-        source,
-        kind,
-        confidence,
-        summary,
-        frameworkVersion,
-      };
-    })
-    .filter(Boolean)
-    .slice(0, 64)
-    .sort((left, right) => left.atMs - right.atMs);
+  const frameworkEvidence = reportEvidence(raw);
+
   // A report with nothing in it must survive normalization as a report with
   // nothing in it. Falling through to the fields below would score the missing
   // numbers as 0 and coerce the missing decision to NO_HIRE, which is how a

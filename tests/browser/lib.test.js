@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { read } from "./source.js";
 
 import {
+  ACTIVE_CONTRACT,
   FRAMEWORKS,
   frameworkChecklist,
   captionWindow,
@@ -1142,6 +1143,33 @@ test("the replay timeline interleaves windows with the moments without joining t
   // A replay with no avatar rows has no windows, so the page has nothing to
   // explain and hides the paragraph explaining it.
   assert.deepEqual(replayTimeline([editor(0, "only")]).windows, []);
+});
+
+test("the contract this build scores is the shape sanitizeReport accepts", () => {
+  // The reason `ACTIVE_CONTRACT` is exported rather than function-local. While
+  // it lived inside `sanitizeReport`, nothing could read it, and moving it left
+  // the whole suite green with the supported-contract branch no longer
+  // rendering: a precondition nobody checks is a precondition that goes.
+  //
+  // Not the versions themselves. `the_interview_contract_is_the_same_bundle_on_
+  // both_sides` in `tests/agent.rs` already compares the whole object against
+  // the server's, which is the stronger check because it is the disagreement
+  // that matters. What is left for here is the shape, which that test reads
+  // rather than asserts.
+  assert.deepEqual(
+    Object.keys(ACTIVE_CONTRACT).sort(),
+    ["bundleVersion", "livePromptVersion", "reportPromptVersion", "reportSchemaVersion", "rubricVersion"],
+    "five versions, and a sixth added without a migration fails here",
+  );
+  // The bounds `reportContract` enforces on a report's own bundle. A build
+  // whose active contract could not pass its own validator would refuse every
+  // report including the ones it just produced.
+  for (const [key, value] of Object.entries(ACTIVE_CONTRACT)) {
+    assert.ok(
+      Number.isSafeInteger(value) && value >= 1 && value <= 999,
+      `${key} is in the range sanitizeReport accepts`,
+    );
+  }
 });
 
 test("the window label says only what its words table gives it", () => {

@@ -3989,10 +3989,10 @@ fn a_weakness_tag_matches_its_plan_item_across_stray_whitespace() {
 #[test]
 fn the_interview_contract_is_the_same_bundle_on_both_sides() {
     let browser = std::fs::read_to_string("web/lib.js").expect("web/lib.js is readable");
-    let declaration = "const activeContract = {";
+    let declaration = "export const ACTIVE_CONTRACT = {";
     let start = browser
         .find(declaration)
-        .expect("web/lib.js declares activeContract")
+        .expect("web/lib.js declares ACTIVE_CONTRACT")
         + declaration.len();
     let rest = &browser[start..];
     let end = rest.find('}').expect("the object literal is closed");
