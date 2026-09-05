@@ -39,9 +39,49 @@
           </section>
           <section>
             <h3>Moments</h3>
-            <!-- Every editor and test snapshot, by the time it happened. The
-                 replay is a list of moments rather than a video scrubber,
-                 because the events are what this server has. -->
+            <!-- Every editor and test snapshot, plus every response window, by
+                 the time each happened. The replay is a list of moments rather
+                 than a video scrubber, because the events are what this server
+                 has. -->
+            <!-- The one place the window wording is written for the browser.
+                 What the number measures, whose clock measured it, what a
+                 window with no duration means, what bounds how long one can
+                 run, why a window can open without a question having ended,
+                 what a lost batch does to any of that, and what a long window
+                 is worth.
+
+                 tests/browser/replay-render.test.js drives this page and reads
+                 back what it rendered, and tests/browser/history.test.js holds
+                 this paragraph and every other string in the markup. Between
+                 them they catch a label added the way a person adds one. They
+                 are not a proof and the tests say where they stop: three
+                 commits claimed otherwise and a reviewer found more each time.
+                 What neither bounds is what the server says, which this page
+                 prints verbatim: the recording state, and a moment's kind. -->
+            <p id="replay-window-note" class="muted small" hidden>
+              A response window is the time between the interviewer finishing a turn and
+              the interviewer speaking again. It is measured from the clock of the
+              browser that recorded the interview, which can jump forward as well as
+              back, and it includes the time CodeTrial itself took to prepare the reply,
+              which is not the same on every turn. The interviewer speaks again on its
+              own after about twenty-five seconds of silence, and neither talking nor
+              typing counts as silence, so a window runs long only while the candidate
+              is working: a long window means they were busy, and a run of short windows
+              holding no transcript is what silence looks like. A window opens whenever
+              the interviewer stops speaking, which is often not the end of a question:
+              it also follows the interviewer's own prompts and reactions, a candidate
+              interrupting, a moment when the interviewer published no state at all, the
+              interviewer dropping out and coming back, and the candidate pausing the
+              interview, which is the one of those a window says on itself. Events reach
+              the server in batches and a batch can be lost, so a window can be missing,
+              doubled, shown with no candidate transcript, wrongly marked as paused, or
+              added after the interview ended. A window shows no duration when the
+              recording ended inside it, or when that clock ran backwards. Each turn
+              carries the window its stream started in, and a recording made before
+              that says so on every window it cannot place, rather than reporting a
+              question nobody answered. A long window is a place in the recording to go
+              and watch, not a finding about anybody.
+            </p>
             <ol id="replay-timeline" class="replay-timeline"></ol>
           </section>
         </div>

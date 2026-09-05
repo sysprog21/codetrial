@@ -1027,7 +1027,32 @@ three scoped to the account.
 |---|---|
 | `GET /api/recordings` | one page, newest first, plus `nextCursor` |
 | `GET /api/recordings/{id}` | one recording's state, dates and recovery |
-| `GET /api/recordings/{id}/events` | its replay, snapshot or tail |
+| `GET /api/recordings/{id}/events` | its replay: snapshot, review or tail |
+
+The events route has three shapes and two query parameters. Absent or negative
+`after` is the snapshot, which keeps the newest row of each replaceable kind and
+drops what it replaced. A sequence number is the tail, which drops nothing.
+`avatar=history` on the snapshot selects the review read: the snapshot with the
+collapse narrowed to the kinds that restate a whole value, `editor` and `stage`,
+so the `avatar` and `lifecycle` transition histories survive. The replay page
+needs the first to compute the response window described under Integrity
+evidence in `docs/integrity-evidence.md`, and the second to say that a window
+overlapped a pause;
+without the pause rows a break renders as thinking time, which is what
+`applyPause` records them to prevent. It is the one
+parameter the recording template's own read does not accept, because a template
+joining late wants Jim's current state and not the history of it. It applies to
+the snapshot only: the tail collapses nothing already, so a request carrying
+both is answered as the tail it asked for.
+
+The review read costs one row per `avatar` or `lifecycle` transition more than
+the snapshot does, which a 45-minute interview keeps to a few hundred short
+rows. The browser writes an `avatar` row only on a change and the server
+deduplicates the state it publishes, so a turn the interviewer takes is two
+rows, one for the speaking and one for the listening after it. How often it can
+take one unprompted is bounded by whichever of `SILENCE_COOLDOWN_S`,
+`REVIEW_INTERVAL_S` and `TEST_REACTION_COOLDOWN_S` applies, the last being the
+tightest at 20 seconds.
 
 Paged by cursor, `<created_at>.<id>`, rather than by offset. A cursor that does
 not parse is `400 cursor_invalid` rather than a silent first page, which would
@@ -1045,6 +1070,10 @@ reason: it is a credential's subject.
 A deleted or expired recording is `410` on both the detail and the events, with
 `recording_deleted` and `replay_expired` respectively: one was taken away and
 the other waited too long, and they are different things to the person asking.
+That holds for all three shapes of the events read, including the review read:
+`gone_response` runs before any of them and `replay_view` checks the deadline
+again inside its own transaction, so a widened read is not a way past a deadline
+that closed the route beside it.
 Cross-account is `404` on all three, because an account that does not own a
 recording should not learn it exists.
 

@@ -199,6 +199,18 @@ and duration from `ffprobe`. Candidate-visible seconds, audio-source count, and
 production-avatar rendering are operator attestations until recorder-side
 telemetry exists; they are not presented as measurements.
 
+## Integrity evidence
+
+Integrity features produce evidence for a person to review. Nothing here scores
+a candidate, and nothing here is a claim that anybody cheated.
+
+The replay page shows a *response window* for each interviewer turn, with what
+that number is worth written beside it: whose clock measured it, what bounds how
+long one can run, and why a long one is a place to go and watch rather than a
+finding. Overlay detection and gaze reading are refused, and the reasons are
+recorded rather than left implicit. See
+[docs/integrity-evidence.md](docs/integrity-evidence.md).
+
 ## Further documentation
 
 | Document | Covers |
@@ -206,6 +218,7 @@ telemetry exists; they are not presented as measurements.
 | [Development](docs/development.md) | The gate, formatters, hooks, generated files, releases |
 | [Installing a binary](docs/install.md) | Published binaries, platform notes, the config beside them |
 | [Interview length](docs/interview-length.md) | What the lobby offers and what the endpoints enforce |
+| [Integrity evidence](docs/integrity-evidence.md) | Response windows, and what CodeTrial declines to look for |
 | [Third-party notices](THIRD-PARTY-NOTICES.md) | Bundled software, model attribution, licenses, checksums |
 | [Avatar contract](docs/avatar-contract.md) | Renderer behavior, asset limits, privacy, accessibility |
 | [Provider pooling](docs/providers.md) | Spreading rooms over several LiveKit projects |

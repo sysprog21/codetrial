@@ -521,6 +521,15 @@ pub(crate) async fn recording_handler(
 ///
 /// The same shape the recording template reads, and the same rules: absent or
 /// negative `after` is the snapshot, a number is the tail.
+///
+/// `avatar=history` is the one thing this route reads that the template's does
+/// not. It answers the snapshot with the collapse narrowed to `Restates`, so
+/// the transition histories survive; `Collapse` in `src/recording/replay.rs`
+/// carries what each read is for and why the template gets neither history.
+///
+/// It applies to the snapshot only. The tail collapses nothing already, so the
+/// parameter has nothing to lift there, and a request carrying both is answered
+/// as the tail it asked for.
 pub(crate) async fn recording_events_handler(
     State(state): State<AppState>,
     UriPath(recording_id): UriPath<String>,
@@ -535,6 +544,12 @@ pub(crate) async fn recording_events_handler(
         .get("after")
         .and_then(|after| after.parse::<i64>().ok())
         .unwrap_or(-1);
+
+    // Exact, not truthy. An unknown value is the ordinary snapshot rather than
+    // a guess at what the caller meant, so a typo reads one avatar row instead
+    // of quietly widening the answer.
+    let avatar_history = params.get("avatar").map(String::as_str) == Some("history");
+
     let found = {
         let accounts = accounts.clone();
         let recording_id = recording_id.clone();
@@ -560,11 +575,17 @@ pub(crate) async fn recording_events_handler(
         return gone;
     }
 
+    // After `gone_response`, and `replay_view` checks expiry and deletion again
+    // inside its own transaction. Both guards cover the review read for the
+    // same reason they cover the snapshot: it is the same function with one
+    // argument changed, so there is no second path to leave unguarded.
     let view = blocking(move || {
-        if after < 0 {
-            crate::recording::replay_snapshot(&accounts, &summary.interview_id, user.id, now)
-        } else {
+        if after >= 0 {
             crate::recording::replay_tail(&accounts, &summary.interview_id, user.id, after, now)
+        } else if avatar_history {
+            crate::recording::replay_review(&accounts, &summary.interview_id, user.id, now)
+        } else {
+            crate::recording::replay_snapshot(&accounts, &summary.interview_id, user.id, now)
         }
     })
     .await;

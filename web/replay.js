@@ -11,7 +11,7 @@
 // section it already serves.
 
 import { reportMarkup } from "/render.js";
-import { modeLabel, sanitizeReport } from "/lib.js";
+import { modeLabel, replayRows, replayTimeline, responseWindowLabel, sanitizeReport } from "/lib.js";
 
 const nodes = {
   list: document.querySelector("#replay-list"),
@@ -22,6 +22,7 @@ const nodes = {
   media: document.querySelector("#replay-media"),
   transcript: document.querySelector("#replay-transcript"),
   timeline: document.querySelector("#replay-timeline"),
+  windowNote: document.querySelector("#replay-window-note"),
   momentLabel: document.querySelector("#replay-moment-label"),
   code: document.querySelector("#replay-code"),
   tests: document.querySelector("#replay-tests"),
@@ -59,6 +60,51 @@ let latest = { code: "", language: "" };
 const GONE_WORDS = {
   replay_expired: "This recording is past its 24 hours and has been deleted.",
   recording_deleted: "This recording has been deleted.",
+};
+
+/// Every word a response window may put on the timeline.
+///
+/// One object, because `tests/browser/history.test.js` holds it to an allowlist,
+/// alongside every other string this file can say. "No severity language
+/// anywhere" is a negative no test can observe; "these strings and no others" is
+/// one it can, and it is what tells the next person who reaches for a label that
+/// the wording is a decision rather than a blank.
+///
+/// That allowlist is the static half. The other half is
+/// `tests/browser/replay-render.test.js`, which drives this page through a stub
+/// document and reads back what it rendered, because a table of allowed strings
+/// says nothing about where they are put or what is put beside them.
+///
+/// The sentence explaining what the number is worth is not here. It is the
+/// static `#replay-window-note` in `web/replay.html`, written once, because a
+/// paragraph that needs no state does not need a renderer.
+const WINDOW_WORDS = {
+  label: "response window",
+  seconds: " s",
+  separator: " · ",
+  /// Both reasons `responseWindows` returns a null duration: a window the
+  /// recording ended inside, and a clock that ran backwards between the two
+  /// rows. One phrase for both, because neither is a measurement and the note
+  /// above the list says what they are.
+  unmeasured: "duration not recorded",
+  /// A window a transcript row could have named and none did. The producer
+  /// stamps each turn with the window its stream started in, so this is a fact
+  /// about the interview rather than about the record: the candidate said
+  /// nothing between the interviewer's two turns.
+  noTurn: "no candidate transcript recorded",
+  /// A window nothing could have named, which is a fact about the recording
+  /// instead. Recordings made before the producer stamped its turns carry no
+  /// index to match on, and past the first window there is no way to place a
+  /// turn without guessing at timing.
+  ///
+  /// Its own sentence rather than `noTurn`, because that one is the only claim
+  /// about the candidate this panel makes, and making it on a recording that
+  /// cannot support it is the one thing here that would be false rather than
+  /// merely withheld.
+  unmatchedTurn: "transcript not matched to a window",
+  /// The one cause of a long window the replay can name; why, in
+  /// `responseWindows`.
+  paused: "interview paused during this window",
 };
 
 export function momentTime(at) {
@@ -141,6 +187,11 @@ async function select(recordingId) {
 
 function clearDetail() {
   latest = { code: "", language: "" };
+  // The paragraph explaining a response window is hidden until there is one to
+  // explain. A replay with no `avatar` rows is a replay this feature has nothing
+  // to say about, and a standing note about an empty list reads as a promise the
+  // page did not keep.
+  nodes.windowNote.hidden = true;
   nodes.momentLabel.textContent = "Code";
   nodes.status.textContent = "";
   nodes.media.textContent = "";
@@ -151,8 +202,33 @@ function clearDetail() {
   nodes.report.replaceChildren();
 }
 
+/// The events, with the `avatar` history rather than the newest `avatar` row.
+///
+/// A response window is computed from the `avatar` rows and marked from the
+/// `lifecycle` ones, and the default read keeps one of each: both are snapshot
+/// kinds on the server, so the newest row supersedes every earlier one. Three
+/// ways to reach the history, and this is the one that was taken.
+///
+///  - `?after=0` alone, with no server change. The tail collapses nothing, so it
+///    also returns every superseded `editor` snapshot, a whole code buffer per
+///    debounce, bounded only by the per-interview replay ceiling, sent to a page
+///    that wants one buffer and a list of states. And the tail floors its `after`
+///    at 0 against a `seq > ?` bound, so `seq` 0 is unreachable through it.
+///  - Dropping `Avatar` from `ReplayKind::is_snapshot`. The smallest diff and
+///    the wrong one; `ReplayClass` in `src/recording/replay.rs` says why.
+///  - A read that collapses only what restates a whole value, `editor` and
+///    `stage`, so the `avatar` and `lifecycle` transitions survive. This one. It
+///    costs a server change and a query parameter, and it is the only one of the
+///    three where the page pays for what it reads.
+///
+/// `seq` 0 comes with it. This read binds `after` at `-1` as the snapshot does,
+/// so the bound is `seq > -1` and the first event of the interview is in the
+/// answer; nothing here has to argue that the first event does not matter,
+/// because it is not missing.
 async function loadEvents(recordingId) {
-  const response = await fetch(`/api/recordings/${encodeURIComponent(recordingId)}/events`);
+  const response = await fetch(
+    `/api/recordings/${encodeURIComponent(recordingId)}/events?avatar=history`,
+  );
   if (selected !== recordingId) return;
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
@@ -183,7 +259,13 @@ async function loadEvents(recordingId) {
 /// replaces the last one. Every snapshot keeps its time, so a moment can be
 /// opened rather than scrubbed to.
 export function render(events) {
-  const stage = events.findLast((event) => event.kind === "stage");
+  // Guarded here rather than only inside `replayTimeline`. The page reads
+  // `body.events || []` off a parsed JSON body on the path where the response
+  // was already `ok`, so a string or an object there is one bad deploy away, and
+  // `findLast` on either throws before anything defensive downstream is reached.
+  // A throw paints a blank panel where this page had a sentence ready.
+  const rows = replayRows(events);
+  const stage = rows.findLast((event) => event?.kind === "stage");
   // Only where the recording actually carried one. Reading it unconditionally
   // floored `undefined` to "Scored" and announced a distinction that no longer
   // exists on every replay made since the practice mode was removed.
@@ -193,30 +275,74 @@ export function render(events) {
       ? `${nodes.status.textContent} · ${mode}`
       : mode;
   }
-  const moments = [];
-  for (const event of events) {
-    if (event.kind === "transcript") {
-      const line = document.createElement("li");
-      line.className = "replay-line";
-      line.textContent = `${momentTime(event.at)} ${event.payload?.speaker || "candidate"}: ${event.payload?.text || ""}`;
-      nodes.transcript.append(line);
-      continue;
-    }
-    if (event.kind === "editor" || event.kind === "tests") moments.push(event);
+  for (const event of rows) {
+    if (event?.kind !== "transcript") continue;
+    const line = document.createElement("li");
+    line.className = "replay-line";
+    line.textContent = `${momentTime(event.at)} ${event.payload?.speaker || "candidate"}: ${event.payload?.text || ""}`;
+    nodes.transcript.append(line);
   }
 
-  for (const [index, moment] of moments.entries()) {
-    const item = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "replay-moment";
-    button.dataset.moment = String(index);
-    button.textContent = `${momentTime(moment.at)} · ${moment.kind}`;
-    button.addEventListener("click", () => showMoment(moments, index));
-    item.append(button);
-    nodes.timeline.append(item);
-  }
+  // Two lists, not one: a window does not join `moments`, because `showMoment`
+  // scans that list as editor and test snapshots. They are interleaved in one
+  // timeline because that is where a reader looks for both.
+  const { moments, windows, timeline } = replayTimeline(rows);
+
+  nodes.windowNote.hidden = windows.length === 0;
+  // Appended once. Interleaving the windows roughly quadruples this list, and a
+  // node at a time is a layout pass at a time.
+  nodes.timeline.append(
+    ...timeline.map((entry) => {
+      const item = document.createElement("li");
+      item.append(
+        entry.window === undefined
+          ? momentButton(moments, entry.moment)
+          : windowItem(windows[entry.window], entry.window),
+      );
+      return item;
+    }),
+  );
   if (moments.length) showMoment(moments, moments.length - 1);
+}
+
+function momentButton(moments, index) {
+  const moment = moments[index];
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "replay-moment";
+  button.dataset.moment = String(index);
+  button.textContent = `${momentTime(moment.at)} · ${moment.kind}`;
+  button.addEventListener("click", () => showMoment(moments, index));
+  return button;
+}
+
+/// One response window, in the only words it is allowed.
+///
+/// Every string it can write comes from `WINDOW_WORDS`, and what is left here is
+/// a time, a number and the separators between them. What holds that is
+/// `tests/browser/replay-render.test.js`, which renders this row and reads
+/// the result rather than reading this source: twelve ways to put a word on this
+/// page were closed one at a time by reading source, and a thirteenth kept
+/// arriving until the check started reading the output instead.
+function windowItem(span, index) {
+  const item = document.createElement("div");
+  item.className = "replay-window";
+  item.dataset.window = String(index);
+  // The clock here and every word from `responseWindowLabel`, which is given
+  // `WINDOW_WORDS` and can say nothing else. Empty parts dropped rather than
+  // joined: `momentTime` answers a clock it cannot read with "", and joining
+  // that left the label opening on a separator with nothing in front of it.
+  item.textContent = [momentTime(span.at), ...responseWindowLabel(span, WINDOW_WORDS)]
+    .filter(Boolean)
+    .join(WINDOW_WORDS.separator);
+  return item;
+}
+
+/// The editor or test moment currently shown in the panels.
+function markCurrent(index) {
+  for (const button of nodes.timeline.querySelectorAll("[data-moment]")) {
+    button.classList.toggle("current", button.dataset.moment === String(index));
+  }
 }
 
 /// The editor and the test results as they stood at one moment.
@@ -243,9 +369,7 @@ function showMoment(moments, index) {
   nodes.tests.textContent = tests
     ? `${tests.passed ?? 0}/${tests.total ?? 0} passing`
     : "No test run before this point.";
-  for (const button of nodes.timeline.querySelectorAll("[data-moment]")) {
-    button.classList.toggle("current", Number(button.dataset.moment) === index);
-  }
+  markCurrent(index);
 }
 
 /// The report, which is `/api/reports` rather than anything recording owns.

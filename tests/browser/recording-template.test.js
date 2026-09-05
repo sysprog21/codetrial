@@ -18,6 +18,7 @@ const interview = withoutInterviewComments(interviewSource());
 const page = read("web/recording/index.html");
 const script = read("web/recording/recording.js");
 const styles = read("web/recording/recording.css");
+const replayFeed = await import("../../web/replay-feed.js");
 
 const withoutComments = (source) => source.replace(/^\s*\/\/.*$/gm, "");
 function withoutInterviewComments(source) {
@@ -350,8 +351,8 @@ test("replay-producer envelope", () => {
 test("replay-producer transcript", () => {
   const body = withoutComments(functionBody(interview, "consumeTranscript"));
   assert.ok(
-    body.includes('recordReplay("transcript", { speaker, text: text.trim() });'),
-    "the transcript is recorded as spoken turns",
+    body.includes('recordReplay("transcript", { speaker, text: text.trim(), responseWindow });'),
+    "the transcript is recorded with the window active when its stream started",
   );
   const emits = body.match(/recordReplay\("transcript"/g) || [];
   assert.equal(emits.length, 1, "one emit, so a second inside the chunk loop cannot hide behind this one");
@@ -440,9 +441,9 @@ test("replay-producer stage", () => {
 test("replay-producer avatar", () => {
   assert.ok(
     withoutComments(functionBody(interview, "recordAvatarState")).includes(
-      'recordReplay("avatar", { state: value });',
+      'recordReplay("avatar", { state: value, responseWindow: opensWindow ? replayWindow : null });',
     ),
-    "the interviewer's state is recorded",
+    "the interviewer's state and each opening window are recorded together",
   );
   assert.ok(
     withoutComments(functionBody(interview, "recordAvatarState")).includes(
@@ -450,6 +451,24 @@ test("replay-producer avatar", () => {
     ),
     "on the change, not on the participant event that happened to carry it",
   );
+});
+
+test("replay transcripts capture only the open response window", () => {
+  assert.equal(replayFeed.responseWindowIndex(), null);
+  replayFeed.recordAvatarState("listening");
+  replayFeed.recordAvatarState("speaking");
+  replayFeed.recordAvatarState("listening");
+  assert.equal(replayFeed.responseWindowIndex(), 0);
+  replayFeed.recordAvatarState("listening");
+  assert.equal(replayFeed.responseWindowIndex(), 0, "a repeated state opens no window");
+  replayFeed.recordAvatarState("speaking");
+  assert.equal(replayFeed.responseWindowIndex(), null, "interviewer speech closes the window");
+  replayFeed.recordAvatarState("listening");
+  assert.equal(replayFeed.responseWindowIndex(), 1);
+  replayFeed.recordAvatarState("thinking");
+  assert.equal(replayFeed.responseWindowIndex(), null);
+  replayFeed.recordAvatarState("listening");
+  assert.equal(replayFeed.responseWindowIndex(), null, "listening after thinking opens no window");
 });
 
 test("replay-producer lifecycle", () => {

@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::accounts::Accounts;
 
-use super::*;
+use super::RecordingState;
 
 /// The replay, which is the interview without the video.
 ///
@@ -79,17 +79,127 @@ impl ReplayKind {
         Self::ALL.into_iter().find(|kind| kind.as_str() == value)
     }
 
+    /// What a row of this kind is to the row before it.
+    ///
+    /// Exhaustive on purpose. Two overlapping `matches!` lists stood here, one
+    /// naming the replaceable kinds and one naming the restated ones, and a
+    /// seventh kind added to `ALL` would have classified silently as
+    /// accumulating in both. A `match` with no wildcard does not compile until
+    /// somebody says which of the three a new kind is.
+    fn class(self) -> ReplayClass {
+        match self {
+            // A transcript line is a line and a test run is a result; neither
+            // replaces what came before it.
+            Self::Transcript | Self::Tests => ReplayClass::Accumulates,
+
+            // A whole value, restated: a code buffer and a heading plus a
+            // clock.
+            Self::Editor | Self::Stage => ReplayClass::Restates,
+            // A transition, whose newest row is the current state.
+            Self::Avatar | Self::Lifecycle => ReplayClass::Transitions,
+        }
+    }
+
     /// Whether the newest event of this kind is the whole story.
     ///
     /// An editor snapshot replaces the last one and a transcript line does not,
     /// which is what lets a late join be one snapshot plus the events after it
     /// rather than every keystroke since the interview began.
     pub fn is_snapshot(self) -> bool {
-        matches!(
-            self,
-            Self::Editor | Self::Stage | Self::Avatar | Self::Lifecycle
-        )
+        !matches!(self.class(), ReplayClass::Accumulates)
     }
+}
+
+/// The three things a replay row can be to the row before it.
+///
+/// Private for the same reason `Collapse` is: nothing outside this module
+/// classifies a kind, and `is_snapshot` is the answer the rest of the crate
+/// asks for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReplayClass {
+    /// Adds to what came before. Nothing supersedes it.
+    Accumulates,
+    /// Restates a whole value, so only the newest is worth keeping.
+    Restates,
+    /// A change of state, so the newest is the current one and the ones before
+    /// it are the history.
+    Transitions,
+}
+
+/// Which superseded frames a whole-replay read drops.
+///
+/// The two whole reads differ here and nowhere else.
+///
+/// A late join wants the newest row of each replaceable kind, and none of what
+/// it replaced. The review page wants one editor buffer and every `avatar` row,
+/// because what it renders is the shape of Jim's state over time, and what it
+/// cannot afford is a whole code buffer per debounce.
+///
+/// Private, because nothing outside this module chooses one: the reads are
+/// functions, and this is how two of them differ inside.
+#[derive(Clone, Copy)]
+enum Collapse {
+    /// Every snapshot kind, which is what `is_snapshot` names.
+    Snapshots,
+    /// Only the kinds whose rows restate a whole value: the editor buffer and
+    /// the stage heading. The other two, `avatar` and `lifecycle`, are
+    /// transitions rather than restatements, and a history of transitions is
+    /// what the review page is for.
+    ///
+    /// `Avatar` and `Lifecycle` stay snapshot kinds, and for two different
+    /// reasons.
+    ///
+    /// `Avatar` earns it by having a reader. A recording template joining late
+    /// takes the newest row and learns Jim's current state without replaying
+    /// the interview, which is what `web/recording/recording.js` does with it.
+    /// `Lifecycle` earns it by shape alone: its rows replace each other the way
+    /// a state does, but no consumer of the snapshot reads one, and the
+    /// template drops it in a `default:` arm that says so.
+    ///
+    /// `Lifecycle` is out of this collapse because of the pause. `applyPause`
+    /// in `web/interview.js` records a `paused` row precisely so a break is
+    /// visible rather than passing as thinking time, and the response window
+    /// computed from the `avatar` history is exactly what it would otherwise
+    /// pass as. Collapsing to the newest `lifecycle` row leaves a reviewer
+    /// reading a break as a long silence.
+    Restatements,
+}
+
+impl Collapse {
+    /// Whether a superseded row of this kind is dropped from the answer.
+    fn drops(self, kind: ReplayKind) -> bool {
+        match self {
+            Self::Snapshots => kind.is_snapshot(),
+
+            // No `is_snapshot` conjunct: both of these are snapshot kinds, and
+            // an `&&` that is always true reads as a guard somebody checked.
+            Self::Restatements => kind.class() == ReplayClass::Restates,
+        }
+    }
+}
+
+/// What one read of `replay_events` is asking for.
+///
+/// One argument rather than two, and that is the point of it.
+///
+/// Collapsing is correct only from the start of the replay. The subquery that
+/// finds the newest row of a kind is bounded above by the ceiling and not below
+/// by the floor, so a read that both collapsed and began at a sequence number
+/// would drop a kind entirely whenever that kind's newest row sat at or below
+/// the floor.
+///
+/// While collapsing and starting from the beginning were the same `after < 0`
+/// test, the code shape enforced that. Splitting them into two parameters would
+/// have left it to convention, so they are one parameter instead and the bad
+/// pair cannot be written.
+#[derive(Clone, Copy)]
+enum ReplayRead {
+    /// The whole replay, minus what the given collapse drops.
+    Whole(Collapse),
+    /// Everything after a sequence number, dropping nothing. A caller carrying
+    /// on from a snapshot is replaying, and a frame it never saw is not one to
+    /// skip.
+    After(i64),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -498,7 +608,37 @@ pub fn replay_snapshot(
     account_id: i64,
     now: i64,
 ) -> rusqlite::Result<SnapshotView> {
-    replay_view(accounts, interview_id, account_id, -1, now)
+    replay_view(
+        accounts,
+        interview_id,
+        account_id,
+        ReplayRead::Whole(Collapse::Snapshots),
+        now,
+    )
+}
+
+/// The replay a reviewer reads: one editor buffer, every transition.
+///
+/// The same read as `replay_snapshot`, under the same guards, differing only in
+/// what it collapses; `Collapse::Restatements` says what that is for.
+///
+/// `seq` 0 is in the answer. `after` is `-1` here exactly as it is for the
+/// snapshot, so the `seq > ?3` bound is `seq > -1` and the first event of the
+/// interview is included. That is the difference from reaching the same rows
+/// through `replay_tail`, whose `after.max(0)` puts the floor at `seq > 0`.
+pub fn replay_review(
+    accounts: &Accounts,
+    interview_id: &str,
+    account_id: i64,
+    now: i64,
+) -> rusqlite::Result<SnapshotView> {
+    replay_view(
+        accounts,
+        interview_id,
+        account_id,
+        ReplayRead::Whole(Collapse::Restatements),
+        now,
+    )
 }
 
 /// Everything after `seq`, under the same guards.
@@ -513,14 +653,20 @@ pub fn replay_tail(
     after: i64,
     now: i64,
 ) -> rusqlite::Result<SnapshotView> {
-    replay_view(accounts, interview_id, account_id, after.max(0), now)
+    replay_view(
+        accounts,
+        interview_id,
+        account_id,
+        ReplayRead::After(after),
+        now,
+    )
 }
 
 fn replay_view(
     accounts: &Accounts,
     interview_id: &str,
     account_id: i64,
-    after: i64,
+    read: ReplayRead,
     now: i64,
 ) -> rusqlite::Result<SnapshotView> {
     accounts.with(|connection| {
@@ -562,15 +708,28 @@ fn replay_view(
             [interview_id],
             |row| row.get(0),
         )?;
-        let superseded = ReplayKind::ALL
-            .iter()
-            .filter(|kind| kind.is_snapshot())
-            .map(|kind| format!("'{}'", kind.as_str()))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let query = if after < 0 {
-            format!(
-                "
+
+        // The floor and the query are one decision, so they are one match. A
+        // whole read binds `-1`, so `seq > -1` includes `seq` 0; a tail floors
+        // its argument at 0 and collapses nothing, which is why it never has to
+        // build `kind NOT IN ()` out of an empty list, a thing SQLite refuses
+        // to parse.
+        //
+        // The kinds are interpolated rather than bound, because SQLite has no
+        // list parameter and `kind.as_str()` is a `&'static str` from a closed
+        // enum: there is no caller-supplied text anywhere in this list.
+        let (after, query) = match read {
+            ReplayRead::Whole(collapse) => {
+                let superseded = ReplayKind::ALL
+                    .into_iter()
+                    .filter(|kind| collapse.drops(*kind))
+                    .map(|kind| format!("'{}'", kind.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (
+                    -1,
+                    format!(
+                        "
         SELECT seq, kind, at, payload FROM replay_events
         WHERE interview_id = ?1 AND seq <= ?2 AND seq > ?3
           AND (kind NOT IN ({superseded})
@@ -580,14 +739,18 @@ fn replay_view(
                            AND newer.seq <= ?2))
         ORDER BY seq
         "
-            )
-        } else {
-            "
+                    ),
+                )
+            }
+            ReplayRead::After(after) => (
+                after.max(0),
+                "
         SELECT seq, kind, at, payload FROM replay_events
         WHERE interview_id = ?1 AND seq <= ?2 AND seq > ?3
         ORDER BY seq
         "
-            .to_string()
+                .to_string(),
+            ),
         };
         let mut statement = transaction.prepare(&query)?;
         let events = statement
@@ -604,6 +767,12 @@ fn replay_view(
 }
 
 /// Every event of an interview, in the order they were allocated.
+///
+/// Public and called only by tests: the three reads a route takes are
+/// `replay_snapshot`, `replay_review` and `replay_tail`, and this one predates
+/// them. Kept because the tests that assert on ingest want the rows as stored,
+/// with nothing collapsed and no retention guard in the way, which none of the
+/// three will give them.
 pub fn replay_events(
     accounts: &Accounts,
     interview_id: &str,
@@ -611,8 +780,8 @@ pub fn replay_events(
     after: i64,
 ) -> rusqlite::Result<Vec<(i64, ReplayEvent)>> {
     accounts.with(|connection| {
-        // Scoped in the query rather than by the caller. The read routes are a
-        // later task, and an id from a URL is the only thing they will have.
+        // Scoped in the query rather than by the caller, because a caller that
+        // has only an id from a URL cannot scope it itself.
         let mut statement = connection.prepare(
             "
         SELECT seq, kind, at, payload FROM replay_events

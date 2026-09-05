@@ -2898,7 +2898,7 @@ mod replay {
         use codetrial::recording::{
             Ingest, MAX_REPLAY_EVENT_BYTES, MAX_REPLAY_EVENTS, MAX_REPLAY_STRING, ReplayKind,
             ReplayRejection, SnapshotView, append_replay_events, parse_replay_event, replay_events,
-            replay_snapshot,
+            replay_review, replay_snapshot, replay_tail,
         };
         use serde_json::json;
 
@@ -3158,6 +3158,178 @@ mod replay {
                 replay_snapshot(&accounts, "int-1", 1, 50).unwrap(),
                 SnapshotView::Deleted
             );
+        }
+
+        /// The template read and the page read, side by side.
+        ///
+        /// `Avatar` is a snapshot kind and stays one: that is what lets a
+        /// recording template joining late learn Jim's current state without
+        /// replaying the interview, and `replay_snapshot` is the read it makes.
+        /// The review page needs the history instead, and gets it without
+        /// widening what the template sees, because the two are different reads
+        /// rather than a changed `is_snapshot`.
+        #[tokio::test]
+        async fn replay_review_keeps_the_avatar_history_the_snapshot_collapses() {
+            let (_scratch, accounts) = harness("replay-review-history");
+
+            let payload = |kind: &str, state: &str| {
+                parse_replay_event(&super::envelope(kind, json!({ "state": state }))).unwrap()
+            };
+
+            // The states the server actually publishes, so this fixture is a
+            // replay a real interview could produce. `src/livekit.rs` writes
+            // `listening` and `speaking` and nothing writes `thinking`.
+            append_replay_events(
+                &accounts,
+                "int-1",
+                1,
+                &[
+                    payload("avatar", "speaking"),
+                    event(ReplayKind::Editor, "first draft"),
+                    event(ReplayKind::Transcript, "a hash map"),
+                    payload("avatar", "listening"),
+                    event(ReplayKind::Editor, "second draft"),
+                    payload("lifecycle", "paused"),
+                    payload("avatar", "speaking"),
+                    payload("lifecycle", "resumed"),
+                ],
+                10,
+            )
+            .unwrap();
+
+            let ready = |view: SnapshotView| match view {
+                SnapshotView::Ready(snapshot) => snapshot,
+                _ => panic!("the owner reads their own replay"),
+            };
+            let kinds = |snapshot: &codetrial::recording::Snapshot| {
+                snapshot
+                    .events
+                    .iter()
+                    .map(|(seq, event)| (*seq, event.kind))
+                    .collect::<Vec<_>>()
+            };
+
+            assert_eq!(
+                kinds(&ready(replay_snapshot(&accounts, "int-1", 1, 100).unwrap())),
+                vec![
+                    (2, ReplayKind::Transcript),
+                    (4, ReplayKind::Editor),
+                    (6, ReplayKind::Avatar),
+                    (7, ReplayKind::Lifecycle),
+                ],
+                "the template gets one avatar row, which is the state Jim is in \
+                 now, and one lifecycle row, which nothing reads"
+            );
+            let review = ready(replay_review(&accounts, "int-1", 1, 100).unwrap());
+            assert_eq!(
+                kinds(&review),
+                vec![
+                    (0, ReplayKind::Avatar),
+                    (2, ReplayKind::Transcript),
+                    (3, ReplayKind::Avatar),
+                    (4, ReplayKind::Editor),
+                    (5, ReplayKind::Lifecycle),
+                    (6, ReplayKind::Avatar),
+                    (7, ReplayKind::Lifecycle),
+                ],
+                "and the page gets every transition, with the editor still collapsed"
+            );
+
+            // The pause in particular, which is what `Collapse::Restatements`
+            // keeps the `lifecycle` history for.
+            assert_eq!(
+                review
+                    .events
+                    .iter()
+                    .filter(|(_, event)| event.kind == ReplayKind::Lifecycle)
+                    .map(|(_, event)| event.payload["state"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                vec!["paused", "resumed"],
+                "a collapsed lifecycle read keeps only the resume and loses the break"
+            );
+
+            // `seq` 0 is in that answer, which is the reason this is a read of
+            // its own rather than `?after=0` against `replay_tail`: that one
+            // floors `after` at 0 against `seq > ?3` and cannot return the
+            // first event of an interview at all.
+            assert_eq!(
+                ready(replay_tail(&accounts, "int-1", 1, 0, 100).unwrap())
+                    .events
+                    .first()
+                    .map(|(seq, _)| *seq),
+                Some(1),
+                "the tail cannot reach seq 0, and the review read does not go through it"
+            );
+        }
+
+        /// The retention guards cover the review read, because it is the same
+        /// function with one argument changed.
+        ///
+        /// A second read that skipped them would leave a replay readable past a
+        /// deadline that closed the route beside it, which is the whole reason
+        /// `replay_view` checks expiry and deletion itself rather than trusting
+        /// its callers.
+        #[tokio::test]
+        async fn replay_review_is_gone_when_the_snapshot_is() {
+            let (scratch, accounts) = harness("replay-review-gone");
+            append_replay_events(
+                &accounts,
+                "int-1",
+                1,
+                &[event(ReplayKind::Transcript, "mine")],
+                10,
+            )
+            .unwrap();
+            scratch
+                .open()
+                .execute(
+                    "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, expires_at, created_at, updated_at
+        ) VALUES ('rec-1', 1, 'int-1', 'interview-abc12345', 'int-1',
+            'one@example.test', 'ready', 100, 1, 1)
+        ",
+                    [],
+                )
+                .unwrap();
+
+            assert!(matches!(
+                replay_review(&accounts, "int-1", 1, 99).unwrap(),
+                SnapshotView::Ready(_)
+            ));
+            assert_eq!(
+                replay_review(&accounts, "int-1", 1, 100).unwrap(),
+                SnapshotView::Expired,
+                "the deadline is the deadline for this read too"
+            );
+
+            scratch
+                .open()
+                .execute(
+                    "
+        UPDATE recordings SET state = 'deleted', deleted_at = 90, expires_at = NULL,
+            room_name = NULL, recipient_email = NULL WHERE id = 'rec-1'
+        ",
+                    [],
+                )
+                .unwrap();
+            assert_eq!(
+                replay_review(&accounts, "int-1", 1, 50).unwrap(),
+                SnapshotView::Deleted
+            );
+
+            // And an interview that exists and belongs to account 2 is not
+            // account 1's to review. A nonexistent id would answer the same way
+            // and prove less, so this uses the one the harness owns elsewhere.
+            assert_eq!(
+                replay_review(&accounts, "int-other", 1, 50).unwrap(),
+                SnapshotView::NoInterview
+            );
+            assert!(matches!(
+                replay_review(&accounts, "int-other", 2, 50).unwrap(),
+                SnapshotView::Ready(_)
+            ));
         }
 
         #[tokio::test]

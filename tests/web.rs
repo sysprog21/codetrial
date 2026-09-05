@@ -5384,20 +5384,22 @@ async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
             [&interview, &room.to_string()],
         )
         .unwrap();
-    let event = |kind: &str, text: &str| {
-        json!({
-            "v": codetrial::recording::REPLAY_VERSION,
-            "kind": kind,
-            "at": 1_770_000_000_000i64,
-            "payload": { "text": text }
-        })
-    };
+    let event = |kind: &str, text: &str| envelope(kind, json!({ "text": text }));
     let posted = client
         .post(format!("{base}/api/interviews/{interview}/events"))
         .header("cookie", cookie.clone())
+        // The `avatar` and `lifecycle` rows are what make the assertion below
+        // able to fail. They are the only kinds the snapshot's collapse and the
+        // review read's differ on, so without them the template's answer is the
+        // same either way and "the template still gets the collapsed snapshot"
+        // held whether or not this route honoured the parameter, which is the
+        // one thing it exists to catch.
         .json(&json!({ "events": [
+            envelope("avatar", json!({ "state": "speaking" })),
             event("editor", "first draft"),
             event("transcript", "hello"),
+            envelope("avatar", json!({ "state": "listening" })),
+            envelope("lifecycle", json!({ "state": "paused" })),
             event("editor", "second draft"),
         ] }))
         .send()
@@ -5434,7 +5436,7 @@ async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
     let snapshot = replay(token_for(room), "").await;
     assert_eq!(snapshot.status(), 200);
     let body = snapshot.json::<Value>().await.unwrap();
-    assert_eq!(body["seq"], 2);
+    assert_eq!(body["seq"], 5);
     assert_eq!(
         body["events"]
             .as_array()
@@ -5442,8 +5444,26 @@ async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
             .iter()
             .map(|event| event["kind"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        vec!["transcript", "editor"],
-        "the snapshot drops the superseded editor frame"
+        vec!["transcript", "avatar", "lifecycle", "editor"],
+        "the snapshot drops the superseded editor and avatar frames"
+    );
+
+    // The template's read does not take the review page's parameter, and this
+    // is the assertion that says so. The whole reason `Avatar` stays a snapshot
+    // kind is that a template joining late should learn Jim's current state
+    // without replaying the interview; a refactor that plumbed `avatar=history`
+    // through to here would undo that with nothing to notice.
+    let unwidened = replay(token_for(room), "?avatar=history").await;
+    assert_eq!(unwidened.status(), 200);
+    assert_eq!(
+        unwidened.json::<Value>().await.unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["transcript", "avatar", "lifecycle", "editor"],
+        "the template still gets the collapsed snapshot, parameter or no parameter"
     );
 
     // The tail keeps every frame, superseded or not: a reader carrying on from
@@ -5455,7 +5475,7 @@ async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
             .as_array()
             .unwrap()
             .len(),
-        2
+        5
     );
 
     // A token for another room opens nothing here.
@@ -5600,7 +5620,7 @@ async fn history_cross_account_denied() {
     // it exists. The two paths are refused by two different scopings, which is
     // the point of asking both: the detail is scoped by `recording_summary`'s
     // `account_id`, and the events by the replay read's own ownership check.
-    for path_suffix in ["", "/events"] {
+    for path_suffix in ["", "/events", "/events?avatar=history"] {
         let response = client
             .get(format!("{base}/api/recordings/rec-theirs{path_suffix}"))
             .header("cookie", cookie.clone())
@@ -5657,7 +5677,14 @@ async fn history_expired_returns_410() {
 
     // Gone rather than missing: this account owns the interview and is owed the
     // difference between "never yours" and "not any more".
-    for path_suffix in ["", "/events"] {
+    //
+    // `?avatar=history` is in this list to pin where the refusal happens, not
+    // to re-prove it. The parameter is parsed before `gone_response` and used
+    // after it, so what fails here is an edit that moves the read itself in
+    // front of the guard. That the review read refuses on its own, guard or no
+    // guard, is `replay_review_is_gone_when_the_snapshot_is` in
+    // `tests/recording.rs`, which calls it directly.
+    for path_suffix in ["", "/events", "/events?avatar=history"] {
         let response = client
             .get(format!("{base}/api/recordings/rec-expired{path_suffix}"))
             .header("cookie", cookie.clone())
@@ -5684,7 +5711,7 @@ async fn history_expired_returns_410() {
             [],
         )
         .unwrap();
-    for path_suffix in ["", "/events"] {
+    for path_suffix in ["", "/events", "/events?avatar=history"] {
         let deleted = client
             .get(format!("{base}/api/recordings/rec-expired{path_suffix}"))
             .header("cookie", cookie.clone())
@@ -5703,19 +5730,149 @@ async fn history_expired_returns_410() {
     remove_database(path);
 }
 
+/// The review page's read: every `avatar` row, and one editor buffer.
+///
+/// The snapshot keeps the newest row of every replaceable kind, which is what a
+/// recording template joining late needs and exactly what a response window
+/// cannot be computed from. `?avatar=history` lifts the collapse on that one
+/// kind and on no other, so the page pays for the state history it reads rather
+/// than for a code buffer per debounce.
+#[tokio::test]
+async fn history_events_avatar_history_returns_every_state() {
+    let (base, server, path, client, cookie) = recorded_server("history-avatar").await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, created_at, updated_at
+        ) VALUES ('rec-window', 1, ?1, 'interview-abc12345', ?1,
+            'one@example.test', 'ready', 10, 10)
+        ",
+                [&interview],
+            )
+            .unwrap();
+    }
+
+    let posted = client
+        .post(format!("{base}/api/interviews/{interview}/events"))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "events": [
+
+            // The states the server publishes, so this is a replay a real
+            // interview could produce: `src/livekit.rs` writes `listening` and
+            // `speaking` and nothing writes `thinking`.
+            envelope("avatar", json!({ "state": "speaking" })),
+            envelope("editor", json!({ "code": "first draft" })),
+            envelope("transcript", json!({ "speaker": "you", "text": "a hash map" })),
+            envelope("avatar", json!({ "state": "listening" })),
+            envelope("editor", json!({ "code": "second draft" })),
+            envelope("lifecycle", json!({ "state": "paused" })),
+            envelope("avatar", json!({ "state": "speaking" })),
+        ] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(posted.status(), 200);
+
+    let rows = async |query: &str| {
+        let response = client
+            .get(format!("{base}/api/recordings/rec-window/events{query}"))
+            .header("cookie", cookie.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "{query}");
+        response.json::<Value>().await.unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| {
+                (
+                    event["seq"].as_i64().unwrap(),
+                    event["kind"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let snapshot = rows("").await;
+    assert_eq!(
+        snapshot,
+        vec![
+            (2, "transcript".to_string()),
+            (4, "editor".to_string()),
+            (5, "lifecycle".to_string()),
+            (6, "avatar".to_string()),
+        ],
+        "the default read is the snapshot the recording template also takes"
+    );
+    assert_eq!(
+        rows("?avatar=history").await,
+        vec![
+            (0, "avatar".to_string()),
+            (2, "transcript".to_string()),
+            (3, "avatar".to_string()),
+            (4, "editor".to_string()),
+            (5, "lifecycle".to_string()),
+            (6, "avatar".to_string()),
+        ],
+        "the page read keeps every transition, seq 0 included, and still one editor"
+    );
+
+    // Exact, not truthy. A value nobody wrote is the ordinary snapshot rather
+    // than a guess at what the caller meant. Compared against the whole default
+    // answer rather than against its length: three rows of the wrong kinds is
+    // also three rows.
+    assert_eq!(
+        rows("?avatar=latest").await,
+        snapshot,
+        "an unrecognised value reads the snapshot, not every avatar row"
+    );
+
+    // The tail collapses nothing already, so the parameter has nothing to lift
+    // there and the request is answered as the tail it asked for.
+    assert_eq!(
+        rows("?after=0&avatar=history").await,
+        vec![
+            (1, "editor".to_string()),
+            (2, "transcript".to_string()),
+            (3, "avatar".to_string()),
+            (4, "editor".to_string()),
+            (5, "lifecycle".to_string()),
+            (6, "avatar".to_string()),
+        ],
+        "and the tail is still the tail, which is why the page does not use it"
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
+/// One replay event on the wire, at a fixed clock.
+///
+/// Free rather than a closure per test: three tests were writing the same eight
+/// lines, so `REPLAY_VERSION` and the timestamp were pinned in three places and
+/// a
+/// version bump touched all of them.
+fn envelope(kind: &str, payload: Value) -> Value {
+    json!({
+        "v": codetrial::recording::REPLAY_VERSION,
+        "kind": kind,
+        "at": 1_770_000_000_000i64,
+        "payload": payload
+    })
+}
+
 /// A late join reads the snapshot, and only its own.
 #[tokio::test]
 async fn replay_snapshot_is_owner_scoped() {
     let (base, server, path, client, cookie) = recorded_server("replay-snapshot").await;
     let interview = start_interview(&client, &base, &cookie).await;
-    let event = |kind: &str, text: &str| {
-        json!({
-            "v": codetrial::recording::REPLAY_VERSION,
-            "kind": kind,
-            "at": 1_770_000_000_000i64,
-            "payload": { "text": text }
-        })
-    };
+    let event = |kind: &str, text: &str| envelope(kind, json!({ "text": text }));
     let posted = client
         .post(format!("{base}/api/interviews/{interview}/events"))
         .header("cookie", cookie.clone())

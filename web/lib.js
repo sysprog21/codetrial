@@ -836,3 +836,289 @@ export function providerUiState(kind, detail = "") {
   };
   return states[kind] || states.degraded;
 }
+
+/// The candidate's own words in one transcript event, or nothing.
+///
+/// Two questions, and both have to be answered before a window may say a turn
+/// closed it. Whose line it is: `consumeTranscript` in `web/interview.js` writes
+/// `"you"` for the local participant and `"interviewer"` for the agent, and
+/// `web/replay.js` reads a missing speaker as the candidate, so anything that is
+/// not the interviewer is the candidate. And whether there is a line at all: a
+/// payload with no text, a non-string text, or whitespace is not a turn, and
+/// counting it as one would take the "no transcript in this window" note off a
+/// window that has none. Our own producer cannot emit that shape, which is
+/// exactly why nothing downstream would notice if some later one did.
+function candidateTurnText(event) {
+  if ((event.payload?.speaker || "candidate") === "interviewer") return "";
+  const text = event.payload?.text;
+  return typeof text === "string" ? text.trim() : "";
+}
+
+/// How long a window lasted, or nothing when the clock will not say.
+///
+/// `at` is the candidate's own browser clock and it can jump: a `thinking`
+/// stamped before the `listening` it closes is not a negative duration, it is a
+/// clock that moved. Null rather than a number, because a reader can be told
+/// "not measurable" and cannot be told what a negative second means.
+function windowSpan(start, end) {
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const duration = end - start;
+  return duration >= 0 ? duration : null;
+}
+
+/// The gap between Jim finishing a question and Jim starting on the answer.
+///
+/// Screen evidence and gaze evidence are both designed around by the shipped
+/// interview assistants; what none of them removes is time, because each still
+/// needs the question to finish, a turn to close, a model round trip, and the
+/// candidate to read. That lands in this window, so this is what the replay page
+/// renders.
+///
+/// What it can show is bounded by the interviewer, and the bound is the first
+/// thing to know about the number. `timing_decision` in `src/agent.rs` nudges a
+/// candidate who has been silent for `SILENCE_THRESHOLD_S`, and the nudge makes
+/// Jim speak, which closes the window. Neither talking nor typing counts as
+/// silence, so a window runs long only while the candidate is working, and a
+/// candidate who is silently reading is interrupted at twenty-five seconds and
+/// gets a run of short windows instead of one long one. A long window therefore
+/// means the candidate was busy, which is the innocent reading; the shape that
+/// is not innocent is several windows in a row holding no transcript at all.
+///
+/// It is a duration and not a finding, and two things make it softer than it
+/// looks. `at` is the candidate's own browser clock, which
+/// `src/recording/replay.rs` documents as never trusted for ordering. And
+/// `web/interview.js` falls back to `listening` when the agent publishes no
+/// `lk.agent.state`, so some `listening` rows mean "attribute absent" rather
+/// than "Jim stopped". Both belong beside any number this produces.
+///
+/// Ordering is the array's, which is `seq` order from the server. `at` is read
+/// for the duration and for nothing else, which is the same rule
+/// `src/recording/replay.rs` applies to its own rows.
+///
+/// A window opens on a `listening` row whose previous `avatar` row was
+/// `speaking`, and closes on the next `speaking` or `thinking`. Both halves of
+/// that are about what the server actually publishes rather than about what the
+/// state names suggest.
+///
+/// `src/livekit.rs` declares two agent states, `listening` and `speaking`, and
+/// every `set_agent_state` call writes one of them; nothing writes `thinking`.
+/// So a real interview records `listening, speaking, listening, speaking, ...`,
+/// and a window that closed only on `thinking` never closed at all: one row per
+/// interview reading "duration not recorded", however many questions were asked.
+/// `thinking` still closes a window, for a deployment that publishes it, but it
+/// is not what closes one today.
+///
+/// Closing on `speaking` puts CodeTrial's own model round trip inside the
+/// number, because the interviewer starts speaking after it rather than after
+/// the candidate stops. `src/livekit.rs` already measures that round trip on the
+/// server's own clock and logs it; joining the two is a server change and is
+/// written up as a candidate improvement, not done here.
+///
+/// Opening on the previous row rather than on a latch is what keeps three
+/// non-questions from opening a window. The first `avatar` row of almost every
+/// interview is a `listening` written on first sight of the agent participant,
+/// before a question exists. A `listening` that follows a `thinking` is the
+/// interviewer having thought and said nothing. And a `listening` with no
+/// earlier row at all is a replay that starts mid-interview. A latch would admit
+/// the second of those, because "has spoken at some point" stays true.
+///
+/// What it does not exclude is an interviewer that stopped speaking for a
+/// reason other than finishing a question, and the commonest one is the
+/// interviewer itself. A silence nudge, a proactive review, a reaction to a
+/// test run, the time warning, the round transition and the wrap-up all end in
+/// a `speaking` row followed by a `listening` row, and none of them is a
+/// question. The candidate interrupting, the agent dropping out and coming
+/// back, a Gemini socket restart, and the candidate pressing Pause while the
+/// interviewer is mid-turn write the same pair. There is no row that tells
+/// those from a question ending, so the page says so beside the number rather
+/// than guessing.
+///
+/// The pause is the exception, because there is a row: `applyPause` in
+/// `web/interview.js` records a `lifecycle` `paused`, and its comment says why,
+/// which is that a break must be visible rather than passing as thinking time.
+/// A window overlapping one carries `paused`, and the page says so on that
+/// window rather than only in the paragraph above the list. Marked rather than
+/// hidden or subtracted: how long the break was is in the rows, and a duration
+/// this function silently shortened would be a number nothing on the page
+/// explains.
+///
+/// Six shapes, because `recordAvatarState` writes only on a change and an
+/// interview can stop anywhere:
+///
+/// - A `listening` with no later close is a window that never closed. It is
+///   returned with a null duration rather than dropped, because an interview
+///   that ended mid-answer is still a window a reviewer may want to open.
+/// - A closed window holding no candidate turn returns a null turn rather than
+///   being dropped. The interviewer asking twice with nothing said in between is
+///   exactly the shape worth seeing, and it is two windows rather than one:
+///   the re-prompt closes the first and opens the second, so the unanswered ask
+///   is visible on its own instead of being folded into the answered one.
+/// - A `listening` the interviewer was not speaking before starts no window.
+/// - A close whose `at` precedes its `listening` returns a null duration rather
+///   than a negative one.
+/// - A window the interview was paused during carries `paused`, whichever of
+///   the two rows arrived first.
+/// - Nothing after a `lifecycle` `ended` row is read, because the interview is
+///   over and the goodbye is not a question.
+export function responseWindows(events) {
+  const windows = [];
+  const windowsById = new Map();
+  let open = null;
+  /// The previous `avatar` state, which is what decides whether a `listening`
+  /// row is the end of a question or something else. `null` until the first one,
+  /// so a replay that opens on a `listening` starts no window.
+  let previous = null;
+  /// Whether the interview is paused right now, from the `lifecycle` rows.
+  /// Carried across the whole scan rather than read per window, because the
+  /// `paused` row and the `listening` row a pause causes are written by two
+  /// different sides and either can land first.
+  let paused = false;
+  for (const [index, event] of replayRows(events).entries()) {
+    if (event?.kind === "lifecycle") {
+      const state = event.payload?.state;
+      if (state === "paused" || state === "resumed") paused = state === "paused";
+      // A window already open when the break started keeps the mark, which is
+      // the ordinary case: the candidate pauses during their own turn and no
+      // `avatar` row is written at all.
+      if (paused && open) open.paused = true;
+      // The interview is over. `send_wrap_up_and_wait` in `src/livekit.rs` ends
+      // by setting `listening` again, and the browser keeps recording past
+      // `ended` to write `rounds_final`, so without this every timed-out
+      // interview finishes with a window opened by the goodbye and closed by
+      // nothing. That row is not an interview that stopped mid-answer, which is
+      // what an unclosed window otherwise means.
+      if (state === "ended") break;
+      continue;
+    }
+    if (event?.kind === "transcript") {
+      const text = candidateTurnText(event);
+      // The stream can finish after the next question opens. Its window index
+      // is captured before that await; sequence position is not.
+      //
+      // A row without one is a recording made before the producer stamped them,
+      // or one whose stream started before the first window opened. There is
+      // exactly one shape those can be placed in without guessing: a single
+      // window that is still open is the only window the turn could belong to.
+      // Past that the answer is unknowable, and `matched` below is what stops
+      // the page reading the silence as a claim.
+      const responseWindow = event.payload?.responseWindow;
+      const target = Number.isInteger(responseWindow)
+        ? windowsById.get(responseWindow)
+        : windows.length === 1 && open === windows[0]
+          ? open
+          : null;
+      if (target && text) target.turn = { at: event.at, text };
+      continue;
+    }
+    if (event?.kind !== "avatar") continue;
+    const state = event.payload?.state;
+    // Read before either branch and written after both, so "the previous row"
+    // means the previous `avatar` row and not the previous row of any kind.
+    const before = previous;
+    previous = state;
+
+    // The interviewer speaking is proof the interview is not paused, which is
+    // what bounds a lost `resumed` row to the windows before it. `watch_prompt`
+    // in `src/livekit/turn.rs` returns nothing while `state.paused`, and
+    // `handle_gemini_event` in `src/livekit.rs` drops every audio event then, so
+    // there is no path from a paused interview to a `speaking` row. Without this
+    // one dropped batch painted every remaining window as paused, and that mark
+    // is the panel's only affirmative claim.
+    if (state === "speaking") paused = false;
+
+    // Closed first. A `speaking` row both ends the window before it and, on the
+    // next `listening`, opens the one after; taking them in the other order
+    // would let one row close a window it had just opened.
+    if ((state === "speaking" || state === "thinking") && open) {
+      open.duration = windowSpan(open.at, event.at);
+      open = null;
+    }
+    if (state === "listening" && !open && before === "speaking") {
+      // `paused` is read here as well, for the other order: pausing mid-turn
+      // makes the server publish `listening`, so the window this opens is the
+      // break itself.
+      // `matched` is whether a turn could have been attributed to this window
+      // at all, which is not the same question as whether one was. A window
+      // whose opening row carries an index can be named by a transcript row, so
+      // an empty one means nothing was said. A window with no index can only be
+      // reached by the single-window fallback above, so an empty one means the
+      // recording cannot say, and the page owes the reader that difference:
+      // "nothing recorded" is a claim about the candidate and this is the one
+      // place the panel could make a false one.
+      const responseWindow = event.payload?.responseWindow;
+      const matched = Number.isInteger(responseWindow);
+      open = { index, at: event.at, duration: null, turn: null, paused, matched };
+      windows.push(open);
+      if (matched) windowsById.set(responseWindow, open);
+    }
+  }
+  return windows;
+}
+
+/// What one response window says, as the pieces it is joined from.
+///
+/// Pure and given its words, so that a test can hand it a table of sentinels and
+/// assert that nothing came out which the table did not put in. That is the only
+/// form of "the panel does not accuse" that is actually observable: reading the
+/// renderer's source for labels catches a literal and misses a helper, a
+/// computed lookup, and a second table declared beside the first, all three of
+/// which were written and shown to pass a source-reading version of this check.
+///
+/// The clock is not here. It is the caller's, because formatting a wall-clock
+/// time is `toLocaleTimeString` and that is the browser's job, not this one's.
+export function responseWindowLabel(span, words) {
+  const parts = [
+    words.label,
+    span.duration === null
+      ? words.unmeasured
+      : `${(span.duration / 1000).toFixed(1)}${words.seconds}`,
+  ];
+  if (span.paused) parts.push(words.paused);
+  if (!span.turn) parts.push(span.matched ? words.noTurn : words.unmatchedTurn);
+  return parts;
+}
+
+/// Whatever arrived where a list of events was expected, as a list of events.
+///
+/// The server sends an array and the page reads `body.events || []` off a parsed
+/// JSON body, which is one bad deploy or one proxy away from a string or an
+/// object. `.entries()` on either throws, and a throw here paints a blank panel
+/// where the page had a sentence ready to explain itself. An empty replay is the
+/// honest answer to a body that is not one.
+export function replayRows(events) {
+  return Array.isArray(events) ? events : [];
+}
+
+/// The replay page's timeline, assembled without a DOM.
+///
+/// Two lists and the order they interleave in, which is every decision the page
+/// makes about the timeline and none of the drawing. Here rather than in
+/// `web/replay.js` for the reason `web/devices.js` and `web/face-check.js` are
+/// here: that file reads `document.querySelector` at module scope, so importing
+/// it costs a stub document and a module hook, and a helper that needs neither
+/// belongs where neither is needed.
+///
+/// The windows are their own list and do not join `moments`. `data-moment`
+/// indexes that array and the page rebuilds the code and the test result by
+/// scanning its prefix, so a third kind mixed in would shift every index and
+/// then be scanned over as neither an editor nor a test snapshot.
+export function replayTimeline(events) {
+  const rows = replayRows(events);
+  const moments = [];
+  const windows = responseWindows(rows);
+  // Keyed by the position of the `avatar` row that opened each window, which is
+  // the only ordering `responseWindows` trusts. One window per position, so no
+  // two entries can collide.
+  const opened = new Map(windows.map((span, index) => [span.index, index]));
+  const timeline = [];
+  for (const [index, event] of rows.entries()) {
+    if (event?.kind === "editor" || event?.kind === "tests") {
+      moments.push(event);
+      timeline.push({ moment: moments.length - 1 });
+      continue;
+    }
+    const opening = opened.get(index);
+    if (opening !== undefined) timeline.push({ window: opening });
+  }
+  return { moments, windows, timeline };
+}
