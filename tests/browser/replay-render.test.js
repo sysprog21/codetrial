@@ -558,7 +558,7 @@ test("a missing id is caught, except for the ids nothing drives", async () => {
   assert.ok(declared.length >= 10, `only ${declared.length} ids declared`);
   const missed = [];
   for (const id of declared) {
-    const outcome = await importWithout(markup, id, ({ render: renderAgain }) =>
+    const outcome = await importWithout(markup, "/replay.js", id, ({ render: renderAgain }) =>
       renderAgain(REPLAYS["a closed window with an answer"]),
     );
     if (!outcome.caught) missed.push(id);
