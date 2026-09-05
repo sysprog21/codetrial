@@ -480,15 +480,31 @@ pub struct AgentConfig {
     pub pool: ProviderPool,
 }
 
-/// Scheme, and whether it encrypts. A LiveKit join token is a bearer
-/// credential, so plaintext is a local-development convenience and nothing
-/// more.
-const LIVEKIT_SCHEMES: [(&str, bool); 4] = [
-    ("wss://", true),
-    ("https://", true),
-    ("ws://", false),
-    ("http://", false),
+/// Scheme, whether it encrypts, and the scheme a RoomService request to the
+/// same deployment is made over. A LiveKit join token is a bearer credential,
+/// so plaintext is a local-development convenience and nothing more.
+///
+/// The third column lives here rather than beside the two functions that
+/// rewrite a URL with it, because all three lists have to agree on what a
+/// scheme is and two of them already disagreed: this one matched `WSS://`
+/// case-insensitively and `livekit_http_base` did not, so an accepted URL was
+/// posted to as `WSS://`, which is not a scheme reqwest will send.
+const LIVEKIT_SCHEMES: [(&str, bool, &str); 4] = [
+    ("wss://", true, "https://"),
+    ("https://", true, "https://"),
+    ("ws://", false, "http://"),
+    ("http://", false, "http://"),
 ];
+
+/// The entry `url` starts with, matched the way a URL scheme compares: without
+/// regard to case. Case is the whole reason this is a function and not an
+/// `iter().find()` at each call site.
+pub(crate) fn livekit_scheme(url: &str) -> Option<&'static (&'static str, bool, &'static str)> {
+    LIVEKIT_SCHEMES.iter().find(|(scheme, _, _)| {
+        url.get(..scheme.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(scheme))
+    })
+}
 
 /// Rejects what `url_origin` in `web.rs` would otherwise have to cope with: a
 /// scheme nothing here knows, or a scheme with no host after it. The URL never
@@ -496,11 +512,7 @@ const LIVEKIT_SCHEMES: [(&str, bool); 4] = [
 /// can carry a query string.
 pub fn validate_livekit_url(url: &str, production: bool) -> Result<(), String> {
     let trimmed = url.trim();
-    let Some((scheme, encrypted)) = LIVEKIT_SCHEMES.iter().find(|(scheme, _)| {
-        trimmed
-            .get(..scheme.len())
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(scheme))
-    }) else {
+    let Some((scheme, encrypted, _)) = livekit_scheme(trimmed) else {
         return Err("LIVEKIT_URL must start with wss://, https://, ws:// or http://".to_string());
     };
     if trimmed[scheme.len()..]

@@ -193,13 +193,8 @@ pub(crate) fn livekit_cloud_domain(url: &str) -> Option<&'static str> {
 /// `/rtc/validate`.
 pub(crate) fn livekit_http_origin(url: &str) -> Option<String> {
     let origin = url_origin(url)?;
-    let (scheme, host) = origin.split_once("://")?;
-    let http = match scheme {
-        "wss" | "https" => "https",
-        "ws" | "http" => "http",
-        _ => return None,
-    };
-    Some(format!("{http}://{host}"))
+    let (scheme, _, http) = crate::config::livekit_scheme(&origin)?;
+    Some(format!("{http}{}", &origin[scheme.len()..]))
 }
 
 /// Scheme and authority, without pulling in a URL parser for one field. The

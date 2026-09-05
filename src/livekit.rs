@@ -951,10 +951,21 @@ pub(crate) async fn validate_livekit_credentials(
     }
 }
 
+/// The RoomService origin for a LiveKit URL: the same host, over the scheme an
+/// HTTP client will send.
+///
+/// The rewrite goes through `livekit_scheme` rather than matching the two
+/// websocket schemes here, because `validate_livekit_url` accepts a scheme in
+/// any case and this has to rewrite every spelling that accepts. A pasted
+/// `WSS://` used to survive unchanged, and reqwest refuses any scheme but http
+/// and https before the request leaves the process, so credentials that were
+/// good came back as credentials that did not work.
 fn livekit_http_base(url: &str) -> String {
-    url.trim_end_matches('/')
-        .replacen("wss://", "https://", 1)
-        .replacen("ws://", "http://", 1)
+    let trimmed = url.trim_end_matches('/');
+    match crate::config::livekit_scheme(trimmed) {
+        Some((scheme, _, http)) => format!("{http}{}", &trimmed[scheme.len()..]),
+        None => trimmed.to_string(),
+    }
 }
 
 fn parse_room_service_response(
@@ -2491,6 +2502,25 @@ mod tests {
         assert_eq!(
             livekit_http_base("ws://localhost:7880"),
             "http://localhost:7880"
+        );
+    }
+
+    /// `validate_livekit_url` compares the scheme without regard to case, so
+    /// every spelling it accepts reaches here. The host keeps the case it was
+    /// given: DNS does not care, and a path might.
+    #[test]
+    fn livekit_http_base_rewrites_a_scheme_in_any_case() {
+        assert_eq!(
+            livekit_http_base("WSS://Example.LiveKit.Cloud"),
+            "https://Example.LiveKit.Cloud"
+        );
+        assert_eq!(
+            livekit_http_base("Ws://localhost:7880/"),
+            "http://localhost:7880"
+        );
+        assert_eq!(
+            livekit_http_base("HTTPS://example.livekit.cloud"),
+            "https://example.livekit.cloud"
         );
     }
 
