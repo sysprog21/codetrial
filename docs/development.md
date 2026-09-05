@@ -1,9 +1,44 @@
 # Development
 
-The formatters, the hooks, the generated files, and the checks that stay out of
-the gate. `make` targets and the one-line summary of each are in
+The gate, the formatters, the hooks, the generated files, and where a slow run's
+time actually goes. `make` targets and the one-line summary of each are in
 [README.md](../README.md#development); everything here is the detail behind
 them.
+
+## What the gate checks, and what it will not
+
+`./scripts/test.sh` finishes by printing what it did not check, because several
+lanes are optional and a run that skips them still exits 0. A checkout with none
+of the tools below is a green gate over roughly a tenth of the browser suite and
+no static analysis of the shell, the workflows, the Python, or the dependency
+tree. The summary names each one; these are what they need.
+
+```bash
+npx playwright install chromium   # ~30 browser tests, the whole lobby flow
+npm install                       # eslint
+cargo install cargo-audit         # the dependency advisory scan
+```
+
+`shellcheck`, `ruff` and `actionlint` come from the system package manager. CI
+installs all of them, so what is optional locally is enforced on a pull request
+— the summary exists so that a contributor knows which of the two they are
+looking at. One lane needs `javac` 16 or newer and is skipped on an older JDK;
+that is the Java class-harness fixture and nothing else depends on it.
+
+Where the time goes, measured on this repo rather than guessed, because the
+answer is not the one a first look gives. Warm, the two Rust lanes are seconds:
+`cargo clippy --all-targets` takes about five and building and linking the
+eleven test binaries about nine, and the whole browser suite runs in under
+twenty. What costs minutes is any change that invalidates the dependency graph,
+a lockfile bump, a toolchain bump, a profile edit or a fresh checkout, because
+rebuilding it means building the LiveKit SDK and libwebrtc from source. That is
+why CI caches `target` keyed on the lockfile and links with mold, and it is why
+a local run that suddenly takes twenty minutes has usually just had its cache
+invalidated rather than got slower.
+
+Trimming debug info, which is what buys CI 40% per relink, was measured here
+and buys nothing: 7.5s against 8.1s on macOS, where the system linker rather
+than mold does the work. It stays a CI setting for that reason.
 
 ## Formatting
 
