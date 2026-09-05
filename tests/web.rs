@@ -5684,17 +5684,20 @@ async fn history_expired_returns_410() {
             [],
         )
         .unwrap();
-    let deleted = client
-        .get(format!("{base}/api/recordings/rec-expired"))
-        .header("cookie", cookie)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(deleted.status(), 410);
-    assert_eq!(
-        deleted.json::<Value>().await.unwrap()["code"],
-        "recording_deleted"
-    );
+    for path_suffix in ["", "/events"] {
+        let deleted = client
+            .get(format!("{base}/api/recordings/rec-expired{path_suffix}"))
+            .header("cookie", cookie.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(deleted.status(), 410, "{path_suffix}");
+        assert_eq!(
+            deleted.json::<Value>().await.unwrap()["code"],
+            "recording_deleted",
+            "{path_suffix}"
+        );
+    }
 
     server.abort();
     remove_database(path);
@@ -5786,7 +5789,7 @@ async fn replay_snapshot_is_owner_scoped() {
         .unwrap();
     let expired = client
         .get(format!("{base}/api/interviews/{interview}/snapshot"))
-        .header("cookie", cookie)
+        .header("cookie", cookie.clone())
         .send()
         .await
         .unwrap();
@@ -5794,6 +5797,33 @@ async fn replay_snapshot_is_owner_scoped() {
     assert_eq!(
         expired.json::<Value>().await.unwrap()["code"],
         "replay_expired"
+    );
+
+    // And a deleted recording, which is the other half of the same promise and
+    // was asserted nowhere: this route has no `gone_response` ahead of it, so
+    // `SnapshotView::Deleted` reaches the response mapping directly here. The
+    // status was free to become a `404` without a test noticing, which is the
+    // difference between "taken away" and "never yours" going missing.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "
+        UPDATE recordings SET state = 'deleted', deleted_at = 5, expires_at = NULL,
+            room_name = NULL, recipient_email = NULL WHERE id = 'rec-snap'
+        ",
+            [],
+        )
+        .unwrap();
+    let deleted = client
+        .get(format!("{base}/api/interviews/{interview}/snapshot"))
+        .header("cookie", cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), 410);
+    assert_eq!(
+        deleted.json::<Value>().await.unwrap()["code"],
+        "recording_deleted"
     );
 
     let signed_out = client

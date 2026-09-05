@@ -613,9 +613,54 @@ pub(crate) fn client_ip(headers: &header::HeaderMap, peer: SocketAddr, hops: u32
         .unwrap_or_else(|| peer.ip())
 }
 
+/// One answer for every replay read, so the three routes that take one cannot
+/// drift apart.
+///
+/// They differ in two things and this takes both: what "no such replay" means
+/// to the caller, which is a recording id to one route and a room to another,
+/// and the sentence a read error is logged under. Everything else was written
+/// out three times, including the two `410` bodies, and those are the retention
+/// promise: a copy that said something slightly different would be a third
+/// answer to a question the product gives one answer to. `gone_response` below
+/// exists for the same reason on the route ahead of this one.
+///
+/// A function pointer rather than a closure, because none of the three captures
+/// anything: what a route answers here is a constant, and a signature that
+/// allowed a captured one would be inviting a fourth thing to differ.
+pub(crate) fn replay_response(
+    view: rusqlite::Result<crate::recording::SnapshotView>,
+    missing: fn() -> Response,
+    context: &str,
+) -> Response {
+    use crate::recording::SnapshotView;
+
+    match view {
+        Ok(SnapshotView::Ready(snapshot)) => json_response(StatusCode::OK, replay_body(&snapshot)),
+        Ok(SnapshotView::Expired) => json_response(
+            StatusCode::GONE,
+            json!({ "code": "replay_expired", "error": "This replay is past its retention deadline." }),
+        ),
+        Ok(SnapshotView::Deleted) => json_response(
+            StatusCode::GONE,
+            json!({ "code": "recording_deleted", "error": "This recording has been deleted." }),
+        ),
+        Ok(SnapshotView::NoInterview) => missing(),
+        Err(error) => {
+            eprintln!("{context}: {error}");
+            json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "Could not read the replay." }),
+            )
+        }
+    }
+}
+
 /// One body shape for both replay reads, so a caller that starts with a
 /// snapshot and carries on with the tail parses one thing.
-pub(crate) fn replay_body(snapshot: &crate::recording::Snapshot) -> Value {
+///
+/// Private since the fold: `replay_response` above is the only caller, and the
+/// routes that used to build this themselves now go through it.
+fn replay_body(snapshot: &crate::recording::Snapshot) -> Value {
     json!({
         "seq": snapshot.seq,
         "quotaExceeded": snapshot.quota_exceeded,

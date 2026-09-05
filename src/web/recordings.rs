@@ -17,7 +17,7 @@ use crate::current_epoch_seconds;
 
 use super::auth::Owner;
 use super::consent::recording_requires_consent;
-use super::{AppState, MAX_WEBHOOK_BODY_BYTES, json_response, replay_body};
+use super::{AppState, MAX_WEBHOOK_BODY_BYTES, json_response, replay_response};
 
 /// How often the sweeper runs. The shortest retry backoff, because a schedule
 /// checked less often than its own first step is a schedule with a different
@@ -297,22 +297,24 @@ pub(crate) async fn recording_status_handler(
 ) -> Response {
     // A server that records nothing answers exactly as one with no such
     // recording does. Three states, one reply: telling them apart is a way to
-    // learn about other people's interviews and about this deployment.
-    let missing = || {
+    // learn about other people's interviews and about this deployment. Its own
+    // sentence: this route is asked about an interview, and the two others
+    // about a recording id, so the words differ where the code does not.
+    let no_recording = || {
         json_response(
             StatusCode::NOT_FOUND,
             json!({ "code": "recording_not_found", "error": "No recording for that interview." }),
         )
     };
     if state.recorder.is_none() {
-        return missing();
+        return no_recording();
     }
     let found = blocking(move || {
         crate::recording::recording_for_interview(&accounts, &interview_id, user.id)
     })
     .await;
     match found {
-        Ok(None) => missing(),
+        Ok(None) => no_recording(),
         Ok(Some(recording)) => {
             // Through `Failure::parse`, so only an enumerated code can reach a
             // client. The column is written by this crate today, and a status
@@ -476,14 +478,8 @@ pub(crate) async fn recording_handler(
     UriPath(recording_id): UriPath<String>,
     Owner { accounts, user }: Owner,
 ) -> Response {
-    let missing = || {
-        json_response(
-            StatusCode::NOT_FOUND,
-            json!({ "code": "recording_not_found", "error": "No such recording." }),
-        )
-    };
     if state.recorder.is_none() {
-        return missing();
+        return recording_missing();
     }
     let found =
         blocking(move || crate::recording::recording_summary(&accounts, &recording_id, user.id))
@@ -495,7 +491,7 @@ pub(crate) async fn recording_handler(
         );
     };
     let Some(summary) = found else {
-        return missing();
+        return recording_missing();
     };
     if let Some(gone) = gone_response(&summary, current_epoch_seconds() as i64) {
         return gone;
@@ -531,23 +527,14 @@ pub(crate) async fn recording_events_handler(
     Query(params): Query<HashMap<String, String>>,
     Owner { accounts, user }: Owner,
 ) -> Response {
-    use crate::recording::SnapshotView;
-
-    let missing = || {
-        json_response(
-            StatusCode::NOT_FOUND,
-            json!({ "code": "recording_not_found", "error": "No such recording." }),
-        )
-    };
     if state.recorder.is_none() {
-        return missing();
+        return recording_missing();
     }
     let now = current_epoch_seconds() as i64;
     let after = params
         .get("after")
         .and_then(|after| after.parse::<i64>().ok())
         .unwrap_or(-1);
-
     let found = {
         let accounts = accounts.clone();
         let recording_id = recording_id.clone();
@@ -556,7 +543,7 @@ pub(crate) async fn recording_events_handler(
     };
     let summary = match found {
         Ok(Some(summary)) => summary,
-        Ok(None) => return missing(),
+        Ok(None) => return recording_missing(),
 
         // A read that failed is not a recording that does not exist. Answering
         // `404` for it tells a person their interview is gone when the database
@@ -581,25 +568,24 @@ pub(crate) async fn recording_events_handler(
         }
     })
     .await;
-    match view {
-        Ok(SnapshotView::Ready(snapshot)) => json_response(StatusCode::OK, replay_body(&snapshot)),
-        Ok(SnapshotView::Expired) => json_response(
-            StatusCode::GONE,
-            json!({ "code": "replay_expired", "error": "This replay is past its retention deadline." }),
-        ),
-        Ok(SnapshotView::Deleted) => json_response(
-            StatusCode::GONE,
-            json!({ "code": "recording_deleted", "error": "This recording has been deleted." }),
-        ),
-        Ok(SnapshotView::NoInterview) => missing(),
-        Err(error) => {
-            eprintln!("could not read a replay: {error}");
-            json_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error": "Could not read the replay." }),
-            )
-        }
-    }
+    replay_response(view, recording_missing, "could not read a replay")
+}
+
+/// No such recording, in the words the detail and the events routes both use.
+///
+/// Written out twice before, which is two chances for one of them to start
+/// saying something a caller can tell apart from the other: an account that
+/// does not own a recording must not learn that it exists, and that only holds
+/// while both routes answer a stranger and an owner of nothing the same way.
+///
+/// The other two routes in this file keep their own wording deliberately, and
+/// each says why where it says it: one is asked about an interview and one
+/// about a room.
+fn recording_missing() -> Response {
+    json_response(
+        StatusCode::NOT_FOUND,
+        json!({ "code": "recording_not_found", "error": "No such recording." }),
+    )
 }
 
 /// `410` for a recording whose media is gone or past its deadline, and nothing
@@ -647,8 +633,6 @@ pub(crate) async fn recording_replay_handler(
     Query(params): Query<HashMap<String, String>>,
     request: Request<Body>,
 ) -> Response {
-    use crate::recording::SnapshotView;
-
     let Some(accounts) = state.accounts.clone() else {
         return state.accounts_error();
     };
@@ -721,28 +705,16 @@ pub(crate) async fn recording_replay_handler(
         }
     })
     .await;
-    match view {
-        Ok(SnapshotView::Ready(snapshot)) => json_response(StatusCode::OK, replay_body(&snapshot)),
-        Ok(SnapshotView::Expired) => json_response(
-            StatusCode::GONE,
-            json!({ "code": "replay_expired", "error": "This replay is past its retention deadline." }),
-        ),
-        Ok(SnapshotView::Deleted) => json_response(
-            StatusCode::GONE,
-            json!({ "code": "recording_deleted", "error": "This recording has been deleted." }),
-        ),
-        Ok(SnapshotView::NoInterview) => json_response(
-            StatusCode::NOT_FOUND,
-            json!({ "code": "recording_not_found", "error": "No replay for that room." }),
-        ),
-        Err(error) => {
-            eprintln!("could not read a replay for a room: {error}");
+    replay_response(
+        view,
+        || {
             json_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error": "Could not read the replay." }),
+                StatusCode::NOT_FOUND,
+                json!({ "code": "recording_not_found", "error": "No replay for that room." }),
             )
-        }
-    }
+        },
+        "could not read a replay for a room",
+    )
 }
 
 /// LiveKit's webhooks.
