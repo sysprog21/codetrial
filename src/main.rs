@@ -228,6 +228,55 @@ fn bind_web_listener(addr: &str) -> Result<std::net::TcpListener, String> {
     Ok(listener)
 }
 
+/// The recording block and the server configuration it goes into.
+///
+/// Split from `run_web` because it is one decision made in one place:
+/// everything here is read from the operator's environment, validated, and put
+/// in a struct, and nothing here binds a socket or starts a task. The order
+/// inside it is load bearing and is written where it happens.
+fn web_server_config(
+    values: &std::collections::BTreeMap<String, String>,
+    pool: codetrial::config::ProviderPool,
+    production: bool,
+    options: &CliOptions,
+) -> Result<WebServerConfig, String> {
+    // After the pool is complete, so the "is this project in the pool" check
+    // sees the pool the server will actually serve, and before the listener
+    // does any work: a half-configured recording block is a startup failure,
+    // never a surprise at the moment a candidate's interview ends.
+    let recording = codetrial::config::load_recording(
+        values,
+        &pool,
+        interview_duration_min(values),
+        production,
+    )
+    .map_err(|error| error.to_string())?;
+    recording_needs_verified_identity(
+        recording.is_some(),
+        nonempty(values, "GITHUB_CLIENT_ID").is_some()
+            && nonempty(values, "GITHUB_CLIENT_SECRET").is_some(),
+    )?;
+    recording_can_deliver(recording.as_ref())?;
+
+    Ok(WebServerConfig {
+        web_dir: PathBuf::from(value_or(values, "CODETRIAL_WEB_DIR", DEFAULT_WEB_DIR)),
+        github_client_id: nonempty(values, "GITHUB_CLIENT_ID"),
+        github_client_secret: nonempty(values, "GITHUB_CLIENT_SECRET"),
+        session_secret: Some(value_or(values, "SESSION_SECRET", DEFAULT_SESSION_SECRET)),
+        db_path: Some(account_db_path(values, options)),
+        github_oauth_base_url: None,
+        github_api_base_url: None,
+        room_prefix: value_or(values, "CODETRIAL_ROOM_PREFIX", DEFAULT_ROOM_PREFIX),
+        fixed_room_name: nonempty(values, "INTERVIEW_ROOM_NAME"),
+        production,
+        trusted_proxy_hops: trusted_proxy_hops(values),
+        compiler_explorer_enabled: compiler_explorer_enabled(values),
+        recording,
+        pool,
+        probe_provider_quota: true,
+    })
+}
+
 fn run_web(options: CliOptions) -> Result<(), String> {
     // Falls through: once `serve_setup` returns, the config exists and the rest
     // of this function is an ordinary launch, on the socket Setup served on.
@@ -258,41 +307,7 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     let production = is_production(&values);
     let pool = web_provider_pool(&values, &options, production)?;
 
-    // After the pool is complete, so the "is this project in the pool" check
-    // sees the pool the server will actually serve, and before the listener
-    // does any work: a half-configured recording block is a startup failure,
-    // never a surprise at the moment a candidate's interview ends.
-    let recording = codetrial::config::load_recording(
-        &values,
-        &pool,
-        interview_duration_min(&values),
-        production,
-    )
-    .map_err(|error| error.to_string())?;
-    recording_needs_verified_identity(
-        recording.is_some(),
-        nonempty(&values, "GITHUB_CLIENT_ID").is_some()
-            && nonempty(&values, "GITHUB_CLIENT_SECRET").is_some(),
-    )?;
-    recording_can_deliver(recording.as_ref())?;
-
-    let config = WebServerConfig {
-        web_dir: PathBuf::from(value_or(&values, "CODETRIAL_WEB_DIR", DEFAULT_WEB_DIR)),
-        github_client_id: nonempty(&values, "GITHUB_CLIENT_ID"),
-        github_client_secret: nonempty(&values, "GITHUB_CLIENT_SECRET"),
-        session_secret: Some(value_or(&values, "SESSION_SECRET", DEFAULT_SESSION_SECRET)),
-        db_path: Some(account_db_path(&values, &options)),
-        github_oauth_base_url: None,
-        github_api_base_url: None,
-        room_prefix: value_or(&values, "CODETRIAL_ROOM_PREFIX", DEFAULT_ROOM_PREFIX),
-        fixed_room_name: nonempty(&values, "INTERVIEW_ROOM_NAME"),
-        production: is_production(&values),
-        trusted_proxy_hops: trusted_proxy_hops(&values),
-        compiler_explorer_enabled: compiler_explorer_enabled(&values),
-        recording,
-        pool,
-        probe_provider_quota: true,
-    };
+    let config = web_server_config(&values, pool, production, &options)?;
 
     initialize_accounts(&config)?;
 

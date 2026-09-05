@@ -2,23 +2,34 @@
 //! Gemini, publish Gemini's audio back, and produce the report when the
 //! interview ends.
 //!
-//! Still the largest module in the tree, so here is its shape. The regions
-//! below are cohesive and appear in this order; a further split should follow
-//! these lines rather than a line count.
+//! Still the largest module in the tree, so here is its shape.
 //!
-//! Two are already out: `media` holds the buffers, pumps and codecs that carry
+//! Four regions are out. `media` holds the buffers, pumps and codecs that carry
 //! audio and video in both directions, and `turn` holds the state a turn is
-//! made of, which explains what stayed behind with the loop.
+//! made of, which explains what stayed behind with the loop. `rooms` is the
+//! only region that talks to LiveKit over HTTP rather than over the room's
+//! event stream, and `report` is the packet an ending interview produces.
+//!
+//! What is left is the loop and the things it is made of:
 //!
 //! - `run_room` and `join_room`: the lifecycle, and the only entry point.
-//! - Room admin over the LiveKit REST API (`isolate_local_agent` through
-//!   `evict_duplicate_agent`): finding and removing a duplicate agent left
-//!   behind by a previous run.
+//! - Session setup and restart (`take_restart_attempt` through `open_session`):
+//!   what runs once before the loop, and what the loop calls when the Gemini
+//!   socket dies under it.
 //! - Event handling (`handle_data_packet`, `handle_gemini_event`): the sources
 //!   that drive the session. The third, `handle_media_event`, is in `media`.
 //! - Turn procedures (`send_wrap_up_and_wait` through `close_turn`): what ends
 //!   a turn, operating on the context above.
-//! - Report building (`publish_report` through `report_data_packet`).
+//!
+//! Session setup is the region that looks separable and is not, which is worth
+//! writing down so the next reader does not spend the afternoon finding out.
+//! `open_session` and `restart_after_close` name `InterviewContext`,
+//! `GeminiEventContext`, `OutputAudio`, `CandidateMedia` and `TurnState`, and
+//! call `join_room`, `close_turns`, `cut_off_turn`, `set_agent_state`,
+//! `publish_interviewer_state` and `candidate_bootstrap`. Moving it out moves
+//! the loop's own vocabulary with it, and what is gained is a file boundary
+//! rather than a seam. The three that did come out each named four parent items
+//! or fewer.
 
 use std::collections::HashMap;
 use std::ops::ControlFlow;
@@ -30,10 +41,9 @@ use ::livekit::data_stream::api::StreamTextOptions;
 use ::livekit::prelude::{DataPacket, RemoteParticipant, Room, RoomEvent, RoomOptions};
 
 use crate::agent::{
-    ReportPromptInput, RuntimeState, SpeakerTurn, WATCH_TICK_S, apply_data_event, final_report,
-    format_test_run, framework_evidence_json, framework_progress, interview_contract_json,
-    parse_participant_metadata, read_editor_text, record_framework_evidence, report_prompt,
-    transcript_for_report, wrap_up,
+    RuntimeState, SpeakerTurn, WATCH_TICK_S, apply_data_event, framework_evidence_json,
+    framework_progress, parse_participant_metadata, read_editor_text, record_framework_evidence,
+    wrap_up,
 };
 use crate::config::AgentConfig;
 use crate::runtime::TOPIC_CONTROL;
@@ -57,19 +67,25 @@ const CANDIDATE_JOIN_LIMIT: Duration = Duration::from_secs(300);
 const CANDIDATE_ABSENCE_LIMIT: Duration = Duration::from_secs(90);
 
 use crate::gemini::{
-    GeminiEvent, GeminiFunctionCall, GeminiLiveSession, generate_report, open_live_session,
-    redact_api_key, resume_live_session,
+    GeminiEvent, GeminiFunctionCall, GeminiLiveSession, open_live_session, resume_live_session,
 };
-#[cfg(test)]
-use crate::runtime::bootstrap;
 use crate::runtime::{
     AGENT_NAME, RuntimeBootstrap, TOOL_LOG_HINT, TOOL_READ_EDITOR, TOOL_RECORD_FRAMEWORK_EVIDENCE,
-    TOPIC_REPORT, TOPIC_TRANSCRIPTION, agent_identity,
+    TOPIC_TRANSCRIPTION, agent_identity,
 };
-use crate::token::{LivekitTokenInput, livekit_room_admin_token, livekit_token};
+use crate::token::{LivekitTokenInput, livekit_token};
 
 mod media;
+mod report;
+mod rooms;
 mod turn;
+
+use report::publish_report;
+use rooms::{evict_duplicate_agent, isolate_local_agent};
+
+// Re-exported rather than merely used: `web::setup` calls this to check the
+// credentials a Setup form was given, and it names it through this module.
+pub(crate) use rooms::validate_livekit_credentials;
 
 use media::*;
 use turn::*;
@@ -109,7 +125,7 @@ const NOTABLE_PLAYOUT_BACKLOG: Duration = Duration::from_millis(500);
 /// Covers the normal report attempt, one schema repair, and bounded transient
 /// retries. The candidate is watching a spinner, so this is the point where
 /// waiting stops being worth more than an honest incomplete report.
-const REPORT_TIMEOUT: Duration = Duration::from_secs(45);
+pub(super) const REPORT_TIMEOUT: Duration = Duration::from_secs(45);
 /// Whether the candidate is in the room, and since when they have not been.
 ///
 /// The departure, the return and the grace check happen in three different
@@ -797,241 +813,6 @@ async fn join_room(
     Ok((room, events))
 }
 
-async fn isolate_local_agent(
-    config: &AgentConfig,
-    room_name: &str,
-    local_identity: &str,
-    now_seconds: u64,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // One list pass more than removal rounds: the last pass only confirms the
-    // final removal landed.
-    let mut rounds_left = DUPLICATE_AGENT_ISOLATION_ATTEMPTS;
-    loop {
-        let participants = list_room_participants(config, room_name, now_seconds).await?;
-        let duplicate_agents = duplicate_agent_identities(&participants, local_identity);
-        if duplicate_agents.is_empty() {
-            return Ok(());
-        }
-        if rounds_left == 0 {
-            // Loud, not fatal. This used to return Err, and in `serve` an agent
-            // error aborts the web task and exits the process, so one stubborn
-            // auto-dispatched agent took the whole server down mid-interview.
-            // Two interviewers talking over each other is bad; no interviewer,
-            // no editor and no report is worse, and the operator can see this
-            // line and act on it while the candidate finishes.
-            eprintln!(
-                "WARNING: duplicate LiveKit agent participants remained after \
-                 {DUPLICATE_AGENT_ISOLATION_ATTEMPTS} attempts, continuing anyway: \
-                 {duplicate_agents:?}"
-            );
-            return Ok(());
-        }
-        rounds_left -= 1;
-        for identity in &duplicate_agents {
-            eprintln!("removing duplicate LiveKit agent participant identity={identity}");
-            remove_room_participant(config, room_name, identity, now_seconds).await?;
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-}
-
-async fn list_room_participants(
-    config: &AgentConfig,
-    room_name: &str,
-    now_seconds: u64,
-) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-    livekit_room_service_request(
-        config,
-        room_name,
-        "ListParticipants",
-        serde_json::json!({ "room": room_name }),
-        now_seconds,
-    )
-    .await
-}
-
-/// A removal that finds nothing to remove has achieved what it was asked to do.
-///
-/// This used to propagate the 404 and kill the interview. The duplicate agents
-/// being evicted here are the ones that leave on their own, so losing the race
-/// with them is the common case, not the exceptional one: the agent greeted the
-/// candidate, tried to evict a participant that had already gone, took the
-/// `not_found` as fatal, and exited. The candidate was left in a room with no
-/// interviewer, talking to nobody, with the status pill correctly reading
-/// "Waiting" and nothing on screen explaining why.
-async fn remove_room_participant(
-    config: &AgentConfig,
-    room_name: &str,
-    identity: &str,
-    now_seconds: u64,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    match livekit_room_service_request(
-        config,
-        room_name,
-        "RemoveParticipant",
-        serde_json::json!({ "room": room_name, "identity": identity }),
-        now_seconds,
-    )
-    .await
-    {
-        Ok(_) => Ok(()),
-        Err(error) if is_participant_gone(&error.to_string()) => {
-            eprintln!("duplicate LiveKit agent participant already gone identity={identity}");
-            Ok(())
-        }
-        Err(error) => Err(error),
-    }
-}
-
-/// Matches on the wire response rather than on a status code alone, because
-/// LiveKit answers Twirp over HTTP and a bare 404 could also mean the route is
-/// wrong. All three parts are required: the method, so a 404 from any other
-/// RoomService call stays fatal; the status; and `not_found` in the body, which
-/// is the participant-specific Twirp code rather than an HTML error page.
-fn is_participant_gone(error: &str) -> bool {
-    error.contains("RemoveParticipant") && error.contains("404") && error.contains("not_found")
-}
-
-/// The Twirp POST both RoomService callers make. Only the token and the base
-/// differ, and both are strings; the body comes back with the status because a
-/// refusal explains itself there and not in the code.
-async fn post_room_service(
-    base: &str,
-    token: &str,
-    method: &str,
-    body: &serde_json::Value,
-) -> Result<(reqwest::StatusCode, String), Box<dyn std::error::Error + Send + Sync>> {
-    let response = crate::http_client()
-        .post(format!("{base}/twirp/livekit.RoomService/{method}"))
-        .bearer_auth(token)
-        .json(body)
-        .send()
-        .await?;
-    let status = response.status();
-    Ok((status, response.text().await?))
-}
-
-async fn livekit_room_service_request(
-    config: &AgentConfig,
-    room_name: &str,
-    method: &str,
-    body: serde_json::Value,
-    now_seconds: u64,
-) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-    let token = livekit_room_admin_token(
-        &config.livekit_api_key,
-        &config.livekit_api_secret,
-        room_name,
-        now_seconds,
-    )?;
-    let (status, text) = post_room_service(
-        &livekit_http_base(&config.livekit_url),
-        &token,
-        method,
-        &body,
-    )
-    .await?;
-    if !status.is_success() {
-        return Err(format!("LiveKit RoomService {method} failed: {status} {text}").into());
-    }
-    parse_room_service_response(method, &text)
-}
-
-/// Proves credentials like `check-gemini` proves a Google key: the server
-/// must accept a signed request. `ListRooms` needs no room to exist.
-pub(crate) async fn validate_livekit_credentials(
-    url: &str,
-    api_key: &str,
-    api_secret: &str,
-    now_seconds: u64,
-) -> Result<(), String> {
-    let token = crate::token::livekit_room_list_token(api_key, api_secret, now_seconds)
-        .map_err(|error| error.to_string())?;
-    let (status, text) = post_room_service(
-        &livekit_http_base(url),
-        &token,
-        "ListRooms",
-        &serde_json::json!({}),
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    if status.is_success() {
-        return Ok(());
-    }
-
-    // The body, because it is LiveKit's own account of the refusal and the
-    // Setup form is the one place a reader can act on it: a status alone says
-    // "did not work" to someone who already knows that. Bounded, because a
-    // wrong host answers with an HTML page and the form is one line.
-    const REASON_LIMIT: usize = 200;
-    let reason: String = text.chars().take(REASON_LIMIT).collect();
-    let ellipsis = if text.chars().count() > REASON_LIMIT {
-        "..."
-    } else {
-        ""
-    };
-    Err(format!(
-        "LiveKit ListRooms failed: {status} {reason}{ellipsis}"
-    ))
-}
-
-/// The RoomService origin for a LiveKit URL: the same host, over the scheme an
-/// HTTP client will send.
-///
-/// The rewrite goes through `livekit_scheme` rather than matching the two
-/// websocket schemes here, because `validate_livekit_url` accepts a scheme in
-/// any case and this has to rewrite every spelling that accepts. A pasted
-/// `WSS://` used to survive unchanged, and reqwest refuses any scheme but http
-/// and https before the request leaves the process, so credentials that were
-/// good came back as credentials that did not work.
-fn livekit_http_base(url: &str) -> String {
-    let trimmed = url.trim_end_matches('/');
-    match crate::config::livekit_scheme(trimmed) {
-        Some((scheme, _, http)) => format!("{http}{}", &trimmed[scheme.len()..]),
-        None => trimmed.to_string(),
-    }
-}
-
-fn parse_room_service_response(
-    method: &str,
-    text: &str,
-) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-    serde_json::from_str(text).map_err(|error| {
-        format!("LiveKit RoomService {method} returned invalid JSON: {error}").into()
-    })
-}
-
-fn duplicate_agent_identities(
-    participants: &serde_json::Value,
-    local_identity: &str,
-) -> Vec<String> {
-    participants
-        .get("participants")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|participant| is_agent_participant(participant))
-        .filter_map(|participant| {
-            participant
-                .get("identity")
-                .and_then(serde_json::Value::as_str)
-        })
-        .filter(|identity| *identity != local_identity)
-        .map(ToString::to_string)
-        .collect()
-}
-
-fn is_agent_participant(participant: &serde_json::Value) -> bool {
-    participant
-        .pointer("/permission/agent")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-        || participant
-            .get("kind")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|kind| kind == "AGENT")
-}
-
 fn is_candidate(participant: &RemoteParticipant) -> bool {
     participant.kind() == ParticipantKind::Standard
         && candidate_identity_matches(&participant.identity().0, &participant.metadata())
@@ -1047,19 +828,6 @@ pub fn candidate_identity_matches(identity: &str, metadata: &str) -> bool {
                 .map(str::to_owned)
         })
         .is_some_and(|minted| minted == identity && minted.starts_with("candidate-"))
-}
-
-/// A second agent in the room would answer over the top of this one, so the
-/// late joiner is removed rather than tolerated.
-async fn evict_duplicate_agent(
-    config: &AgentConfig,
-    room_name: &str,
-    participant: &RemoteParticipant,
-    now_seconds: u64,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let identity = participant.identity().0;
-    eprintln!("removing late duplicate LiveKit agent participant identity={identity}");
-    remove_room_participant(config, room_name, &identity, now_seconds).await
 }
 
 /// Only the candidate this interview bootstrapped from may drive the runtime.
@@ -1232,7 +1000,7 @@ fn initial_runtime_state(boot: &RuntimeBootstrap<'_>, started_at: Instant) -> Ru
 /// an unreliable one may be dropped on a bad network, and one with no topic
 /// lands on a channel nothing reads. Built in one place because it was written
 /// out at four call sites, where each field was free to go missing on its own.
-fn browser_packet(
+pub(super) fn browser_packet(
     topic: &str,
     message: &serde_json::Value,
 ) -> Result<DataPacket, serde_json::Error> {
@@ -1636,193 +1404,6 @@ fn transcript_text(text: &str) -> Option<&str> {
     (!text.is_empty()).then_some(text)
 }
 
-async fn publish_report(
-    room: &Room,
-    boot: &RuntimeBootstrap<'_>,
-    state: &RuntimeState,
-    reason: &str,
-    elapsed_min: f64,
-    api_key: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    room.local_participant()
-        .publish_data(report_packet(boot, state, reason, elapsed_min, api_key).await?)
-        .await?;
-    Ok(())
-}
-
-async fn report_packet(
-    boot: &RuntimeBootstrap<'_>,
-    state: &RuntimeState,
-    reason: &str,
-    elapsed_min: f64,
-    api_key: &str,
-) -> Result<DataPacket, Box<dyn std::error::Error + Send + Sync>> {
-    let mut report = match tokio::time::timeout(
-        REPORT_TIMEOUT,
-        generate_report(
-            api_key,
-            boot.report_model,
-            &report_prompt_text(boot, state, elapsed_min),
-        ),
-    )
-    .await
-    {
-        Ok(Ok(raw)) => final_report(Some(&raw), state.hints_used, None),
-        Ok(Err(error)) => final_report(
-            None,
-            state.hints_used,
-            Some(&report_error_note(
-                boot,
-                state,
-                reason,
-                error.as_ref(),
-                api_key,
-            )),
-        ),
-        Err(error) => final_report(
-            None,
-            state.hints_used,
-            Some(&report_error_note(boot, state, reason, &error, api_key)),
-        ),
-    };
-    stamp_report_contract(&mut report);
-    Ok(report_data_packet(report_with_integrity_events(
-        report, state,
-    ))?)
-}
-
-fn stamp_report_contract(report: &mut serde_json::Value) {
-    if let Some(object) = report.as_object_mut() {
-        object.insert("interviewContract".to_string(), interview_contract_json());
-    }
-}
-
-fn report_with_integrity_events(
-    mut report: serde_json::Value,
-    state: &RuntimeState,
-) -> serde_json::Value {
-    if let Some(object) = report.as_object_mut() {
-        // The evidence, plus the heartbeats that bookend it, merged by sequence
-        // rather than appended: a reader goes down this list in the order the
-        // interview happened, and a device-state sample out of place reads as a
-        // fault rather than as a bookend.
-        let kept = state.integrity_events.len() as u64;
-        let liveness = state.integrity_first_heartbeat.iter();
-        let liveness = liveness.chain(state.integrity_last_heartbeat.iter());
-        let samples = liveness.clone().count() as u64;
-        let mut events = state.integrity_events.clone();
-        events.extend(liveness.cloned());
-        events.sort_by_key(|event| event["seq"].as_u64().unwrap_or(0));
-        object.insert(
-            "integrityEvents".to_string(),
-            serde_json::Value::Array(events),
-        );
-
-        // How far verification got, and how much of it this report is not
-        // showing. The array above is a subsequence, so its links cannot be
-        // recomputed by whoever holds the report; without these a reader cannot
-        // tell a retention gap from a deleted row, which is the distinction the
-        // chain exists to make visible.
-        //
-        // The dropped count is derived rather than tallied. Every accepted
-        // event is in the evidence, held as a sample, or gone, and the cursor
-        // counts acceptances, so a counter would have been a fourth place for
-        // the same fact to be wrong.
-        let verified = state.integrity_chain.as_ref().map(|(seq, _)| *seq);
-        object.insert("integrityChainSeq".to_string(), serde_json::json!(verified));
-        object.insert(
-            "integrityDropped".to_string(),
-            serde_json::json!(verified.map(|seq| seq.saturating_sub(kept + samples))),
-        );
-        object.insert(
-            "frameworkEvidence".to_string(),
-            serde_json::Value::Array(
-                state
-                    .framework_evidence
-                    .iter()
-                    .map(framework_evidence_json)
-                    .collect(),
-            ),
-        );
-        let coding_gate = [
-            crate::agent::FrameworkPhase::Test,
-            crate::agent::FrameworkPhase::Optimizations,
-        ]
-        .iter()
-        .all(|phase| {
-            state.framework_evidence.iter().any(|item| {
-                item.phase == *phase && item.kind != crate::agent::EvidenceKind::Skipped
-            })
-        });
-        object.insert(
-            "interviewLoop".to_string(),
-            serde_json::json!(state.interview_loop.as_str()),
-        );
-        let star_complete = state.behavioral_round_started
-            && [
-                crate::agent::FrameworkPhase::Situation,
-                crate::agent::FrameworkPhase::Task,
-                crate::agent::FrameworkPhase::Action,
-                crate::agent::FrameworkPhase::Result,
-            ]
-            .iter()
-            .all(|phase| {
-                state.framework_evidence.iter().any(|item| {
-                    item.phase == *phase && item.kind != crate::agent::EvidenceKind::Skipped
-                })
-            });
-        object.insert("rounds".to_string(), serde_json::json!([
-            {"kind":"coding","budgetMin": state.coding_minutes, "status": if coding_gate { "complete" } else { "incomplete" }},
-            {"kind":"behavioral","budgetMin": state.behavioral_minutes, "status": if state.interview_loop == crate::agent::InterviewLoop::CodingOnly { "not_configured" } else if star_complete { "complete" } else if state.behavioral_round_started { "started" } else { "skipped" }}
-        ]));
-    }
-    report
-}
-
-fn report_prompt_text(
-    boot: &RuntimeBootstrap<'_>,
-    state: &RuntimeState,
-    elapsed_min: f64,
-) -> String {
-    let transcript = transcript_for_report(&state.transcript);
-    let test_summary = format_test_run(state.last_test_run.as_ref(), state.test_runs);
-    report_prompt(ReportPromptInput {
-        problem: boot.problem,
-        transcript: &transcript,
-        final_code: &state.code,
-        language: &state.language,
-        hints_used: state.hints_used,
-        duration_min: boot.duration_min,
-        elapsed_min,
-        test_summary: &test_summary,
-    })
-}
-
-/// This note is published to the candidate's browser and rendered in the report
-/// card, so `api_key` is not decoration: an error carrying a credentialed URL
-/// would otherwise hand the server's Google key to whoever is taking the
-/// interview.
-fn report_error_note(
-    boot: &RuntimeBootstrap<'_>,
-    state: &RuntimeState,
-    reason: &str,
-    error: &(dyn std::error::Error + 'static),
-    api_key: &str,
-) -> String {
-    let detail = redact_api_key(&error.to_string(), api_key);
-    format!(
-        "Rust LiveKit runner ended ({reason}) but Gemini report generation failed for model {} on {}. Final editor state: {} bytes of {}. Error: {detail}",
-        boot.report_model,
-        boot.problem.id,
-        state.code.len(),
-        state.language
-    )
-}
-
-fn report_data_packet(report: serde_json::Value) -> Result<DataPacket, serde_json::Error> {
-    browser_packet(TOPIC_REPORT, &report)
-}
-
 async fn send_wrap_up_and_wait(
     room: &Room,
     context: &mut GeminiEventContext<'_>,
@@ -1995,6 +1576,11 @@ impl TurnState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Only the tests below reach for it now: the report packet that carries
+    // this topic is built in `report.rs`, and what is left here asserts which
+    // topics the loop refuses from a browser.
+    use crate::runtime::TOPIC_REPORT;
     use ::livekit::webrtc::audio_frame::AudioFrame;
     use ::livekit::webrtc::audio_source::AudioSourceOptions;
     use ::livekit::webrtc::audio_source::native::NativeAudioSource;
@@ -2099,102 +1685,6 @@ mod tests {
             close_turn(&mut turn, "Candidate").is_none(),
             "a closed turn closes once; publishing it again repeats the line"
         );
-    }
-
-    /// The report says which rounds actually completed, from banked evidence.
-    ///
-    /// Two gates, and both are the same shape: every phase of the round needs
-    /// evidence that is not a skip. Loosened to "any phase" or to "including
-    /// skips", a candidate who ran out of time reads as one who finished.
-    #[test]
-    fn the_rounds_a_report_calls_complete_are_the_ones_with_evidence() {
-        let rounds = |state: &RuntimeState| {
-            report_with_integrity_events(serde_json::json!({}), state)["rounds"].clone()
-        };
-        let bank = |state: &mut RuntimeState, phase: &str, kind: &str| {
-            crate::agent::record_framework_evidence(
-                state,
-                &serde_json::json!({
-                    "phase": phase, "source": if kind == "skipped" { "session_timing" }
-                        else { "candidate_speech" },
-                    "kind": kind, "confidence": 90,
-                    "summary": format!("candidate {kind} {phase}"),
-                }),
-            )
-            .expect("evidence should record");
-        };
-
-        // Nothing banked: neither round is claimed.
-        let bare = RuntimeState {
-            interview_loop: crate::agent::InterviewLoop::CodingBehavioral,
-            ..RuntimeState::default()
-        };
-        assert_eq!(rounds(&bare)[0]["status"], "incomplete");
-        assert_eq!(rounds(&bare)[1]["status"], "skipped");
-
-        // Evidence for some other phase is evidence for neither of these.
-        // Asking whether any banked phase is not Test answers yes for a
-        // candidate who only restated the problem, and calls the round done.
-        let mut elsewhere = bare.clone();
-        bank(&mut elsewhere, "repeat", "observed");
-        assert_eq!(
-            rounds(&elsewhere)[0]["status"],
-            "incomplete",
-            "restating the problem is not having tested or optimized it"
-        );
-
-        // One of the two coding phases is not both of them.
-        let mut half = bare.clone();
-        bank(&mut half, "test", "observed");
-        assert_eq!(
-            rounds(&half)[0]["status"],
-            "incomplete",
-            "one phase is not the gate"
-        );
-
-        // A skip is the record of not reaching it, so it cannot complete it.
-        let mut skipped = half.clone();
-        bank(&mut skipped, "optimizations", "skipped");
-        assert_eq!(
-            rounds(&skipped)[0]["status"],
-            "incomplete",
-            "running out of time is not finishing"
-        );
-
-        let mut coding_done = half.clone();
-        bank(&mut coding_done, "optimizations", "observed");
-        assert_eq!(rounds(&coding_done)[0]["status"], "complete");
-
-        // STAR needs the round to have started and all four phases banked.
-        let mut star = coding_done.clone();
-        for phase in ["situation", "task", "action", "result"] {
-            bank(&mut star, phase, "observed");
-        }
-        assert_eq!(
-            rounds(&star)[1]["status"],
-            "skipped",
-            "four phases without the round beginning is not a behavioral round"
-        );
-        star.behavioral_round_started = true;
-        assert_eq!(rounds(&star)[1]["status"], "complete");
-
-        // Begun but not finished. Evidence for one STAR phase is not evidence
-        // for the other three, and asking whether any banked phase is not Task
-        // answers yes as soon as anything else was said, which reports a
-        // behavioral round the candidate barely entered as one they completed.
-        let mut begun = coding_done.clone();
-        begun.behavioral_round_started = true;
-        bank(&mut begun, "situation", "observed");
-        assert_eq!(
-            rounds(&begun)[1]["status"],
-            "started",
-            "one STAR phase in is started, not complete"
-        );
-
-        // A coding-only interview reserves no behavioral round at all.
-        let mut coding_only = coding_done.clone();
-        coding_only.interview_loop = crate::agent::InterviewLoop::CodingOnly;
-        assert_eq!(rounds(&coding_only)[1]["status"], "not_configured");
     }
 
     /// A packet the browser never receives is the same as one never sent.
@@ -2403,41 +1893,6 @@ mod tests {
         );
     }
 
-    /// The note goes over the data channel into the candidate's report card. A
-    /// `reqwest` error Displays the URL it was built from, so a credentialed
-    /// URL
-    /// anywhere in that chain hands the server's Google key to the candidate.
-    #[test]
-    fn report_error_note_never_carries_the_google_api_key() {
-        let config = load_from_pairs([
-            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
-            ("LIVEKIT_API_KEY", "devkey"),
-            ("LIVEKIT_API_SECRET", "devsecret"),
-            ("GOOGLE_API_KEY", "AQ.Ab8RN6secret"),
-        ])
-        .unwrap();
-        let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
-        let leaky = std::io::Error::other(
-            "HTTP status server error (503 Service Unavailable) for url \
-             (https://generativelanguage.googleapis.com/v1beta/models/x:generateContent?key=AQ.Ab8RN6secret)",
-        );
-
-        let note = report_error_note(
-            &boot,
-            &RuntimeState::default(),
-            "candidate_ended",
-            &leaky,
-            "AQ.Ab8RN6secret",
-        );
-
-        assert!(!note.contains("AQ.Ab8RN6secret"), "{note}");
-        assert!(note.contains("[REDACTED]"), "{note}");
-        assert!(
-            note.contains("503 Service Unavailable"),
-            "the reason still has to be readable: {note}"
-        );
-    }
-
     #[test]
     fn candidate_bootstrap_uses_participant_metadata() {
         let config = load_from_pairs([
@@ -2463,279 +1918,6 @@ mod tests {
         assert_eq!(boot.profile.role, "Platform engineer");
         assert_eq!(boot.profile.target_company, "Example Co");
         assert!(boot.instructions.contains("candidate selected staff"));
-    }
-
-    /// Losing the race with a duplicate agent that left on its own must not end
-    /// the interview. This shipped as a fatal error: the agent greeted the
-    /// candidate, tried to evict a participant that was already gone, and
-    /// exited on the `not_found`, leaving the candidate talking to an empty
-    /// room. Every other RoomService failure stays fatal.
-    #[test]
-    fn a_removal_that_finds_nobody_is_not_a_failure() {
-        assert!(is_participant_gone(
-            "LiveKit RoomService RemoveParticipant failed: 404 Not Found {\"code\":\"not_found\",\"msg\":\"participant does not exist\"}"
-        ));
-
-        for still_fatal in [
-            "LiveKit RoomService RemoveParticipant failed: 401 Unauthorized {\"code\":\"unauthenticated\"}",
-            "LiveKit RoomService RemoveParticipant failed: 503 Service Unavailable {}",
-            "LiveKit RoomService ListParticipants failed: 404 Not Found <html>no such route</html>",
-        ] {
-            assert!(!is_participant_gone(still_fatal), "{still_fatal}");
-        }
-    }
-
-    #[test]
-    fn duplicate_agent_identities_ignores_candidate_and_local_agent() {
-        let participants = serde_json::json!({
-            "participants": [
-                {
-                    "identity": "candidate-fixed",
-                    "kind": "STANDARD",
-                    "permission": { "agent": false }
-                },
-                {
-                    "identity": "interviewer-interview-fixed",
-                    "kind": "AGENT",
-                    "permission": { "agent": true }
-                },
-                {
-                    "identity": "hosted-agent",
-                    "kind": "AGENT",
-                    "permission": { "agent": true }
-                },
-                {
-                    "identity": "legacy-agent",
-                    "permission": { "agent": true }
-                }
-            ]
-        });
-
-        assert_eq!(
-            duplicate_agent_identities(&participants, "interviewer-interview-fixed"),
-            vec!["hosted-agent".to_string(), "legacy-agent".to_string()]
-        );
-    }
-
-    #[test]
-    fn livekit_http_base_maps_websocket_urls_to_room_service_host() {
-        assert_eq!(
-            livekit_http_base("wss://example.livekit.cloud/"),
-            "https://example.livekit.cloud"
-        );
-        assert_eq!(
-            livekit_http_base("ws://localhost:7880"),
-            "http://localhost:7880"
-        );
-    }
-
-    /// `validate_livekit_url` compares the scheme without regard to case, so
-    /// every spelling it accepts reaches here. The host keeps the case it was
-    /// given: DNS does not care, and a path might.
-    #[test]
-    fn livekit_http_base_rewrites_a_scheme_in_any_case() {
-        assert_eq!(
-            livekit_http_base("WSS://Example.LiveKit.Cloud"),
-            "https://Example.LiveKit.Cloud"
-        );
-        assert_eq!(
-            livekit_http_base("Ws://localhost:7880/"),
-            "http://localhost:7880"
-        );
-        assert_eq!(
-            livekit_http_base("HTTPS://example.livekit.cloud"),
-            "https://example.livekit.cloud"
-        );
-    }
-
-    #[test]
-    fn room_service_response_rejects_malformed_success_json() {
-        let error = parse_room_service_response("ListParticipants", "not json")
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("ListParticipants returned invalid JSON"));
-    }
-
-    #[test]
-    fn report_helpers_use_report_topic_prompt_state_and_error_note() {
-        let config = load_from_pairs([
-            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
-            ("LIVEKIT_API_KEY", "devkey"),
-            ("LIVEKIT_API_SECRET", "devsecret"),
-            ("GOOGLE_API_KEY", "google"),
-        ])
-        .unwrap();
-        let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
-        let state = RuntimeState {
-            code: "return [0, 1]".to_string(),
-            language: "python".to_string(),
-            transcript: vec![
-                "Interviewer: Welcome.".to_string(),
-                "Candidate: I will use a hash map.".to_string(),
-            ],
-            last_test_run: Some(serde_json::json!({
-                "language": "python",
-                "passed": 1,
-                "total": 2,
-                "failures": [],
-            })),
-            test_runs: 1,
-            hints_used: 2,
-            ..RuntimeState::default()
-        };
-        let error = std::io::Error::other("model unavailable");
-        let report = final_report(
-            None,
-            state.hints_used,
-            Some(&report_error_note(
-                &boot,
-                &state,
-                "candidate_ended",
-                &error,
-                "google",
-            )),
-        );
-        let packet = report_data_packet(report).unwrap();
-        let payload: serde_json::Value = serde_json::from_slice(&packet.payload).unwrap();
-        let report = report_with_integrity_events(
-            payload.clone(),
-            &RuntimeState {
-                integrity_events: vec![serde_json::json!({
-                    "type": "SESSION_START",
-                    "at": "now",
-                    "severity": "info",
-                    "source": "media",
-                    "durationMs": 0,
-                    "seq": 1,
-                    "prevHash": "",
-                    "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "detail": null,
-                })],
-                ..RuntimeState::default()
-            },
-        );
-        let prompt = report_prompt_text(&boot, &state, 12.4);
-
-        assert!(prompt.contains("Candidate: I will use a hash map."));
-        assert!(prompt.contains("Latest test run (run #1, python): 1/2 cases passed."));
-        assert!(packet.reliable);
-        assert_eq!(packet.topic.as_deref(), Some(TOPIC_REPORT));
-        assert!(
-            payload["summary"]
-                .as_str()
-                .unwrap()
-                .contains("Final editor state: 13 bytes of python")
-        );
-        assert_eq!(payload["hintsUsed"], 2);
-        assert_eq!(report["integrityEvents"][0]["type"], "SESSION_START");
-    }
-
-    #[test]
-    fn the_server_overwrites_model_selected_contract_provenance() {
-        let mut report = serde_json::json!({
-            "decision": "HIRE",
-            "interviewContract": {"bundleVersion": 999}
-        });
-        stamp_report_contract(&mut report);
-        assert_eq!(report["interviewContract"], interview_contract_json());
-
-        let mut incomplete = serde_json::json!({"incomplete": true});
-        stamp_report_contract(&mut incomplete);
-        assert_eq!(incomplete["interviewContract"], interview_contract_json());
-    }
-
-    /// The liveness pair bookends the evidence, and the closing sample is the
-    /// one that says how the interview ended. Nothing covered this merge, so
-    /// dropping it, duplicating it, or emitting it out of order was invisible.
-    #[test]
-    fn the_report_packet_bookends_the_evidence_with_the_liveness_pair() {
-        let event = |seq: u64, kind: &str| {
-            serde_json::json!({
-                "type": kind,
-                "at": "now",
-                "severity": "info",
-                "source": "media",
-                "durationMs": 0,
-                "seq": seq,
-                "prevHash": "",
-                "hash": "a".repeat(64),
-                "detail": null,
-            })
-        };
-        let packet = |first, last| {
-            report_with_integrity_events(
-                serde_json::json!({}),
-                &RuntimeState {
-                    integrity_events: vec![event(5, "CAMERA_STOPPED")],
-                    integrity_first_heartbeat: first,
-                    integrity_last_heartbeat: last,
-                    integrity_chain: Some((9, "b".repeat(64))),
-                    ..RuntimeState::default()
-                },
-            )
-        };
-
-        let both = packet(
-            Some(event(2, "INTEGRITY_HEARTBEAT")),
-            Some(event(9, "INTEGRITY_HEARTBEAT")),
-        );
-        let seqs: Vec<u64> = both["integrityEvents"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|event| event["seq"].as_u64().unwrap())
-            .collect();
-        assert_eq!(seqs, vec![2, 5, 9], "merged in the order the interview ran");
-        assert_eq!(both["integrityChainSeq"], 9);
-
-        // Derived, not tallied: nine accepted, one kept as evidence and two
-        // held as samples, so six went for space.
-        assert_eq!(both["integrityDropped"], 6);
-
-        // A run of one has an opening sample and no closing one.
-        let single = packet(Some(event(2, "INTEGRITY_HEARTBEAT")), None);
-        let seqs: Vec<u64> = single["integrityEvents"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|event| event["seq"].as_u64().unwrap())
-            .collect();
-        assert_eq!(seqs, vec![2, 5], "one sample is one row");
-        assert_eq!(single["integrityDropped"], 7);
-
-        // And an interview that produced no heartbeat at all carries neither.
-        let none = packet(None, None);
-        assert_eq!(none["integrityEvents"].as_array().unwrap().len(), 1);
-        assert_eq!(none["integrityDropped"], 8);
-    }
-
-    #[test]
-    fn complete_and_incomplete_reports_carry_agent_owned_framework_evidence() {
-        let mut state = RuntimeState::default();
-        record_framework_evidence(
-            &mut state,
-            &serde_json::json!({
-                "phase":"result", "source":"session_timing", "kind":"skipped",
-                "confidence":100, "summary":"The cutoff prevented STAR assessment."
-            }),
-        )
-        .unwrap();
-        for report in [
-            serde_json::json!({"decision":"HIRE"}),
-            serde_json::json!({"incomplete":true}),
-        ] {
-            let report = report_with_integrity_events(report, &state);
-            assert_eq!(report["frameworkEvidence"][0]["phase"], "result");
-            assert_eq!(report["frameworkEvidence"][0]["kind"], "skipped");
-            assert_eq!(report["interviewLoop"], "coding_behavioral");
-            assert_eq!(report["rounds"][0]["budgetMin"], 37);
-            assert_eq!(report["rounds"][1]["status"], "skipped");
-            assert_eq!(
-                report["frameworkEvidence"][0]["frameworkVersion"],
-                crate::agent::FRAMEWORK_VERSION
-            );
-        }
     }
 
     #[test]

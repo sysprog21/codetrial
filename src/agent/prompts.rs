@@ -456,8 +456,13 @@ pub struct ReportPromptInput<'a> {
     pub test_summary: &'a str,
 }
 
-pub fn report_prompt(input: ReportPromptInput<'_>) -> String {
-    let rubric_version = RUBRIC_VERSION;
+/// What happened in this interview: the brief the reviewer reads before the
+/// rules, and the only half of the prompt that interpolates anything.
+///
+/// The four values that can be absent get the words the prompt uses for
+/// absence here, rather than in the caller, because "the editor was left empty"
+/// is prompt text and belongs with the rest of it.
+fn report_brief(input: &ReportPromptInput<'_>) -> String {
     let metadata = input.problem.question_metadata();
     let competencies = metadata.competencies.join(", ");
     let [statement_point, optimal_point, pitfalls_point] = metadata.expected_discussion_points;
@@ -520,9 +525,33 @@ Score two independent dimensions from 0 to 100:
    of Situation, Task, personal Action, and Result only if the interviewer actually
    asked a behavioral question. If none was asked, say behavioral communication
    was not assessed and do not deduct for it. Consider independence too: each hint
-   should meaningfully reduce this score; {} hint(s) were given.
+   should meaningfully reduce this score; {} hint(s) were given."#,
+        input.duration_min,
+        input.elapsed_min,
+        input.problem.title,
+        input.problem.difficulty,
+        statement_point,
+        optimal_point,
+        pitfalls_point,
+        input.language,
+        final_code,
+        transcript,
+        input.hints_used,
+        test_summary,
+        input.hints_used
+    )
+}
 
-Decision rule: "HIRE" only if the performance would clear a real mid-level SWE
+/// The schema, and the rules for filling it in. The same document every time.
+///
+/// Split from the brief where the last interpolated value ends, so this half
+/// interpolates nothing but the rubric version. It stays one string rather than
+/// being assembled from fragments: a reviewer reads it end to end, and a rule
+/// that arrives in pieces is one somebody has to reassemble to check.
+fn report_rules() -> String {
+    let rubric_version = RUBRIC_VERSION;
+    format!(
+        r#"Decision rule: "HIRE" only if the performance would clear a real mid-level SWE
 onsite bar — a working, reasonably optimal solution AND clear communication.
 Otherwise "NO_HIRE".
 The ten `frameworkAssessment` phase scores are formative coaching signals and
@@ -622,21 +651,12 @@ clear opportunity. A zero is observed performance, never a substitute for `null`
 Weakness tags must be copied character for character from the `weakness` of an
 `improvementPlan` item whose `phase` is this phase; where no plan item names this
 phase, the list is empty. Evidence confidence is not
-performance and must never become a phase score."#,
-        input.duration_min,
-        input.elapsed_min,
-        input.problem.title,
-        input.problem.difficulty,
-        statement_point,
-        optimal_point,
-        pitfalls_point,
-        input.language,
-        final_code,
-        transcript,
-        input.hints_used,
-        test_summary,
-        input.hints_used
+performance and must never become a phase score."#
     )
+}
+
+pub fn report_prompt(input: ReportPromptInput<'_>) -> String {
+    format!("{}\n\n{}", report_brief(&input), report_rules())
 }
 
 pub fn test_results_reaction(summary_text: &str, all_passed: bool) -> String {
