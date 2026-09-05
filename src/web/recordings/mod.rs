@@ -1,25 +1,42 @@
-//! Everything downstream of a room being recorded: starting and stopping an
-//! Egress job, the webhook that reports on it, the queries that list and serve
-//! the result, and the background workers that sweep and deliver.
+//! An account's own recordings, over HTTP: starting and stopping an Egress
+//! job, and the queries that list and serve the result.
+//!
+//! Two regions are out. `workers` holds the sweeper and the delivery worker,
+//! which no request drives, and `webhook` holds LiveKit's callback, which
+//! authenticates on a signature rather than a session.
+//!
+//! What is left is one caller and one auth model: every route here takes
+//! `Owner`, answers the account that owns the recording, and shares
+//! `recording_missing` and `gone_response`. Starting a recording and reading
+//! one back looked like two regions by line count and are not: splitting them
+//! would put a file boundary through one surface rather than along a seam.
+
+mod webhook;
+mod workers;
+
+pub(crate) use webhook::recording_webhook_handler;
+
+// Not re-exported: the replay route below is the only caller outside `webhook`,
+// so these stay visible to this module and no wider.
+use webhook::{signed_by_the_rooms_project, webhook_credentials};
+pub(crate) use workers::{delivery_provider, spawn_delivery_worker, spawn_recording_sweeper};
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use axum::body::{Body, to_bytes};
+use axum::body::Body;
 use axum::extract::{Path as UriPath, Query, State};
 use axum::http::{Request, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::accounts::{Accounts, blocking, random_token};
 use crate::current_epoch_seconds;
 
 use super::auth::Owner;
 use super::consent::recording_requires_consent;
-use super::{
-    AppState, MAX_WEBHOOK_BODY_BYTES, json_response, rate_limited_response, replay_response,
-};
+use super::{AppState, json_response, rate_limited_response, replay_response};
 
 /// What one account may spend reading its own recordings in a window.
 ///
@@ -51,112 +68,17 @@ fn read_allowed(state: &AppState, account_id: i64) -> Option<Response> {
         .then(|| rate_limited_response("Too many reads at once. Wait a minute."))
 }
 
-/// How often the sweeper runs. The shortest retry backoff, because a schedule
-/// checked less often than its own first step is a schedule with a different
-/// first step.
-pub(crate) const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
-
-/// Resolves recordings nobody is looking after, now and then repeatedly.
+/// The `after` query parameter, which chooses the shape of a replay read.
 ///
-/// Now, because a process that died mid-interview left rows no request will
-/// ever touch again. Repeatedly, because the retry schedule is minutes long and
-/// a sweep that only ran at startup would turn every provider hiccup into a
-/// failed recording.
-///
-/// Silent when there is no runtime to spawn on. `web_router` is public and can
-/// be built outside one; a router that serves without a sweeper is degraded,
-/// and a panic at construction is worse.
-pub(crate) fn spawn_recording_sweeper(
-    accounts: Arc<Accounts>,
-    recorder: crate::recording::Recorder,
-) {
-    let Ok(handle) = tokio::runtime::Handle::try_current() else {
-        eprintln!("recording is configured but there is no runtime to sweep on");
-        return;
-    };
-    handle.spawn(async move {
-        loop {
-            let outcome = crate::recording::sweep_recordings(&accounts, &recorder).await;
-            if outcome != crate::recording::SweepOutcome::default() {
-                eprintln!(
-                    "recording sweep retried {} deleted {} failed {}",
-                    outcome.retried, outcome.deleted, outcome.failed
-                );
-            }
-            tokio::time::sleep(SWEEP_INTERVAL).await;
-        }
-    });
-}
-
-/// How often the delivery queue is asked whether anything is due.
-///
-/// Ten seconds, because the queue's own `run_after` is what schedules a retry
-/// and this only decides how late the first attempt can be. A recording that
-/// waits ten seconds for its upload to begin is a recording nobody noticed
-/// waiting.
-pub(crate) const DELIVERY_INTERVAL: Duration = Duration::from_secs(10);
-
-/// The upload that a finished recording still owes.
-///
-/// Separate from the sweeper, because they answer different questions: the
-/// sweeper looks for rows nothing is moving, and this moves them. Running them
-/// on one timer would tie the pace of deliveries to the pace of a scan.
-///
-/// A deployment whose credentials do not build a delivery client gets a warning
-/// and no worker rather than a panic in a router constructor. The binary does
-/// not reach that case: `codetrial web` parses the key before it listens and
-/// refuses to start without one. It is reachable from
-/// this function, which is public and is what the tests build, and there the
-/// warning is the right answer.
-/// The delivery client, or a warning and none.
-///
-/// A `None` here is a deployment that records and never hands anything over,
-/// which the binary refuses to start in: `codetrial web` parses the key before
-/// it listens. It is reachable from the public router
-/// constructors, which is what the tests build, and there a warning is the
-/// right answer rather than a panic inside a constructor.
-pub(crate) fn delivery_provider(
-    recording: &crate::config::RecordingConfig,
-) -> Option<Arc<dyn crate::recording::DeliveryProvider>> {
-    match crate::delivery::GoogleDelivery::new(
-        &recording.service_account_json,
-        &recording.gcs_bucket,
-        &recording.drive_id,
-        Arc::new(|| crate::current_epoch_seconds() as i64),
-    ) {
-        Ok(delivery) => Some(Arc::new(delivery)),
-        Err(error) => {
-            eprintln!("WARNING: recordings cannot be delivered or deleted: {error}");
-            None
-        }
-    }
-}
-
-pub(crate) fn spawn_delivery_worker(accounts: Arc<Accounts>, recorder: crate::recording::Recorder) {
-    let Ok(handle) = tokio::runtime::Handle::try_current() else {
-        eprintln!("recording is configured but there is no runtime to deliver on");
-        return;
-    };
-    let Some(delivery) = recorder.delivery.clone() else {
-        return;
-    };
-    handle.spawn(async move {
-        loop {
-            let outcome = crate::recording::run_delivery_queue(
-                &accounts,
-                &recorder,
-                delivery.as_ref() as &dyn crate::recording::DeliveryProvider,
-            )
-            .await;
-            if outcome != crate::recording::DeliveryOutcome::default() {
-                eprintln!(
-                    "recording delivery delivered {} retrying {} failed {}",
-                    outcome.delivered, outcome.retrying, outcome.failed
-                );
-            }
-            tokio::time::sleep(DELIVERY_INTERVAL).await;
-        }
-    });
+/// Absent, negative or unparseable is the whole replay; a sequence number is
+/// everything past it. Both replay routes take it, so the sentinel is spelled
+/// once: a second spelling is a second thing to keep in step with `ReplayRead`,
+/// which is what actually decides.
+fn replay_after(params: &HashMap<String, String>) -> i64 {
+    params
+        .get("after")
+        .and_then(|after| after.parse::<i64>().ok())
+        .unwrap_or(-1)
 }
 
 /// Starts recording the room this interview claimed.
@@ -251,7 +173,7 @@ pub(crate) async fn start_recording_handler(
 /// because the row moves underneath it: `starting` becomes `recording` when the
 /// egress id lands, and a sweeper retry can have moved it first. Answering with
 /// the older copy told the browser a recording had not begun when it had.
-pub(crate) async fn recording_state_now(
+async fn recording_state_now(
     accounts: &Arc<Accounts>,
     recording: &crate::recording::Recording,
 ) -> Response {
@@ -278,14 +200,14 @@ pub(crate) async fn recording_state_now(
     }
 }
 
-pub(crate) fn recording_accepted(recording: &crate::recording::Recording) -> Response {
+fn recording_accepted(recording: &crate::recording::Recording) -> Response {
     json_response(
         StatusCode::ACCEPTED,
         json!({ "recordingId": recording.id, "state": recording.state.as_str() }),
     )
 }
 
-pub(crate) fn start_refusal_response(refusal: crate::recording::StartRefusal) -> Response {
+fn start_refusal_response(refusal: crate::recording::StartRefusal) -> Response {
     use crate::recording::StartRefusal;
     match refusal {
         StartRefusal::NoConsent => recording_requires_consent(),
@@ -581,10 +503,7 @@ pub(crate) async fn recording_events_handler(
         return refused;
     }
     let now = current_epoch_seconds() as i64;
-    let after = params
-        .get("after")
-        .and_then(|after| after.parse::<i64>().ok())
-        .unwrap_or(-1);
+    let after = replay_after(&params);
 
     // Exact, not truthy. An unknown value is the ordinary snapshot rather than
     // a guess at what the caller meant, so a typo reads one avatar row instead
@@ -656,10 +575,7 @@ fn recording_missing() -> Response {
 /// One function, because the two routes have to answer this the same way: a
 /// history page that listed a recording as watchable and a replay that answered
 /// `410` would be two answers to one question.
-pub(crate) fn gone_response(
-    summary: &crate::recording::RecordingSummary,
-    now: i64,
-) -> Option<Response> {
+fn gone_response(summary: &crate::recording::RecordingSummary, now: i64) -> Option<Response> {
     if summary.deleted_at.is_some() {
         return Some(json_response(
             StatusCode::GONE,
@@ -732,10 +648,7 @@ pub(crate) async fn recording_replay_handler(
         return refused();
     }
 
-    let after = params
-        .get("after")
-        .and_then(|after| after.parse::<i64>().ok())
-        .unwrap_or(-1);
+    let after = replay_after(&params);
     let found = {
         let accounts = accounts.clone();
         let room_name = room_name.clone();
@@ -777,410 +690,4 @@ pub(crate) async fn recording_replay_handler(
         },
         "could not read a replay for a room",
     )
-}
-
-/// LiveKit's webhooks.
-///
-/// Unauthenticated in the session sense and authenticated in every other: the
-/// signature covers the body, and nothing in it is trusted until that checks
-/// out. A refusal says nothing about which step failed, because telling a
-/// caller "wrong secret" apart from "wrong digest" hands them a probe.
-pub(crate) async fn recording_webhook_handler(
-    State(state): State<AppState>,
-    request: Request<Body>,
-) -> Response {
-    let Some(accounts) = state.accounts.clone() else {
-        return state.accounts_error();
-    };
-    let Some(recorder) = state.recorder.clone() else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let (parts, body) = request.into_parts();
-    let Ok(body) = to_bytes(body, MAX_WEBHOOK_BODY_BYTES).await else {
-        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
-    };
-    let authorization = parts
-        .headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-
-    // The key names the project, and the project owns the secret. Reading it
-    // from the token rather than assuming the primary project is what lets a
-    // deployment with more than one LiveKit project verify a webhook from any
-    // of them; the signature check below is still what decides.
-    let Some((api_key, api_secret)) = webhook_credentials(&state, &recorder, authorization) else {
-        eprintln!("recording webhook refused: unknown_key");
-        return json_response(
-            StatusCode::UNAUTHORIZED,
-            json!({ "error": "webhook_signature_invalid" }),
-        );
-    };
-    if let Err(rejection) = crate::token::verify_livekit_webhook(
-        &api_key,
-        &api_secret,
-        authorization,
-        body.as_ref(),
-        recorder.clock.now().max(0) as u64,
-    ) {
-        eprintln!("recording webhook refused: {rejection}");
-        return json_response(
-            StatusCode::UNAUTHORIZED,
-            json!({ "error": "webhook_signature_invalid" }),
-        );
-    }
-
-    let Ok(event) = serde_json::from_slice::<Value>(body.as_ref()) else {
-        return json_response(
-            StatusCode::BAD_REQUEST,
-            json!({ "error": "webhook_body_invalid" }),
-        );
-    };
-    let Some(event_id) = event.get("id").and_then(Value::as_str).map(str::to_string) else {
-        return json_response(
-            StatusCode::BAD_REQUEST,
-            json!({ "error": "webhook_body_invalid" }),
-        );
-    };
-
-    // Claimed before anything is acted on. A retry is a fresh, validly signed
-    // message with the same id, and acting on it twice is how one recording
-    // gets stopped, transferred, or failed more than once.
-    //
-    // The ceiling: two identical deliveries arriving at once both find the
-    // claim unapplied and both apply it. That is deliberate, because the
-    // alternative is a lock held across a provider call, and every transition
-    // below is idempotent by the table, so the outcome is the same one twice.
-    let fresh = {
-        let accounts = accounts.clone();
-        let now = recorder.clock.now();
-        blocking(move || crate::recording::claim_webhook_event(&accounts, &event_id, now)).await
-    };
-    match fresh {
-        Ok(true) => {}
-
-        // A duplicate is a success. LiveKit retries anything it did not get a
-        // 2xx for, so answering anything else asks for it forever.
-        Ok(false) => return StatusCode::OK.into_response(),
-        Err(error) => {
-            eprintln!("could not record a webhook event: {error}");
-            return json_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error": "webhook_not_recorded" }),
-            );
-        }
-    }
-
-    if !apply_webhook(&state, &accounts, &recorder, &event, &api_key).await {
-        // Not marked applied, so LiveKit's retry gets another attempt at it.
-        // There is no compensating write here on purpose: the earlier version
-        // deleted the claim, and a delete that itself failed lost the event.
-        return json_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            json!({ "error": "webhook_not_applied" }),
-        );
-    }
-
-    let applied = {
-        let accounts = accounts.clone();
-        let event_id = event
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        let now = recorder.clock.now();
-        blocking(move || crate::recording::mark_webhook_applied(&accounts, &event_id, now)).await
-    };
-    if let Err(error) = applied {
-        // The work is done and the ledger does not know. A redelivery would
-        // repeat a transition that is idempotent by the table, so this is a
-        // line rather than a failure.
-        eprintln!("could not mark a webhook event applied: {error}");
-    }
-    StatusCode::OK.into_response()
-}
-
-/// The secret belonging to the key a webhook claims signed it.
-///
-/// `None` when no configured project holds that key, which is a refusal: a
-/// message signed by a project this server does not serve is not this server's
-/// message. Looking the key up rather than assuming the primary project is what
-/// makes a multi-project deployment work at all, since a room belongs to one
-/// project and the others' secrets verify nothing it signed.
-///
-/// There is deliberately no separate webhook secret. LiveKit signs with the
-/// project's own API key and secret, so a third value would be one an operator
-/// believed was checked.
-pub(crate) fn webhook_credentials(
-    state: &AppState,
-    recorder: &crate::recording::Recorder,
-    authorization: &str,
-) -> Option<(String, String)> {
-    let key = crate::token::livekit_token_issuer(authorization)?;
-    if let Some(livekit) = &recorder.config.livekit
-        && livekit.api_key == key
-    {
-        return Some((livekit.api_key.clone(), livekit.api_secret.clone()));
-    }
-    state
-        .config
-        .pool
-        .providers
-        .iter()
-        .find(|provider| provider.api_key == key)
-        .map(|provider| (provider.api_key.clone(), provider.api_secret.clone()))
-}
-
-/// Whether the project that signed a webhook is the one that owns this room.
-///
-/// The room name routes to a provider exactly as `/api/token` routed it, and
-/// the key that signed the message has to be that provider's. The recording
-/// override only substitutes a different key for the same project, so it is
-/// checked against the room's provider rather than instead of it.
-pub(crate) fn signed_by_the_rooms_project(
-    state: &AppState,
-    recorder: &crate::recording::Recorder,
-    room_name: Option<&str>,
-    signed_by: &str,
-) -> bool {
-    let Some(room_name) = room_name else {
-        // A tombstoned recording has given its room name up, and there is
-        // nothing left for a webhook to change.
-        return false;
-    };
-    let Some(provider) = state
-        .config
-        .pool
-        .for_room(room_name, &state.config.room_prefix)
-    else {
-        return false;
-    };
-
-    // Either key for that project. The override is a different key for the same
-    // project, not a different project, and LiveKit signs a webhook with
-    // whichever key the project's webhook configuration names, which is not
-    // necessarily the one this server makes Egress calls with.
-    if provider.api_key == signed_by {
-        return true;
-    }
-    recorder.config.livekit.as_ref().is_some_and(|livekit| {
-        livekit.api_key == signed_by
-            && crate::config::same_livekit_project(&livekit.url, &provider.url)
-    })
-}
-
-/// Whether the event was dealt with.
-///
-/// `false` asks the caller to give the claim back so LiveKit delivers it again.
-/// The case that matters is an egress event arriving before this server has
-/// written down the egress id it names: dropping it there would lose the only
-/// notice that a recording started, ended, or failed.
-pub(crate) async fn apply_webhook(
-    state: &AppState,
-    accounts: &Arc<Accounts>,
-    recorder: &crate::recording::Recorder,
-    event: &Value,
-    signed_by: &str,
-) -> bool {
-    use crate::recording::RecordingState;
-    let kind = event
-        .get("event")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-
-    // lowerCamelCase, unlike the Twirp call that started this: upstream
-    // marshals the webhook with protojson directly. The contract document is
-    // where that asymmetry is explained.
-    let egress_id = event
-        .pointer("/egressInfo/egressId")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let status = event
-        .pointer("/egressInfo/status")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-
-    let found = match kind {
-        "room_finished" => {
-            let room = event
-                .pointer("/room/name")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            let accounts = accounts.clone();
-            blocking(move || crate::recording::recording_for_room(&accounts, &room)).await
-        }
-        "egress_started" | "egress_updated" | "egress_ended" => {
-            let Some(egress_id) = egress_id else {
-                return true;
-            };
-            let accounts = accounts.clone();
-            blocking(move || crate::recording::recording_for_egress(&accounts, &egress_id)).await
-        }
-
-        // Acknowledged and dropped. Answering anything else asks LiveKit to
-        // keep sending events this pipeline has no opinion about.
-        _ => return true,
-    };
-    let recording = match found {
-        Ok(Some(recording)) => recording,
-
-        // No recording for this event. For a room that is not this server's,
-        // that is the end of it; for an egress event it usually means the start
-        // response has not been written down yet, and this is the only notice
-        // that job will ever get.
-        Ok(None) => return kind == "room_finished",
-        Err(error) => {
-            eprintln!("could not read a recording for a webhook: {error}");
-            return false;
-        }
-    };
-
-    // A valid signature proves which project sent this, not which project owns
-    // the room it names. Without this, any configured project could end another
-    // project's recording by naming its room.
-    if !signed_by_the_rooms_project(state, recorder, recording.room_name.as_deref(), signed_by) {
-        eprintln!(
-            "recording {} was named by a webhook from another project",
-            recording.id
-        );
-        return true;
-    }
-
-    match kind {
-        "room_finished" => finish_recording(state, accounts, recorder, &recording, None)
-            .await
-            .status()
-            .is_success(),
-        "egress_started" => {
-            let accounts = accounts.clone();
-            let clock = recorder.clock.clone();
-            let id = recording.id.clone();
-            blocking(move || {
-                crate::recording::transition(
-                    &accounts,
-                    clock.as_ref(),
-                    &id,
-                    RecordingState::Recording,
-                    None,
-                )
-            })
-            .await
-            .is_ok()
-        }
-        "egress_ended" | "egress_updated" => {
-            apply_egress_status(accounts, recorder, &recording, event, status).await
-        }
-        _ => true,
-    }
-}
-
-/// What the provider's own word for how a job ended means for the row.
-///
-/// `None` is an update that says nothing new. `EGRESS_ACTIVE` and
-/// `EGRESS_STARTING` in particular do not say the job has stopped, and marking
-/// it stopped here would tell the orphan sweep to stop watching a job that is
-/// still running.
-pub(crate) fn egress_outcome(
-    status: &str,
-    event: &Value,
-    expected_object: &str,
-) -> Option<(
-    crate::recording::RecordingState,
-    Option<crate::recording::Failure>,
-)> {
-    use crate::recording::{Failure, RecordingState};
-    let outcome = match status {
-        // A completion with nothing in it is not a completion. A missing file
-        // result, or one of no bytes, is how a truncated recording arrives, and
-        // sending it through the transfer shared a zero-byte video with a
-        // candidate.
-        "EGRESS_COMPLETE" if crate::recording::completed_with_output(event, expected_object) => {
-            (RecordingState::Transferring, None)
-        }
-        "EGRESS_COMPLETE" => (RecordingState::Failed, Some(Failure::PartialOutput)),
-        "EGRESS_FAILED" => (RecordingState::Failed, Some(Failure::Egress)),
-        "EGRESS_ABORTED" => (RecordingState::Failed, Some(Failure::Aborted)),
-        "EGRESS_LIMIT_REACHED" => (RecordingState::Failed, Some(Failure::LimitReached)),
-        _ => return None,
-    };
-    Some(outcome)
-}
-
-/// Applies one `egress_ended` or `egress_updated` to the row it names.
-pub(crate) async fn apply_egress_status(
-    accounts: &Arc<Accounts>,
-    recorder: &crate::recording::Recorder,
-    recording: &crate::recording::Recording,
-    event: &Value,
-    status: &str,
-) -> bool {
-    use crate::recording::RecordingState;
-
-    // The object this recording is going to transfer, not any file the job
-    // happened to write.
-    let expected_object =
-        crate::recording::gcs_object_path(&recorder.config.gcs_prefix, &recording.id);
-    let Some((next, failure)) = egress_outcome(status, event, &expected_object) else {
-        return true;
-    };
-
-    // Terminal, whichever way it ended, so the row stops being one the sweeper
-    // has to chase. A failure here fails the whole application, because the
-    // alternative is a terminal row that looks stopped and a job that is not.
-    let stopped = {
-        let accounts = accounts.clone();
-        let clock = recorder.clock.clone();
-        let id = recording.id.clone();
-        blocking(move || crate::recording::mark_stopped(&accounts, clock.as_ref(), &id)).await
-    };
-    if stopped.is_err() {
-        return false;
-    }
-    let moved = {
-        let accounts = accounts.clone();
-        let clock = recorder.clock.clone();
-        let id = recording.id.clone();
-        let reason = failure.map(|failure| failure.as_str().to_string());
-        blocking(move || {
-            crate::recording::transition(&accounts, clock.as_ref(), &id, next, reason.as_deref())
-        })
-        .await
-    };
-
-    // Queued only when this call moved the row, and after the move rather than
-    // before it. A webhook LiveKit sent twice must not become two deliveries,
-    // and the queue's own `ON CONFLICT` is the second half of that rather than
-    // the first.
-    if next == RecordingState::Transferring
-        && let Ok(Some((_, true))) = &moved
-    {
-        let accounts = accounts.clone();
-        let id = recording.id.clone();
-        let now = recorder.clock.now();
-        if let Err(error) =
-            blocking(move || crate::recording::enqueue_delivery(&accounts, &id, now)).await
-        {
-            // Not fatal to the webhook: the row is `transferring` and the
-            // sweeper will not lose it. It does mean nobody has queued the
-            // delivery, which is worth a line.
-            eprintln!("WARNING: could not queue a delivery: {error}");
-        }
-    }
-
-    // After the transition, and only when it moved. A late `EGRESS_FAILED` for
-    // a row that has already advanced is refused by the table, and an audit
-    // line written first said a recording had failed while its status said
-    // otherwise.
-    if let (Some(failure), Ok(Some((_, true)))) = (failure, &moved) {
-        crate::recording::audit(
-            "recording_failed",
-            &recording.id,
-            &[
-                ("reason", failure.as_str()),
-                ("recovery", failure.recovery()),
-            ],
-        );
-    }
-    moved.is_ok()
 }
