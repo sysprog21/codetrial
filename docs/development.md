@@ -49,6 +49,24 @@ indent` runs it with `--write` and the gate runs it with `--check`, against a
 copy of the tree so a check never rewrites what it is judging. `shfmt` takes
 its style from `.editorconfig` and is passed no style flags anywhere.
 
+## Comments that count things
+
+Comments here carry the reasoning, deliberately, and that is not the part worth
+economising on. What has gone wrong repeatedly is narrower: a comment that
+states a count of code, "all three routes", "written out twice", "five
+caveats". Nothing checks those, the code moves, and the comment is then a
+confident false statement sitting next to what it describes. One recent branch
+spent twelve of its eighteen commits correcting claims an earlier commit's
+prose had made.
+
+Two shapes are safe and are the ones to reach for. A count in the past tense is
+history and cannot go stale: "seven modules were each restating this" stays
+true after an eighth arrives. A count a test already pins is checked by that
+test, so `ReplayKind::ALL` being `[Self; 6]` makes "six kinds" safe to write.
+
+A present-tense count of anything else is a liability. Either drop the number,
+naming the things instead, or move it somewhere a run can fail on it.
+
 ## Git hooks
 
 `scripts/test-git-hooks.sh` drives all four hooks against a scratch repository
