@@ -327,6 +327,14 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     // Same reason `serve_setup` prints this: say where to go.
     println!("codetrial: open http://{bound} in your browser");
 
+    // Past every startup check, so whatever a previous run left in the log is
+    // no longer true. Written on failure and removed on none, the file outlives
+    // what it describes: someone fixes what it named, starts again, and the
+    // next thing to go wrong sends them back to a message from days ago. This
+    // is the only moment that can tell those apart, and the error text points
+    // at nothing else.
+    clear_web_error_log();
+
     // Whether this process also hosts interviewers. A full agent config, which
     // is a Gemini key on top of what the web side needs, means yes; without it
     // this is the web half of a split deployment and agents arrive from
@@ -580,8 +588,19 @@ fn public_setup_refusal(
 /// no working directory anyone chose, so the folder it was unpacked into is
 /// the one place its owner knows to look.
 fn log_web_error(error: &str) {
-    let path = codetrial::exe_dir().join("codetrial-error.log");
-    let _ = std::fs::write(path, format!("{error}\n"));
+    let _ = std::fs::write(web_error_log_path(), format!("{error}\n"));
+}
+
+/// Dropped once a launch is past everything that could have written one, so
+/// the file's presence means the last `web` start failed rather than that one
+/// ever did. Best-effort, like the write: a log that cannot be removed must
+/// not stop a server that is otherwise ready.
+fn clear_web_error_log() {
+    let _ = std::fs::remove_file(web_error_log_path());
+}
+
+fn web_error_log_path() -> std::path::PathBuf {
+    codetrial::exe_dir().join("codetrial-error.log")
 }
 
 fn run_livekit(config: AgentConfig, room_name: &str) -> Result<(), String> {

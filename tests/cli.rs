@@ -639,6 +639,9 @@ fn setup_page_renders_a_form_with_all_four_credential_fields() {
         );
     }
     assert!(response.contains("/api/setup"), "{response}");
+    // What leaving the optional field blank buys. The only other place that
+    // says it is a console this launch does not have.
+    assert!(response.contains("nobody joins the room"), "{response}");
 }
 
 /// Accept, validate, write: the mocks answer as working credentials would,
@@ -1365,10 +1368,14 @@ fn setup_page_refuses_a_plaintext_url_when_node_env_is_production() {
     );
 }
 
-/// The page polls for the app that replaces it, and both servers answer
-/// `/healthz`: a probe on that route can be satisfied by the listener that is
-/// shutting down, and the reload then lands in the gap before the app has
-/// bound. `/api/session` is routed by the full app alone.
+/// The page polls for the app that replaces it, so the route it polls has to be
+/// one this server does not answer. Both are asserted: the page naming it, and
+/// this server refusing it, without which a route added to `setup_service`
+/// would put the bug back with the page unchanged and this test still green.
+///
+/// `/healthz` is the same assertion from the other side. The full app routes
+/// it, so a probe answered here would say ready of a process that has no config
+/// and is serving a credential form.
 #[test]
 fn setup_page_waits_on_a_route_only_the_full_app_serves() {
     let dir = exe_temp_path("setup-readiness-probe");
@@ -1381,10 +1388,6 @@ fn setup_page_waits_on_a_route_only_the_full_app_serves() {
         &format!("GET / HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
     );
 
-    // Both halves of the contract. The page naming the route is one; the other
-    // is that this server does not answer it, without which a route added to
-    // `setup_service` would put the bug back with the page unchanged and this
-    // test still green.
     let probed = http_request(
         &addr,
         &format!("GET /api/session HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
@@ -1405,8 +1408,8 @@ fn setup_page_waits_on_a_route_only_the_full_app_serves() {
         "the setup server must not answer the route the page waits on: {probed}"
     );
     assert!(
-        health.starts_with("HTTP/1.1 200 OK"),
-        "and /healthz is the one it does answer, which is why it cannot be the probe: {health}"
+        health.starts_with("HTTP/1.1 404 Not Found"),
+        "a probe must not be told ready by a server that is asking for credentials: {health}"
     );
 }
 
@@ -1684,6 +1687,48 @@ fn binary_web_reads_deployment_keys_from_the_config_file() {
 
     assert!(serve.contains("trusted_proxy_hops(&values)"), "{serve}");
     assert!(!serve.contains("std::env::var"), "{serve}");
+}
+
+/// The log is the one place the error text sends a reader with no console, so
+/// it has to describe the last start rather than any start. Written on failure
+/// and removed on none: a reader who fixes what it named and starts again
+/// would otherwise be sent back to it by the next thing to go wrong.
+#[test]
+fn a_start_that_reaches_the_server_removes_the_log_of_the_last_failure() {
+    let dir = exe_temp_path("stale-error-log");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+    let config = dir.join("run.env");
+    write_config(&config, &dir, "127.0.0.1:1");
+
+    let log = dir.join("codetrial-error.log");
+    std::fs::write(&log, "a reason from a launch that has been fixed\n").unwrap();
+
+    let (_addr, mut server) = spawn_server(|addr| {
+        let mut command = Command::new(&exe);
+        command
+            .args([
+                "web",
+                "--web-addr",
+                addr,
+                "--config",
+                config.to_str().unwrap(),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    });
+
+    // `spawn_server` returns once the server answers, which is past everything
+    // that could have written a log.
+    let cleared = !log.exists();
+    stop_child(&mut server);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        cleared,
+        "a start that got as far as serving must not leave the last failure's log behind"
+    );
 }
 
 /// `spawn_server` decides whether a failed start was a lost port race by

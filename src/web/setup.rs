@@ -29,6 +29,12 @@ use crate::runtime::bootstrap;
 /// `config_path` is where a submission is written, decided by the caller: the
 /// rest of the path rules live there and a second answer here could disagree
 /// with the search the next launch performs.
+///
+/// No `/healthz`. Nothing polls it here any more, and the full app routes it,
+/// so its absence is the readiness answer a probe wants: a container
+/// healthcheck against a process that has no config and is serving a
+/// credential form used to be told 200 by a server that will never host an
+/// interview.
 pub fn setup_service(
     ready: Arc<Notify>,
     production: bool,
@@ -36,7 +42,6 @@ pub fn setup_service(
     config_path: PathBuf,
 ) -> Router {
     Router::new()
-        .route("/healthz", get(|| async { "ok\n" }))
         .route("/", get(setup_page))
         .route(
             "/api/setup",
@@ -98,6 +103,11 @@ async fn setup_page() -> Html<&'static str> {
 /// Field `name`s are the contract with `submit_setup`'s JSON keys. Inline,
 /// not a `web/` file: served before any config exists, outside the embedded
 /// asset tree.
+///
+/// The Google field says what leaving it blank buys, because the only other
+/// place that says so is `run_web`'s `eprintln!`, and this page exists for a
+/// launch with no console to print it on. Blank is a server that looks
+/// finished: the lobby loads, the interview starts, and nothing ever joins.
 const SETUP_PAGE: &str = r#"<!doctype html>
 <html>
 <head>
@@ -131,7 +141,10 @@ const SETUP_PAGE: &str = r#"<!doctype html>
 
   <label for="googleApiKey">Google API Key</label>
   <input id="googleApiKey" name="googleApiKey" type="password">
-  <small>From <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a>.</small>
+  <small>From <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a>.
+  Optional, and what it decides is whether this server hosts the interviewer. Without it
+  the app still loads and an interview still starts, but nobody joins the room: something
+  running elsewhere would have to.</small>
 
   <button id="submit" type="submit">Save and continue</button>
 </form>
@@ -144,8 +157,8 @@ const SETUP_PAGE: &str = r#"<!doctype html>
   async function waitForRestart() {
     // The server keeps the port and swaps what answers on it, so a request landing in
     // the handover waits in the accept backlog rather than failing. Poll anyway: the
-    // gap is not zero. /api/session and not /healthz, because this page's own server
-    // answers /healthz too and a probe that beats its shutdown reloads into the gap.
+    // gap is not zero. Any route the full app alone answers would do; /api/session is
+    // one, and it is the route this page is on its way to.
     for (let attempt = 0; attempt < 40; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 250));
       try {
