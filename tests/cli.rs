@@ -38,7 +38,7 @@ fn run_cli_args_with_env(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, 
 /// That is not hypothetical; it is how `replace == with != in run_web` reached
 /// CI as a 33-second timeout. Bounded, so a guard that stopped guarding is a
 /// red test.
-fn run_cli_until_exit(args: &[&str]) -> (i32, String, String) {
+fn run_cli_until_exit(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, String) {
     // Generous for a loaded runner, and well inside the timeout `cargo mutants`
     // derives from the baseline (33s when this was written). A bound above that
     // would score a caught mutant as a timeout again, which is the failure this
@@ -47,7 +47,7 @@ fn run_cli_until_exit(args: &[&str]) -> (i32, String, String) {
 
     let cwd = exe_temp_path("empty-cwd");
     std::fs::create_dir_all(&cwd).expect("empty cwd should create");
-    let mut child = cli_command(args, &[], &cwd)
+    let mut child = cli_command(args, envs, &cwd)
         .spawn()
         .expect("codetrial should start");
 
@@ -1045,40 +1045,18 @@ async fn setup_page_continues_serving_the_full_app_after_a_successful_submission
 /// launch is a cold start and the page cannot come back to say why.
 #[test]
 fn a_production_cold_start_without_a_session_secret_refuses_to_serve() {
-    let dir = exe_temp_path("setup-production-no-secret");
-    std::fs::create_dir_all(&dir).unwrap();
-
-    // `cli_command` links the binary into `dir` itself and clears
-    // `SESSION_SECRET`, which is the state under test.
+    // Through the bounded runner, because the behaviour this guards against is
+    // a page that serves and waits: an unbounded wait would report that as a
+    // hung suite rather than as this assertion.
     let (code, stdout, stderr) = with_free_addr(|addr| {
-        let output = cli_command(
-            &["web", "--web-addr", addr],
-            &[("NODE_ENV", "production")],
-            &dir,
-        )
-        .output()
-        .expect("codetrial should exit");
-        let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
-        if stderr.contains("Address already in use") {
-            return None;
-        }
-        Some((
-            output.status.code(),
-            String::from_utf8(output.stdout).expect("stdout should be UTF-8"),
-            stderr,
-        ))
+        let result =
+            run_cli_until_exit(&["web", "--web-addr", addr], &[("NODE_ENV", "production")]);
+        (!result.2.contains("failed to bind")).then_some(result)
     });
 
-    let written = dir.join("config").join("codetrial.env.local").exists();
-    let _ = std::fs::remove_dir_all(&dir);
-
-    assert_eq!(code, Some(1));
+    assert_eq!(code, 1);
     assert!(stderr.contains("SESSION_SECRET"), "{stderr}");
     assert!(!stdout.contains("continue setup"), "{stdout}");
-    assert!(
-        !written,
-        "nothing may be written by a launch that never served"
-    );
 }
 
 /// Whitespace survives a paste, and everything after the required-field check
@@ -1131,6 +1109,87 @@ fn setup_page_trims_what_it_was_given() {
     assert!(written.contains("LIVEKIT_API_SECRET=secret\n"), "{written}");
     // Spaces are an empty optional field, not a key to probe Gemini with.
     assert!(!written.contains("GOOGLE_API_KEY"), "{written}");
+}
+
+/// `read_config_file` drops a quote at either end of a value, so one written
+/// raw is probed as one string and loaded as another. The file format cannot
+/// carry it, and saying so on the form is the only place a user can act on it.
+///
+/// The LiveKit mock answers as working credentials would, so the refusal has
+/// to be this rule: without it the submission is accepted and written, and a
+/// 400 for any other reason would be a test that passes for the wrong one.
+#[test]
+fn setup_page_rejects_a_value_edged_with_a_quote() {
+    let dir = exe_temp_path("setup-quoted");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+
+    let mock = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mock_addr = mock.local_addr().unwrap();
+    thread::spawn(move || {
+        if let Ok((mut socket, _)) = mock.accept() {
+            let mut buffer = [0u8; 1024];
+            let _ = socket.read(&mut buffer);
+            let _ = socket.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"rooms\":[]}",
+            );
+        }
+    });
+
+    let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
+
+    let body = format!(
+        r#"{{"livekitUrl":"http://{mock_addr}","livekitApiKey":"key","livekitApiSecret":"'abc","googleApiKey":""}}"#
+    );
+    let response = http_request(
+        &addr,
+        &format!(
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        ),
+    );
+
+    let written = dir.join("config").join("codetrial.env.local").exists();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        response.starts_with("HTTP/1.1 400 Bad Request"),
+        "{response}"
+    );
+    assert!(
+        response.contains("must not start or end with"),
+        "{response}"
+    );
+    assert!(
+        !written,
+        "a value the file cannot carry must not be written"
+    );
+}
+
+/// A file is not the only way to be configured. Exported credentials used to
+/// exit naming the file that was wanted, which a log carries; serving the page
+/// instead left a headless launch waiting on something nobody would open.
+#[test]
+fn binary_web_does_not_ask_when_the_environment_already_answered() {
+    let (code, stdout, stderr) = with_free_addr(|addr| {
+        let result = run_cli_until_exit(
+            &["web", "--web-addr", addr],
+            &[
+                ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+                ("LIVEKIT_API_KEY", "key"),
+                ("LIVEKIT_API_SECRET", "secret"),
+            ],
+        );
+        (!result.2.contains("failed to bind")).then_some(result)
+    });
+
+    assert_eq!(code, 1);
+    assert!(
+        stderr.contains("required configuration file is missing"),
+        "{stderr}"
+    );
+    assert!(!stdout.contains("continue setup"), "{stdout}");
 }
 
 /// Setup writes credentials to disk for whoever posts them, and on a cold
@@ -1507,13 +1566,16 @@ fn binary_web_refuses_a_public_listener_without_a_session_secret() {
 
     let (code, stdout, stderr) = with_free_addr(|addr| {
         let port = addr.rsplit_once(':').unwrap().1;
-        let result = run_cli_until_exit(&[
-            "web",
-            "--web-addr",
-            &format!("0.0.0.0:{port}"),
-            "--config",
-            config.to_str().unwrap(),
-        ]);
+        let result = run_cli_until_exit(
+            &[
+                "web",
+                "--web-addr",
+                &format!("0.0.0.0:{port}"),
+                "--config",
+                config.to_str().unwrap(),
+            ],
+            &[],
+        );
         (!result.2.contains("failed to bind")).then_some(result)
     });
     let _ = std::fs::remove_dir_all(&config_dir);
@@ -1546,13 +1608,16 @@ fn binary_web_refuses_production_without_a_session_secret() {
 
     // No free-port dance: the refusal comes before the bind, so no listener is
     // ever created and there is no port to race for.
-    let (code, stdout, stderr) = run_cli_until_exit(&[
-        "web",
-        "--web-addr",
-        "127.0.0.1:0",
-        "--config",
-        config.to_str().unwrap(),
-    ]);
+    let (code, stdout, stderr) = run_cli_until_exit(
+        &[
+            "web",
+            "--web-addr",
+            "127.0.0.1:0",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[],
+    );
     let _ = std::fs::remove_dir_all(&dir);
 
     assert_eq!(code, 1);
@@ -1628,9 +1693,13 @@ fn binary_web_reads_deployment_keys_from_the_config_file() {
 /// than left to whoever writes the next spawning test.
 #[test]
 fn a_spawned_server_pipes_stderr_so_a_bind_failure_can_be_read() {
-    // No arguments: it exits on a usage error immediately, which is all this
-    // needs. The assertion is about the pipe, not about the server.
-    let child = ServerProcess::spawn(&mut Command::new(env!("CARGO_BIN_EXE_codetrial")));
+    // A mode that does not exist: it exits on a usage error before reading any
+    // config, which is all this needs. No arguments used to do the same and now
+    // means `web`, which in a checkout finds the developer's own config and
+    // starts a server here, in the crate root, with the real environment and
+    // beside the real test binary.
+    let child =
+        ServerProcess::spawn(Command::new(env!("CARGO_BIN_EXE_codetrial")).arg("no-such-mode"));
     assert!(
         child.stderr.is_some(),
         "a child whose stderr is inherited reports an empty reason, and a lost \

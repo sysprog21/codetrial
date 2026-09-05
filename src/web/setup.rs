@@ -263,6 +263,27 @@ async fn submit_setup(
                 json!({ "error": format!("{key} must not contain control characters") }),
             );
         }
+        // `read_config_file` does `trim_matches('"')` then `trim_matches('\'')`,
+        // so a value edged with either is probed as one string and loaded as
+        // another. Refused rather than written, for the reason the newline
+        // above is: this file format cannot carry the value, and answering 200
+        // would mean the file does not hold what was checked. Refusing says so
+        // while there is still a form to say it in.
+        if let Some(edge) = ['"', '\'']
+            .into_iter()
+            .find(|quote| field(key).starts_with(*quote) || field(key).ends_with(*quote))
+        {
+            return super::json_response(
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": format!(
+                        "{key} must not start or end with {edge}: the config file drops \
+                         a quote at either end, so the value read back would not be the \
+                         one checked here"
+                    )
+                }),
+            );
+        }
     }
 
     let livekit_url = field("livekitUrl");

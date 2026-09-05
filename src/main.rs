@@ -232,8 +232,11 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     // Falls through: once `serve_setup` returns, the config exists and the rest
     // of this function is an ordinary launch, on the socket Setup served on.
     // Why that socket is carried here rather than rebound: `serve_setup`.
-    let handed_over = if is_cold_start(&options) {
-        Some(serve_setup(&options)?)
+    // Read once, so the question and the page it opens answer from the same
+    // map.
+    let before_config = environment_and_flags(&options);
+    let handed_over = if is_cold_start(&options, &before_config) {
+        Some(serve_setup(&before_config)?)
     } else {
         None
     };
@@ -408,16 +411,42 @@ fn web_provider_pool(
     Ok(pool)
 }
 
-/// The solo self-serve cold start: no `--config` given and none of the
-/// searched paths holds a file. A named-but-missing `--config` is an
-/// operator's mistake, not this.
+/// The solo self-serve cold start: no `--config` given, none of the searched
+/// paths holds a file, and the environment has not supplied the credentials
+/// either. A named-but-missing `--config` is an operator's mistake, not this.
 ///
 /// The search order comes from `primary_config_path` rather than being
 /// written out again here. Spelled twice it was free to drift, and the drift
 /// is silent in the worst direction: a Setup page in front of someone whose
 /// config the rest of the process is about to read.
-fn is_cold_start(options: &CliOptions) -> bool {
-    options.config_path.is_none() && primary_config_path(options).is_err()
+///
+/// The environment counts because a file is not the only way to be configured.
+/// A headless launch with `LIVEKIT_*` exported and no file used to exit naming
+/// the file it wanted, which is a failure someone reading a log can act on;
+/// asking it instead put a page nobody would open in front of a process that
+/// then waited forever. Only the LiveKit keys, because those are what the web
+/// side refuses to start without, and `GOOGLE_API_KEY` decides whether this
+/// process also hosts interviewers rather than whether it can run.
+fn is_cold_start(options: &CliOptions, values: &BTreeMap<String, String>) -> bool {
+    options.config_path.is_none()
+        && primary_config_path(options).is_err()
+        && !environment_supplies_credentials(values)
+}
+
+/// Whether this launch is already configured without a file.
+///
+/// Its own function so it can be asserted without a filesystem: `is_cold_start`
+/// reaches this only after the config search misses, and the search hits in any
+/// checkout that has a config, which is every machine a developer runs the
+/// suite on.
+///
+/// The LiveKit keys and not `GOOGLE_API_KEY`, because those three are what the
+/// web side refuses to start without. The Google key decides whether this
+/// process also hosts interviewers, which is a shape rather than a requirement.
+fn environment_supplies_credentials(values: &BTreeMap<String, String>) -> bool {
+    ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
+        .iter()
+        .all(|key| nonempty(values, key).is_some())
 }
 
 /// Serves Setup until a submission writes `codetrial.env.local`, then returns
@@ -429,14 +458,8 @@ fn is_cold_start(options: &CliOptions) -> bool {
 /// connections this page just served, and `TIME_WAIT` outlasts any retry worth
 /// writing. The loser has already written the config, so it has also spent the
 /// cold start that would have brought Setup back.
-fn serve_setup(options: &CliOptions) -> Result<std::net::TcpListener, String> {
-    // The environment and the flags, which in a cold start is everything
-    // `load_values` has: the file it reads on top of them is the file that does
-    // not exist yet.
-    let mut values = std::env::vars().collect::<BTreeMap<_, _>>();
-    apply_options(&mut values, options);
-
-    let listener = bind_web_listener(&value_or(&values, "CODETRIAL_WEB_ADDR", DEFAULT_WEB_ADDR))?;
+fn serve_setup(values: &BTreeMap<String, String>) -> Result<std::net::TcpListener, String> {
+    let listener = bind_web_listener(&value_or(values, "CODETRIAL_WEB_ADDR", DEFAULT_WEB_ADDR))?;
 
     // Fails closed on an address the socket cannot name, for the reason
     // `run_web` does: an impossible kernel answer must not be the way past a
@@ -444,13 +467,13 @@ fn serve_setup(options: &CliOptions) -> Result<std::net::TcpListener, String> {
     let bound = listener
         .local_addr()
         .map_err(|error| format!("bound listener has no address to check: {error}"))?;
-    if let Some(refusal) = public_setup_refusal(&values, bound) {
+    if let Some(refusal) = public_setup_refusal(values, bound) {
         return Err(refusal);
     }
     // Everything `run_web` will refuse for that this already knows the answer
     // to. There is one such rule today; the rest of its checks need the pool
     // the submission has not supplied yet.
-    if let Some(refusal) = production_secret_refusal(&values) {
+    if let Some(refusal) = production_secret_refusal(values) {
         return Err(refusal);
     }
     // The window stays open now, but still needs to say where to go.
@@ -474,7 +497,7 @@ fn serve_setup(options: &CliOptions) -> Result<std::net::TcpListener, String> {
             let listener = tokio::net::TcpListener::from_std(listener)?;
             let service = codetrial::web::setup_service(
                 ready.clone(),
-                is_production(&values),
+                is_production(values),
                 bound.port(),
                 cold_start_config_path(),
             );
@@ -648,6 +671,20 @@ fn load_agent_config(options: &CliOptions) -> Result<AgentConfig, String> {
         &provider_order,
     );
     Ok(config)
+}
+
+/// The environment and the flags, which in a cold start is everything
+/// `load_values` has: the file it reads between them is the file that does not
+/// exist yet.
+///
+/// Its own function so `run_web` does not name the process environment. Reading
+/// a deployment key straight from it there is what
+/// `binary_web_reads_deployment_keys_from_the_config_file` refuses, because a
+/// key set in the config file was once silently a no-op.
+fn environment_and_flags(options: &CliOptions) -> BTreeMap<String, String> {
+    let mut values = std::env::vars().collect::<BTreeMap<_, _>>();
+    apply_options(&mut values, options);
+    values
 }
 
 fn load_values(options: &CliOptions) -> Result<BTreeMap<String, String>, String> {
@@ -1391,15 +1428,52 @@ mod tests {
             ..super::CliOptions::default()
         };
 
+        let empty = values(&[]);
         assert!(
-            !super::is_cold_start(&named(root.join("Cargo.toml"))),
+            !super::is_cold_start(&named(root.join("Cargo.toml")), &empty),
             "a config file that exists was named, so there is nothing to set up"
         );
         assert!(
-            !super::is_cold_start(&named(root.join("no-such-config.env"))),
+            !super::is_cold_start(&named(root.join("no-such-config.env")), &empty),
             "a config file that is missing was still named, and a name is an \
              instruction to read that file rather than an invitation to ask"
         );
+    }
+
+    /// Exported credentials are a configured launch, so there is nothing to ask
+    /// for. Asking anyway put a page nobody would open in front of a headless
+    /// start that then waited forever, where naming the missing file and
+    /// exiting was something a log could carry.
+    #[test]
+    fn exported_credentials_are_a_configured_launch() {
+        assert!(super::environment_supplies_credentials(&values(&[
+            ("LIVEKIT_URL", "wss://example"),
+            ("LIVEKIT_API_KEY", "key"),
+            ("LIVEKIT_API_SECRET", "secret"),
+        ])));
+
+        // One short of the set the web side refuses to start without, which is
+        // still a launch that has to be asked.
+        assert!(!super::environment_supplies_credentials(&values(&[
+            ("LIVEKIT_URL", "wss://example"),
+            ("LIVEKIT_API_KEY", "key"),
+        ])));
+
+        // Present and blank is missing, the way `nonempty` reads it everywhere
+        // else, and the way `read_config_file` would have written it back.
+        assert!(!super::environment_supplies_credentials(&values(&[
+            ("LIVEKIT_URL", "wss://example"),
+            ("LIVEKIT_API_KEY", "key"),
+            ("LIVEKIT_API_SECRET", "   "),
+        ])));
+
+        // The optional one is not part of the question.
+        assert!(super::environment_supplies_credentials(&values(&[
+            ("LIVEKIT_URL", "wss://example"),
+            ("LIVEKIT_API_KEY", "key"),
+            ("LIVEKIT_API_SECRET", "secret"),
+            ("GOOGLE_API_KEY", ""),
+        ])));
     }
 
     #[test]
