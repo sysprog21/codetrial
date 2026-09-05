@@ -112,6 +112,7 @@ fn cli_command(args: &[&str], envs: &[(&str, &str)], cwd: &Path) -> Command {
         .env_remove("CODETRIAL_DURATION_MIN")
         .env_remove("CODETRIAL_WEB_DIR")
         .env_remove("CODETRIAL_WEB_ADDR")
+        .env_remove("CODETRIAL_TRUSTED_PROXY_HOPS")
         .env_remove("NODE_ENV")
         .env_remove("SESSION_SECRET")
         .envs(envs.iter().copied())
@@ -243,6 +244,38 @@ fn spawn_server(build: impl Fn(&str) -> Command) -> (String, ServerProcess) {
         }
     }
     panic!("could not start the server on a free port");
+}
+
+/// A cold-start server: the binary beside `dir`, with no config file on any
+/// path it searches and no credentials in the environment.
+///
+/// Three more variables are cleared than the credentials, because
+/// `serve_setup` reads all three: `CODETRIAL_WEB_ADDR` decides where it binds,
+/// `CODETRIAL_TRUSTED_PROXY_HOPS` can refuse the launch outright, and
+/// `NODE_ENV` decides what a submission has to survive. A suite that inherits
+/// any of them from whoever ran it tests a different program on their machine
+/// than in CI -- and the failure arrives as `spawn_server` panicking on a
+/// startup refusal, which reads as the behavior under test breaking.
+fn spawn_cold_start(exe: &Path, dir: &Path, envs: &[(&str, String)]) -> (String, ServerProcess) {
+    spawn_server(|addr| {
+        let mut command = Command::new(exe);
+        command
+            .args(["web", "--web-addr", addr])
+            .current_dir(dir)
+            .env_remove("LIVEKIT_URL")
+            .env_remove("LIVEKIT_API_KEY")
+            .env_remove("LIVEKIT_API_SECRET")
+            .env_remove("GOOGLE_API_KEY")
+            .env_remove("CODETRIAL_WEB_ADDR")
+            .env_remove("CODETRIAL_TRUSTED_PROXY_HOPS")
+            .env_remove("NODE_ENV")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        command
+    })
 }
 
 fn try_http(addr: &str, request: &str) -> Option<String> {
@@ -565,19 +598,7 @@ fn binary_web_serves_a_setup_page_when_no_config_exists() {
     std::fs::create_dir_all(&dir).unwrap();
     let exe = binary_beside(&dir);
 
-    let (addr, _server) = spawn_server(|addr| {
-        let mut command = Command::new(&exe);
-        command
-            .args(["web", "--web-addr", addr])
-            .current_dir(&dir)
-            .env_remove("LIVEKIT_URL")
-            .env_remove("LIVEKIT_API_KEY")
-            .env_remove("LIVEKIT_API_SECRET")
-            .env_remove("GOOGLE_API_KEY")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        command
-    });
+    let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
     let response = http_request(
         &addr,
         "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
@@ -596,19 +617,7 @@ fn setup_page_renders_a_form_with_all_four_credential_fields() {
     std::fs::create_dir_all(&dir).unwrap();
     let exe = binary_beside(&dir);
 
-    let (addr, _server) = spawn_server(|addr| {
-        let mut command = Command::new(&exe);
-        command
-            .args(["web", "--web-addr", addr])
-            .current_dir(&dir)
-            .env_remove("LIVEKIT_URL")
-            .env_remove("LIVEKIT_API_KEY")
-            .env_remove("LIVEKIT_API_SECRET")
-            .env_remove("GOOGLE_API_KEY")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        command
-    });
+    let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
     let response = http_request(
         &addr,
         "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
@@ -665,20 +674,11 @@ async fn setup_page_accepts_credentials_and_writes_the_primary_config_file() {
         }
     });
 
-    let (addr, _server) = spawn_server(|addr| {
-        let mut command = Command::new(&exe);
-        command
-            .args(["web", "--web-addr", addr])
-            .current_dir(&dir)
-            .env("CODETRIAL_GEMINI_LIVE_URL", format!("ws://{gemini_addr}"))
-            .env_remove("LIVEKIT_URL")
-            .env_remove("LIVEKIT_API_KEY")
-            .env_remove("LIVEKIT_API_SECRET")
-            .env_remove("GOOGLE_API_KEY")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        command
-    });
+    let (addr, _server) = spawn_cold_start(
+        &exe,
+        &dir,
+        &[("CODETRIAL_GEMINI_LIVE_URL", format!("ws://{gemini_addr}"))],
+    );
 
     let body = format!(
         r#"{{"livekitUrl":"http://{livekit_addr}","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":"google"}}"#
@@ -727,19 +727,7 @@ fn setup_page_accepts_credentials_without_a_google_api_key() {
         }
     });
 
-    let (addr, _server) = spawn_server(|addr| {
-        let mut command = Command::new(&exe);
-        command
-            .args(["web", "--web-addr", addr])
-            .current_dir(&dir)
-            .env_remove("LIVEKIT_URL")
-            .env_remove("LIVEKIT_API_KEY")
-            .env_remove("LIVEKIT_API_SECRET")
-            .env_remove("GOOGLE_API_KEY")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        command
-    });
+    let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
 
     let body = format!(
         r#"{{"livekitUrl":"http://{livekit_addr}","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":""}}"#
@@ -797,20 +785,11 @@ async fn setup_page_continues_serving_the_full_app_after_a_successful_submission
         }
     });
 
-    let (addr, _server) = spawn_server(|addr| {
-        let mut command = Command::new(&exe);
-        command
-            .args(["web", "--web-addr", addr])
-            .current_dir(&dir)
-            .env("CODETRIAL_GEMINI_LIVE_URL", format!("ws://{gemini_addr}"))
-            .env_remove("LIVEKIT_URL")
-            .env_remove("LIVEKIT_API_KEY")
-            .env_remove("LIVEKIT_API_SECRET")
-            .env_remove("GOOGLE_API_KEY")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        command
-    });
+    let (addr, _server) = spawn_cold_start(
+        &exe,
+        &dir,
+        &[("CODETRIAL_GEMINI_LIVE_URL", format!("ws://{gemini_addr}"))],
+    );
 
     let body = format!(
         r#"{{"livekitUrl":"http://{livekit_addr}","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":"google"}}"#
@@ -849,6 +828,215 @@ async fn setup_page_continues_serving_the_full_app_after_a_successful_submission
     assert!(response.contains(r#""loginRequired":true"#), "{response}");
 }
 
+/// Setup writes credentials to disk for whoever posts them, and on a cold
+/// start there is nothing it could authenticate them with. A public listener
+/// is refused outright rather than served with a warning: the old behavior for
+/// this launch was an exit naming the missing config, and that is a safer
+/// answer than an open one.
+#[test]
+fn binary_web_refuses_to_serve_setup_on_a_public_address() {
+    let dir = exe_temp_path("setup-public-address");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Port 0 on the unspecified address: bound and named by the kernel, so the
+    // test needs no fixed port, and not loopback, which is the whole question.
+    let output = cli_command(&["web", "--web-addr", "0.0.0.0:0"], &[], &dir)
+        .output()
+        .expect("codetrial should exit");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+    let log = std::fs::read_to_string(dir.join("codetrial-error.log"));
+    let written = dir.join("codetrial.env.local").exists();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("refusing to serve the Setup page"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("codetrial.env.local"), "{stderr}");
+    assert!(!written, "a refused Setup must not write a config file");
+    let log = log.expect("codetrial-error.log should have been written");
+    assert!(log.contains("refusing to serve the Setup page"), "{log}");
+}
+
+/// The flag is not the only way to ask for a public listener. `serve_setup`
+/// used to read `--web-addr` alone while the launch it hands over to reads
+/// `CODETRIAL_WEB_ADDR` as well, so an operator who set the variable got a
+/// Setup page on loopback and then a server on every interface: two addresses
+/// in one start, and only the second one guarded.
+#[test]
+fn binary_web_refuses_a_public_setup_address_from_the_environment() {
+    let dir = exe_temp_path("setup-public-address-env");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let output = cli_command(&["web"], &[("CODETRIAL_WEB_ADDR", "0.0.0.0:0")], &dir)
+        .output()
+        .expect("codetrial should exit");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("refusing to serve the Setup page"),
+        "{stderr}"
+    );
+}
+
+/// `codetrial.env.local` is read back a line at a time, so a newline inside a
+/// submitted value is a config key nobody submitted -- `SESSION_SECRET` among
+/// them, in the file this same process is about to read. Refused before the
+/// probe, so a value like this never reaches the network either.
+#[test]
+fn setup_page_rejects_a_field_carrying_a_newline() {
+    let dir = exe_temp_path("setup-newline-field");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+
+    let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
+
+    // Every field, because every field is written as a line of that file.
+    // `livekitApiSecret` is the one that would otherwise get furthest: it is
+    // only ever signed into a JWT, so a newline in it is nothing a LiveKit
+    // server has any reason to reject, and the submission would reach the
+    // write.
+    //
+    // The newline is JSON's `\n` escape, not a raw byte: serde refuses a
+    // control character inside a string outright, so the escaped form is the
+    // only one that reaches the handler, and it decodes to the same newline.
+    for carrier in [
+        "livekitUrl",
+        "livekitApiKey",
+        "livekitApiSecret",
+        "googleApiKey",
+    ] {
+        let value = |field: &str| match field {
+            _ if field == carrier => r"poisoned\nSESSION_SECRET=known",
+            "livekitUrl" => "wss://example.livekit.cloud",
+            "googleApiKey" => "",
+            _ => "value",
+        };
+        let body = format!(
+            r#"{{"livekitUrl":"{}","livekitApiKey":"{}","livekitApiSecret":"{}","googleApiKey":"{}"}}"#,
+            value("livekitUrl"),
+            value("livekitApiKey"),
+            value("livekitApiSecret"),
+            value("googleApiKey")
+        );
+        let response = http_request(
+            &addr,
+            &format!(
+                "POST /api/setup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            ),
+        );
+
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request"),
+            "{carrier}: {response}"
+        );
+        assert!(response.contains(carrier), "{carrier}: {response}");
+        assert!(
+            response.contains("control characters"),
+            "{carrier}: {response}"
+        );
+        assert!(
+            !dir.join("codetrial.env.local").exists(),
+            "{carrier}: a rejected submission must not write a config file"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The rules the launch on the far side of this page applies to the file are
+/// applied while the form is still on screen. Without this the URL is written,
+/// answered with 200, and then refused by `web_provider_pool`, which exits --
+/// and the file now exists, so the next start is not a cold start and the page
+/// never comes back.
+///
+/// No LiveKit mock: the refusal has to come before the probe, and a test that
+/// stood up a server to answer `ListRooms` could not tell the two apart.
+#[test]
+fn setup_page_refuses_a_plaintext_url_when_node_env_is_production() {
+    let dir = exe_temp_path("setup-production-plaintext");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+
+    let (addr, _server) = spawn_cold_start(&exe, &dir, &[("NODE_ENV", "production".to_string())]);
+
+    let body = r#"{"livekitUrl":"http://example.livekit.cloud","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":""}"#;
+    let response = http_request(
+        &addr,
+        &format!(
+            "POST /api/setup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        ),
+    );
+
+    let written = dir.join("codetrial.env.local").exists();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        response.starts_with("HTTP/1.1 400 Bad Request"),
+        "{response}"
+    );
+    assert!(
+        response.contains("must use wss:// or https://"),
+        "{response}"
+    );
+    assert!(
+        !written,
+        "a rejected submission must not write a config file"
+    );
+}
+
+/// The page polls for the app that replaces it, and both servers answer
+/// `/healthz`: a probe on that route can be satisfied by the listener that is
+/// shutting down, and the reload then lands in the gap before the app has
+/// bound. `/api/session` is routed by the full app alone.
+#[test]
+fn setup_page_waits_on_a_route_only_the_full_app_serves() {
+    let dir = exe_temp_path("setup-readiness-probe");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+
+    let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
+    let page = http_request(
+        &addr,
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+
+    // Both halves of the contract. The page naming the route is one; the other
+    // is that this server does not answer it, without which a route added to
+    // `setup_service` would put the bug back with the page unchanged and this
+    // test still green.
+    let probed = http_request(
+        &addr,
+        "GET /api/session HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    let health = http_request(
+        &addr,
+        "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(page.contains("fetch('/api/session'"), "{page}");
+    assert!(
+        !page.contains("fetch('/healthz'"),
+        "the readiness probe must not use a route this server answers itself"
+    );
+    assert!(
+        probed.starts_with("HTTP/1.1 404 Not Found"),
+        "the setup server must not answer the route the page waits on: {probed}"
+    );
+    assert!(
+        health.starts_with("HTTP/1.1 200 OK"),
+        "and /healthz is the one it does answer, which is why it cannot be the probe: {health}"
+    );
+}
+
 /// A missing field is refused before anything touches disk.
 #[test]
 fn setup_page_rejects_a_submission_missing_a_field() {
@@ -856,19 +1044,7 @@ fn setup_page_rejects_a_submission_missing_a_field() {
     std::fs::create_dir_all(&dir).unwrap();
     let exe = binary_beside(&dir);
 
-    let (addr, _server) = spawn_server(|addr| {
-        let mut command = Command::new(&exe);
-        command
-            .args(["web", "--web-addr", addr])
-            .current_dir(&dir)
-            .env_remove("LIVEKIT_URL")
-            .env_remove("LIVEKIT_API_KEY")
-            .env_remove("LIVEKIT_API_SECRET")
-            .env_remove("GOOGLE_API_KEY")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        command
-    });
+    let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
 
     // `livekitUrl` is absent entirely; the others are merely blank, so this
     // exercises both ways a field can fail to be there.
@@ -927,20 +1103,11 @@ async fn setup_page_rejects_a_google_api_key_that_fails_live_validation() {
         }
     });
 
-    let (addr, _server) = spawn_server(|addr| {
-        let mut command = Command::new(&exe);
-        command
-            .args(["web", "--web-addr", addr])
-            .current_dir(&dir)
-            .env("CODETRIAL_GEMINI_LIVE_URL", format!("ws://{gemini_addr}"))
-            .env_remove("LIVEKIT_URL")
-            .env_remove("LIVEKIT_API_KEY")
-            .env_remove("LIVEKIT_API_SECRET")
-            .env_remove("GOOGLE_API_KEY")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        command
-    });
+    let (addr, _server) = spawn_cold_start(
+        &exe,
+        &dir,
+        &[("CODETRIAL_GEMINI_LIVE_URL", format!("ws://{gemini_addr}"))],
+    );
 
     let body = format!(
         r#"{{"livekitUrl":"http://{livekit_addr}","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":"bad-key"}}"#
@@ -985,19 +1152,7 @@ fn setup_page_rejects_livekit_credentials_that_fail_live_validation() {
         }
     });
 
-    let (addr, _server) = spawn_server(|addr| {
-        let mut command = Command::new(&exe);
-        command
-            .args(["web", "--web-addr", addr])
-            .current_dir(&dir)
-            .env_remove("LIVEKIT_URL")
-            .env_remove("LIVEKIT_API_KEY")
-            .env_remove("LIVEKIT_API_SECRET")
-            .env_remove("GOOGLE_API_KEY")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        command
-    });
+    let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
 
     let body = format!(
         r#"{{"livekitUrl":"http://{mock_addr}","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":"google"}}"#
@@ -1283,33 +1438,27 @@ fn binary_web_logs_any_startup_failure_not_just_a_cold_start_one() {
 fn binary_web_prints_the_url_to_open_when_setup_starts_serving() {
     let dir = exe_temp_path("setup-prints-url");
     std::fs::create_dir_all(&dir).unwrap();
-    let addr = free_addr();
+    let exe = binary_beside(&dir);
 
-    let mut child = Command::new(binary_beside(&dir))
-        .args(["web", "--web-addr", &addr])
-        .current_dir(&dir)
-        .env_remove("LIVEKIT_URL")
-        .env_remove("LIVEKIT_API_KEY")
-        .env_remove("LIVEKIT_API_SECRET")
-        .env_remove("GOOGLE_API_KEY")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("codetrial should start");
+    // Through `spawn_cold_start` rather than a bare `free_addr`, because the
+    // port it hands out is only free until its listener closes: a sibling
+    // socket taking it first is a bind failure, and read as this assertion
+    // failing it would say the server stopped printing its URL.
+    let (addr, mut server) = spawn_cold_start(&exe, &dir, &[]);
 
-    let mut stdout = child.stdout.take().expect("stdout is piped");
+    // Taken after the server is answering, and read to EOF only once the child
+    // is stopped: the pipe stays open for as long as it is running.
+    let mut stdout = server.stdout.take().expect("stdout is piped");
     let stdout_reader = thread::spawn(move || {
         let mut text = String::new();
         let _ = stdout.read_to_string(&mut text);
         text
     });
 
-    let started = wait_for_http(&addr, &mut child);
-    stop_child(&mut child);
+    stop_child(&mut server);
     let _ = std::fs::remove_dir_all(&dir);
     let output = stdout_reader.join().expect("stdout reader should finish");
 
-    assert!(started.is_ok(), "{started:?}");
     assert!(output.contains(&addr), "{output}");
 }
 
@@ -1320,35 +1469,37 @@ fn binary_web_prints_the_url_to_open_for_the_full_app_too() {
     let dir = temp_path("full-app-prints-url");
     std::fs::create_dir_all(&dir).unwrap();
     let config = dir.join("codetrial.env.local");
+
+    // The address in the file is never bound: `--web-addr` overrides it in
+    // `load_values`, and `spawn_server` picks a fresh one for each attempt.
     write_config(&config, &dir, "127.0.0.1:1");
-    let addr = free_addr();
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_codetrial"))
-        .args([
-            "web",
-            "--web-addr",
-            &addr,
-            "--config",
-            config.to_str().unwrap(),
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("codetrial should start");
+    let (addr, mut server) = spawn_server(|addr| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_codetrial"));
+        command
+            .args([
+                "web",
+                "--web-addr",
+                addr,
+                "--config",
+                config.to_str().unwrap(),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    });
 
-    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let mut stdout = server.stdout.take().expect("stdout is piped");
     let stdout_reader = thread::spawn(move || {
         let mut text = String::new();
         let _ = stdout.read_to_string(&mut text);
         text
     });
 
-    let started = wait_for_http(&addr, &mut child);
-    stop_child(&mut child);
+    stop_child(&mut server);
     let _ = std::fs::remove_dir_all(&dir);
     let output = stdout_reader.join().expect("stdout reader should finish");
 
-    assert!(started.is_ok(), "{started:?}");
     assert!(output.contains(&addr), "{output}");
 }
 

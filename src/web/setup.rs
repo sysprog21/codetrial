@@ -17,13 +17,17 @@ use crate::runtime::bootstrap;
 
 /// Notified on a successful submission: the caller's shutdown signal to
 /// drop this listener and rebind as the full app.
-pub fn setup_service(ready: Arc<Notify>) -> Router {
+///
+/// `production` is the caller's, not one read here. The launch this hands over
+/// to enforces the production rules on the file this writes, and a second
+/// reading of `NODE_ENV` is a second answer waiting to disagree with it.
+pub fn setup_service(ready: Arc<Notify>, production: bool) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/", get(setup_page))
         .route(
             "/api/setup",
-            post(move |body| submit_setup(body, ready.clone())),
+            post(move |body| submit_setup(body, ready.clone(), production)),
         )
 }
 
@@ -78,10 +82,12 @@ const SETUP_PAGE: &str = r#"<!doctype html>
 
   async function waitForRestart() {
     // Server rebinds after success; poll instead of reloading once so the gap is invisible.
+    // /api/session and not /healthz: this page's own server answers /healthz too, so a
+    // probe that beats its shutdown would reload into the gap before the app has bound.
     for (let attempt = 0; attempt < 40; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 250));
       try {
-        const probe = await fetch('/healthz', { cache: 'no-store' });
+        const probe = await fetch('/api/session', { cache: 'no-store' });
         if (probe.ok) break;
       } catch (error) {
         // keep polling
@@ -129,7 +135,11 @@ const SETUP_PAGE: &str = r#"<!doctype html>
 /// Parsed as `Value`, not a derived struct — this crate has no `serde`
 /// derive dependency, and a missing field reads as empty rather than a
 /// parse error.
-async fn submit_setup(Json(submission): Json<Value>, ready: Arc<Notify>) -> Response {
+async fn submit_setup(
+    Json(submission): Json<Value>,
+    ready: Arc<Notify>,
+    production: bool,
+) -> Response {
     let field = |key: &str| {
         submission
             .get(key)
@@ -142,10 +152,33 @@ async fn submit_setup(Json(submission): Json<Value>, ready: Arc<Notify>) -> Resp
     // optional here, same as an operator's config file: empty means web-only,
     // no interviewer hosted by this process.
     for key in ["livekitUrl", "livekitApiKey", "livekitApiSecret"] {
-        if field(key).is_empty() {
+        // Trimmed, because `read_config_file` trims when it reads this back and
+        // `nonempty` then calls it missing: a value of spaces would be accepted
+        // here, written, and refused by the launch this page hands over to.
+        if field(key).trim().is_empty() {
             return super::json_response(
                 StatusCode::BAD_REQUEST,
                 json!({ "error": format!("{key} is required") }),
+            );
+        }
+    }
+
+    // Every field, including the optional one, and before anything is sent
+    // anywhere. These are written as `KEY=value` lines below and read back by
+    // `read_config_file`, which parses one line at a time: a newline inside a
+    // value is a second line, and a second line is a config key nobody
+    // submitted. `SESSION_SECRET` is one such key, and this process reads the
+    // file it just wrote.
+    for key in [
+        "livekitUrl",
+        "livekitApiKey",
+        "livekitApiSecret",
+        "googleApiKey",
+    ] {
+        if field(key).chars().any(char::is_control) {
+            return super::json_response(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": format!("{key} must not contain control characters") }),
             );
         }
     }
@@ -154,6 +187,34 @@ async fn submit_setup(Json(submission): Json<Value>, ready: Arc<Notify>) -> Resp
     let livekit_api_key = field("livekitApiKey");
     let livekit_api_secret = field("livekitApiSecret");
     let google_api_key = field("googleApiKey");
+
+    // The keys this submission becomes, in the order the file below writes
+    // them. One list: what the launch is asked about has to be what gets
+    // written, or the answer was about a different config.
+    let pairs = [
+        ("LIVEKIT_URL", livekit_url.as_str()),
+        ("LIVEKIT_API_KEY", livekit_api_key.as_str()),
+        ("LIVEKIT_API_SECRET", livekit_api_secret.as_str()),
+        ("GOOGLE_API_KEY", google_api_key.as_str()),
+    ];
+
+    // The rule the launch on the other side of this page applies to the URL,
+    // applied while there is still a form to report it in. Without it a URL
+    // this accepts and `web_provider_pool` refuses is written, answered with
+    // 200, and then kills the process that was about to serve it -- and because
+    // the file now exists, the next launch is no longer a cold start, so the
+    // page never comes back to correct it. Before the probes, which are the
+    // slow half and reach the network.
+    //
+    // The URL is one rule of several that `run_web` applies to this file; the
+    // rest still fire after the write, which is a separate change.
+    //
+    // Reported as it stands, naming `LIVEKIT_URL` rather than the form's
+    // `livekitUrl`: the two spellings are the same value, and the one in the
+    // message is what the reader will find in the file afterwards.
+    if let Err(error) = crate::config::validate_livekit_url(&livekit_url, production) {
+        return super::json_response(StatusCode::BAD_REQUEST, json!({ "error": error }));
+    }
 
     if let Err(error) = crate::livekit::validate_livekit_credentials(
         &livekit_url,
@@ -174,12 +235,6 @@ async fn submit_setup(Json(submission): Json<Value>, ready: Arc<Notify>) -> Resp
     }
 
     if !google_api_key.is_empty() {
-        let pairs = [
-            ("LIVEKIT_URL", livekit_url.clone()),
-            ("LIVEKIT_API_KEY", livekit_api_key.clone()),
-            ("LIVEKIT_API_SECRET", livekit_api_secret.clone()),
-            ("GOOGLE_API_KEY", google_api_key.clone()),
-        ];
         let config = match load_from_pairs(pairs) {
             Ok(config) => config,
             Err(error) => {
@@ -190,8 +245,9 @@ async fn submit_setup(Json(submission): Json<Value>, ready: Arc<Notify>) -> Resp
             }
         };
 
-        // Same proof as `check-gemini`: open a real session. `CODETRIAL_GEMINI_LIVE_URL`
-        // lets tests redirect this away from the real endpoint.
+        // Same proof as `check-gemini`: open a real session.
+        // `CODETRIAL_GEMINI_LIVE_URL` lets tests redirect this away from the
+        // real endpoint.
         let room_name = format!("{}-smoke", config.room_prefix);
         let boot = bootstrap(&config, &room_name, None, config.default_duration_min);
         let url = std::env::var("CODETRIAL_GEMINI_LIVE_URL")
@@ -209,9 +265,13 @@ async fn submit_setup(Json(submission): Json<Value>, ready: Arc<Notify>) -> Resp
         }
     }
 
-    let contents = format!(
-        "LIVEKIT_URL={livekit_url}\nLIVEKIT_API_KEY={livekit_api_key}\nLIVEKIT_API_SECRET={livekit_api_secret}\nGOOGLE_API_KEY={google_api_key}\n",
-    );
+    // From `pairs`, so the file holds exactly the config that was checked and
+    // probed above. Every value is known to carry no newline by now, which is
+    // what makes one line per key a faithful encoding of it.
+    let contents = pairs
+        .iter()
+        .map(|(key, value)| format!("{key}={value}\n"))
+        .collect::<String>();
     let path = crate::exe_dir().join("codetrial.env.local");
     if let Err(error) = std::fs::write(&path, contents) {
         return super::json_response(
@@ -219,7 +279,9 @@ async fn submit_setup(Json(submission): Json<Value>, ready: Arc<Notify>) -> Resp
             json!({ "error": format!("could not write {}: {error}", path.display()) }),
         );
     }
-    // Only reached once the file is on disk; tells the caller to rebind as the full app.
+
+    // Only reached once the file is on disk; tells the caller to rebind as the
+    // full app.
     ready.notify_one();
     super::json_response(StatusCode::OK, json!({ "saved": true }))
 }

@@ -72,10 +72,12 @@ Explorer service.
 The binary looks for `codetrial.env.local` in `./config/`, then in the current
 directory, then beside the executable itself. Use `--config PATH` to point at a
 different file. Extra `codetrial.env.*` files in the same directory are optional
-providers used for pooling. If `web` mode finds no config file at all, it opens
-a Setup page in your browser instead — you can skip steps 2–3 above, fill in
-your keys there, and it writes them to `codetrial.env.local` for you. See
-[Prebuilt binaries](#prebuilt-binaries).
+providers used for pooling. If `web` mode finds no config file at all, it serves
+a Setup page instead and prints the URL to open — you can skip steps 2–3 above,
+fill in your keys there, and it writes them to `codetrial.env.local` for you. That page
+serves on a loopback address only; a start that would put it on any other
+address refuses instead, and writing the file yourself is the way to deploy for
+other people. See [Prebuilt binaries](#prebuilt-binaries).
 
 ## Prebuilt binaries
 
@@ -107,8 +109,12 @@ xattr -d com.apple.quarantine codetrial-aarch64-apple-darwin
 mv codetrial-aarch64-apple-darwin codetrial
 ```
 
-Run `./codetrial` with no config file nearby, and `web` mode opens a Setup
-page in your browser at <http://127.0.0.1:3000> instead of refusing to start.
+Run `./codetrial` with no config file nearby, and `web` mode serves a Setup
+page at <http://127.0.0.1:3000> instead of refusing to start, printing that
+address for you to open.
+Loopback is the only place it will serve: `--web-addr 0.0.0.0:3000` or
+`CODETRIAL_WEB_ADDR` pointing anywhere else is refused, because the page takes
+credentials over plain HTTP from anyone who can reach it.
 Enter your LiveKit keys there, and your Google key if you want this process to
 host interviewers (see below). Saving writes them **in plain text** to
 `codetrial.env.local` beside the executable — the same file you would

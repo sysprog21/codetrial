@@ -11,7 +11,7 @@ const DEFAULT_CONFIG_PATH: &str = "config/codetrial.env.local";
 const DEFAULT_ACCOUNT_DB_PATH: &str = "codetrial.db";
 const DEFAULT_SESSION_SECRET: &str = "codetrial-local-session";
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct CliOptions {
     config_path: Option<String>,
     web_addr: Option<String>,
@@ -28,7 +28,8 @@ struct CliOptions {
 /// check is a mode that silently ignores its extra arguments.
 const MODES: [(&str, usize, &str, ModeFn); 3] = [
     ("web", 1, "codetrial web [OPTIONS]", |_, options| {
-        // Logged for `web` only: `run-livekit`/`check-gemini` are terminal-run tooling.
+        // Logged for `web` only: `run-livekit`/`check-gemini` are terminal-run
+        // tooling.
         run_web(options).inspect_err(|error| log_web_error(error))
     }),
     (
@@ -87,7 +88,9 @@ fn run_agent_command(args: &[String]) -> i32 {
             return 2;
         }
     };
-    // No console survives to show a usage line on double-click; default to `web`.
+
+    // No console survives to show a usage line on double-click; default to
+    // `web`.
     if positionals.is_empty() {
         positionals.push("web".to_string());
     }
@@ -217,8 +220,8 @@ fn bind_web_listener(addr: &str) -> Result<std::net::TcpListener, String> {
 
 fn run_web(options: CliOptions) -> Result<(), String> {
     if is_cold_start(&options) {
-        // Falls through: once `serve_setup` returns, the config exists, so
-        // the rest of this function is an ordinary launch — same process.
+        // Falls through: once `serve_setup` returns, the config exists, so the
+        // rest of this function is an ordinary launch — same process.
         serve_setup(&options)?;
     }
     let values = load_values(&options)?;
@@ -411,21 +414,78 @@ fn is_cold_start(options: &CliOptions) -> bool {
 /// returns so `run_web` continues as an ordinary launch. Drop-and-rebind,
 /// not a swappable router: the gap is milliseconds, worth one retry.
 fn serve_setup(options: &CliOptions) -> Result<(), String> {
-    let listener = bind_web_listener(options.web_addr.as_deref().unwrap_or(DEFAULT_WEB_ADDR))?;
-    // The window stays open now, but still needs to say where to go.
-    if let Ok(bound) = listener.local_addr() {
-        println!("codetrial: open http://{bound} in your browser to continue setup");
+    // The environment and the flags, which in a cold start is everything
+    // `load_values` has: the file it reads on top of them is the file that does
+    // not exist yet. Built the same way here so this listener and the one
+    // `run_web` binds a moment later cannot land on different addresses --
+    // `CODETRIAL_WEB_ADDR` in the environment used to reach only the second.
+    let mut values = std::env::vars().collect::<BTreeMap<_, _>>();
+    apply_options(&mut values, options);
+
+    let listener = bind_web_listener(&value_or(&values, "CODETRIAL_WEB_ADDR", DEFAULT_WEB_ADDR))?;
+
+    // Fails closed on an address the socket cannot name, for the reason
+    // `run_web` does: an impossible kernel answer must not be the way past a
+    // security guard.
+    let bound = listener
+        .local_addr()
+        .map_err(|error| format!("bound listener has no address to check: {error}"))?;
+    if let Some(refusal) = public_setup_refusal(&values, bound) {
+        return Err(refusal);
     }
+    // The window stays open now, but still needs to say where to go.
+    println!("codetrial: open http://{bound} in your browser to continue setup");
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
     runtime
         .block_on(async {
             let ready = Arc::new(tokio::sync::Notify::new());
             let listener = tokio::net::TcpListener::from_std(listener)?;
-            axum::serve(listener, codetrial::web::setup_service(ready.clone()))
+            let service = codetrial::web::setup_service(ready.clone(), is_production(&values));
+            axum::serve(listener, service)
                 .with_graceful_shutdown(async move { ready.notified().await })
                 .await
         })
         .map_err(|error| format!("web server failed: {error}"))
+}
+
+/// Why Setup may not serve on `bound`, or `None` where it may.
+///
+/// Setup writes LiveKit credentials to disk for whoever posts them and has
+/// nothing to authenticate that person with: on a cold start there is no
+/// config, no account database and no secret either side could have agreed on
+/// beforehand. What confines it is the listener, so the listener is what gets
+/// checked. Adding a password to the page would only be a second credential
+/// the same person has to be told over the same channel, and a cold start has
+/// no console to print it on.
+///
+/// The reachability test is `published_secret_refusal`'s, whose doc says why it
+/// is written this way and why a declared proxy counts.
+///
+/// Each reason names the one thing its reader can change, because the remedy
+/// for the two is not the same: an address is passed on the command line, a
+/// declared proxy is a variable in the environment, and "bind loopback" is no
+/// help to someone already on it.
+fn public_setup_refusal(
+    values: &BTreeMap<String, String>,
+    bound: std::net::SocketAddr,
+) -> Option<String> {
+    let reason = if !bound.ip().to_canonical().is_loopback() {
+        format!("it is bound to {bound}, which is not a loopback address")
+    } else if trusted_proxy_hops(values) > 0 {
+        "CODETRIAL_TRUSTED_PROXY_HOPS says something in front of it forwards \
+         requests from elsewhere"
+            .to_string()
+    } else {
+        return None;
+    };
+
+    Some(format!(
+        "refusing to serve the Setup page because {reason}: it takes LiveKit credentials \
+         from anyone who can reach it, over plain HTTP, and has nothing to authenticate \
+         them with. Serve it where only this machine can reach it, or write \
+         codetrial.env.local with LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET \
+         before starting."
+    ))
 }
 
 /// Any `web` failure, not just a cold-start one. No attempt to tell a solo
@@ -535,6 +595,17 @@ fn load_values(options: &CliOptions) -> Result<BTreeMap<String, String>, String>
     for (key, value) in codetrial::config::read_config_file(&path)? {
         values.insert(key, value);
     }
+    apply_options(&mut values, options);
+    Ok(values)
+}
+
+/// The flags, over whatever the environment and the config file said.
+///
+/// Split out because a cold start has to build the same map without the file
+/// it does not have yet: `serve_setup` decides where to bind and what a
+/// submission must survive, and both answers have to be the ones `run_web`
+/// will reach a moment later. Spelled twice, this precedence is free to drift.
+fn apply_options(values: &mut BTreeMap<String, String>, options: &CliOptions) {
     if let Some(value) = &options.web_addr {
         values.insert("CODETRIAL_WEB_ADDR".to_string(), value.clone());
     }
@@ -547,7 +618,6 @@ fn load_values(options: &CliOptions) -> Result<BTreeMap<String, String>, String>
     if let Some(value) = options.duration_min {
         values.insert("CODETRIAL_DURATION_MIN".to_string(), value.to_string());
     }
-    Ok(values)
 }
 
 fn primary_config_path(options: &CliOptions) -> Result<PathBuf, String> {
@@ -561,6 +631,7 @@ fn primary_config_path(options: &CliOptions) -> Result<PathBuf, String> {
         }
         return Ok(path);
     }
+
     // The working directory first, which is a checkout's `config/` and an
     // operator's deployment directory, then the folder the executable sits in.
     // A release binary is unpacked into a folder of its own and its config is
@@ -976,6 +1047,96 @@ mod tests {
             ),
             None,
             "no declared proxy is the local run the default exists for"
+        );
+    }
+
+    /// The precedence two launches depend on: a cold start builds this map
+    /// without a config file and has to reach the same address and the same
+    /// verdict `run_web` will reach with one. A flag overrides what was in the
+    /// environment; no flag leaves it alone.
+    #[test]
+    fn the_flags_override_the_environment_and_only_where_given() {
+        let mut values = values(&[
+            ("CODETRIAL_WEB_ADDR", "127.0.0.1:1"),
+            ("CODETRIAL_WEB_DIR", "env-dir"),
+            ("NODE_ENV", "production"),
+        ]);
+        super::apply_options(
+            &mut values,
+            &super::CliOptions {
+                web_addr: Some("127.0.0.1:2".to_string()),
+                room_prefix: Some("flag".to_string()),
+                duration_min: Some(45),
+                ..super::CliOptions::default()
+            },
+        );
+
+        assert_eq!(values["CODETRIAL_WEB_ADDR"], "127.0.0.1:2");
+        assert_eq!(values["CODETRIAL_ROOM_PREFIX"], "flag");
+        assert_eq!(values["CODETRIAL_DURATION_MIN"], "45");
+        assert_eq!(
+            values["CODETRIAL_WEB_DIR"], "env-dir",
+            "a flag that was not passed must not erase the environment"
+        );
+        assert_eq!(
+            values["NODE_ENV"], "production",
+            "and must not touch the rest"
+        );
+    }
+
+    /// Setup is confined to the same interface the published session secret is,
+    /// and for a sharper reason: this listener hands `codetrial.env.local` to
+    /// whoever posts to it. Unlike `published_secret_refusal` there is no value
+    /// an operator can set to lift it, so every address is tested against one
+    /// empty environment.
+    #[test]
+    fn the_setup_page_is_confined_to_loopback() {
+        for local in [
+            "127.0.0.1:3000",
+            "127.0.0.53:3000",
+            "[::1]:3000",
+            "[::ffff:127.0.0.1]:3000",
+        ] {
+            assert_eq!(
+                super::public_setup_refusal(&values(&[]), addr(local)),
+                None,
+                "{local} reaches no further than this machine"
+            );
+        }
+
+        for public in ["0.0.0.0:3000", "[::]:3000", "192.168.1.10:3000"] {
+            let refusal = super::public_setup_refusal(&values(&[]), addr(public))
+                .unwrap_or_else(|| panic!("{public} must be refused"));
+            assert!(refusal.contains(public), "{refusal}");
+            assert!(refusal.contains("codetrial.env.local"), "{refusal}");
+        }
+    }
+
+    /// The same admission that makes a loopback bind public for the session
+    /// secret makes it public for Setup: a tunnel or an nginx in front is how
+    /// the internet reaches 127.0.0.1.
+    #[test]
+    fn a_declared_proxy_closes_the_setup_page_too() {
+        let refusal = super::public_setup_refusal(
+            &values(&[("CODETRIAL_TRUSTED_PROXY_HOPS", "1")]),
+            addr("127.0.0.1:3000"),
+        )
+        .expect("loopback behind a declared proxy must be refused");
+
+        // The variable by name: it is the only thing the reader of this message
+        // can change, and the address they are on is already loopback.
+        assert!(
+            refusal.contains("CODETRIAL_TRUSTED_PROXY_HOPS"),
+            "{refusal}"
+        );
+
+        assert_eq!(
+            super::public_setup_refusal(
+                &values(&[("CODETRIAL_TRUSTED_PROXY_HOPS", "0")]),
+                addr("127.0.0.1:3000")
+            ),
+            None,
+            "no declared proxy is the solo cold start this page exists for"
         );
     }
 
