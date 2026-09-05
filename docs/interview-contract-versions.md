@@ -1,38 +1,48 @@
 # Interview contract versioning
 
-Every agent-produced report carries one `interviewContract` bundle with five
-positive integer versions: the bundle, live prompt, report prompt, scoring rubric,
-and public report schema. The server owns this value and stamps it after model
-generation; model or candidate output cannot select it.
+Every agent-produced report carries one `interviewContract` bundle of five
+positive integer versions: the bundle, the live prompt, the report prompt, the
+scoring rubric, and the public report schema. The server owns that value and
+stamps it after model generation, so neither model output nor candidate input
+can select it.
 
-The active bundle is version 4: live prompt 1, report prompt 4, rubric 1, and
-report schema 1. Bundle 4 makes the observable-delivery policy explicit in the
-report prompt and server validator without changing the rubric or public shape.
-Bundle 3 explicitly keeps framework phase scores formative and
-prohibits using them mechanically for hiring decisions while calibration remains
-incomplete. Bundle 2 introduced provider-enforced structured report output and
-strict validation without changing rubric semantics or the public schema. A change to prompt behavior,
-score anchors, or report shape must update the relevant component and create a new
-bundle version in the same change. Update Rust and browser constants, prompt/report
-goldens, migration fixtures, and replay fixtures together. Never reuse a released
-bundle number for different behavior.
+## The active bundle
 
-Compatibility rules:
+Bundle 4: live prompt 1, report prompt 4, rubric 1, report schema 1.
 
-- Reports without `interviewContract` predate this contract. They remain readable
-  and are labeled `legacy/unversioned`; they are never assigned the current rubric.
-- The browser renders the active report schema normally. Additive fields may be
-  ignored by an older renderer only after the bundle/schema migration explicitly
-  permits them.
+| Bundle | Introduced |
+|---|---|
+| 4 | The observable-delivery policy, made explicit in the report prompt and the server validator, with no change to the rubric or the public shape |
+| 3 | Framework phase scores kept explicitly formative, and prohibited from mechanical use in a hiring decision while calibration remains incomplete |
+| 2 | Provider-enforced structured report output and strict validation, with no change to rubric semantics or the public schema |
+
+## Changing it
+
+A change to prompt behavior, score anchors, or report shape updates the relevant
+component and creates a new bundle version in the same change. Rust and browser
+constants, prompt and report goldens, migration fixtures, and replay fixtures
+move together. A released bundle number is never reused for different behavior.
+
+## Compatibility rules
+
+- Reports without `interviewContract` predate this contract. They stay readable
+  and are labeled `legacy/unversioned`; they are never assigned the current
+  rubric.
+- The browser renders the active report schema normally. An older renderer may
+  ignore additive fields only after the bundle and schema migration explicitly
+  permits it.
 - A malformed, unknown, or future bundle becomes an incomplete but renderable
-  report. Scores are not coerced or displayed under a rubric the renderer does not
-  understand.
-- Breaking field semantics, required-field changes, rubric-anchor changes, or
-  prompt-policy changes require a new bundle and the corresponding component bump.
-- Migration belongs at the browser report-sanitization boundary. It must be pure,
-  deterministic, fixture-backed, and preserve the original rubric provenance.
+  report. Scores are not coerced, and not displayed under a rubric the renderer
+  does not understand.
+- Breaking field semantics, required-field changes, rubric-anchor changes, and
+  prompt-policy changes each require a new bundle and the corresponding
+  component bump.
+- Migration belongs at the browser report-sanitization boundary. It is pure,
+  deterministic, fixture-backed, and preserves the original rubric provenance.
 
-Release checklist: update the active server bundle; add the browser migration;
-refresh prompt and report goldens; cover successful, incomplete, legacy, malformed,
-and future reports; verify HTML, Markdown, history/progress, and replay provenance;
+## Release checklist
+
+Update the active server bundle; add the browser migration; refresh the prompt
+and report goldens; cover successful, incomplete, legacy, malformed, and future
+reports; verify HTML, Markdown, history and progress, and replay provenance;
 then run the complete local test suite.

@@ -102,7 +102,7 @@ because a later task has to recognize a wrong one:
 
 ## Fixed paths
 
-These values have exactly one owner in code, `src/recording.rs`, and
+These values have exactly one owner in code, `src/recording/contract.rs`, and
 `tests/recording_contract.rs` fails if this document stops naming them. Do not
 respell them in a later task.
 
@@ -268,8 +268,9 @@ Events this pipeline reacts to: `egress_started`, `egress_updated`,
 
 ## The lifecycle
 
-Eight states. `RecordingState::may_become` in `src/recording.rs` is the only
-implementation of this table, and any transition absent from both is a bug.
+Eight states. `RecordingState::may_become` in `src/recording/provider.rs` is
+the only implementation of this table, and any transition absent from both is a
+bug.
 
 | From | May become | Because |
 |---|---|---|

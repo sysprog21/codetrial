@@ -28,21 +28,20 @@ LiveKit tokens, and runs the interviewer agent.
 └────────────────────────────┘
 ```
 
-The browser sends code updates and test outcomes over LiveKit's data channel;
-the agent receives structured code, not editor screenshots. Candidate code runs
-locally for Python and JavaScript. C, C++, and Java runs use Compiler Explorer,
-so source code leaves the browser for those languages.
+The browser sends code updates and test outcomes over LiveKit's data channel, so
+the agent receives structured code rather than editor screenshots. Python and
+JavaScript run locally; C, C++, and Java run through Compiler Explorer, so
+source code leaves the browser for those three.
 
-Camera and microphone are required to start an interview. Audio and code
-snapshots are kept in memory only unless recording is enabled, which is off by
-default and described under [Recording](#recording). Candidate video is not
-forwarded to Gemini
-unless `CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED=true` is set. Face-presence
-analysis runs locally in the browser; when unsupported, it is reported as
-unavailable rather than inferred. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
-for bundled software, models, licenses, and integrity verification.
+Camera and microphone are required to start. Audio and code snapshots stay in
+memory unless [recording](#recording) is enabled, which is off by default.
+Candidate video reaches Gemini only with
+`CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED=true`. Face-presence analysis runs in
+the browser and reports itself unavailable rather than guessing.
+
 Jim's avatar model is Seed-san by VirtualCast, Inc.; its required credit and
-license are recorded in that notice.
+license are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), along with
+every other bundled asset and its checksum.
 
 ## Dependencies by lifecycle
 
@@ -52,7 +51,7 @@ license are recorded in that notice.
 | Test time | Build-time tools, Node.js 18+, and Python 3 | Node runs browser and fixture checks; Python verifies generated problem-bank files. `npm ci` adds ESLint and Playwright for the full local browser gate. `ruff`, `shellcheck`, `shfmt`, `commentflow`, `actionlint`, and `cargo-audit` are optional: each gate reports that it skipped rather than failing without them. CI installs all of them except `actionlint`, whose lane skips there too. |
 | Runtime | The compiled `codetrial` binary and a config file | No Node.js, Python, or `node_modules` is required. Rust dependencies are compiled into the binary; browser dependencies are vendored, checksum-pinned, and embedded, so a `web/` directory is optional and only overrides what is already inside. |
 
-Running an interview also requires a LiveKit Cloud project and a Google AI Studio
+Running an interview also needs a LiveKit Cloud project and a Google AI Studio
 API key. C, C++, and Java test runs additionally use the remote Compiler
 Explorer service.
 
@@ -79,94 +78,13 @@ a Setup page instead and prints the URL to open — you can skip steps 2–3 abo
 fill in your keys there, and it writes them to `config/codetrial.env.local` for you. That page
 serves on a loopback address only; a start that would put it on any other
 address refuses instead, and writing the file yourself is the way to deploy for
-other people. See [Prebuilt binaries](#prebuilt-binaries).
-
-## Prebuilt binaries
-
-Every successful build of `main` replaces the `latest` release under
-<https://github.com/sysprog21/codetrial/releases>, unless a newer commit landed
-while it was running. The binaries go to a draft first, and their sizes are
-checked against the files the build produced before that draft takes the name,
-so a truncated upload never reaches the download page. Two things that tag will not
-give you: replacing a release is not atomic, so each publish has a short window
-where `latest` resolves to nothing, and the tag moves, so a link does not keep
-serving the bytes it served last week. Pin a commit and keep your own checksum
-if you need the same binary twice. Nothing is required at runtime beyond the
-binary itself: the browser application, its vendored assets, and the WASM are
-compiled in, so there is no Node.js, no `node_modules`, and no `web/` directory
-to unpack alongside it. The avatar
-model is not in there either: the browser downloads it once from a pinned
-upstream URL, checks it against a pinned SHA-256, and keeps it in its own cache.
-Without that reachable, the interview falls back to Jim's voice-only panel and
-nothing else changes.
-
-```bash
-# Linux
-tar -xzf codetrial-x86_64-unknown-linux-gnu.tar.gz
-mv codetrial-x86_64-unknown-linux-gnu codetrial
-
-# macOS
-unzip codetrial-aarch64-apple-darwin.zip
-xattr -d com.apple.quarantine codetrial-aarch64-apple-darwin
-mv codetrial-aarch64-apple-darwin codetrial
-```
-
-Run `./codetrial` with no config file nearby, and `web` mode serves a Setup
-page at <http://127.0.0.1:3000> instead of refusing to start, printing that
-address for you to open.
-Loopback is the only place it will serve: `--web-addr 0.0.0.0:3000` or
-`CODETRIAL_WEB_ADDR` pointing anywhere else is refused, because the page takes
-credentials over plain HTTP from anyone who can reach it.
-Enter your LiveKit keys there, and your Google key if you want this process to
-host interviewers (see below). Saving writes them **in plain text** to
-`config/codetrial.env.local` beside the executable, creating that directory —
-the same file you would otherwise write yourself:
-
-```bash
-mkdir -p config
-cat >config/codetrial.env.local <<'EOF'
-LIVEKIT_URL=wss://YOUR-PROJECT.livekit.cloud
-LIVEKIT_API_KEY=...
-LIVEKIT_API_SECRET=...
-GOOGLE_API_KEY=...
-EOF
-./codetrial web   # http://127.0.0.1:3000
-```
-
-That `config/` is your data: the keys above and, once the server has run,
-`codetrial.db` with your accounts and reports. To take a newer build, replace
-the executable in place and leave `config/` alone. Unpacking into a fresh
-directory starts over, and deleting the directory removes everything this
-program kept.
-
-`GOOGLE_API_KEY` is the optional one, and it decides which of two things this
-process is. With it, the server hosts interviewers itself. Without it, it serves
-the web side only and every room waits for an agent to join from elsewhere, and
-it says so on startup. There is no matching line for the hosting case, so a
-silent start is the one that hosts interviewers. `--config PATH` names the file
-if you would rather keep it somewhere else; see
-[Configuration](#configuration) for the rest.
-
-Platform notes:
-
-- macOS binaries carry only the ad-hoc signature the linker applies, which is
-  what lets an arm64 binary run at all. They are not Developer ID signed and not
-  notarized, because that needs a paid Apple Developer Program membership this
-  project does not have. A downloaded `.zip` carries the quarantine attribute
-  and Gatekeeper refuses it, so clear the attribute as above or build from
-  source.
-- Windows binaries are unsigned. SmartScreen warns on first run. Put the exe in
-  a folder of its own before double-clicking it: with no config file nearby it
-  opens the Setup page above, and everything it writes lands in that folder —
-  the `config/` that page fills in, and, if the start fails, a
-  `codetrial-error.log` beside the executable that is the only place the reason
-  appears when there is no terminal to read one from.
-- Only `x86_64` Linux, `arm64` macOS, and `x86_64` Windows are published. Build
-  from source for anything else.
+other people. See [docs/install.md](docs/install.md).
 
 ## Run
 
-Building from a checkout instead:
+Prebuilt binaries for Linux, macOS, and Windows are published for every build of
+`main`. What they carry, the config file each needs beside it, and the platform
+notes are in [docs/install.md](docs/install.md). From a checkout instead:
 
 ```bash
 INTERVIEW_ROOM_NAME=interview-local make web
@@ -197,41 +115,19 @@ editors available while disabling their remote test runs.
 
 Jim asks short, targeted questions between logical blocks, offers progressive
 conceptual hints, and uses the latest test run in the final assessment. Voice
-responses stop when the candidate interrupts. Say “can I get a hint?” when
+responses stop when the candidate interrupts. Say "can I get a hint?" when
 needed; hints affect the communication score.
 
-Candidates can present the interview in Google Meet by sharing the CodeTrial
-tab with tab audio enabled. Meet owns the shared tab after that point, and
-face-presence analysis is disabled for the session. See the
+Candidates can present the interview in Google Meet by sharing the CodeTrial tab
+with tab audio enabled. Meet owns the shared tab after that, and face-presence
+analysis is disabled for the session. See the
 [manual check](docs/meet-tab-audio-manual-check.md) for the supported flow.
 
-### Interview length
-
-The lobby offers 30, 45, and 60 minutes, and the candidate picks one before
-starting. `CODETRIAL_DURATION_MIN` is only the length preselected for a
-candidate who does not choose; the endpoint accepts 10 to 90 either way, so a
-deployment that lowers the default has not lowered the ceiling.
-
-Recording lowers it. `CODETRIAL_RECORDING_MAX_MINUTES` bounds a single
-recording, and the sweeper fails one still running five minutes past it, so an
-interview longer than the cap loses exactly the stretch past it and the artifact
-is failed rather than delivered. Where recording is on, the longest interview
-this deployment will start is that cap, clamped into the 10–90 the endpoint
-offers; where it is off, the ceiling is 90.
-
-The lobby is told the ceiling rather than left to discover it. `/api/session`
-reports `maxDurationMin`, and the duration row disables the lengths above it
-with the reason beside them — a length this deployment cannot record is never
-offered and then quietly shortened. `/api/token` clamps to the same ceiling, so
-a request that skips the lobby is bounded too, and both endpoints read it from
-one function so the length that is offered and the length that is enforced
-cannot drift apart.
-
-Startup refuses a cap below `CODETRIAL_DURATION_MIN`, so the length this
-deployment preselects is always one it can record; the pairing is a
-configuration error rather than a quietly shortened interview. Should a cap ever
-sit below every length the row offers, the lobby leaves the row alone rather
-than rendering a page with nothing to press.
+The lobby offers 30, 45, and 60 minutes and the endpoints accept 10 to 90.
+Recording lowers that ceiling to `CODETRIAL_RECORDING_MAX_MINUTES`, and the
+lobby is told the ceiling rather than left to discover it. The rules, and why
+the offered length and the enforced length come from one function, are in
+[docs/interview-length.md](docs/interview-length.md).
 
 ## Development
 
@@ -247,97 +143,21 @@ make hooks           # install the git hooks; uninstall-hooks removes them
 ./scripts/test.sh    # credential-free CI gate
 ```
 
-`scripts/indent.sh` holds the formatter chain: comment reflow with
-`commentflow`, then `cargo fmt`, `ruff format` and `shfmt`, in that order
-because the formatters have to have the last word over the reflow. `make
-indent` runs it with `--write` and the gate runs it with `--check`, against a
-copy of the tree so a check never rewrites what it is judging. `shfmt` takes
-its style from `.editorconfig` and is passed no style flags anywhere.
-
-`scripts/test-git-hooks.sh` drives all four hooks against a scratch repository
-and runs in the gate, so a hook that stops rejecting fails here rather than on
-somebody's next commit.
-
-`make hooks` installs wrappers in `.git/hooks` that resolve the active
-worktree's `scripts/git-*.sh`. The pre-commit hook
-runs `rustfmt`, ESLint, `ruff`, `shellcheck`, `shfmt` and `commentflow` over a
-checkout of the index, so an unstaged edit neither fails a commit nor passes
-one; the commit-msg hook
-holds the subject to 50 characters and the body to 72, imperative and ASCII.
-Whatever is missing locally reports itself as skipped. The pre-push hook
-replays the same message rules over commits a rebase or an amend rewrote after
-the fact, and CI runs them over a pull request's own commits.
-
-The [prerelease](#prebuilt-binaries) is published by the `build` and `release`
-jobs in `.github/workflows/check.yml`, which run only on a push to `main`. No
-repository secrets are involved: the macOS binary ships with the linker's ad-hoc
-signature and nothing else, so a fork builds the same artifacts this repository
-does. Developer ID signing and notarization would need a paid Apple Developer
-Program membership, and the download instructions clear quarantine instead.
-
-The embed falls back per file rather than wholesale, so a partially populated
-web tree is filled in from the built-in copy rather than 404ing. Assets on disk
-win where they exist. That root is `web/` relative to the working directory
-unless `CODETRIAL_WEB_DIR` names another, so running the binary from a checkout
-picks up edits with no environment variable set.
-
-`web/problems/`, `web/judges/`, and the problem cards in `web/index.html` are
-generated from `problem-bank/`. Regenerate them after editing that source, or
-the gate fails on the drift:
-
-```bash
-python3 scripts/gen-problems.py
-python3 scripts/gen-problem-cards.py
-```
-
-`scripts/top-interview-150.json` records which problems the study plan asks
-for. Refresh it from LeetCode with:
-
-```bash
-python3 scripts/gen-problems.py --sync-study-plan
-```
-
-The sync refuses to write when the plan and `problem-bank/` disagree, naming
-the problems each side is missing. Port those first. `--check` holds the
-committed manifest to the same rule, so drift fails the gate offline.
-
-Two commands cover the porting. `--plan-drift` asks LeetCode what changed
-without writing anything, and `--scaffold SLUG` prints the `problems.json` and
-`judges.json` entries for one problem, filled in as far as LeetCode's metadata
-reaches:
-
-```bash
-python3 scripts/gen-problems.py --plan-drift
-python3 scripts/gen-problems.py --scaffold reverse-linked-list-ii
-```
-
-It stops where it has to. The statement, examples and constraints stay empty
-because the fetcher never asks LeetCode for problem prose, and each judge case
-carries its input without an expected value, because `exampleTestcases` is
-inputs only. Both are written by someone who has read the problem.
-
-The end-to-end browser check additionally needs Playwright and Chromium:
-
-```bash
-npm ci && npx playwright install chromium
-scripts/browser-check.sh
-```
-
-Checks that need credentials or a running service stay out of the gate and are
-run on their own: `scripts/server-check.sh`, `gemini-check.sh`,
-`parity-check.sh`, `report-parity-check.sh`, `visual-parity-check.sh`,
-`recording-integration.sh`, and `recording-provision-check.sh`.
+The gate ends by printing what it did not check, because several lanes are
+optional and a run that skips them still exits 0. That summary, the formatter
+chain, the git hooks, the generated problem files, and where a slow run's time
+actually goes are in [docs/development.md](docs/development.md).
 
 ## Configuration
 
 `config/codetrial.env.example` documents the variables that belong in a config
-file. `NODE_ENV` and `INTERVIEW_ROOM_NAME` are set in
-the environment instead. The common ones are:
+file; `NODE_ENV` and `INTERVIEW_ROOM_NAME` are set in the environment instead.
+The common ones:
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `CODETRIAL_WEB_ADDR` | `127.0.0.1:3000` | Listen address |
-| `CODETRIAL_DURATION_MIN` | `45` | Interview length preselected in the lobby (10–90); see [Interview length](#interview-length) |
+| `CODETRIAL_DURATION_MIN` | `45` | Interview length preselected in the lobby (10–90); see [interview length](docs/interview-length.md) |
 | `GEMINI_LIVE_MODEL` | `gemini-3.1-flash-live-preview` | Realtime interviewer model |
 | `GEMINI_REPORT_MODEL` | `gemini-3.1-flash-lite` | Report model |
 | `CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED` | `false` | Forward candidate video to Gemini |
@@ -370,9 +190,9 @@ Recording is off by default. Enabling it requires a separate LiveKit project,
 private GCS staging bucket, Shared Drive, service account, GitHub OAuth, and
 candidate consent. It also caps how long an interview can run:
 `CODETRIAL_RECORDING_MAX_MINUTES` (45 by default) becomes the longest length the
-lobby offers, described under [Interview length](#interview-length). The full
-configuration, lifecycle, retention policy, and credentialed acceptance check
-are in [docs/recording-contract.md](docs/recording-contract.md).
+lobby offers, described in [docs/interview-length.md](docs/interview-length.md).
+The full configuration, lifecycle, retention policy, and credentialed acceptance
+check are in [docs/recording-contract.md](docs/recording-contract.md).
 
 The credentialed recording acceptance records frame dimensions, rate, bitrate,
 and duration from `ffprobe`. Candidate-visible seconds, audio-source count, and
@@ -383,12 +203,19 @@ telemetry exists; they are not presented as measurements.
 
 | Document | Covers |
 |---|---|
-| [Third-party notices](THIRD-PARTY-NOTICES.md) | Bundled software, model attribution, licenses, and checksum verification |
-| [Avatar contract](docs/avatar-contract.md) | Renderer behavior, asset limits, privacy, and accessibility |
+| [Development](docs/development.md) | The gate, formatters, hooks, generated files, releases |
+| [Installing a binary](docs/install.md) | Published binaries, platform notes, the config beside them |
+| [Interview length](docs/interview-length.md) | What the lobby offers and what the endpoints enforce |
+| [Third-party notices](THIRD-PARTY-NOTICES.md) | Bundled software, model attribution, licenses, checksums |
+| [Avatar contract](docs/avatar-contract.md) | Renderer behavior, asset limits, privacy, accessibility |
 | [Provider pooling](docs/providers.md) | Spreading rooms over several LiveKit projects |
-| [Recording contract](docs/recording-contract.md) | Provisioning, consent, delivery, retention, and operations |
+| [Recording contract](docs/recording-contract.md) | Provisioning, consent, delivery, retention, operations |
 | [Google Meet manual check](docs/meet-tab-audio-manual-check.md) | Verifying tab-audio presentation |
-| [LiveKit connection troubleshooting](docs/livekit-connection-troubleshooting.md) | Telling four connection failures apart, and checking credentials without the browser |
+| [LiveKit troubleshooting](docs/livekit-connection-troubleshooting.md) | Telling four connection failures apart |
+| [Observable delivery policy](docs/observable-delivery-policy.md) | What a report may and may not assess |
+| [Interview contract versions](docs/interview-contract-versions.md) | The five versions every report carries |
+| [Rubric calibration](docs/rubric-calibration.md) | Calibration status of the framework scores |
+| [Provider cost and degradation](docs/provider-cost-and-degradation.md) | Gemini budgets, restarts, concurrency |
 
 ## Repository layout
 
@@ -405,7 +232,8 @@ tests/          Rust and browser tests
 ## Troubleshooting
 
 - Waiting for interviewer: start the agent in the same LiveKit room and project.
-- No audio: check browser and system output devices, then the microphone mute state.
+- No audio: check browser and system output devices, then the microphone
+  mute state.
 - Report error: verify `GOOGLE_API_KEY`; the agent log contains the exact cause.
 - Gemini model not found: set `GEMINI_LIVE_MODEL` to a current model from
   <https://ai.google.dev/gemini-api/docs/live>.
