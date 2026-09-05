@@ -2,6 +2,8 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -210,7 +212,7 @@ fn wait_for_http(addr: &str, child: &mut Child) -> Result<(), String> {
     while std::time::Instant::now() < deadline {
         if try_http(
             addr,
-            "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+            &format!("GET /healthz HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
         )
         .is_some_and(|response| response.starts_with("HTTP/"))
         {
@@ -601,7 +603,7 @@ fn binary_web_serves_a_setup_page_when_no_config_exists() {
     let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
     let response = http_request(
         &addr,
-        "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        &format!("GET / HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
     );
     let _ = std::fs::remove_dir_all(&dir);
 
@@ -620,7 +622,7 @@ fn setup_page_renders_a_form_with_all_four_credential_fields() {
     let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
     let response = http_request(
         &addr,
-        "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        &format!("GET / HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
     );
     let _ = std::fs::remove_dir_all(&dir);
 
@@ -686,17 +688,30 @@ async fn setup_page_accepts_credentials_and_writes_the_primary_config_file() {
     let response = http_request(
         &addr,
         &format!(
-            "POST /api/setup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         ),
     );
 
-    let written = std::fs::read_to_string(dir.join("codetrial.env.local"))
+    let written = std::fs::read_to_string(dir.join("config").join("codetrial.env.local"))
         .expect("codetrial.env.local should have been written");
+    // The file holds two secrets, so the umask does not get to decide who reads
+    // it. Windows has no mode to check and inherits the folder's ACL.
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(dir.join("config").join("codetrial.env.local"))
+            .expect("the written config should be readable")
+            .permissions()
+            .mode()
+            & 0o777
+    };
     let _ = std::fs::remove_dir_all(&dir);
 
     assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    #[cfg(unix)]
+    assert_eq!(mode, 0o600, "{mode:o}");
     assert!(
         written.contains(&format!("LIVEKIT_URL=http://{livekit_addr}")),
         "{written}"
@@ -735,13 +750,13 @@ fn setup_page_accepts_credentials_without_a_google_api_key() {
     let response = http_request(
         &addr,
         &format!(
-            "POST /api/setup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         ),
     );
 
-    let written = std::fs::read_to_string(dir.join("codetrial.env.local"))
+    let written = std::fs::read_to_string(dir.join("config").join("codetrial.env.local"))
         .expect("codetrial.env.local should have been written");
     let _ = std::fs::remove_dir_all(&dir);
 
@@ -749,9 +764,172 @@ fn setup_page_accepts_credentials_without_a_google_api_key() {
     assert!(written.contains("GOOGLE_API_KEY=\n"), "{written}");
 }
 
-/// Drop-and-rebind means a brief gap, so this polls rather than asserting
-/// the next request lands immediately. `/api/session` only exists on the
-/// full app, so 200 there proves the switch happened.
+/// A checkout keeps its config in its own `config/`, not in the one beside the
+/// binary, which for `make web` is under `target/` and goes with `make clean`.
+/// The working directory and the executable's folder are separate here for
+/// that reason: the same two directories a source build has.
+///
+/// `codetrial.env.example` is what marks the directory as this project's. A
+/// released binary run from a directory that happens to hold a `config/` must
+/// still write beside itself, or the credentials are lost the moment it is
+/// started from somewhere else.
+#[test]
+fn a_cold_start_in_a_checkout_writes_into_the_checkout_config_directory() {
+    let work = temp_path("setup-checkout-work");
+    let home = exe_temp_path("setup-checkout-exe");
+    std::fs::create_dir_all(work.join("config")).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        work.join("config").join("codetrial.env.example"),
+        "# keys\n",
+    )
+    .unwrap();
+    let exe = binary_beside(&home);
+
+    let mock = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mock_addr = mock.local_addr().unwrap();
+    thread::spawn(move || {
+        if let Ok((mut socket, _)) = mock.accept() {
+            let mut buffer = [0u8; 1024];
+            let _ = socket.read(&mut buffer);
+            let _ = socket.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"rooms\":[]}",
+            );
+        }
+    });
+
+    let (addr, _server) = spawn_cold_start(&exe, &work, &[]);
+
+    let body = format!(
+        r#"{{"livekitUrl":"http://{mock_addr}","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":""}}"#
+    );
+    let response = http_request(
+        &addr,
+        &format!(
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        ),
+    );
+
+    let in_checkout = work.join("config").join("codetrial.env.local").exists();
+    let beside_exe = home.join("config").join("codetrial.env.local").exists();
+    let _ = std::fs::remove_dir_all(&work);
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(in_checkout, "the checkout's config/ should have the file");
+    assert!(
+        !beside_exe,
+        "nothing should have been written under target/"
+    );
+}
+
+/// The loopback bind stops the network, not a browser that was handed a name
+/// resolving to 127.0.0.1. The `Host` is what survives that trick, so a
+/// submission carrying a foreign one is refused before it can write the
+/// attacker's LiveKit project into the config.
+#[test]
+fn setup_page_refuses_a_request_carrying_a_foreign_host() {
+    let dir = exe_temp_path("setup-foreign-host");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+
+    let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
+    let port = addr.rsplit_once(':').expect("the address names a port").1;
+
+    let body = r#"{"livekitUrl":"wss://attacker.example","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":""}"#;
+    let submission = http_request(
+        &addr,
+        &format!(
+            "POST /api/setup HTTP/1.1\r\nHost: codetrial.example:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        ),
+    );
+    // The page itself too, so the rebound origin cannot read the form it would
+    // be posting.
+    let page = http_request(
+        &addr,
+        &format!("GET / HTTP/1.1\r\nHost: codetrial.example:{port}\r\nConnection: close\r\n\r\n"),
+    );
+
+    let written = dir.join("config").join("codetrial.env.local").exists();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(!written, "a foreign Host must not write a config file");
+    assert!(
+        submission.starts_with("HTTP/1.1 403 Forbidden"),
+        "{submission}"
+    );
+    assert!(page.starts_with("HTTP/1.1 403 Forbidden"), "{page}");
+}
+
+/// A symlink with nothing at the end of it is not a file to `is_file`, so it
+/// does not stop the cold start, and a plain write would follow it and put
+/// `LIVEKIT_API_SECRET` wherever it points. The submission is refused instead.
+///
+/// Unix only: this plants a symlink, and creating one on Windows needs a
+/// privilege the test runner is not assumed to have.
+#[cfg(unix)]
+#[test]
+fn setup_page_refuses_to_write_through_a_dangling_symlink() {
+    let dir = exe_temp_path("setup-symlink");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+
+    let target = dir.join("stolen.env");
+    std::fs::create_dir_all(dir.join("config")).unwrap();
+    std::os::unix::fs::symlink(&target, dir.join("config").join("codetrial.env.local"))
+        .expect("the symlink should be planted");
+
+    let livekit_mock = TcpListener::bind("127.0.0.1:0").unwrap();
+    let livekit_addr = livekit_mock.local_addr().unwrap();
+    thread::spawn(move || {
+        if let Ok((mut socket, _)) = livekit_mock.accept() {
+            let mut buffer = [0u8; 1024];
+            let _ = socket.read(&mut buffer);
+            let _ = socket.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"rooms\":[]}",
+            );
+        }
+    });
+
+    let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
+
+    let body = format!(
+        r#"{{"livekitUrl":"http://{livekit_addr}","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":""}}"#
+    );
+    let response = http_request(
+        &addr,
+        &format!(
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        ),
+    );
+
+    let followed = target.exists();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(!followed, "the symlink target must not be created");
+    assert!(
+        response.starts_with("HTTP/1.1 500 Internal Server Error"),
+        "{response}"
+    );
+    assert!(response.contains("already exists"), "{response}");
+}
+
+/// `/api/session` only exists on the full app, so 200 there proves the switch
+/// happened. Polled rather than asserted on the next request: the config is
+/// reread, the pool built and the account database migrated in between.
+///
+/// The watcher thread is what pins the socket being handed over rather than
+/// rebound. While something is listening, binding the same address has to fail,
+/// so a bind that succeeds is a moment when the port was free -- the moment
+/// `TIME_WAIT` takes it away on Windows, which builds in CI but does not run
+/// this suite. A bind and not a connection, which would sit in the accept
+/// backlog for the length of the gap.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn setup_page_continues_serving_the_full_app_after_a_successful_submission() {
     let dir = exe_temp_path("setup-continue");
@@ -791,13 +969,30 @@ async fn setup_page_continues_serving_the_full_app_after_a_successful_submission
         &[("CODETRIAL_GEMINI_LIVE_URL", format!("ws://{gemini_addr}"))],
     );
 
+    let watching = Arc::new(AtomicBool::new(true));
+    let stole = Arc::new(AtomicBool::new(false));
+    let watcher = thread::spawn({
+        let (addr, watching, stole) = (addr.clone(), watching.clone(), stole.clone());
+        move || {
+            while watching.load(Ordering::Relaxed) {
+                // Released immediately: holding it would fail the server's own
+                // bind and report this as the poll below timing out.
+                if TcpListener::bind(&addr).is_ok() {
+                    stole.store(true, Ordering::Relaxed);
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+    });
+
     let body = format!(
         r#"{{"livekitUrl":"http://{livekit_addr}","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":"google"}}"#
     );
     let submit_response = http_request(
         &addr,
         &format!(
-            "POST /api/setup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         ),
@@ -812,7 +1007,7 @@ async fn setup_page_continues_serving_the_full_app_after_a_successful_submission
     while Instant::now() < deadline {
         if let Some(candidate) = try_http(
             &addr,
-            "GET /api/session HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+            &format!("GET /api/session HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
         ) {
             response = candidate;
             if response.starts_with("HTTP/1.1 200 OK") {
@@ -822,8 +1017,20 @@ async fn setup_page_continues_serving_the_full_app_after_a_successful_submission
         thread::sleep(Duration::from_millis(50));
     }
 
+    watching.store(false, Ordering::Relaxed);
+    watcher.join().expect("the bind watcher should finish");
+    let database = dir.join("config").join("codetrial.db").exists();
     let _ = std::fs::remove_dir_all(&dir);
 
+    assert!(
+        database,
+        "the account database belongs beside the config, not in the working directory"
+    );
+
+    assert!(
+        !stole.load(Ordering::Relaxed),
+        "the port must stay bound across the handover"
+    );
     assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
     assert!(response.contains(r#""loginRequired":true"#), "{response}");
 }
@@ -845,7 +1052,7 @@ fn binary_web_refuses_to_serve_setup_on_a_public_address() {
         .expect("codetrial should exit");
     let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
     let log = std::fs::read_to_string(dir.join("codetrial-error.log"));
-    let written = dir.join("codetrial.env.local").exists();
+    let written = dir.join("config").join("codetrial.env.local").exists();
     let _ = std::fs::remove_dir_all(&dir);
 
     assert_eq!(output.status.code(), Some(1), "{stderr}");
@@ -925,7 +1132,7 @@ fn setup_page_rejects_a_field_carrying_a_newline() {
         let response = http_request(
             &addr,
             &format!(
-                "POST /api/setup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),
                 body
             ),
@@ -941,7 +1148,7 @@ fn setup_page_rejects_a_field_carrying_a_newline() {
             "{carrier}: {response}"
         );
         assert!(
-            !dir.join("codetrial.env.local").exists(),
+            !dir.join("config").join("codetrial.env.local").exists(),
             "{carrier}: a rejected submission must not write a config file"
         );
     }
@@ -969,13 +1176,13 @@ fn setup_page_refuses_a_plaintext_url_when_node_env_is_production() {
     let response = http_request(
         &addr,
         &format!(
-            "POST /api/setup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         ),
     );
 
-    let written = dir.join("codetrial.env.local").exists();
+    let written = dir.join("config").join("codetrial.env.local").exists();
     let _ = std::fs::remove_dir_all(&dir);
 
     assert!(
@@ -1005,7 +1212,7 @@ fn setup_page_waits_on_a_route_only_the_full_app_serves() {
     let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
     let page = http_request(
         &addr,
-        "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        &format!("GET / HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
     );
 
     // Both halves of the contract. The page naming the route is one; the other
@@ -1014,11 +1221,11 @@ fn setup_page_waits_on_a_route_only_the_full_app_serves() {
     // test still green.
     let probed = http_request(
         &addr,
-        "GET /api/session HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        &format!("GET /api/session HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
     );
     let health = http_request(
         &addr,
-        "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        &format!("GET /healthz HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
     );
     let _ = std::fs::remove_dir_all(&dir);
 
@@ -1052,13 +1259,13 @@ fn setup_page_rejects_a_submission_missing_a_field() {
     let response = http_request(
         &addr,
         &format!(
-            "POST /api/setup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         ),
     );
 
-    let written = dir.join("codetrial.env.local").exists();
+    let written = dir.join("config").join("codetrial.env.local").exists();
     let _ = std::fs::remove_dir_all(&dir);
 
     assert!(
@@ -1115,13 +1322,13 @@ async fn setup_page_rejects_a_google_api_key_that_fails_live_validation() {
     let response = http_request(
         &addr,
         &format!(
-            "POST /api/setup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         ),
     );
 
-    let written = dir.join("codetrial.env.local").exists();
+    let written = dir.join("config").join("codetrial.env.local").exists();
     let _ = std::fs::remove_dir_all(&dir);
 
     assert!(
@@ -1160,13 +1367,13 @@ fn setup_page_rejects_livekit_credentials_that_fail_live_validation() {
     let response = http_request(
         &addr,
         &format!(
-            "POST /api/setup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         ),
     );
 
-    let written = dir.join("codetrial.env.local").exists();
+    let written = dir.join("config").join("codetrial.env.local").exists();
     let _ = std::fs::remove_dir_all(&dir);
 
     assert!(

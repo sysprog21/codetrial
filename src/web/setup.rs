@@ -1,11 +1,14 @@
 //! The solo self-serve cold start's Setup page: served instead of the full
 //! app when `run_web` finds no config file at all.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Json;
 use axum::Router;
-use axum::http::StatusCode;
+use axum::extract::Request;
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{Html, Response};
 use axum::routing::{get, post};
 use serde_json::{Value, json};
@@ -15,19 +18,76 @@ use crate::config::load_from_pairs;
 use crate::gemini::{gemini_live_websocket_url, open_live_session_at};
 use crate::runtime::bootstrap;
 
-/// Notified on a successful submission: the caller's shutdown signal to
-/// drop this listener and rebind as the full app.
+/// Notified on a successful submission: the caller's shutdown signal to stop
+/// serving Setup and continue as the full app on the same socket.
 ///
 /// `production` is the caller's, not one read here. The launch this hands over
 /// to enforces the production rules on the file this writes, and a second
 /// reading of `NODE_ENV` is a second answer waiting to disagree with it.
-pub fn setup_service(ready: Arc<Notify>, production: bool) -> Router {
+///
+/// `port` is the one the listener bound, which is what a `Host` has to name.
+/// `config_path` is where a submission is written, decided by the caller: the
+/// rest of the path rules live there and a second answer here could disagree
+/// with the search the next launch performs.
+pub fn setup_service(
+    ready: Arc<Notify>,
+    production: bool,
+    port: u16,
+    config_path: PathBuf,
+) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/", get(setup_page))
         .route(
             "/api/setup",
-            post(move |body| submit_setup(body, ready.clone(), production)),
+            post(move |body| submit_setup(body, ready.clone(), production, config_path.clone())),
+        )
+        .layer(middleware::from_fn(
+            move |request: Request, next: Next| async move {
+                if host_is_loopback(request.headers().get(header::HOST), port) {
+                    next.run(request).await
+                } else {
+                    super::json_response(
+                        StatusCode::FORBIDDEN,
+                        json!({
+                            "error": "Setup answers only to a loopback Host. Open it at the \
+                                      address the console printed."
+                        }),
+                    )
+                }
+            },
+        ))
+}
+
+/// The `Host` a browser sends for a loopback origin on `port`, and nothing
+/// else.
+///
+/// The loopback bind keeps the network out, not a browser. Any origin can give
+/// a name a short TTL, repoint it at 127.0.0.1 after the first load and POST
+/// here as same origin, which skips the preflight `Content-Type:
+/// application/json` would otherwise force. That submission writes the
+/// attacker's own LiveKit project into the config every later interview routes
+/// through, and the rebound name is the one thing the request still carries.
+fn host_is_loopback(host: Option<&HeaderValue>, port: u16) -> bool {
+    let Some(host) = host.and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    // An IPv6 literal is bracketed, so a colon inside the brackets is not the
+    // port separator.
+    let (name, host_port) = match host.rsplit_once(':') {
+        Some((name, digits)) if !digits.contains(']') => (name, Some(digits)),
+        _ => (host, None),
+    };
+    let port_matches = match host_port {
+        Some(digits) => digits.parse::<u16>() == Ok(port),
+        // A browser omits the port only for the scheme's default, and this page
+        // is plain HTTP.
+        None => port == 80,
+    };
+    port_matches
+        && matches!(
+            name.to_ascii_lowercase().as_str(),
+            "localhost" | "127.0.0.1" | "[::1]"
         )
 }
 
@@ -73,17 +133,19 @@ const SETUP_PAGE: &str = r#"<!doctype html>
   <input id="googleApiKey" name="googleApiKey" type="password">
   <small>From <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a>.</small>
 
-  <button type="submit">Save and continue</button>
+  <button id="submit" type="submit">Save and continue</button>
 </form>
 <div id="status"></div>
 <script>
   const form = document.getElementById('setup-form');
   const status = document.getElementById('status');
+  const submit = document.getElementById('submit');
 
   async function waitForRestart() {
-    // Server rebinds after success; poll instead of reloading once so the gap is invisible.
-    // /api/session and not /healthz: this page's own server answers /healthz too, so a
-    // probe that beats its shutdown would reload into the gap before the app has bound.
+    // The server keeps the port and swaps what answers on it, so a request landing in
+    // the handover waits in the accept backlog rather than failing. Poll anyway: the
+    // gap is not zero. /api/session and not /healthz, because this page's own server
+    // answers /healthz too and a probe that beats its shutdown reloads into the gap.
     for (let attempt = 0; attempt < 40; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 250));
       try {
@@ -98,6 +160,11 @@ const SETUP_PAGE: &str = r#"<!doctype html>
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
+    // A second submission would reach a config file the first one has already
+    // written, and the write refuses to overwrite: the double-click would report
+    // a failure over a setup that worked. Re-enabled only where the form is
+    // still the way forward, which a successful submission is not.
+    submit.disabled = true;
     status.className = '';
     status.textContent = 'Checking credentials…';
     const data = Object.fromEntries(new FormData(form).entries());
@@ -111,6 +178,7 @@ const SETUP_PAGE: &str = r#"<!doctype html>
     } catch (error) {
       status.className = 'error';
       status.textContent = 'Request failed: ' + error;
+      submit.disabled = false;
       return;
     }
     const body = await response.json().catch(() => ({}));
@@ -121,6 +189,7 @@ const SETUP_PAGE: &str = r#"<!doctype html>
     } else {
       status.className = 'error';
       status.textContent = body.error || ('Request failed: ' + response.status);
+      submit.disabled = false;
     }
   });
 </script>
@@ -128,10 +197,10 @@ const SETUP_PAGE: &str = r#"<!doctype html>
 </html>
 "#;
 
-/// Writes `codetrial.env.local` into the executable's own folder, which is
-/// the last path `primary_config_path` searches: the file has to be found
-/// again on the next launch, and that folder is the one thing about a
-/// double-clicked binary that does not depend on where it was started from.
+/// Writes the config to `config_path`, which `primary_config_path` searches
+/// for: the file has to be found again on the next launch, from whatever
+/// directory that launch happens to start in.
+///
 /// Parsed as `Value`, not a derived struct — this crate has no `serde`
 /// derive dependency, and a missing field reads as empty rather than a
 /// parse error.
@@ -139,6 +208,7 @@ async fn submit_setup(
     Json(submission): Json<Value>,
     ready: Arc<Notify>,
     production: bool,
+    path: PathBuf,
 ) -> Response {
     let field = |key: &str| {
         submission
@@ -272,16 +342,107 @@ async fn submit_setup(
         .iter()
         .map(|(key, value)| format!("{key}={value}\n"))
         .collect::<String>();
-    let path = crate::exe_dir().join("codetrial.env.local");
-    if let Err(error) = std::fs::write(&path, contents) {
+    // The directory is the caller's answer, and a released binary's copy of it
+    // does not exist until the first submission.
+    if let Some(parent) = path.parent()
+        && let Err(error) = std::fs::create_dir_all(parent)
+    {
         return super::json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            json!({ "error": format!("could not write {}: {error}", path.display()) }),
+            json!({ "error": format!("could not create {}: {error}", parent.display()) }),
+        );
+    }
+    // `create_new`, so an existing name is reported rather than followed and
+    // truncated. `is_cold_start` reached this page by finding no config, and
+    // the `is_file` it asked answers no for a symlink with nothing at the end
+    // of it: without `O_EXCL` a dangling one planted here sends these
+    // credentials wherever it points.
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        // Otherwise the umask decides, and its usual answer is world-readable.
+        // This file holds `LIVEKIT_API_SECRET` and `GOOGLE_API_KEY`. Windows
+        // has no equivalent here and inherits the folder's ACL.
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let written = options
+        .open(&path)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, contents.as_bytes()));
+    if let Err(error) = written {
+        let reason = if error.kind() == std::io::ErrorKind::AlreadyExists {
+            format!(
+                "{} already exists; move it aside and reload",
+                path.display()
+            )
+        } else {
+            format!("could not write {}: {error}", path.display())
+        };
+        return super::json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": reason }),
         );
     }
 
-    // Only reached once the file is on disk; tells the caller to rebind as the
-    // full app.
+    // Only reached once the file is on disk; tells the caller to stop serving
+    // Setup and continue as the full app.
     ready.notify_one();
     super::json_response(StatusCode::OK, json!({ "saved": true }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::host_is_loopback;
+    use axum::http::HeaderValue;
+
+    fn host(value: &str) -> HeaderValue {
+        HeaderValue::from_str(value).expect("a test Host should be a header value")
+    }
+
+    #[test]
+    fn a_loopback_host_naming_the_bound_port_is_accepted() {
+        for value in [
+            "127.0.0.1:3000",
+            "localhost:3000",
+            "[::1]:3000",
+            "LocalHost:3000",
+        ] {
+            assert!(host_is_loopback(Some(&host(value)), 3000), "{value}");
+        }
+    }
+
+    /// The rebinding case: the name is the attacker's, the port is ours, and
+    /// the port is the half that matches.
+    #[test]
+    fn a_host_that_is_not_a_loopback_name_is_refused() {
+        for value in [
+            "codetrial.example:3000",
+            "127.0.0.1.codetrial.example:3000",
+            "localhost.codetrial.example:3000",
+        ] {
+            assert!(!host_is_loopback(Some(&host(value)), 3000), "{value}");
+        }
+    }
+
+    /// A `Host` is only missing or portless from something that is not the
+    /// browser this page was opened in, since the console printed the port.
+    #[test]
+    fn a_missing_or_mismatched_port_is_refused() {
+        assert!(!host_is_loopback(None, 3000));
+        assert!(!host_is_loopback(Some(&host("127.0.0.1")), 3000));
+        assert!(!host_is_loopback(Some(&host("127.0.0.1:3001")), 3000));
+        assert!(!host_is_loopback(Some(&host("[::1]")), 3000));
+        assert!(!host_is_loopback(Some(&host("127.0.0.1:")), 3000));
+    }
+
+    /// Port 80 is the one a browser leaves out of the `Host`, so it is the one
+    /// case where a portless value is the real thing rather than a hand-written
+    /// request.
+    #[test]
+    fn the_default_http_port_is_accepted_without_one() {
+        assert!(host_is_loopback(Some(&host("localhost")), 80));
+        assert!(host_is_loopback(Some(&host("localhost:80")), 80));
+        assert!(!host_is_loopback(Some(&host("localhost")), 3000));
+    }
 }

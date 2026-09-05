@@ -29,13 +29,19 @@ usage: recording-cleanup.sh [--db PATH] [--now EPOCH] [--dry-run]
   --expire ID...  bring those recordings' deadlines forward, so the running
                   server's sweeper deletes their media on its next pass and
                   records the deletion as an operator's
-  --db PATH       the account database, default $CODETRIAL_DB_PATH or codetrial.db
+  --db PATH       the account database, default $CODETRIAL_DB_PATH; required,
+                  because the server's own default is the config directory of
+                  the launch that wrote it and this script cannot know which
+                  one that was
   --now EPOCH     the clock to measure deadlines against, default now
 USAGE
     exit 2
 }
 
-db=${CODETRIAL_DB_PATH:-codetrial.db}
+# No fallback filename. sqlite3 creates a database it cannot find, so a guess
+# that misses does not fail: it reports an empty list of due recordings, which
+# reads exactly like a clean sweep.
+db=${CODETRIAL_DB_PATH:-}
 now=$(date +%s)
 expire=
 
@@ -84,6 +90,11 @@ case "$now" in
         exit 2
         ;;
 esac
+
+[ -n "$db" ] || {
+    echo "no database: pass --db PATH or set CODETRIAL_DB_PATH" >&2
+    exit 2
+}
 
 command -v sqlite3 > /dev/null 2>&1 || {
     echo "required command is unavailable: sqlite3" >&2

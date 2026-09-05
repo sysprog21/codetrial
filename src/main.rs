@@ -7,7 +7,17 @@ use codetrial::config::{
 };
 use codetrial::web::{RoomDispatcher, WebServerConfig};
 
-const DEFAULT_CONFIG_PATH: &str = "config/codetrial.env.local";
+/// One installation keeps its config file and its account database together in
+/// `config/`, under whichever root it was installed as: a checkout, or the
+/// folder a released binary was unpacked into. Beside the executable is not
+/// that root for a checkout -- the executable is in `target/`, which
+/// `make clean` deletes -- so the two are named separately and joined per case.
+const CONFIG_DIR: &str = "config";
+const CONFIG_FILE_NAME: &str = "codetrial.env.local";
+/// Tracked, so it exists in a checkout and in no release archive. That makes it
+/// the one thing that tells a `config/` belonging to this project apart from a
+/// directory of the same name that happens to sit where the binary was run.
+const CONFIG_EXAMPLE_NAME: &str = "codetrial.env.example";
 const DEFAULT_ACCOUNT_DB_PATH: &str = "codetrial.db";
 const DEFAULT_SESSION_SECRET: &str = "codetrial-local-session";
 
@@ -219,11 +229,14 @@ fn bind_web_listener(addr: &str) -> Result<std::net::TcpListener, String> {
 }
 
 fn run_web(options: CliOptions) -> Result<(), String> {
-    if is_cold_start(&options) {
-        // Falls through: once `serve_setup` returns, the config exists, so the
-        // rest of this function is an ordinary launch — same process.
-        serve_setup(&options)?;
-    }
+    // Falls through: once `serve_setup` returns, the config exists and the rest
+    // of this function is an ordinary launch, on the socket Setup served on.
+    // Why that socket is carried here rather than rebound: `serve_setup`.
+    let handed_over = if is_cold_start(&options) {
+        Some(serve_setup(&options)?)
+    } else {
+        None
+    };
     let values = load_values(&options)?;
 
     // The built-in default is a published string, so in production it is not a
@@ -275,7 +288,7 @@ fn run_web(options: CliOptions) -> Result<(), String> {
         github_client_id: nonempty(&values, "GITHUB_CLIENT_ID"),
         github_client_secret: nonempty(&values, "GITHUB_CLIENT_SECRET"),
         session_secret: Some(value_or(&values, "SESSION_SECRET", DEFAULT_SESSION_SECRET)),
-        db_path: Some(account_db_path(&values)),
+        db_path: Some(account_db_path(&values, &options)),
         github_oauth_base_url: None,
         github_api_base_url: None,
         room_prefix: value_or(&values, "CODETRIAL_ROOM_PREFIX", DEFAULT_ROOM_PREFIX),
@@ -289,7 +302,13 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     };
 
     initialize_accounts(&config)?;
-    let listener = bind_web_listener(&value_or(&values, "CODETRIAL_WEB_ADDR", DEFAULT_WEB_ADDR))?;
+    // The address is not re-read for a cold start: `serve_setup` read it from
+    // the same environment and flags, and the config file written since holds
+    // credentials, not `CODETRIAL_WEB_ADDR`.
+    let listener = match handed_over {
+        Some(listener) => listener,
+        None => bind_web_listener(&value_or(&values, "CODETRIAL_WEB_ADDR", DEFAULT_WEB_ADDR))?,
+    };
 
     // The other half of the `SESSION_SECRET` guard above, and the half that
     // does not depend on the operator having said anything.
@@ -392,7 +411,7 @@ fn web_provider_pool(
     extend_pool(
         &mut pool,
         production,
-        &provider_dir(options),
+        &config_dir(options),
         &value_or(values, codetrial::config::PROVIDER_ORDER_KEY, ""),
     );
     Ok(pool)
@@ -410,15 +429,19 @@ fn is_cold_start(options: &CliOptions) -> bool {
     options.config_path.is_none() && primary_config_path(options).is_err()
 }
 
-/// Serves Setup until a submission writes `codetrial.env.local`, then
-/// returns so `run_web` continues as an ordinary launch. Drop-and-rebind,
-/// not a swappable router: the gap is milliseconds, worth one retry.
-fn serve_setup(options: &CliOptions) -> Result<(), String> {
+/// Serves Setup until a submission writes `codetrial.env.local`, then returns
+/// the still-bound listener so `run_web` continues on it.
+///
+/// Handed over rather than rebound because of Windows, the platform this
+/// feature exists for: `bind` sets `SO_REUSEADDR` on Unix and deliberately not
+/// there, so a rebind has to win against the `TIME_WAIT` left by the
+/// connections this page just served, and `TIME_WAIT` outlasts any retry worth
+/// writing. The loser has already written the config, so it has also spent the
+/// cold start that would have brought Setup back.
+fn serve_setup(options: &CliOptions) -> Result<std::net::TcpListener, String> {
     // The environment and the flags, which in a cold start is everything
     // `load_values` has: the file it reads on top of them is the file that does
-    // not exist yet. Built the same way here so this listener and the one
-    // `run_web` binds a moment later cannot land on different addresses --
-    // `CODETRIAL_WEB_ADDR` in the environment used to reach only the second.
+    // not exist yet.
     let mut values = std::env::vars().collect::<BTreeMap<_, _>>();
     apply_options(&mut values, options);
 
@@ -435,17 +458,35 @@ fn serve_setup(options: &CliOptions) -> Result<(), String> {
     }
     // The window stays open now, but still needs to say where to go.
     println!("codetrial: open http://{bound} in your browser to continue setup");
+    // Taken before `axum::serve` consumes the listener: this descriptor stays
+    // open, so the port stays bound whatever the server does with its own.
+    let retained = listener
+        .try_clone()
+        .map_err(|error| format!("could not retain the Setup listener: {error}"))?;
+    // Re-asserted rather than assumed: whether a duplicate carries the flag
+    // `bind_web_listener` set is a per-platform answer, and `from_std` in
+    // `run_web` needs it true on this descriptor.
+    retained
+        .set_nonblocking(true)
+        .expect("retained web listener should become nonblocking");
+
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
     runtime
         .block_on(async {
             let ready = Arc::new(tokio::sync::Notify::new());
             let listener = tokio::net::TcpListener::from_std(listener)?;
-            let service = codetrial::web::setup_service(ready.clone(), is_production(&values));
+            let service = codetrial::web::setup_service(
+                ready.clone(),
+                is_production(&values),
+                bound.port(),
+                cold_start_config_path(),
+            );
             axum::serve(listener, service)
                 .with_graceful_shutdown(async move { ready.notified().await })
                 .await
         })
-        .map_err(|error| format!("web server failed: {error}"))
+        .map_err(|error| format!("web server failed: {error}"))?;
+    Ok(retained)
 }
 
 /// Why Setup may not serve on `bound`, or `None` where it may.
@@ -583,7 +624,7 @@ fn load_agent_config(options: &CliOptions) -> Result<AgentConfig, String> {
     extend_pool(
         &mut config.pool,
         production,
-        &provider_dir(options),
+        &config_dir(options),
         &provider_order,
     );
     Ok(config)
@@ -637,10 +678,15 @@ fn primary_config_path(options: &CliOptions) -> Result<PathBuf, String> {
     // A release binary is unpacked into a folder of its own and its config is
     // written there, so it has to be findable from a shortcut or a terminal
     // opened somewhere else, not only from a double-click.
+    //
+    // Within each of those two roots, `config/` before the bare filename. The
+    // bare ones are where a release used to keep its config and where an
+    // operator may still keep one; they are searched, not written.
     for path in [
-        PathBuf::from(DEFAULT_CONFIG_PATH),
-        PathBuf::from("codetrial.env.local"),
-        codetrial::exe_dir().join("codetrial.env.local"),
+        PathBuf::from(CONFIG_DIR).join(CONFIG_FILE_NAME),
+        PathBuf::from(CONFIG_FILE_NAME),
+        codetrial::exe_dir().join(CONFIG_DIR).join(CONFIG_FILE_NAME),
+        codetrial::exe_dir().join(CONFIG_FILE_NAME),
     ] {
         if path.is_file() {
             return Ok(path);
@@ -653,20 +699,27 @@ fn primary_config_path(options: &CliOptions) -> Result<PathBuf, String> {
     // sends them looking for a file they were never given. Naming what the file
     // must contain is an instruction both audiences can act on.
     Err(format!(
-        "required configuration file is missing: ./{DEFAULT_CONFIG_PATH}, \
-         ./codetrial.env.local, or codetrial.env.local beside the executable; \
-         write one with LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET \
-         (config/codetrial.env.example lists the optional keys in a checkout)"
+        "required configuration file is missing: ./{CONFIG_DIR}/{CONFIG_FILE_NAME}, \
+         ./{CONFIG_FILE_NAME}, or {CONFIG_DIR}/{CONFIG_FILE_NAME} beside the \
+         executable; write one with LIVEKIT_URL, LIVEKIT_API_KEY and \
+         LIVEKIT_API_SECRET ({CONFIG_DIR}/{CONFIG_EXAMPLE_NAME} lists the \
+         optional keys in a checkout)"
     ))
 }
 
-/// Providers live beside the config file the operator named, so
-/// `--config /etc/codetrial/prod.env` discovers
+/// The directory of the config file this launch actually read, which is where
+/// everything else belonging to the installation lives: the provider files it
+/// discovers, and the account database it writes.
+///
+/// So `--config /etc/codetrial/prod.env` discovers
 /// `/etc/codetrial/codetrial.env.<id>` rather than whatever `config/` happens
-/// to sit in the current directory. Both
-/// halves of a deployment are launched with the same `--config`, and that is
-/// what makes them agree on the pool.
-fn provider_dir(options: &CliOptions) -> PathBuf {
+/// to sit in the current directory. Both halves of a deployment are launched
+/// with the same `--config`, and that is what makes them agree on the pool.
+///
+/// The database is written here rather than read, which is the one asymmetry:
+/// a `--config` pointing somewhere a process may not write is a startup
+/// failure that names the directory, and `CODETRIAL_DB_PATH` is the way out.
+fn config_dir(options: &CliOptions) -> PathBuf {
     // The search order comes from primary_config_path rather than being written
     // out again here. Spelled twice, it was free to drift, and the drift is
     // silent: the server keeps reading its own config while the pool quietly
@@ -681,7 +734,7 @@ fn provider_dir(options: &CliOptions) -> PathBuf {
         .as_deref()
         .map(PathBuf::from)
         .or_else(|| primary_config_path(options).ok())
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+        .unwrap_or_else(|| PathBuf::from(CONFIG_DIR).join(CONFIG_FILE_NAME));
     match path.parent() {
         // A bare filename has an empty parent, and its siblings are in the
         // working directory, not in `config/`.
@@ -930,12 +983,32 @@ fn value_or(values: &BTreeMap<String, String>, key: &str, default: &str) -> Stri
 
 /// One place decides where accounts live, because `web` and `serve` both open
 /// the same database and disagreeing about it would split a person's reports.
-fn account_db_path(values: &BTreeMap<String, String>) -> PathBuf {
-    PathBuf::from(value_or(
-        values,
-        "CODETRIAL_DB_PATH",
-        DEFAULT_ACCOUNT_DB_PATH,
-    ))
+///
+/// Beside the config file rather than in the working directory: the database
+/// has to be the same file on the next launch, and the directory a process was
+/// started from is not. It used to be a bare filename, which meant a launch
+/// from a shortcut or from another terminal found the config it wrote and then
+/// opened an empty database next to wherever it had been started.
+fn account_db_path(values: &BTreeMap<String, String>, options: &CliOptions) -> PathBuf {
+    match nonempty(values, "CODETRIAL_DB_PATH") {
+        Some(path) => PathBuf::from(path),
+        None => config_dir(options).join(DEFAULT_ACCOUNT_DB_PATH),
+    }
+}
+
+/// Where a cold start writes the config it just took, which is the same
+/// `config/` the search above looks in first for the root this is installed as.
+///
+/// A checkout is told apart by the template it ships, not by `config/` merely
+/// existing: a released binary run from a directory that happens to hold one
+/// would otherwise write the credentials there and lose them the moment it was
+/// next started from somewhere else.
+fn cold_start_config_path() -> PathBuf {
+    let in_checkout = PathBuf::from(CONFIG_DIR);
+    if in_checkout.join(CONFIG_EXAMPLE_NAME).is_file() {
+        return in_checkout.join(CONFIG_FILE_NAME);
+    }
+    codetrial::exe_dir().join(CONFIG_DIR).join(CONFIG_FILE_NAME)
 }
 
 #[cfg(test)]
@@ -1315,7 +1388,28 @@ mod tests {
             config_path: Some("prod.env".to_string()),
             ..Default::default()
         };
-        assert_eq!(super::provider_dir(&options), std::path::PathBuf::from("."));
+        assert_eq!(super::config_dir(&options), std::path::PathBuf::from("."));
+    }
+
+    /// The database is the config directory's, so a named config carries it
+    /// along rather than leaving it wherever the process was started.
+    #[test]
+    fn the_account_database_sits_beside_the_config_that_was_named() {
+        let options = super::CliOptions {
+            config_path: Some("/etc/codetrial/prod.env".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            super::account_db_path(&values(&[]), &options),
+            std::path::PathBuf::from("/etc/codetrial/codetrial.db")
+        );
+        assert_eq!(
+            super::account_db_path(
+                &values(&[("CODETRIAL_DB_PATH", "/srv/accounts.db")]),
+                &options
+            ),
+            std::path::PathBuf::from("/srv/accounts.db")
+        );
     }
 
     /// The pair, not the id. `login_config` enables OAuth only when it has
