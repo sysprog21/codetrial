@@ -239,17 +239,8 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     };
     let values = load_values(&options)?;
 
-    // The built-in default is a published string, so in production it is not a
-    // weak signing key, it is a known one. Refuse rather than mint forgeable
-    // session cookies.
-    if is_production(&values)
-        && value_or(&values, "SESSION_SECRET", DEFAULT_SESSION_SECRET) == DEFAULT_SESSION_SECRET
-    {
-        return Err(
-            "SESSION_SECRET must be set when NODE_ENV=production; the built-in \
-                    default is a published value that would let anyone forge a session cookie"
-                .to_string(),
-        );
+    if let Some(refusal) = production_secret_refusal(&values) {
+        return Err(refusal);
     }
     for warning in relaxed_for_local_use(&values) {
         eprintln!("{warning}");
@@ -456,6 +447,12 @@ fn serve_setup(options: &CliOptions) -> Result<std::net::TcpListener, String> {
     if let Some(refusal) = public_setup_refusal(&values, bound) {
         return Err(refusal);
     }
+    // Everything `run_web` will refuse for that this already knows the answer
+    // to. There is one such rule today; the rest of its checks need the pool
+    // the submission has not supplied yet.
+    if let Some(refusal) = production_secret_refusal(&values) {
+        return Err(refusal);
+    }
     // The window stays open now, but still needs to say where to go.
     println!("codetrial: open http://{bound} in your browser to continue setup");
     // Taken before `axum::serve` consumes the listener: this descriptor stays
@@ -487,6 +484,29 @@ fn serve_setup(options: &CliOptions) -> Result<std::net::TcpListener, String> {
         })
         .map_err(|error| format!("web server failed: {error}"))?;
     Ok(retained)
+}
+
+/// Why a production launch may not sign session cookies, or `None` where it
+/// may. The built-in default is a published string, so in production it is not
+/// a weak signing key, it is a known one.
+///
+/// A function rather than an inline check because `serve_setup` asks it too.
+/// The verdict needs nothing from the submission, and a check that could have
+/// been made before the page was served but is made after it has taken
+/// credentials, written them and answered 200 is a launch that exits with the
+/// config already on disk -- which is what stops the next launch being a cold
+/// start, so the page never comes back to say why.
+fn production_secret_refusal(values: &BTreeMap<String, String>) -> Option<String> {
+    if is_production(values)
+        && value_or(values, "SESSION_SECRET", DEFAULT_SESSION_SECRET) == DEFAULT_SESSION_SECRET
+    {
+        return Some(
+            "SESSION_SECRET must be set when NODE_ENV=production; the built-in \
+             default is a published value that would let anyone forge a session cookie"
+                .to_string(),
+        );
+    }
+    None
 }
 
 /// Why Setup may not serve on `bound`, or `None` where it may.

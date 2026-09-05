@@ -761,7 +761,10 @@ fn setup_page_accepts_credentials_without_a_google_api_key() {
     let _ = std::fs::remove_dir_all(&dir);
 
     assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
-    assert!(written.contains("GOOGLE_API_KEY=\n"), "{written}");
+    // Absent, not empty. `read_config_file` keeps an empty value and
+    // `load_values` lays the file over the environment, so the line would erase
+    // a `GOOGLE_API_KEY` the operator exported.
+    assert!(!written.contains("GOOGLE_API_KEY"), "{written}");
 }
 
 /// A checkout keeps its config in its own `config/`, not in the one beside the
@@ -1035,6 +1038,101 @@ async fn setup_page_continues_serving_the_full_app_after_a_successful_submission
     assert!(response.contains(r#""loginRequired":true"#), "{response}");
 }
 
+/// A verdict the launch behind the page already had can only be delivered
+/// before the page takes anything. Served instead, this one lets the
+/// submission be probed, written and answered 200, and then exits on a rule
+/// that never needed the submission -- with the file on disk, so no later
+/// launch is a cold start and the page cannot come back to say why.
+#[test]
+fn a_production_cold_start_without_a_session_secret_refuses_to_serve() {
+    let dir = exe_temp_path("setup-production-no-secret");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // `cli_command` links the binary into `dir` itself and clears
+    // `SESSION_SECRET`, which is the state under test.
+    let (code, stdout, stderr) = with_free_addr(|addr| {
+        let output = cli_command(
+            &["web", "--web-addr", addr],
+            &[("NODE_ENV", "production")],
+            &dir,
+        )
+        .output()
+        .expect("codetrial should exit");
+        let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+        if stderr.contains("Address already in use") {
+            return None;
+        }
+        Some((
+            output.status.code(),
+            String::from_utf8(output.stdout).expect("stdout should be UTF-8"),
+            stderr,
+        ))
+    });
+
+    let written = dir.join("config").join("codetrial.env.local").exists();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(code, Some(1));
+    assert!(stderr.contains("SESSION_SECRET"), "{stderr}");
+    assert!(!stdout.contains("continue setup"), "{stdout}");
+    assert!(
+        !written,
+        "nothing may be written by a launch that never served"
+    );
+}
+
+/// Whitespace survives a paste, and everything after the required-field check
+/// used to assume it had not. The URL is the reachable half: it passes
+/// `validate_livekit_url`, which trims to decide, and then reaches the rewrite
+/// that only matches `wss` at offset 0, so working credentials come back as
+/// "did not work".
+#[test]
+fn setup_page_trims_what_it_was_given() {
+    let dir = exe_temp_path("setup-untrimmed");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+
+    let mock = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mock_addr = mock.local_addr().unwrap();
+    thread::spawn(move || {
+        if let Ok((mut socket, _)) = mock.accept() {
+            let mut buffer = [0u8; 1024];
+            let _ = socket.read(&mut buffer);
+            let _ = socket.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"rooms\":[]}",
+            );
+        }
+    });
+
+    let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
+
+    let body = format!(
+        r#"{{"livekitUrl":" http://{mock_addr} ","livekitApiKey":" key ","livekitApiSecret":" secret ","googleApiKey":"   "}}"#
+    );
+    let response = http_request(
+        &addr,
+        &format!(
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        ),
+    );
+
+    let written = std::fs::read_to_string(dir.join("config").join("codetrial.env.local"))
+        .expect("codetrial.env.local should have been written");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(
+        written.contains(&format!("LIVEKIT_URL=http://{mock_addr}\n")),
+        "{written}"
+    );
+    assert!(written.contains("LIVEKIT_API_KEY=key\n"), "{written}");
+    assert!(written.contains("LIVEKIT_API_SECRET=secret\n"), "{written}");
+    // Spaces are an empty optional field, not a key to probe Gemini with.
+    assert!(!written.contains("GOOGLE_API_KEY"), "{written}");
+}
+
 /// Setup writes credentials to disk for whoever posts them, and on a cold
 /// start there is nothing it could authenticate them with. A public listener
 /// is refused outright rather than served with a warning: the old behavior for
@@ -1170,7 +1268,16 @@ fn setup_page_refuses_a_plaintext_url_when_node_env_is_production() {
     std::fs::create_dir_all(&dir).unwrap();
     let exe = binary_beside(&dir);
 
-    let (addr, _server) = spawn_cold_start(&exe, &dir, &[("NODE_ENV", "production".to_string())]);
+    // A real `SESSION_SECRET`, because a production cold start without one is
+    // now refused before the page is served, and this test is about the URL.
+    let (addr, _server) = spawn_cold_start(
+        &exe,
+        &dir,
+        &[
+            ("NODE_ENV", "production".to_string()),
+            ("SESSION_SECRET", "a-real-secret".to_string()),
+        ],
+    );
 
     let body = r#"{"livekitUrl":"http://example.livekit.cloud","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":""}"#;
     let response = http_request(

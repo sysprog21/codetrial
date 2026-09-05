@@ -210,11 +210,22 @@ async fn submit_setup(
     production: bool,
     path: PathBuf,
 ) -> Response {
+    // Trimmed here, once, because everything downstream assumes it was. A
+    // pasted URL keeps its leading space through `validate_livekit_url`, which
+    // trims to decide and hands the original on, and `livekit_scheme` then
+    // matches at offset 0 and rewrites nothing: working credentials come back
+    // as "did not work". A key with a trailing space is signed into the JWT
+    // verbatim and refused, though the same value hand-written into the config
+    // file works, because `read_config_file` trims what it reads. And a
+    // `googleApiKey` of spaces is not empty to `is_empty`, so it takes the
+    // branch that probes Gemini and fails there for a field the form calls
+    // optional.
     let field = |key: &str| {
         submission
             .get(key)
             .and_then(Value::as_str)
             .unwrap_or("")
+            .trim()
             .to_string()
     };
 
@@ -222,10 +233,11 @@ async fn submit_setup(
     // optional here, same as an operator's config file: empty means web-only,
     // no interviewer hosted by this process.
     for key in ["livekitUrl", "livekitApiKey", "livekitApiSecret"] {
-        // Trimmed, because `read_config_file` trims when it reads this back and
-        // `nonempty` then calls it missing: a value of spaces would be accepted
-        // here, written, and refused by the launch this page hands over to.
-        if field(key).trim().is_empty() {
+        // A value of spaces is empty by now, which is what it has to be:
+        // `read_config_file` trims when it reads this back and `nonempty` then
+        // calls it missing, so accepting one here would write a file the launch
+        // on the other side of this page refuses.
+        if field(key).is_empty() {
             return super::json_response(
                 StatusCode::BAD_REQUEST,
                 json!({ "error": format!("{key} is required") }),
@@ -261,12 +273,21 @@ async fn submit_setup(
     // The keys this submission becomes, in the order the file below writes
     // them. One list: what the launch is asked about has to be what gets
     // written, or the answer was about a different config.
-    let pairs = [
+    //
+    // A blank `googleApiKey` leaves the key out rather than writing it empty.
+    // `read_config_file` keeps an empty value, and `load_values` lays file
+    // pairs over the environment, so the line would erase a `GOOGLE_API_KEY`
+    // the operator had exported and drop the process to web-only -- announced
+    // on a console a double-clicked binary does not have. A hand-written config
+    // omits the key to defer to the environment, and this writes the same file.
+    let mut pairs = vec![
         ("LIVEKIT_URL", livekit_url.as_str()),
         ("LIVEKIT_API_KEY", livekit_api_key.as_str()),
         ("LIVEKIT_API_SECRET", livekit_api_secret.as_str()),
-        ("GOOGLE_API_KEY", google_api_key.as_str()),
     ];
+    if !google_api_key.is_empty() {
+        pairs.push(("GOOGLE_API_KEY", google_api_key.as_str()));
+    }
 
     // The rule the launch on the other side of this page applies to the URL,
     // applied while there is still a form to report it in. Without it a URL
@@ -305,7 +326,7 @@ async fn submit_setup(
     }
 
     if !google_api_key.is_empty() {
-        let config = match load_from_pairs(pairs) {
+        let config = match load_from_pairs(pairs.iter().copied()) {
             Ok(config) => config,
             Err(error) => {
                 return super::json_response(
