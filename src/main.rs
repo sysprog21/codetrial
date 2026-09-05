@@ -1283,6 +1283,32 @@ mod tests {
         }
     }
 
+    /// A `--config` that names nothing is an operator's mistake, which
+    /// `primary_config_path` reports by name. Reading it as a cold start
+    /// instead would answer a wrong path with a Setup page and write a second
+    /// config beside the one they meant. Both halves are asserted here because
+    /// the missing file is the only case where the two conditions disagree,
+    /// and it is a unit test rather than a spawned binary because a launch
+    /// that wrongly believes it is a cold start serves Setup and waits there.
+    #[test]
+    fn a_named_config_is_never_a_cold_start() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let named = |path: std::path::PathBuf| super::CliOptions {
+            config_path: Some(path.display().to_string()),
+            ..super::CliOptions::default()
+        };
+
+        assert!(
+            !super::is_cold_start(&named(root.join("Cargo.toml"))),
+            "a config file that exists was named, so there is nothing to set up"
+        );
+        assert!(
+            !super::is_cold_start(&named(root.join("no-such-config.env"))),
+            "a config file that is missing was still named, and a name is an \
+             instruction to read that file rather than an invitation to ask"
+        );
+    }
+
     #[test]
     fn bare_config_paths_discover_providers_from_the_current_directory() {
         let options = super::CliOptions {
