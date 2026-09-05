@@ -112,8 +112,19 @@ impl GeminiLiveSession {
     /// Same teardown as [`Self::close`], for callers that only hold a mutable
     /// borrow and cannot give up ownership.
     pub async fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.writer.close().await?;
+        // The reader is aborted whether or not the close lands, and the close
+        // result is reported afterwards. Returning on the close first left the
+        // task running: dropping a `JoinHandle` detaches the task rather than
+        // cancelling it, so it stayed parked on a read holding the socket open.
+        //
+        // The order matters most where the close is expected to fail. A socket
+        // that is gone without having said so answers no read and refuses every
+        // write, which is what the reconnect in `livekit.rs` calls this for, so
+        // the one session that cannot end on its own was the one this left
+        // behind.
+        let closed = self.writer.close().await;
         self.reader.abort();
+        closed?;
         Ok(())
     }
 
@@ -1409,6 +1420,51 @@ mod tests {
         );
         drop(held);
         session.close().await.unwrap();
+    }
+
+    /// Ending the session has to end the reader task. Dropping the handle only
+    /// detaches it, and a detached reader parked on a socket holds that socket
+    /// for the rest of the process.
+    ///
+    /// The server answers the handshake and then holds the connection without
+    /// replying to the close, so a reader that was merely dropped would still
+    /// be waiting here rather than finishing on its own.
+    ///
+    /// The close succeeds here, so what this pins is that the reader is ended
+    /// at all, not the order the two happen in. A close that fails while the
+    /// reader is still parked is the case that was wrong, and it has no test:
+    /// every way of making a write fail locally breaks the read as well, and
+    /// then the reader ends on its own and proves nothing.
+    #[tokio::test]
+    async fn shutdown_ends_the_reader_task() {
+        let config = live_config(&[]);
+        let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(socket).await.unwrap();
+            let _ = socket.next().await;
+            socket
+                .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+                .await
+                .unwrap();
+            std::future::pending::<()>().await;
+        });
+
+        let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+            .await
+            .unwrap();
+        session.shutdown().await.unwrap();
+
+        assert!(
+            (&mut session.reader)
+                .await
+                .expect_err("a reader that was aborted cannot have joined")
+                .is_cancelled(),
+            "shutdown must end the reader task rather than detach it"
+        );
     }
 
     #[tokio::test]
