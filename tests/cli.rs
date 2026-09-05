@@ -639,6 +639,7 @@ fn setup_page_renders_a_form_with_all_four_credential_fields() {
         );
     }
     assert!(response.contains("/api/setup"), "{response}");
+
     // What leaving the optional field blank buys. The only other place that
     // says it is a console this launch does not have.
     assert!(response.contains("nobody joins the room"), "{response}");
@@ -699,6 +700,7 @@ async fn setup_page_accepts_credentials_and_writes_the_primary_config_file() {
 
     let written = std::fs::read_to_string(dir.join("config").join("codetrial.env.local"))
         .expect("codetrial.env.local should have been written");
+
     // The file holds two secrets, so the umask does not get to decide who reads
     // it. Windows has no mode to check and inherits the folder's ACL.
     #[cfg(unix)]
@@ -764,6 +766,7 @@ fn setup_page_accepts_credentials_without_a_google_api_key() {
     let _ = std::fs::remove_dir_all(&dir);
 
     assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+
     // Absent, not empty. `read_config_file` keeps an empty value and
     // `load_values` lays the file over the environment, so the line would erase
     // a `GOOGLE_API_KEY` the operator exported.
@@ -853,6 +856,7 @@ fn setup_page_refuses_a_request_carrying_a_foreign_host() {
             body
         ),
     );
+
     // The page itself too, so the rebound origin cannot read the form it would
     // be posting.
     let page = http_request(

@@ -231,9 +231,8 @@ fn bind_web_listener(addr: &str) -> Result<std::net::TcpListener, String> {
 fn run_web(options: CliOptions) -> Result<(), String> {
     // Falls through: once `serve_setup` returns, the config exists and the rest
     // of this function is an ordinary launch, on the socket Setup served on.
-    // Why that socket is carried here rather than rebound: `serve_setup`.
-    // Read once, so the question and the page it opens answer from the same
-    // map.
+    // Why that socket is carried here rather than rebound: `serve_setup`. Read
+    // once, so the question and the page it opens answer from the same map.
     let before_config = environment_and_flags(&options);
     let handed_over = if is_cold_start(&options, &before_config) {
         Some(serve_setup(&before_config)?)
@@ -296,6 +295,7 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     };
 
     initialize_accounts(&config)?;
+
     // The address is not re-read for a cold start: `serve_setup` read it from
     // the same environment and flags, and the config file written since holds
     // credentials, not `CODETRIAL_WEB_ADDR`.
@@ -478,6 +478,7 @@ fn serve_setup(values: &BTreeMap<String, String>) -> Result<std::net::TcpListene
     if let Some(refusal) = public_setup_refusal(values, bound) {
         return Err(refusal);
     }
+
     // Everything `run_web` will refuse for that this already knows the answer
     // to. There is one such rule today; the rest of its checks need the pool
     // the submission has not supplied yet.
@@ -486,11 +487,13 @@ fn serve_setup(values: &BTreeMap<String, String>) -> Result<std::net::TcpListene
     }
     // The window stays open now, but still needs to say where to go.
     println!("codetrial: open http://{bound} in your browser to continue setup");
+
     // Taken before `axum::serve` consumes the listener: this descriptor stays
     // open, so the port stays bound whatever the server does with its own.
     let retained = listener
         .try_clone()
         .map_err(|error| format!("could not retain the Setup listener: {error}"))?;
+
     // Re-asserted rather than assumed: whether a duplicate carries the flag
     // `bind_web_listener` set is a per-platform answer, and `from_std` in
     // `run_web` needs it true on this descriptor.

@@ -77,6 +77,7 @@ fn host_is_loopback(host: Option<&HeaderValue>, port: u16) -> bool {
     let Some(host) = host.and_then(|value| value.to_str().ok()) else {
         return false;
     };
+
     // An IPv6 literal is bracketed, so a colon inside the brackets is not the
     // port separator.
     let (name, host_port) = match host.rsplit_once(':') {
@@ -85,6 +86,7 @@ fn host_is_loopback(host: Option<&HeaderValue>, port: u16) -> bool {
     };
     let port_matches = match host_port {
         Some(digits) => digits.parse::<u16>() == Ok(port),
+
         // A browser omits the port only for the scheme's default, and this page
         // is plain HTTP.
         None => port == 80,
@@ -276,12 +278,13 @@ async fn submit_setup(
                 json!({ "error": format!("{key} must not contain control characters") }),
             );
         }
-        // `read_config_file` does `trim_matches('"')` then `trim_matches('\'')`,
-        // so a value edged with either is probed as one string and loaded as
-        // another. Refused rather than written, for the reason the newline
-        // above is: this file format cannot carry the value, and answering 200
-        // would mean the file does not hold what was checked. Refusing says so
-        // while there is still a form to say it in.
+
+        // `read_config_file` does `trim_matches('"')` then
+        // `trim_matches('\'')`, so a value edged with either is probed as one
+        // string and loaded as another. Refused rather than written, for the
+        // reason the newline above is: this file format cannot carry the value,
+        // and answering 200 would mean the file does not hold what was checked.
+        // Refusing says so while there is still a form to say it in.
         if let Some(edge) = ['"', '\'']
             .into_iter()
             .find(|quote| field(key).starts_with(*quote) || field(key).ends_with(*quote))
@@ -401,6 +404,7 @@ async fn submit_setup(
         .iter()
         .map(|(key, value)| format!("{key}={value}\n"))
         .collect::<String>();
+
     // The directory is the caller's answer, and a released binary's copy of it
     // does not exist until the first submission.
     if let Some(parent) = path.parent()
@@ -411,6 +415,7 @@ async fn submit_setup(
             json!({ "error": format!("could not create {}: {error}", parent.display()) }),
         );
     }
+
     // `create_new`, so an existing name is reported rather than followed and
     // truncated. `is_cold_start` reached this page by finding no config, and
     // the `is_file` it asked answers no for a symlink with nothing at the end
@@ -503,5 +508,9 @@ mod tests {
         assert!(host_is_loopback(Some(&host("localhost")), 80));
         assert!(host_is_loopback(Some(&host("localhost:80")), 80));
         assert!(!host_is_loopback(Some(&host("localhost")), 3000));
+
+        // The bracket guard's case: the last colon of `[::1]` is inside the
+        // brackets, and reading it as the separator refuses a real browser.
+        assert!(host_is_loopback(Some(&host("[::1]")), 80));
     }
 }
