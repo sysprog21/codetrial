@@ -40,6 +40,7 @@ pub use assets::static_file_meta;
 pub use auth::login_config;
 pub use interviews::REPLAY_RATE_LIMIT;
 use pool::{ProviderQuota, QuotaRefresher, spawn_provider_quota_refresher};
+pub use recordings::READ_RATE_LIMIT;
 pub use setup::setup_service;
 pub use token::{TOKEN_RATE_LIMIT, TokenConfig, TokenResponse, token_response};
 
@@ -197,6 +198,17 @@ pub(crate) struct AppState {
     /// for the length of an interview, so sharing the token bucket would have a
     /// candidate's own replay spend the budget their next token needs.
     replay_limit: TokenRateLimit<i64>,
+
+    /// The read side of the same reasoning, and a separate bucket from the
+    /// write side so that a candidate mid-interview cannot be locked out of
+    /// posting their own replay by a reviewer reading one.
+    ///
+    /// Every route behind it is already `Owner`-scoped and every answer is
+    /// already bounded, by `MAX_REPLAY_EVENTS` and `MAX_REPLAY_BYTES` on a
+    /// replay and by the page size on a listing. So this bounds neither the
+    /// blast radius of one request nor who may ask: it bounds how often, which
+    /// is the one of the three nothing else covered.
+    read_limit: TokenRateLimit<i64>,
 
     /// Which provider the next room goes to. Relaxed because nothing depends on
     /// the order two concurrent requests observe, only that they observe
@@ -371,6 +383,7 @@ pub(crate) fn web_router(
             token_limit: TokenRateLimit::with_limit(token::TOKEN_RATE_LIMIT),
             login_limit: TokenRateLimit::with_limit(token::TOKEN_RATE_LIMIT),
             replay_limit: TokenRateLimit::with_limit(interviews::REPLAY_RATE_LIMIT),
+            read_limit: TokenRateLimit::with_limit(recordings::READ_RATE_LIMIT),
             provider_counter: Arc::new(AtomicUsize::new(0)),
             provider_quota,
             quota_refresher: Arc::new(quota_refresher),

@@ -22,9 +22,9 @@ use codetrial::token::{
     livekit_token,
 };
 use codetrial::web::{
-    MAX_BODY_BYTES, MAX_REPORT_BYTES, REPLAY_RATE_LIMIT, RoomDispatcher, TOKEN_RATE_LIMIT,
-    TokenConfig, WebServerConfig, initialize_account_database, login_config, static_file_meta,
-    token_response,
+    MAX_BODY_BYTES, MAX_REPORT_BYTES, READ_RATE_LIMIT, REPLAY_RATE_LIMIT, RoomDispatcher,
+    TOKEN_RATE_LIMIT, TokenConfig, WebServerConfig, initialize_account_database, login_config,
+    static_file_meta, token_response,
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -5173,6 +5173,95 @@ async fn replay_ingestion_rate_limits_a_looping_client() {
         )
         .unwrap();
     assert_eq!(stored, i64::from(REPLAY_RATE_LIMIT));
+
+    server.abort();
+    remove_database(path);
+}
+
+/// Reading a recording costs budget too, and the three read routes share one.
+///
+/// Every one of them was already owner scoped and already bounded per answer,
+/// so what was missing was a bound on how often, and the review read added for
+/// the response window is what made that worth closing: it returns every
+/// `avatar` and `lifecycle` transition where the snapshot returns the newest of
+/// each.
+///
+/// Spent across the three routes rather than one, because they share a bucket
+/// and a test that spent it on one route would pass on a server that gave each
+/// route its own.
+#[tokio::test]
+async fn recording_reads_share_one_rate_limit() {
+    let (base, server, path, client, cookie) = recorded_server("read-rate-limit").await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, created_at, updated_at
+        ) VALUES ('rec-read', 1, ?1, 'interview-abc12345', ?1,
+            'one@example.test', 'ready', 10, 10)
+        ",
+            [&interview],
+        )
+        .unwrap();
+
+    let paths = [
+        "/api/recordings".to_string(),
+        "/api/recordings/rec-read".to_string(),
+        "/api/recordings/rec-read/events".to_string(),
+        "/api/recordings/rec-read/events?avatar=history".to_string(),
+    ];
+    for spent in 0..READ_RATE_LIMIT {
+        let url = format!("{base}{}", paths[spent as usize % paths.len()]);
+        let response = client
+            .get(&url)
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "read {spent} should be allowed");
+    }
+
+    // Every route, because one bucket means the next request is refused
+    // whichever of them asks.
+    for path_suffix in &paths {
+        let blocked = client
+            .get(format!("{base}{path_suffix}"))
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(blocked.status(), 429, "{path_suffix}");
+        assert_eq!(blocked.headers().get("retry-after").unwrap(), "60");
+    }
+
+    // A different account is untouched, which is what keying on the account
+    // rather than the address buys: both accounts reach this server on the same
+    // loopback address, so an address-keyed bucket would refuse this read too.
+    // It asks for its own listing, the one read of the three it owns anything
+    // to answer.
+    let (other_cookie, _) = second_account(&client, &base, &path).await;
+    let other = client
+        .get(format!("{base}/api/recordings"))
+        .header("cookie", &other_cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(other.status(), 200);
+
+    // Posting a replay still works too: the read budget and the write budget
+    // are separate buckets, so a reviewer reading a history cannot lock a
+    // candidate out of recording their own interview.
+    let posted = client
+        .post(format!("{base}/api/interviews/{interview}/events"))
+        .header("cookie", &cookie)
+        .json(&json!({ "events": [envelope("transcript", json!({ "text": "hello" }))] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(posted.status(), 200);
 
     server.abort();
     remove_database(path);

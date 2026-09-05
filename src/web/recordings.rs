@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::body::{Body, to_bytes};
 use axum::extract::{Path as UriPath, Query, State};
@@ -17,7 +17,39 @@ use crate::current_epoch_seconds;
 
 use super::auth::Owner;
 use super::consent::recording_requires_consent;
-use super::{AppState, MAX_WEBHOOK_BODY_BYTES, json_response, replay_response};
+use super::{
+    AppState, MAX_WEBHOOK_BODY_BYTES, json_response, rate_limited_response, replay_response,
+};
+
+/// What one account may spend reading its own recordings in a window.
+///
+/// Derived from the first-party caller rather than picked, the way
+/// `REPLAY_RATE_LIMIT` is. `web/replay.js` reads the listing once a page load
+/// and then the detail and the events of whichever recording a person clicks,
+/// so a reviewer working quickly through a history spends single digits a
+/// minute against this budget. A hundred and twenty leaves that untouched with
+/// room to spare.
+///
+/// The reads it bounds are cheap per call and not free per row: the review read
+/// added for the response window returns every `avatar` and `lifecycle`
+/// transition rather than the newest of each, which is what made "nothing
+/// bounds how often" worth closing rather than noting.
+pub const READ_RATE_LIMIT: u32 = 120;
+
+/// Whether this account may spend one more read, in the words the routes behind
+/// it answer with: the listing, the detail and the events.
+///
+/// Keyed on the account, which `Owner` has already resolved, for the reason the
+/// ingest limiter gives: the address would put a whole office behind one budget
+/// and let one looping tab refuse everyone beside it.
+///
+/// Not every read in this file is behind it. The room-token replay route has no
+/// account to charge, and the status route that `web/recording-state.js` polls
+/// is not budgeted.
+fn read_allowed(state: &AppState, account_id: i64) -> Option<Response> {
+    (!state.read_limit.allow(account_id, Instant::now()))
+        .then(|| rate_limited_response("Too many reads at once. Wait a minute."))
+}
 
 /// How often the sweeper runs. The shortest retry backoff, because a schedule
 /// checked less often than its own first step is a schedule with a different
@@ -406,6 +438,9 @@ pub(crate) async fn list_recordings_handler(
             json!({ "recordings": [], "nextCursor": null }),
         );
     }
+    if let Some(refused) = read_allowed(&state, user.id) {
+        return refused;
+    }
 
     // `<created_at>.<id>`, which is the last row of the previous page. Refused
     // rather than ignored when it does not parse: a cursor that quietly became
@@ -481,6 +516,9 @@ pub(crate) async fn recording_handler(
     if state.recorder.is_none() {
         return recording_missing();
     }
+    if let Some(refused) = read_allowed(&state, user.id) {
+        return refused;
+    }
     let found =
         blocking(move || crate::recording::recording_summary(&accounts, &recording_id, user.id))
             .await;
@@ -538,6 +576,9 @@ pub(crate) async fn recording_events_handler(
 ) -> Response {
     if state.recorder.is_none() {
         return recording_missing();
+    }
+    if let Some(refused) = read_allowed(&state, user.id) {
+        return refused;
     }
     let now = current_epoch_seconds() as i64;
     let after = params
