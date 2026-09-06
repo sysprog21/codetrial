@@ -45,7 +45,51 @@ owned by a different project than the one whose ancestors it just walked, or
 anything other than one active organizer membership on the Shared Drive. It
 then authenticates the delivery account to prove its own bucket and Drive
 access, and fetches the recording template from the public, globally-routable
-HTTPS origin. The two supplied keys and short-lived access-token headers live
+HTTPS origin.
+
+A one-day Delete rule is not on its own a promise that anything is deleted, so
+five more bucket settings are read beside it. Soft delete is the one that fires
+by default: Cloud Storage retains soft-deleted objects for a configured window
+and a lifecycle Delete moves an object into exactly that state, so a bucket
+created without turning it off keeps every recording restorable long after the
+rule has run. `softDeletePolicy.retentionDurationSeconds` must be present and
+`0`. Absent is refused rather than read as off, because whether disabling the
+policy omits the field or reports a zero is not something the checker can
+settle from outside, and an audit whose point is that soft delete is off must
+not report success without having seen it off.
+
+Three settings defer the Delete rather than forbid it, which comes to the same
+thing when the promise is a day: a `retentionPolicy`, whose locked form cannot
+be shortened afterwards at all; `objectRetention` in `Enabled` mode; and
+`defaultEventBasedHold`, which puts a hold on every object written from then
+on. Per-object holds and per-object retention do not appear in the bucket
+resource and so are not visible to this check. Object Versioning is refused
+last, because it makes deleting an object write a noncurrent version instead of
+ending it: the lifecycle rule reaches those versions only on a second pass, and
+`delete_object` in `src/delivery.rs` sends no `generation`, so versioning turns
+the server's own authoritative delete into an archive.
+
+The Shared Drive audit reads every active permission on the drive, not only the
+rows naming the delivery account, which is what it did for as long as "exactly
+one active organizer" was a claim about that one address rather than about the
+drive. Every member must be an individually named user: `group`, `domain`,
+`anyone` and any type Google adds later are refused together, because this
+drive stages candidate recordings and nothing else, so its membership has to be
+something the audit can read out. Named human members are not refused.
+
+The scope is the drive's own membership. Link sharing on a delivered recording
+lives on the permissions of the files inside the drive, which this check does
+not list and does not speak for; `docs/recording-contract.md` describes the
+per-file reader grant the delivery path creates, and Recording 7b is what
+observes one.
+
+The template is proved by status and by content. `curl --fail` exits 0 on a 3xx
+when nothing follows the redirect, so a redirecting origin used to satisfy this
+step without the template ever being fetched, and a 200 serving some other page
+satisfied it too. The checker reads the status code, requires `200`, and looks
+for the `id="recording-ready"` element the template declares, which is how
+`scripts/recording-integration.sh` has proved the same origin since it was
+written. The two supplied keys and short-lived access-token headers live
 only in a private temporary directory, are removed from child-process
 environments where they are not needed, and do not replace a developer's active
 `gcloud` account.

@@ -72,17 +72,18 @@ case "$template_host" in
         exit 2
         ;;
 esac
+template_fetch_port=443
 case "$template_host" in
     *:*)
-        template_port=${template_host#*:}
-        case "$template_port" in
+        template_fetch_port=${template_host#*:}
+        case "$template_fetch_port" in
             [1-9] | [1-9][0-9] | [1-9][0-9][0-9] | [1-9][0-9][0-9][0-9] | [1-9][0-9][0-9][0-9][0-9]) ;;
             *)
                 echo "template base URL has an invalid port" >&2
                 exit 2
                 ;;
         esac
-        [ "$template_port" -le 65535 ] || {
+        [ "$template_fetch_port" -le 65535 ] || {
             echo "template base URL has an invalid port" >&2
             exit 2
         }
@@ -94,7 +95,13 @@ esac
 # 127.0.0.1 and neither looks private. Resolve it before either credential is
 # loaded and refuse any answer that is not globally routable.
 template_name=${template_host%%:*}
-python3 - "$template_name" << 'PY'
+
+# The address is printed, not merely approved, so the fetch below can be pinned
+# to it. Resolving here and letting curl resolve again is a check on one answer
+# and a connection to another: a short-TTL record passes this and then sends the
+# fetch somewhere else. `--resolve` binds the two together.
+template_address=$(
+    python3 - "$template_name" << 'PY'
 import ipaddress
 import socket
 import sys
@@ -102,16 +109,45 @@ import sys
 host = sys.argv[1]
 try:
     addresses = {result[4][0] for result in socket.getaddrinfo(host, None)}
-except socket.gaierror as error:
+except OSError as error:
+    # Not just gaierror: every other OSError out of getaddrinfo used to reach
+    # the operator as a traceback rather than as this sentence.
     raise SystemExit(f"template base URL host cannot be resolved: {error}")
 
-if any(not ipaddress.ip_address(address).is_global for address in addresses):
+try:
+    parsed = [ipaddress.ip_address(address) for address in addresses]
+except ValueError as error:
+    # An IPv6 answer can carry a %scope suffix that ip_address refuses.
+    raise SystemExit(f"template base URL resolved to an unreadable address: {error}")
+
+if any(not address.is_global for address in parsed):
     raise SystemExit("template base URL must resolve only to public addresses")
+
+# Sorted within one family, because IPv4Address and IPv6Address do not compare
+# with each other and a dual-stack host would otherwise raise a TypeError here
+# rather than answer. IPv4 first: it is the one every network can reach.
+parsed.sort(key=lambda address: (address.version, address))
+
+# Sorted, so the pinned address does not depend on set iteration order and the
+# same host does not reach a different server between two runs. Bracketed when
+# it is IPv6, because that is the spelling `curl --resolve` takes and an
+# AAAA-only origin would otherwise fail a check it should pass.
+pinned = parsed[0]
+print(f"[{pinned}]" if pinned.version == 6 else pinned)
 PY
+)
 
 umask 077
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT HUP INT TERM
+
+# QUIT is in the list because it was not, and `/bin/sh` here is dash, where a
+# trap that omits it leaves both service-account private keys and both
+# bearer-token config files on disk after a Ctrl-\\. The handler exits rather
+# than falling through: a caught INT used to return to the next command with
+# `$work` already deleted, which reported a missing template file instead of an
+# interruption and exited 0.
+trap 'rm -rf "$work"' EXIT
+trap 'rm -rf "$work"; exit 130' HUP INT QUIT TERM
 export CLOUDSDK_CONFIG="$work/gcloud"
 mkdir "$CLOUDSDK_CONFIG"
 delivery_key=$work/delivery-service-account.json
@@ -174,15 +210,39 @@ gcloud storage buckets describe "gs://$bucket" --raw --format=json > "$work/buck
 # project whose ancestor policies were just audited. A bucket owned elsewhere
 # inherits that other project's grants, and none of them appear above.
 project_number=$(gcloud projects describe "$project" --format="value(projectNumber)")
+
+# The token goes in a config file rather than in `-H` on the command line so it
+# stays out of `ps`. That format has its own escaping, though, and nothing was
+# checking the value against it: a token carrying a quote silently truncated the
+# header, and one carrying a newline had its remainder parsed as further curl
+# options, which was proved end to end by making curl write its body to a chosen
+# path. Real Google tokens are drawn from this alphabet; anything else is a
+# `gcloud` that printed something besides the token, and this refuses rather
+# than concatenates it.
+write_bearer_config()
+{
+    # A `case` glob and not `grep -qx`: with a multi-line value `grep -x`
+    # succeeds when any single line matches, so a token whose second line was a
+    # curl directive passed a check written to stop exactly that. This tests the
+    # whole string, and a newline is outside the set like any other character.
+    case "$2" in
+        '' | *[!A-Za-z0-9._~+/=-]*)
+            echo "the $3 access token is not a bare token; refusing to build a curl config" >&2
+            exit 2
+            ;;
+    esac
+    printf 'header = "Authorization: Bearer %s"\n' "$2" > "$1"
+}
+
 auditor_token=$(gcloud auth print-access-token)
 auditor_curl=$work/auditor-curl.conf
-printf 'header = "Authorization: Bearer %s"\n' "$auditor_token" > "$auditor_curl"
+write_bearer_config "$auditor_curl" "$auditor_token" auditor
 
 # Follow the pages. A shared drive caps permissions.list at 100 per page, and
 # naming only permissions() in fields drops nextPageToken, so a truncated answer
 # looked exactly like a complete one: a second grant for this account on page
 # two left the count at one and the audit reported an exactness it never saw.
-drive_query="supportsAllDrives=true&pageSize=100&fields=nextPageToken,permissions(id,type,role,emailAddress,deleted)"
+drive_query="supportsAllDrives=true&pageSize=100&fields=nextPageToken,permissions(id,type,role,emailAddress,domain,deleted)"
 drive_url="https://www.googleapis.com/drive/v3/files/$drive_id/permissions?$drive_query"
 page=0
 while :; do
@@ -229,19 +289,50 @@ ancestors_iam = read(ancestors_iam_path)
 bucket = read(bucket_path)
 drive = read(drive_path)
 
-def ensure_auditable(policy):
-    """Refuse a policy whose grants cannot be read exactly.
+# Which member spellings this script can resolve, rather than which ones it
+# cannot. The denylist this replaces had grown to eight prefixes and a
+# substring in one sitting, and every spelling nobody had thought of failed
+# open: an unrecognised member was silently filed as "not the delivery account"
+# and never reached the verdict. IAM member types are added by Google, so that
+# list was structurally behind, and `projectEditor:` sat outside it for as long
+# as this check has existed while granting its role to every project editor.
+#
+# The inverted form is also smaller, and it subsumes the one case that proves a
+# prefix test cannot work on its own: `serviceAccount:PROJECT.svc.id.goog[NS/SA]`
+# is Google's legacy member for every GKE pod running as a Kubernetes service
+# account, so it names a set while sitting under an allowed prefix. A bracket
+# cannot appear in an address, which is what separates the two.
+RESOLVABLE_PREFIXES = (
+    "user:",
+    "serviceAccount:",
+    "deleted:user:",
+    "deleted:serviceAccount:",
+)
 
-    Whole-policy, not per-member: these identities either include every
-    authenticated service account or need a directory lookup to exclude this
-    one, so treating them as unrelated would turn the audit into a guess.
+
+def names_one_identity(principal):
+    """One account this script could go and look at, or something broader."""
+    if not principal.startswith(RESOLVABLE_PREFIXES):
+        return False
+    address = principal.split(":", 1)[1]
+    return "@" in address and "[" not in address
+
+
+def ensure_auditable(policy):
+    """Refuse a policy holding a grant this script cannot read exactly.
+
+    Whole-policy, not per-member. A member it cannot resolve either includes
+    every authenticated service account, needs a directory lookup to rule this
+    one out, or is a spelling nobody here has seen; in all three cases treating
+    it as unrelated would turn the audit into a guess. That last case is why
+    the test is an allowlist: the version that named the broad spellings
+    instead filed every unknown one as harmless.
     """
     for binding in policy.get("bindings", []):
         indirect = [
             principal
             for principal in binding.get("members", [])
-            if principal in {"allUsers", "allAuthenticatedUsers"}
-            or principal.startswith(("group:", "domain:", "principalSet:"))
+            if not names_one_identity(principal)
         ]
         if indirect:
             # Named, because the operator has to go and look. Whether the
@@ -308,15 +399,121 @@ if not any(
 ):
     raise SystemExit("bucket has no unconditional 24-hour Delete lifecycle rule")
 
-matches = [
+# A one-day Delete rule is not on its own a promise that anything is deleted,
+# and the rule alone was being read as if it were. Each setting below is a way a
+# bucket passes every check above while a candidate's recording is still
+# retrievable a week later, which is the one guarantee this environment exists
+# to make.
+#
+# Soft delete is the one that fires by default: Cloud Storage enables it on new
+# buckets with a seven-day retention, and a lifecycle Delete moves an object
+# into exactly that state rather than ending it. So a bucket nobody
+# deliberately configured keeps every recording restorable for a week after the
+# rule has run.
+#
+# Absent is refused rather than accepted. Whether disabling the policy omits the
+# field or reports a zero duration is not something this script can settle from
+# outside, and resolving that ambiguity in the passing direction would mean an
+# audit whose whole point is that soft delete is off reporting success without
+# having seen it off. `str()` because the JSON API types the duration as a
+# number and gcloud has rendered it both ways.
+soft_delete = bucket.get("softDeletePolicy", {}).get("retentionDurationSeconds")
+if soft_delete is None:
+    raise SystemExit(
+        "could not determine the bucket's soft-delete state: no "
+        "softDeletePolicy.retentionDurationSeconds in the bucket resource, and an "
+        "absent field is not proof that soft delete is off"
+    )
+if str(soft_delete) != "0":
+    raise SystemExit(
+        f"bucket retains soft-deleted objects for {soft_delete}s, so the lifecycle "
+        "rule would leave every recording restorable for that long; set the "
+        "soft-delete retention duration to 0"
+    )
+
+# Three ways to defer the Delete action rather than forbid it, which comes to
+# the same thing here: the object stays until the deferral ends, and none of
+# these ends within a day. A locked retention policy cannot be shortened
+# afterwards at all. Per-object holds and per-object retention do not appear in
+# the bucket resource and so are not visible here, which is why
+# `defaultEventBasedHold` matters most of the three: it is the one that puts a
+# hold on every object written from now on.
+def refuse_deferral(field, description):
+    raise SystemExit(
+        f"bucket has {description} ({field}={bucket.get(field)!r}), which defers the "
+        "lifecycle Delete past the retention this environment promises; the staging "
+        "bucket must carry none"
+    )
+
+
+if bucket.get("retentionPolicy"):
+    refuse_deferral("retentionPolicy", "a retention policy")
+if (bucket.get("objectRetention") or {}).get("mode") == "Enabled":
+    refuse_deferral("objectRetention", "object retention")
+if bucket.get("defaultEventBasedHold") is True:
+    refuse_deferral("defaultEventBasedHold", "a default event-based hold")
+
+# With versioning on, deleting an object writes a noncurrent version instead of
+# removing it. The lifecycle rule does reach those versions, but only on a
+# second pass, so a recording outlives the day the rule is written for. The
+# sharper reason is this repository's own: `delete_object` in `src/delivery.rs`
+# issues the object delete with no `generation`, which under versioning archives
+# the live version rather than ending it, so turning versioning on converts the
+# server's authoritative delete into a no-op nothing else would notice.
+if bucket.get("versioning", {}).get("enabled") is True:
+    raise SystemExit("bucket must not enable Object Versioning")
+
+# Every active permission on the drive, not only the rows naming the delivery
+# account. The audit used to filter on the delivery address first and count
+# second, so "exactly one active organizer" meant "exactly one for this
+# account" and said nothing about who else held the drive. The message claimed
+# the stronger thing.
+#
+# One branch rather than three: this drive stages candidate recordings and
+# nothing else, so its membership has to be individually named accounts, and
+# `group`, `domain`, `anyone` and any type Google adds later all fall out of
+# the same test. A group is a legitimate way to run a shared drive in general,
+# which is why the remedy is spelled out rather than called unauditable.
+#
+# The scope, stated because the previous wording overclaimed it: this is the
+# drive's own membership. Link sharing on delivered recordings lives on the
+# permissions of the files inside the drive, which this audit does not list and
+# does not speak for.
+active = [
     permission
     for permission in drive.get("permissions", [])
-    if not permission.get("deleted") and permission.get("emailAddress") == delivery
+    if not permission.get("deleted")
+]
+named = [
+    permission for permission in active if permission.get("type") != "user"
+]
+if named:
+    described = ", ".join(
+        f"{permission.get('type')} "
+        f"{permission.get('emailAddress') or permission.get('domain') or 'anyone'}"
+        f" as {permission.get('role')}"
+        for permission in named
+    )
+    raise SystemExit(
+        f"the Shared Drive has non-user members ({described}); this drive's "
+        "membership must be individually named accounts, so that the audit can say "
+        "who holds it"
+    )
+
+matches = [
+    permission for permission in active if permission.get("emailAddress") == delivery
 ]
 if len(matches) != 1 or matches[0].get("type") != "user" or matches[0].get("role") != "organizer":
     raise SystemExit(f"{delivery} must have exactly one active Shared Drive organizer permission")
 PY
-echo "IAM, lifecycle, and Shared Drive membership are least-privilege"
+
+# What this line does and does not say, because both previous wordings claimed
+# more than the checks above establish. It is about the delivery account's own
+# grants, the bucket's own settings, and the drive's own membership. Roles held
+# by other named principals are read for auditability and not for whether they
+# should hold them; per-object holds and per-object retention are not in the
+# bucket resource; and permissions on the files inside the drive are not listed.
+echo "the delivery account's grants and the bucket's retention settings are least-privilege"
 
 # Access is checked as the delivery account itself, not inferred from the
 # auditor's broad ability to inspect policy.
@@ -325,12 +522,46 @@ gcloud storage ls "gs://$bucket" > /dev/null
 echo "GCS bucket is accessible"
 delivery_token=$(gcloud auth print-access-token)
 delivery_curl=$work/delivery-curl.conf
-printf 'header = "Authorization: Bearer %s"\n' "$delivery_token" > "$delivery_curl"
+write_bearer_config "$delivery_curl" "$delivery_token" delivery
 curl --fail --silent --show-error --max-time 20 --config "$delivery_curl" \
     "https://www.googleapis.com/drive/v3/files?corpora=drive&driveId=$drive_id&includeItemsFromAllDrives=true&supportsAllDrives=true&pageSize=1&fields=files(id)" \
     > /dev/null
 echo "Shared Drive is accessible"
 
-curl --fail --silent --show-error --max-time 30 \
-    "$template_origin/recording/index.html" > /dev/null
+# Not `curl --fail`, which exits 0 on a 3xx when nothing follows it, so a
+# redirecting origin used to satisfy this line without the template ever being
+# fetched. The status is read and compared, and the body is then checked for the
+# element the template declares, because a 200 serving somebody else's page is
+# the other way this passed. `scripts/recording-integration.sh` proves the same
+# origin the same way, and carried the same swallowed exit code until this
+# change; the two are meant to stay in step.
+template_url="$template_origin/recording/index.html"
+
+# The exit code is kept, not discarded. `%{http_code}` is already 200 once the
+# headers arrive, so a transfer that dies part-way through the body still prints
+# 200 while curl exits non-zero, and swallowing that with `|| true` accepted a
+# fraction of a page as proof the page is served. Measured: a stalled body gave
+# `status=200`, exit 28, and 258 of 5258 bytes, which still carried the marker
+# the grep below looks for. The `if` is what keeps `set -e` out of it, since a
+# refused connection has to reach the status message rather than abort here.
+if status=$(curl --silent --show-error --max-time 30 --output "$work/template.html" \
+    --resolve "$template_name:$template_fetch_port:$template_address" \
+    --write-out '%{http_code}' "$template_url"); then
+    template_transfer=complete
+else
+    template_transfer=$?
+fi
+[ "$template_transfer" = complete ] || {
+    echo "the template fetch did not complete: $template_url answered $status after" \
+        "curl exit $template_transfer" >&2
+    exit 1
+}
+[ "$status" = "200" ] || {
+    echo "the template is not being served: $template_url answered $status" >&2
+    exit 1
+}
+grep -q 'id="recording-ready"' "$work/template.html" || {
+    echo "the page at $template_url is not the recording template" >&2
+    exit 1
+}
 echo "Recording template is publicly reachable"
