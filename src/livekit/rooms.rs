@@ -395,6 +395,31 @@ mod tests {
         );
     }
 
+    /// All three parts are required, and nothing said so.
+    ///
+    /// Each is load bearing for a different reason the doc comment gives: the
+    /// method keeps a 404 from any other RoomService call fatal, the status
+    /// distinguishes a refusal from a failure, and the Twirp code separates a
+    /// participant that is gone from an HTML error page at the wrong route.
+    /// Dropping any one of them widens this to a participant that is still
+    /// there, and the caller treats that as a successful eviction.
+    #[test]
+    fn a_participant_is_gone_only_when_all_three_parts_say_so() {
+        let gone = "RemoveParticipant failed: 404 {\"code\":\"not_found\"}";
+        assert!(is_participant_gone(gone));
+
+        for missing in [
+            // Another RoomService call answering 404 is still fatal.
+            "ListParticipants failed: 404 {\"code\":\"not_found\"}",
+            // The right call and the right code, but not a refusal.
+            "RemoveParticipant failed: 500 {\"code\":\"not_found\"}",
+            // A 404 from the wrong route, which is an error page and not Twirp.
+            "RemoveParticipant failed: 404 <html>no such route</html>",
+        ] {
+            assert!(!is_participant_gone(missing), "{missing}");
+        }
+    }
+
     #[test]
     fn room_service_response_rejects_malformed_success_json() {
         let error = parse_room_service_response("ListParticipants", "not json")
