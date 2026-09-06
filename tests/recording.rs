@@ -3437,18 +3437,32 @@ mod replay {
             // Fill to the event ceiling directly, because writing five thousand
             // events through the ingest path tests SQLite rather than the
             // quota.
-            let connection = scratch.open();
+            //
+            // One transaction around the seed, not five thousand. Each
+            // `execute` outside one is its own implicit transaction and so its
+            // own fsync, and the ceiling is five thousand of them: on an idle
+            // machine that is a few seconds, and on a loaded one this single
+            // test ran past four hundred seconds while the whole fifty-five
+            // test binary takes forty idle. It also starved its neighbours --
+            // `replay_ingest_concurrent_writers` runs beside it in this binary
+            // with a five second `busy_timeout`, and five thousand fsyncs on
+            // the same disk is what pushed those writers past it, which read as
+            // a flaky concurrency test rather than as this. What is being
+            // asserted is the quota refusal below; how the rows got there is
+            // setup, and setup does not need to be durable one row at a time.
+            let mut connection = scratch.open();
+            let seed = connection.transaction().unwrap();
             for seq in 0..MAX_REPLAY_EVENTS {
-                connection
-                    .execute(
-                        "
+                seed.execute(
+                    "
         INSERT INTO replay_events (interview_id, seq, kind, at, payload, bytes, received_at)
         VALUES ('int-1', ?1, 'transcript', 1, '{}', 2, 1)
         ",
-                        [seq],
-                    )
-                    .unwrap();
+                    [seq],
+                )
+                .unwrap();
             }
+            seed.commit().unwrap();
 
             assert_eq!(
                 append_replay_events(

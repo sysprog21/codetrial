@@ -5308,15 +5308,35 @@ async fn replay_ingestion_rate_limits_a_looping_client() {
         }]
     });
 
+    // Sent together rather than one after another, because the limiter's window
+    // is sixty seconds and this is a hundred and twenty round trips.
+    // Sequential, the test quietly assumed all of them finish inside that
+    // window: on a loaded machine they do not, the window rolls over mid-loop,
+    // and the request below starts a fresh one and answers 200. That read as a
+    // flaky rate-limit test and it was this.
+    //
+    // Order does not matter to what is being asserted. The limiter admits the
+    // first `REPLAY_RATE_LIMIT` asks in a window and refuses the next, so every
+    // one of these is allowed whichever way they interleave, and the refusal
+    // below is the first ask past the limit however they landed.
+    let mut inflight = Vec::new();
     for attempt in 1..=REPLAY_RATE_LIMIT {
-        let response = client
-            .post(&url)
-            .header("cookie", &cookie)
-            .json(&batch)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200, "batch {attempt} should be allowed");
+        let (client, url, cookie, batch) =
+            (client.clone(), url.clone(), cookie.clone(), batch.clone());
+        inflight.push(tokio::spawn(async move {
+            let response = client
+                .post(&url)
+                .header("cookie", &cookie)
+                .json(&batch)
+                .send()
+                .await
+                .unwrap();
+            (attempt, response.status())
+        }));
+    }
+    for handle in inflight {
+        let (attempt, status) = handle.await.unwrap();
+        assert_eq!(status, 200, "batch {attempt} should be allowed");
     }
 
     let blocked = client
