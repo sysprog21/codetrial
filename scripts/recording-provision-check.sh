@@ -540,8 +540,9 @@ owner = bucket.get("projectNumber")
 if not project_number or str(owner) != str(project_number):
     raise SystemExit(f"bucket belongs to project number {owner!r}, not {project_number!r}")
 
-iam_configuration = bucket.get("iamConfiguration", {})
-if iam_configuration.get("uniformBucketLevelAccess", {}).get("enabled") is not True:
+iam_configuration = bucket.get("iamConfiguration") or {}
+uniform_access = iam_configuration.get("uniformBucketLevelAccess") or {}
+if uniform_access.get("enabled") is not True:
     raise SystemExit("bucket must enable Uniform Bucket-Level Access")
 
 # Uniform access can be turned back off within 90 days of being switched on, so
@@ -549,7 +550,7 @@ if iam_configuration.get("uniformBucketLevelAccess", {}).get("enabled") is not T
 # time is when that window closes; it is reported rather than refused, because
 # refusing would fail every bucket for its first three months, which is every
 # bucket this check will ever see on the day it is provisioned.
-locked_until = iam_configuration.get("uniformBucketLevelAccess", {}).get("lockedTime")
+locked_until = uniform_access.get("lockedTime")
 if locked_until:
     print(f"uniform bucket-level access can be reverted until {locked_until}")
 
@@ -573,7 +574,7 @@ if prevention != "enforced":
 # class or version filter deletes some objects at a day old and leaves the rest,
 # and this script is not told which prefix the recordings use, so it cannot say
 # whether a filtered rule covers them.
-rules = bucket.get("lifecycle", {}).get("rule", [])
+rules = (bucket.get("lifecycle") or {}).get("rule") or []
 if not any(
     rule.get("action") == {"type": "Delete"} and rule.get("condition") == {"age": 1}
     for rule in rules
@@ -598,7 +599,7 @@ if not any(
 # audit whose whole point is that soft delete is off reporting success without
 # having seen it off. `str()` because the JSON API types the duration as a
 # number and gcloud has rendered it both ways.
-soft_delete = bucket.get("softDeletePolicy", {}).get("retentionDurationSeconds")
+soft_delete = (bucket.get("softDeletePolicy") or {}).get("retentionDurationSeconds")
 if soft_delete is None:
     raise SystemExit(
         "could not determine the bucket's soft-delete state: no "
@@ -641,7 +642,7 @@ if bucket.get("defaultEventBasedHold") is True:
 # issues the object delete with no `generation`, which under versioning archives
 # the live version rather than ending it, so turning versioning on converts the
 # server's authoritative delete into a no-op nothing else would notice.
-if bucket.get("versioning", {}).get("enabled") is True:
+if (bucket.get("versioning") or {}).get("enabled") is True:
     raise SystemExit("bucket must not enable Object Versioning")
 
 # Every active permission on the drive, not only the rows naming the delivery

@@ -1273,6 +1273,29 @@ class ProvisionCheckTests(RefusalAssertions):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_a_bucket_field_reported_as_null_refuses_rather_than_crashes(self):
+        # gcloud renders an unset sub-resource as an absent key, but a null is
+        # the same statement and the reads chained off these keys would meet it
+        # as `None.get`. A traceback exits non-zero and so fails closed, but it
+        # says the audit broke rather than what the bucket is carrying, which
+        # is the distinction `permissionDetails` and `aware_expiry` already
+        # make.
+        for field, expected in [
+            ("softDeletePolicy", "could not determine"),
+            ("iamConfiguration", "Uniform Bucket-Level Access"),
+            ("lifecycle", "24-hour Delete lifecycle"),
+        ]:
+            with self.subTest(field=field):
+                result = self.run_check(bucket=bucket_resource(**{field: None}))
+                self.assertRefused(result, expected)
+                self.assertNotIn("Traceback", result.stderr)
+
+    def test_versioning_reported_as_null_does_not_refuse(self):
+        # The other half of the same read: a null here means versioning is off,
+        # which is the state this check wants, so it must pass rather than die.
+        result = self.run_check(bucket=bucket_resource(versioning=None))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_an_unreported_soft_delete_state_is_refused(self):
         # Absence is not proof. Whether disabling the policy omits the field or
         # reports a zero cannot be settled from outside the API, and resolving
