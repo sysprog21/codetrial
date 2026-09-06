@@ -30,10 +30,19 @@ test("lobby exposes signed in and signed out account hooks", () => {
 
 test("interview history routes through the shared persistence helper", () => {
   const script = read("interview.js");
-  const saveHistory = script.slice(script.indexOf("function saveHistory"));
+  const saveHistory = functionBody(script, "saveHistory");
 
   assert.match(script, /import \{ saveReportHistory \} from "\.\/history\.js"/);
   assert.match(saveHistory, /return saveReportHistory\(entry\)/);
+  for (const name of ["receiveReport", "showReport"]) {
+    const body = functionBody(script, name);
+    assert.match(body, /renderReport\(\)/);
+    assert.match(body, /renderReportSaveStatus\(await saving\)/);
+    assert.ok(body.indexOf("renderReport()") < body.indexOf("await saving"));
+  }
+  assert.match(functionBody(script, "renderReport"), /saveResult: null/);
+  assert.match(functionBody(script, "renderReportSaveStatus"), /querySelector\("#done"\)\.disabled = false/);
+  assert.match(functionBody(script, "renderReport"), /nodes\.ending\.hidden = true/);
 });
 
 test("a completed test run keeps pause and round locks", () => {
@@ -183,7 +192,7 @@ test("report history writes local storage before account sync", async () => {
   assert.deepEqual(posts, []);
 
   releaseSession();
-  assert.equal(await saved, true);
+  assert.deepEqual(await saved, { local: "saved", account: "saved" });
   assert.equal(posts.length, 1);
   assert.equal(posts[0].url, "/api/reports");
   assert.equal(posts[0].options.method, "POST");
@@ -191,18 +200,18 @@ test("report history writes local storage before account sync", async () => {
 
 test("report history keeps anonymous and failed account saves local", async () => {
   const anonymous = memoryStorage();
-  assert.equal(
+  assert.deepEqual(
     await saveReportHistory({ id: "anon", problemId: "two-sum" }, {
       storage: anonymous,
       fetcher: async () => response({ signedIn: false }),
     }),
-    false,
+    { local: "saved", account: "skipped" },
   );
   assert.equal(JSON.parse(anonymous.getItem(historyKey))[0].id, "anon");
 
   const failed = memoryStorage();
   const calls = [];
-  assert.equal(
+  assert.deepEqual(
     await saveReportHistory({ id: "fail", problemId: "two-sum" }, {
       storage: failed,
       fetcher: async (url) => {
@@ -210,10 +219,53 @@ test("report history keeps anonymous and failed account saves local", async () =
         return url === "/api/session" ? response({ signedIn: true }) : response({}, false);
       },
     }),
-    false,
+    { local: "saved", account: "failed" },
   );
   assert.deepEqual(calls, ["/api/session", "/api/reports"]);
   assert.equal(JSON.parse(failed.getItem(historyKey))[0].id, "fail");
+});
+
+test("report history exposes every local and account failure", async () => {
+  const brokenStorage = {
+    getItem: () => null,
+    setItem: () => { throw new Error("quota"); },
+  };
+  assert.deepEqual(
+    await saveReportHistory({ id: "local-fail" }, {
+      storage: brokenStorage,
+      fetcher: async () => response({ signedIn: false }),
+    }),
+    { local: "failed", account: "skipped" },
+  );
+
+  const accountFailure = async (fetcher) => saveReportHistory({ id: "account-fail" }, {
+    storage: memoryStorage(),
+    fetcher,
+  });
+  assert.deepEqual(
+    await accountFailure(async () => { throw new Error("offline"); }),
+    { local: "saved", account: "failed" },
+  );
+  assert.deepEqual(
+    await accountFailure(async () => response(null)),
+    { local: "saved", account: "failed" },
+  );
+  assert.deepEqual(
+    await accountFailure(async () => ({ ok: true, json: async () => { throw new Error("bad json"); } })),
+    { local: "saved", account: "failed" },
+  );
+
+  for (const session of [response({}, false), response({ loginRequired: true })]) {
+    let calls = 0;
+    assert.deepEqual(
+      await accountFailure(async () => {
+        calls += 1;
+        return session;
+      }),
+      { local: "saved", account: "failed" },
+    );
+    assert.equal(calls, 1, "a failed or malformed session must not POST a report");
+  }
 });
 
 function response(body, ok = true) {
