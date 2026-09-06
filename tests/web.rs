@@ -5025,6 +5025,21 @@ async fn a_late_provider_failure_does_not_fail_a_queued_recording() {
         "a completion carrying the expected object queues the transfer"
     );
 
+    // Queued, not merely moved. The row reaching `transferring` is what the
+    // delivery worker looks for, and the queue entry is what tells it to look:
+    // without it the recording waits for the sweeper to notice it was orphaned.
+    let queued = |path: &std::path::Path| -> i64 {
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM delivery_queue WHERE recording_id = ?1",
+                [&recording_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(queued(&path), 1, "the completion queued the delivery");
+
     // The same egress, reported failed afterwards. Nothing here is delivered,
     // so the row can only move if this webhook moves it.
     let failed = json!({
@@ -5044,6 +5059,11 @@ async fn a_late_provider_failure_does_not_fail_a_queued_recording() {
         state(&path),
         ("transferring".to_string(), None),
         "a stale provider failure must not take back a completed egress"
+    );
+    assert_eq!(
+        queued(&path),
+        1,
+        "and it did not queue a second delivery either"
     );
 
     server.abort();
