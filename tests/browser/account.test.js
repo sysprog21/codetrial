@@ -3,13 +3,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 import { historyKey, readLocalHistory, saveReportHistory } from "../../web/history.js";
-import { functionBody } from "./source.js";
+import { functionBody, memoryStorage, root } from "./source.js";
 
-const web = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web");
+const web = join(root, "web");
 const read = (name) => readFileSync(join(web, name), "utf8");
 
 test("lobby exposes signed in and signed out account hooks", () => {
@@ -216,14 +215,6 @@ test("report history keeps anonymous and failed account saves local", async () =
   assert.deepEqual(calls, ["/api/session", "/api/reports"]);
   assert.equal(JSON.parse(failed.getItem(historyKey))[0].id, "fail");
 });
-
-function memoryStorage() {
-  const data = new Map();
-  return {
-    getItem: (key) => data.get(key) ?? null,
-    setItem: (key, value) => data.set(key, String(value)),
-  };
-}
 
 function response(body, ok = true) {
   return {

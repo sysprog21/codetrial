@@ -96,6 +96,22 @@ export function failFetchWith(handler) {
   };
 }
 
+/// A `localStorage` stand-in backed by a Map. Shared for the same reason as the
+/// fetch stub above: two copies had appeared and they had drifted apart. One of
+/// them read a stored empty string back as `null` and did not stringify what it
+/// was given, so a test could pass against a stub that behaves as the real
+/// storage does not.
+/// `getItem` answers `null` only for a key that is absent, and `setItem`
+/// stringifies, because that is what the browser does.
+export function memoryStorage() {
+  const data = new Map();
+  return {
+    getItem: (key) => data.get(key) ?? null,
+    removeItem: (key) => data.delete(key),
+    setItem: (key, value) => data.set(key, String(value)),
+  };
+}
+
 /// The browser, or null when there is no browser to be had. Shared so that
 /// every file launching one agrees on what a missing Playwright or an
 /// undownloaded Chromium means. `make check` installs neither, so a null here
