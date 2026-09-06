@@ -654,11 +654,26 @@ pub(crate) async fn recording_replay_handler(
         let room_name = room_name.clone();
         blocking(move || crate::recording::recording_for_room(&accounts, &room_name)).await
     };
-    let Ok(Some(recording)) = found else {
-        return json_response(
-            StatusCode::NOT_FOUND,
-            json!({ "code": "recording_not_found", "error": "No recording for that room." }),
-        );
+    let recording = match found {
+        Ok(Some(recording)) => recording,
+        Ok(None) => {
+            return json_response(
+                StatusCode::NOT_FOUND,
+                json!({ "code": "recording_not_found", "error": "No recording for that room." }),
+            );
+        }
+
+        // Separated from the empty read, because the template treats this route
+        // as the answer to whether a replay exists. A database that was busy
+        // for a moment reported the recording gone, which is a permanent answer
+        // to a temporary condition and one no caller retries.
+        Err(error) => {
+            eprintln!("could not read the recording for a room: {error}");
+            return json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "Could not read the recording." }),
+            );
+        }
     };
 
     let view = blocking(move || {

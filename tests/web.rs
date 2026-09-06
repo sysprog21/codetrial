@@ -5656,6 +5656,77 @@ async fn the_server_starts_the_recording_workers() {
     panic!("the sweeper never ran: the recording is still {reached}");
 }
 
+/// A storage failure is not the same answer as no such recording.
+///
+/// This route is what the recording template asks before it decides a replay
+/// exists. A read that failed used to arrive as `404`, which tells the template
+/// the recording is gone: a permanent answer to a temporary condition, and one
+/// no caller retries.
+#[tokio::test]
+async fn a_replay_read_that_fails_is_not_reported_as_missing() {
+    let (base, server, path, client, cookie) = recorded_server("replay-read-error").await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    let room = "interview-abc12345";
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, created_at, updated_at
+        ) VALUES ('rec-err', 1, ?1, ?2, ?1, 'one@example.test', 'recording', 1, 1)
+        ",
+            [&interview, &room.to_string()],
+        )
+        .unwrap();
+    let token = codetrial::token::livekit_token(codetrial::token::LivekitTokenInput {
+        api_key: "devkey",
+        api_secret: "devsecret",
+        identity: "EG_recorder",
+        name: "recorder",
+        room,
+        metadata: "",
+        agent: false,
+        now_seconds: codetrial::current_epoch_seconds(),
+    })
+    .unwrap();
+    let replay = |token: String| {
+        let url = format!("{base}/api/recording/replay");
+        let client = client.clone();
+        async move {
+            client
+                .get(url)
+                .header("authorization", token)
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+
+    assert_eq!(
+        replay(token.clone()).await.status(),
+        200,
+        "the room this token names has a recording to read"
+    );
+
+    // The table out from under the read, which is the shape a storage failure
+    // takes here: the query errors rather than returning no rows.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("DROP TABLE recordings")
+        .unwrap();
+
+    let broken = replay(token).await;
+    assert_eq!(
+        broken.status(),
+        500,
+        "a failed read is not the answer 'no such recording'"
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
 /// The history a candidate reads about their own interviews.
 #[tokio::test]
 async fn history_lists_own_recordings_only() {
