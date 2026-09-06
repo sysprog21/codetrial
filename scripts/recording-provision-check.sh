@@ -234,6 +234,15 @@ write_bearer_config()
     printf 'header = "Authorization: Bearer %s"\n' "$2" > "$1"
 }
 
+# The delivery account's own resource policy, which is a different policy from
+# the project's and appears in neither the bucket's nor any ancestor's. A
+# binding here hands somebody else the delivery identity entire: objectAdmin on
+# the recordings and organizer on the drive, reached by minting a token rather
+# than by holding a role anything above would have shown. Least privilege that
+# never asks who may become the account is not a claim about access at all.
+gcloud iam service-accounts get-iam-policy "$delivery_email" \
+    --project="$project" --format=json > "$work/delivery-account-iam.json"
+
 auditor_token=$(gcloud auth print-access-token)
 auditor_curl=$work/auditor-curl.conf
 write_bearer_config "$auditor_curl" "$auditor_token" auditor
@@ -242,7 +251,17 @@ write_bearer_config "$auditor_curl" "$auditor_token" auditor
 # naming only permissions() in fields drops nextPageToken, so a truncated answer
 # looked exactly like a complete one: a second grant for this account on page
 # two left the count at one and the audit reported an exactness it never saw.
-drive_query="supportsAllDrives=true&pageSize=100&fields=nextPageToken,permissions(id,type,role,emailAddress,domain,deleted)"
+#
+# One prefix for both permission listings, the drive's membership below and the
+# per-file grants further down, because the second was a copy of the first and
+# the copy is where the safeguard goes missing. Trimming `nextPageToken` out of
+# either mask is silent: the API stops reporting the token, the page-two
+# refusals below stop being reachable, and a link share on page two passes as a
+# complete answer again. Sharing the spelling means a trim reaches both listings
+# at once, where the tests can see it.
+permissions_query="supportsAllDrives=true&pageSize=100&fields=nextPageToken,permissions"
+permission_fields="id,type,role,emailAddress,domain,deleted"
+drive_query="$permissions_query($permission_fields)"
 drive_url="https://www.googleapis.com/drive/v3/files/$drive_id/permissions?$drive_query"
 page=0
 while :; do
@@ -270,12 +289,107 @@ for page in pages:
 json.dump({"permissions": permissions}, open(out, "w", encoding="utf-8"))
 PY_MERGE
 
-python3 - "$delivery_email" "$work/bucket-iam.json" "$work/ancestors-iam.json" \
-    "$work/bucket.json" "$work/drive-permissions.json" "$project_number" << 'PY'
-import json
-import sys
+# The files on the drive, and the permissions on each. The membership audit
+# above is about who holds the drive; this is about who can reach one recording,
+# which is where `create_permission` in `src/delivery.rs` writes its grants and
+# where a link share actually lives. The previous version refused `anyone` at
+# the drive root and said that settled bearer-URL access, which was an
+# overclaim: only users and groups can be drive members, so that branch could
+# not fire for the case it named.
+#
+# Paged, with a ceiling. The first version refused the second page outright on
+# the reasoning that a day of recordings fits in one, which is a false-fail the
+# moment a busy day produces a hundred and one of them. The ceiling stays,
+# because this walks a tree while an operator waits and an unbounded listing is
+# how that becomes a hang, but it is high enough that reaching it means the
+# check is pointed at the wrong drive.
+files_query="corpora=drive&driveId=$drive_id&includeItemsFromAllDrives=true&supportsAllDrives=true"
+files_query="$files_query&pageSize=100&fields=nextPageToken,files(id)"
+files_url="https://www.googleapis.com/drive/v3/files?$files_query"
+files_page=0
+: > "$work/drive-file-ids.txt"
+while :; do
+    files_page=$((files_page + 1))
+    [ "$files_page" -le 20 ] || {
+        echo "the Shared Drive holds more than $(((files_page - 1) * 100)) files;" \
+            "this audit reads the permissions on each, and a staging drive under a" \
+            "24-hour retention rule holding that many is itself the finding" >&2
+        exit 1
+    }
+    curl --fail --silent --show-error --max-time 20 --config "$auditor_curl" \
+        "$files_url" > "$work/drive-files-$files_page.json"
 
-delivery, bucket_iam_path, ancestors_iam_path, bucket_path, drive_path, project_number = sys.argv[1:]
+    # The ids land in a file rather than a `for` word list. A word list is a
+    # command substitution, and `set -e` does not reach into one, so a refusal
+    # raised in there printed its message and let the run continue to exit 0.
+    python3 -c 'import json,sys
+for entry in json.load(open(sys.argv[1])).get("files", []):
+    print(entry["id"])' "$work/drive-files-$files_page.json" >> "$work/drive-file-ids.txt"
+    files_token=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("nextPageToken") or "")' \
+        "$work/drive-files-$files_page.json")
+    [ -n "$files_token" ] || break
+    files_url="https://www.googleapis.com/drive/v3/files?$files_query&pageToken=$files_token"
+done
+
+# `permissionDetails` is the difference between a grant made on this file and
+# one the drive's membership already carries, and it is the only field that says
+# so. Without it every `user` row looked alike, so a recording shared directly
+# with a colleague as a writer read the same as the delivery account's own
+# inherited organizer, and passed. `expirationTime` alongside them, because a
+# reader that never lapses is a standing copy of somebody's interview and the
+# top-level listing does not say so.
+file_query="$permissions_query($permission_fields,expirationTime,permissionDetails(permissionType,role,inherited))"
+
+# curl writes each answer and nothing else runs in here. Reading them back is
+# the main audit block's job, which it reaches by globbing these filenames, so a
+# drive of a hundred recordings costs a hundred requests rather than a hundred
+# requests and a hundred interpreter launches.
+while read -r file_id; do
+    [ -n "$file_id" ] || continue
+
+    # The same alphabet `CODETRIAL_RECORDING_DRIVE_ID` is held to above, and for
+    # the same reason twice over: this id is pasted into a query string, where a
+    # `?` or a `#` would rewrite the request, and into a filename under `$work`,
+    # where a `/` would put the answer somewhere the reader below never globs.
+    # Refused rather than escaped, because an id outside this set is not a shape
+    # Drive produces and guessing what it meant is how an audit reports on a
+    # file it did not read.
+    case "$file_id" in
+        *[!A-Za-z0-9_-]*)
+            echo "the Shared Drive listed a file id this audit cannot read: $file_id" >&2
+            exit 1
+            ;;
+    esac
+    curl --fail --silent --show-error --max-time 20 --config "$auditor_curl" \
+        "https://www.googleapis.com/drive/v3/files/$file_id/permissions?$file_query" \
+        > "$work/file-$file_id.json"
+done < "$work/drive-file-ids.txt"
+
+# Counted through `wc -l` with the padding stripped: only GNU `wc` writes a bare
+# number when it reads a redirect, and the BSD one pads to a width, which put
+# eight spaces in the middle of this sentence.
+files_read=$(wc -l < "$work/drive-file-ids.txt" | tr -d ' \t')
+echo "read the permissions on $files_read Shared Drive files"
+
+python3 - "$delivery_email" "$work/bucket-iam.json" "$work/ancestors-iam.json" \
+    "$work/bucket.json" "$work/drive-permissions.json" "$project_number" \
+    "$work/delivery-account-iam.json" "$work" << 'PY'
+import glob
+import json
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+
+(
+    delivery,
+    bucket_iam_path,
+    ancestors_iam_path,
+    bucket_path,
+    drive_path,
+    project_number,
+    delivery_account_iam_path,
+    work,
+) = sys.argv[1:]
 member = f"serviceAccount:{delivery}"
 
 def read(path):
@@ -288,6 +402,17 @@ bucket_iam = read(bucket_iam_path)
 ancestors_iam = read(ancestors_iam_path)
 bucket = read(bucket_path)
 drive = read(drive_path)
+delivery_account_iam = read(delivery_account_iam_path)
+
+# One answer per file, named by the id the shell asked for, so the id comes back
+# off the basename and no second pass had to write it down. `glob` answers an
+# empty list on a drive with nothing delivered yet, which is the normal state of
+# a freshly provisioned one and would have been a missing-file error for any
+# spelling that passed the names in.
+drive_files = {
+    os.path.basename(path)[len("file-") : -len(".json")]: read(path)
+    for path in sorted(glob.glob(os.path.join(work, "file-*.json")))
+}
 
 # Which member spellings this script can resolve, rather than which ones it
 # cannot. The denylist this replaces had grown to eight prefixes and a
@@ -381,12 +506,68 @@ for entry in ancestors_iam:
 if ancestor_roles:
     raise SystemExit(f"{member} has forbidden ancestor IAM roles: {ancestor_roles!r}")
 
+# Nobody may become the delivery account. A binding on the account's own
+# resource is how impersonation is granted, and it appears in none of the
+# policies above, so every check so far could pass while a person held
+# `roles/iam.serviceAccountTokenCreator` and could mint tokens for the identity
+# that holds objectAdmin on the recordings and organizer on the drive. The
+# whole policy is refused rather than a named list of roles: TokenCreator,
+# ServiceAccountUser, the two key-admin roles and `setIamPolicy` on the
+# resource all reach the same place by different routes, and a dedicated
+# delivery account has no reason to carry any binding at all.
+ensure_auditable(delivery_account_iam)
+impersonators = []
+for binding in delivery_account_iam.get("bindings", []):
+    # `deleted:` members are tombstones IAM keeps in the policy after the
+    # principal is gone. They grant nothing, and refusing over one would fail an
+    # account whose stray grant had already been removed, which is exactly the
+    # state this check is asking the operator to reach.
+    live = [
+        principal
+        for principal in binding.get("members", [])
+        if not principal.startswith("deleted:")
+    ]
+    if live:
+        impersonators.append((binding.get("role"), live))
+if impersonators:
+    raise SystemExit(
+        f"the delivery account's own IAM policy grants {impersonators!r}; a binding here "
+        "lets its holder mint tokens for the recording identity, which no policy above "
+        "would show, so the account must carry none"
+    )
+
 owner = bucket.get("projectNumber")
 if not project_number or str(owner) != str(project_number):
     raise SystemExit(f"bucket belongs to project number {owner!r}, not {project_number!r}")
 
-if bucket.get("iamConfiguration", {}).get("uniformBucketLevelAccess", {}).get("enabled") is not True:
+iam_configuration = bucket.get("iamConfiguration", {})
+if iam_configuration.get("uniformBucketLevelAccess", {}).get("enabled") is not True:
     raise SystemExit("bucket must enable Uniform Bucket-Level Access")
+
+# Uniform access can be turned back off within 90 days of being switched on, so
+# on a freshly created bucket it is a setting rather than a property. The lock
+# time is when that window closes; it is reported rather than refused, because
+# refusing would fail every bucket for its first three months, which is every
+# bucket this check will ever see on the day it is provisioned.
+locked_until = iam_configuration.get("uniformBucketLevelAccess", {}).get("lockedTime")
+if locked_until:
+    print(f"uniform bucket-level access can be reverted until {locked_until}")
+
+# The one setting that survives a later mistake. Without it, a grant to
+# allUsers is a thing somebody can still make; `inherited` means the
+# organization policy is carrying it and this bucket is not.
+prevention = iam_configuration.get("publicAccessPrevention")
+if prevention != "enforced":
+    # `inherited` can be safe, when an ancestor organization policy enforces
+    # prevention. This script does not read that policy and will not certify a
+    # protection it has not seen, so it refuses rather than warns: the remedy is
+    # one setting on this bucket, it is strictly safer than what it replaces,
+    # and an operator is never stuck here.
+    raise SystemExit(
+        f"bucket public access prevention is {prevention!r}, not 'enforced'; set it on "
+        "the bucket, because inherited is only safe if an ancestor organization policy "
+        "enforces it and this audit does not read that policy"
+    )
 
 # Exactly `age: 1` and nothing beside it. A rule carrying a prefix, storage
 # class or version filter deletes some objects at a day old and leaves the rest,
@@ -484,21 +665,202 @@ active = [
     for permission in drive.get("permissions", [])
     if not permission.get("deleted")
 ]
-named = [
+unnamed = [
     permission for permission in active if permission.get("type") != "user"
 ]
-if named:
+if unnamed:
     described = ", ".join(
         f"{permission.get('type')} "
         f"{permission.get('emailAddress') or permission.get('domain') or 'anyone'}"
         f" as {permission.get('role')}"
-        for permission in named
+        for permission in unnamed
     )
     raise SystemExit(
         f"the Shared Drive has non-user members ({described}); this drive's "
         "membership must be individually named accounts, so that the audit can say "
         "who holds it"
     )
+
+# The retention the contract promises, which is `RETENTION_SECONDS` in
+# `src/recording/queue.rs` said again here because a shell audit cannot read a
+# Rust constant. `tests/test_recording_provision_check.py` pins this line to
+# that one, so the copy cannot drift without a test saying so.
+retention = timedelta(hours=24)
+
+# Slack on the bound, and only on this bound. Delivery stamps the expiry as its
+# own host's now plus the retention, and this audit compares that against the
+# auditor host's clock, so an exact ceiling refuses a correctly provisioned
+# drive whenever the two disagree by a second. The acceptance checks in
+# `scripts/recording-integration.sh` and `tests/recording_integration.rs` carry
+# no such slack and want none: every stamp they compare was written by one host
+# in one run, so there is no skew for slack to absorb.
+skew = timedelta(minutes=5)
+
+# One instant for the whole audit, read before the loop. Recomputed per
+# permission, a drive of a hundred files judged its last file against a later
+# ceiling than its first, so the same grant could pass or fail depending on
+# where in the listing it sat.
+ceiling = datetime.now(timezone.utc) + retention + skew
+
+
+def aware_expiry(value):
+    """`expirationTime` as an aware datetime, or None if it is not one.
+
+    A naive stamp is refused here rather than compared below, because comparing
+    it against an aware `now` raises out of the script as a traceback instead
+    of as a refusal.
+
+    The same normalisation as `parse` in `scripts/recording-integration.sh`,
+    which reads this same field off the same API. Not shared, because these are
+    two standalone scripts with no common file between them; kept in step by
+    both being written against what `create_permission` in `src/delivery.rs`
+    emits, which is the `Z` form.
+    """
+    if not isinstance(value, str):
+        return None
+    # `fromisoformat` learned `Z` in 3.11, and this script names no Python
+    # floor. Lowercase `z` is as valid in RFC 3339 as the uppercase one and
+    # Drive is not documented to prefer either, so both are folded rather than
+    # one being refused as unparseable.
+    text = value.strip()
+    if text[-1:] in ("Z", "z"):
+        text = text[:-1] + "+00:00"
+    try:
+        expiry = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    # `tzinfo` alone: fromisoformat only ever attaches a `datetime.timezone`,
+    # whose `utcoffset()` never answers None, so testing that too was testing
+    # a branch nothing can reach.
+    return expiry if expiry.tzinfo is not None else None
+
+
+# Every permission on every file, which is where a delivered recording is
+# actually reachable from. The delivery path writes one expiring `user` reader
+# per file, so a `user` grant is expected and anything else is a link share or
+# a domain-wide grant on a candidate's interview.
+for file_id, answer in drive_files.items():
+    # A page carrying a token is a listing whose end this script has not seen,
+    # and it was being read as a complete one, so a link share sitting on page
+    # two of a file's permissions passed. Refused rather than paged: a recording
+    # with more than a hundred permissions on it is not a shape this environment
+    # produces, and saying so beats walking it.
+    if answer.get("nextPageToken"):
+        raise SystemExit(
+            f"the permissions on file {file_id} do not fit one page; this audit "
+            "cannot see the end of them"
+        )
+    for permission in answer.get("permissions", []):
+        if permission.get("deleted"):
+            continue
+        if permission.get("type") != "user":
+            raise SystemExit(
+                f"the file {file_id} on the Shared Drive is shared with "
+                f"{permission.get('type')} as {permission.get('role')}; a delivered "
+                "recording must be reachable only by named accounts, never by holding "
+                "a link"
+            )
+
+        # A grant the drive's membership carries is the membership audit's, as
+        # far as that audit goes: it refuses a non-user member and pins the
+        # delivery account's sole organizer, and does not refuse an extra named
+        # member. Who may sit on the drive is a provisioning policy rather than
+        # something this run can settle. What is left is a grant somebody made
+        # on this recording, and the
+        # delivery path makes exactly one shape of those: an expiring reader for
+        # the candidate. Anything else is a person given standing access to
+        # somebody's interview.
+        #
+        # `inherited` is the discriminator, not `permissionType` on its own. A
+        # grant made on a folder inside the drive surfaces on every file under
+        # it as a `file` entry carrying `inherited`, so reading that as this
+        # file's own delivery grant let one folder share pass as many. The
+        # folder is listed by the same query and audited in its turn, where the
+        # grant is its own and is not inherited, so nothing goes unchecked by
+        # skipping it here.
+        #
+        # No details at all is still read as direct: the field is populated on
+        # shared-drive items, and its absence is not a thing to resolve in the
+        # passing direction.
+        details = permission.get("permissionDetails")
+        # Shape checked rather than assumed. A `details` that is not a list of
+        # objects reached `.get` on a string and left the run on an
+        # `AttributeError`, which exits non-zero and so fails closed, but a
+        # traceback is not a finding: it says the audit broke, not what the
+        # drive is carrying. Same principle `aware_expiry` states above.
+        if details is not None and (
+            not isinstance(details, list)
+            or not all(isinstance(detail, dict) for detail in details)
+        ):
+            raise SystemExit(
+                f"the file {file_id} on the Shared Drive reports permissionDetails "
+                f"for {permission.get('emailAddress')} that this audit cannot read "
+                f"({details!r})"
+            )
+        own = [
+            detail
+            for detail in details or []
+            if detail.get("permissionType") == "file" and not detail.get("inherited")
+        ]
+        if details and not own:
+            continue
+
+        # Every source this grantee has on this file, judged together. Drive
+        # reports one merged top-level role whose meaning it does not document,
+        # so the entries are read instead; but reading only the `file` ones
+        # dropped the membership half, and somebody holding `writer` on the
+        # drive and an expiring `reader` here came out as a reader. They can
+        # write the recording. Both roles are compared, and the entry that
+        # decided this permission is a direct grant at all is still the
+        # non-inherited `file` one, so a pure member never reaches this line:
+        # the skip above returns it to the membership audit, which is where a
+        # drive-wide role belongs.
+        #
+        # Every own entry, not the first. Drive is not documented to report one
+        # `file` source per grantee, and judging on `own[0]` made the verdict
+        # turn on the order of an array: the same pair of entries passed with
+        # the reader ahead of the organizer and refused with them the other way
+        # round. The other two listings here quantify over all their rows; so
+        # does this one now.
+        membership = [
+            detail.get("role")
+            for detail in details or []
+            if detail.get("permissionType") == "member"
+        ]
+        granted = [detail.get("role") for detail in own] + membership or [
+            permission.get("role")
+        ]
+        standing = [role for role in granted if role != "reader"]
+        if standing:
+            raise SystemExit(
+                f"the file {file_id} on the Shared Drive is shared directly with "
+                f"{permission.get('emailAddress')} as "
+                f"{', '.join(str(role) for role in standing)}; the delivery path "
+                "grants an expiring reader and nothing else"
+            )
+
+        # The grant has to lapse on its own. A reader that never expires is a
+        # standing copy of somebody's interview, and the delivery path sets an
+        # expiry precisely so that losing the sweeper does not mean losing the
+        # retention promise.
+        expiry = aware_expiry(permission.get("expirationTime"))
+        if expiry is None:
+            raise SystemExit(
+                f"the file {file_id} on the Shared Drive has a direct reader for "
+                f"{permission.get('emailAddress')} without a valid expirationTime "
+                f"({permission.get('expirationTime')!r})"
+            )
+        # An upper bound only. A grant whose expiry has passed confers nothing,
+        # which is the state this check exists to reach, and Drive does not
+        # document how promptly it drops a lapsed permission from this listing;
+        # refusing over one would fail a drive for having done the right thing.
+        if expiry > ceiling:
+            raise SystemExit(
+                f"the file {file_id} on the Shared Drive has a direct reader for "
+                f"{permission.get('emailAddress')} whose expirationTime "
+                f"({permission.get('expirationTime')}) is more than "
+                f"{int(retention.total_seconds() // 3600)} hours out"
+            )
 
 matches = [
     permission for permission in active if permission.get("emailAddress") == delivery
@@ -507,12 +869,20 @@ if len(matches) != 1 or matches[0].get("type") != "user" or matches[0].get("role
     raise SystemExit(f"{delivery} must have exactly one active Shared Drive organizer permission")
 PY
 
-# What this line does and does not say, because both previous wordings claimed
-# more than the checks above establish. It is about the delivery account's own
-# grants, the bucket's own settings, and the drive's own membership. Roles held
-# by other named principals are read for auditability and not for whether they
-# should hold them; per-object holds and per-object retention are not in the
-# bucket resource; and permissions on the files inside the drive are not listed.
+# What this line does and does not say, because earlier wordings claimed more
+# than the checks above establish. It covers the delivery account's own grants,
+# who may become that account, the bucket's own settings, the drive's
+# membership, and the permissions on every file the drive holds.
+#
+# Three things it still does not. Roles held by other named principals are read
+# for auditability rather than for whether they should hold them. Per-object
+# holds and per-object retention are not in the bucket resource. And uniform
+# access is read as enabled, not as irreversible: it can be turned back off
+# within ninety days of being set, a window that is open on every bucket this
+# check sees on the day it is provisioned, so the lock time is printed instead
+# of refused. A direct named grant on one recording is deliberately allowed,
+# because the delivery path writes exactly one per file and Recording 7b is what
+# proves there is exactly one.
 echo "the delivery account's grants and the bucket's retention settings are least-privilege"
 
 # Access is checked as the delivery account itself, not inferred from the

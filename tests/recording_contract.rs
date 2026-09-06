@@ -532,6 +532,62 @@ fn contract_document_pins_the_fixed_strings() {
     }
 }
 
+/// Every copy of the retention window, pinned to the one constant that owns it.
+///
+/// `RETENTION_SECONDS` says in its own doc comment that the number lives in one
+/// place "because the Drive permission and the deletion deadline have to be the
+/// same number or one of them is a lie". Three copies live outside Rust and
+/// cannot read it: two shell audits and the contract document. Nothing held
+/// them together, so the provision check could carry a different day from the
+/// integration check and both could disagree with the document, each looking
+/// correct on its own.
+///
+/// Spelled as the hours rather than the seconds, because that is how all three
+/// say it. The seconds-to-hours step is asserted rather than assumed, so a
+/// retention that stops being a whole number of hours fails here instead of
+/// being silently rounded into three files.
+#[test]
+fn every_copy_of_the_retention_window_matches_the_constant() {
+    let seconds = recording::RETENTION_SECONDS;
+    assert_eq!(
+        seconds % 3600,
+        0,
+        "the retention is no longer a whole number of hours, which every copy \
+         outside Rust spells it as"
+    );
+    let hours = seconds / 3600;
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for (path, expected) in [
+        // The audit's ceiling. It adds skew slack of its own, which is the one
+        // difference this test does not pin: the slack is about two hosts
+        // disagreeing, not about how long a recording is readable.
+        (
+            "scripts/recording-provision-check.sh",
+            format!("retention = timedelta(hours={hours})"),
+        ),
+        // The acceptance check, which compares stamps written by a single host
+        // in a single run and so carries no slack.
+        (
+            "scripts/recording-integration.sh",
+            format!("dt.timedelta(hours={hours})"),
+        ),
+        // The request the delivery path actually sends.
+        (
+            "docs/recording-contract.md",
+            format!("\"<RFC 3339, {hours} hours out>\""),
+        ),
+    ] {
+        let source = std::fs::read_to_string(root.join(path))
+            .unwrap_or_else(|error| panic!("{path} should be readable: {error}"));
+        assert!(
+            source.contains(&expected),
+            "{path} should carry the retention as {expected:?}, which is \
+             RETENTION_SECONDS said in the units that file uses"
+        );
+    }
+}
+
 /// The staging record is a stop condition, not a form. A missing owner or
 /// price has to block provisioning, because the alternative is a plausible
 /// guess that nobody agreed to pay for.
