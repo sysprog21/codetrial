@@ -19,7 +19,8 @@ use crate::current_epoch_seconds;
 use super::auth::Owner;
 use super::recordings::finish_recording;
 use super::{
-    AppState, MAX_BODY_BYTES, MAX_REPORT_BYTES, json_response, rate_limited_response, replay_body,
+    AppState, MAX_BODY_BYTES, MAX_REPORT_BYTES, json_response, rate_limited_response,
+    replay_response,
 };
 
 /// What one account posting replay events may spend in a window.
@@ -360,8 +361,6 @@ pub(crate) async fn replay_snapshot_handler(
     UriPath(interview_id): UriPath<String>,
     Owner { accounts, user }: Owner,
 ) -> Response {
-    use crate::recording::SnapshotView;
-
     let missing = || {
         json_response(
             StatusCode::NOT_FOUND,
@@ -375,26 +374,10 @@ pub(crate) async fn replay_snapshot_handler(
     let view =
         blocking(move || crate::recording::replay_snapshot(&accounts, &interview_id, user.id, now))
             .await;
-    match view {
-        Ok(SnapshotView::Ready(snapshot)) => json_response(StatusCode::OK, replay_body(&snapshot)),
 
-        // Gone rather than not-found: this account owns the interview and is
-        // owed the difference between "never yours" and "not any more".
-        Ok(SnapshotView::Expired) => json_response(
-            StatusCode::GONE,
-            json!({ "code": "replay_expired", "error": "This replay is past its retention deadline." }),
-        ),
-        Ok(SnapshotView::Deleted) => json_response(
-            StatusCode::GONE,
-            json!({ "code": "recording_deleted", "error": "This recording has been deleted." }),
-        ),
-        Ok(SnapshotView::NoInterview) => missing(),
-        Err(error) => {
-            eprintln!("could not read a replay snapshot: {error}");
-            json_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error": "Could not read the replay." }),
-            )
-        }
-    }
+    // Gone rather than not-found on an expired or deleted replay: this account
+    // owns the interview and is owed the difference between "never yours" and
+    // "not any more". That distinction, and the two sentences carrying it, are
+    // `replay_response`'s, shared with the two recording routes.
+    replay_response(view, missing, "could not read a replay snapshot")
 }

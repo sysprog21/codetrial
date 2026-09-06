@@ -40,6 +40,7 @@ pub use assets::static_file_meta;
 pub use auth::login_config;
 pub use interviews::REPLAY_RATE_LIMIT;
 use pool::{ProviderQuota, QuotaRefresher, spawn_provider_quota_refresher};
+pub use recordings::READ_RATE_LIMIT;
 pub use setup::setup_service;
 pub use token::{TOKEN_RATE_LIMIT, TokenConfig, TokenResponse, token_response};
 
@@ -187,6 +188,12 @@ pub(crate) struct AppState {
     #[allow(dead_code)]
     quota_refresher: Arc<QuotaRefresher>,
 
+    /// The same, for the recording sweeper and the delivery worker. Detached,
+    /// these outlived the router that started them and went on scanning a
+    /// database the server they belonged to had finished with.
+    #[allow(dead_code)]
+    recording_workers: Arc<RecordingWorkers>,
+
     // A separate bucket, for the same reason `/api/token` checks the session
     // before spending its own: login is reachable without any credential, so a
     // flood of it must not lock a signed-in candidate out of a token.
@@ -197,6 +204,17 @@ pub(crate) struct AppState {
     /// for the length of an interview, so sharing the token bucket would have a
     /// candidate's own replay spend the budget their next token needs.
     replay_limit: TokenRateLimit<i64>,
+
+    /// The read side of the same reasoning, and a separate bucket from the
+    /// write side so that a candidate mid-interview cannot be locked out of
+    /// posting their own replay by a reviewer reading one.
+    ///
+    /// Every route behind it is already `Owner`-scoped and every answer is
+    /// already bounded, by `MAX_REPLAY_EVENTS` and `MAX_REPLAY_BYTES` on a
+    /// replay and by the page size on a listing. So this bounds neither the
+    /// blast radius of one request nor who may ask: it bounds how often, which
+    /// is the one of the three nothing else covered.
+    read_limit: TokenRateLimit<i64>,
 
     /// Which provider the next room goes to. Relaxed because nothing depends on
     /// the order two concurrent requests observe, only that they observe
@@ -290,10 +308,12 @@ pub(crate) fn web_router(
         );
     }
     let accounts = login.and_then(open_accounts);
-    if let (Some(accounts), Some(recorder)) = (&accounts, &recorder) {
-        spawn_recording_sweeper(accounts.clone(), recorder.clone());
-        spawn_delivery_worker(accounts.clone(), recorder.clone());
-    }
+    let recording_workers = match (&accounts, &recorder) {
+        (Some(accounts), Some(recorder)) => {
+            spawn_recording_workers(accounts.clone(), recorder.clone())
+        }
+        _ => RecordingWorkers::default(),
+    };
 
     // Built here rather than in the state literal below, because the refresher
     // and the request path have to share one cache: a second `default()` would
@@ -371,9 +391,11 @@ pub(crate) fn web_router(
             token_limit: TokenRateLimit::with_limit(token::TOKEN_RATE_LIMIT),
             login_limit: TokenRateLimit::with_limit(token::TOKEN_RATE_LIMIT),
             replay_limit: TokenRateLimit::with_limit(interviews::REPLAY_RATE_LIMIT),
+            read_limit: TokenRateLimit::with_limit(recordings::READ_RATE_LIMIT),
             provider_counter: Arc::new(AtomicUsize::new(0)),
             provider_quota,
             quota_refresher: Arc::new(quota_refresher),
+            recording_workers: Arc::new(recording_workers),
             room_authorizations: Arc::default(),
         })
 }
@@ -613,9 +635,54 @@ pub(crate) fn client_ip(headers: &header::HeaderMap, peer: SocketAddr, hops: u32
         .unwrap_or_else(|| peer.ip())
 }
 
+/// One answer for every replay read, so the three routes that take one cannot
+/// drift apart.
+///
+/// They differ in two things and this takes both: what "no such replay" means
+/// to the caller, which is a recording id to one route and a room to another,
+/// and the sentence a read error is logged under. Everything else was written
+/// out three times, including the two `410` bodies, and those are the retention
+/// promise: a copy that said something slightly different would be a third
+/// answer to a question the product gives one answer to. `gone_response` below
+/// exists for the same reason on the route ahead of this one.
+///
+/// A function pointer rather than a closure, because none of the three captures
+/// anything: what a route answers here is a constant, and a signature that
+/// allowed a captured one would be inviting a fourth thing to differ.
+pub(crate) fn replay_response(
+    view: rusqlite::Result<crate::recording::SnapshotView>,
+    missing: fn() -> Response,
+    context: &str,
+) -> Response {
+    use crate::recording::SnapshotView;
+
+    match view {
+        Ok(SnapshotView::Ready(snapshot)) => json_response(StatusCode::OK, replay_body(&snapshot)),
+        Ok(SnapshotView::Expired) => json_response(
+            StatusCode::GONE,
+            json!({ "code": "replay_expired", "error": "This replay is past its retention deadline." }),
+        ),
+        Ok(SnapshotView::Deleted) => json_response(
+            StatusCode::GONE,
+            json!({ "code": "recording_deleted", "error": "This recording has been deleted." }),
+        ),
+        Ok(SnapshotView::NoInterview) => missing(),
+        Err(error) => {
+            eprintln!("{context}: {error}");
+            json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "Could not read the replay." }),
+            )
+        }
+    }
+}
+
 /// One body shape for both replay reads, so a caller that starts with a
 /// snapshot and carries on with the tail parses one thing.
-pub(crate) fn replay_body(snapshot: &crate::recording::Snapshot) -> Value {
+///
+/// Private since the fold: `replay_response` above is the only caller, and the
+/// routes that used to build this themselves now go through it.
+fn replay_body(snapshot: &crate::recording::Snapshot) -> Value {
     json!({
         "seq": snapshot.seq,
         "quotaExceeded": snapshot.quota_exceeded,

@@ -94,6 +94,13 @@
 # `parse_and_validate_report`, which is tested; the wait in between is the part
 # that needs the network.
 #
+# `publish_report` is the two lines around `report_packet`: it takes `&Room` and
+# publishes what that returns, so `Ok(())` looks the same from outside as
+# publishing, exactly as `publish_interviewer_state` above does. It belonged
+# here as soon as `report_packet` did and was missed because both lived in
+# `livekit.rs`, where `report_packet`'s own entry already covered the pair;
+# splitting `src/livekit/report.rs` out scored the wrapper on its own.
+#
 # The media helpers are the same shape one layer down. `handle_media_event`
 # and `attach_audio` take a LiveKit participant, `next_audio_frame` and
 # `next_video_frame` poll a track, and `pump_video` and
@@ -120,6 +127,7 @@ exclude_re = [
     "close_turns",
     "generate_report",
     "report_packet",
+    "publish_report",
     "restart_after_close",
     "open_cold_session",
     "open_live_session_at",

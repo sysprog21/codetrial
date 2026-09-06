@@ -58,6 +58,7 @@ import {
   recordReplay,
   recordStage,
   recordStageTick,
+  responseWindowIndex,
 } from "./replay-feed.js";
 import {
   AUDIO_OUTPUT_KEY,
@@ -1100,6 +1101,7 @@ async function consumeTranscript(room, reader, participant) {
   const id = attrs["lk.segment_id"] || reader.info?.id || randomId();
   const speaker = participant?.identity === room.localParticipant.identity ? "you" : "interviewer";
   if (speaker === "interviewer" && !isCurrentAgent(participant)) return;
+  const responseWindow = responseWindowIndex();
   const final = attrs["lk.transcription_final"] === "true";
   let text = "";
   try {
@@ -1119,7 +1121,7 @@ async function consumeTranscript(room, reader, participant) {
     updateCaptions(speaker, text, id);
     // Once per turn, at the end of the stream, not once per chunk: a chunk is a
     // few words and a turn is a sentence, and the replay is read as sentences.
-    recordReplay("transcript", { speaker, text: text.trim() });
+    recordReplay("transcript", { speaker, text: text.trim(), responseWindow });
   }
 }
 

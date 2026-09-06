@@ -172,45 +172,7 @@ fn apply_test_results(
 
 fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataEventResult {
     match payload.get("type").and_then(serde_json::Value::as_str) {
-        // Pause used to be a practice-only affordance, and practice is gone.
-        // Left working for everyone rather than deleted with the mode: a
-        // candidate whose machine or network interrupts them mid-interview can
-        // at least stop the interviewer talking into an empty room. It stops
-        // the conversation, not the deadline, which runs on wall clock either
-        // way. It is recorded, so a paused stretch is visible in the report.
-        Some("pause_interview") if !state.ended => {
-            let paused = payload
-                .get("paused")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            if paused == state.paused {
-                return DataEventResult::default();
-            }
-            state.paused = paused;
-
-            // A resumed interview whose interviewer was replaced mid-pause has
-            // to be re-grounded before it is told to carry on: the fixed line
-            // below assumes a Jim who remembers the conversation, and after a
-            // cold restart there is none to continue from.
-            let cold_brief = !paused && std::mem::take(&mut state.needs_cold_brief);
-            DataEventResult {
-                pause_changed: Some(paused),
-                generate_reply: (!paused).then(|| {
-                    if cold_brief {
-                        cold_restart(state)
-                    } else {
-                        "The interview has resumed. Continue with your REACTO step.".to_string()
-                    }
-                }),
-
-                // Resuming makes Jim speak, so it starts the interjection
-                // cooldown like every other reply here. Without this the timing
-                // loop could follow the resume line straight into a proactive
-                // review, talking twice over a candidate who just came back.
-                update_last_interjection: !paused,
-                ..DataEventResult::default()
-            }
-        }
+        Some("pause_interview") if !state.ended => control_pause(state, payload),
         Some("round_transition")
             if !state.ended
                 && !state.paused
@@ -221,79 +183,135 @@ fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
                 && state.started_at.elapsed() + ROUND_TRANSITION_SKEW
                     >= std::time::Duration::from_secs(u64::from(state.coding_minutes) * 60) =>
         {
-            state.round_transition_seen = true;
-            let completed = |phase| {
-                state
-                    .framework_evidence
-                    .iter()
-                    .any(|item| item.phase == phase && item.kind != EvidenceKind::Skipped)
-            };
-            if completed(FrameworkPhase::Test) && completed(FrameworkPhase::Optimizations) {
-                state.behavioral_round_started = true;
-                DataEventResult {
-                    round_changed: Some("started"),
-                    generate_reply: Some("[SYSTEM EVENT] The trusted coding completion gate passed: Test and Optimizations both have candidate evidence. The coding round is closed. Begin the reserved behavioral round now with exactly one concise question under the private STAR, profile, and document-grounding policies. Use prior candidate answers only to deepen the follow-up; do not repeat them and do not return to coding.".to_string()),
-                    ..DataEventResult::default()
-                }
-            } else {
-                DataEventResult {
-                    round_changed: Some("skipped"),
-                    generate_reply: Some("[SYSTEM EVENT] The behavioral reserve began, but the trusted coding completion gate did not pass because Test or Optimizations evidence is absent. Do not start STAR. Keep the candidate focused on a testable solution, highest-value tests, and justified complexity until the session ends; missing STAR phases will be marked skipped.".to_string()),
-                    ..DataEventResult::default()
-                }
-            }
+            control_round_transition(state)
         }
         Some("time_warning") if !state.ended && !state.paused => {
-            let remaining_seconds = payload
-                .get("remainingSeconds")
-                .and_then(json_int)
-                .unwrap_or(300);
-            let minutes = spoken_minutes_from_remaining_seconds(remaining_seconds) as u32;
-            DataEventResult {
-                generate_reply: Some(if state.behavioral_round_started {
-                    format!(
-                        "[SYSTEM EVENT] Exactly {minutes} minutes remain in the active behavioral round. Do not return to coding or ask a new question. Let the candidate finish the current answer, ask at most the one permitted neutral missing-STAR follow-up, then close naturally."
-                    )
-                } else {
-                    time_warning(minutes)
-                }),
-                ..DataEventResult::default()
-            }
+            control_time_warning(state, payload)
         }
-        Some("end_interview") if !state.ended => {
-            if !state.behavioral_round_started
-                && !payload.get("code").is_some_and(serde_json::Value::is_null)
-                && let Some(code) = payload.get("code").and_then(serde_json::Value::as_str)
-            {
-                state.code = code.to_string();
-            }
-
-            // Read independently of the code. Nesting it meant a payload whose
-            // code was absent or null also discarded the language, and the
-            // report prompt was then written against whatever language the
-            // session last happened to record. Validated for the same reason as
-            // the code path: this string reaches the report prompt.
-            if !state.behavioral_round_started
-                && let Some((id, _)) = payload
-                    .get("language")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(offered_language)
-            {
-                state.language = id.to_string();
-            }
-            state.ended = true;
-            DataEventResult {
-                finish_interview: Some(
-                    payload
-                        .get("reason")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("candidate_ended")
-                        .to_string(),
-                ),
-                ..DataEventResult::default()
-            }
-        }
+        Some("end_interview") if !state.ended => control_end_interview(state, payload),
         _ => DataEventResult::default(),
+    }
+}
+
+/// Pause used to be a practice-only affordance, and practice is gone. Left
+/// working for everyone rather than deleted with the mode: a candidate whose
+/// machine or network interrupts them mid-interview can at least stop the
+/// interviewer talking into an empty room. It stops the conversation, not the
+/// deadline, which runs on wall clock either way. It is recorded, so a paused
+/// stretch is visible in the report.
+fn control_pause(state: &mut RuntimeState, payload: &serde_json::Value) -> DataEventResult {
+    let paused = payload
+        .get("paused")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if paused == state.paused {
+        return DataEventResult::default();
+    }
+    state.paused = paused;
+
+    // A resumed interview whose interviewer was replaced mid-pause has to be
+    // re-grounded before it is told to carry on: the fixed line below assumes a
+    // Jim who remembers the conversation, and after a cold restart there is
+    // none to continue from.
+    let cold_brief = !paused && std::mem::take(&mut state.needs_cold_brief);
+    DataEventResult {
+        pause_changed: Some(paused),
+        generate_reply: (!paused).then(|| {
+            if cold_brief {
+                cold_restart(state)
+            } else {
+                "The interview has resumed. Continue with your REACTO step.".to_string()
+            }
+        }),
+
+        // Resuming makes Jim speak, so it starts the interjection cooldown like
+        // every other reply here. Without this the timing loop could follow the
+        // resume line straight into a proactive review, talking twice over a
+        // candidate who just came back.
+        update_last_interjection: !paused,
+        ..DataEventResult::default()
+    }
+}
+
+/// The reserved behavioral round, opened or refused, once.
+fn control_round_transition(state: &mut RuntimeState) -> DataEventResult {
+    state.round_transition_seen = true;
+    let completed = |phase| {
+        state
+            .framework_evidence
+            .iter()
+            .any(|item| item.phase == phase && item.kind != EvidenceKind::Skipped)
+    };
+    if completed(FrameworkPhase::Test) && completed(FrameworkPhase::Optimizations) {
+        state.behavioral_round_started = true;
+        DataEventResult {
+            round_changed: Some("started"),
+            generate_reply: Some("[SYSTEM EVENT] The trusted coding completion gate passed: Test and Optimizations both have candidate evidence. The coding round is closed. Begin the reserved behavioral round now with exactly one concise question under the private STAR, profile, and document-grounding policies. Use prior candidate answers only to deepen the follow-up; do not repeat them and do not return to coding.".to_string()),
+            ..DataEventResult::default()
+        }
+    } else {
+        DataEventResult {
+            round_changed: Some("skipped"),
+            generate_reply: Some("[SYSTEM EVENT] The behavioral reserve began, but the trusted coding completion gate did not pass because Test or Optimizations evidence is absent. Do not start STAR. Keep the candidate focused on a testable solution, highest-value tests, and justified complexity until the session ends; missing STAR phases will be marked skipped.".to_string()),
+            ..DataEventResult::default()
+        }
+    }
+}
+
+/// The clock crossing the warning threshold.
+///
+/// The one control message that reads the state without writing any, which is
+/// what the shared reference says.
+fn control_time_warning(state: &RuntimeState, payload: &serde_json::Value) -> DataEventResult {
+    let remaining_seconds = payload
+        .get("remainingSeconds")
+        .and_then(json_int)
+        .unwrap_or(300);
+    let minutes = spoken_minutes_from_remaining_seconds(remaining_seconds) as u32;
+    DataEventResult {
+        generate_reply: Some(if state.behavioral_round_started {
+            format!(
+                "[SYSTEM EVENT] Exactly {minutes} minutes remain in the active behavioral round. Do not return to coding or ask a new question. Let the candidate finish the current answer, ask at most the one permitted neutral missing-STAR follow-up, then close naturally."
+            )
+        } else {
+            time_warning(minutes)
+        }),
+        ..DataEventResult::default()
+    }
+}
+
+/// The candidate leaving, however they left.
+fn control_end_interview(state: &mut RuntimeState, payload: &serde_json::Value) -> DataEventResult {
+    if !state.behavioral_round_started
+        && !payload.get("code").is_some_and(serde_json::Value::is_null)
+        && let Some(code) = payload.get("code").and_then(serde_json::Value::as_str)
+    {
+        state.code = code.to_string();
+    }
+
+    // Read independently of the code. Nesting it meant a payload whose code was
+    // absent or null also discarded the language, and the report prompt was
+    // then written against whatever language the session last happened to
+    // record. Validated for the same reason as the code path: this string
+    // reaches the report prompt.
+    if !state.behavioral_round_started
+        && let Some((id, _)) = payload
+            .get("language")
+            .and_then(serde_json::Value::as_str)
+            .and_then(offered_language)
+    {
+        state.language = id.to_string();
+    }
+    state.ended = true;
+    DataEventResult {
+        finish_interview: Some(
+            payload
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("candidate_ended")
+                .to_string(),
+        ),
+        ..DataEventResult::default()
     }
 }
 

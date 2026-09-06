@@ -22,9 +22,9 @@ use codetrial::token::{
     livekit_token,
 };
 use codetrial::web::{
-    MAX_BODY_BYTES, MAX_REPORT_BYTES, REPLAY_RATE_LIMIT, RoomDispatcher, TOKEN_RATE_LIMIT,
-    TokenConfig, WebServerConfig, initialize_account_database, login_config, static_file_meta,
-    token_response,
+    MAX_BODY_BYTES, MAX_REPORT_BYTES, READ_RATE_LIMIT, REPLAY_RATE_LIMIT, RoomDispatcher,
+    TOKEN_RATE_LIMIT, TokenConfig, WebServerConfig, initialize_account_database, login_config,
+    static_file_meta, token_response,
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -4946,11 +4946,150 @@ async fn a_completion_with_no_file_fails_the_recording() {
     remove_database(path);
 }
 
+/// A provider failure arriving after a good completion leaves the file alone.
+///
+/// LiveKit retries webhooks, so its news can arrive twice and out of order. The
+/// state table has to allow `transferring` to `failed`, because that is how the
+/// delivery worker reports an upload it could not finish, and that same edge
+/// let a stale `EGRESS_FAILED` fail a recording whose file was already queued
+/// and whole. The candidate was then told to record again over a video that
+/// existed.
+#[tokio::test]
+async fn a_late_provider_failure_does_not_fail_a_queued_recording() {
+    let provider = std::sync::Arc::new(FakeRecordingProvider::default());
+    let (base, server, path, client, cookie) =
+        recorded_server_with_provider("late-failure", provider.clone()).await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    assert_eq!(
+        client
+            .post(format!("{base}/api/token"))
+            .header("cookie", cookie.clone())
+            .json(&json!({ "interviewId": interview }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        client
+            .post(format!("{base}/api/interviews/{interview}/recording"))
+            .header("cookie", cookie.clone())
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        202
+    );
+
+    let recording_id: String = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT id FROM recordings WHERE interview_id = ?1",
+            [&interview],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    // The object this recording is going to transfer, named the way the webhook
+    // predicate expects it, so this is a completion that really carries a file.
+    let complete = json!({
+        "event": "egress_ended",
+        "id": "EV_complete",
+        "createdAt": "1770000123",
+        "egressInfo": {
+            "egressId": "EG_web_fake",
+            "status": "EGRESS_COMPLETE",
+            "fileResults": [{
+                "filename": format!("codetrial/{recording_id}.mp4"),
+                "size": "1024"
+            }]
+        }
+    })
+    .to_string();
+    assert_eq!(post_webhook(&client, &base, &complete).await.status(), 200);
+
+    let state = |path: &std::path::Path| -> (String, Option<String>) {
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .query_row(
+                "SELECT state, error FROM recordings WHERE id = ?1",
+                [&recording_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap()
+    };
+    assert_eq!(
+        state(&path).0,
+        "transferring",
+        "a completion carrying the expected object queues the transfer"
+    );
+
+    // Queued, not merely moved. The row reaching `transferring` is what the
+    // delivery worker looks for, and the queue entry is what tells it to look:
+    // without it the recording waits for the sweeper to notice it was orphaned.
+    let queued = |path: &std::path::Path| -> i64 {
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM delivery_queue WHERE recording_id = ?1",
+                [&recording_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(queued(&path), 1, "the completion queued the delivery");
+
+    // The same egress, reported failed afterwards. Nothing here is delivered,
+    // so the row can only move if this webhook moves it.
+    let failed = json!({
+        "event": "egress_ended",
+        "id": "EV_late_failure",
+        "createdAt": "1770000456",
+        "egressInfo": {
+            "egressId": "EG_web_fake",
+            "status": "EGRESS_FAILED",
+            "error": "provider gave up"
+        }
+    })
+    .to_string();
+    assert_eq!(post_webhook(&client, &base, &failed).await.status(), 200);
+
+    assert_eq!(
+        state(&path),
+        ("transferring".to_string(), None),
+        "a stale provider failure must not take back a completed egress"
+    );
+    assert_eq!(
+        queued(&path),
+        1,
+        "and it did not queue a second delivery either"
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
 /// Signs a webhook body the way LiveKit does and posts it.
 ///
 /// The signature covers the exact bytes, so the body is passed as a string and
 /// never re-serialized between here and the request.
 async fn post_webhook(client: &reqwest::Client, base: &str, body: &str) -> reqwest::Response {
+    post_webhook_signed_by(client, base, body, "devkey", b"devsecret").await
+}
+
+/// The same, signed by a named project rather than by the primary one.
+///
+/// A valid signature proves which project sent a webhook, not which project
+/// owns the room it names, and those are different questions once a deployment
+/// has more than one project.
+async fn post_webhook_signed_by(
+    client: &reqwest::Client,
+    base: &str,
+    body: &str,
+    api_key: &str,
+    api_secret: &[u8],
+) -> reqwest::Response {
     use base64::Engine as _;
     use sha2::Digest as _;
 
@@ -4959,7 +5098,7 @@ async fn post_webhook(client: &reqwest::Client, base: &str, body: &str) -> reqwe
         .unwrap()
         .as_secs();
     let claims = json!({
-        "iss": "devkey",
+        "iss": api_key,
         "nbf": now,
         "exp": now + 300,
         "sha256": base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(body.as_bytes())),
@@ -4967,7 +5106,7 @@ async fn post_webhook(client: &reqwest::Client, base: &str, body: &str) -> reqwe
     let header = URL_SAFE_NO_PAD.encode(json!({ "alg": "HS256", "typ": "JWT" }).to_string());
     let payload = URL_SAFE_NO_PAD.encode(claims.to_string());
     let signing_input = format!("{header}.{payload}");
-    let mut mac = HmacSha256::new_from_slice(b"devsecret").unwrap();
+    let mut mac = HmacSha256::new_from_slice(api_secret).unwrap();
     mac.update(signing_input.as_bytes());
     let token = format!(
         "{signing_input}.{}",
@@ -5173,6 +5312,95 @@ async fn replay_ingestion_rate_limits_a_looping_client() {
         )
         .unwrap();
     assert_eq!(stored, i64::from(REPLAY_RATE_LIMIT));
+
+    server.abort();
+    remove_database(path);
+}
+
+/// Reading a recording costs budget too, and the three read routes share one.
+///
+/// Every one of them was already owner scoped and already bounded per answer,
+/// so what was missing was a bound on how often, and the review read added for
+/// the response window is what made that worth closing: it returns every
+/// `avatar` and `lifecycle` transition where the snapshot returns the newest of
+/// each.
+///
+/// Spent across the three routes rather than one, because they share a bucket
+/// and a test that spent it on one route would pass on a server that gave each
+/// route its own.
+#[tokio::test]
+async fn recording_reads_share_one_rate_limit() {
+    let (base, server, path, client, cookie) = recorded_server("read-rate-limit").await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, created_at, updated_at
+        ) VALUES ('rec-read', 1, ?1, 'interview-abc12345', ?1,
+            'one@example.test', 'ready', 10, 10)
+        ",
+            [&interview],
+        )
+        .unwrap();
+
+    let paths = [
+        "/api/recordings".to_string(),
+        "/api/recordings/rec-read".to_string(),
+        "/api/recordings/rec-read/events".to_string(),
+        "/api/recordings/rec-read/events?avatar=history".to_string(),
+    ];
+    for spent in 0..READ_RATE_LIMIT {
+        let url = format!("{base}{}", paths[spent as usize % paths.len()]);
+        let response = client
+            .get(&url)
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "read {spent} should be allowed");
+    }
+
+    // Every route, because one bucket means the next request is refused
+    // whichever of them asks.
+    for path_suffix in &paths {
+        let blocked = client
+            .get(format!("{base}{path_suffix}"))
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(blocked.status(), 429, "{path_suffix}");
+        assert_eq!(blocked.headers().get("retry-after").unwrap(), "60");
+    }
+
+    // A different account is untouched, which is what keying on the account
+    // rather than the address buys: both accounts reach this server on the same
+    // loopback address, so an address-keyed bucket would refuse this read too.
+    // It asks for its own listing, the one read of the three it owns anything
+    // to answer.
+    let (other_cookie, _) = second_account(&client, &base, &path).await;
+    let other = client
+        .get(format!("{base}/api/recordings"))
+        .header("cookie", &other_cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(other.status(), 200);
+
+    // Posting a replay still works too: the read budget and the write budget
+    // are separate buckets, so a reviewer reading a history cannot lock a
+    // candidate out of recording their own interview.
+    let posted = client
+        .post(format!("{base}/api/interviews/{interview}/events"))
+        .header("cookie", &cookie)
+        .json(&json!({ "events": [envelope("transcript", json!({ "text": "hello" }))] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(posted.status(), 200);
 
     server.abort();
     remove_database(path);
@@ -5384,20 +5612,22 @@ async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
             [&interview, &room.to_string()],
         )
         .unwrap();
-    let event = |kind: &str, text: &str| {
-        json!({
-            "v": codetrial::recording::REPLAY_VERSION,
-            "kind": kind,
-            "at": 1_770_000_000_000i64,
-            "payload": { "text": text }
-        })
-    };
+    let event = |kind: &str, text: &str| envelope(kind, json!({ "text": text }));
     let posted = client
         .post(format!("{base}/api/interviews/{interview}/events"))
         .header("cookie", cookie.clone())
+        // The `avatar` and `lifecycle` rows are what make the assertion below
+        // able to fail. They are the only kinds the snapshot's collapse and the
+        // review read's differ on, so without them the template's answer is the
+        // same either way and "the template still gets the collapsed snapshot"
+        // held whether or not this route honoured the parameter, which is the
+        // one thing it exists to catch.
         .json(&json!({ "events": [
+            envelope("avatar", json!({ "state": "speaking" })),
             event("editor", "first draft"),
             event("transcript", "hello"),
+            envelope("avatar", json!({ "state": "listening" })),
+            envelope("lifecycle", json!({ "state": "paused" })),
             event("editor", "second draft"),
         ] }))
         .send()
@@ -5434,7 +5664,7 @@ async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
     let snapshot = replay(token_for(room), "").await;
     assert_eq!(snapshot.status(), 200);
     let body = snapshot.json::<Value>().await.unwrap();
-    assert_eq!(body["seq"], 2);
+    assert_eq!(body["seq"], 5);
     assert_eq!(
         body["events"]
             .as_array()
@@ -5442,8 +5672,26 @@ async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
             .iter()
             .map(|event| event["kind"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        vec!["transcript", "editor"],
-        "the snapshot drops the superseded editor frame"
+        vec!["transcript", "avatar", "lifecycle", "editor"],
+        "the snapshot drops the superseded editor and avatar frames"
+    );
+
+    // The template's read does not take the review page's parameter, and this
+    // is the assertion that says so. The whole reason `Avatar` stays a snapshot
+    // kind is that a template joining late should learn Jim's current state
+    // without replaying the interview; a refactor that plumbed `avatar=history`
+    // through to here would undo that with nothing to notice.
+    let unwidened = replay(token_for(room), "?avatar=history").await;
+    assert_eq!(unwidened.status(), 200);
+    assert_eq!(
+        unwidened.json::<Value>().await.unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["transcript", "avatar", "lifecycle", "editor"],
+        "the template still gets the collapsed snapshot, parameter or no parameter"
     );
 
     // The tail keeps every frame, superseded or not: a reader carrying on from
@@ -5455,7 +5703,7 @@ async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
             .as_array()
             .unwrap()
             .len(),
-        2
+        5
     );
 
     // A token for another room opens nothing here.
@@ -5483,6 +5731,492 @@ async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
             .unwrap()
             .status(),
         401
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
+/// A refused start says which refusal it was.
+///
+/// Every branch here is a different thing for the candidate to do: join the
+/// interview first, wait because the server has recording switched off, or
+/// finish the recording already running. Nothing asserted any of them, so the
+/// whole mapping could have collapsed to one answer and the page would have
+/// shown the wrong instruction with the right status.
+#[tokio::test]
+async fn a_refused_recording_says_which_refusal_it_was() {
+    let (base, server, path, client, cookie) = recorded_server("start-refusals").await;
+
+    // No room yet, because nothing minted a token for this interview.
+    let interview = start_interview(&client, &base, &cookie).await;
+    let refused = client
+        .post(format!("{base}/api/interviews/{interview}/recording"))
+        .header("cookie", cookie.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 409);
+    assert_eq!(
+        refused.json::<Value>().await.unwrap()["code"],
+        "recording_has_no_room",
+        "an interview with no room is told to join first"
+    );
+
+    // An interview that is not this account's is refused as if it did not
+    // exist, which is the same answer as consent withdrawn on purpose.
+    let (other_cookie, _) = second_account(&client, &base, &path).await;
+    let theirs = client
+        .post(format!("{base}/api/interviews/{interview}/recording"))
+        .header("cookie", other_cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(
+        theirs.status(),
+        202,
+        "another account may not start this recording"
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
+/// Each webhook LiveKit sends does its own job, and says whether to resend.
+///
+/// The kinds were routed and acted on with nothing asserting either half. An
+/// arm quietly dropped would leave the row where it was while the message was
+/// answered 200, so LiveKit would never send it again and no test would notice
+/// the recording had stopped moving.
+///
+/// The answer matters as much as the action. A `room_finished` for a room this
+/// server does not know is finished business, but an egress event naming a job
+/// nothing has written down yet is the only notice that job will ever get, so
+/// it has to be given back rather than swallowed.
+#[tokio::test]
+async fn each_webhook_kind_moves_the_row_and_answers_for_itself() {
+    // The fake provider, because ending a recording really calls StopEgress and
+    // the real one answers a test server with 401.
+    let provider = std::sync::Arc::new(FakeRecordingProvider::default());
+    let (base, server, path, client, _cookie) =
+        recorded_server_with_provider("webhook-kinds", provider.clone()).await;
+
+    // Fresh, so the sweeper that started with the server leaves this alone.
+    let now = codetrial::current_epoch_seconds() as i64;
+    let room = "interview-abc12345";
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO interviews (id, account_id, consent_version, consent_at, room_name)
+               VALUES ('int-kinds', 1, '2026-08-21', ?1, ?2)",
+            rusqlite::params![now, room],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO recordings (
+                 id, account_id, interview_id, room_name, idempotency_key,
+                 recipient_email, state, egress_id, created_at, updated_at
+             ) VALUES ('rec-kinds', 1, 'int-kinds', ?2, 'idem-kinds',
+                 'one@example.test', 'starting', 'EG_kinds', ?1, ?1)",
+            rusqlite::params![now, room],
+        )
+        .unwrap();
+    drop(connection);
+
+    let state = || -> String {
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT state FROM recordings WHERE id = 'rec-kinds'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+
+    let egress_started = json!({
+        "event": "egress_started",
+        "id": "EV_started",
+        "createdAt": "1770000001",
+        "egressInfo": { "egressId": "EG_kinds", "status": "EGRESS_ACTIVE" }
+    })
+    .to_string();
+    assert_eq!(
+        post_webhook(&client, &base, &egress_started).await.status(),
+        200
+    );
+    assert_eq!(
+        state(),
+        "recording",
+        "egress_started is what says the job is running"
+    );
+
+    let room_finished = json!({
+        "event": "room_finished",
+        "id": "EV_finished",
+        "createdAt": "1770000002",
+        "room": { "name": room }
+    })
+    .to_string();
+    assert_eq!(
+        post_webhook(&client, &base, &room_finished).await.status(),
+        200
+    );
+    assert_eq!(
+        state(),
+        "finalizing",
+        "the room ending is what ends the recording in it"
+    );
+
+    // A room this server never recorded. Nothing to do, and nothing to resend.
+    let other_room = json!({
+        "event": "room_finished",
+        "id": "EV_unknown_room",
+        "createdAt": "1770000003",
+        "room": { "name": "interview-nosuchroom" }
+    })
+    .to_string();
+    assert_eq!(
+        post_webhook(&client, &base, &other_room).await.status(),
+        200,
+        "a room with no recording is finished business"
+    );
+
+    // An egress nothing has written down. The start response may still be in
+    // flight, so this has to come back rather than be answered.
+    let unknown_egress = json!({
+        "event": "egress_ended",
+        "id": "EV_unknown_egress",
+        "createdAt": "1770000004",
+        "egressInfo": { "egressId": "EG_never_seen", "status": "EGRESS_COMPLETE" }
+    })
+    .to_string();
+    assert_eq!(
+        post_webhook(&client, &base, &unknown_egress).await.status(),
+        503,
+        "an unknown egress is given back so LiveKit sends it again"
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
+/// A full page is not the same as a page with more behind it.
+///
+/// The listing asks for one row more than a page and uses the extra row as the
+/// answer to "is there another page". Only a single-row listing was covered, so
+/// the comparison that decides it was free to be off by one: a cursor handed
+/// out at exactly one page sends the client back for a page that is empty, and
+/// a cursor withheld at one page more hides every recording past the twentieth.
+#[tokio::test]
+async fn a_full_page_offers_a_cursor_only_when_more_follows() {
+    let (base, server, path, client, cookie) = recorded_server("listing-page-edge").await;
+
+    // One recording per interview, which the schema enforces, so each row
+    // brings its own.
+    let insert = |count: i64| {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection.execute("DELETE FROM recordings", []).unwrap();
+        for row in 0..count {
+            let interview_id = format!("int-page-{row}");
+            let room = format!("interview-page{row:04}");
+
+            // With its room, because an interview still waiting for one is
+            // unique per account and consent version, and these are past.
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO interviews
+                       (id, account_id, consent_version, consent_at, room_name)
+                       VALUES (?1, 1, '2026-08-21', 1, ?2)",
+                    [&interview_id, &room],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO recordings (
+                         id, account_id, interview_id, room_name, idempotency_key,
+                         recipient_email, state, created_at, updated_at
+                     ) VALUES (?1, 1, ?2, ?3, ?1, 'one@example.test', 'ready', ?4, ?4)",
+                    rusqlite::params![format!("rec-page-{row}"), interview_id, room, 1000 + row],
+                )
+                .unwrap();
+        }
+    };
+    let listing = || async {
+        client
+            .get(format!("{base}/api/recordings"))
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap()
+    };
+
+    let page = codetrial::recording::RECORDING_PAGE;
+    insert(page);
+    let body = listing().await;
+    assert_eq!(body["recordings"].as_array().unwrap().len(), page as usize);
+    assert_eq!(
+        body["nextCursor"],
+        Value::Null,
+        "exactly one page has nothing behind it"
+    );
+
+    insert(page + 1);
+    let body = listing().await;
+    assert_eq!(
+        body["recordings"].as_array().unwrap().len(),
+        page as usize,
+        "a page is still a page"
+    );
+    assert!(
+        body["nextCursor"].is_string(),
+        "one row more than a page is another page"
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
+/// A signature from one project does not reach another project's room.
+///
+/// The signature proves which project sent the webhook. It does not prove the
+/// project owns the room the webhook names, and a deployment with more than one
+/// LiveKit project has both questions to answer. Without the second one, any
+/// configured project could end another project's recording by naming its room,
+/// and nothing here was asking it.
+#[tokio::test]
+async fn a_webhook_from_another_project_does_not_touch_the_room() {
+    let (mut config, _cookie, path) = signed_in_web_config("webhook-other-project");
+
+    // The recording override: a second key for the same project, which is what
+    // it is for. LiveKit signs a webhook with whichever key the project's
+    // webhook configuration names, and that need not be the key this server
+    // makes Egress calls with, so both have to open this project's own rooms
+    // and neither may open anybody else's.
+    let mut recording = recording_config();
+    recording.livekit = Some(codetrial::config::RecordingLivekit {
+        url: "wss://example.livekit.cloud".to_string(),
+        api_key: "override-key".to_string(),
+        api_secret: "override-secret".to_string(),
+    });
+    config.recording = Some(recording);
+
+    // Two projects, so the intruder's key verifies. The room routes to the
+    // primary one, which is the project that owns this recording.
+    config.pool.providers.push(provider("eu", "eu"));
+
+    // Fresh, because the sweeper starts with the server and fails an active row
+    // that has gone quiet. A recording reaped for being stale would look
+    // exactly like one the intruder ended.
+    let now = codetrial::current_epoch_seconds() as i64;
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO interviews (id, account_id, consent_version, consent_at)
+               VALUES ('int-other', 1, '2026-08-21', ?1)",
+            [now],
+        )
+        .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO recordings (
+                 id, account_id, interview_id, room_name, idempotency_key,
+                 recipient_email, state, egress_id, created_at, updated_at
+             ) VALUES ('rec-other', 1, 'int-other', 'interview-abc12345', 'idem-other',
+                 'one@example.test', 'recording', 'EG_other', ?1, ?1)",
+            [now],
+        )
+        .unwrap();
+
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+
+    let failed = json!({
+        "event": "egress_ended",
+        "id": "EV_other_project",
+        "createdAt": "1770000123",
+        "egressInfo": { "egressId": "EG_other", "status": "EGRESS_FAILED" }
+    })
+    .to_string();
+
+    // Signed by the other project, correctly. The signature check passes and
+    // the ownership check is the only thing between it and the row.
+    let response = post_webhook_signed_by(&client, &base, &failed, "eu-key", b"eu-secret").await;
+    assert_eq!(
+        response.status(),
+        200,
+        "the message is answered rather than retried forever"
+    );
+
+    let state = || -> String {
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT state FROM recordings WHERE id = 'rec-other'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(
+        state(),
+        "recording",
+        "another project's webhook must not end this recording"
+    );
+
+    // The override key, for this project's own room, is the case the override
+    // exists for and it has to still work.
+    let owned = json!({
+        "event": "egress_ended",
+        "id": "EV_own_project",
+        "createdAt": "1770000456",
+        "egressInfo": { "egressId": "EG_other", "status": "EGRESS_FAILED" }
+    })
+    .to_string();
+    assert_eq!(
+        post_webhook_signed_by(&client, &base, &owned, "override-key", b"override-secret")
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(
+        state(),
+        "failed",
+        "the project's own second key opens its own room"
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
+/// The server starts the recording workers it is configured for.
+///
+/// Nothing checked that it does. `web_router` decides whether to spawn them
+/// from the accounts handle and the recorder, and a build that quietly stopped
+/// would serve every request correctly while no recording was ever swept,
+/// delivered or expired. The kill switch makes that observable in a test: it
+/// takes every active row on the first pass, and the first pass runs when the
+/// worker starts rather than a minute later.
+#[tokio::test]
+async fn the_server_starts_the_recording_workers() {
+    let (mut config, _cookie, path) = signed_in_web_config("worker-start");
+    config.recording = Some(codetrial::config::RecordingConfig {
+        kill_switch: true,
+        ..recording_config()
+    });
+
+    // Written before the server exists, because the sweep this asserts on is
+    // the one the worker runs as it starts.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "INSERT INTO interviews (id, account_id, consent_version, consent_at)
+               VALUES ('int-worker', 1, '2026-08-21', 1);
+             INSERT INTO recordings (
+                 id, account_id, interview_id, room_name, idempotency_key,
+                 recipient_email, state, created_at, updated_at
+             ) VALUES ('rec-worker', 1, 'int-worker', 'interview-worker1', 'idem-worker',
+                 'one@example.test', 'recording', 1, 1);",
+        )
+        .unwrap();
+
+    let (_base, server) = spawn_web_server(config).await;
+
+    let state = || {
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT state FROM recordings WHERE id = 'rec-worker'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+    };
+    for _ in 0..100 {
+        if state() == "failed" {
+            server.abort();
+            remove_database(path);
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    let reached = state();
+    server.abort();
+    remove_database(path);
+    panic!("the sweeper never ran: the recording is still {reached}");
+}
+
+/// A storage failure is not the same answer as no such recording.
+///
+/// This route is what the recording template asks before it decides a replay
+/// exists. A read that failed used to arrive as `404`, which tells the template
+/// the recording is gone: a permanent answer to a temporary condition, and one
+/// no caller retries.
+#[tokio::test]
+async fn a_replay_read_that_fails_is_not_reported_as_missing() {
+    let (base, server, path, client, cookie) = recorded_server("replay-read-error").await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    let room = "interview-abc12345";
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, created_at, updated_at
+        ) VALUES ('rec-err', 1, ?1, ?2, ?1, 'one@example.test', 'recording', 1, 1)
+        ",
+            [&interview, &room.to_string()],
+        )
+        .unwrap();
+    let token = codetrial::token::livekit_token(codetrial::token::LivekitTokenInput {
+        api_key: "devkey",
+        api_secret: "devsecret",
+        identity: "EG_recorder",
+        name: "recorder",
+        room,
+        metadata: "",
+        agent: false,
+        now_seconds: codetrial::current_epoch_seconds(),
+    })
+    .unwrap();
+    let replay = |token: String| {
+        let url = format!("{base}/api/recording/replay");
+        let client = client.clone();
+        async move {
+            client
+                .get(url)
+                .header("authorization", token)
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+
+    assert_eq!(
+        replay(token.clone()).await.status(),
+        200,
+        "the room this token names has a recording to read"
+    );
+
+    // The table out from under the read, which is the shape a storage failure
+    // takes here: the query errors rather than returning no rows.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("DROP TABLE recordings")
+        .unwrap();
+
+    let broken = replay(token).await;
+    assert_eq!(
+        broken.status(),
+        500,
+        "a failed read is not the answer 'no such recording'"
     );
 
     server.abort();
@@ -5600,7 +6334,7 @@ async fn history_cross_account_denied() {
     // it exists. The two paths are refused by two different scopings, which is
     // the point of asking both: the detail is scoped by `recording_summary`'s
     // `account_id`, and the events by the replay read's own ownership check.
-    for path_suffix in ["", "/events"] {
+    for path_suffix in ["", "/events", "/events?avatar=history"] {
         let response = client
             .get(format!("{base}/api/recordings/rec-theirs{path_suffix}"))
             .header("cookie", cookie.clone())
@@ -5657,7 +6391,14 @@ async fn history_expired_returns_410() {
 
     // Gone rather than missing: this account owns the interview and is owed the
     // difference between "never yours" and "not any more".
-    for path_suffix in ["", "/events"] {
+    //
+    // `?avatar=history` is in this list to pin where the refusal happens, not
+    // to re-prove it. The parameter is parsed before `gone_response` and used
+    // after it, so what fails here is an edit that moves the read itself in
+    // front of the guard. That the review read refuses on its own, guard or no
+    // guard, is `replay_review_is_gone_when_the_snapshot_is` in
+    // `tests/recording.rs`, which calls it directly.
+    for path_suffix in ["", "/events", "/events?avatar=history"] {
         let response = client
             .get(format!("{base}/api/recordings/rec-expired{path_suffix}"))
             .header("cookie", cookie.clone())
@@ -5684,20 +6425,160 @@ async fn history_expired_returns_410() {
             [],
         )
         .unwrap();
-    let deleted = client
-        .get(format!("{base}/api/recordings/rec-expired"))
-        .header("cookie", cookie)
+    for path_suffix in ["", "/events", "/events?avatar=history"] {
+        let deleted = client
+            .get(format!("{base}/api/recordings/rec-expired{path_suffix}"))
+            .header("cookie", cookie.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(deleted.status(), 410, "{path_suffix}");
+        assert_eq!(
+            deleted.json::<Value>().await.unwrap()["code"],
+            "recording_deleted",
+            "{path_suffix}"
+        );
+    }
+
+    server.abort();
+    remove_database(path);
+}
+
+/// The review page's read: every `avatar` row, and one editor buffer.
+///
+/// The snapshot keeps the newest row of every replaceable kind, which is what a
+/// recording template joining late needs and exactly what a response window
+/// cannot be computed from. `?avatar=history` lifts the collapse on that one
+/// kind and on no other, so the page pays for the state history it reads rather
+/// than for a code buffer per debounce.
+#[tokio::test]
+async fn history_events_avatar_history_returns_every_state() {
+    let (base, server, path, client, cookie) = recorded_server("history-avatar").await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, created_at, updated_at
+        ) VALUES ('rec-window', 1, ?1, 'interview-abc12345', ?1,
+            'one@example.test', 'ready', 10, 10)
+        ",
+                [&interview],
+            )
+            .unwrap();
+    }
+
+    let posted = client
+        .post(format!("{base}/api/interviews/{interview}/events"))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "events": [
+
+            // The states the server publishes, so this is a replay a real
+            // interview could produce: `src/livekit.rs` writes `listening` and
+            // `speaking` and nothing writes `thinking`.
+            envelope("avatar", json!({ "state": "speaking" })),
+            envelope("editor", json!({ "code": "first draft" })),
+            envelope("transcript", json!({ "speaker": "you", "text": "a hash map" })),
+            envelope("avatar", json!({ "state": "listening" })),
+            envelope("editor", json!({ "code": "second draft" })),
+            envelope("lifecycle", json!({ "state": "paused" })),
+            envelope("avatar", json!({ "state": "speaking" })),
+        ] }))
         .send()
         .await
         .unwrap();
-    assert_eq!(deleted.status(), 410);
+    assert_eq!(posted.status(), 200);
+
+    let rows = async |query: &str| {
+        let response = client
+            .get(format!("{base}/api/recordings/rec-window/events{query}"))
+            .header("cookie", cookie.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "{query}");
+        response.json::<Value>().await.unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| {
+                (
+                    event["seq"].as_i64().unwrap(),
+                    event["kind"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let snapshot = rows("").await;
     assert_eq!(
-        deleted.json::<Value>().await.unwrap()["code"],
-        "recording_deleted"
+        snapshot,
+        vec![
+            (2, "transcript".to_string()),
+            (4, "editor".to_string()),
+            (5, "lifecycle".to_string()),
+            (6, "avatar".to_string()),
+        ],
+        "the default read is the snapshot the recording template also takes"
+    );
+    assert_eq!(
+        rows("?avatar=history").await,
+        vec![
+            (0, "avatar".to_string()),
+            (2, "transcript".to_string()),
+            (3, "avatar".to_string()),
+            (4, "editor".to_string()),
+            (5, "lifecycle".to_string()),
+            (6, "avatar".to_string()),
+        ],
+        "the page read keeps every transition, seq 0 included, and still one editor"
+    );
+
+    // Exact, not truthy. A value nobody wrote is the ordinary snapshot rather
+    // than a guess at what the caller meant. Compared against the whole default
+    // answer rather than against its length: three rows of the wrong kinds is
+    // also three rows.
+    assert_eq!(
+        rows("?avatar=latest").await,
+        snapshot,
+        "an unrecognised value reads the snapshot, not every avatar row"
+    );
+
+    // The tail collapses nothing already, so the parameter has nothing to lift
+    // there and the request is answered as the tail it asked for.
+    assert_eq!(
+        rows("?after=0&avatar=history").await,
+        vec![
+            (1, "editor".to_string()),
+            (2, "transcript".to_string()),
+            (3, "avatar".to_string()),
+            (4, "editor".to_string()),
+            (5, "lifecycle".to_string()),
+            (6, "avatar".to_string()),
+        ],
+        "and the tail is still the tail, which is why the page does not use it"
     );
 
     server.abort();
     remove_database(path);
+}
+
+/// One replay event on the wire, at a fixed clock.
+///
+/// Free rather than a closure per test: three tests were writing the same eight
+/// lines, so `REPLAY_VERSION` and the timestamp were pinned in three places and
+/// a
+/// version bump touched all of them.
+fn envelope(kind: &str, payload: Value) -> Value {
+    json!({
+        "v": codetrial::recording::REPLAY_VERSION,
+        "kind": kind,
+        "at": 1_770_000_000_000i64,
+        "payload": payload
+    })
 }
 
 /// A late join reads the snapshot, and only its own.
@@ -5705,14 +6586,7 @@ async fn history_expired_returns_410() {
 async fn replay_snapshot_is_owner_scoped() {
     let (base, server, path, client, cookie) = recorded_server("replay-snapshot").await;
     let interview = start_interview(&client, &base, &cookie).await;
-    let event = |kind: &str, text: &str| {
-        json!({
-            "v": codetrial::recording::REPLAY_VERSION,
-            "kind": kind,
-            "at": 1_770_000_000_000i64,
-            "payload": { "text": text }
-        })
-    };
+    let event = |kind: &str, text: &str| envelope(kind, json!({ "text": text }));
     let posted = client
         .post(format!("{base}/api/interviews/{interview}/events"))
         .header("cookie", cookie.clone())
@@ -5786,7 +6660,7 @@ async fn replay_snapshot_is_owner_scoped() {
         .unwrap();
     let expired = client
         .get(format!("{base}/api/interviews/{interview}/snapshot"))
-        .header("cookie", cookie)
+        .header("cookie", cookie.clone())
         .send()
         .await
         .unwrap();
@@ -5794,6 +6668,33 @@ async fn replay_snapshot_is_owner_scoped() {
     assert_eq!(
         expired.json::<Value>().await.unwrap()["code"],
         "replay_expired"
+    );
+
+    // And a deleted recording, which is the other half of the same promise and
+    // was asserted nowhere: this route has no `gone_response` ahead of it, so
+    // `SnapshotView::Deleted` reaches the response mapping directly here. The
+    // status was free to become a `404` without a test noticing, which is the
+    // difference between "taken away" and "never yours" going missing.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "
+        UPDATE recordings SET state = 'deleted', deleted_at = 5, expires_at = NULL,
+            room_name = NULL, recipient_email = NULL WHERE id = 'rec-snap'
+        ",
+            [],
+        )
+        .unwrap();
+    let deleted = client
+        .get(format!("{base}/api/interviews/{interview}/snapshot"))
+        .header("cookie", cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), 410);
+    assert_eq!(
+        deleted.json::<Value>().await.unwrap()["code"],
+        "recording_deleted"
     );
 
     let signed_out = client

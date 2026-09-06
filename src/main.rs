@@ -228,6 +228,55 @@ fn bind_web_listener(addr: &str) -> Result<std::net::TcpListener, String> {
     Ok(listener)
 }
 
+/// The recording block and the server configuration it goes into.
+///
+/// Split from `run_web` because it is one decision made in one place:
+/// everything here is read from the operator's environment, validated, and put
+/// in a struct, and nothing here binds a socket or starts a task. The order
+/// inside it is load bearing and is written where it happens.
+fn web_server_config(
+    values: &std::collections::BTreeMap<String, String>,
+    pool: codetrial::config::ProviderPool,
+    production: bool,
+    options: &CliOptions,
+) -> Result<WebServerConfig, String> {
+    // After the pool is complete, so the "is this project in the pool" check
+    // sees the pool the server will actually serve, and before the listener
+    // does any work: a half-configured recording block is a startup failure,
+    // never a surprise at the moment a candidate's interview ends.
+    let recording = codetrial::config::load_recording(
+        values,
+        &pool,
+        interview_duration_min(values),
+        production,
+    )
+    .map_err(|error| error.to_string())?;
+    recording_needs_verified_identity(
+        recording.is_some(),
+        nonempty(values, "GITHUB_CLIENT_ID").is_some()
+            && nonempty(values, "GITHUB_CLIENT_SECRET").is_some(),
+    )?;
+    recording_can_deliver(recording.as_ref())?;
+
+    Ok(WebServerConfig {
+        web_dir: PathBuf::from(value_or(values, "CODETRIAL_WEB_DIR", DEFAULT_WEB_DIR)),
+        github_client_id: nonempty(values, "GITHUB_CLIENT_ID"),
+        github_client_secret: nonempty(values, "GITHUB_CLIENT_SECRET"),
+        session_secret: Some(value_or(values, "SESSION_SECRET", DEFAULT_SESSION_SECRET)),
+        db_path: Some(account_db_path(values, options)),
+        github_oauth_base_url: None,
+        github_api_base_url: None,
+        room_prefix: value_or(values, "CODETRIAL_ROOM_PREFIX", DEFAULT_ROOM_PREFIX),
+        fixed_room_name: nonempty(values, "INTERVIEW_ROOM_NAME"),
+        production,
+        trusted_proxy_hops: trusted_proxy_hops(values),
+        compiler_explorer_enabled: compiler_explorer_enabled(values),
+        recording,
+        pool,
+        probe_provider_quota: true,
+    })
+}
+
 fn run_web(options: CliOptions) -> Result<(), String> {
     // Falls through: once `serve_setup` returns, the config exists and the rest
     // of this function is an ordinary launch, on the socket Setup served on.
@@ -258,41 +307,7 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     let production = is_production(&values);
     let pool = web_provider_pool(&values, &options, production)?;
 
-    // After the pool is complete, so the "is this project in the pool" check
-    // sees the pool the server will actually serve, and before the listener
-    // does any work: a half-configured recording block is a startup failure,
-    // never a surprise at the moment a candidate's interview ends.
-    let recording = codetrial::config::load_recording(
-        &values,
-        &pool,
-        interview_duration_min(&values),
-        production,
-    )
-    .map_err(|error| error.to_string())?;
-    recording_needs_verified_identity(
-        recording.is_some(),
-        nonempty(&values, "GITHUB_CLIENT_ID").is_some()
-            && nonempty(&values, "GITHUB_CLIENT_SECRET").is_some(),
-    )?;
-    recording_can_deliver(recording.as_ref())?;
-
-    let config = WebServerConfig {
-        web_dir: PathBuf::from(value_or(&values, "CODETRIAL_WEB_DIR", DEFAULT_WEB_DIR)),
-        github_client_id: nonempty(&values, "GITHUB_CLIENT_ID"),
-        github_client_secret: nonempty(&values, "GITHUB_CLIENT_SECRET"),
-        session_secret: Some(value_or(&values, "SESSION_SECRET", DEFAULT_SESSION_SECRET)),
-        db_path: Some(account_db_path(&values, &options)),
-        github_oauth_base_url: None,
-        github_api_base_url: None,
-        room_prefix: value_or(&values, "CODETRIAL_ROOM_PREFIX", DEFAULT_ROOM_PREFIX),
-        fixed_room_name: nonempty(&values, "INTERVIEW_ROOM_NAME"),
-        production: is_production(&values),
-        trusted_proxy_hops: trusted_proxy_hops(&values),
-        compiler_explorer_enabled: compiler_explorer_enabled(&values),
-        recording,
-        pool,
-        probe_provider_quota: true,
-    };
+    let config = web_server_config(&values, pool, production, &options)?;
 
     initialize_accounts(&config)?;
 
@@ -1583,6 +1598,65 @@ bm90IGEga2V5
         assert!(super::recording_can_deliver(None).is_ok());
         recording.service_account_json = String::new();
         assert!(super::recording_can_deliver(Some(&recording)).is_err());
+    }
+
+    /// Half an OAuth app is not an OAuth app.
+    ///
+    /// The rule below is tested on its own; this is the wiring that feeds it,
+    /// and the two lookups have to be joined with "and". Joined with "or", a
+    /// deployment holding only a client id would start recording and then
+    /// refuse every interview at `/api/token`, because the address a recording
+    /// is delivered to is the one GitHub returns and there is no GitHub. Each
+    /// half alone has to be refused, and so does neither.
+    #[test]
+    fn recording_starts_only_with_both_halves_of_the_oauth_app() {
+        let recording_values = |pairs: &[(&str, &str)]| {
+            let mut values: std::collections::BTreeMap<String, String> = [
+                ("CODETRIAL_RECORDING_ENABLED", "true"),
+                ("CODETRIAL_RECORDING_GCS_BUCKET", "codetrial-staging"),
+                ("CODETRIAL_RECORDING_DRIVE_ID", "0AKfixtureDriveId"),
+                (
+                    "CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON",
+                    r#"{"type":"service_account","client_email":"a@b.iam.gserviceaccount.com","private_key":"KEYMATERIAL-4bd2"}"#,
+                ),
+                (
+                    "CODETRIAL_RECORDING_TEMPLATE_BASE_URL",
+                    "https://recording.codetrial.example",
+                ),
+                ("SESSION_SECRET", "a-real-secret"),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+            for (key, value) in pairs {
+                values.insert(key.to_string(), value.to_string());
+            }
+            values
+        };
+        let pool = codetrial::config::ProviderPool {
+            providers: vec![provider(codetrial::config::PRIMARY_PROVIDER_ID)],
+        };
+
+        for half in [
+            vec![("GITHUB_CLIENT_ID", "id")],
+            vec![("GITHUB_CLIENT_SECRET", "secret")],
+            vec![],
+        ] {
+            let error = super::web_server_config(
+                &recording_values(&half),
+                pool.clone(),
+                false,
+                &super::CliOptions::default(),
+            )
+            .expect_err("recording with half an OAuth app must not start");
+            assert!(error.contains("GITHUB_CLIENT_ID"), "{error}");
+        }
+
+        // The other direction is `recording_needs_verified_identity` below,
+        // which takes the answer rather than the lookups: reaching it from here
+        // means a service account whose key really parses, and the rule it
+        // applies is the same either way.
+        let _ = pool;
     }
 
     #[test]

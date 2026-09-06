@@ -1172,7 +1172,8 @@ p {
 }
 
 .replay-item,
-.replay-moment {
+.replay-moment,
+.replay-window {
   width: 100%;
   padding: 0.5rem 0.65rem;
   border: 1px solid var(--hairline);
@@ -1182,6 +1183,17 @@ p {
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+/* A response window shares the timeline with the editor and test snapshots and
+   must not look louder than they do. Dashed and unfilled, because it is a
+   duration somebody may want to go and watch rather than a result: no colour
+   that could be read as a severity, and none of the emphasis the current
+   selection uses. */
+.replay-window {
+  border-style: dashed;
+  background: none;
+  cursor: default;
 }
 
 .replay-item + .replay-item,

@@ -403,19 +403,139 @@ export function loopLabel(value) {
 
 const textEncoder = new TextEncoder();
 
+/// The five versions this build renders, and the only bundle it will score.
+///
+/// Here rather than inside `sanitizeReport` so a test can read it. While it was
+/// function-local, moving it left the whole suite green with the supported-card
+/// branch no longer rendering, which is the defect a local constant invites.
+export const ACTIVE_CONTRACT = {
+  bundleVersion: 4,
+  livePromptVersion: 1,
+  reportPromptVersion: 4,
+  reportSchemaVersion: 1,
+  rubricVersion: 1,
+};
+
+/// The report's contract bundle, and whether this build can score against it.
+///
+/// Two answers rather than one, because they are not the same question. The
+/// bundle is what the report claims and is kept whenever it is well formed, so
+/// a reader is told which rubric produced it. Supported is whether every version
+/// matches this build, and only that decides whether the scores below are shown.
+/// A report with no bundle at all predates the contract and is neither.
+function reportContract(raw) {
+  const keys = Object.keys(ACTIVE_CONTRACT);
+  const claimed = raw?.interviewContract;
+  const wellFormed = claimed && typeof claimed === "object" && !Array.isArray(claimed)
+    && Object.keys(claimed).sort().join(",") === [...keys].sort().join(",")
+    && keys.every((key) => Number.isSafeInteger(claimed[key]) && claimed[key] >= 1 && claimed[key] <= 999);
+  const interviewContract = claimed === undefined
+    ? null
+    : wellFormed ? Object.fromEntries(keys.map((key) => [key, claimed[key]])) : null;
+  const unsupported = claimed !== undefined
+    && (interviewContract === null || keys.some((key) => interviewContract[key] !== ACTIVE_CONTRACT[key]));
+  return { interviewContract, unsupported };
+}
+
+/// The framework evidence rows, bounded and ordered.
+///
+/// Its own function because it is the one part of a report that carries fields
+/// this build has never heard of. Everything else here is a closed shape read
+/// key by key; this one round-trips the unknown, and the rules that make that
+/// safe, a byte ceiling and a null prototype, are easier to hold in one place
+/// than in the middle of the rest.
+function reportEvidence(raw) {
+  const knownEvidenceFields = new Set([
+    "atMs", "phase", "source", "kind", "confidence", "summary", "frameworkVersion",
+  ]);
+  const evidencePhases = new Set(frameworkPhases.map((phase) => phase.toLowerCase()));
+  const frameworkSources = new Set(["candidate_speech", "editor_snapshot", "test_event", "session_timing"]);
+  const frameworkKinds = new Set(["observed", "inferred", "skipped"]);
+  return (Array.isArray(raw?.frameworkEvidence) ? raw.frameworkEvidence : [])
+    .map((item) => {
+      const phase = typeof item?.phase === "string" ? item.phase : "";
+      const source = typeof item?.source === "string" ? item.source : "";
+      const kind = typeof item?.kind === "string" ? item.kind : "";
+      const atMs = Math.trunc(Number(item?.atMs));
+      const confidence = Math.trunc(Number(item?.confidence));
+      const frameworkVersion = Math.trunc(Number(item?.frameworkVersion));
+      const summary = typeof item?.summary === "string" ? boundedText(item.summary, 240).trim() : "";
+      if (!evidencePhases.has(phase) || !frameworkSources.has(source) || !frameworkKinds.has(kind)
+        || (source === "session_timing") !== (kind === "skipped")
+        || !Number.isFinite(atMs) || atMs < 0 || !Number.isFinite(confidence)
+        || confidence < 0 || confidence > 100 || !Number.isFinite(frameworkVersion)
+        || frameworkVersion < 1 || !summary) return null;
+      // Unknown fields round-trip, so a newer report re-saved by an older
+      // client does not quietly lose what that client could not name. They
+      // are also the only part of an evidence row with no size of its own,
+      // and the whole report has to fit what the account sync accepts, which
+      // refuses the request rather than trimming it: over that, the candidate
+      // keeps the local copy and the account copy simply never arrives. So
+      // they are carried while they are a field rather than a payload.
+      // The common row has nothing unknown on it and this runs over whatever
+      // length arrived from storage or the wire, before the cap below trims it,
+      // so that row allocates nothing and is never serialized to be measured.
+      // Null prototype, not `{}`: assigning a key named `__proto__` to a plain
+      // object runs the inherited setter, which ignores a string and drops the
+      // field. A newer client's field is not ours to name, so it cannot be ours
+      // to lose either.
+      let extras = null;
+      for (const key of Object.keys(item)) {
+        if (!knownEvidenceFields.has(key)) (extras ??= Object.create(null))[key] = item[key];
+      }
+      // Spreading null spreads nothing, which is what both the common row and
+      // an over-budget one want.
+      const carried = extras && textEncoder.encode(JSON.stringify(extras)).length <= 512 ? extras : null;
+      return {
+        ...carried,
+        // A year, which no interview approaches: this is a sanity bound on a
+        // timestamp that arrives as untrusted JSON, not a statement about how
+        // long a session runs.
+        atMs: clamp(atMs, 0, 31_536_000_000),
+        phase,
+        source,
+        kind,
+        confidence,
+        summary,
+        frameworkVersion,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 64)
+    .sort((left, right) => left.atMs - right.atMs);
+}
+
+/// The two rounds an interview is made of, or nothing.
+///
+/// All or nothing on purpose: the pair is one statement about how the time was
+/// divided, and half of it is not a shorter version of that statement, it is a
+/// different and unsupported one. So a round that fails any of its own rules,
+/// or a pair whose budgets do not add up to a length this product offers, or a
+/// behavioral round that disagrees with the loop the report recorded, returns
+/// the empty list rather than the half that parsed.
+function reportRounds(raw, interviewLoop) {
+  const kinds = ["coding", "behavioral"];
+  const codingStatuses = new Set(["complete", "incomplete"]);
+  const behavioralStatuses = new Set(["complete", "started", "skipped", "not_configured"]);
+  const rounds = Array.isArray(raw?.rounds) && raw.rounds.length === 2
+    ? raw.rounds.map((round, index) => round?.kind === kinds[index]
+      && Number.isInteger(round.budgetMin) && round.budgetMin >= 0 && round.budgetMin <= 90
+      && (index === 0 ? codingStatuses : behavioralStatuses).has(round.status)
+      ? { kind: round.kind, budgetMin: round.budgetMin, status: round.status } : null)
+    : [];
+  // `[].every(Boolean)` is true, so the pair has to be proved present before
+  // anything reads into it. Writing the length test second cost an exception on
+  // every report with no rounds at all, which is most of them.
+  if (rounds.length !== 2 || !rounds.every(Boolean)) return [];
+  const total = rounds[0].budgetMin + rounds[1].budgetMin;
+  const behavioralFits = interviewLoop === "coding_only"
+    ? rounds[1].budgetMin === 0 && rounds[1].status === "not_configured"
+    : rounds[1].budgetMin === 8 && rounds[1].status !== "not_configured";
+  return total >= 10 && total <= 90 && behavioralFits ? rounds : [];
+}
+
 export function sanitizeReport(raw) {
-  const activeContract = { bundleVersion: 4, livePromptVersion: 1, reportPromptVersion: 4, reportSchemaVersion: 1, rubricVersion: 1 };
-  const contractKeys = Object.keys(activeContract);
-  const candidateContract = raw?.interviewContract;
-  const contractValues = candidateContract && typeof candidateContract === "object" && !Array.isArray(candidateContract)
-    ? Object.keys(candidateContract).sort().join(",") === [...contractKeys].sort().join(",")
-      && contractKeys.every((key) => Number.isSafeInteger(candidateContract[key])
-        && candidateContract[key] >= 1 && candidateContract[key] <= 999)
-      ? Object.fromEntries(contractKeys.map((key) => [key, candidateContract[key]])) : null
-    : null;
-  const interviewContract = candidateContract === undefined ? null : contractValues;
-  const unsupportedContract = candidateContract !== undefined
-    && (interviewContract === null || contractKeys.some((key) => interviewContract[key] !== activeContract[key]));
+  const { interviewContract, unsupported: unsupportedContract } = reportContract(raw);
   // Only what the report actually recorded. Defaulting this to "scored" put a
   // mode on every new report and made the header announce a distinction that no
   // longer exists; a report written before the split still says what it was.
@@ -426,22 +546,7 @@ export function sanitizeReport(raw) {
   // never ran, the same way defaulting the mode did.
   const interviewLoop = codingLoop(raw?.interviewLoop);
   const recordedLoop = raw?.interviewLoop === undefined ? undefined : interviewLoop;
-  const roundKinds = ["coding", "behavioral"];
-  const codingStatuses = new Set(["complete", "incomplete"]);
-  const behavioralStatuses = new Set(["complete", "started", "skipped", "not_configured"]);
-  const rounds = Array.isArray(raw?.rounds) && raw.rounds.length === 2
-    ? raw.rounds.map((round, index) => round?.kind === roundKinds[index]
-      && Number.isInteger(round.budgetMin) && round.budgetMin >= 0 && round.budgetMin <= 90
-      && (index === 0 ? codingStatuses : behavioralStatuses).has(round.status)
-      ? { kind: round.kind, budgetMin: round.budgetMin, status: round.status } : null)
-    : [];
-  const roundSummary = rounds.length === 2 && rounds.every(Boolean)
-    && rounds[0].budgetMin + rounds[1].budgetMin >= 10
-    && rounds[0].budgetMin + rounds[1].budgetMin <= 90
-    && (interviewLoop === "coding_only"
-      ? rounds[1].budgetMin === 0 && rounds[1].status === "not_configured"
-      : rounds[1].budgetMin === 8 && rounds[1].status !== "not_configured")
-    ? rounds : [];
+  const roundSummary = reportRounds(raw, interviewLoop);
   const bounded = (value, max) => {
     const number = Math.trunc(Number(value));
     return Number.isFinite(number) ? clamp(number, 0, max) : 0;
@@ -549,64 +654,8 @@ export function sanitizeReport(raw) {
       phases: assessmentPhases.map((phase) => normalizedAssessment.get(phase)),
     }
     : null;
-  const knownEvidenceFields = new Set([
-    "atMs", "phase", "source", "kind", "confidence", "summary", "frameworkVersion",
-  ]);
-  const evidencePhases = new Set(frameworkPhases.map((phase) => phase.toLowerCase()));
-  const frameworkSources = new Set(["candidate_speech", "editor_snapshot", "test_event", "session_timing"]);
-  const frameworkKinds = new Set(["observed", "inferred", "skipped"]);
-  const frameworkEvidence = (Array.isArray(raw?.frameworkEvidence) ? raw.frameworkEvidence : [])
-    .map((item) => {
-      const phase = typeof item?.phase === "string" ? item.phase : "";
-      const source = typeof item?.source === "string" ? item.source : "";
-      const kind = typeof item?.kind === "string" ? item.kind : "";
-      const atMs = Math.trunc(Number(item?.atMs));
-      const confidence = Math.trunc(Number(item?.confidence));
-      const frameworkVersion = Math.trunc(Number(item?.frameworkVersion));
-      const summary = typeof item?.summary === "string" ? boundedText(item.summary, 240).trim() : "";
-      if (!evidencePhases.has(phase) || !frameworkSources.has(source) || !frameworkKinds.has(kind)
-        || (source === "session_timing") !== (kind === "skipped")
-        || !Number.isFinite(atMs) || atMs < 0 || !Number.isFinite(confidence)
-        || confidence < 0 || confidence > 100 || !Number.isFinite(frameworkVersion)
-        || frameworkVersion < 1 || !summary) return null;
-      // Unknown fields round-trip, so a newer report re-saved by an older
-      // client does not quietly lose what that client could not name. They
-      // are also the only part of an evidence row with no size of its own,
-      // and the whole report has to fit what the account sync accepts, which
-      // refuses the request rather than trimming it: over that, the candidate
-      // keeps the local copy and the account copy simply never arrives. So
-      // they are carried while they are a field rather than a payload.
-      // The common row has nothing unknown on it and this runs over whatever
-      // length arrived from storage or the wire, before the cap below trims it,
-      // so that row allocates nothing and is never serialized to be measured.
-      // Null prototype, not `{}`: assigning a key named `__proto__` to a plain
-      // object runs the inherited setter, which ignores a string and drops the
-      // field. A newer client's field is not ours to name, so it cannot be ours
-      // to lose either.
-      let extras = null;
-      for (const key of Object.keys(item)) {
-        if (!knownEvidenceFields.has(key)) (extras ??= Object.create(null))[key] = item[key];
-      }
-      // Spreading null spreads nothing, which is what both the common row and
-      // an over-budget one want.
-      const carried = extras && textEncoder.encode(JSON.stringify(extras)).length <= 512 ? extras : null;
-      return {
-        ...carried,
-        // A year, which no interview approaches: this is a sanity bound on a
-        // timestamp that arrives as untrusted JSON, not a statement about how
-        // long a session runs.
-        atMs: clamp(atMs, 0, 31_536_000_000),
-        phase,
-        source,
-        kind,
-        confidence,
-        summary,
-        frameworkVersion,
-      };
-    })
-    .filter(Boolean)
-    .slice(0, 64)
-    .sort((left, right) => left.atMs - right.atMs);
+  const frameworkEvidence = reportEvidence(raw);
+
   // A report with nothing in it must survive normalization as a report with
   // nothing in it. Falling through to the fields below would score the missing
   // numbers as 0 and coerce the missing decision to NO_HIRE, which is how a
@@ -835,4 +884,290 @@ export function providerUiState(kind, detail = "") {
     retry_ready: { label: "Retry available", message: "The report is still unavailable. Leave safely, then retry the interview when the provider recovers.", personalized: false, retry: true },
   };
   return states[kind] || states.degraded;
+}
+
+/// The candidate's own words in one transcript event, or nothing.
+///
+/// Two questions, and both have to be answered before a window may say a turn
+/// closed it. Whose line it is: `consumeTranscript` in `web/interview.js` writes
+/// `"you"` for the local participant and `"interviewer"` for the agent, and
+/// `web/replay.js` reads a missing speaker as the candidate, so anything that is
+/// not the interviewer is the candidate. And whether there is a line at all: a
+/// payload with no text, a non-string text, or whitespace is not a turn, and
+/// counting it as one would take the "no transcript in this window" note off a
+/// window that has none. Our own producer cannot emit that shape, which is
+/// exactly why nothing downstream would notice if some later one did.
+function candidateTurnText(event) {
+  if ((event.payload?.speaker || "candidate") === "interviewer") return "";
+  const text = event.payload?.text;
+  return typeof text === "string" ? text.trim() : "";
+}
+
+/// How long a window lasted, or nothing when the clock will not say.
+///
+/// `at` is the candidate's own browser clock and it can jump: a `thinking`
+/// stamped before the `listening` it closes is not a negative duration, it is a
+/// clock that moved. Null rather than a number, because a reader can be told
+/// "not measurable" and cannot be told what a negative second means.
+function windowSpan(start, end) {
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const duration = end - start;
+  return duration >= 0 ? duration : null;
+}
+
+/// The gap between Jim finishing a question and Jim starting on the answer.
+///
+/// Screen evidence and gaze evidence are both designed around by the shipped
+/// interview assistants; what none of them removes is time, because each still
+/// needs the question to finish, a turn to close, a model round trip, and the
+/// candidate to read. That lands in this window, so this is what the replay page
+/// renders.
+///
+/// What it can show is bounded by the interviewer, and the bound is the first
+/// thing to know about the number. `timing_decision` in `src/agent.rs` nudges a
+/// candidate who has been silent for `SILENCE_THRESHOLD_S`, and the nudge makes
+/// Jim speak, which closes the window. Neither talking nor typing counts as
+/// silence, so a window runs long only while the candidate is working, and a
+/// candidate who is silently reading is interrupted at twenty-five seconds and
+/// gets a run of short windows instead of one long one. A long window therefore
+/// means the candidate was busy, which is the innocent reading; the shape that
+/// is not innocent is several windows in a row holding no transcript at all.
+///
+/// It is a duration and not a finding, and two things make it softer than it
+/// looks. `at` is the candidate's own browser clock, which
+/// `src/recording/replay.rs` documents as never trusted for ordering. And
+/// `web/interview.js` falls back to `listening` when the agent publishes no
+/// `lk.agent.state`, so some `listening` rows mean "attribute absent" rather
+/// than "Jim stopped". Both belong beside any number this produces.
+///
+/// Ordering is the array's, which is `seq` order from the server. `at` is read
+/// for the duration and for nothing else, which is the same rule
+/// `src/recording/replay.rs` applies to its own rows.
+///
+/// A window opens on a `listening` row whose previous `avatar` row was
+/// `speaking`, and closes on the next `speaking` or `thinking`. Both halves of
+/// that are about what the server actually publishes rather than about what the
+/// state names suggest.
+///
+/// `src/livekit.rs` declares two agent states, `listening` and `speaking`, and
+/// every `set_agent_state` call writes one of them; nothing writes `thinking`.
+/// So a real interview records `listening, speaking, listening, speaking, ...`,
+/// and a window that closed only on `thinking` never closed at all: one row per
+/// interview reading "duration not recorded", however many questions were asked.
+/// `thinking` still closes a window, for a deployment that publishes it, but it
+/// is not what closes one today.
+///
+/// Closing on `speaking` puts CodeTrial's own model round trip inside the
+/// number, because the interviewer starts speaking after it rather than after
+/// the candidate stops. `src/livekit.rs` already measures that round trip on the
+/// server's own clock and logs it; joining the two is a server change and is
+/// written up as a candidate improvement, not done here.
+///
+/// Opening on the previous row rather than on a latch is what keeps three
+/// non-questions from opening a window. The first `avatar` row of almost every
+/// interview is a `listening` written on first sight of the agent participant,
+/// before a question exists. A `listening` that follows a `thinking` is the
+/// interviewer having thought and said nothing. And a `listening` with no
+/// earlier row at all is a replay that starts mid-interview. A latch would admit
+/// the second of those, because "has spoken at some point" stays true.
+///
+/// What it does not exclude is an interviewer that stopped speaking for a
+/// reason other than finishing a question, and the commonest one is the
+/// interviewer itself. A silence nudge, a proactive review, a reaction to a
+/// test run, the time warning, the round transition and the wrap-up all end in
+/// a `speaking` row followed by a `listening` row, and none of them is a
+/// question. The candidate interrupting, the agent dropping out and coming
+/// back, a Gemini socket restart, and the candidate pressing Pause while the
+/// interviewer is mid-turn write the same pair. There is no row that tells
+/// those from a question ending, so the page says so beside the number rather
+/// than guessing.
+///
+/// The pause is the exception, because there is a row: `applyPause` in
+/// `web/interview.js` records a `lifecycle` `paused`, and its comment says why,
+/// which is that a break must be visible rather than passing as thinking time.
+/// A window overlapping one carries `paused`, and the page says so on that
+/// window rather than only in the paragraph above the list. Marked rather than
+/// hidden or subtracted: how long the break was is in the rows, and a duration
+/// this function silently shortened would be a number nothing on the page
+/// explains.
+///
+/// Six shapes, because `recordAvatarState` writes only on a change and an
+/// interview can stop anywhere:
+///
+/// - A `listening` with no later close is a window that never closed. It is
+///   returned with a null duration rather than dropped, because an interview
+///   that ended mid-answer is still a window a reviewer may want to open.
+/// - A closed window holding no candidate turn returns a null turn rather than
+///   being dropped. The interviewer asking twice with nothing said in between is
+///   exactly the shape worth seeing, and it is two windows rather than one:
+///   the re-prompt closes the first and opens the second, so the unanswered ask
+///   is visible on its own instead of being folded into the answered one.
+/// - A `listening` the interviewer was not speaking before starts no window.
+/// - A close whose `at` precedes its `listening` returns a null duration rather
+///   than a negative one.
+/// - A window the interview was paused during carries `paused`, whichever of
+///   the two rows arrived first.
+/// - Nothing after a `lifecycle` `ended` row is read, because the interview is
+///   over and the goodbye is not a question.
+export function responseWindows(events) {
+  const windows = [];
+  const windowsById = new Map();
+  let open = null;
+  /// The previous `avatar` state, which is what decides whether a `listening`
+  /// row is the end of a question or something else. `null` until the first one,
+  /// so a replay that opens on a `listening` starts no window.
+  let previous = null;
+  /// Whether the interview is paused right now, from the `lifecycle` rows.
+  /// Carried across the whole scan rather than read per window, because the
+  /// `paused` row and the `listening` row a pause causes are written by two
+  /// different sides and either can land first.
+  let paused = false;
+  for (const [index, event] of replayRows(events).entries()) {
+    if (event?.kind === "lifecycle") {
+      const state = event.payload?.state;
+      if (state === "paused" || state === "resumed") paused = state === "paused";
+      // A window already open when the break started keeps the mark, which is
+      // the ordinary case: the candidate pauses during their own turn and no
+      // `avatar` row is written at all.
+      if (paused && open) open.paused = true;
+      // The interview is over. `send_wrap_up_and_wait` in `src/livekit.rs` ends
+      // by setting `listening` again, and the browser keeps recording past
+      // `ended` to write `rounds_final`, so without this every timed-out
+      // interview finishes with a window opened by the goodbye and closed by
+      // nothing. That row is not an interview that stopped mid-answer, which is
+      // what an unclosed window otherwise means.
+      if (state === "ended") break;
+      continue;
+    }
+    if (event?.kind === "transcript") {
+      const text = candidateTurnText(event);
+      // The stream can finish after the next question opens. Its window index
+      // is captured before that await; sequence position is not.
+      //
+      // A row without one is a recording made before the producer stamped them,
+      // or one whose stream started before the first window opened. There is
+      // exactly one shape those can be placed in without guessing: a single
+      // window that is still open is the only window the turn could belong to.
+      // Past that the answer is unknowable, and `matched` below is what stops
+      // the page reading the silence as a claim.
+      const responseWindow = event.payload?.responseWindow;
+      const target = Number.isInteger(responseWindow)
+        ? windowsById.get(responseWindow)
+        : windows.length === 1 && open === windows[0]
+          ? open
+          : null;
+      if (target && text) target.turn = { at: event.at, text };
+      continue;
+    }
+    if (event?.kind !== "avatar") continue;
+    const state = event.payload?.state;
+    // Read before either branch and written after both, so "the previous row"
+    // means the previous `avatar` row and not the previous row of any kind.
+    const before = previous;
+    previous = state;
+
+    // The interviewer speaking is proof the interview is not paused, which is
+    // what bounds a lost `resumed` row to the windows before it. `watch_prompt`
+    // in `src/livekit/turn.rs` returns nothing while `state.paused`, and
+    // `handle_gemini_event` in `src/livekit.rs` drops every audio event then, so
+    // there is no path from a paused interview to a `speaking` row. Without this
+    // one dropped batch painted every remaining window as paused, and that mark
+    // is the panel's only affirmative claim.
+    if (state === "speaking") paused = false;
+
+    // Closed first. A `speaking` row both ends the window before it and, on the
+    // next `listening`, opens the one after; taking them in the other order
+    // would let one row close a window it had just opened.
+    if ((state === "speaking" || state === "thinking") && open) {
+      open.duration = windowSpan(open.at, event.at);
+      open = null;
+    }
+    if (state === "listening" && !open && before === "speaking") {
+      // `paused` is read here as well, for the other order: pausing mid-turn
+      // makes the server publish `listening`, so the window this opens is the
+      // break itself.
+      // `matched` is whether a turn could have been attributed to this window
+      // at all, which is not the same question as whether one was. A window
+      // whose opening row carries an index can be named by a transcript row, so
+      // an empty one means nothing was said. A window with no index can only be
+      // reached by the single-window fallback above, so an empty one means the
+      // recording cannot say, and the page owes the reader that difference:
+      // "nothing recorded" is a claim about the candidate and this is the one
+      // place the panel could make a false one.
+      const responseWindow = event.payload?.responseWindow;
+      const matched = Number.isInteger(responseWindow);
+      open = { index, at: event.at, duration: null, turn: null, paused, matched };
+      windows.push(open);
+      if (matched) windowsById.set(responseWindow, open);
+    }
+  }
+  return windows;
+}
+
+/// What one response window says, as the pieces it is joined from.
+///
+/// Pure and given its words, so that a test can hand it a table of sentinels and
+/// assert that nothing came out which the table did not put in. That is the only
+/// form of "the panel does not accuse" that is actually observable: reading the
+/// renderer's source for labels catches a literal and misses a helper, a
+/// computed lookup, and a second table declared beside the first, all three of
+/// which were written and shown to pass a source-reading version of this check.
+///
+/// The clock is not here. It is the caller's, because formatting a wall-clock
+/// time is `toLocaleTimeString` and that is the browser's job, not this one's.
+export function responseWindowLabel(span, words) {
+  const parts = [
+    words.label,
+    span.duration === null
+      ? words.unmeasured
+      : `${(span.duration / 1000).toFixed(1)}${words.seconds}`,
+  ];
+  if (span.paused) parts.push(words.paused);
+  if (!span.turn) parts.push(span.matched ? words.noTurn : words.unmatchedTurn);
+  return parts;
+}
+
+/// Whatever arrived where a list of events was expected, as a list of events.
+///
+/// The server sends an array and the page reads `body.events || []` off a parsed
+/// JSON body, which is one bad deploy or one proxy away from a string or an
+/// object. `.entries()` on either throws, and a throw here paints a blank panel
+/// where the page had a sentence ready to explain itself. An empty replay is the
+/// honest answer to a body that is not one.
+export function replayRows(events) {
+  return Array.isArray(events) ? events : [];
+}
+
+/// The replay page's timeline, assembled without a DOM.
+///
+/// Two lists and the order they interleave in, which is every decision the page
+/// makes about the timeline and none of the drawing. Here rather than in
+/// `web/replay.js` for the reason `web/devices.js` and `web/face-check.js` are
+/// here: that file reads `document.querySelector` at module scope, so importing
+/// it costs a stub document and a module hook, and a helper that needs neither
+/// belongs where neither is needed.
+///
+/// The windows are their own list and do not join `moments`. `data-moment`
+/// indexes that array and the page rebuilds the code and the test result by
+/// scanning its prefix, so a third kind mixed in would shift every index and
+/// then be scanned over as neither an editor nor a test snapshot.
+export function replayTimeline(events) {
+  const rows = replayRows(events);
+  const moments = [];
+  const windows = responseWindows(rows);
+  // Keyed by the position of the `avatar` row that opened each window, which is
+  // the only ordering `responseWindows` trusts. One window per position, so no
+  // two entries can collide.
+  const opened = new Map(windows.map((span, index) => [span.index, index]));
+  const timeline = [];
+  for (const [index, event] of rows.entries()) {
+    if (event?.kind === "editor" || event?.kind === "tests") {
+      moments.push(event);
+      timeline.push({ moment: moments.length - 1 });
+      continue;
+    }
+    const opening = opened.get(index);
+    if (opening !== undefined) timeline.push({ window: opening });
+  }
+  return { moments, windows, timeline };
 }

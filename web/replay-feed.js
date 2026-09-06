@@ -42,6 +42,8 @@ let replayTimer = null;
 let replayClosed = false;
 let replayStageAt = 0;
 let replayAvatarState = "";
+let replayWindow = -1;
+let replayWindowOpen = false;
 
 /// One event onto the queue.
 ///
@@ -211,6 +213,13 @@ export function recordStageTick(remainingSeconds) {
 /// one event, not sixty.
 export function recordAvatarState(value) {
   if (value === replayAvatarState) return;
+  const opensWindow = value === "listening" && replayAvatarState === "speaking";
+  if (opensWindow) replayWindow += 1;
+  replayWindowOpen = opensWindow;
   replayAvatarState = value;
-  recordReplay("avatar", { state: value });
+  recordReplay("avatar", { state: value, responseWindow: opensWindow ? replayWindow : null });
+}
+
+export function responseWindowIndex() {
+  return replayWindowOpen ? replayWindow : null;
 }

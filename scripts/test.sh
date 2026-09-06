@@ -9,6 +9,23 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 failed=""
 
+# What this run did not check, collected as it goes and printed at the end.
+#
+# Every optional lane already said so where it was skipped, several hundred
+# lines above the verdict, which is not where anyone looks. A gate that is
+# quieter about what it skipped than about what it ran reports a green tree to
+# somebody whose checkout cannot run a tenth of it: the browser suite alone
+# skips thirty-odd tests without Chromium, and the shell lane covers the scripts
+# that delete cloud artifacts.
+skipped=""
+
+skip()
+{
+    echo "skipping $1" >&2
+    skipped="$skipped
+  $1"
+}
+
 gate()
 {
     name=$1
@@ -30,7 +47,49 @@ browser_tests()
         echo "no browser tests matched $ROOT/tests/browser/*.test.js" >&2
         return 1
     fi
-    node --test "$@"
+
+    # Two reporters: `spec` to the terminal for whoever is watching, and `tap`
+    # to a file for the summary below. A skip reads as "unverified", not as
+    # "fine", and both the reason and the total scroll past long before the
+    # verdict, so they are counted and repeated where the reader is looking.
+    #
+    # The parsing reads TAP rather than the human output for one reason: TAP
+    # says which lines are directives. `spec` writes the reason in place of the
+    # word, so a skip is `# javac 11 is older...` and cannot be told apart from
+    # a passing test titled `works (1ms) # example`, which is a test that ran
+    # being reported as one that did not. TAP escapes `#` inside a title and
+    # spells the directive `# SKIP` or `# TODO`, so there is nothing to guess.
+    #
+    # Anchored on the assertion record all the same, because the YAML block
+    # under a failure quotes the error verbatim: a test whose message happened
+    # to contain the word counted itself as a skip from inside its own
+    # diagnostic.
+    #
+    # No pipeline either, which is why the exit status no longer travels through
+    # a second file: `tee` loses it in POSIX sh and asking node for a file does
+    # not.
+    tap=$(mktemp)
+    node --test \
+        --test-reporter=spec --test-reporter-destination=stdout \
+        --test-reporter=tap --test-reporter-destination="$tap" "$@"
+    status=$?
+
+    # A heredoc rather than a pipe, so the loop runs in this shell and what it
+    # appends to `skipped` survives it. A todo is counted beside the skips on
+    # purpose: it checked nothing either.
+    while IFS= read -r reason; do
+        [ -n "$reason" ] || continue
+        skipped="$skipped
+  browser tests, $reason"
+    done << REASONS
+$(sed -n -e 's/^ *\(not \)\{0,1\}ok [0-9][0-9]* .* # SKIP */skipped: /p' \
+        -e 's/^ *\(not \)\{0,1\}ok [0-9][0-9]* .* # TODO */todo: /p' "$tap" \
+        | sed 's/: $/: no reason given/' \
+        | sort | uniq -c | sed 's/^ *\([0-9]*\) /\1 /')
+REASONS
+
+    rm -f "$tap"
+    return "$status"
 }
 
 # The Rust half of this repo runs clippy at `-D warnings`; this is the other
@@ -41,7 +100,7 @@ browser_tests()
 eslint_gate()
 {
     if [ ! -x "$ROOT/node_modules/.bin/eslint" ]; then
-        echo "skipping eslint: run \`npm install\` to enable it locally" >&2
+        skip "eslint: \`npm install\` enables it"
         return 0
     fi
 
@@ -66,7 +125,7 @@ eslint_gate()
 actionlint_gate()
 {
     if ! command -v actionlint > /dev/null 2>&1; then
-        echo "skipping actionlint: install it to check .github/workflows locally" >&2
+        skip "actionlint: installing it checks .github/workflows, which is code too"
         return 0
     fi
 
@@ -76,7 +135,7 @@ actionlint_gate()
 cargo_audit_gate()
 {
     if ! command -v cargo-audit > /dev/null 2>&1; then
-        echo "skipping cargo-audit: run \`cargo install cargo-audit\` to enable it locally" >&2
+        skip "cargo-audit: \`cargo install cargo-audit\` audits the dependency tree"
         return 0
     fi
 
@@ -90,7 +149,7 @@ cargo_audit_gate()
 ruff_gate()
 {
     if ! command -v ruff > /dev/null 2>&1; then
-        echo "skipping ruff: install it to lint the Python locally" >&2
+        skip "ruff: installing it lints the Python under scripts/ and tests/"
         return 0
     fi
 
@@ -114,7 +173,7 @@ shell_syntax()
     if command -v shellcheck > /dev/null 2>&1; then
         (cd "$ROOT" && shellcheck scripts/*.sh) || status=1
     else
-        echo "skipping shellcheck: install it to enable the rest of this gate locally" >&2
+        skip "shellcheck: installing it checks what 21 shell scripts mean, not just that they parse"
     fi
 
     return "$status"
@@ -169,6 +228,12 @@ gate browser-check-env env BROWSER_CHECK_VALIDATE_ENV_ONLY=1 sh "$ROOT/scripts/b
 # running this, so a stale tests/golden/report-python.json would only have
 # surfaced the next time somebody ran the whole thing by hand.
 gate report-parity-fixtures env REPORT_PARITY_CHECK_VALIDATE_FIXTURES_ONLY=1 sh "$ROOT/scripts/report-parity-check.sh"
+
+[ -z "$skipped" ] || {
+    echo "" >&2
+    echo "not checked by this run:$skipped" >&2
+    echo "" >&2
+}
 
 [ -z "$failed" ] || {
     echo "failed gates:$failed" >&2

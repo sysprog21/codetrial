@@ -1681,16 +1681,32 @@ fn binary_web_reads_deployment_keys_from_the_config_file() {
     // Ends at the closing brace in column zero rather than at whatever item
     // happens to follow. Keying on the next `async fn` meant deleting the
     // function that used to sit there silently emptied this test's haystack.
-    let serve = source
-        .split_once("fn run_web(")
-        .expect("run_web should exist")
-        .1
-        .split_once("\n}\n")
-        .expect("run_web should end")
-        .0;
+    let body = |name: &str| {
+        source
+            .split_once(&format!("fn {name}("))
+            .unwrap_or_else(|| panic!("{name} should exist"))
+            .1
+            .split_once("\n}\n")
+            .unwrap_or_else(|| panic!("{name} should end"))
+            .0
+            .to_string()
+    };
 
-    assert!(serve.contains("trusted_proxy_hops(&values)"), "{serve}");
+    // Both halves of the startup path. The configuration is assembled in
+    // `web_server_config` and the socket is bound in `run_web`, and the
+    // property is about the pair: what this deployment runs on comes out of the
+    // config file the operator wrote, never out of the ambient environment.
+    // Splitting the function moved the first assertion's subject and would have
+    // left this reading an empty haystack had it kept naming only one of them.
+    let serve = body("run_web");
+    let configure = body("web_server_config");
+
+    assert!(
+        configure.contains("trusted_proxy_hops(values)"),
+        "{configure}"
+    );
     assert!(!serve.contains("std::env::var"), "{serve}");
+    assert!(!configure.contains("std::env::var"), "{configure}");
 }
 
 /// The log is the one place the error text sends a reader with no console, so
