@@ -277,6 +277,284 @@ pub(super) async fn evict_duplicate_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A RoomService that answers what the test tells it to and remembers what
+    /// it was asked.
+    ///
+    /// A real socket rather than an injected transport, because what these
+    /// functions do with a reply is bound up with how they make the request:
+    /// the Twirp path, the bearer token and the status handling are the parts
+    /// worth pinning, and none of them survives being stubbed out one layer up.
+    /// Replies are answered in order and the last one repeats, so a caller that
+    /// polls needs one entry rather than twenty.
+    struct RoomService {
+        url: String,
+        seen: Arc<Mutex<Vec<(String, String)>>>,
+    }
+
+    impl RoomService {
+        async fn start(replies: Vec<(u16, &'static str)>) -> Self {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let recorded = seen.clone();
+            tokio::spawn(async move {
+                let mut replies = replies.into_iter().peekable();
+                let mut last = (200, "{}");
+                loop {
+                    let Ok((mut socket, _)) = listener.accept().await else {
+                        return;
+                    };
+                    if replies.peek().is_some() {
+                        last = replies.next().unwrap();
+                    }
+
+                    // Headers to the blank line, then exactly the declared
+                    // body.
+                    let mut raw = Vec::new();
+                    let mut byte = [0u8; 1];
+                    while !raw.ends_with(b"\r\n\r\n") {
+                        match socket.read(&mut byte).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => raw.push(byte[0]),
+                        }
+                    }
+                    let head = String::from_utf8_lossy(&raw).to_string();
+                    let path = head
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or_default()
+                        .to_string();
+                    let length: usize = head
+                        .to_ascii_lowercase()
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .and_then(|value| value.trim().parse().ok())
+                        .unwrap_or(0);
+                    let mut body = vec![0u8; length];
+                    if length > 0 && socket.read_exact(&mut body).await.is_err() {
+                        return;
+                    }
+                    recorded
+                        .lock()
+                        .unwrap()
+                        .push((path, String::from_utf8_lossy(&body).to_string()));
+
+                    let (status, reply) = last;
+                    let response = format!(
+                        "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\n\
+                         content-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.flush().await;
+                }
+            });
+            Self { url, seen }
+        }
+
+        fn config(&self) -> AgentConfig {
+            crate::config::load_from_pairs([
+                ("LIVEKIT_URL", self.url.as_str()),
+                ("LIVEKIT_API_KEY", "devkey"),
+                ("LIVEKIT_API_SECRET", "devsecret"),
+                ("GOOGLE_API_KEY", "google"),
+            ])
+            .unwrap()
+        }
+
+        fn requests(&self) -> Vec<(String, String)> {
+            self.seen.lock().unwrap().clone()
+        }
+    }
+
+    /// The request this makes, and what it does with each kind of answer.
+    ///
+    /// The Twirp path is a contract with LiveKit that no test named: a wrong
+    /// method segment reaches a real server and 404s, which
+    /// `is_participant_gone` then has to be careful not to read as a departed
+    /// participant. The success path returned the parsed body and the failure
+    /// path had to keep the method, the status and the body, because that
+    /// string is the only thing the caller can tell them apart by.
+    #[tokio::test]
+    async fn a_room_service_call_names_its_method_and_carries_the_answer() {
+        let service =
+            RoomService::start(vec![(200, r#"{"participants":[{"identity":"a"}]}"#)]).await;
+        let config = service.config();
+
+        let participants = list_room_participants(&config, "interview-abc12345", 1_700_000_000)
+            .await
+            .unwrap();
+        assert_eq!(participants["participants"][0]["identity"], "a");
+
+        let (path, body) = service.requests().into_iter().next().unwrap();
+        assert_eq!(path, "/twirp/livekit.RoomService/ListParticipants");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap()["room"],
+            "interview-abc12345"
+        );
+
+        // A refusal is an error, and the message carries all three parts the
+        // caller reads it for.
+        let refusing = RoomService::start(vec![(503, r#"{"msg":"busy"}"#)]).await;
+        let error = list_room_participants(&refusing.config(), "interview-abc12345", 1_700_000_000)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("ListParticipants"), "{error}");
+        assert!(error.contains("503"), "{error}");
+        assert!(error.contains("busy"), "{error}");
+    }
+
+    /// The Setup form's credential check, and the sentence it hands back.
+    ///
+    /// This is what a reader acts on: the form shows LiveKit's own account of
+    /// the refusal, because a status alone says "did not work" to somebody who
+    /// already knows that. It is bounded because a wrong host answers with an
+    /// HTML page and the form is one line, and the boundary is the part worth
+    /// pinning: an off-by-one there either truncates a reason that fit or lets
+    /// a whole page through.
+    #[tokio::test]
+    async fn a_credential_check_reports_what_livekit_said() {
+        let accepted = RoomService::start(vec![(200, "{}")]).await;
+        validate_livekit_credentials(&accepted.url, "devkey", "devsecret", 1_700_000_000)
+            .await
+            .expect("a project that answers ListRooms has usable credentials");
+        let (path, _) = accepted.requests().into_iter().next().unwrap();
+        assert_eq!(path, "/twirp/livekit.RoomService/ListRooms");
+
+        let refused = RoomService::start(vec![(401, r#"{"msg":"invalid api key"}"#)]).await;
+        let error = validate_livekit_credentials(&refused.url, "devkey", "wrong", 1_700_000_000)
+            .await
+            .unwrap_err();
+        assert!(error.contains("401"), "{error}");
+        assert!(error.contains("invalid api key"), "{error}");
+        assert!(
+            !error.ends_with("..."),
+            "a reason that fits is not truncated"
+        );
+    }
+
+    /// A wrong host answers with a page, and the form takes one line of it.
+    #[tokio::test]
+    async fn a_credential_check_bounds_the_reason_it_repeats() {
+        // Longer than the limit by one, which is the only length that tells the
+        // boundary apart from its neighbours.
+        const OVER: &str = concat!(
+            "0123456789012345678901234567890123456789012345678901234567890123456789",
+            "0123456789012345678901234567890123456789012345678901234567890123456789",
+            "0123456789012345678901234567890123456789012345678901234567890123456789",
+        );
+        assert_eq!(OVER.len(), 210);
+
+        let wordy = RoomService::start(vec![(500, OVER)]).await;
+        let error = validate_livekit_credentials(&wordy.url, "devkey", "devsecret", 1_700_000_000)
+            .await
+            .unwrap_err();
+        assert!(
+            error.ends_with("..."),
+            "an over-long reason is cut and marked"
+        );
+        assert!(
+            error.contains(&OVER[..200]) && !error.contains(&OVER[..201]),
+            "exactly the limit is repeated: {error}"
+        );
+
+        // Exactly the limit, which is the length that tells `>` from `>=`: a
+        // reason that fits to the last character is whole, not cut.
+        let exact = &OVER[..200];
+        let fitting = RoomService::start(vec![(500, exact)]).await;
+        let error =
+            validate_livekit_credentials(&fitting.url, "devkey", "devsecret", 1_700_000_000)
+                .await
+                .unwrap_err();
+        assert!(
+            error.ends_with(exact),
+            "a reason of exactly the limit is not marked as cut: {error}"
+        );
+    }
+
+    /// A removal that finds nobody is done, and every other refusal is not.
+    ///
+    /// The predicate is unit tested above; this is the path that consults it,
+    /// which is where losing the race with a departing agent used to end the
+    /// interview.
+    #[tokio::test]
+    async fn a_removal_consults_the_predicate_before_giving_up() {
+        let gone = RoomService::start(vec![(
+            404,
+            r#"{"code":"not_found","msg":"participant does not exist"}"#,
+        )])
+        .await;
+        remove_room_participant(
+            &gone.config(),
+            "interview-abc12345",
+            "agent-old",
+            1_700_000_000,
+        )
+        .await
+        .expect("a participant that already left is not a failure");
+        let (path, _) = gone.requests().into_iter().next().unwrap();
+        assert_eq!(path, "/twirp/livekit.RoomService/RemoveParticipant");
+
+        let refused = RoomService::start(vec![(401, r#"{"code":"unauthenticated"}"#)]).await;
+        remove_room_participant(
+            &refused.config(),
+            "interview-abc12345",
+            "agent-old",
+            1_700_000_000,
+        )
+        .await
+        .expect_err("a refusal that is not a departed participant stays fatal");
+    }
+
+    /// Isolation lists, removes what it finds, and stops.
+    ///
+    /// The loop is the part worth pinning: it re-lists after removing, so the
+    /// last pass is the one that confirms the room is clear, and it gives up
+    /// loudly rather than spinning forever. Nothing asserted that it removed
+    /// anything at all.
+    #[tokio::test]
+    async fn isolation_removes_a_duplicate_and_confirms_the_room_is_clear() {
+        // Crowded once, then empty, which is the ordinary case: list, remove,
+        // list again and find nothing.
+        let service = RoomService::start(vec![
+            (
+                200,
+                r#"{"participants":[{"identity":"agent-old","kind":"AGENT"},{"identity":"agent-me","kind":"AGENT"}]}"#,
+            ),
+            (200, r#"{}"#),
+            (200, r#"{"participants":[]}"#),
+        ])
+        .await;
+
+        isolate_local_agent(
+            &service.config(),
+            "interview-abc12345",
+            "agent-me",
+            1_700_000_000,
+        )
+        .await
+        .unwrap();
+
+        let methods: Vec<String> = service
+            .requests()
+            .into_iter()
+            .map(|(path, _)| path.rsplit('/').next().unwrap_or_default().to_string())
+            .collect();
+        assert_eq!(
+            methods,
+            vec![
+                "ListParticipants".to_string(),
+                "RemoveParticipant".to_string(),
+                "ListParticipants".to_string(),
+            ],
+            "it lists, removes what it found, and lists again to confirm"
+        );
+    }
 
     /// Losing the race with a duplicate agent that left on its own must not end
     /// the interview. This shipped as a fatal error: the agent greeted the
