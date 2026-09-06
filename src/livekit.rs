@@ -1582,14 +1582,8 @@ mod tests {
     // this topic is built in `report.rs`, and what is left here asserts which
     // topics the loop refuses from a browser.
     use crate::runtime::TOPIC_REPORT;
-    use ::livekit::webrtc::audio_frame::AudioFrame;
-    use ::livekit::webrtc::audio_source::AudioSourceOptions;
-    use ::livekit::webrtc::audio_source::native::NativeAudioSource;
-    use tokio::sync::mpsc;
-    use tokio_util::sync::CancellationToken;
 
     use crate::config::load_from_pairs;
-    use ::livekit::webrtc::video_frame::{I420Buffer, VideoBuffer, VideoFrame, VideoRotation};
 
     /// The interview starts from the plan its token was minted for.
     ///
@@ -2180,21 +2174,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn pcm16_bytes_serializes_little_endian_samples() {
-        let frame = AudioFrame {
-            data: [1_i16, -2_i16, 0x1234_i16].as_slice().into(),
-            sample_rate: GEMINI_AUDIO_SAMPLE_RATE as u32,
-            num_channels: GEMINI_AUDIO_CHANNELS as u32,
-            samples_per_channel: 3,
-        };
-
-        let mut bytes = Vec::new();
-        append_pcm16_bytes(&frame, &mut bytes);
-
-        assert_eq!(bytes, vec![1, 0, 254, 255, 0x34, 0x12]);
-    }
-
     /// The closing message is the one turn barge-in must not touch. Cutting it
     /// leaves the candidate without the ending, and `wrap_up_settled` reads the
     /// emptied queue as the turn being over, so the interview ended there.
@@ -2404,235 +2383,94 @@ mod tests {
         }
     }
 
+    /// The ceiling is a boundary, so both sides of it are named. One attempt
+    /// short
+    /// of the limit still restarts; the limit itself does not, and neither does
+    /// the
+    /// count past it that a wrong comparison would let through.
+    ///
+    /// Every case here uses a socket that died young, because a socket that
+    /// lived
+    /// clears the counter and there would be no ceiling left to test.
     #[test]
-    fn output_audio_interrupt_clears_partial_pcm_frame_and_cancels_old_queue() {
-        let (mut output_audio, _) = test_output_audio(vec![1, 2, 3]);
-        let old_cancellation = output_audio.output_cancellation.clone();
-        output_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
+    fn the_restart_ceiling_admits_the_last_attempt_and_refuses_the_one_after() {
+        let young = Duration::from_secs(1);
 
-        output_audio.interrupt();
-
-        assert!(output_audio.pending_bytes.is_empty());
-        assert!(old_cancellation.is_cancelled());
-        assert!(!output_audio.output_cancellation.is_cancelled());
-        assert!(!output_audio.is_playing());
-    }
-
-    fn test_output_audio(
-        pending_bytes: Vec<u8>,
-    ) -> (OutputAudio, mpsc::Receiver<QueuedOutputFrame>) {
-        let (frames, queued_frames) = mpsc::channel(4);
-        (
-            OutputAudio {
-                source: NativeAudioSource::new(
-                    AudioSourceOptions::default(),
-                    GEMINI_OUTPUT_AUDIO_SAMPLE_RATE,
-                    LIVEKIT_OUTPUT_CHANNELS,
-                    LIVEKIT_OUTPUT_QUEUE_MS,
-                ),
-                sample_rate: GEMINI_OUTPUT_AUDIO_SAMPLE_RATE,
-                pending_bytes,
-                playout_deadline: Instant::now(),
-                frames,
-                output_cancellation: CancellationToken::new(),
-            },
-            queued_frames,
-        )
-    }
-
-    #[tokio::test]
-    async fn output_audio_capture_queues_frames_with_current_cancellation_token() {
-        let (mut output_audio, mut queued_frames) = test_output_audio(Vec::new());
-        let start_deadline = output_audio.playout_deadline;
-        let bytes = vec![0_u8; 240 * 2];
-
+        let mut last = GEMINI_RESTART_LIMIT - 1;
         assert!(
-            output_audio
-                .capture(&bytes, "audio/pcm;rate=24000")
-                .await
-                .unwrap()
+            take_restart_attempt(&mut last, young),
+            "the attempt below the ceiling is the one a flaky endpoint gets"
         );
+        assert_eq!(last, GEMINI_RESTART_LIMIT);
 
-        let frame = queued_frames.try_recv().unwrap();
-        assert!(!frame.output_cancellation.is_cancelled());
-        assert_eq!(frame.samples.len(), 240);
+        let mut at_limit = GEMINI_RESTART_LIMIT;
+        assert!(!take_restart_attempt(&mut at_limit, young));
+        assert_eq!(
+            at_limit, GEMINI_RESTART_LIMIT,
+            "a refused attempt is not a spent one"
+        );
+    }
 
-        // By how much, not merely that it moved. The deadline is what paces
-        // playout, and ten milliseconds of audio buys ten milliseconds of it:
-        // arithmetic that divides where it should multiply still moves this
-        // forward, only by minutes or by nothing.
-        let advance = output_audio.playout_deadline - start_deadline;
-        assert!(
-            advance >= Duration::from_millis(10),
-            "240 samples at 24 kHz is ten milliseconds of playout, got {advance:?}"
+    /// The bug this exists for: Gemini's own connection cap closes a healthy
+    /// socket
+    /// every ten minutes or so, and counting those against the ceiling turned a
+    /// budget for a failing endpoint into a limit on how long an interview
+    /// could
+    /// run. A socket that carried a working conversation costs nothing.
+    #[test]
+    fn a_socket_that_lived_clears_what_earlier_failures_spent() {
+        let mut restarts = GEMINI_RESTART_LIMIT;
+
+        assert!(take_restart_attempt(&mut restarts, HEALTHY_GEMINI_SOCKET));
+
+        assert_eq!(
+            restarts, 1,
+            "the healthy socket resets the run, and this attempt is the first of the next one"
         );
-        assert!(
-            advance < Duration::from_millis(500),
-            "ten milliseconds of audio must not reserve more, got {advance:?}"
-        );
-        output_audio.interrupt();
-        assert!(frame.output_cancellation.is_cancelled());
-        assert!(queued_frames.try_recv().is_err());
+    }
+
+    /// The boundary of that reset, from the other side. One second short of
+    /// healthy
+    /// is still a failing socket, and it must not refill the budget.
+    #[test]
+    fn a_socket_that_died_just_short_of_healthy_still_spends() {
+        let mut restarts = 3;
+
+        assert!(take_restart_attempt(
+            &mut restarts,
+            HEALTHY_GEMINI_SOCKET - Duration::from_secs(1)
+        ));
+
+        assert_eq!(restarts, 4);
+    }
+
+    /// Exactly one attempt per restart. Started away from zero on purpose: at
+    /// zero
+    /// a counter that multiplied instead of adding would look identical to one
+    /// that
+    /// added.
+    #[test]
+    fn each_restart_spends_one_attempt() {
+        let young = Duration::from_secs(1);
+        let mut restarts = 3;
+
+        assert!(take_restart_attempt(&mut restarts, young));
+        assert_eq!(restarts, 4);
+
+        assert!(take_restart_attempt(&mut restarts, young));
+        assert_eq!(restarts, 5);
     }
 
     #[test]
-    fn take_pcm16_frames_decodes_full_ten_ms_frames_and_keeps_remainder() {
-        let frame_bytes = 240 * 2;
-        let mut bytes = vec![0_u8; frame_bytes + 2];
-        bytes[0] = 1;
-        bytes[1] = 0;
-        bytes[frame_bytes] = 9;
-        let mut pending = Vec::new();
-
-        let frames = take_pcm16_frames(&bytes, 24_000, 1, &mut pending);
-
-        assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0].len(), 240);
-        assert_eq!(frames[0][0], 1);
-        assert_eq!(pending, vec![9, 0]);
+    fn observer_is_not_the_candidate() {
+        assert!(candidate_identity_matches(
+            "candidate-a1b2c3",
+            r#"{"candidateIdentity":"candidate-a1b2c3"}"#,
+        ));
+        assert!(!candidate_identity_matches("observer-a1b2c3", "{}"));
+        assert!(!candidate_identity_matches(
+            "candidate-a1b2c3",
+            r#"{"candidateIdentity":"candidate-other"}"#,
+        ));
     }
-
-    #[test]
-    fn encode_video_frame_jpeg_outputs_jpeg_bytes() {
-        let buffer: Box<dyn VideoBuffer> = Box::new(I420Buffer::new_black(16, 16));
-        let frame = VideoFrame {
-            rotation: VideoRotation::VideoRotation0,
-            timestamp_us: 0,
-            frame_metadata: None,
-            buffer,
-        };
-
-        let (rgba, width, height) = frame_to_rgba(&frame).unwrap();
-        let bytes = encode_rgba_jpeg(&rgba, width, height, GEMINI_VIDEO_JPEG_QUALITY).unwrap();
-
-        assert!(bytes.starts_with(&[0xff, 0xd8]));
-        assert!(bytes.ends_with(&[0xff, 0xd9]));
-    }
-
-    /// A black frame cannot catch a permuted channel, because every channel
-    /// holds the same value. This one is solid red in BT.601 limited range, so
-    /// the four libyuv layouts land on four different byte patterns.
-    #[test]
-    fn channel_order_survives_the_libyuv_naming_trap() {
-        let mut buffer = I420Buffer::new(16, 16);
-        let (luma, blue, red) = buffer.data_mut();
-        luma.fill(81);
-        blue.fill(90);
-        red.fill(240);
-        let frame = VideoFrame {
-            rotation: VideoRotation::VideoRotation0,
-            timestamp_us: 0,
-            frame_metadata: None,
-            buffer: Box::new(buffer) as Box<dyn VideoBuffer>,
-        };
-
-        let (rgba, width, height) = frame_to_rgba(&frame).unwrap();
-
-        assert_eq!((width, height), (16, 16));
-
-        // Checked on the first pixel and on the last. The first is right
-        // whatever the row stride is, because row zero starts at offset zero,
-        // so a stride computed any other way still paints it correctly and
-        // leaves the bottom of the image as the zeroes it was allocated with.
-        for (where_, pixel) in [("first", &rgba[..4]), ("last", &rgba[rgba.len() - 4..])] {
-            assert!(
-                pixel[0] > 200,
-                "red belongs in byte 0 of the {where_}, got {pixel:?}"
-            );
-            assert!(
-                pixel[1] < 60,
-                "green belongs in byte 1 of the {where_}, got {pixel:?}"
-            );
-            assert!(
-                pixel[2] < 60,
-                "blue belongs in byte 2 of the {where_}, got {pixel:?}"
-            );
-            assert_eq!(
-                pixel[3], 255,
-                "alpha belongs in byte 3 of the {where_}, got {pixel:?}"
-            );
-        }
-    }
-}
-/// The ceiling is a boundary, so both sides of it are named. One attempt short
-/// of the limit still restarts; the limit itself does not, and neither does the
-/// count past it that a wrong comparison would let through.
-///
-/// Every case here uses a socket that died young, because a socket that lived
-/// clears the counter and there would be no ceiling left to test.
-#[test]
-fn the_restart_ceiling_admits_the_last_attempt_and_refuses_the_one_after() {
-    let young = Duration::from_secs(1);
-
-    let mut last = GEMINI_RESTART_LIMIT - 1;
-    assert!(
-        take_restart_attempt(&mut last, young),
-        "the attempt below the ceiling is the one a flaky endpoint gets"
-    );
-    assert_eq!(last, GEMINI_RESTART_LIMIT);
-
-    let mut at_limit = GEMINI_RESTART_LIMIT;
-    assert!(!take_restart_attempt(&mut at_limit, young));
-    assert_eq!(
-        at_limit, GEMINI_RESTART_LIMIT,
-        "a refused attempt is not a spent one"
-    );
-}
-
-/// The bug this exists for: Gemini's own connection cap closes a healthy socket
-/// every ten minutes or so, and counting those against the ceiling turned a
-/// budget for a failing endpoint into a limit on how long an interview could
-/// run. A socket that carried a working conversation costs nothing.
-#[test]
-fn a_socket_that_lived_clears_what_earlier_failures_spent() {
-    let mut restarts = GEMINI_RESTART_LIMIT;
-
-    assert!(take_restart_attempt(&mut restarts, HEALTHY_GEMINI_SOCKET));
-
-    assert_eq!(
-        restarts, 1,
-        "the healthy socket resets the run, and this attempt is the first of the next one"
-    );
-}
-
-/// The boundary of that reset, from the other side. One second short of healthy
-/// is still a failing socket, and it must not refill the budget.
-#[test]
-fn a_socket_that_died_just_short_of_healthy_still_spends() {
-    let mut restarts = 3;
-
-    assert!(take_restart_attempt(
-        &mut restarts,
-        HEALTHY_GEMINI_SOCKET - Duration::from_secs(1)
-    ));
-
-    assert_eq!(restarts, 4);
-}
-
-/// Exactly one attempt per restart. Started away from zero on purpose: at zero
-/// a counter that multiplied instead of adding would look identical to one that
-/// added.
-#[test]
-fn each_restart_spends_one_attempt() {
-    let young = Duration::from_secs(1);
-    let mut restarts = 3;
-
-    assert!(take_restart_attempt(&mut restarts, young));
-    assert_eq!(restarts, 4);
-
-    assert!(take_restart_attempt(&mut restarts, young));
-    assert_eq!(restarts, 5);
-}
-
-#[test]
-fn observer_is_not_the_candidate() {
-    assert!(candidate_identity_matches(
-        "candidate-a1b2c3",
-        r#"{"candidateIdentity":"candidate-a1b2c3"}"#,
-    ));
-    assert!(!candidate_identity_matches("observer-a1b2c3", "{}"));
-    assert!(!candidate_identity_matches(
-        "candidate-a1b2c3",
-        r#"{"candidateIdentity":"candidate-other"}"#,
-    ));
 }

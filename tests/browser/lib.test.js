@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { read } from "./source.js";
+import { livekitSource, read } from "./source.js";
 
 import {
   ACTIVE_CONTRACT,
@@ -1390,7 +1390,7 @@ test("windows are computed from the two states the server actually publishes", (
   // in this file fed it. This is the cross-language pin `INTEGRITY_DETAIL_MAX`
   // already uses in the other direction, and it fails the day a third state is
   // declared without `responseWindows` being taught what it means.
-  const livekit = read("src/livekit.rs");
+  const livekit = livekitSource();
   // Anchored loosely enough to catch a third state however it is declared: a
   // pattern that only matched the exact current spelling would fail open on a
   // `pub const`, which is the direction a pin must never fail.

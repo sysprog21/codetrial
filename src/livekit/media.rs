@@ -25,6 +25,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::gemini::GeminiLiveSession;
 
+#[cfg(test)]
+use super::GEMINI_OUTPUT_AUDIO_SAMPLE_RATE;
 use super::is_interview_participant;
 
 pub(super) const GEMINI_AUDIO_SAMPLE_RATE: i32 = 16_000;
@@ -591,10 +593,40 @@ pub(super) async fn encode_video_frame_jpeg_off_thread(
         .map_err(|error| format!("jpeg encode task did not finish: {error}"))?
 }
 
+/// An `OutputAudio` wired to a channel instead of a room.
+///
+/// At module scope rather than inside `mod tests` because both this
+/// file's tests and the room loop's in `livekit.rs` build one, and it
+/// used to live in `livekit.rs` where the fields it sets are private to
+/// here. A test module cannot export it to a sibling; this can.
+#[cfg(test)]
+pub(super) fn test_output_audio(
+    pending_bytes: Vec<u8>,
+) -> (OutputAudio, mpsc::Receiver<QueuedOutputFrame>) {
+    let (frames, queued_frames) = mpsc::channel(4);
+    (
+        OutputAudio {
+            source: NativeAudioSource::new(
+                AudioSourceOptions::default(),
+                GEMINI_OUTPUT_AUDIO_SAMPLE_RATE,
+                LIVEKIT_OUTPUT_CHANNELS,
+                LIVEKIT_OUTPUT_QUEUE_MS,
+            ),
+            sample_rate: GEMINI_OUTPUT_AUDIO_SAMPLE_RATE,
+            pending_bytes,
+            playout_deadline: Instant::now(),
+            frames,
+            output_cancellation: CancellationToken::new(),
+        },
+        queued_frames,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::load_from_pairs;
+    use ::livekit::webrtc::video_frame::{I420Buffer, VideoBuffer, VideoFrame, VideoRotation};
 
     /// A sink that records instead of dialling Gemini, and can be told to fail.
     #[derive(Default)]
@@ -959,5 +991,155 @@ mod tests {
     fn video_frame_throttle_matches_gemini_live_limit() {
         assert!(!should_send_video_frame(Duration::from_millis(999)));
         assert!(should_send_video_frame(Duration::from_secs(1)));
+    }
+
+    // Moved here from `livekit.rs`, where they tested these functions from the
+    // room loop's test module. `pcm16_bytes`, `OutputAudio`,
+    // `take_pcm16_frames` and the JPEG encoder all live in this file, so the
+    // tests that pin them were reaching across a module boundary to do it, and
+    // a reader of this file saw untested code that was in fact covered next
+    // door.
+
+    #[test]
+    fn pcm16_bytes_serializes_little_endian_samples() {
+        let frame = AudioFrame {
+            data: [1_i16, -2_i16, 0x1234_i16].as_slice().into(),
+            sample_rate: GEMINI_AUDIO_SAMPLE_RATE as u32,
+            num_channels: GEMINI_AUDIO_CHANNELS as u32,
+            samples_per_channel: 3,
+        };
+
+        let mut bytes = Vec::new();
+        append_pcm16_bytes(&frame, &mut bytes);
+
+        assert_eq!(bytes, vec![1, 0, 254, 255, 0x34, 0x12]);
+    }
+
+    #[test]
+    fn output_audio_interrupt_clears_partial_pcm_frame_and_cancels_old_queue() {
+        let (mut output_audio, _) = test_output_audio(vec![1, 2, 3]);
+        let old_cancellation = output_audio.output_cancellation.clone();
+        output_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
+
+        output_audio.interrupt();
+
+        assert!(output_audio.pending_bytes.is_empty());
+        assert!(old_cancellation.is_cancelled());
+        assert!(!output_audio.output_cancellation.is_cancelled());
+        assert!(!output_audio.is_playing());
+    }
+
+    #[tokio::test]
+    async fn output_audio_capture_queues_frames_with_current_cancellation_token() {
+        let (mut output_audio, mut queued_frames) = test_output_audio(Vec::new());
+        let start_deadline = output_audio.playout_deadline;
+        let bytes = vec![0_u8; 240 * 2];
+
+        assert!(
+            output_audio
+                .capture(&bytes, "audio/pcm;rate=24000")
+                .await
+                .unwrap()
+        );
+
+        let frame = queued_frames.try_recv().unwrap();
+        assert!(!frame.output_cancellation.is_cancelled());
+        assert_eq!(frame.samples.len(), 240);
+
+        // By how much, not merely that it moved. The deadline is what paces
+        // playout, and ten milliseconds of audio buys ten milliseconds of it:
+        // arithmetic that divides where it should multiply still moves this
+        // forward, only by minutes or by nothing.
+        let advance = output_audio.playout_deadline - start_deadline;
+        assert!(
+            advance >= Duration::from_millis(10),
+            "240 samples at 24 kHz is ten milliseconds of playout, got {advance:?}"
+        );
+        assert!(
+            advance < Duration::from_millis(500),
+            "ten milliseconds of audio must not reserve more, got {advance:?}"
+        );
+        output_audio.interrupt();
+        assert!(frame.output_cancellation.is_cancelled());
+        assert!(queued_frames.try_recv().is_err());
+    }
+
+    #[test]
+    fn take_pcm16_frames_decodes_full_ten_ms_frames_and_keeps_remainder() {
+        let frame_bytes = 240 * 2;
+        let mut bytes = vec![0_u8; frame_bytes + 2];
+        bytes[0] = 1;
+        bytes[1] = 0;
+        bytes[frame_bytes] = 9;
+        let mut pending = Vec::new();
+
+        let frames = take_pcm16_frames(&bytes, 24_000, 1, &mut pending);
+
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].len(), 240);
+        assert_eq!(frames[0][0], 1);
+        assert_eq!(pending, vec![9, 0]);
+    }
+
+    #[test]
+    fn encode_video_frame_jpeg_outputs_jpeg_bytes() {
+        let buffer: Box<dyn VideoBuffer> = Box::new(I420Buffer::new_black(16, 16));
+        let frame = VideoFrame {
+            rotation: VideoRotation::VideoRotation0,
+            timestamp_us: 0,
+            frame_metadata: None,
+            buffer,
+        };
+
+        let (rgba, width, height) = frame_to_rgba(&frame).unwrap();
+        let bytes = encode_rgba_jpeg(&rgba, width, height, GEMINI_VIDEO_JPEG_QUALITY).unwrap();
+
+        assert!(bytes.starts_with(&[0xff, 0xd8]));
+        assert!(bytes.ends_with(&[0xff, 0xd9]));
+    }
+
+    /// A black frame cannot catch a permuted channel, because every channel
+    /// holds the same value. This one is solid red in BT.601 limited range, so
+    /// the four libyuv layouts land on four different byte patterns.
+    #[test]
+    fn channel_order_survives_the_libyuv_naming_trap() {
+        let mut buffer = I420Buffer::new(16, 16);
+        let (luma, blue, red) = buffer.data_mut();
+        luma.fill(81);
+        blue.fill(90);
+        red.fill(240);
+        let frame = VideoFrame {
+            rotation: VideoRotation::VideoRotation0,
+            timestamp_us: 0,
+            frame_metadata: None,
+            buffer: Box::new(buffer) as Box<dyn VideoBuffer>,
+        };
+
+        let (rgba, width, height) = frame_to_rgba(&frame).unwrap();
+
+        assert_eq!((width, height), (16, 16));
+
+        // Checked on the first pixel and on the last. The first is right
+        // whatever the row stride is, because row zero starts at offset zero,
+        // so a stride computed any other way still paints it correctly and
+        // leaves the bottom of the image as the zeroes it was allocated with.
+        for (where_, pixel) in [("first", &rgba[..4]), ("last", &rgba[rgba.len() - 4..])] {
+            assert!(
+                pixel[0] > 200,
+                "red belongs in byte 0 of the {where_}, got {pixel:?}"
+            );
+            assert!(
+                pixel[1] < 60,
+                "green belongs in byte 1 of the {where_}, got {pixel:?}"
+            );
+            assert!(
+                pixel[2] < 60,
+                "blue belongs in byte 2 of the {where_}, got {pixel:?}"
+            );
+            assert_eq!(
+                pixel[3], 255,
+                "alpha belongs in byte 3 of the {where_}, got {pixel:?}"
+            );
+        }
     }
 }
