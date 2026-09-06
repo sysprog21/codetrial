@@ -44,6 +44,7 @@ let holdReports = null;
 /// while a start is mid-flight holds that request open rather than guessing a
 /// latency long enough to win the race.
 let holdLogin = null;
+let deleteRequests = 0;
 
 const type = (file) =>
   file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : "text/html";
@@ -63,12 +64,21 @@ before(async () => {
       response.end(JSON.stringify(body));
     };
 
+    if (request.method === "DELETE" && url.pathname === "/api/reports") {
+      deleteRequests += 1;
+    }
+
     if (failing.has(url.pathname)) {
       response.statusCode = 500;
       return response.end("nope");
     }
     if (url.pathname === "/api/session") return json(session);
     if (url.pathname === "/api/reports") {
+      if (request.method === "DELETE") {
+        const deleted = reports.length;
+        reports = [];
+        return json({ deleted });
+      }
       return holdReports ? holdReports.then(() => json({ reports })) : json({ reports });
     }
     if (url.pathname === "/api/login") {
@@ -106,6 +116,7 @@ beforeEach(() => {
   failing = new Set();
   holdReports = null;
   holdLogin = null;
+  deleteRequests = 0;
 });
 
 /// Hold `/api/reports` open and hand back the release. Everything between the
@@ -183,6 +194,14 @@ const markupDuration = () =>
 
 const hired = (problemId) => ({ problemId, payload: { report: { decision: "HIRE" } } });
 const missed = (problemId) => ({ problemId, payload: { report: { decision: "NO_HIRE" } } });
+const savedAttempt = (problemId) => ({
+  problemId,
+  payload: {
+    problemId,
+    date: "2026-01-01T00:00:00Z",
+    report: { decision: "HIRE" },
+  },
+});
 
 /// Ids from the real bank, so these break if the bank stops carrying them
 /// rather than testing against problems that do not exist.
@@ -621,7 +640,7 @@ lobbyTest("widening the filter keeps a problem the candidate picked by hand", as
 });
 
 lobbyTest("a restore in flight is not a history a difficulty change may read", async (page) => {
-  reports = [hired(MEDIUM[0])];
+  reports = [savedAttempt(MEDIUM[0])];
   await lobby(page);
 
   // Restored from cache, so the reports in hand are the ones from before the
@@ -636,6 +655,7 @@ lobbyTest("a restore in flight is not a history a difficulty change may read", a
   const midflight = await snapshot(page);
   assert.equal(midflight.card, null, "a problem was chosen from the history being replaced");
   assert.equal(midflight.startDisabled, true, "start went live on a history already known stale");
+  assert.equal(await page.locator("#delete-reports").isDisabled(), true);
 
   release();
   await awaitReady(page);
@@ -828,6 +848,173 @@ lobbyTest("a server that can record every length on offer disables nothing", asy
   assert.deepEqual(state.durationsOff, []);
   assert.equal(state.durationNote, "", "a lobby with nothing capped explained a cap anyway");
   assert.equal(state.duration, markupDuration());
+});
+
+lobbyTest("saved reports require confirmation and clear the progress panel", async (page) => {
+  reports = [savedAttempt(EASY[0]), savedAttempt(EASY[1])];
+  await lobby(page);
+  assert.match(await page.locator("#recommendation").textContent(), /passed your last two Easy problems/);
+
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await page.click("#delete-reports");
+  assert.equal(deleteRequests, 0);
+  assert.equal(await page.locator("#history").isHidden(), false);
+
+  page.once("dialog", (dialog) => {
+    assert.match(dialog.message(), /reports and progress/);
+    assert.match(dialog.message(), /Recording files follow their separate retention policy/);
+    return dialog.accept();
+  });
+  await page.click("#delete-reports");
+  await settles(page, () => document.querySelector("#history").hidden);
+  assert.equal(deleteRequests, 1);
+  assert.deepEqual(reports, []);
+  assert.equal(await page.locator("#history").isHidden(), true);
+  assert.equal(await page.locator("#delete-reports").isHidden(), true);
+  assert.doesNotMatch(await page.locator("#recommendation").textContent(), /passed your last two/);
+  assert.equal(await page.locator("#report-delete-status").textContent(), "Saved reports and progress were deleted.");
+  assert.equal(await page.evaluate(() => document.activeElement.id), "report-delete-status");
+});
+
+lobbyTest("a failed report deletion retains the current progress", async (page) => {
+  reports = [savedAttempt(EASY[0])];
+  await lobby(page);
+  failing.add("/api/reports");
+  page.once("dialog", (dialog) => dialog.accept());
+
+  await page.click("#delete-reports");
+  await settles(page, () => document.querySelector("#report-delete-status").textContent !== "");
+
+  assert.equal(deleteRequests, 1);
+  assert.equal(await page.locator("#history").isHidden(), false);
+  assert.match(await page.locator("#progress-summary").textContent(), /1 of 1 attempts shown/);
+  assert.equal(
+    await page.locator("#report-delete-status").textContent(),
+    "Could not delete saved reports. Your reports may not have been removed.",
+  );
+});
+
+lobbyTest("a signed-in account can erase reports saved only on this device", async (page) => {
+  await page.addInitScript((entry) => {
+    localStorage.setItem("codetrial_history", JSON.stringify([entry]));
+  }, {
+    problemId: EASY[0],
+    date: "2026-01-03T00:00:00Z",
+    report: { decision: "HIRE" },
+  });
+  await lobby(page);
+  assert.equal(await page.locator("#history").isHidden(), true);
+  assert.equal(await page.locator("#delete-reports").isVisible(), true);
+  page.once("dialog", (dialog) => dialog.accept());
+
+  await page.click("#delete-reports");
+  await settles(page, () => document.querySelector("#report-delete-status").textContent !== "");
+
+  assert.equal(await page.evaluate(() => localStorage.getItem("codetrial_history")), null);
+  assert.equal(await page.locator("#delete-reports").isHidden(), true);
+});
+
+lobbyTest("an unavailable account check retains visible local reports", async (page) => {
+  await page.addInitScript((entry) => {
+    localStorage.setItem("codetrial_history", JSON.stringify([entry]));
+  }, {
+    problemId: EASY[0],
+    date: "2026-01-04T00:00:00Z",
+    report: { decision: "HIRE" },
+  });
+  failing.add("/api/session");
+  await lobby(page);
+  page.once("dialog", (dialog) => dialog.accept());
+
+  await page.click("#delete-reports");
+  await settles(page, () => document.querySelector("#report-delete-status").textContent !== "");
+
+  assert.notEqual(await page.evaluate(() => localStorage.getItem("codetrial_history")), null);
+  assert.equal(
+    await page.locator("#report-delete-status").textContent(),
+    "Could not delete saved reports. Your reports may not have been removed.",
+  );
+});
+
+lobbyTest("a partial clear stays visible when local storage cannot be read", async (page) => {
+  reports = [savedAttempt(EASY[0])];
+  await page.addInitScript(() => {
+    const getItem = Storage.prototype.getItem;
+    const removeItem = Storage.prototype.removeItem;
+    Storage.prototype.getItem = function readHistory(key) {
+      if (key === "codetrial_history") throw new Error("blocked");
+      return getItem.call(this, key);
+    };
+    Storage.prototype.removeItem = function removeHistory(key) {
+      if (key === "codetrial_history") throw new Error("blocked");
+      return removeItem.call(this, key);
+    };
+  });
+  await lobby(page);
+  page.once("dialog", (dialog) => dialog.accept());
+
+  await page.click("#delete-reports");
+  await settles(page, () => document.querySelector("#report-delete-status").textContent !== "");
+
+  assert.equal(await page.locator("#history").isHidden(), true);
+  assert.equal(await page.locator("#report-delete-status").isVisible(), true);
+  assert.equal(
+    await page.locator("#report-delete-status").textContent(),
+    "Account reports were deleted, but reports saved on this device could not be deleted.",
+  );
+});
+
+lobbyTest("blocked local storage does not prevent account deletion", async (page) => {
+  reports = [savedAttempt(EASY[0])];
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      get() { throw new DOMException("blocked", "SecurityError"); },
+    });
+  });
+  await lobby(page);
+  page.once("dialog", (dialog) => dialog.accept());
+
+  await page.click("#delete-reports");
+  await settles(page, () => document.querySelector("#report-delete-status").textContent !== "");
+
+  assert.equal(deleteRequests, 1);
+  assert.deepEqual(reports, []);
+  assert.equal(
+    await page.locator("#report-delete-status").textContent(),
+    "Account reports were deleted, but reports saved on this device could not be deleted.",
+  );
+  assert.equal(await page.evaluate(() => document.activeElement.id), "report-delete-status");
+});
+
+lobbyTest("a partial clear reloads local reports and states what remains", async (page) => {
+  reports = [savedAttempt(EASY[0])];
+  await page.addInitScript((entry) => {
+    localStorage.setItem("codetrial_history", JSON.stringify([entry]));
+    const removeItem = Storage.prototype.removeItem;
+    Storage.prototype.removeItem = function removeHistory(key) {
+      if (key === "codetrial_history") throw new Error("blocked");
+      return removeItem.call(this, key);
+    };
+  }, {
+    problemId: EASY[1],
+    date: "2026-01-02T00:00:00Z",
+    report: { decision: "HIRE" },
+  });
+  await lobby(page);
+  page.once("dialog", (dialog) => dialog.accept());
+
+  await page.click("#delete-reports");
+  await settles(page, () => document.querySelector("#report-delete-status").textContent !== "");
+
+  assert.equal(deleteRequests, 1);
+  assert.deepEqual(reports, []);
+  assert.match(await page.locator("#progress-summary").textContent(), /saved on this device/);
+  assert.equal(
+    await page.locator("#report-delete-status").textContent(),
+    "Account reports were deleted, but reports saved on this device could not be deleted.",
+  );
+  assert.equal(await page.evaluate(() => document.activeElement.id), "report-delete-status");
 });
 
 lobbyTest("a cap under every length on offer leaves the row alone", async (page) => {

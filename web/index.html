@@ -699,8 +699,11 @@
         <button id="start" class="start-button" type="button" disabled>Start interview</button>
       </section>
 
-      <section id="history" class="history" aria-labelledby="progress-title" hidden>
+      <div id="history-header" class="history-header" hidden>
         <h2 id="progress-title">Interview progress</h2>
+        <button id="delete-reports" class="pill-button danger" type="button" disabled>Delete saved reports</button>
+      </div>
+      <section id="history" class="history" aria-labelledby="progress-title" hidden>
         <fieldset class="progress-filters">
           <legend>Filter attempts</legend>
           <label>Difficulty <select id="progress-difficulty"><option value="all">All</option></select></label>
@@ -714,6 +717,7 @@
           <ol id="progress-weaknesses"></ol>
         </section>
       </section>
+      <p id="report-delete-status" class="small" tabindex="-1"></p>
 
       <!-- The interviewer model's own metadata sets "creditNotation":
            "required", so naming its author is a license term rather than a

@@ -1,5 +1,5 @@
 import { FRAMEWORKS, codingLoop } from "./lib.js";
-import { readLocalHistory } from "./history.js";
+import { clearReportHistory, readLocalHistory } from "./history.js";
 import { pickProblem, suggestDifficulty } from "./problem-picker.js";
 import { buildProgressModel, unwrapEntry } from "./progress.js";
 import { parseGroundingFile, selectedGroundingPacket, storeGroundingPacket } from "./document-grounding.js";
@@ -36,7 +36,10 @@ const nodes = {
   githubLogin: document.querySelector("#github-login"),
   loginLink: document.querySelector("#login-link"),
   logout: document.querySelector("#logout"),
+  historyHeader: document.querySelector("#history-header"),
   history: document.querySelector("#history"),
+  deleteReports: document.querySelector("#delete-reports"),
+  reportDeleteStatus: document.querySelector("#report-delete-status"),
   recommendation: document.querySelector("#recommendation"),
   progressSummary: document.querySelector("#progress-summary"),
   progressTrends: document.querySelector("#progress-trends"),
@@ -118,10 +121,15 @@ nodes.groundingClear.addEventListener("click", clearGrounding);
 
 let progressEntries = [];
 let progressSuffix = "saved";
+/// Whether the history on screen came from an account: null until /api/session
+/// answers, and never assumed false, because a browser that cannot ask is not a
+/// browser that knows there is nothing on the server.
+let accountHistory = null;
 
 for (const filter of [nodes.progressDifficulty, nodes.progressLanguage, nodes.progressDuration]) {
   filter.addEventListener("change", renderProgress);
 }
+nodes.deleteReports.addEventListener("click", deleteSavedReports);
 
 const durations = [...document.querySelectorAll("[data-duration]")];
 for (const button of durations) {
@@ -273,6 +281,9 @@ window.addEventListener("pageshow", (event) => {
   historyReady = false;
   starting = false;
   start.disabled = true;
+  nodes.deleteReports.disabled = true;
+  nodes.reportDeleteStatus.textContent = "";
+  accountHistory = null;
   loadAccount().finally(settle);
 });
 
@@ -326,13 +337,17 @@ function settle() {
   // still stands, so the button the restore below held down needs releasing
   // here rather than there.
   start.disabled = !problem || starting;
+  nodes.deleteReports.disabled = false;
 }
 
 async function loadAccount() {
+  accountHistory = null;
   try {
     const session = await fetchJson("/api/session");
+    accountHistory = false;
     applyDurationCeiling(session.maxDurationMin);
     if (session.signedIn) {
+      accountHistory = true;
       nodes.accountStatus.textContent = `Signed in as ${session.user.login}`;
       nodes.githubLogin.hidden = true;
       nodes.loginLink.hidden = true;
@@ -411,6 +426,47 @@ function renderLocalHistory() {
   }
 }
 
+const deleteFailedMessage = "Could not delete saved reports. Your reports may not have been removed.";
+
+async function deleteSavedReports() {
+  const confirmed = window.confirm(
+    "Delete saved reports and progress? Recording files follow their separate retention policy. This cannot be undone.",
+  );
+  if (!confirmed) return;
+  nodes.deleteReports.disabled = true;
+  nodes.reportDeleteStatus.textContent = "";
+  try {
+    const result = await clearReportHistory({ account: accountHistory });
+    if (result === "cleared") {
+      showReportDeleteStatus("Saved reports and progress were deleted.", "good small");
+      reports = [];
+      showProgress([], "saved");
+      settle();
+      return;
+    }
+    if (result === "account-cleared-local-failed") {
+      showReportDeleteStatus(
+        "Account reports were deleted, but reports saved on this device could not be deleted.",
+      );
+      renderLocalHistory();
+      settle();
+      return;
+    }
+    showReportDeleteStatus(deleteFailedMessage);
+  } catch {
+    if (!nodes.reportDeleteStatus.textContent) showReportDeleteStatus(deleteFailedMessage);
+    nodes.reportDeleteStatus.focus();
+  } finally {
+    nodes.deleteReports.disabled = false;
+  }
+}
+
+function showReportDeleteStatus(message, className = "critical small") {
+  nodes.reportDeleteStatus.className = className;
+  nodes.reportDeleteStatus.textContent = message;
+  nodes.reportDeleteStatus.focus();
+}
+
 function selectedDifficulties() {
   return new Set(levels.filter((input) => input.checked).map((input) => input.value));
 }
@@ -454,7 +510,11 @@ function recommend(note = "") {
 /// markup's default standing.
 function applySuggestedLevel() {
   const suggestion = suggestDifficulty(cards, reports);
-  if (!suggestion) return "";
+  if (!suggestion) {
+    for (const input of levels) input.checked = input.defaultChecked;
+    applyDifficulties();
+    return "";
+  }
   for (const input of levels) input.checked = input.value === suggestion.difficulty;
   applyDifficulties();
   // Named after the level just finished, not the one being suggested: those
@@ -568,6 +628,7 @@ function showProgressError(message) {
   // history it had last managed to load.
   reports = [];
   progressEntries = [];
+  nodes.historyHeader.hidden = false;
   nodes.history.hidden = false;
   nodes.progressSummary.textContent = message;
   nodes.progressTrends.replaceChildren();
@@ -577,6 +638,8 @@ function showProgressError(message) {
 function showProgress(entries, suffix) {
   progressEntries = entries;
   progressSuffix = suffix;
+  const erasable = entries.length > 0 || readLocalHistory().length > 0;
+  nodes.historyHeader.hidden = !erasable;
   nodes.history.hidden = false;
   const model = buildProgressModel(progressEntries);
   syncFilter(nodes.progressDifficulty, model.options.difficulty, (value) => value);

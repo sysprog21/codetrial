@@ -1147,6 +1147,14 @@ pub fn list_reports(accounts: &Accounts, user_id: i64) -> rusqlite::Result<Vec<V
     })
 }
 
+/// Deletes every saved report owned by one account and returns the row count.
+/// Interviews, replay events, and recordings have separate lifecycles and are
+/// deliberately untouched.
+pub fn delete_reports(accounts: &Accounts, user_id: i64) -> rusqlite::Result<usize> {
+    accounts
+        .with(|connection| connection.execute("DELETE FROM reports WHERE user_id = ?1", [user_id]))
+}
+
 pub fn save_report(
     accounts: &Accounts,
     user_id: i64,
@@ -1956,6 +1964,38 @@ mod migration_tests {
         assert_eq!(
             list_reports(&accounts, user).unwrap().len() as i64,
             MAX_REPORTS_PER_USER
+        );
+    }
+
+    #[test]
+    fn deleting_reports_is_scoped_idempotent_and_reclaims_quota() {
+        let path = scratch("delete-reports");
+        initialize_account_database(&path).unwrap();
+        let accounts = accounts_at(&path);
+        let deleting = user_id_for(&accounts, &sign_in_as(&path, "deleting", -1));
+        let other = user_id_for(&accounts, &sign_in_as(&path, "other", -2));
+        for index in 0..MAX_REPORTS_PER_USER {
+            save_report(
+                &accounts,
+                deleting,
+                &format!("r{index}"),
+                "two-sum",
+                &json!({}),
+            )
+            .unwrap();
+        }
+        save_report(&accounts, other, "other-report", "two-sum", &json!({})).unwrap();
+
+        assert_eq!(
+            delete_reports(&accounts, deleting).unwrap() as i64,
+            MAX_REPORTS_PER_USER
+        );
+        assert!(list_reports(&accounts, deleting).unwrap().is_empty());
+        assert_eq!(list_reports(&accounts, other).unwrap().len(), 1);
+        assert_eq!(delete_reports(&accounts, deleting).unwrap(), 0);
+        assert_eq!(
+            save_report(&accounts, deleting, "after-clear", "two-sum", &json!({})).unwrap(),
+            ReportSave::Saved,
         );
     }
 

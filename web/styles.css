@@ -414,7 +414,8 @@ p {
 .editor-toolbar,
 .language-tabs,
 .report-header,
-.report-actions {
+.report-actions,
+.history-header {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -987,7 +988,14 @@ p {
   justify-content: space-between;
 }
 
-.report-header h2 {
+.history-header {
+  margin-top: 1rem;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.report-header h2,
+.history-header h2 {
   margin: 0;
 }
 

@@ -23,6 +23,35 @@ export async function saveReportHistory(entry, { fetcher = fetch, storage } = {}
   return { local, account };
 }
 
+/// `account` is what the page knows: whether the history it is showing came
+/// from an account. The session is still rechecked here rather than trusted
+/// from page load, because signing in from another tab has to reach the
+/// account copy. The pair matters in the other direction too: signing out from
+/// another tab leaves a copy this browser can no longer authenticate a delete
+/// for, and clearing the local half of that would report an erasure that only
+/// happened on this device.
+export async function clearReportHistory({ account = false, fetcher = fetch, storage } = {}) {
+  try {
+    const session = await sessionState(fetcher);
+    if (session === "failed") return "failed";
+    if (session === "in") {
+      const deleted = await fetcher("/api/reports", { method: "DELETE" });
+      if (!deleted.ok) return "failed";
+    } else if (account !== false) {
+      return "failed";
+    }
+    try {
+      storage ||= localStorage;
+      storage.removeItem(historyKey);
+      return "cleared";
+    } catch {
+      return session === "in" ? "account-cleared-local-failed" : "failed";
+    }
+  } catch {
+    return "failed";
+  }
+}
+
 function saveLocalReport(entry, storage) {
   try {
     storage ||= localStorage;

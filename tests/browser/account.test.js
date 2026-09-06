@@ -5,7 +5,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { historyKey, readLocalHistory, saveReportHistory } from "../../web/history.js";
+import {
+  clearReportHistory,
+  historyKey,
+  readLocalHistory,
+  saveReportHistory,
+} from "../../web/history.js";
 import { functionBody, memoryStorage, root } from "./source.js";
 
 const web = join(root, "web");
@@ -15,7 +20,16 @@ test("lobby exposes signed in and signed out account hooks", () => {
   const page = read("index.html");
   const script = read("app.js");
 
-  for (const id of ["account-status", "github-login", "login-link", "logout", "history"]) {
+  for (const id of [
+    "account-status",
+    "github-login",
+    "login-link",
+    "logout",
+    "history-header",
+    "history",
+    "delete-reports",
+    "report-delete-status",
+  ]) {
     assert.match(page, new RegExp(`id="${id}"`), `index.html must keep #${id}`);
   }
   assert.match(script, /fetch\("\/api\/login", \{/);
@@ -25,6 +39,7 @@ test("lobby exposes signed in and signed out account hooks", () => {
   assert.match(script, /fetchJson\("\/api\/reports"\)/);
   assert.match(script, /fetch\("\/api\/logout", \{ method: "POST" \}\)/);
   assert.match(script, /readLocalHistory\(\)/);
+  assert.match(script, /clearReportHistory\(\{ account: accountHistory \}\)/);
   assert.match(script, /setStartGate\(true\)/, "GitHub username must gate interview start when required");
 });
 
@@ -266,6 +281,101 @@ test("report history exposes every local and account failure", async () => {
     );
     assert.equal(calls, 1, "a failed or malformed session must not POST a report");
   }
+});
+
+test("report history rechecks signed-out and signed-in storage before clearing", async () => {
+  const signedOut = memoryStorage();
+  signedOut.setItem(historyKey, "local");
+  const signedOutCalls = [];
+  assert.equal(await clearReportHistory({
+    storage: signedOut,
+    fetcher: async (url) => {
+      signedOutCalls.push(url);
+      return response({ signedIn: false });
+    },
+  }), "cleared");
+  assert.equal(signedOut.getItem(historyKey), null);
+  assert.deepEqual(signedOutCalls, ["/api/session"]);
+
+  const signedIn = memoryStorage();
+  signedIn.setItem(historyKey, "local");
+  const calls = [];
+  const clear = () => clearReportHistory({
+    storage: signedIn,
+    fetcher: async (url, options) => {
+      calls.push({ url, options });
+      return url === "/api/session" ? response({ signedIn: true }) : response({ deleted: 1 });
+    },
+  });
+  assert.equal(await clear(), "cleared");
+  signedIn.setItem(historyKey, "local-again");
+  assert.equal(await clear(), "cleared");
+  assert.equal(signedIn.getItem(historyKey), null);
+  assert.deepEqual(calls.map(({ url }) => url), [
+    "/api/session", "/api/reports", "/api/session", "/api/reports",
+  ]);
+  assert.equal(calls[1].options.method, "DELETE");
+});
+
+test("report history retains local data on account failure and reports a partial clear", async () => {
+  const retained = memoryStorage();
+  retained.setItem(historyKey, "keep");
+  for (const fetcher of [
+    async () => { throw new Error("offline"); },
+    async () => response({}, false),
+  ]) {
+    assert.equal(await clearReportHistory({ storage: retained, fetcher }), "failed");
+    assert.equal(retained.getItem(historyKey), "keep");
+  }
+
+  const brokenStorage = {
+    removeItem: () => { throw new Error("blocked"); },
+  };
+  assert.equal(await clearReportHistory({
+    storage: brokenStorage,
+    fetcher: async (url) => url === "/api/session"
+      ? response({ signedIn: true })
+      : response({ deleted: 1 }),
+  }), "account-cleared-local-failed");
+  assert.equal(await clearReportHistory({
+    storage: brokenStorage,
+    fetcher: async () => response({}),
+  }), "failed");
+});
+
+test("history deletion observes a cross-tab sign-in", async () => {
+  const storage = memoryStorage();
+  storage.setItem(historyKey, "keep");
+  const calls = [];
+  assert.equal(await clearReportHistory({
+    storage,
+    fetcher: async (url, options) => {
+      calls.push({ url, options });
+      return url === "/api/session" ? response({ signedIn: true }) : response({ deleted: 1 });
+    },
+  }), "cleared");
+  assert.equal(storage.getItem(historyKey), null);
+  assert.deepEqual(calls.map(({ url }) => url), ["/api/session", "/api/reports"]);
+  assert.equal(calls[1].options.method, "DELETE");
+});
+
+test("a cross-tab sign-out keeps the account copy rather than claiming a clear", async () => {
+  const storage = memoryStorage();
+  storage.setItem(historyKey, "keep");
+  const calls = [];
+  // The lobby loaded account history, then the session went away in another
+  // tab. This browser can no longer authenticate the delete, so the account
+  // copy is still there and saying it was erased would be a lie.
+  assert.equal(await clearReportHistory({
+    account: true,
+    storage,
+    fetcher: async (url) => {
+      calls.push(url);
+      return response({ signedIn: false });
+    },
+  }), "failed");
+  assert.equal(storage.getItem(historyKey), "keep");
+  assert.deepEqual(calls, ["/api/session"]);
 });
 
 function response(body, ok = true) {
