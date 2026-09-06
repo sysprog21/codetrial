@@ -5717,6 +5717,85 @@ async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
     remove_database(path);
 }
 
+/// A full page is not the same as a page with more behind it.
+///
+/// The listing asks for one row more than a page and uses the extra row as the
+/// answer to "is there another page". Only a single-row listing was covered, so
+/// the comparison that decides it was free to be off by one: a cursor handed
+/// out at exactly one page sends the client back for a page that is empty, and
+/// a cursor withheld at one page more hides every recording past the twentieth.
+#[tokio::test]
+async fn a_full_page_offers_a_cursor_only_when_more_follows() {
+    let (base, server, path, client, cookie) = recorded_server("listing-page-edge").await;
+
+    // One recording per interview, which the schema enforces, so each row
+    // brings its own.
+    let insert = |count: i64| {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection.execute("DELETE FROM recordings", []).unwrap();
+        for row in 0..count {
+            let interview_id = format!("int-page-{row}");
+            let room = format!("interview-page{row:04}");
+
+            // With its room, because an interview still waiting for one is
+            // unique per account and consent version, and these are past.
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO interviews
+                       (id, account_id, consent_version, consent_at, room_name)
+                       VALUES (?1, 1, '2026-08-21', 1, ?2)",
+                    [&interview_id, &room],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO recordings (
+                         id, account_id, interview_id, room_name, idempotency_key,
+                         recipient_email, state, created_at, updated_at
+                     ) VALUES (?1, 1, ?2, ?3, ?1, 'one@example.test', 'ready', ?4, ?4)",
+                    rusqlite::params![format!("rec-page-{row}"), interview_id, room, 1000 + row],
+                )
+                .unwrap();
+        }
+    };
+    let listing = || async {
+        client
+            .get(format!("{base}/api/recordings"))
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap()
+    };
+
+    let page = codetrial::recording::RECORDING_PAGE;
+    insert(page);
+    let body = listing().await;
+    assert_eq!(body["recordings"].as_array().unwrap().len(), page as usize);
+    assert_eq!(
+        body["nextCursor"],
+        Value::Null,
+        "exactly one page has nothing behind it"
+    );
+
+    insert(page + 1);
+    let body = listing().await;
+    assert_eq!(
+        body["recordings"].as_array().unwrap().len(),
+        page as usize,
+        "a page is still a page"
+    );
+    assert!(
+        body["nextCursor"].is_string(),
+        "one row more than a page is another page"
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
 /// A signature from one project does not reach another project's room.
 ///
 /// The signature proves which project sent the webhook. It does not prove the
