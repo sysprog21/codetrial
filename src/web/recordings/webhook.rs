@@ -381,13 +381,32 @@ async fn apply_egress_status(
     if stopped.is_err() {
         return false;
     }
+
+    // Only while the provider still owns the row. Its news can arrive late and
+    // out of order, and `transferring` to `failed` is a move the table has to
+    // allow for the delivery worker, so an `EGRESS_FAILED` retried after a
+    // completed egress could fail a recording whose file was already queued and
+    // whole. Once the transfer side has the row, the provider has nothing left
+    // to say about it.
+    const PROVIDER_OWNED: [RecordingState; 3] = [
+        RecordingState::Starting,
+        RecordingState::Recording,
+        RecordingState::Finalizing,
+    ];
     let moved = {
         let accounts = accounts.clone();
         let clock = recorder.clock.clone();
         let id = recording.id.clone();
         let reason = failure.map(|failure| failure.as_str().to_string());
         blocking(move || {
-            crate::recording::transition(&accounts, clock.as_ref(), &id, next, reason.as_deref())
+            crate::recording::transition_within(
+                &accounts,
+                clock.as_ref(),
+                &id,
+                Some(&PROVIDER_OWNED),
+                next,
+                reason.as_deref(),
+            )
         })
         .await
     };
@@ -413,8 +432,8 @@ async fn apply_egress_status(
     }
 
     // After the transition, and only when it moved. A late `EGRESS_FAILED` for
-    // a row that has already advanced is refused by the table, and an audit
-    // line written first said a recording had failed while its status said
+    // a row that has already advanced is refused above, and an audit line
+    // written first said a recording had failed while its status said
     // otherwise.
     if let (Some(failure), Ok(Some((_, true)))) = (failure, &moved) {
         crate::recording::audit(

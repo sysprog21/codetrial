@@ -245,6 +245,26 @@ pub fn transition(
     next: RecordingState,
     error: Option<&str>,
 ) -> rusqlite::Result<Option<(RecordingState, bool)>> {
+    transition_within(accounts, clock, recording_id, None, next, error)
+}
+
+/// [`transition`], refused unless the row is still in one of `only_from`.
+///
+/// For a caller whose news can arrive late about a row somebody else now owns.
+/// The table cannot express that: it allows `transferring` to `failed` because
+/// the delivery worker needs that move, which also let a provider failure
+/// arriving after a completed egress fail a recording whose file was already
+/// queued and sound. Reading the state first and then moving would leave the
+/// same race in a wider window, so the guard is inside the one closure that
+/// already reads and writes under the same lock.
+pub fn transition_within(
+    accounts: &Accounts,
+    clock: &dyn Clock,
+    recording_id: &str,
+    only_from: Option<&[RecordingState]>,
+    next: RecordingState,
+    error: Option<&str>,
+) -> rusqlite::Result<Option<(RecordingState, bool)>> {
     let now = clock.now();
     accounts.with(|connection| {
         let current: Option<String> = connection
@@ -257,6 +277,11 @@ pub fn transition(
         let Some(current) = current.as_deref().and_then(RecordingState::parse) else {
             return Ok(None);
         };
+        if let Some(only_from) = only_from
+            && !only_from.contains(&current)
+        {
+            return Ok(Some((current, false)));
+        }
 
         // Already there. The transition is allowed, and nothing moved, which is
         // the difference a duplicate stop rides on: the second caller has

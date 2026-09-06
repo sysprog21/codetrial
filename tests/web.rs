@@ -4946,6 +4946,110 @@ async fn a_completion_with_no_file_fails_the_recording() {
     remove_database(path);
 }
 
+/// A provider failure arriving after a good completion leaves the file alone.
+///
+/// LiveKit retries webhooks, so its news can arrive twice and out of order. The
+/// state table has to allow `transferring` to `failed`, because that is how the
+/// delivery worker reports an upload it could not finish, and that same edge
+/// let a stale `EGRESS_FAILED` fail a recording whose file was already queued
+/// and whole. The candidate was then told to record again over a video that
+/// existed.
+#[tokio::test]
+async fn a_late_provider_failure_does_not_fail_a_queued_recording() {
+    let provider = std::sync::Arc::new(FakeRecordingProvider::default());
+    let (base, server, path, client, cookie) =
+        recorded_server_with_provider("late-failure", provider.clone()).await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    assert_eq!(
+        client
+            .post(format!("{base}/api/token"))
+            .header("cookie", cookie.clone())
+            .json(&json!({ "interviewId": interview }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        client
+            .post(format!("{base}/api/interviews/{interview}/recording"))
+            .header("cookie", cookie.clone())
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        202
+    );
+
+    let recording_id: String = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT id FROM recordings WHERE interview_id = ?1",
+            [&interview],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    // The object this recording is going to transfer, named the way the webhook
+    // predicate expects it, so this is a completion that really carries a file.
+    let complete = json!({
+        "event": "egress_ended",
+        "id": "EV_complete",
+        "createdAt": "1770000123",
+        "egressInfo": {
+            "egressId": "EG_web_fake",
+            "status": "EGRESS_COMPLETE",
+            "fileResults": [{
+                "filename": format!("codetrial/{recording_id}.mp4"),
+                "size": "1024"
+            }]
+        }
+    })
+    .to_string();
+    assert_eq!(post_webhook(&client, &base, &complete).await.status(), 200);
+
+    let state = |path: &std::path::Path| -> (String, Option<String>) {
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .query_row(
+                "SELECT state, error FROM recordings WHERE id = ?1",
+                [&recording_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap()
+    };
+    assert_eq!(
+        state(&path).0,
+        "transferring",
+        "a completion carrying the expected object queues the transfer"
+    );
+
+    // The same egress, reported failed afterwards. Nothing here is delivered,
+    // so the row can only move if this webhook moves it.
+    let failed = json!({
+        "event": "egress_ended",
+        "id": "EV_late_failure",
+        "createdAt": "1770000456",
+        "egressInfo": {
+            "egressId": "EG_web_fake",
+            "status": "EGRESS_FAILED",
+            "error": "provider gave up"
+        }
+    })
+    .to_string();
+    assert_eq!(post_webhook(&client, &base, &failed).await.status(), 200);
+
+    assert_eq!(
+        state(&path),
+        ("transferring".to_string(), None),
+        "a stale provider failure must not take back a completed egress"
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
 /// Signs a webhook body the way LiveKit does and posts it.
 ///
 /// The signature covers the exact bytes, so the body is passed as a string and
