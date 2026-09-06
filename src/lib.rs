@@ -20,6 +20,20 @@ pub fn current_epoch_seconds() -> u64 {
         .as_secs()
 }
 
+/// The folder the executable itself sits in, which is where anything
+/// `codetrial` writes or looks for without being told a path belongs. A
+/// released binary is unpacked into a folder of its own and everything it
+/// needs ends up there, whatever directory it was launched from: a
+/// double-click makes the two the same, a shortcut or a terminal elsewhere
+/// does not. Falls back to the working directory when the path cannot be
+/// resolved, which leaves the old behaviour rather than no behaviour.
+pub fn exe_dir() -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
 /// One shared client so repeated Gemini and LiveKit RoomService calls reuse
 /// connections instead of renegotiating TLS per request. `reqwest::Client` is
 /// already an `Arc` internally and is meant to be reused.
@@ -38,4 +52,21 @@ pub fn http_client() -> &'static reqwest::Client {
             .build()
             .expect("http client should build")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    /// The empty path is what a `PathBuf` defaults to, and joining a file name
+    /// onto it yields that name alone, which resolves against the working
+    /// directory. That is the fallback this function has for when the
+    /// executable cannot be located, not the answer it gives when it can, and
+    /// the difference decides where a released binary looks for its config.
+    #[test]
+    fn exe_dir_names_the_folder_the_running_binary_sits_in() {
+        let exe = std::env::current_exe().expect("a running test binary has a path");
+        assert_eq!(
+            super::exe_dir(),
+            exe.parent().expect("an executable sits in a folder")
+        );
+    }
 }

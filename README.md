@@ -69,10 +69,17 @@ Explorer service.
 3. Set `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, and
    `GOOGLE_API_KEY` in that file.
 
-The binary requires `codetrial.env.local`, searching `./config/` before the
-current directory. Use `--config PATH` for an alternate primary config file.
-Extra `codetrial.env.*` files in the same directory are optional providers used
-for pooling.
+One installation keeps its config file and its account database together in a
+`config/` directory: `config/` in a checkout, and a `config/` beside the
+executable for a downloaded binary. The binary looks in both, and in two older
+places it no longer writes to — `codetrial.env.local` in the current directory
+and beside the executable. Use `--config PATH` to point at a different file. Extra `codetrial.env.*` files in the same directory are optional
+providers used for pooling. If `web` mode finds no config file at all, it serves
+a Setup page instead and prints the URL to open — you can skip steps 2–3 above,
+fill in your keys there, and it writes them to `config/codetrial.env.local` for you. That page
+serves on a loopback address only; a start that would put it on any other
+address refuses instead, and writing the file yourself is the way to deploy for
+other people. See [Prebuilt binaries](#prebuilt-binaries).
 
 ## Prebuilt binaries
 
@@ -104,13 +111,20 @@ xattr -d com.apple.quarantine codetrial-aarch64-apple-darwin
 mv codetrial-aarch64-apple-darwin codetrial
 ```
 
-A config file has to sit beside it. The binary will not run on environment
-variables alone, and it refuses to start without LiveKit credentials rather than
-booting a server that cannot mint a token. There is no `config/codetrial.env.example`
-to copy outside a checkout, so write the three required keys yourself:
+Run `./codetrial` with no config file nearby, and `web` mode serves a Setup
+page at <http://127.0.0.1:3000> instead of refusing to start, printing that
+address for you to open.
+Loopback is the only place it will serve: `--web-addr 0.0.0.0:3000` or
+`CODETRIAL_WEB_ADDR` pointing anywhere else is refused, because the page takes
+credentials over plain HTTP from anyone who can reach it.
+Enter your LiveKit keys there, and your Google key if you want this process to
+host interviewers (see below). Saving writes them **in plain text** to
+`config/codetrial.env.local` beside the executable, creating that directory —
+the same file you would otherwise write yourself:
 
 ```bash
-cat >codetrial.env.local <<'EOF'
+mkdir -p config
+cat >config/codetrial.env.local <<'EOF'
 LIVEKIT_URL=wss://YOUR-PROJECT.livekit.cloud
 LIVEKIT_API_KEY=...
 LIVEKIT_API_SECRET=...
@@ -118,6 +132,12 @@ GOOGLE_API_KEY=...
 EOF
 ./codetrial web   # http://127.0.0.1:3000
 ```
+
+That `config/` is your data: the keys above and, once the server has run,
+`codetrial.db` with your accounts and reports. To take a newer build, replace
+the executable in place and leave `config/` alone. Unpacking into a fresh
+directory starts over, and deleting the directory removes everything this
+program kept.
 
 `GOOGLE_API_KEY` is the optional one, and it decides which of two things this
 process is. With it, the server hosts interviewers itself. Without it, it serves
@@ -135,7 +155,12 @@ Platform notes:
   project does not have. A downloaded `.zip` carries the quarantine attribute
   and Gatekeeper refuses it, so clear the attribute as above or build from
   source.
-- Windows binaries are unsigned. SmartScreen warns on first run.
+- Windows binaries are unsigned. SmartScreen warns on first run. Put the exe in
+  a folder of its own before double-clicking it: with no config file nearby it
+  opens the Setup page above, and everything it writes lands in that folder —
+  the `config/` that page fills in, and, if the start fails, a
+  `codetrial-error.log` beside the executable that is the only place the reason
+  appears when there is no terminal to read one from.
 - Only `x86_64` Linux, `arm64` macOS, and `x86_64` Windows are published. Build
   from source for anything else.
 

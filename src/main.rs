@@ -7,11 +7,21 @@ use codetrial::config::{
 };
 use codetrial::web::{RoomDispatcher, WebServerConfig};
 
-const DEFAULT_CONFIG_PATH: &str = "config/codetrial.env.local";
+/// One installation keeps its config file and its account database together in
+/// `config/`, under whichever root it was installed as: a checkout, or the
+/// folder a released binary was unpacked into. Beside the executable is not
+/// that root for a checkout -- the executable is in `target/`, which
+/// `make clean` deletes -- so the two are named separately and joined per case.
+const CONFIG_DIR: &str = "config";
+const CONFIG_FILE_NAME: &str = "codetrial.env.local";
+/// Tracked, so it exists in a checkout and in no release archive. That makes it
+/// the one thing that tells a `config/` belonging to this project apart from a
+/// directory of the same name that happens to sit where the binary was run.
+const CONFIG_EXAMPLE_NAME: &str = "codetrial.env.example";
 const DEFAULT_ACCOUNT_DB_PATH: &str = "codetrial.db";
 const DEFAULT_SESSION_SECRET: &str = "codetrial-local-session";
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct CliOptions {
     config_path: Option<String>,
     web_addr: Option<String>,
@@ -28,7 +38,9 @@ struct CliOptions {
 /// check is a mode that silently ignores its extra arguments.
 const MODES: [(&str, usize, &str, ModeFn); 3] = [
     ("web", 1, "codetrial web [OPTIONS]", |_, options| {
-        run_web(options)
+        // Logged for `web` only: `run-livekit`/`check-gemini` are terminal-run
+        // tooling.
+        run_web(options).inspect_err(|error| log_web_error(error))
     }),
     (
         "run-livekit",
@@ -79,17 +91,20 @@ fn run_agent_command(args: &[String]) -> i32 {
         }));
         return 0;
     }
-    let (positionals, options) = match parse_agent_args(args) {
+    let (mut positionals, options) = match parse_agent_args(args) {
         Ok(parsed) => parsed,
         Err(error) => {
             eprintln!("{error}");
             return 2;
         }
     };
-    let Some(mode) = positionals.first().map(String::as_str) else {
-        eprintln!("usage: codetrial MODE [OPTIONS]");
-        return 2;
-    };
+
+    // No console survives to show a usage line on double-click; default to
+    // `web`.
+    if positionals.is_empty() {
+        positionals.push("web".to_string());
+    }
+    let mode = positionals[0].as_str();
     let Some(&(_, arity, usage, run)) = MODES.iter().find(|(name, ..)| *name == mode) else {
         // The names, not just the refusal. A mode that was removed reaches this
         // line as an ordinary typo, and "unknown agent mode: serve" on its own
@@ -214,19 +229,20 @@ fn bind_web_listener(addr: &str) -> Result<std::net::TcpListener, String> {
 }
 
 fn run_web(options: CliOptions) -> Result<(), String> {
+    // Falls through: once `serve_setup` returns, the config exists and the rest
+    // of this function is an ordinary launch, on the socket Setup served on.
+    // Why that socket is carried here rather than rebound: `serve_setup`. Read
+    // once, so the question and the page it opens answer from the same map.
+    let before_config = environment_and_flags(&options);
+    let handed_over = if is_cold_start(&options, &before_config) {
+        Some(serve_setup(&before_config)?)
+    } else {
+        None
+    };
     let values = load_values(&options)?;
 
-    // The built-in default is a published string, so in production it is not a
-    // weak signing key, it is a known one. Refuse rather than mint forgeable
-    // session cookies.
-    if is_production(&values)
-        && value_or(&values, "SESSION_SECRET", DEFAULT_SESSION_SECRET) == DEFAULT_SESSION_SECRET
-    {
-        return Err(
-            "SESSION_SECRET must be set when NODE_ENV=production; the built-in \
-                    default is a published value that would let anyone forge a session cookie"
-                .to_string(),
-        );
+    if let Some(refusal) = production_secret_refusal(&values) {
+        return Err(refusal);
     }
     for warning in relaxed_for_local_use(&values) {
         eprintln!("{warning}");
@@ -265,7 +281,7 @@ fn run_web(options: CliOptions) -> Result<(), String> {
         github_client_id: nonempty(&values, "GITHUB_CLIENT_ID"),
         github_client_secret: nonempty(&values, "GITHUB_CLIENT_SECRET"),
         session_secret: Some(value_or(&values, "SESSION_SECRET", DEFAULT_SESSION_SECRET)),
-        db_path: Some(account_db_path(&values)),
+        db_path: Some(account_db_path(&values, &options)),
         github_oauth_base_url: None,
         github_api_base_url: None,
         room_prefix: value_or(&values, "CODETRIAL_ROOM_PREFIX", DEFAULT_ROOM_PREFIX),
@@ -279,7 +295,14 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     };
 
     initialize_accounts(&config)?;
-    let listener = bind_web_listener(&value_or(&values, "CODETRIAL_WEB_ADDR", DEFAULT_WEB_ADDR))?;
+
+    // The address is not re-read for a cold start: `serve_setup` read it from
+    // the same environment and flags, and the config file written since holds
+    // credentials, not `CODETRIAL_WEB_ADDR`.
+    let listener = match handed_over {
+        Some(listener) => listener,
+        None => bind_web_listener(&value_or(&values, "CODETRIAL_WEB_ADDR", DEFAULT_WEB_ADDR))?,
+    };
 
     // The other half of the `SESSION_SECRET` guard above, and the half that
     // does not depend on the operator having said anything.
@@ -301,6 +324,16 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     if let Some(refusal) = published_secret_refusal(&values, bound) {
         return Err(refusal);
     }
+    // Same reason `serve_setup` prints this: say where to go.
+    println!("codetrial: open http://{bound} in your browser");
+
+    // Past every startup check, so whatever a previous run left in the log is
+    // no longer true. Written on failure and removed on none, the file outlives
+    // what it describes: someone fixes what it named, starts again, and the
+    // next thing to go wrong sends them back to a message from days ago. This
+    // is the only moment that can tell those apart, and the error text points
+    // at nothing else.
+    clear_web_error_log();
 
     // Whether this process also hosts interviewers. A full agent config, which
     // is a Gemini key on top of what the web side needs, means yes; without it
@@ -380,10 +413,197 @@ fn web_provider_pool(
     extend_pool(
         &mut pool,
         production,
-        &provider_dir(options),
+        &config_dir(options),
         &value_or(values, codetrial::config::PROVIDER_ORDER_KEY, ""),
     );
     Ok(pool)
+}
+
+/// The solo self-serve cold start: no `--config` given, none of the searched
+/// paths holds a file, and the environment has not supplied the credentials
+/// either. A named-but-missing `--config` is an operator's mistake, not this.
+///
+/// The search order comes from `primary_config_path` rather than being
+/// written out again here. Spelled twice it was free to drift, and the drift
+/// is silent in the worst direction: a Setup page in front of someone whose
+/// config the rest of the process is about to read.
+///
+/// The environment counts because a file is not the only way to be configured.
+/// A headless launch with `LIVEKIT_*` exported and no file used to exit naming
+/// the file it wanted, which is a failure someone reading a log can act on;
+/// asking it instead put a page nobody would open in front of a process that
+/// then waited forever. Only the LiveKit keys, because those are what the web
+/// side refuses to start without, and `GOOGLE_API_KEY` decides whether this
+/// process also hosts interviewers rather than whether it can run.
+fn is_cold_start(options: &CliOptions, values: &BTreeMap<String, String>) -> bool {
+    options.config_path.is_none()
+        && primary_config_path(options).is_err()
+        && !environment_supplies_credentials(values)
+}
+
+/// Whether this launch is already configured without a file.
+///
+/// Its own function so it can be asserted without a filesystem: `is_cold_start`
+/// reaches this only after the config search misses, and the search hits in any
+/// checkout that has a config, which is every machine a developer runs the
+/// suite on.
+///
+/// The LiveKit keys and not `GOOGLE_API_KEY`, because those three are what the
+/// web side refuses to start without. The Google key decides whether this
+/// process also hosts interviewers, which is a shape rather than a requirement.
+fn environment_supplies_credentials(values: &BTreeMap<String, String>) -> bool {
+    ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
+        .iter()
+        .all(|key| nonempty(values, key).is_some())
+}
+
+/// Serves Setup until a submission writes `codetrial.env.local`, then returns
+/// the still-bound listener so `run_web` continues on it.
+///
+/// Handed over rather than rebound because of Windows, the platform this
+/// feature exists for: `bind` sets `SO_REUSEADDR` on Unix and deliberately not
+/// there, so a rebind has to win against the `TIME_WAIT` left by the
+/// connections this page just served, and `TIME_WAIT` outlasts any retry worth
+/// writing. The loser has already written the config, so it has also spent the
+/// cold start that would have brought Setup back.
+fn serve_setup(values: &BTreeMap<String, String>) -> Result<std::net::TcpListener, String> {
+    let listener = bind_web_listener(&value_or(values, "CODETRIAL_WEB_ADDR", DEFAULT_WEB_ADDR))?;
+
+    // Fails closed on an address the socket cannot name, for the reason
+    // `run_web` does: an impossible kernel answer must not be the way past a
+    // security guard.
+    let bound = listener
+        .local_addr()
+        .map_err(|error| format!("bound listener has no address to check: {error}"))?;
+    if let Some(refusal) = public_setup_refusal(values, bound) {
+        return Err(refusal);
+    }
+
+    // Everything `run_web` will refuse for that this already knows the answer
+    // to. There is one such rule today; the rest of its checks need the pool
+    // the submission has not supplied yet.
+    if let Some(refusal) = production_secret_refusal(values) {
+        return Err(refusal);
+    }
+    // The window stays open now, but still needs to say where to go.
+    println!("codetrial: open http://{bound} in your browser to continue setup");
+
+    // Taken before `axum::serve` consumes the listener: this descriptor stays
+    // open, so the port stays bound whatever the server does with its own.
+    let retained = listener
+        .try_clone()
+        .map_err(|error| format!("could not retain the Setup listener: {error}"))?;
+
+    // Re-asserted rather than assumed: whether a duplicate carries the flag
+    // `bind_web_listener` set is a per-platform answer, and `from_std` in
+    // `run_web` needs it true on this descriptor.
+    retained
+        .set_nonblocking(true)
+        .expect("retained web listener should become nonblocking");
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
+    runtime
+        .block_on(async {
+            let ready = Arc::new(tokio::sync::Notify::new());
+            let listener = tokio::net::TcpListener::from_std(listener)?;
+            let service = codetrial::web::setup_service(
+                ready.clone(),
+                is_production(values),
+                bound.port(),
+                cold_start_config_path(),
+            );
+            axum::serve(listener, service)
+                .with_graceful_shutdown(async move { ready.notified().await })
+                .await
+        })
+        .map_err(|error| format!("web server failed: {error}"))?;
+    Ok(retained)
+}
+
+/// Why a production launch may not sign session cookies, or `None` where it
+/// may. The built-in default is a published string, so in production it is not
+/// a weak signing key, it is a known one.
+///
+/// A function rather than an inline check because `serve_setup` asks it too.
+/// The verdict needs nothing from the submission, and a check that could have
+/// been made before the page was served but is made after it has taken
+/// credentials, written them and answered 200 is a launch that exits with the
+/// config already on disk -- which is what stops the next launch being a cold
+/// start, so the page never comes back to say why.
+fn production_secret_refusal(values: &BTreeMap<String, String>) -> Option<String> {
+    if is_production(values)
+        && value_or(values, "SESSION_SECRET", DEFAULT_SESSION_SECRET) == DEFAULT_SESSION_SECRET
+    {
+        return Some(
+            "SESSION_SECRET must be set when NODE_ENV=production; the built-in \
+             default is a published value that would let anyone forge a session cookie"
+                .to_string(),
+        );
+    }
+    None
+}
+
+/// Why Setup may not serve on `bound`, or `None` where it may.
+///
+/// Setup writes LiveKit credentials to disk for whoever posts them and has
+/// nothing to authenticate that person with: on a cold start there is no
+/// config, no account database and no secret either side could have agreed on
+/// beforehand. What confines it is the listener, so the listener is what gets
+/// checked. Adding a password to the page would only be a second credential
+/// the same person has to be told over the same channel, and a cold start has
+/// no console to print it on.
+///
+/// The reachability test is `published_secret_refusal`'s, whose doc says why it
+/// is written this way and why a declared proxy counts.
+///
+/// Each reason names the one thing its reader can change, because the remedy
+/// for the two is not the same: an address is passed on the command line, a
+/// declared proxy is a variable in the environment, and "bind loopback" is no
+/// help to someone already on it.
+fn public_setup_refusal(
+    values: &BTreeMap<String, String>,
+    bound: std::net::SocketAddr,
+) -> Option<String> {
+    let reason = match reachable_from_elsewhere(values, bound)? {
+        Reachable::Address => {
+            format!("it is bound to {bound}, which is not a loopback address")
+        }
+        Reachable::DeclaredProxy => "CODETRIAL_TRUSTED_PROXY_HOPS says something in front of \
+             it forwards requests from elsewhere"
+            .to_string(),
+    };
+
+    Some(format!(
+        "refusing to serve the Setup page because {reason}: it takes LiveKit credentials \
+         from anyone who can reach it, over plain HTTP, and has nothing to authenticate \
+         them with. Serve it where only this machine can reach it, or write \
+         codetrial.env.local with LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET \
+         before starting."
+    ))
+}
+
+/// Any `web` failure, not just a cold-start one. No attempt to tell a solo
+/// user's config apart from an operator's: the error text already says
+/// what's wrong. Best-effort: must not shadow the real error.
+///
+/// Beside the executable, where the config it just failed to read also
+/// lives. A double-clicked binary has no console to leave the reason in and
+/// no working directory anyone chose, so the folder it was unpacked into is
+/// the one place its owner knows to look.
+fn log_web_error(error: &str) {
+    let _ = std::fs::write(web_error_log_path(), format!("{error}\n"));
+}
+
+/// Dropped once a launch is past everything that could have written one, so
+/// the file's presence means the last `web` start failed rather than that one
+/// ever did. Best-effort, like the write: a log that cannot be removed must
+/// not stop a server that is otherwise ready.
+fn clear_web_error_log() {
+    let _ = std::fs::remove_file(web_error_log_path());
+}
+
+fn web_error_log_path() -> std::path::PathBuf {
+    codetrial::exe_dir().join("codetrial-error.log")
 }
 
 fn run_livekit(config: AgentConfig, room_name: &str) -> Result<(), String> {
@@ -468,10 +688,24 @@ fn load_agent_config(options: &CliOptions) -> Result<AgentConfig, String> {
     extend_pool(
         &mut config.pool,
         production,
-        &provider_dir(options),
+        &config_dir(options),
         &provider_order,
     );
     Ok(config)
+}
+
+/// The environment and the flags, which in a cold start is everything
+/// `load_values` has: the file it reads between them is the file that does not
+/// exist yet.
+///
+/// Its own function so `run_web` does not name the process environment. Reading
+/// a deployment key straight from it there is what
+/// `binary_web_reads_deployment_keys_from_the_config_file` refuses, because a
+/// key set in the config file was once silently a no-op.
+fn environment_and_flags(options: &CliOptions) -> BTreeMap<String, String> {
+    let mut values = std::env::vars().collect::<BTreeMap<_, _>>();
+    apply_options(&mut values, options);
+    values
 }
 
 fn load_values(options: &CliOptions) -> Result<BTreeMap<String, String>, String> {
@@ -480,6 +714,17 @@ fn load_values(options: &CliOptions) -> Result<BTreeMap<String, String>, String>
     for (key, value) in codetrial::config::read_config_file(&path)? {
         values.insert(key, value);
     }
+    apply_options(&mut values, options);
+    Ok(values)
+}
+
+/// The flags, over whatever the environment and the config file said.
+///
+/// Split out because a cold start has to build the same map without the file
+/// it does not have yet: `serve_setup` decides where to bind and what a
+/// submission must survive, and both answers have to be the ones `run_web`
+/// will reach a moment later. Spelled twice, this precedence is free to drift.
+fn apply_options(values: &mut BTreeMap<String, String>, options: &CliOptions) {
     if let Some(value) = &options.web_addr {
         values.insert("CODETRIAL_WEB_ADDR".to_string(), value.clone());
     }
@@ -492,7 +737,6 @@ fn load_values(options: &CliOptions) -> Result<BTreeMap<String, String>, String>
     if let Some(value) = options.duration_min {
         values.insert("CODETRIAL_DURATION_MIN".to_string(), value.to_string());
     }
-    Ok(values)
 }
 
 fn primary_config_path(options: &CliOptions) -> Result<PathBuf, String> {
@@ -506,9 +750,21 @@ fn primary_config_path(options: &CliOptions) -> Result<PathBuf, String> {
         }
         return Ok(path);
     }
+
+    // The working directory first, which is a checkout's `config/` and an
+    // operator's deployment directory, then the folder the executable sits in.
+    // A release binary is unpacked into a folder of its own and its config is
+    // written there, so it has to be findable from a shortcut or a terminal
+    // opened somewhere else, not only from a double-click.
+    //
+    // Within each of those two roots, `config/` before the bare filename. The
+    // bare ones are where a release used to keep its config and where an
+    // operator may still keep one; they are searched, not written.
     for path in [
-        PathBuf::from(DEFAULT_CONFIG_PATH),
-        PathBuf::from("codetrial.env.local"),
+        PathBuf::from(CONFIG_DIR).join(CONFIG_FILE_NAME),
+        PathBuf::from(CONFIG_FILE_NAME),
+        codetrial::exe_dir().join(CONFIG_DIR).join(CONFIG_FILE_NAME),
+        codetrial::exe_dir().join(CONFIG_FILE_NAME),
     ] {
         if path.is_file() {
             return Ok(path);
@@ -521,19 +777,27 @@ fn primary_config_path(options: &CliOptions) -> Result<PathBuf, String> {
     // sends them looking for a file they were never given. Naming what the file
     // must contain is an instruction both audiences can act on.
     Err(format!(
-        "required configuration file is missing: ./{DEFAULT_CONFIG_PATH} or ./codetrial.env.local; \
-         write one with LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET \
-         (config/codetrial.env.example lists the optional keys in a checkout)"
+        "required configuration file is missing: ./{CONFIG_DIR}/{CONFIG_FILE_NAME}, \
+         ./{CONFIG_FILE_NAME}, or {CONFIG_DIR}/{CONFIG_FILE_NAME} beside the \
+         executable; write one with LIVEKIT_URL, LIVEKIT_API_KEY and \
+         LIVEKIT_API_SECRET ({CONFIG_DIR}/{CONFIG_EXAMPLE_NAME} lists the \
+         optional keys in a checkout)"
     ))
 }
 
-/// Providers live beside the config file the operator named, so
-/// `--config /etc/codetrial/prod.env` discovers
+/// The directory of the config file this launch actually read, which is where
+/// everything else belonging to the installation lives: the provider files it
+/// discovers, and the account database it writes.
+///
+/// So `--config /etc/codetrial/prod.env` discovers
 /// `/etc/codetrial/codetrial.env.<id>` rather than whatever `config/` happens
-/// to sit in the current directory. Both
-/// halves of a deployment are launched with the same `--config`, and that is
-/// what makes them agree on the pool.
-fn provider_dir(options: &CliOptions) -> PathBuf {
+/// to sit in the current directory. Both halves of a deployment are launched
+/// with the same `--config`, and that is what makes them agree on the pool.
+///
+/// The database is written here rather than read, which is the one asymmetry:
+/// a `--config` pointing somewhere a process may not write is a startup
+/// failure that names the directory, and `CODETRIAL_DB_PATH` is the way out.
+fn config_dir(options: &CliOptions) -> PathBuf {
     // The search order comes from primary_config_path rather than being written
     // out again here. Spelled twice, it was free to drift, and the drift is
     // silent: the server keeps reading its own config while the pool quietly
@@ -548,7 +812,7 @@ fn provider_dir(options: &CliOptions) -> PathBuf {
         .as_deref()
         .map(PathBuf::from)
         .or_else(|| primary_config_path(options).ok())
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+        .unwrap_or_else(|| PathBuf::from(CONFIG_DIR).join(CONFIG_FILE_NAME));
     match path.parent() {
         // A bare filename has an empty parent, and its siblings are in the
         // working directory, not in `config/`.
@@ -743,6 +1007,36 @@ fn relaxed_for_local_use(values: &BTreeMap<String, String>) -> Vec<String> {
 /// `::1` and of nothing else: a dual-stack socket that landed on
 /// `::ffff:127.0.0.1`, which is a name for the same interface, would otherwise
 /// be refused an address only this machine can reach.
+/// How a listener on `bound` can be reached from somewhere other than this
+/// machine, or `None` where it cannot.
+///
+/// Shared, because two guards ask it and a third answer added to one of them
+/// would drift silently -- in the direction that leaves the page taking
+/// credentials open. What each guard says about it is not shared: the remedies
+/// differ, an address is passed on the command line and a declared proxy is a
+/// variable in the environment.
+enum Reachable {
+    /// The bind address is not loopback.
+    Address,
+    /// `CODETRIAL_TRUSTED_PROXY_HOPS` is the operator saying requests arrive
+    /// through something in front, which is the same admission: a server on
+    /// loopback behind nginx or a tunnel is as public as one on `0.0.0.0`.
+    DeclaredProxy,
+}
+
+fn reachable_from_elsewhere(
+    values: &BTreeMap<String, String>,
+    bound: std::net::SocketAddr,
+) -> Option<Reachable> {
+    if !bound.ip().to_canonical().is_loopback() {
+        Some(Reachable::Address)
+    } else if trusted_proxy_hops(values) > 0 {
+        Some(Reachable::DeclaredProxy)
+    } else {
+        None
+    }
+}
+
 fn published_secret_refusal(
     values: &BTreeMap<String, String>,
     bound: std::net::SocketAddr,
@@ -756,16 +1050,9 @@ fn published_secret_refusal(
         return None;
     }
 
-    // Two ways to be reachable, and the second is the one a bind address cannot
-    // see: a server on loopback behind nginx or a tunnel is as public as one on
-    // `0.0.0.0`. `CODETRIAL_TRUSTED_PROXY_HOPS` is the operator saying requests
-    // arrive through something in front, which is the same admission.
-    let reason = if !bound.ip().to_canonical().is_loopback() {
-        format!("bind {bound}")
-    } else if trusted_proxy_hops(values) > 0 {
-        "serve from behind a declared proxy".to_string()
-    } else {
-        return None;
+    let reason = match reachable_from_elsewhere(values, bound)? {
+        Reachable::Address => format!("bind {bound}"),
+        Reachable::DeclaredProxy => "serve from behind a declared proxy".to_string(),
     };
 
     Some(format!(
@@ -797,12 +1084,32 @@ fn value_or(values: &BTreeMap<String, String>, key: &str, default: &str) -> Stri
 
 /// One place decides where accounts live, because `web` and `serve` both open
 /// the same database and disagreeing about it would split a person's reports.
-fn account_db_path(values: &BTreeMap<String, String>) -> PathBuf {
-    PathBuf::from(value_or(
-        values,
-        "CODETRIAL_DB_PATH",
-        DEFAULT_ACCOUNT_DB_PATH,
-    ))
+///
+/// Beside the config file rather than in the working directory: the database
+/// has to be the same file on the next launch, and the directory a process was
+/// started from is not. It used to be a bare filename, which meant a launch
+/// from a shortcut or from another terminal found the config it wrote and then
+/// opened an empty database next to wherever it had been started.
+fn account_db_path(values: &BTreeMap<String, String>, options: &CliOptions) -> PathBuf {
+    match nonempty(values, "CODETRIAL_DB_PATH") {
+        Some(path) => PathBuf::from(path),
+        None => config_dir(options).join(DEFAULT_ACCOUNT_DB_PATH),
+    }
+}
+
+/// Where a cold start writes the config it just took, which is the same
+/// `config/` the search above looks in first for the root this is installed as.
+///
+/// A checkout is told apart by the template it ships, not by `config/` merely
+/// existing: a released binary run from a directory that happens to hold one
+/// would otherwise write the credentials there and lose them the moment it was
+/// next started from somewhere else.
+fn cold_start_config_path() -> PathBuf {
+    let in_checkout = PathBuf::from(CONFIG_DIR);
+    if in_checkout.join(CONFIG_EXAMPLE_NAME).is_file() {
+        return in_checkout.join(CONFIG_FILE_NAME);
+    }
+    codetrial::exe_dir().join(CONFIG_DIR).join(CONFIG_FILE_NAME)
 }
 
 #[cfg(test)]
@@ -914,6 +1221,96 @@ mod tests {
             ),
             None,
             "no declared proxy is the local run the default exists for"
+        );
+    }
+
+    /// The precedence two launches depend on: a cold start builds this map
+    /// without a config file and has to reach the same address and the same
+    /// verdict `run_web` will reach with one. A flag overrides what was in the
+    /// environment; no flag leaves it alone.
+    #[test]
+    fn the_flags_override_the_environment_and_only_where_given() {
+        let mut values = values(&[
+            ("CODETRIAL_WEB_ADDR", "127.0.0.1:1"),
+            ("CODETRIAL_WEB_DIR", "env-dir"),
+            ("NODE_ENV", "production"),
+        ]);
+        super::apply_options(
+            &mut values,
+            &super::CliOptions {
+                web_addr: Some("127.0.0.1:2".to_string()),
+                room_prefix: Some("flag".to_string()),
+                duration_min: Some(45),
+                ..super::CliOptions::default()
+            },
+        );
+
+        assert_eq!(values["CODETRIAL_WEB_ADDR"], "127.0.0.1:2");
+        assert_eq!(values["CODETRIAL_ROOM_PREFIX"], "flag");
+        assert_eq!(values["CODETRIAL_DURATION_MIN"], "45");
+        assert_eq!(
+            values["CODETRIAL_WEB_DIR"], "env-dir",
+            "a flag that was not passed must not erase the environment"
+        );
+        assert_eq!(
+            values["NODE_ENV"], "production",
+            "and must not touch the rest"
+        );
+    }
+
+    /// Setup is confined to the same interface the published session secret is,
+    /// and for a sharper reason: this listener hands `codetrial.env.local` to
+    /// whoever posts to it. Unlike `published_secret_refusal` there is no value
+    /// an operator can set to lift it, so every address is tested against one
+    /// empty environment.
+    #[test]
+    fn the_setup_page_is_confined_to_loopback() {
+        for local in [
+            "127.0.0.1:3000",
+            "127.0.0.53:3000",
+            "[::1]:3000",
+            "[::ffff:127.0.0.1]:3000",
+        ] {
+            assert_eq!(
+                super::public_setup_refusal(&values(&[]), addr(local)),
+                None,
+                "{local} reaches no further than this machine"
+            );
+        }
+
+        for public in ["0.0.0.0:3000", "[::]:3000", "192.168.1.10:3000"] {
+            let refusal = super::public_setup_refusal(&values(&[]), addr(public))
+                .unwrap_or_else(|| panic!("{public} must be refused"));
+            assert!(refusal.contains(public), "{refusal}");
+            assert!(refusal.contains("codetrial.env.local"), "{refusal}");
+        }
+    }
+
+    /// The same admission that makes a loopback bind public for the session
+    /// secret makes it public for Setup: a tunnel or an nginx in front is how
+    /// the internet reaches 127.0.0.1.
+    #[test]
+    fn a_declared_proxy_closes_the_setup_page_too() {
+        let refusal = super::public_setup_refusal(
+            &values(&[("CODETRIAL_TRUSTED_PROXY_HOPS", "1")]),
+            addr("127.0.0.1:3000"),
+        )
+        .expect("loopback behind a declared proxy must be refused");
+
+        // The variable by name: it is the only thing the reader of this message
+        // can change, and the address they are on is already loopback.
+        assert!(
+            refusal.contains("CODETRIAL_TRUSTED_PROXY_HOPS"),
+            "{refusal}"
+        );
+
+        assert_eq!(
+            super::public_setup_refusal(
+                &values(&[("CODETRIAL_TRUSTED_PROXY_HOPS", "0")]),
+                addr("127.0.0.1:3000")
+            ),
+            None,
+            "no declared proxy is the solo cold start this page exists for"
         );
     }
 
@@ -1060,13 +1457,97 @@ mod tests {
         }
     }
 
+    /// A `--config` that names nothing is an operator's mistake, which
+    /// `primary_config_path` reports by name. Reading it as a cold start
+    /// instead would answer a wrong path with a Setup page and write a second
+    /// config beside the one they meant. Both halves are asserted here because
+    /// the missing file is the only case where the two conditions disagree,
+    /// and it is a unit test rather than a spawned binary because a launch
+    /// that wrongly believes it is a cold start serves Setup and waits there.
+    #[test]
+    fn a_named_config_is_never_a_cold_start() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let named = |path: std::path::PathBuf| super::CliOptions {
+            config_path: Some(path.display().to_string()),
+            ..super::CliOptions::default()
+        };
+
+        let empty = values(&[]);
+        assert!(
+            !super::is_cold_start(&named(root.join("Cargo.toml")), &empty),
+            "a config file that exists was named, so there is nothing to set up"
+        );
+        assert!(
+            !super::is_cold_start(&named(root.join("no-such-config.env")), &empty),
+            "a config file that is missing was still named, and a name is an \
+             instruction to read that file rather than an invitation to ask"
+        );
+    }
+
+    /// Exported credentials are a configured launch, so there is nothing to ask
+    /// for. Asking anyway put a page nobody would open in front of a headless
+    /// start that then waited forever, where naming the missing file and
+    /// exiting was something a log could carry.
+    #[test]
+    fn exported_credentials_are_a_configured_launch() {
+        assert!(super::environment_supplies_credentials(&values(&[
+            ("LIVEKIT_URL", "wss://example"),
+            ("LIVEKIT_API_KEY", "key"),
+            ("LIVEKIT_API_SECRET", "secret"),
+        ])));
+
+        // One short of the set the web side refuses to start without, which is
+        // still a launch that has to be asked.
+        assert!(!super::environment_supplies_credentials(&values(&[
+            ("LIVEKIT_URL", "wss://example"),
+            ("LIVEKIT_API_KEY", "key"),
+        ])));
+
+        // Present and blank is missing, the way `nonempty` reads it everywhere
+        // else, and the way `read_config_file` would have written it back.
+        assert!(!super::environment_supplies_credentials(&values(&[
+            ("LIVEKIT_URL", "wss://example"),
+            ("LIVEKIT_API_KEY", "key"),
+            ("LIVEKIT_API_SECRET", "   "),
+        ])));
+
+        // The optional one is not part of the question.
+        assert!(super::environment_supplies_credentials(&values(&[
+            ("LIVEKIT_URL", "wss://example"),
+            ("LIVEKIT_API_KEY", "key"),
+            ("LIVEKIT_API_SECRET", "secret"),
+            ("GOOGLE_API_KEY", ""),
+        ])));
+    }
+
     #[test]
     fn bare_config_paths_discover_providers_from_the_current_directory() {
         let options = super::CliOptions {
             config_path: Some("prod.env".to_string()),
             ..Default::default()
         };
-        assert_eq!(super::provider_dir(&options), std::path::PathBuf::from("."));
+        assert_eq!(super::config_dir(&options), std::path::PathBuf::from("."));
+    }
+
+    /// The database is the config directory's, so a named config carries it
+    /// along rather than leaving it wherever the process was started.
+    #[test]
+    fn the_account_database_sits_beside_the_config_that_was_named() {
+        let options = super::CliOptions {
+            config_path: Some("/etc/codetrial/prod.env".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            super::account_db_path(&values(&[]), &options),
+            std::path::PathBuf::from("/etc/codetrial/codetrial.db")
+        );
+        assert_eq!(
+            super::account_db_path(
+                &values(&[("CODETRIAL_DB_PATH", "/srv/accounts.db")]),
+                &options
+            ),
+            std::path::PathBuf::from("/srv/accounts.db")
+        );
     }
 
     /// The pair, not the id. `login_config` enables OAuth only when it has

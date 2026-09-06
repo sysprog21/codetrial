@@ -137,6 +137,27 @@ pub fn livekit_room_admin_token(
     )
 }
 
+/// Validation-only: `roomList` proves the key works without needing a room,
+/// unlike `livekit_room_admin_token`.
+pub fn livekit_room_list_token(
+    api_key: &str,
+    api_secret: &str,
+    now_seconds: u64,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    sign_jwt(
+        api_secret,
+        &json!({
+            "iss": api_key,
+            "sub": "credential-check",
+            "nbf": now_seconds,
+            "exp": now_seconds + TOKEN_TTL_SECONDS,
+            "video": {
+                "roomList": true
+            }
+        }),
+    )
+}
+
 fn sign_jwt(
     api_secret: &str,
     claims: &Value,

@@ -1172,7 +1172,9 @@ deletion nothing here can perform.
 
 ## The database
 
-One database, the one at `CODETRIAL_DB_PATH`, default `codetrial.db`.
+One database, the one at `CODETRIAL_DB_PATH`. Its default is `codetrial.db` in
+the directory the config file was read from, so it stays with the installation
+rather than with whatever directory the server was started in.
 `interviewlab.db` at the repo root is a pre-rename leftover and is not migrated.
 
 Schema changes are appended to `ACCOUNT_MIGRATIONS` in `src/accounts.rs` and

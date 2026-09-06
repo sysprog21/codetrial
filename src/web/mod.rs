@@ -24,6 +24,7 @@ mod interviews;
 mod policy;
 mod pool;
 mod recordings;
+mod setup;
 mod token;
 
 // Flattened back into one namespace so the split is a file boundary and not an
@@ -39,6 +40,7 @@ pub use assets::static_file_meta;
 pub use auth::login_config;
 pub use interviews::REPLAY_RATE_LIMIT;
 use pool::{ProviderQuota, QuotaRefresher, spawn_provider_quota_refresher};
+pub use setup::setup_service;
 pub use token::{TOKEN_RATE_LIMIT, TokenConfig, TokenResponse, token_response};
 
 pub const MAX_BODY_BYTES: usize = 8 * 1024;

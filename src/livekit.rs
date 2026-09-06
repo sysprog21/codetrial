@@ -892,6 +892,25 @@ fn is_participant_gone(error: &str) -> bool {
     error.contains("RemoveParticipant") && error.contains("404") && error.contains("not_found")
 }
 
+/// The Twirp POST both RoomService callers make. Only the token and the base
+/// differ, and both are strings; the body comes back with the status because a
+/// refusal explains itself there and not in the code.
+async fn post_room_service(
+    base: &str,
+    token: &str,
+    method: &str,
+    body: &serde_json::Value,
+) -> Result<(reqwest::StatusCode, String), Box<dyn std::error::Error + Send + Sync>> {
+    let response = crate::http_client()
+        .post(format!("{base}/twirp/livekit.RoomService/{method}"))
+        .bearer_auth(token)
+        .json(body)
+        .send()
+        .await?;
+    let status = response.status();
+    Ok((status, response.text().await?))
+}
+
 async fn livekit_room_service_request(
     config: &AgentConfig,
     room_name: &str,
@@ -905,28 +924,72 @@ async fn livekit_room_service_request(
         room_name,
         now_seconds,
     )?;
-    let url = format!(
-        "{}/twirp/livekit.RoomService/{method}",
-        livekit_http_base(&config.livekit_url)
-    );
-    let response = crate::http_client()
-        .post(url)
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .await?;
-    let status = response.status();
-    let text = response.text().await?;
+    let (status, text) = post_room_service(
+        &livekit_http_base(&config.livekit_url),
+        &token,
+        method,
+        &body,
+    )
+    .await?;
     if !status.is_success() {
         return Err(format!("LiveKit RoomService {method} failed: {status} {text}").into());
     }
     parse_room_service_response(method, &text)
 }
 
+/// Proves credentials like `check-gemini` proves a Google key: the server
+/// must accept a signed request. `ListRooms` needs no room to exist.
+pub(crate) async fn validate_livekit_credentials(
+    url: &str,
+    api_key: &str,
+    api_secret: &str,
+    now_seconds: u64,
+) -> Result<(), String> {
+    let token = crate::token::livekit_room_list_token(api_key, api_secret, now_seconds)
+        .map_err(|error| error.to_string())?;
+    let (status, text) = post_room_service(
+        &livekit_http_base(url),
+        &token,
+        "ListRooms",
+        &serde_json::json!({}),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    if status.is_success() {
+        return Ok(());
+    }
+
+    // The body, because it is LiveKit's own account of the refusal and the
+    // Setup form is the one place a reader can act on it: a status alone says
+    // "did not work" to someone who already knows that. Bounded, because a
+    // wrong host answers with an HTML page and the form is one line.
+    const REASON_LIMIT: usize = 200;
+    let reason: String = text.chars().take(REASON_LIMIT).collect();
+    let ellipsis = if text.chars().count() > REASON_LIMIT {
+        "..."
+    } else {
+        ""
+    };
+    Err(format!(
+        "LiveKit ListRooms failed: {status} {reason}{ellipsis}"
+    ))
+}
+
+/// The RoomService origin for a LiveKit URL: the same host, over the scheme an
+/// HTTP client will send.
+///
+/// The rewrite goes through `livekit_scheme` rather than matching the two
+/// websocket schemes here, because `validate_livekit_url` accepts a scheme in
+/// any case and this has to rewrite every spelling that accepts. A pasted
+/// `WSS://` used to survive unchanged, and reqwest refuses any scheme but http
+/// and https before the request leaves the process, so credentials that were
+/// good came back as credentials that did not work.
 fn livekit_http_base(url: &str) -> String {
-    url.trim_end_matches('/')
-        .replacen("wss://", "https://", 1)
-        .replacen("ws://", "http://", 1)
+    let trimmed = url.trim_end_matches('/');
+    match crate::config::livekit_scheme(trimmed) {
+        Some((scheme, _, http)) => format!("{http}{}", &trimmed[scheme.len()..]),
+        None => trimmed.to_string(),
+    }
 }
 
 fn parse_room_service_response(
@@ -2463,6 +2526,25 @@ mod tests {
         assert_eq!(
             livekit_http_base("ws://localhost:7880"),
             "http://localhost:7880"
+        );
+    }
+
+    /// `validate_livekit_url` compares the scheme without regard to case, so
+    /// every spelling it accepts reaches here. The host keeps the case it was
+    /// given: DNS does not care, and a path might.
+    #[test]
+    fn livekit_http_base_rewrites_a_scheme_in_any_case() {
+        assert_eq!(
+            livekit_http_base("WSS://Example.LiveKit.Cloud"),
+            "https://Example.LiveKit.Cloud"
+        );
+        assert_eq!(
+            livekit_http_base("Ws://localhost:7880/"),
+            "http://localhost:7880"
+        );
+        assert_eq!(
+            livekit_http_base("HTTPS://example.livekit.cloud"),
+            "https://example.livekit.cloud"
         );
     }
 
