@@ -796,6 +796,133 @@ mod migration_tests {
         );
     }
 
+    /// The stored expiry is the constant applied, not merely a number near it.
+    ///
+    /// Pinning `SESSION_TTL_SECONDS` alone left the arithmetic that uses it
+    /// free: turning `now + SESSION_TTL_SECONDS` into a product survived,
+    /// because nothing read the row the session actually got.
+    #[test]
+    fn a_session_expires_one_lifetime_after_it_was_created() {
+        let dir = scratch("session-expiry");
+        initialize_account_database(dir.as_ref()).unwrap();
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        sign_in(dir.as_ref(), "clockwatcher");
+        let after = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let expires: i64 = rusqlite::Connection::open(dir.as_ref())
+            .unwrap()
+            .query_row("SELECT expires_at FROM sessions", [], |row| row.get(0))
+            .unwrap();
+        assert!(
+            expires >= before + SESSION_TTL_SECONDS && expires <= after + SESSION_TTL_SECONDS,
+            "expiry {expires} is not one lifetime after a creation between \
+             {before} and {after}"
+        );
+    }
+
+    /// Zero is the boundary of the sign test, and neither caller produces it.
+    ///
+    /// `recorded_account_id` is negative by construction and GitHub ids are
+    /// positive, so nothing reaches this value in the product; the comparisons
+    /// still have to resolve it one way, and both of them resolve it to the
+    /// GitHub side. Asserted because the alternatives survive otherwise: a
+    /// zero id that adopted nothing would collide with itself on the second
+    /// sign-in, and one treated as vouched for would keep an address GitHub
+    /// never confirmed.
+    #[test]
+    fn a_zero_github_id_adopts_its_row_and_earns_no_verified_address() {
+        let dir = scratch("zero-github-id");
+        initialize_account_database(dir.as_ref()).unwrap();
+        let profile = |login: &str| GitHubProfile {
+            github_id: 0,
+            login: login.to_string(),
+            avatar_url: None,
+            verified_email: Some("zero@example.test".to_string()),
+        };
+        create_session(&accounts_at(dir.as_ref()), &profile("zero")).unwrap();
+        create_session(&accounts_at(dir.as_ref()), &profile("zero-renamed")).unwrap();
+        assert_eq!(logins(dir.as_ref()), vec!["zero-renamed".to_string()]);
+
+        let (email, verified): (Option<String>, i64) = rusqlite::Connection::open(dir.as_ref())
+            .unwrap()
+            .query_row("SELECT email, email_verified FROM users", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(email, None, "only a positive id is one GitHub vouched for");
+        assert_eq!(verified, 0);
+    }
+
+    /// A report id somebody else holds is refused, not overwritten.
+    ///
+    /// The ownership guard is the whole of that refusal, and dropping it
+    /// survived every test: the write below would have gone through and
+    /// replaced another account's report with this one's.
+    #[test]
+    fn a_report_id_another_account_holds_is_refused() {
+        let dir = scratch("report-owner");
+        initialize_account_database(dir.as_ref()).unwrap();
+        let accounts = accounts_at(dir.as_ref());
+        let holder = user_id_for(&accounts, &sign_in_as(dir.as_ref(), "holder", -1));
+        let other = user_id_for(&accounts, &sign_in_as(dir.as_ref(), "other", -2));
+
+        assert_eq!(
+            save_report(
+                &accounts,
+                holder,
+                "shared",
+                "two-sum",
+                &json!({"whose": "holder"})
+            )
+            .unwrap(),
+            ReportSave::Saved
+        );
+        assert_eq!(
+            save_report(
+                &accounts,
+                other,
+                "shared",
+                "two-sum",
+                &json!({"whose": "other"})
+            )
+            .unwrap(),
+            ReportSave::NotOwner
+        );
+        assert_eq!(list_reports(&accounts, other).unwrap().len(), 0);
+        assert_eq!(
+            list_reports(&accounts, holder).unwrap()[0]["payload"]["whose"],
+            "holder",
+            "the refused write must not have replaced the row it collided with"
+        );
+    }
+
+    /// A room is claimed once, and the second claim says so.
+    ///
+    /// The claim is an UPDATE guarded on the room still being unset, so its
+    /// row count is what separates taking the room from finding it taken.
+    /// Reading that count as anything but positive survived, which would have
+    /// handed two tokens the same interview.
+    #[test]
+    fn an_interview_room_is_claimed_once() {
+        let dir = scratch("claim-room");
+        initialize_account_database(dir.as_ref()).unwrap();
+        let accounts = accounts_at(dir.as_ref());
+        let account = user_id_for(&accounts, &sign_in(dir.as_ref(), "claimer"));
+        create_interview(&accounts, "int-claim", account, "2026-08-21", 5).unwrap();
+
+        assert!(claim_interview_room(&accounts, "int-claim", account, "interview-aaa").unwrap());
+        assert!(
+            !claim_interview_room(&accounts, "int-claim", account, "interview-bbb").unwrap(),
+            "a room already claimed is not claimed again"
+        );
+    }
+
     fn accounts_at(path: &Path) -> Accounts {
         Accounts::open(GitHubLoginConfig {
             oauth: None,
