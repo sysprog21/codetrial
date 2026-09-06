@@ -16,6 +16,7 @@ import {
   problemMarkup,
   reportMarkdown,
   reportMarkup,
+  reportSaveStatus,
   resultsMarkup,
   runnerStatusMarkup,
 } from "../../web/render.js";
@@ -340,6 +341,48 @@ test("report markup renders scores, verdict, and escaped feedback", () => {
   assert.match(body, /<pre>print\(1\)<\/pre>/, "trailing blank lines are trimmed");
   assert.match(body, /id="download-report"/);
   assert.match(body, /id="done"/);
+});
+
+test("report markup states every save outcome without hiding Download", () => {
+  const session = {
+    report: { incomplete: true, summary: "Done", hintsUsed: 0 },
+    problemTitle: "Two Sum",
+    language: "python",
+    code: "pass",
+  };
+  for (const [saveResult, message] of [
+    [{ local: "saved", account: "saved" }, "Saved to your account"],
+    [{ local: "saved", account: "failed" }, "Saved on this device only"],
+    [{ local: "saved", account: "skipped" }, "Saved on this device only"],
+    [{ local: "failed", account: "saved" }, "Saved to your account"],
+    [{ local: "failed", account: "failed" }, "Report was not saved"],
+    [{ local: "failed", account: "skipped" }, "Report was not saved"],
+  ]) {
+    const body = reportMarkup({ ...session, saveResult });
+    assert.match(body, new RegExp(`<p id="report-save-status"[^>]*>${message}</p>`));
+    assert.match(body, /id="download-report"/);
+  }
+  const saving = reportMarkup({ ...session, saveResult: null });
+  assert.match(saving, /role="status">Saving report\.\.\.<\/p>/);
+  assert.match(saving, /id="done"[^>]*disabled/);
+  assert.doesNotMatch(saving, /id="download-report"[^>]*disabled/);
+  assert.doesNotMatch(reportMarkup(session), /report-save-status/);
+  assert.deepEqual(reportSaveStatus(null), {
+    message: "Saving report...",
+    className: "muted small",
+  });
+  assert.deepEqual(reportSaveStatus({ local: "saved", account: "saved" }), {
+    message: "Saved to your account",
+    className: "muted small",
+  });
+  assert.deepEqual(reportSaveStatus({ local: "failed", account: "failed" }), {
+    message: "Report was not saved",
+    className: "critical small",
+  });
+  assert.deepEqual(reportSaveStatus({ local: "saved", account: "failed" }), {
+    message: "Saved on this device only",
+    className: "muted small",
+  });
 });
 
 test("practice-next drills render accessibly in HTML and Markdown", () => {

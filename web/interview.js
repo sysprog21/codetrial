@@ -17,6 +17,7 @@ import {
   problemMarkup,
   reportMarkdown,
   reportMarkup,
+  reportSaveStatus,
   resultsMarkup,
   runnerStatusMarkup,
 } from "./render.js";
@@ -1036,13 +1037,14 @@ async function receiveReport(room, payload) {
     void flushReplay();
     state.phase = "report";
     setLocalAudioEnabled(false);
-    await saveHistory();
+    const saving = saveHistory();
     // renderReport releases the devices for every report path, so there is no
     // separate stopLocalMedia here.
     renderReport();
     void room.disconnect().catch(() => {});
     state.room = null;
     state.connected = false;
+    renderReportSaveStatus(await saving);
   } catch (error) {
     // A malformed report is not worth tearing the session down over, but it is
     // worth saying so: this catch also covers saveHistory and renderReport, so
@@ -1487,7 +1489,6 @@ function leaveRoom() {
 async function showReport() {
   if (state.phase === "report") return;
   state.phase = "report";
-  nodes.ending.hidden = true;
   const passed = state.latestSummary?.passed || 0;
   const total = state.latestSummary?.total || 0;
   // Only the candidate's own turns count as having communicated. Jim's greeting
@@ -1512,8 +1513,9 @@ async function showReport() {
     { kind: "coding", budgetMin: codingMinutes, status: total > 0 && passed === total ? "complete" : "incomplete" },
     { kind: "behavioral", budgetMin: behavioralMinutes, status: interviewLoop === "coding_only" ? "not_configured" : "skipped" },
   ] };
-  await saveHistory();
+  const saving = saveHistory();
   renderReport();
+  renderReportSaveStatus(await saving);
 }
 
 function renderReport() {
@@ -1525,14 +1527,24 @@ function renderReport() {
   // candidate was looking at a screen telling them the interview had ended.
   stopAvatar();
   stopLocalMedia();
+  nodes.ending.hidden = true;
   nodes.report.hidden = false;
   nodes.report.innerHTML = reportMarkup({
     report: state.report,
     problemTitle: problem.title,
     language: state.language,
     code: currentCode(),
+    saveResult: null,
   });
   mountBehavioralReview(nodes.report, state.transcript.values());
+}
+
+function renderReportSaveStatus(result) {
+  const node = nodes.report.querySelector("#report-save-status");
+  const status = reportSaveStatus(result);
+  node.textContent = status.message;
+  node.className = status.className;
+  nodes.report.querySelector("#done").disabled = false;
 }
 
 function saveHistory() {

@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::accounts::{
     MAX_INTERVIEWS_PER_USER, MAX_REPORTS_PER_USER, ReportSave, blocking, create_interview,
-    list_reports, random_token, save_report,
+    delete_reports, list_reports, random_token, save_report,
 };
 use crate::current_epoch_seconds;
 
@@ -38,6 +38,16 @@ pub(crate) async fn list_reports_handler(Owner { accounts, user }: Owner) -> Res
         Err(_) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             json!({ "error": "Could not read reports." }),
+        ),
+    }
+}
+
+pub(crate) async fn delete_reports_handler(Owner { accounts, user }: Owner) -> Response {
+    match blocking(move || delete_reports(&accounts, user.id)).await {
+        Ok(deleted) => json_response(StatusCode::OK, json!({ "deleted": deleted })),
+        Err(_) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": "Could not delete reports." }),
         ),
     }
 }

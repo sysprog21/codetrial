@@ -113,6 +113,13 @@ export function problemMarkup(problem) {
   `;
 }
 
+export function reportSaveStatus(result) {
+  if (result === null) return { message: "Saving report...", className: "muted small" };
+  if (result.account === "saved") return { message: "Saved to your account", className: "muted small" };
+  if (result.local === "saved") return { message: "Saved on this device only", className: "muted small" };
+  return { message: "Report was not saved", className: "critical small" };
+}
+
 /// Only the verdict and the scores differ between an evaluated session and one
 /// that produced nothing. Forking the whole card duplicated the header, the
 /// evidence section, the code block and the actions row, including the
@@ -120,7 +127,7 @@ export function problemMarkup(problem) {
 /// Exactly one expression in this file emits `/ 100`, and it sits behind the
 /// guard, so "no scores in an incomplete report" is structural rather than
 /// something a test has to catch after the fact.
-export function reportMarkup({ report, problemTitle, language, code }) {
+export function reportMarkup({ report, problemTitle, language, code, saveResult }) {
   const hire = report.decision === "HIRE";
   const heading = report.incomplete ? "No evaluation" : "Your performance packet";
   const badge = report.incomplete
@@ -155,6 +162,9 @@ export function reportMarkup({ report, problemTitle, language, code }) {
   const contract = report.interviewContract
     ? `Contract bundle ${report.interviewContract.bundleVersion} · rubric ${report.interviewContract.rubricVersion} · report schema ${report.interviewContract.reportSchemaVersion}`
     : "Legacy/unversioned contract";
+  // Replay renders reports it did not create, so only the interview caller
+  // supplies this field and mounts a live region for the pending save.
+  const saveStatus = saveResult === undefined ? null : reportSaveStatus(saveResult);
 
   return `
     <div class="report-card">
@@ -170,7 +180,8 @@ export function reportMarkup({ report, problemTitle, language, code }) {
       ${frameworkTimeline}
       ${integrityEvidenceMarkup(report)}
       <details><summary>Your final code (${escapeHtml(language)})</summary><pre>${escapeHtml(code.trimEnd() || "(editor was empty)")}</pre></details>
-      <div class="report-actions"><button id="download-report" type="button">Download report (.md)</button><button id="done" type="button">Done - back to lobby</button></div>
+      ${saveStatus ? `<p id="report-save-status" class="${saveStatus.className}" role="status">${saveStatus.message}</p>` : ""}
+      <div class="report-actions"><button id="download-report" type="button">Download report (.md)</button><button id="done" type="button"${saveResult === null ? " disabled" : ""}>Done - back to lobby</button></div>
     </div>
   `;
 }

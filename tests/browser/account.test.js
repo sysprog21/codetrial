@@ -3,20 +3,33 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
-import { historyKey, readLocalHistory, saveReportHistory } from "../../web/history.js";
-import { functionBody } from "./source.js";
+import {
+  clearReportHistory,
+  historyKey,
+  readLocalHistory,
+  saveReportHistory,
+} from "../../web/history.js";
+import { functionBody, memoryStorage, root } from "./source.js";
 
-const web = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web");
+const web = join(root, "web");
 const read = (name) => readFileSync(join(web, name), "utf8");
 
 test("lobby exposes signed in and signed out account hooks", () => {
   const page = read("index.html");
   const script = read("app.js");
 
-  for (const id of ["account-status", "github-login", "login-link", "logout", "history"]) {
+  for (const id of [
+    "account-status",
+    "github-login",
+    "login-link",
+    "logout",
+    "history-header",
+    "history",
+    "delete-reports",
+    "report-delete-status",
+  ]) {
     assert.match(page, new RegExp(`id="${id}"`), `index.html must keep #${id}`);
   }
   assert.match(script, /fetch\("\/api\/login", \{/);
@@ -26,15 +39,25 @@ test("lobby exposes signed in and signed out account hooks", () => {
   assert.match(script, /fetchJson\("\/api\/reports"\)/);
   assert.match(script, /fetch\("\/api\/logout", \{ method: "POST" \}\)/);
   assert.match(script, /readLocalHistory\(\)/);
+  assert.match(script, /clearReportHistory\(\{ account: accountHistory \}\)/);
   assert.match(script, /setStartGate\(true\)/, "GitHub username must gate interview start when required");
 });
 
 test("interview history routes through the shared persistence helper", () => {
   const script = read("interview.js");
-  const saveHistory = script.slice(script.indexOf("function saveHistory"));
+  const saveHistory = functionBody(script, "saveHistory");
 
   assert.match(script, /import \{ saveReportHistory \} from "\.\/history\.js"/);
   assert.match(saveHistory, /return saveReportHistory\(entry\)/);
+  for (const name of ["receiveReport", "showReport"]) {
+    const body = functionBody(script, name);
+    assert.match(body, /renderReport\(\)/);
+    assert.match(body, /renderReportSaveStatus\(await saving\)/);
+    assert.ok(body.indexOf("renderReport()") < body.indexOf("await saving"));
+  }
+  assert.match(functionBody(script, "renderReport"), /saveResult: null/);
+  assert.match(functionBody(script, "renderReportSaveStatus"), /querySelector\("#done"\)\.disabled = false/);
+  assert.match(functionBody(script, "renderReport"), /nodes\.ending\.hidden = true/);
 });
 
 test("a completed test run keeps pause and round locks", () => {
@@ -184,7 +207,7 @@ test("report history writes local storage before account sync", async () => {
   assert.deepEqual(posts, []);
 
   releaseSession();
-  assert.equal(await saved, true);
+  assert.deepEqual(await saved, { local: "saved", account: "saved" });
   assert.equal(posts.length, 1);
   assert.equal(posts[0].url, "/api/reports");
   assert.equal(posts[0].options.method, "POST");
@@ -192,18 +215,18 @@ test("report history writes local storage before account sync", async () => {
 
 test("report history keeps anonymous and failed account saves local", async () => {
   const anonymous = memoryStorage();
-  assert.equal(
+  assert.deepEqual(
     await saveReportHistory({ id: "anon", problemId: "two-sum" }, {
       storage: anonymous,
       fetcher: async () => response({ signedIn: false }),
     }),
-    false,
+    { local: "saved", account: "skipped" },
   );
   assert.equal(JSON.parse(anonymous.getItem(historyKey))[0].id, "anon");
 
   const failed = memoryStorage();
   const calls = [];
-  assert.equal(
+  assert.deepEqual(
     await saveReportHistory({ id: "fail", problemId: "two-sum" }, {
       storage: failed,
       fetcher: async (url) => {
@@ -211,19 +234,163 @@ test("report history keeps anonymous and failed account saves local", async () =
         return url === "/api/session" ? response({ signedIn: true }) : response({}, false);
       },
     }),
-    false,
+    { local: "saved", account: "failed" },
   );
   assert.deepEqual(calls, ["/api/session", "/api/reports"]);
   assert.equal(JSON.parse(failed.getItem(historyKey))[0].id, "fail");
 });
 
-function memoryStorage() {
-  const data = new Map();
-  return {
-    getItem: (key) => data.get(key) ?? null,
-    setItem: (key, value) => data.set(key, String(value)),
+test("report history exposes every local and account failure", async () => {
+  const brokenStorage = {
+    getItem: () => null,
+    setItem: () => { throw new Error("quota"); },
   };
-}
+  assert.deepEqual(
+    await saveReportHistory({ id: "local-fail" }, {
+      storage: brokenStorage,
+      fetcher: async () => response({ signedIn: false }),
+    }),
+    { local: "failed", account: "skipped" },
+  );
+
+  const accountFailure = async (fetcher) => saveReportHistory({ id: "account-fail" }, {
+    storage: memoryStorage(),
+    fetcher,
+  });
+  assert.deepEqual(
+    await accountFailure(async () => { throw new Error("offline"); }),
+    { local: "saved", account: "failed" },
+  );
+  assert.deepEqual(
+    await accountFailure(async () => response(null)),
+    { local: "saved", account: "failed" },
+  );
+  assert.deepEqual(
+    await accountFailure(async () => ({ ok: true, json: async () => { throw new Error("bad json"); } })),
+    { local: "saved", account: "failed" },
+  );
+
+  for (const session of [response({}, false), response({ loginRequired: true })]) {
+    let calls = 0;
+    assert.deepEqual(
+      await accountFailure(async () => {
+        calls += 1;
+        return session;
+      }),
+      { local: "saved", account: "failed" },
+    );
+    assert.equal(calls, 1, "a failed or malformed session must not POST a report");
+  }
+});
+
+test("report history rechecks signed-out and signed-in storage before clearing", async () => {
+  const signedOut = memoryStorage();
+  signedOut.setItem(historyKey, "local");
+  const signedOutCalls = [];
+  assert.equal(await clearReportHistory({
+    storage: signedOut,
+    fetcher: async (url) => {
+      signedOutCalls.push(url);
+      return response({ signedIn: false });
+    },
+  }), "cleared");
+  assert.equal(signedOut.getItem(historyKey), null);
+  assert.deepEqual(signedOutCalls, ["/api/session"]);
+
+  const signedIn = memoryStorage();
+  signedIn.setItem(historyKey, "local");
+  const calls = [];
+  const clear = () => clearReportHistory({
+    storage: signedIn,
+    fetcher: async (url, options) => {
+      calls.push({ url, options });
+      return url === "/api/session" ? response({ signedIn: true }) : response({ deleted: 1 });
+    },
+  });
+  assert.equal(await clear(), "cleared");
+  signedIn.setItem(historyKey, "local-again");
+  assert.equal(await clear(), "cleared");
+  assert.equal(signedIn.getItem(historyKey), null);
+  assert.deepEqual(calls.map(({ url }) => url), [
+    "/api/session", "/api/reports", "/api/session", "/api/reports",
+  ]);
+  assert.equal(calls[1].options.method, "DELETE");
+});
+
+test("report history retains local data on account failure and reports a partial clear", async () => {
+  const retained = memoryStorage();
+  retained.setItem(historyKey, "keep");
+  for (const fetcher of [
+    async () => { throw new Error("offline"); },
+    async () => response({}, false),
+  ]) {
+    assert.equal(await clearReportHistory({ storage: retained, fetcher }), "failed");
+    assert.equal(retained.getItem(historyKey), "keep");
+  }
+
+  const brokenStorage = {
+    removeItem: () => { throw new Error("blocked"); },
+  };
+  assert.equal(await clearReportHistory({
+    storage: brokenStorage,
+    fetcher: async (url) => url === "/api/session"
+      ? response({ signedIn: true })
+      : response({ deleted: 1 }),
+  }), "account-cleared-local-failed");
+  assert.equal(await clearReportHistory({
+    storage: brokenStorage,
+    fetcher: async () => response({}),
+  }), "failed");
+});
+
+test("history deletion observes a cross-tab sign-in", async () => {
+  const storage = memoryStorage();
+  storage.setItem(historyKey, "keep");
+  const calls = [];
+  assert.equal(await clearReportHistory({
+    storage,
+    fetcher: async (url, options) => {
+      calls.push({ url, options });
+      return url === "/api/session" ? response({ signedIn: true }) : response({ deleted: 1 });
+    },
+  }), "cleared");
+  assert.equal(storage.getItem(historyKey), null);
+  assert.deepEqual(calls.map(({ url }) => url), ["/api/session", "/api/reports"]);
+  assert.equal(calls[1].options.method, "DELETE");
+});
+
+test("a cross-tab sign-out keeps the account copy rather than claiming a clear", async () => {
+  const storage = memoryStorage();
+  storage.setItem(historyKey, "keep");
+  const calls = [];
+  // The lobby loaded account history, then the session went away in another
+  // tab. This browser can no longer authenticate the delete, so the account
+  // copy is still there and saying it was erased would be a lie.
+  assert.equal(await clearReportHistory({
+    account: true,
+    storage,
+    fetcher: async (url) => {
+      calls.push(url);
+      return response({ signedIn: false });
+    },
+  }), "failed");
+  assert.equal(storage.getItem(historyKey), "keep");
+  assert.deepEqual(calls, ["/api/session"]);
+});
+
+test("every history request carries a deadline", async () => {
+  const deadlines = [];
+  const fetcher = async (url, options) => {
+    deadlines.push(options?.signal instanceof AbortSignal);
+    return url === "/api/session" ? response({ signedIn: true }) : response({ deleted: 1 });
+  };
+  const storage = memoryStorage();
+  await saveReportHistory({ id: "deadline" }, { fetcher, storage });
+  await clearReportHistory({ fetcher, storage });
+  // Session probe and report POST for the save, then the same pair for the
+  // clear. A request without one hangs whatever the candidate is waiting on.
+  assert.deepEqual(deadlines, [true, true, true, true]);
+});
 
 function response(body, ok = true) {
   return {

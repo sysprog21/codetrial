@@ -415,6 +415,13 @@ function cppPrefixGuard(spec, lengthName) {
   return `if (${lengthName} < 0 || ${lengthName} > (int)${name}.size()) throw runtime_error("Return value must be an integer length for the kept prefix.");`;
 }
 
+/// The Java harnesses below stay on Java 8 syntax, which is why `jsonAny` tests
+/// types with a plain `instanceof` and a cast rather than the pattern matching
+/// that reads better. Compiler Explorer runs a current JDK, so the modern form
+/// worked there, but it needs javac 16 to compile and every machine with an
+/// older one skipped the harness test instead of running it. The generated code
+/// is never read by a candidate, so the plainer form costs nothing and keeps
+/// the test runnable wherever a JDK exists.
 function javaHarness(spec, candidateCode) {
   candidateCode = candidateCode.replace(/\bpublic\s+class\s+Solution\b/g, "class Solution");
   return `import java.util.*;
@@ -435,7 +442,7 @@ class Main {
   static String json(char[][] values) { StringJoiner out = new StringJoiner(",", "[", "]"); for (char[] row : values) { StringJoiner inner = new StringJoiner(",", "[", "]"); for (char value : row) inner.add(json(String.valueOf(value))); out.add(inner.toString()); } return out.toString(); }
   static String json(int[][] values) { StringJoiner out = new StringJoiner(",", "[", "]"); for (int[] row : values) out.add(json(row)); return out.toString(); }
   static String json(List<?> values) { StringJoiner out = new StringJoiner(",", "[", "]"); for (Object value : values) out.add(jsonAny(value)); return out.toString(); }
-  static String jsonAny(Object value) { if (value == null) return "null"; if (value instanceof String s) return json(s); if (value instanceof Integer i) return json(i); if (value instanceof Double d) return json(d); if (value instanceof Boolean b) return json(b); if (value instanceof int[] a) return json(a); if (value instanceof double[] a) return json(a); if (value instanceof String[] a) return json(a); if (value instanceof char[][] a) return json(a); if (value instanceof int[][] a) return json(a); if (value instanceof List<?> l) return json(l); if (value instanceof ListNode n) return json(n); if (value instanceof TreeNode n) return json(n); return json(String.valueOf(value)); }
+  static String jsonAny(Object value) { if (value == null) return "null"; if (value instanceof String) return json((String) value); if (value instanceof Integer) return json((Integer) value); if (value instanceof Double) return json((Double) value); if (value instanceof Boolean) return json((Boolean) value); if (value instanceof int[]) return json((int[]) value); if (value instanceof double[]) return json((double[]) value); if (value instanceof String[]) return json((String[]) value); if (value instanceof char[][]) return json((char[][]) value); if (value instanceof int[][]) return json((int[][]) value); if (value instanceof List<?>) return json((List<?>) value); if (value instanceof ListNode) return json((ListNode) value); if (value instanceof TreeNode) return json((TreeNode) value); return json(String.valueOf(value)); }
   static String json(ListNode node) { ArrayList<Integer> values = new ArrayList<>(); HashSet<ListNode> seen = new HashSet<>(); while (node != null && !seen.contains(node)) { seen.add(node); values.add(node.val); node = node.next; } return json(values); }
   static String json(TreeNode root) { if (root == null) return "[]"; ArrayList<String> values = new ArrayList<>(); LinkedList<TreeNode> q = new LinkedList<>(); q.add(root); while (!q.isEmpty()) { TreeNode node = q.remove(); if (node == null) { values.add("null"); continue; } values.add(String.valueOf(node.val)); q.add(node.left); q.add(node.right); } while (!values.isEmpty() && values.get(values.size() - 1).equals("null")) values.remove(values.size() - 1); return "[" + String.join(",", values) + "]"; }
   static ListNode listNode(int[] values) { ListNode dummy = new ListNode(0), tail = dummy; for (int value : values) { tail.next = new ListNode(value); tail = tail.next; } return dummy.next; }
@@ -469,7 +476,7 @@ class Main {
   static String json(boolean value) { return value ? "true" : "false"; }
   static String json(int value) { return String.valueOf(value); }
   static String json(double value) { return Double.isFinite(value) ? String.valueOf(value) : "null"; }
-  static String jsonAny(Object value) { if (value == null) return "null"; if (value instanceof String s) return json(s); if (value instanceof Integer i) return json(i); if (value instanceof Double d) return json(d); if (value instanceof Boolean b) return json(b); return json(String.valueOf(value)); }
+  static String jsonAny(Object value) { if (value == null) return "null"; if (value instanceof String) return json((String) value); if (value instanceof Integer) return json((Integer) value); if (value instanceof Double) return json((Double) value); if (value instanceof Boolean) return json((Boolean) value); return json(String.valueOf(value)); }
   static TreeNode treeNode(Integer[] values) { if (values.length == 0 || values[0] == null) return null; TreeNode root = new TreeNode(values[0]); ArrayDeque<TreeNode> q = new ArrayDeque<>(); q.add(root); int i = 1; while (!q.isEmpty() && i < values.length) { TreeNode node = q.remove(); if (i < values.length && values[i] != null) { node.left = new TreeNode(values[i]); q.add(node.left); } i++; if (i < values.length && values[i] != null) { node.right = new TreeNode(values[i]); q.add(node.right); } i++; } return root; }
   public static void main(String[] args) {
     ArrayList<String> results = new ArrayList<>();

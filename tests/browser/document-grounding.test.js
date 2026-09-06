@@ -4,6 +4,7 @@ import {
   consumeGroundingPacket, groundingStorageKey, maxGroundingFileBytes, maxGroundingPacketBytes,
   parseGroundingFile, selectedGroundingPacket, storeGroundingPacket,
 } from "../../web/document-grounding.js";
+import { memoryStorage } from "./source.js";
 
 const file = (name, type, bytes) => ({ name, type, size: bytes.length, arrayBuffer: async () => Uint8Array.from(bytes).buffer });
 const txt = (text, name = "input.txt", type = "text/plain") => file(name, type, new TextEncoder().encode(text));
@@ -53,11 +54,6 @@ test("hostile text remains inert data and storage failure is explicit", async ()
   assert.doesNotThrow(() => storeGroundingPacket({ removeItem() { throw new Error("private mode"); } }, null));
   assert.equal(consumeGroundingPacket({ getItem() { throw new Error("disabled"); }, removeItem() {} }), null);
 });
-
-function memoryStorage() {
-  const data = new Map();
-  return { getItem: (key) => data.get(key) || null, setItem: (key, value) => data.set(key, value), removeItem: (key) => data.delete(key) };
-}
 
 test("the packet holds what the server will store, so the budget counts one string", () => {
   const packet = (text) => selectedGroundingPacket(

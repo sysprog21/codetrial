@@ -362,7 +362,9 @@ pub(crate) fn web_router(
         .route("/runtime-config.js", get(runtime_config_handler))
         .route(
             "/api/reports",
-            get(list_reports_handler).post(save_report_handler),
+            get(list_reports_handler)
+                .post(save_report_handler)
+                .delete(delete_reports_handler),
         )
         .fallback(web_static_handler)
         .layer(axum::middleware::from_fn_with_state(

@@ -2586,6 +2586,12 @@ async fn account_routes_record_interviewee_github_login() {
         .await
         .unwrap();
     assert_eq!(save_report.status(), 401);
+    let delete_reports = client
+        .delete(format!("{base}/api/reports"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(delete_reports.status(), 401);
 
     server.abort();
     remove_database(path);
@@ -3172,6 +3178,29 @@ async fn account_reports_are_scoped_to_the_signed_in_user() {
         .await
         .unwrap();
     assert_eq!(blocked.status(), 409);
+
+    let deleted = client
+        .delete(format!("{base}/api/reports"))
+        .header("cookie", &user_one_cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), 200);
+    assert_eq!(
+        deleted.json::<Value>().await.unwrap(),
+        json!({ "deleted": 2 })
+    );
+
+    let user_one_reports = client
+        .get(format!("{base}/api/reports"))
+        .header("cookie", &user_one_cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert!(user_one_reports["reports"].as_array().unwrap().is_empty());
 
     let user_two_reports = client
         .get(format!("{base}/api/reports"))
@@ -7344,6 +7373,7 @@ async fn every_owner_scoped_route_refuses_an_anonymous_request() {
     let owner_scoped = [
         (reqwest::Method::GET, "/api/reports"),
         (reqwest::Method::POST, "/api/reports"),
+        (reqwest::Method::DELETE, "/api/reports"),
         (reqwest::Method::POST, "/api/interviews"),
         (reqwest::Method::DELETE, "/api/interviews/{id}/consent"),
         (reqwest::Method::POST, "/api/interviews/{id}/recording"),

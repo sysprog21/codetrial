@@ -292,16 +292,8 @@ public:
 
 test("Java BSTIterator class harness can produce passing Compiler Explorer JSON", (t) => {
   try {
-    // The generated harness uses `instanceof String s` pattern matching, so a
-    // present-but-older javac fails to compile it and reports a syntax error,
-    // which reads as a harness bug rather than a toolchain gap.
-    const version = execFileSync("javac", ["--version"], { encoding: "utf8" });
-    const major = Number.parseInt(version.replace(/^javac\s+/, ""), 10);
-    if (!Number.isFinite(major) || major < 16) {
-      t.skip(`javac ${major} is older than 16, which the harness needs`);
-      return;
-    }
-    execFileSync("java", ["--version"], { stdio: "ignore" });
+    execFileSync("javac", ["-version"], { stdio: "ignore" });
+    execFileSync("java", ["-version"], { stdio: "ignore" });
   } catch {
     t.skip("javac/java are not available");
     return;
