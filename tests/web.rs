@@ -5598,6 +5598,64 @@ async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
     remove_database(path);
 }
 
+/// The server starts the recording workers it is configured for.
+///
+/// Nothing checked that it does. `web_router` decides whether to spawn them
+/// from the accounts handle and the recorder, and a build that quietly stopped
+/// would serve every request correctly while no recording was ever swept,
+/// delivered or expired. The kill switch makes that observable in a test: it
+/// takes every active row on the first pass, and the first pass runs when the
+/// worker starts rather than a minute later.
+#[tokio::test]
+async fn the_server_starts_the_recording_workers() {
+    let (mut config, _cookie, path) = signed_in_web_config("worker-start");
+    config.recording = Some(codetrial::config::RecordingConfig {
+        kill_switch: true,
+        ..recording_config()
+    });
+
+    // Written before the server exists, because the sweep this asserts on is
+    // the one the worker runs as it starts.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "INSERT INTO interviews (id, account_id, consent_version, consent_at)
+               VALUES ('int-worker', 1, '2026-08-21', 1);
+             INSERT INTO recordings (
+                 id, account_id, interview_id, room_name, idempotency_key,
+                 recipient_email, state, created_at, updated_at
+             ) VALUES ('rec-worker', 1, 'int-worker', 'interview-worker1', 'idem-worker',
+                 'one@example.test', 'recording', 1, 1);",
+        )
+        .unwrap();
+
+    let (_base, server) = spawn_web_server(config).await;
+
+    let state = || {
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT state FROM recordings WHERE id = 'rec-worker'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+    };
+    for _ in 0..100 {
+        if state() == "failed" {
+            server.abort();
+            remove_database(path);
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    let reached = state();
+    server.abort();
+    remove_database(path);
+    panic!("the sweeper never ran: the recording is still {reached}");
+}
+
 /// The history a candidate reads about their own interviews.
 #[tokio::test]
 async fn history_lists_own_recordings_only() {

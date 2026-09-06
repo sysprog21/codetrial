@@ -18,25 +18,48 @@ use crate::accounts::Accounts;
 /// first step.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Resolves recordings nobody is looking after, now and then repeatedly.
+/// The timers this module owns, stopped when the server that started them is.
 ///
-/// Now, because a process that died mid-interview left rows no request will
-/// ever touch again. Repeatedly, because the retry schedule is minutes long and
-/// a sweep that only ran at startup would turn every provider hiccup into a
-/// failed recording.
+/// Held rather than detached. A router is built per test and more than one can
+/// share a runtime, so a sweeper nothing aborted went on scanning a database
+/// its own server had finished with, and a delivery worker went on uploading
+/// from it. `QuotaRefresher` is the same shape for the same reason.
+#[derive(Default)]
+pub(crate) struct RecordingWorkers(Vec<tokio::task::JoinHandle<()>>);
+
+impl Drop for RecordingWorkers {
+    fn drop(&mut self) {
+        for handle in self.0.drain(..) {
+            handle.abort();
+        }
+    }
+}
+
+/// Starts the sweeper and the delivery worker, which always run as a pair.
+///
+/// The sweeper resolves recordings nobody is looking after, now and then
+/// repeatedly: now, because a process that died mid-interview left rows no
+/// request will ever touch again, and repeatedly, because the retry schedule is
+/// minutes long and a sweep that only ran at startup would turn every provider
+/// hiccup into a failed recording. The delivery worker moves what the sweeper
+/// finds finished.
 ///
 /// Silent when there is no runtime to spawn on. `web_router` is public and can
-/// be built outside one; a router that serves without a sweeper is degraded,
-/// and a panic at construction is worse.
-pub(crate) fn spawn_recording_sweeper(
+/// be built outside one; a router that serves without these is degraded, and a
+/// panic at construction is worse.
+pub(crate) fn spawn_recording_workers(
     accounts: Arc<Accounts>,
     recorder: crate::recording::Recorder,
-) {
+) -> RecordingWorkers {
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
-        eprintln!("recording is configured but there is no runtime to sweep on");
-        return;
+        eprintln!("recording is configured but there is no runtime to sweep or deliver on");
+        return RecordingWorkers::default();
     };
-    handle.spawn(async move {
+    let mut workers = RecordingWorkers::default();
+
+    let sweeping = (accounts.clone(), recorder.clone());
+    workers.0.push(handle.spawn(async move {
+        let (accounts, recorder) = sweeping;
         loop {
             let outcome = crate::recording::sweep_recordings(&accounts, &recorder).await;
             if outcome != crate::recording::SweepOutcome::default() {
@@ -47,7 +70,31 @@ pub(crate) fn spawn_recording_sweeper(
             }
             tokio::time::sleep(SWEEP_INTERVAL).await;
         }
-    });
+    }));
+
+    // A deployment whose credentials do not build a delivery client records and
+    // hands nothing over, which `delivery_provider` has already warned about.
+    // The sweeper still runs: it is what expires those rows.
+    if let Some(delivery) = recorder.delivery.clone() {
+        workers.0.push(handle.spawn(async move {
+            loop {
+                let outcome = crate::recording::run_delivery_queue(
+                    &accounts,
+                    &recorder,
+                    delivery.as_ref() as &dyn crate::recording::DeliveryProvider,
+                )
+                .await;
+                if outcome != crate::recording::DeliveryOutcome::default() {
+                    eprintln!(
+                        "recording delivery delivered {} retrying {} failed {}",
+                        outcome.delivered, outcome.retrying, outcome.failed
+                    );
+                }
+                tokio::time::sleep(DELIVERY_INTERVAL).await;
+            }
+        }));
+    }
+    workers
 }
 
 /// How often the delivery queue is asked whether anything is due.
@@ -58,18 +105,6 @@ pub(crate) fn spawn_recording_sweeper(
 /// waiting.
 const DELIVERY_INTERVAL: Duration = Duration::from_secs(10);
 
-/// The upload that a finished recording still owes.
-///
-/// Separate from the sweeper, because they answer different questions: the
-/// sweeper looks for rows nothing is moving, and this moves them. Running them
-/// on one timer would tie the pace of deliveries to the pace of a scan.
-///
-/// A deployment whose credentials do not build a delivery client gets a warning
-/// and no worker rather than a panic in a router constructor. The binary does
-/// not reach that case: `codetrial web` parses the key before it listens and
-/// refuses to start without one. It is reachable from
-/// this function, which is public and is what the tests build, and there the
-/// warning is the right answer.
 /// The delivery client, or a warning and none.
 ///
 /// A `None` here is a deployment that records and never hands anything over,
@@ -94,29 +129,45 @@ pub(crate) fn delivery_provider(
     }
 }
 
-pub(crate) fn spawn_delivery_worker(accounts: Arc<Accounts>, recorder: crate::recording::Recorder) {
-    let Ok(handle) = tokio::runtime::Handle::try_current() else {
-        eprintln!("recording is configured but there is no runtime to deliver on");
-        return;
-    };
-    let Some(delivery) = recorder.delivery.clone() else {
-        return;
-    };
-    handle.spawn(async move {
-        loop {
-            let outcome = crate::recording::run_delivery_queue(
-                &accounts,
-                &recorder,
-                delivery.as_ref() as &dyn crate::recording::DeliveryProvider,
-            )
-            .await;
-            if outcome != crate::recording::DeliveryOutcome::default() {
-                eprintln!(
-                    "recording delivery delivered {} retrying {} failed {}",
-                    outcome.delivered, outcome.retrying, outcome.failed
-                );
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The guard exists so a sweeper cannot outlive the server that wanted it.
+    /// Nothing would prove that: `drop` could be empty and every other test
+    /// still passes, which is exactly the leak this type was added to stop.
+    #[tokio::test]
+    async fn dropping_the_workers_aborts_the_tasks_they_own() {
+        let mut workers = RecordingWorkers::default();
+        let watches: Vec<_> = (0..2)
+            .map(|_| {
+                // Never finishes on its own, so anything that ends it is the
+                // abort.
+                let task = tokio::spawn(async {
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(3600)).await;
+                    }
+                });
+                let watch = task.abort_handle();
+                workers.0.push(task);
+                watch
+            })
+            .collect();
+        assert!(
+            watches.iter().all(|watch| !watch.is_finished()),
+            "both tasks are running before the drop"
+        );
+
+        drop(workers);
+
+        // The abort lands at each task's next scheduling point rather than
+        // inside `drop`, so this yields rather than asserting straight away.
+        for _ in 0..100 {
+            if watches.iter().all(|watch| watch.is_finished()) {
+                return;
             }
-            tokio::time::sleep(DELIVERY_INTERVAL).await;
+            tokio::task::yield_now().await;
         }
-    });
+        panic!("a task outlived the RecordingWorkers that owned it");
+    }
 }

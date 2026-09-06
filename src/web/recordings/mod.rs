@@ -19,7 +19,7 @@ pub(crate) use webhook::recording_webhook_handler;
 // Not re-exported: the replay route below is the only caller outside `webhook`,
 // so these stay visible to this module and no wider.
 use webhook::{signed_by_the_rooms_project, webhook_credentials};
-pub(crate) use workers::{delivery_provider, spawn_delivery_worker, spawn_recording_sweeper};
+pub(crate) use workers::{RecordingWorkers, delivery_provider, spawn_recording_workers};
 
 use std::collections::HashMap;
 use std::sync::Arc;

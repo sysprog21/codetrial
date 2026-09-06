@@ -188,6 +188,12 @@ pub(crate) struct AppState {
     #[allow(dead_code)]
     quota_refresher: Arc<QuotaRefresher>,
 
+    /// The same, for the recording sweeper and the delivery worker. Detached,
+    /// these outlived the router that started them and went on scanning a
+    /// database the server they belonged to had finished with.
+    #[allow(dead_code)]
+    recording_workers: Arc<RecordingWorkers>,
+
     // A separate bucket, for the same reason `/api/token` checks the session
     // before spending its own: login is reachable without any credential, so a
     // flood of it must not lock a signed-in candidate out of a token.
@@ -302,10 +308,12 @@ pub(crate) fn web_router(
         );
     }
     let accounts = login.and_then(open_accounts);
-    if let (Some(accounts), Some(recorder)) = (&accounts, &recorder) {
-        spawn_recording_sweeper(accounts.clone(), recorder.clone());
-        spawn_delivery_worker(accounts.clone(), recorder.clone());
-    }
+    let recording_workers = match (&accounts, &recorder) {
+        (Some(accounts), Some(recorder)) => {
+            spawn_recording_workers(accounts.clone(), recorder.clone())
+        }
+        _ => RecordingWorkers::default(),
+    };
 
     // Built here rather than in the state literal below, because the refresher
     // and the request path have to share one cache: a second `default()` would
@@ -387,6 +395,7 @@ pub(crate) fn web_router(
             provider_counter: Arc::new(AtomicUsize::new(0)),
             provider_quota,
             quota_refresher: Arc::new(quota_refresher),
+            recording_workers: Arc::new(recording_workers),
             room_authorizations: Arc::default(),
         })
 }
