@@ -11,8 +11,6 @@
 
 use std::time::Duration;
 
-use ::livekit::prelude::RemoteParticipant;
-
 use crate::config::AgentConfig;
 use crate::token::livekit_room_admin_token;
 
@@ -266,12 +264,11 @@ fn is_agent_participant(participant: &serde_json::Value) -> bool {
 pub(super) async fn evict_duplicate_agent(
     config: &AgentConfig,
     room_name: &str,
-    participant: &RemoteParticipant,
+    identity: &str,
     now_seconds: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let identity = participant.identity().0;
     eprintln!("removing late duplicate LiveKit agent participant identity={identity}");
-    remove_room_participant(config, room_name, &identity, now_seconds).await
+    remove_room_participant(config, room_name, identity, now_seconds).await
 }
 
 #[cfg(test)]
@@ -474,6 +471,34 @@ mod tests {
         assert!(
             error.ends_with(exact),
             "a reason of exactly the limit is not marked as cut: {error}"
+        );
+    }
+
+    /// A late duplicate is evicted by name.
+    ///
+    /// This runs when a second agent joins after isolation has already passed,
+    /// which is the case isolation cannot cover: the room was clear when it
+    /// looked. It takes an identity rather than the participant it came from,
+    /// because the identity is all it needs and a participant cannot be built
+    /// to test with.
+    #[tokio::test]
+    async fn a_late_duplicate_is_evicted_by_name() {
+        let service = RoomService::start(vec![(200, "{}")]).await;
+
+        evict_duplicate_agent(
+            &service.config(),
+            "interview-abc12345",
+            "agent-late",
+            1_700_000_000,
+        )
+        .await
+        .unwrap();
+
+        let (path, body) = service.requests().into_iter().next().unwrap();
+        assert_eq!(path, "/twirp/livekit.RoomService/RemoveParticipant");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap()["identity"],
+            "agent-late"
         );
     }
 

@@ -765,7 +765,8 @@ async fn handle_room_event(
         RoomEvent::ParticipantConnected(participant)
             if is_duplicate_agent(&participant, agent_identity) =>
         {
-            evict_duplicate_agent(config, room_name, &participant, now_seconds).await?;
+            evict_duplicate_agent(config, room_name, &participant.identity().0, now_seconds)
+                .await?;
         }
         RoomEvent::ParticipantDisconnected(participant)
             if participant.identity().0 == candidate_identity =>
