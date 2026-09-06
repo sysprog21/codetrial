@@ -1,5 +1,12 @@
 export const historyKey = "codetrial_history";
 
+/// Every request here is a small same-origin call, and every one of them is
+/// awaited by something the candidate is looking at: a stalled save leaves the
+/// report page saying "Saving report..." with no end, and a stalled clear leaves
+/// the Delete button disabled, because the finally that re-enables it never runs.
+/// A deadline turns both into the failure they already know how to report.
+const requestTimeoutMs = 10_000;
+
 /// Always a list. The key sits in the origin's local storage, which an older
 /// build, another tab, or anyone with devtools open can write, so what it holds
 /// is input rather than something this module chose. Unparseable JSON was
@@ -35,7 +42,10 @@ export async function clearReportHistory({ account = false, fetcher = fetch, sto
     const session = await sessionState(fetcher);
     if (session === "failed") return "failed";
     if (session === "in") {
-      const deleted = await fetcher("/api/reports", { method: "DELETE" });
+      const deleted = await fetcher("/api/reports", {
+        method: "DELETE",
+        signal: AbortSignal.timeout(requestTimeoutMs),
+      });
       if (!deleted.ok) return "failed";
     } else if (account !== false) {
       return "failed";
@@ -72,6 +82,7 @@ async function saveAccountReport(entry, fetcher) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(entry),
+      signal: AbortSignal.timeout(requestTimeoutMs),
     });
     return saved.ok ? "saved" : "failed";
   } catch {
@@ -81,7 +92,7 @@ async function saveAccountReport(entry, fetcher) {
 
 async function sessionState(fetcher) {
   try {
-    const response = await fetcher("/api/session");
+    const response = await fetcher("/api/session", { signal: AbortSignal.timeout(requestTimeoutMs) });
     if (!response.ok) return "failed";
     const session = await response.json();
     if (session.signedIn === true) return "in";

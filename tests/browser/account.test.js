@@ -378,6 +378,20 @@ test("a cross-tab sign-out keeps the account copy rather than claiming a clear",
   assert.deepEqual(calls, ["/api/session"]);
 });
 
+test("every history request carries a deadline", async () => {
+  const deadlines = [];
+  const fetcher = async (url, options) => {
+    deadlines.push(options?.signal instanceof AbortSignal);
+    return url === "/api/session" ? response({ signedIn: true }) : response({ deleted: 1 });
+  };
+  const storage = memoryStorage();
+  await saveReportHistory({ id: "deadline" }, { fetcher, storage });
+  await clearReportHistory({ fetcher, storage });
+  // Session probe and report POST for the save, then the same pair for the
+  // clear. A request without one hangs whatever the candidate is waiting on.
+  assert.deepEqual(deadlines, [true, true, true, true]);
+});
+
 function response(body, ok = true) {
   return {
     ok,
