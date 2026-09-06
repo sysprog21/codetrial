@@ -109,9 +109,63 @@
 # `is_interview_participant`, `candidate_video_frames_go_to_gemini`,
 # `should_send_video_frame`, `frame_to_rgba` and `encode_rgba_jpeg`.
 #
+# `create_interview`'s two comparisons on the insert rowcount are the one pair
+# here that is reachable, tested, and still unkillable, so they are named
+# individually rather than by function: every other mutant in it is caught.
+#
+# `> 0` to `< 0` is equivalent. The insert still happens; the check merely stops
+# returning on it, and the next turn of the three-iteration loop finds the row
+# it just wrote through `PENDING` and returns the same interview with the same
+# id and the same `consent_at`. Measured: the whole suite passes with it
+# applied, and "a reload is not a second consent" in tests/web.rs is green
+# either way, because that guarantee is the path the mutant falls back onto.
+#
+# `> 0` to `>= 0` and to `== 0` differ only when the insert wrote nothing, which
+# needs another process to land its own row between this call's `PENDING` read
+# and its insert. `PENDING` selects exactly the predicate the partial index
+# conflicts on, so no fixture can produce that state without the race, and a
+# test that only sometimes reaches it would pass on the mutant most runs -- a
+# flaky detector, which is worse than none. What they would catch is the loser
+# of that race returning its own id rather than the winner's, and the comment
+# above the insert is where that decision is written down.
+#
+# `== 0` is here despite a run reporting it caught. It is not: `cargo test`
+# passes with it applied, checked binary by binary. Something else failed during
+# that mutant's run and cargo-mutants read the failure as a detection, which is
+# what a load-sensitive test does to a mutation score -- it inflates it. Left in
+# the list on the measurement rather than on the verdict.
+#
+# `save_report` carries two guards over the same case, so neither mutation of
+# either one changes the answer on its own. Measured: with the match guard
+# forced false, `a_report_id_another_account_holds_is_refused` still passes,
+# because the INSERT's `ON CONFLICT ... WHERE reports.user_id = excluded.user_id`
+# then matches no row, `changed` is zero, and the function returns NotOwner from
+# the other branch. Symmetrically, `changed > 0` can only be false once the match
+# guard has already let a foreign id through. Each is redundant while the other
+# stands, which is what having both is for; a test can pin the refusal, and one
+# now does, but no test can separate the two.
+#
+# `initialize_connection`'s retry guard needs the database locked past the
+# connection's own five second busy timeout, because under that the first
+# attempt waits rather than failing and the loop is never entered. One retry
+# costs six seconds of wall clock and would settle three of these six. The other
+# three differ only once the attempts are spent, which is three timeouts, so
+# fifteen seconds in the suite to observe a loop that only a contended migration
+# reaches. The decision it makes with an error in hand is `is_locked`, which is
+# tested.
+#
 # Keep this list short and each entry justified. An entry that is really "we
 # never got around to testing this" belongs in a test, not here.
 exclude_re = [
+    "match guard existing != user_id with false",
+    "replace > with >= in save_report",
+    "attempts < MIGRATION_ATTEMPTS",
+    "replace && with \\|\\| in initialize_connection",
+    "replace < with (==|>|<=) in initialize_connection",
+    "replace \\+= with \\*= in initialize_connection",
+    "replace > with < in create_interview",
+    "replace > with >= in create_interview",
+    "replace > with == in create_interview",
     "run_room",
     "open_session",
     "run_gemini_check",

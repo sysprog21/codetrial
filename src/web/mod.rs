@@ -368,7 +368,7 @@ pub(crate) fn web_router(
         )
         .fallback(web_static_handler)
         .layer(axum::middleware::from_fn_with_state(
-            content_security_policy_header(&config),
+            security_header_state(&config),
             security_headers,
         ))
         // Outermost, so it sees the finished response whatever produced it.

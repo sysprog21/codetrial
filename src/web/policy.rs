@@ -220,8 +220,53 @@ pub(crate) fn url_origin(url: &str) -> Option<String> {
         .then(|| format!("{}://{host}", scheme.to_ascii_lowercase()))
 }
 
+/// How long a browser should refuse to reach this host over plain HTTP.
+///
+/// A year, which is what makes the promise worth anything: a shorter window
+/// leaves a candidate who last visited outside it open to being downgraded on
+/// the hotel wifi they take the interview from.
+///
+/// `includeSubDomains` is deliberately absent. It is a promise made on behalf
+/// of every name under the parent domain, and this process has never seen them:
+/// the recording template is served from
+/// `CODETRIAL_RECORDING_TEMPLATE_BASE_URL`
+/// and may be a sibling host nobody here configured, so the directive could
+/// take a service off the air that this server does not own and cannot fix.
+/// `preload` is absent for the same reason and one more: it is a submission to
+/// a list baked into browser binaries, and getting back off it takes months.
+const STRICT_TRANSPORT: &str = "max-age=31536000";
+
+/// The headers every response carries, resolved once at startup.
+///
+/// A struct rather than the bare policy, because HSTS is conditional and the
+/// condition is settled before the first request arrives. Asking the config per
+/// response would be work in the hot path to answer a question that cannot
+/// change while the process runs.
+#[derive(Clone)]
+pub(crate) struct SecurityHeaders {
+    policy: HeaderValue,
+    strict_transport: Option<HeaderValue>,
+}
+
+/// Sent only in production, which is the same gate the `Secure` cookie flag
+/// uses and for a related reason.
+///
+/// A user agent must ignore this header when it arrives over plain HTTP, so in
+/// development it would be inert rather than wrong. The gate is here for the
+/// developer who does terminate TLS locally: without it, one run pins
+/// `localhost` for a year in a browser they also use for everything else, and
+/// there is no way to serve the retraction over the scheme it now refuses.
+pub(crate) fn security_header_state(config: &WebServerConfig) -> SecurityHeaders {
+    SecurityHeaders {
+        policy: content_security_policy_header(config),
+        strict_transport: config
+            .production
+            .then(|| HeaderValue::from_static(STRICT_TRANSPORT)),
+    }
+}
+
 pub(crate) async fn security_headers(
-    State(policy): State<HeaderValue>,
+    State(headers_for): State<SecurityHeaders>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
@@ -247,7 +292,10 @@ pub(crate) async fn security_headers(
         "permissions-policy",
         HeaderValue::from_static("geolocation=()"),
     );
-    headers.insert(header::CONTENT_SECURITY_POLICY, policy);
+    if let Some(strict_transport) = headers_for.strict_transport {
+        headers.insert(header::STRICT_TRANSPORT_SECURITY, strict_transport);
+    }
+    headers.insert(header::CONTENT_SECURITY_POLICY, headers_for.policy);
     response
 }
 

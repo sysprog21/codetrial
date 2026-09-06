@@ -222,7 +222,23 @@ PY
 # takes the whole timeout to find out.
 if runs media; then
     template_url="$template_origin/recording/index.html"
-    status=$(curl -s -o "$work/template.html" -w '%{http_code}' --max-time 30 "$template_url" || true)
+
+    # The exit code is kept rather than discarded. `%{http_code}` is already 200
+    # once the headers arrive, so a transfer that dies part-way through the body
+    # still prints 200 while curl exits non-zero, and `|| true` accepted that
+    # fraction of a page as proof the page is served. Measured against a
+    # stalling server: status 200, exit 28, 258 of 5258 bytes, and the fragment
+    # still carried the marker the grep below looks for.
+    if status=$(curl -s -o "$work/template.html" -w '%{http_code}' --max-time 30 "$template_url"); then
+        transfer_exit=
+    else
+        transfer_exit=$?
+    fi
+    [ -z "$transfer_exit" ] || {
+        echo "the template fetch did not complete: $template_url answered $status" \
+            "after curl exit $transfer_exit" >&2
+        exit 1
+    }
     [ "$status" = "200" ] || {
         echo "the template is not being served: $template_url answered $status" >&2
         exit 1

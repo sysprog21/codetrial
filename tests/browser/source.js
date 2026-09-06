@@ -74,6 +74,32 @@ export function firstPartyScripts() {
     .filter((name) => name.endsWith(".js") && !name.startsWith("vendor/"));
 }
 
+/// The agent runtime as one text: `src/livekit.rs` and the modules under
+/// `src/livekit/`.
+///
+/// The same reason [`interviewSource`] exists, in the other language. The
+/// agent-state pin counted `set_agent_state` call sites in the root file, and
+/// when the Gemini event half moved into `src/livekit/events.rs` it took the
+/// only `AGENT_STATE_SPEAKING` publish with it: one state published where two
+/// are declared, from a move that changed no behaviour. Read together, the
+/// property survives the move, because it was a property of the runtime and
+/// not of a filename.
+///
+/// Globbed rather than listed, so the next split needs no edit here to stay
+/// honest. Recursive for the same reason [`firstPartyScripts`] is: a split that
+/// puts the next module a directory down is still a split, and a one-level read
+/// would drop it from the source these pins are computed over -- which is the
+/// fail-open this function exists to close, arriving one directory later.
+export function livekitSource() {
+  return [
+    read("src/livekit.rs"),
+    ...readdirSync(join(root, "src/livekit"), { recursive: true })
+      .map((name) => String(name).replace(/\\/g, "/"))
+      .filter((name) => name.endsWith(".rs"))
+      .map((name) => read(join("src/livekit", name))),
+  ].join("\n");
+}
+
 /// One function body, terminated by the closing brace at column zero rather
 /// than by whatever declaration happens to come next. Throws on a name it
 /// cannot find, so a renamed function fails the test that pins it instead of

@@ -570,6 +570,33 @@ async fn token_endpoint_rate_limits_a_noisy_client() {
     remove_database(db_path);
 }
 
+/// HTTPS is not optional in production, and the browser is told so.
+///
+/// A year, this host only. `includeSubDomains` would be a promise on behalf of
+/// names this process has never seen -- the recording template origin among
+/// them -- and `preload` is a submission to a list baked into browser binaries
+/// that takes months to leave, so the value is pinned here rather than left to
+/// grow a directive nobody meant to commit to.
+#[tokio::test]
+async fn production_promises_the_browser_it_will_stay_on_https() {
+    let (base, server) = spawn_web_server(WebServerConfig {
+        web_dir: Path::new("web").to_path_buf(),
+        pool: primary_pool("wss://example.livekit.cloud:443", "devkey", "devsecret"),
+        probe_provider_quota: false,
+        production: true,
+        ..web_config()
+    })
+    .await;
+
+    let home = reqwest::get(&base).await.unwrap();
+    assert_eq!(
+        home.headers().get("strict-transport-security").unwrap(),
+        "max-age=31536000"
+    );
+
+    server.abort();
+}
+
 #[tokio::test]
 async fn responses_carry_baseline_security_headers() {
     let (base, server) = spawn_web_server(WebServerConfig {
@@ -598,6 +625,12 @@ async fn responses_carry_baseline_security_headers() {
         home.headers().get("permissions-policy").unwrap(),
         "geolocation=()"
     );
+
+    // Absent here, and that is the assertion. This config is not production, so
+    // a developer terminating TLS locally does not get `localhost` pinned for a
+    // year by a browser they use for everything else -- and cannot serve the
+    // retraction over the scheme it has started refusing.
+    assert_eq!(home.headers().get("strict-transport-security"), None);
 
     let policy = home
         .headers()
@@ -5308,15 +5341,35 @@ async fn replay_ingestion_rate_limits_a_looping_client() {
         }]
     });
 
+    // Sent together rather than one after another, because the limiter's window
+    // is sixty seconds and this is a hundred and twenty round trips.
+    // Sequential, the test quietly assumed all of them finish inside that
+    // window: on a loaded machine they do not, the window rolls over mid-loop,
+    // and the request below starts a fresh one and answers 200. That read as a
+    // flaky rate-limit test and it was this.
+    //
+    // Order does not matter to what is being asserted. The limiter admits the
+    // first `REPLAY_RATE_LIMIT` asks in a window and refuses the next, so every
+    // one of these is allowed whichever way they interleave, and the refusal
+    // below is the first ask past the limit however they landed.
+    let mut inflight = Vec::new();
     for attempt in 1..=REPLAY_RATE_LIMIT {
-        let response = client
-            .post(&url)
-            .header("cookie", &cookie)
-            .json(&batch)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200, "batch {attempt} should be allowed");
+        let (client, url, cookie, batch) =
+            (client.clone(), url.clone(), cookie.clone(), batch.clone());
+        inflight.push(tokio::spawn(async move {
+            let response = client
+                .post(&url)
+                .header("cookie", &cookie)
+                .json(&batch)
+                .send()
+                .await
+                .unwrap();
+            (attempt, response.status())
+        }));
+    }
+    for handle in inflight {
+        let (attempt, status) = handle.await.unwrap();
+        assert_eq!(status, 200, "batch {attempt} should be allowed");
     }
 
     let blocked = client

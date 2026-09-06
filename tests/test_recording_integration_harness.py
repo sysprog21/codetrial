@@ -64,6 +64,7 @@ class RecordingHarnessTests(unittest.TestCase):
         cleanup_drive_status="404",
         cleanup_gcs_status="404",
         gcs_prefix=None,
+        template_exit="0",
     ):
         files = files or DELIVERED
         with tempfile.TemporaryDirectory() as temporary:
@@ -96,7 +97,9 @@ if echo "$args" | grep -q '%{http_code}'; then
   elif echo "$args" | grep -q '/drive/v3/files/file-1?'; then echo "$FAKE_CLEANUP_DRIVE_STATUS"
   else
     out=; previous=; for word in "$@"; do [ "$previous" = -o ] && out=$word; previous=$word; done
-    [ -z "$out" ] || printf '<div id="recording-ready"></div>' > "$out"; echo 200
+    [ -z "$out" ] || printf '<div id="recording-ready"></div>' > "$out"
+    echo 200
+    exit "$FAKE_TEMPLATE_EXIT"
   fi
 elif echo "$args" | grep -q '/permissions?'; then cat "$FAKE_ROOT/permissions.json"
 elif echo "$args" | grep -q '/drive/v3/files?'; then cat "$FAKE_ROOT/files.json"
@@ -125,6 +128,7 @@ fi
                 "CODETRIAL_RECORDING_CLEANUP_TIMEOUT_SECONDS": cleanup_timeout,
                 "FAKE_CLEANUP_DRIVE_STATUS": cleanup_drive_status,
                 "FAKE_CLEANUP_GCS_STATUS": cleanup_gcs_status,
+                "FAKE_TEMPLATE_EXIT": template_exit,
             }
             if not include_db:
                 env.pop("CODETRIAL_DB_PATH")
@@ -246,6 +250,22 @@ fi
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("permission_expires_at", document)
+
+    def test_a_truncated_template_transfer_is_refused(self):
+        # `%{http_code}` is 200 as soon as the headers arrive, so a body that
+        # dies part-way through still reports 200 while curl exits non-zero, and
+        # the fragment that did arrive can still carry the marker the content
+        # check greps for. The media preflight used to swallow that exit code.
+        result, _ = self.run_harness(phase="media", template_exit="28")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("did not complete", result.stderr)
+
+    def test_a_served_template_passes_the_media_preflight(self):
+        # The other side of it, so the refusal above is not simply the media
+        # phase failing for its own reasons: a complete 200 carrying the marker
+        # reaches `template ok`.
+        result, _ = self.run_harness(phase="media")
+        self.assertIn("template ok", result.stdout)
 
     def test_a_phase_list_with_spaces_is_refused_rather_than_half_run(self):
         # The validation loop splits on whitespace and `runs` does not, so this

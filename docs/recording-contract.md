@@ -45,7 +45,110 @@ owned by a different project than the one whose ancestors it just walked, or
 anything other than one active organizer membership on the Shared Drive. It
 then authenticates the delivery account to prove its own bucket and Drive
 access, and fetches the recording template from the public, globally-routable
-HTTPS origin. The two supplied keys and short-lived access-token headers live
+HTTPS origin.
+
+A one-day Delete rule is not on its own a promise that anything is deleted, so
+five more bucket settings are read beside it. Soft delete is the one that fires
+by default: Cloud Storage retains soft-deleted objects for a configured window
+and a lifecycle Delete moves an object into exactly that state, so a bucket
+created without turning it off keeps every recording restorable long after the
+rule has run. `softDeletePolicy.retentionDurationSeconds` must be present and
+`0`. Absent is refused rather than read as off, because whether disabling the
+policy omits the field or reports a zero is not something the checker can
+settle from outside, and an audit whose point is that soft delete is off must
+not report success without having seen it off.
+
+Three settings defer the Delete rather than forbid it, which comes to the same
+thing when the promise is a day: a `retentionPolicy`, whose locked form cannot
+be shortened afterwards at all; `objectRetention` in `Enabled` mode; and
+`defaultEventBasedHold`, which puts a hold on every object written from then
+on. Per-object holds and per-object retention do not appear in the bucket
+resource and so are not visible to this check. Object Versioning is refused
+last, because it makes deleting an object write a noncurrent version instead of
+ending it: the lifecycle rule reaches those versions only on a second pass, and
+`delete_object` in `src/delivery.rs` sends no `generation`, so versioning turns
+the server's own authoritative delete into an archive.
+
+The Shared Drive audit reads every active permission on the drive, not only the
+rows naming the delivery account, which is what it did for as long as "exactly
+one active organizer" was a claim about that one address rather than about the
+drive. Every member must be an individually named user: `group`, `domain`,
+`anyone` and any type Google adds later are refused together, because this
+drive stages candidate recordings and nothing else, so its membership has to be
+something the audit can read out. Named human members are not refused.
+
+The audit then descends into the drive, because the drive's membership was
+never where a recording gets overshared. It pages `files.list` to a ceiling of
+twenty pages and reads the permissions on every file. A permission that is not
+a named user is refused outright: that is the link share. A permission that is
+a named user is separated by `permissionDetails` into one this file carries
+from somewhere above it, which is somebody else's audit, and one somebody made
+on this recording.
+
+`inherited` is what separates them, not `permissionType` alone. A grant made on
+the drive surfaces as a `member` entry, but a grant made on a folder *inside*
+the drive surfaces on every file under it as a `file` entry that carries
+`inherited`, so reading `permissionType` alone let one folder share read as a
+direct grant on every child at once. An inherited entry is skipped here because
+the folder that owns it is listed by the same `files.list` and audited in its
+turn, where the grant is its own and is not inherited. The role compared is the
+entry's own, not the permission's top-level one: a grantee holding both a drive
+membership and a grant on this file gets a single merged top-level role whose
+meaning Drive does not document, and every own entry is compared rather than
+the first, so the verdict does not turn on the order of an array.
+
+The delivery path makes exactly one shape of a direct grant, an expiring reader
+for the candidate, so a direct grant in any other role is refused as a person
+given standing access to somebody's interview. The expiry is checked too, not
+just the role: a reader carrying no readable `expirationTime` is refused,
+because a reader that never lapses is a standing copy of an interview and the
+permission expiring is what covers the gap if the deletion is late. The bound is
+an upper one, the contract's twenty-four hours plus five minutes of slack,
+because this audit compares a stamp written on the delivery host against the
+auditor host's own clock and an exact ceiling would refuse a correctly
+provisioned drive over a second of skew. A grant whose expiry has already
+passed confers nothing and is not refused: Drive does not document how promptly
+it drops a lapsed permission from this listing, and refusing over one would fail
+a drive for having done the right thing.
+
+A permission with no details at all is read as direct, since the field is
+populated on shared-drive items and its absence is not a thing to resolve in the
+passing direction. A `permissionDetails` that is not a list of objects is
+refused rather than traversed, because an audit that dies on a traceback reports
+that it broke rather than what the drive is carrying.
+
+A file whose permissions do not fit one page is refused rather than paged, on
+the rule the membership listing already carries: a listing whose end has not
+been seen is not an exactness claim, and a link share on page two used to pass
+as a complete answer. The twenty-page ceiling on the file listing is a bound
+this audit imposes, and a staging drive holding two thousand files under a
+24-hour retention rule is itself the finding.
+
+Two more grants are read, and both are policies nothing else here would show.
+The delivery account's own resource policy must carry no binding naming a live
+principal: `roles/iam.serviceAccountTokenCreator`,
+`roles/iam.serviceAccountUser`, either key-admin role and `setIamPolicy` on the
+resource all let their holder
+mint tokens for the recording identity, which is neither a bucket role nor an
+ancestor role and appears in neither read. Tombstoned `deleted:` members are
+ignored, so an account whose stray grant was removed passes. And the bucket
+must set `publicAccessPrevention` to `enforced` rather than leave it
+`inherited`: inherited is safe only when an ancestor organization policy
+enforces prevention, this check does not read that policy, and the remedy is
+one setting on the bucket that is strictly safer than what it replaces.
+
+Uniform bucket-level access is read as enabled rather than as irreversible. It
+can be turned back off within ninety days of being set, and that window is open
+on every bucket this check sees on the day it is provisioned, so the lock time
+is printed and not refused.
+
+The template is proved by status and by content. `curl --fail` exits 0 on a 3xx
+when nothing follows the redirect, so a redirecting origin used to satisfy this
+step without the template ever being fetched, and a 200 serving some other page
+satisfied it too. The checker reads the status code, requires `200`, and looks
+for the `id="recording-ready"` element the template declares, which is how
+`scripts/recording-integration.sh` has proved the same origin since it was
+written. The two supplied keys and short-lived access-token headers live
 only in a private temporary directory, are removed from child-process
 environments where they are not needed, and do not replace a developer's active
 `gcloud` account.
