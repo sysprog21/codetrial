@@ -5717,6 +5717,126 @@ async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
     remove_database(path);
 }
 
+/// Each webhook LiveKit sends does its own job, and says whether to resend.
+///
+/// The kinds were routed and acted on with nothing asserting either half. An
+/// arm quietly dropped would leave the row where it was while the message was
+/// answered 200, so LiveKit would never send it again and no test would notice
+/// the recording had stopped moving.
+///
+/// The answer matters as much as the action. A `room_finished` for a room this
+/// server does not know is finished business, but an egress event naming a job
+/// nothing has written down yet is the only notice that job will ever get, so
+/// it has to be given back rather than swallowed.
+#[tokio::test]
+async fn each_webhook_kind_moves_the_row_and_answers_for_itself() {
+    // The fake provider, because ending a recording really calls StopEgress and
+    // the real one answers a test server with 401.
+    let provider = std::sync::Arc::new(FakeRecordingProvider::default());
+    let (base, server, path, client, _cookie) =
+        recorded_server_with_provider("webhook-kinds", provider.clone()).await;
+
+    // Fresh, so the sweeper that started with the server leaves this alone.
+    let now = codetrial::current_epoch_seconds() as i64;
+    let room = "interview-abc12345";
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO interviews (id, account_id, consent_version, consent_at, room_name)
+               VALUES ('int-kinds', 1, '2026-08-21', ?1, ?2)",
+            rusqlite::params![now, room],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO recordings (
+                 id, account_id, interview_id, room_name, idempotency_key,
+                 recipient_email, state, egress_id, created_at, updated_at
+             ) VALUES ('rec-kinds', 1, 'int-kinds', ?2, 'idem-kinds',
+                 'one@example.test', 'starting', 'EG_kinds', ?1, ?1)",
+            rusqlite::params![now, room],
+        )
+        .unwrap();
+    drop(connection);
+
+    let state = || -> String {
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT state FROM recordings WHERE id = 'rec-kinds'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+
+    let egress_started = json!({
+        "event": "egress_started",
+        "id": "EV_started",
+        "createdAt": "1770000001",
+        "egressInfo": { "egressId": "EG_kinds", "status": "EGRESS_ACTIVE" }
+    })
+    .to_string();
+    assert_eq!(
+        post_webhook(&client, &base, &egress_started).await.status(),
+        200
+    );
+    assert_eq!(
+        state(),
+        "recording",
+        "egress_started is what says the job is running"
+    );
+
+    let room_finished = json!({
+        "event": "room_finished",
+        "id": "EV_finished",
+        "createdAt": "1770000002",
+        "room": { "name": room }
+    })
+    .to_string();
+    assert_eq!(
+        post_webhook(&client, &base, &room_finished).await.status(),
+        200
+    );
+    assert_eq!(
+        state(),
+        "finalizing",
+        "the room ending is what ends the recording in it"
+    );
+
+    // A room this server never recorded. Nothing to do, and nothing to resend.
+    let other_room = json!({
+        "event": "room_finished",
+        "id": "EV_unknown_room",
+        "createdAt": "1770000003",
+        "room": { "name": "interview-nosuchroom" }
+    })
+    .to_string();
+    assert_eq!(
+        post_webhook(&client, &base, &other_room).await.status(),
+        200,
+        "a room with no recording is finished business"
+    );
+
+    // An egress nothing has written down. The start response may still be in
+    // flight, so this has to come back rather than be answered.
+    let unknown_egress = json!({
+        "event": "egress_ended",
+        "id": "EV_unknown_egress",
+        "createdAt": "1770000004",
+        "egressInfo": { "egressId": "EG_never_seen", "status": "EGRESS_COMPLETE" }
+    })
+    .to_string();
+    assert_eq!(
+        post_webhook(&client, &base, &unknown_egress).await.status(),
+        503,
+        "an unknown egress is given back so LiveKit sends it again"
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
 /// A full page is not the same as a page with more behind it.
 ///
 /// The listing asks for one row more than a page and uses the extra row as the
