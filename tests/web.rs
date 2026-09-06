@@ -5717,6 +5717,51 @@ async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
     remove_database(path);
 }
 
+/// A refused start says which refusal it was.
+///
+/// Every branch here is a different thing for the candidate to do: join the
+/// interview first, wait because the server has recording switched off, or
+/// finish the recording already running. Nothing asserted any of them, so the
+/// whole mapping could have collapsed to one answer and the page would have
+/// shown the wrong instruction with the right status.
+#[tokio::test]
+async fn a_refused_recording_says_which_refusal_it_was() {
+    let (base, server, path, client, cookie) = recorded_server("start-refusals").await;
+
+    // No room yet, because nothing minted a token for this interview.
+    let interview = start_interview(&client, &base, &cookie).await;
+    let refused = client
+        .post(format!("{base}/api/interviews/{interview}/recording"))
+        .header("cookie", cookie.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 409);
+    assert_eq!(
+        refused.json::<Value>().await.unwrap()["code"],
+        "recording_has_no_room",
+        "an interview with no room is told to join first"
+    );
+
+    // An interview that is not this account's is refused as if it did not
+    // exist, which is the same answer as consent withdrawn on purpose.
+    let (other_cookie, _) = second_account(&client, &base, &path).await;
+    let theirs = client
+        .post(format!("{base}/api/interviews/{interview}/recording"))
+        .header("cookie", other_cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(
+        theirs.status(),
+        202,
+        "another account may not start this recording"
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
 /// Each webhook LiveKit sends does its own job, and says whether to resend.
 ///
 /// The kinds were routed and acted on with nothing asserting either half. An
