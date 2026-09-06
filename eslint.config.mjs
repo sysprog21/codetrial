@@ -65,7 +65,11 @@ const CORRECTNESS = {
 
 export default [
   {
-    ignores: ["web/vendor/**", "node_modules/**", "target/**"],
+    // `externals/` holds unrelated checkouts, is untracked, and is excluded in
+    // `.git/info/exclude`. Linting it failed the gate on somebody else's JSX,
+    // and a gate that is red for something outside the repository is one whose
+    // red line stops being read.
+    ignores: ["web/vendor/**", "node_modules/**", "target/**", "externals/**"],
   },
   {
     // The browser tier. `web/*worker*.js` runs without a `window`, so the
