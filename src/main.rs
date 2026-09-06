@@ -1600,6 +1600,65 @@ bm90IGEga2V5
         assert!(super::recording_can_deliver(Some(&recording)).is_err());
     }
 
+    /// Half an OAuth app is not an OAuth app.
+    ///
+    /// The rule below is tested on its own; this is the wiring that feeds it,
+    /// and the two lookups have to be joined with "and". Joined with "or", a
+    /// deployment holding only a client id would start recording and then
+    /// refuse every interview at `/api/token`, because the address a recording
+    /// is delivered to is the one GitHub returns and there is no GitHub. Each
+    /// half alone has to be refused, and so does neither.
+    #[test]
+    fn recording_starts_only_with_both_halves_of_the_oauth_app() {
+        let recording_values = |pairs: &[(&str, &str)]| {
+            let mut values: std::collections::BTreeMap<String, String> = [
+                ("CODETRIAL_RECORDING_ENABLED", "true"),
+                ("CODETRIAL_RECORDING_GCS_BUCKET", "codetrial-staging"),
+                ("CODETRIAL_RECORDING_DRIVE_ID", "0AKfixtureDriveId"),
+                (
+                    "CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON",
+                    r#"{"type":"service_account","client_email":"a@b.iam.gserviceaccount.com","private_key":"KEYMATERIAL-4bd2"}"#,
+                ),
+                (
+                    "CODETRIAL_RECORDING_TEMPLATE_BASE_URL",
+                    "https://recording.codetrial.example",
+                ),
+                ("SESSION_SECRET", "a-real-secret"),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+            for (key, value) in pairs {
+                values.insert(key.to_string(), value.to_string());
+            }
+            values
+        };
+        let pool = codetrial::config::ProviderPool {
+            providers: vec![provider(codetrial::config::PRIMARY_PROVIDER_ID)],
+        };
+
+        for half in [
+            vec![("GITHUB_CLIENT_ID", "id")],
+            vec![("GITHUB_CLIENT_SECRET", "secret")],
+            vec![],
+        ] {
+            let error = super::web_server_config(
+                &recording_values(&half),
+                pool.clone(),
+                false,
+                &super::CliOptions::default(),
+            )
+            .expect_err("recording with half an OAuth app must not start");
+            assert!(error.contains("GITHUB_CLIENT_ID"), "{error}");
+        }
+
+        // The other direction is `recording_needs_verified_identity` below,
+        // which takes the answer rather than the lookups: reaching it from here
+        // means a service account whose key really parses, and the rule it
+        // applies is the same either way.
+        let _ = pool;
+    }
+
     #[test]
     fn recording_needs_both_oauth_credentials_or_it_refuses_to_start() {
         assert!(super::recording_needs_verified_identity(false, false).is_ok());
