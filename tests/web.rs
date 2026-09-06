@@ -570,6 +570,33 @@ async fn token_endpoint_rate_limits_a_noisy_client() {
     remove_database(db_path);
 }
 
+/// HTTPS is not optional in production, and the browser is told so.
+///
+/// A year, this host only. `includeSubDomains` would be a promise on behalf of
+/// names this process has never seen -- the recording template origin among
+/// them -- and `preload` is a submission to a list baked into browser binaries
+/// that takes months to leave, so the value is pinned here rather than left to
+/// grow a directive nobody meant to commit to.
+#[tokio::test]
+async fn production_promises_the_browser_it_will_stay_on_https() {
+    let (base, server) = spawn_web_server(WebServerConfig {
+        web_dir: Path::new("web").to_path_buf(),
+        pool: primary_pool("wss://example.livekit.cloud:443", "devkey", "devsecret"),
+        probe_provider_quota: false,
+        production: true,
+        ..web_config()
+    })
+    .await;
+
+    let home = reqwest::get(&base).await.unwrap();
+    assert_eq!(
+        home.headers().get("strict-transport-security").unwrap(),
+        "max-age=31536000"
+    );
+
+    server.abort();
+}
+
 #[tokio::test]
 async fn responses_carry_baseline_security_headers() {
     let (base, server) = spawn_web_server(WebServerConfig {
@@ -598,6 +625,12 @@ async fn responses_carry_baseline_security_headers() {
         home.headers().get("permissions-policy").unwrap(),
         "geolocation=()"
     );
+
+    // Absent here, and that is the assertion. This config is not production, so
+    // a developer terminating TLS locally does not get `localhost` pinned for a
+    // year by a browser they use for everything else -- and cannot serve the
+    // retraction over the scheme it has started refusing.
+    assert_eq!(home.headers().get("strict-transport-security"), None);
 
     let policy = home
         .headers()
