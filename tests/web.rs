@@ -5055,6 +5055,21 @@ async fn a_late_provider_failure_does_not_fail_a_queued_recording() {
 /// The signature covers the exact bytes, so the body is passed as a string and
 /// never re-serialized between here and the request.
 async fn post_webhook(client: &reqwest::Client, base: &str, body: &str) -> reqwest::Response {
+    post_webhook_signed_by(client, base, body, "devkey", b"devsecret").await
+}
+
+/// The same, signed by a named project rather than by the primary one.
+///
+/// A valid signature proves which project sent a webhook, not which project
+/// owns the room it names, and those are different questions once a deployment
+/// has more than one project.
+async fn post_webhook_signed_by(
+    client: &reqwest::Client,
+    base: &str,
+    body: &str,
+    api_key: &str,
+    api_secret: &[u8],
+) -> reqwest::Response {
     use base64::Engine as _;
     use sha2::Digest as _;
 
@@ -5063,7 +5078,7 @@ async fn post_webhook(client: &reqwest::Client, base: &str, body: &str) -> reqwe
         .unwrap()
         .as_secs();
     let claims = json!({
-        "iss": "devkey",
+        "iss": api_key,
         "nbf": now,
         "exp": now + 300,
         "sha256": base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(body.as_bytes())),
@@ -5071,7 +5086,7 @@ async fn post_webhook(client: &reqwest::Client, base: &str, body: &str) -> reqwe
     let header = URL_SAFE_NO_PAD.encode(json!({ "alg": "HS256", "typ": "JWT" }).to_string());
     let payload = URL_SAFE_NO_PAD.encode(claims.to_string());
     let signing_input = format!("{header}.{payload}");
-    let mut mac = HmacSha256::new_from_slice(b"devsecret").unwrap();
+    let mut mac = HmacSha256::new_from_slice(api_secret).unwrap();
     mac.update(signing_input.as_bytes());
     let token = format!(
         "{signing_input}.{}",
@@ -5696,6 +5711,119 @@ async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
             .unwrap()
             .status(),
         401
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
+/// A signature from one project does not reach another project's room.
+///
+/// The signature proves which project sent the webhook. It does not prove the
+/// project owns the room the webhook names, and a deployment with more than one
+/// LiveKit project has both questions to answer. Without the second one, any
+/// configured project could end another project's recording by naming its room,
+/// and nothing here was asking it.
+#[tokio::test]
+async fn a_webhook_from_another_project_does_not_touch_the_room() {
+    let (mut config, _cookie, path) = signed_in_web_config("webhook-other-project");
+
+    // The recording override: a second key for the same project, which is what
+    // it is for. LiveKit signs a webhook with whichever key the project's
+    // webhook configuration names, and that need not be the key this server
+    // makes Egress calls with, so both have to open this project's own rooms
+    // and neither may open anybody else's.
+    let mut recording = recording_config();
+    recording.livekit = Some(codetrial::config::RecordingLivekit {
+        url: "wss://example.livekit.cloud".to_string(),
+        api_key: "override-key".to_string(),
+        api_secret: "override-secret".to_string(),
+    });
+    config.recording = Some(recording);
+
+    // Two projects, so the intruder's key verifies. The room routes to the
+    // primary one, which is the project that owns this recording.
+    config.pool.providers.push(provider("eu", "eu"));
+
+    // Fresh, because the sweeper starts with the server and fails an active row
+    // that has gone quiet. A recording reaped for being stale would look
+    // exactly like one the intruder ended.
+    let now = codetrial::current_epoch_seconds() as i64;
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO interviews (id, account_id, consent_version, consent_at)
+               VALUES ('int-other', 1, '2026-08-21', ?1)",
+            [now],
+        )
+        .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO recordings (
+                 id, account_id, interview_id, room_name, idempotency_key,
+                 recipient_email, state, egress_id, created_at, updated_at
+             ) VALUES ('rec-other', 1, 'int-other', 'interview-abc12345', 'idem-other',
+                 'one@example.test', 'recording', 'EG_other', ?1, ?1)",
+            [now],
+        )
+        .unwrap();
+
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+
+    let failed = json!({
+        "event": "egress_ended",
+        "id": "EV_other_project",
+        "createdAt": "1770000123",
+        "egressInfo": { "egressId": "EG_other", "status": "EGRESS_FAILED" }
+    })
+    .to_string();
+
+    // Signed by the other project, correctly. The signature check passes and
+    // the ownership check is the only thing between it and the row.
+    let response = post_webhook_signed_by(&client, &base, &failed, "eu-key", b"eu-secret").await;
+    assert_eq!(
+        response.status(),
+        200,
+        "the message is answered rather than retried forever"
+    );
+
+    let state = || -> String {
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT state FROM recordings WHERE id = 'rec-other'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(
+        state(),
+        "recording",
+        "another project's webhook must not end this recording"
+    );
+
+    // The override key, for this project's own room, is the case the override
+    // exists for and it has to still work.
+    let owned = json!({
+        "event": "egress_ended",
+        "id": "EV_own_project",
+        "createdAt": "1770000456",
+        "egressInfo": { "egressId": "EG_other", "status": "EGRESS_FAILED" }
+    })
+    .to_string();
+    assert_eq!(
+        post_webhook_signed_by(&client, &base, &owned, "override-key", b"override-secret")
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(
+        state(),
+        "failed",
+        "the project's own second key opens its own room"
     );
 
     server.abort();
