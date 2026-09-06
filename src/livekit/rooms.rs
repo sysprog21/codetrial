@@ -205,8 +205,16 @@ pub(crate) async fn validate_livekit_credentials(
 /// `WSS://` used to survive unchanged, and reqwest refuses any scheme but http
 /// and https before the request leaves the process, so credentials that were
 /// good came back as credentials that did not work.
+///
+/// The query and the fragment come off, because the Twirp path is appended
+/// to what this returns and validation accepts both. A configured
+/// `?region=eu` took the method name into the query rather than to the
+/// service. The path itself is kept: a LiveKit behind a reverse proxy at
+/// `https://host/livekit` serves RoomService under that prefix.
 fn livekit_http_base(url: &str) -> String {
-    let trimmed = url.trim_end_matches('/');
+    let trimmed = url.trim();
+    let trimmed = trimmed.split(['?', '#']).next().unwrap_or(trimmed);
+    let trimmed = trimmed.trim_end_matches('/');
     match crate::config::livekit_scheme(trimmed) {
         Some((scheme, _, http)) => format!("{http}{}", &trimmed[scheme.len()..]),
         None => trimmed.to_string(),
@@ -332,6 +340,40 @@ mod tests {
             livekit_http_base("ws://localhost:7880"),
             "http://localhost:7880"
         );
+
+        // Everything `validate_livekit_url` lets through. The scheme is matched
+        // case-insensitively there, and a query, a fragment and a path are all
+        // accepted, so each of these is a URL a deployment can be holding.
+        assert_eq!(
+            livekit_http_base("WSS://example.livekit.cloud"),
+            "https://example.livekit.cloud"
+        );
+        assert_eq!(
+            livekit_http_base("Ws://localhost:7880"),
+            "http://localhost:7880"
+        );
+        assert_eq!(
+            livekit_http_base("wss://example.livekit.cloud/?region=eu"),
+            "https://example.livekit.cloud"
+        );
+
+        // The path stays, because a proxy mounts RoomService under it. Only the
+        // query and the fragment come off, and neither can precede a path.
+        assert_eq!(
+            livekit_http_base("wss://example.livekit.cloud/livekit/"),
+            "https://example.livekit.cloud/livekit"
+        );
+        assert_eq!(
+            livekit_http_base("https://example.livekit.cloud/sfu#frag"),
+            "https://example.livekit.cloud/sfu"
+        );
+
+        // Shapes validation also accepts, neither of which this may mangle.
+        assert_eq!(
+            livekit_http_base("wss://user:pass@example.livekit.cloud/sfu"),
+            "https://user:pass@example.livekit.cloud/sfu"
+        );
+        assert_eq!(livekit_http_base("ws://[::1]:7880"), "http://[::1]:7880");
     }
 
     /// `validate_livekit_url` compares the scheme without regard to case, so
