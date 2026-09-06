@@ -22,36 +22,41 @@ pub(super) async fn isolate_local_agent(
     local_identity: &str,
     now_seconds: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // One list pass more than removal rounds: the last pass only confirms the
-    // final removal landed.
-    let mut rounds_left = DUPLICATE_AGENT_ISOLATION_ATTEMPTS;
-    loop {
+    // A bounded number of removal rounds, then one more look. The last look is
+    // what confirms the final removal landed, and writing the budget as the
+    // range rather than as a counter is what keeps "one pass more" a property
+    // of the shape instead of an arithmetic accident.
+    for _ in 0..DUPLICATE_AGENT_ISOLATION_ATTEMPTS {
         let participants = list_room_participants(config, room_name, now_seconds).await?;
         let duplicate_agents = duplicate_agent_identities(&participants, local_identity);
         if duplicate_agents.is_empty() {
             return Ok(());
         }
-        if rounds_left == 0 {
-            // Loud, not fatal. This used to return Err, and in `serve` an agent
-            // error aborts the web task and exits the process, so one stubborn
-            // auto-dispatched agent took the whole server down mid-interview.
-            // Two interviewers talking over each other is bad; no interviewer,
-            // no editor and no report is worse, and the operator can see this
-            // line and act on it while the candidate finishes.
-            eprintln!(
-                "WARNING: duplicate LiveKit agent participants remained after \
-                 {DUPLICATE_AGENT_ISOLATION_ATTEMPTS} attempts, continuing anyway: \
-                 {duplicate_agents:?}"
-            );
-            return Ok(());
-        }
-        rounds_left -= 1;
         for identity in &duplicate_agents {
             eprintln!("removing duplicate LiveKit agent participant identity={identity}");
             remove_room_participant(config, room_name, identity, now_seconds).await?;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
+
+    let participants = list_room_participants(config, room_name, now_seconds).await?;
+    let duplicate_agents = duplicate_agent_identities(&participants, local_identity);
+    if duplicate_agents.is_empty() {
+        return Ok(());
+    }
+
+    // Loud, not fatal. This used to return Err, and in `serve` an agent error
+    // aborts the web task and exits the process, so one stubborn
+    // auto-dispatched agent took the whole server down mid-interview. Two
+    // interviewers talking over each other is bad; no interviewer, no editor
+    // and no report is worse, and the operator can see this line and act on it
+    // while the candidate finishes.
+    eprintln!(
+        "WARNING: duplicate LiveKit agent participants remained after \
+         {DUPLICATE_AGENT_ISOLATION_ATTEMPTS} attempts, continuing anyway: \
+         {duplicate_agents:?}"
+    );
+    Ok(())
 }
 
 async fn list_room_participants(
