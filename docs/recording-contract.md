@@ -1288,10 +1288,18 @@ grants. Cleanup success means both the exact Drive file and GCS object return
 HTTP 404 after the server-owned sweeper runs; any other status remains a
 failure.
 
-The completed document is judged by `cargo test --test recording_integration
-lifecycle_acceptance`, which runs only with `CODETRIAL_RECORDING_INTEGRATION=1`
-and `CODETRIAL_RECORDING_LIFECYCLE_ACCEPTANCE=1` set. Both are opt-in because a
+The completed document is judged by `cargo test --test recording_integration --
+--ignored lifecycle_acceptance`, which runs only with
+`CODETRIAL_RECORDING_INTEGRATION=1` and
+`CODETRIAL_RECORDING_LIFECYCLE_ACCEPTANCE=1` set. Both are opt-in because a
 media-only pass has no Drive file or cleanup result to judge yet.
+
+The `-- --ignored` is not optional. The test carries `#[ignore]` so that an
+ordinary gate run reports it as ignored rather than as passed: it used to return
+early when its variables were unset, which meant the suite counted one passing
+test whether or not it had judged anything. Without the flag the filter now
+matches nothing and the run exits 0 having done nothing, which is the failure
+the ignore was added to stop, wearing a different hat.
 
 The script does not talk to Drive or GCS itself, because a second
 implementation of a deletion is a second thing that can be wrong about what it
