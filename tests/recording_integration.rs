@@ -4,13 +4,24 @@
 //! media run looks like, and whether the document
 //! `scripts/recording-integration.sh` emits is the shape the schema promises.
 //! The run itself needs an isolated LiveKit project, a staging bucket and a
-//! Shared Drive, so it is skipped unless `CODETRIAL_RECORDING_INTEGRATION=1`
-//! says an operator has them.
+//! Shared Drive, so the two tests that judge one are `#[ignore]` and run with
+//! `--ignored`:
+//!
+//! ```text
+//! CODETRIAL_RECORDING_INTEGRATION=1 \
+//!     cargo test --test recording_integration -- --ignored media_acceptance
+//! ```
 //!
 //! Splitting it that way is the point. A harness whose judgement lives inside a
 //! shell script nobody can run without credentials is a harness nobody can
 //! check; the thresholds below are the part that can be wrong quietly, so they
 //! are the part with tests.
+//!
+//! Ignoring rather than returning early is the point of the other half. Those
+//! two used to print a skip and return `Ok`, so a machine with no credentials
+//! reported ten passing tests in this file when eight of them had run: a count
+//! that says "passed" for a check nobody performed, which is the exact fault
+//! this file exists to catch one layer up.
 
 use std::path::Path;
 
@@ -465,18 +476,36 @@ fn the_script_refuses_before_it_creates_anything() {
 
 /// The credentialed run itself.
 ///
-/// Skipped, loudly, unless an operator has said they have the isolated project
-/// from task 0. `Ok` rather than `ignore`, so `scripts/test.sh` runs this file
-/// and proves the skip works rather than proving nothing.
+/// Ignored by default, and run with `--ignored`:
+///
+/// ```text
+/// CODETRIAL_RECORDING_INTEGRATION=1 \
+///     cargo test --test recording_integration -- --ignored media_acceptance
+/// ```
+///
+/// It used to print a skip and return `Ok`, which reported a passing test
+/// whether or not it had judged anything: `scripts/test.sh` counted ten green
+/// tests in this file on a machine that cannot run two of them. A count that
+/// says "passed" for a check nobody performed is the thing this file exists to
+/// prevent, one layer up.
+///
+/// `#[ignore]` is the only mechanism that reports it honestly. It is static,
+/// and libtest has no runtime "skipped" verdict, so the alternative -- a cfg
+/// the operator turns on -- would mean a `--cfg` flag declared outside this
+/// file and a full recompile to flip. Ignoring by default costs the operator
+/// one flag and buys a count that means what it says.
+///
+/// The environment check stays as an assertion rather than a return, so an
+/// `--ignored` run without the project fails instead of quietly agreeing.
 #[test]
+#[ignore = "credentialed: needs CODETRIAL_RECORDING_INTEGRATION=1 and a staged acceptance document"]
 fn media_acceptance() {
-    if std::env::var("CODETRIAL_RECORDING_INTEGRATION").as_deref() != Ok("1") {
-        eprintln!(
-            "skipping the recording media acceptance: set CODETRIAL_RECORDING_INTEGRATION=1 \
-             and run ./scripts/recording-integration.sh --phase=media with the isolated project"
-        );
-        return;
-    }
+    assert_eq!(
+        std::env::var("CODETRIAL_RECORDING_INTEGRATION").as_deref(),
+        Ok("1"),
+        "the recording media acceptance needs CODETRIAL_RECORDING_INTEGRATION=1 and \
+         ./scripts/recording-integration.sh --phase=media run against the isolated project"
+    );
 
     // The document the script left behind, not a run this test performs. The
     // script owns the provider calls and the cleanup trap; this owns the
@@ -495,17 +524,27 @@ fn media_acceptance() {
 /// This is opt-in separately from the media check because a media phase has no
 /// Drive file or cleanup result yet. The all-phases procedure enables it only
 /// after the script has appended those provider facts.
+///
+/// Ignored by default for the reason on `media_acceptance` above, and run the
+/// same way:
+///
+/// ```text
+/// CODETRIAL_RECORDING_INTEGRATION=1 CODETRIAL_RECORDING_LIFECYCLE_ACCEPTANCE=1
+/// \
+///     cargo test --test recording_integration -- --ignored lifecycle_acceptance
+/// ```
 #[test]
+#[ignore = "credentialed: needs CODETRIAL_RECORDING_LIFECYCLE_ACCEPTANCE=1 after every lifecycle phase"]
 fn lifecycle_acceptance() {
-    if std::env::var("CODETRIAL_RECORDING_INTEGRATION").as_deref() != Ok("1")
-        || std::env::var("CODETRIAL_RECORDING_LIFECYCLE_ACCEPTANCE").as_deref() != Ok("1")
-    {
-        eprintln!(
-            "skipping the recording lifecycle acceptance: set CODETRIAL_RECORDING_INTEGRATION=1 \
-             CODETRIAL_RECORDING_LIFECYCLE_ACCEPTANCE=1 after every lifecycle phase"
-        );
-        return;
-    }
+    assert_eq!(
+        (
+            std::env::var("CODETRIAL_RECORDING_INTEGRATION").as_deref(),
+            std::env::var("CODETRIAL_RECORDING_LIFECYCLE_ACCEPTANCE").as_deref(),
+        ),
+        (Ok("1"), Ok("1")),
+        "the recording lifecycle acceptance needs CODETRIAL_RECORDING_INTEGRATION=1 and \
+         CODETRIAL_RECORDING_LIFECYCLE_ACCEPTANCE=1, set after every lifecycle phase has run"
+    );
 
     let document = acceptance_document();
 

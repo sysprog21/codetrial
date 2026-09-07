@@ -126,20 +126,6 @@ test("every script and stylesheet a page loads exists on disk", () => {
   assert.deepEqual(missing, [], "the page requests assets that are not served");
 });
 
-test("every module import resolves to a file that exists", () => {
-  const missing = [];
-  for (const name of scripts) {
-    for (const specifier of matchAll(read(name), /from\s+"\.\/([^"]+)"/g)) {
-      try {
-        readFileSync(join(web, specifier));
-      } catch {
-        missing.push(`${name} -> ./${specifier}`);
-      }
-    }
-  }
-  assert.deepEqual(missing, [], "a module import points at a missing file");
-});
-
 test("problem loader fetches one problem and falls back to the default", async () => {
   // Stands in for the server: serves web/ and 404s anything not on disk, which
   // is what a request for a problem outside the bank gets.
@@ -478,6 +464,12 @@ test("relative imports resolve to files that exist", () => {
     const specifiers = [
       ...matchAll(source, /(?:^|[^\w])import\s+[^;]*?from\s+"(\.[^"]+)"/g),
       ...matchAll(source, /import\("(\.[^"]+)"\)/g),
+      // `export ... from` too. No module re-exports today, which is exactly
+      // why it is listed: it was the one specifier shape the narrower check
+      // deleted below could see and this one could not, and leaving the hole
+      // open would have made that deletion a real loss the day somebody adds
+      // a barrel file.
+      ...matchAll(source, /(?:^|[^\w])export\s+[^;]*?from\s+"(\.[^"]+)"/g),
     ];
     for (const specifier of specifiers) {
       if (!existsSync(resolve(dir, specifier))) missing.push(`web/${name} -> ${specifier}`);

@@ -13,7 +13,10 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use codetrial::recording;
+use codetrial::recording::RecordingProvider;
 use codetrial::token::{WebhookRejection, verify_livekit_webhook};
+
+mod common;
 
 fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/recording")
@@ -321,17 +324,20 @@ fn contract_start_egress() {
         request.get("preset").is_none(),
         "a preset would silently replace the agreed encode"
     );
-    let advanced = field(&request, "advanced");
-    assert_eq!(advanced["width"], recording::OUTPUT_WIDTH);
-    assert_eq!(advanced["height"], recording::OUTPUT_HEIGHT);
-    assert_eq!(advanced["framerate"], recording::OUTPUT_FRAMERATE);
-    assert_eq!(advanced["video_bitrate"], recording::OUTPUT_VIDEO_BITRATE);
-    assert_eq!(advanced["audio_bitrate"], recording::OUTPUT_AUDIO_BITRATE);
-    assert_eq!(advanced["video_codec"], recording::OUTPUT_VIDEO_CODEC);
-    assert_eq!(advanced["audio_codec"], recording::OUTPUT_AUDIO_CODEC);
 
+    // The encode itself is not compared here. It is the same nine constants
+    // against the same fixture that `contract_start_egress_body_matches_the_
+    // fixture` and `contract_start_egress_decodes_as_the_message_livekit_
+    // expects` already read, and a third copy of the list is a third place a
+    // new field is forgotten. Measured, one constant at a time: drift in
+    // `OUTPUT_WIDTH`, `OUTPUT_HEIGHT`, `OUTPUT_FRAMERATE` or
+    // `OUTPUT_AUDIO_BITRATE` fails both of those; `OUTPUT_VIDEO_BITRATE` fails
+    // the decode test, which is the one that does not read it back out of the
+    // fixture; `OUTPUT_FILE_TYPE` fails the body comparison. What is left here
+    // is what neither of them says: that the request is snake_case, that the
+    // encode is spelled out rather than named by a preset, and where the file
+    // goes.
     let output = &field(&request, "file_outputs")[0];
-    assert_eq!(output["file_type"], recording::OUTPUT_FILE_TYPE);
     assert!(
         output["gcp"]["bucket"].is_string(),
         "the file output goes straight to the staging bucket; CodeTrial never holds the media"
@@ -384,6 +390,127 @@ fn contract_stop_egress() {
     // Not COMPLETE. Stopping is a request, and the recording is only finished
     // when the `egress_ended` webhook says so.
     assert_eq!(response["status"], "EGRESS_ENDING");
+}
+
+/// The stop request as this binary actually sends it, not as the fixture says.
+///
+/// `contract_stop_egress` above compares two fixtures to each other. That keeps
+/// them consistent and says nothing about the code: the stop body is built
+/// inline inside `LiveKitEgress::stop`, and nothing in the suite had ever seen
+/// it. The start path has `contract_start_egress_body_matches_the_fixture` for
+/// exactly this reason, and the stop path had no equivalent, so a stop that
+/// named the room, or misspelled the key, or reached the wrong Twirp method,
+/// was a change no test could fail on.
+///
+/// A socket rather than a mock, because the three things worth pinning are the
+/// method path, the body and the credential, and all three exist only on the
+/// wire.
+#[tokio::test]
+async fn contract_stop_egress_sends_what_the_fixture_describes() {
+    const API_KEY: &str = "APIcontractkey";
+    const API_SECRET: &str = "contract-api-secret-7c1d";
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let served = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let head = loop {
+            let mut chunk = [0u8; 1024];
+            let read = tokio::io::AsyncReadExt::read(&mut socket, &mut chunk)
+                .await
+                .unwrap();
+            assert!(read > 0, "the client closed before sending a request");
+            request.extend_from_slice(&chunk[..read]);
+            if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                break end + 4;
+            }
+        };
+        let text = String::from_utf8_lossy(&request[..head]).to_string();
+        let length: usize = text
+            .lines()
+            .find_map(|line| {
+                line.split_once(':')
+                    .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            })
+            .map(|(_, value)| value.trim().parse().unwrap())
+            .expect("a Twirp request carries a body and says how long it is");
+        while request.len() < head + length {
+            let mut chunk = [0u8; 1024];
+            let read = tokio::io::AsyncReadExt::read(&mut socket, &mut chunk)
+                .await
+                .unwrap();
+            assert!(
+                read > 0,
+                "the body was shorter than Content-Length promised"
+            );
+            request.extend_from_slice(&chunk[..read]);
+        }
+        let body: Value = serde_json::from_slice(&request[head..head + length]).unwrap();
+
+        // An empty object: `stop` reads nothing out of the response, and a
+        // Twirp reply still has to parse as JSON.
+        tokio::io::AsyncWriteExt::write_all(
+            &mut socket,
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+        )
+        .await
+        .unwrap();
+        (text, body)
+    });
+
+    let egress = recording::LiveKitEgress {
+        pool: codetrial::config::ProviderPool {
+            providers: vec![codetrial::config::Provider {
+                id: codetrial::config::PRIMARY_PROVIDER_ID.to_string(),
+                url: format!("ws://127.0.0.1:{port}"),
+                api_key: API_KEY.to_string(),
+                api_secret: API_SECRET.to_string(),
+                google_api_key: String::new(),
+            }],
+        },
+        room_prefix: "interview".to_string(),
+        livekit: None,
+    };
+
+    let fixture = json("stop-egress-request.json");
+    let egress_id = fixture["egress_id"].as_str().unwrap();
+    egress
+        .stop(egress_id, "interview-a1b2c3d4")
+        .await
+        .expect("a 200 with a JSON body is a stop that landed");
+    let (head, body) = served.await.unwrap();
+
+    // The body, whole. Not a field check: a key the decoder does not bind is
+    // dropped in silence, which is the failure this whole file exists for.
+    assert_eq!(body, fixture, "the stop body and the fixture have drifted");
+
+    let start = head.lines().next().unwrap();
+    assert_eq!(
+        start,
+        format!(
+            "POST /twirp/{}/{} HTTP/1.1",
+            recording::EGRESS_SERVICE,
+            recording::EGRESS_STOP_METHOD
+        ),
+        "a stop sent to the wrong method reaches a service that answers 404"
+    );
+
+    // Signed by the project that holds the room, so a deployment with more than
+    // one project stops the egress it started rather than being refused. Read
+    // the way the content-length scan above reads: a field name is
+    // case-insensitive, and spelling two of the capitalisations out covers two
+    // of them rather than the rule.
+    let token = head
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        .and_then(|(_, value)| value.trim().strip_prefix("Bearer "))
+        .expect("the Twirp call is a bearer call");
+    assert!(
+        common::livekit_token_matches(token, API_KEY, API_SECRET),
+        "the stop must be signed by the project that holds the room"
+    );
 }
 
 #[test]

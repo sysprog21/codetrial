@@ -146,18 +146,36 @@ fn config_fails_closed_for_invalid_compiler_explorer_switch() {
     }
 }
 
+/// Both directions of the candidate-video switch, because one of them proves
+/// nothing on its own.
+///
+/// `DEFAULT_GEMINI_CANDIDATE_VIDEO_ENABLED` is already `false`, so asserting
+/// that an unreadable value reads as off is true whether the parser fails
+/// closed or ignores the key entirely: this test used to pass against a build
+/// that never looked at the environment at all. The `true` case is what
+/// separates the two, and it has to be here for the `invalid_value` case below
+/// to mean what its name says.
 #[test]
 fn config_fails_closed_for_invalid_gemini_candidate_video_switch() {
-    let config = load_from_pairs([
-        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
-        ("LIVEKIT_API_KEY", "key"),
-        ("LIVEKIT_API_SECRET", "secret"),
-        ("GOOGLE_API_KEY", "google"),
-        ("CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED", "invalid_value"),
-    ])
-    .expect("invalid video switch should still load");
+    let video = |value: &str| {
+        load_from_pairs([
+            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+            ("LIVEKIT_API_KEY", "key"),
+            ("LIVEKIT_API_SECRET", "secret"),
+            ("GOOGLE_API_KEY", "google"),
+            ("CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED", value),
+        ])
+        .expect("the video switch should never stop a deployment from loading")
+        .gemini_candidate_video_enabled
+    };
 
-    assert!(!config.gemini_candidate_video_enabled);
+    for on in ["true", "TRUE", "1", "yes", "on"] {
+        assert!(video(on), "{on} should send candidate video");
+    }
+    for unreadable in ["invalid_value", "ture", "2"] {
+        assert!(!video(unreadable), "{unreadable} should mean off");
+    }
+    assert_eq!(video(" "), DEFAULT_GEMINI_CANDIDATE_VIDEO_ENABLED);
 }
 
 #[test]
@@ -202,6 +220,64 @@ fn config_rejects_missing_required_keys() {
     );
 }
 
+/// A URL that is present and unusable, which is the other half of the error.
+///
+/// Blank counts as missing, so every other test in this file reaches
+/// `ConfigError` through `missing_keys` alone: nothing drove `invalid_entries`
+/// out of `load_from_pairs`, and nothing printed a `ConfigError` carrying both
+/// lists. The separator between them had no test at all, so an error naming
+/// four faults could have run two sentences together.
+#[test]
+fn an_unusable_livekit_url_is_named_beside_the_keys_that_are_missing() {
+    let Err(error) = load_from_pairs([
+        ("LIVEKIT_URL", "ftp://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "key"),
+        ("LIVEKIT_API_SECRET", "secret"),
+        ("GOOGLE_API_KEY", "google"),
+    ]) else {
+        panic!("a LIVEKIT_URL nothing can dial should fail closed");
+    };
+    assert_eq!(error.missing_keys, Vec::<&str>::new());
+    assert_eq!(
+        error.invalid_entries,
+        vec!["LIVEKIT_URL must start with wss://, https://, ws:// or http://".to_string()]
+    );
+    assert_eq!(
+        error.to_string(),
+        "invalid config entries: LIVEKIT_URL must start with wss://, https://, ws:// or http://"
+    );
+
+    // Both faults at once. An operator reading this needs the two sentences to
+    // stay two sentences.
+    let Err(error) = load_from_pairs([
+        ("LIVEKIT_URL", "ftp://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "key"),
+    ]) else {
+        panic!("a bad URL and missing keys should fail closed");
+    };
+    assert_eq!(
+        error.to_string(),
+        "missing required config keys: LIVEKIT_API_SECRET, GOOGLE_API_KEY; \
+         invalid config entries: LIVEKIT_URL must start with wss://, https://, ws:// or http://"
+    );
+
+    // Production is read from the same map, so an unencrypted URL is an invalid
+    // entry rather than a missing key.
+    let Err(error) = load_from_pairs([
+        ("LIVEKIT_URL", "ws://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "key"),
+        ("LIVEKIT_API_SECRET", "secret"),
+        ("GOOGLE_API_KEY", "google"),
+        ("NODE_ENV", "production"),
+    ]) else {
+        panic!("plaintext LiveKit in production should fail closed");
+    };
+    assert_eq!(
+        error.invalid_entries,
+        vec!["LIVEKIT_URL must use wss:// or https:// when NODE_ENV=production".to_string()]
+    );
+}
+
 /// Discovery takes a directory rather than reading the current one, so a test
 /// can state exactly what is on disk. That is also the point of the argument:
 /// two processes started from two directories used to build two different
@@ -224,12 +300,6 @@ impl Drop for ProviderFixture {
 impl std::ops::Deref for ProviderFixture {
     type Target = std::path::Path;
     fn deref(&self) -> &std::path::Path {
-        &self.0
-    }
-}
-
-impl AsRef<std::path::Path> for ProviderFixture {
-    fn as_ref(&self) -> &std::path::Path {
         &self.0
     }
 }
@@ -684,6 +754,41 @@ fn plaintext_livekit_is_local_only() {
     }
 }
 
+/// A scheme is not case sensitive, and neither is the check on one.
+///
+/// This is the bug `livekit_scheme` was extracted to fix, written down: the
+/// validator matched `WSS://` and the function that rewrote the URL for a
+/// RoomService call did not, so an accepted URL was posted to over a scheme
+/// reqwest will not send. Nothing here supplied an upper-case scheme, so both
+/// halves of that could regress with the suite green.
+#[test]
+fn a_livekit_scheme_is_read_the_way_a_url_compares() {
+    for url in [
+        "WSS://example.livekit.cloud",
+        "Https://example.livekit.cloud",
+        "WS://127.0.0.1:7880",
+    ] {
+        assert!(
+            codetrial::config::validate_livekit_url(url, false).is_ok(),
+            "{url} should validate: a scheme is case insensitive"
+        );
+    }
+    assert!(
+        codetrial::config::validate_livekit_url("WS://127.0.0.1:7880", true).is_err(),
+        "an upper-case plaintext scheme is still plaintext"
+    );
+
+    // Surrounding whitespace is trimmed before any of that, so a value with a
+    // stray newline is dialled rather than reported.
+    assert!(
+        codetrial::config::validate_livekit_url("  wss://example.livekit.cloud\n", false).is_ok()
+    );
+    assert!(
+        codetrial::config::validate_livekit_url("   ", false).is_err(),
+        "whitespace is not a URL"
+    );
+}
+
 #[test]
 fn a_livekit_error_never_quotes_the_url() {
     // The message reaches stderr, and a LiveKit URL can carry a query string.
@@ -730,7 +835,59 @@ fn a_room_name_names_the_provider_that_signed_its_token() {
         provider_id_from_room("other-eu-a1b2c3d4", "interview"),
         None
     );
-    assert_ne!(PRIMARY_PROVIDER_ID, "");
+
+    // The other half of the feature: the id the name carries has to resolve
+    // back to the record that signed it, and a name that carries none has to
+    // land on the project a single-provider deployment mints against. Both
+    // sides call `for_room` rather than spelling the rule out twice.
+    let pool = codetrial::config::ProviderPool {
+        providers: vec![
+            provider(PRIMARY_PROVIDER_ID, "wss://home.livekit.cloud"),
+            provider("eu", "wss://eu.livekit.cloud"),
+        ],
+    };
+    assert_eq!(
+        pool.for_room("interview-eu-a1b2c3d4", "interview")
+            .map(|found| found.id.as_str()),
+        Some("eu")
+    );
+    assert_eq!(
+        pool.for_room("interview-a1b2c3d4", "interview")
+            .map(|found| found.id.as_str()),
+        Some(PRIMARY_PROVIDER_ID),
+        "a name with no segment belongs to the project that mints unsegmented names"
+    );
+    assert_eq!(
+        pool.for_room("interview-gone-a1b2c3d4", "interview")
+            .map(|found| found.id.as_str()),
+        Some(PRIMARY_PROVIDER_ID),
+        "a retired id falls back rather than failing the room"
+    );
+
+    // A pool built entirely from files has no `primary` entry, and some project
+    // still has to answer.
+    let files_only = codetrial::config::ProviderPool {
+        providers: vec![
+            provider("eu", "wss://eu.livekit.cloud"),
+            provider("us", "wss://us.livekit.cloud"),
+        ],
+    };
+    assert_eq!(
+        files_only.primary().map(|found| found.id.as_str()),
+        Some("eu"),
+        "with nothing named primary the front of the pool leads"
+    );
+}
+
+/// A pool entry with only the two fields the lookup rules read.
+fn provider(id: &str, url: &str) -> codetrial::config::Provider {
+    codetrial::config::Provider {
+        id: id.to_string(),
+        url: url.to_string(),
+        api_key: "key".to_string(),
+        api_secret: "secret".to_string(),
+        google_api_key: "google".to_string(),
+    }
 }
 
 #[test]
@@ -784,7 +941,7 @@ fn a_provider_debug_does_not_print_its_secret() {
         "redaction",
         &[(
             "codetrial.env.eu",
-            "LIVEKIT_URL=wss://eu.example\nLIVEKIT_API_KEY=livekit-key\nLIVEKIT_API_SECRET=hunter2\nGOOGLE_API_KEY=gsecret\n",
+            "LIVEKIT_URL=wss://frankfurt.example\nLIVEKIT_API_KEY=livekit-key\nLIVEKIT_API_SECRET=hunter2\nGOOGLE_API_KEY=gsecret\n",
         )],
     );
     let (providers, _) = codetrial::config::discover_providers(&dir, false);
@@ -795,8 +952,11 @@ fn a_provider_debug_does_not_print_its_secret() {
     assert!(!rendered.contains("gsecret"), "{rendered}");
 
     // The id and URL are what makes the line useful, and neither is a
-    // credential.
+    // credential. Named against a host that is not the id: this used to look
+    // for "eu" in a line that carried `wss://eu.example`, so it held whether or
+    // not `Debug` printed the id at all.
     assert!(rendered.contains("eu"), "{rendered}");
+    assert!(rendered.contains("frankfurt.example"), "{rendered}");
 }
 
 #[test]
@@ -1103,26 +1263,222 @@ mod recording {
     fn recording_matches_a_pooled_project_across_equivalent_urls() {
         // `wss://host` and `https://host:443` are one endpoint. Reporting them
         // as different projects would refuse a correct configuration.
+        //
+        // Asserted through `livekit`, not through `is_ok`: `Ok(None)` is also
+        // `is_ok` and means recording never loaded, which is how this could
+        // have gone green against a build that stopped reading the override.
+        let matched = |pool: &ProviderPool, url: &'static str| {
+            load_recording(
+                &values([
+                    ("CODETRIAL_RECORDING_LIVEKIT_URL", url),
+                    ("CODETRIAL_RECORDING_LIVEKIT_API_KEY", RECORDING_KEY),
+                    ("CODETRIAL_RECORDING_LIVEKIT_API_SECRET", RECORDING_SECRET),
+                ]),
+                pool,
+                45,
+                false,
+            )
+            .map(|config| config.and_then(|config| config.livekit).is_some())
+        };
         for equivalent in [
             "https://project.livekit.cloud",
             "wss://project.livekit.cloud:443",
             "wss://PROJECT.livekit.cloud",
         ] {
-            assert!(
-                load_recording(
-                    &values([
-                        ("CODETRIAL_RECORDING_LIVEKIT_URL", equivalent),
-                        ("CODETRIAL_RECORDING_LIVEKIT_API_KEY", RECORDING_KEY),
-                        ("CODETRIAL_RECORDING_LIVEKIT_API_SECRET", RECORDING_SECRET),
-                    ]),
-                    &pool(),
-                    45,
-                    false,
-                )
-                .is_ok(),
+            assert_eq!(
+                matched(&pool(), equivalent),
+                Ok(true),
                 "{equivalent} names the pooled project"
             );
         }
+
+        // The plaintext pair is the same rule at the other default port, and it
+        // is the pair a developer runs against: `ws://host` and
+        // `http://host:80` are one endpoint, while `wss://host` is a second one
+        // on port 443. Nothing reached the `ws`/`http` arm, so it could have
+        // defaulted to 443 with every test still green.
+        let local = ProviderPool {
+            providers: vec![Provider {
+                id: PRIMARY_PROVIDER_ID.to_string(),
+                url: "ws://localhost".to_string(),
+                api_key: "devkey".to_string(),
+                api_secret: "devsecret".to_string(),
+                google_api_key: "google".to_string(),
+            }],
+        };
+        assert_eq!(matched(&local, "http://localhost:80"), Ok(true));
+        assert_eq!(matched(&local, "ws://localhost:80"), Ok(true));
+        assert!(
+            matched(&local, "wss://localhost").is_err(),
+            "443 is not 80, so this is a different endpoint"
+        );
+    }
+
+    /// A LiveKit override the pool cannot match because it is not a URL.
+    ///
+    /// `recording_livekit` reports an unusable URL and a URL naming an unpooled
+    /// project through two different branches with two different messages, and
+    /// only the second had a test: a build that stopped validating the override
+    /// would have fallen into the pool check and refused for the wrong reason,
+    /// or accepted `wss://` with no host as a project it could dial.
+    #[test]
+    fn recording_rejects_an_override_url_it_cannot_read() {
+        for (url, expected) in [
+            ("ftp://project.livekit.cloud", "must start with wss://"),
+            ("wss://", "scheme but no host"),
+            ("project.livekit.cloud", "must start with wss://"),
+        ] {
+            let error = load_recording(
+                &values([
+                    ("CODETRIAL_RECORDING_LIVEKIT_URL", url),
+                    ("CODETRIAL_RECORDING_LIVEKIT_API_KEY", RECORDING_KEY),
+                    ("CODETRIAL_RECORDING_LIVEKIT_API_SECRET", RECORDING_SECRET),
+                ]),
+                &pool(),
+                45,
+                false,
+            )
+            .expect_err("an override nothing can dial must fail closed");
+            assert!(
+                error.invalid_entries.iter().any(|entry| entry
+                    .starts_with("CODETRIAL_RECORDING_LIVEKIT_URL:")
+                    && entry.contains(expected)),
+                "{url} should be refused as unreadable, got {:?}",
+                error.invalid_entries
+            );
+        }
+    }
+
+    /// The bitrate ceiling and floor, which nothing asserted.
+    ///
+    /// `recording_number` already refuses a value it cannot parse; this is the
+    /// separate check that a number it can parse is one Egress will encode at.
+    /// A deployment that recorded at 40 kbps would produce a file, bill for it,
+    /// and hand a candidate something unwatchable.
+    #[test]
+    fn recording_rejects_a_bitrate_outside_the_range_egress_can_encode() {
+        use codetrial::config::{MAX_RECORDING_BITRATE, MIN_RECORDING_BITRATE};
+
+        for refused in ["0", "100", "9000"] {
+            let error = load_recording(
+                &values([("CODETRIAL_RECORDING_BITRATE", refused)]),
+                &pool(),
+                45,
+                false,
+            )
+            .expect_err("a bitrate outside the range must fail closed");
+            assert!(
+                error
+                    .invalid_entries
+                    .iter()
+                    .any(|entry| entry.contains("CODETRIAL_RECORDING_BITRATE")),
+                "{refused} kbps should be named, got {:?}",
+                error.invalid_entries
+            );
+        }
+
+        // Both ends are inclusive, so the bounds themselves load.
+        for accepted in [MIN_RECORDING_BITRATE, MAX_RECORDING_BITRATE] {
+            let mut pairs = values([]);
+            pairs.insert(
+                "CODETRIAL_RECORDING_BITRATE".to_string(),
+                accepted.to_string(),
+            );
+            assert_eq!(
+                load_recording(&pairs, &pool(), 45, false)
+                    .unwrap()
+                    .map(|config| config.bitrate),
+                Some(accepted),
+                "{accepted} is inside the range"
+            );
+        }
+    }
+
+    /// The credential is read at startup, not at the first delivery.
+    ///
+    /// `codetrial::delivery::readable_service_account` had no test anywhere:
+    /// replacing its body with `Ok(())` left the whole suite green, and the
+    /// deployment it describes records interviews it can never hand over and
+    /// finds out an hour into the first one.
+    #[test]
+    fn recording_refuses_a_service_account_it_cannot_read() {
+        for (broken, expected) in [
+            ("not json at all", "not JSON"),
+            (r#"{"private_key":"KEYMATERIAL-4bd2"}"#, "no client_email"),
+            (
+                r#"{"client_email":"","private_key":"KEYMATERIAL-4bd2"}"#,
+                "no client_email",
+            ),
+            (
+                r#"{"client_email":"codetrial@example.iam.gserviceaccount.com"}"#,
+                "no private_key",
+            ),
+            (
+                r#"{"client_email":"codetrial@example.iam.gserviceaccount.com","private_key":""}"#,
+                "no private_key",
+            ),
+        ] {
+            let mut pairs = values([]);
+            pairs.insert(
+                "CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON".to_string(),
+                broken.to_string(),
+            );
+            let error = load_recording(&pairs, &pool(), 45, false)
+                .expect_err("a credential nobody can sign with must fail closed");
+            assert!(
+                error.invalid_entries.iter().any(|entry| entry
+                    .starts_with("CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON:")
+                    && entry.contains(expected)),
+                "{expected} should be reported, got {:?}",
+                error.invalid_entries
+            );
+
+            // The reason reaches stderr, so it must not carry the credential.
+            for entry in &error.invalid_entries {
+                assert!(
+                    !entry.contains("KEYMATERIAL-4bd2"),
+                    "the key material must not appear in {entry}"
+                );
+            }
+        }
+
+        assert_eq!(
+            codetrial::delivery::readable_service_account(SERVICE_ACCOUNT),
+            Ok(())
+        );
+    }
+
+    /// The two settings that were only ever asserted at their defaults.
+    ///
+    /// Nothing turned the kill switch on or moved the staging prefix, so a
+    /// parser that ignored either key and answered from the default was
+    /// indistinguishable from one that read it. The kill switch is the control
+    /// an operator reaches for when recording has to stop now.
+    #[test]
+    fn recording_reads_the_kill_switch_and_the_prefix_rather_than_defaulting_them() {
+        let config = |key: &'static str, value: &'static str| {
+            load_recording(&values([(key, value)]), &pool(), 45, false)
+                .expect("the switch and the prefix should load")
+                .expect("recording is enabled")
+        };
+
+        for on in ["true", "TRUE", "1", "yes", "on"] {
+            assert!(
+                config("CODETRIAL_RECORDING_KILL_SWITCH", on).kill_switch,
+                "{on} should stop recording"
+            );
+        }
+        for off in ["false", "0", "no", "off"] {
+            assert!(
+                !config("CODETRIAL_RECORDING_KILL_SWITCH", off).kill_switch,
+                "{off} should leave recording running"
+            );
+        }
+
+        assert_eq!(
+            config("CODETRIAL_RECORDING_GCS_PREFIX", "staging/runs").gcs_prefix,
+            "staging/runs"
+        );
     }
 
     #[test]
@@ -1164,14 +1520,19 @@ mod recording {
             "https://recording.localhostess.example",
             "https://recording.codetrial.example:8443",
         ] {
-            assert!(
+            // Asserted through the value that comes back, not through `is_ok`:
+            // `Ok(None)` is also `is_ok` and means recording never loaded, so a
+            // break anywhere before the URL check would have passed for
+            // acceptance.
+            assert_eq!(
                 load_recording(
                     &values([("CODETRIAL_RECORDING_TEMPLATE_BASE_URL", public)]),
                     &pool(),
                     45,
                     false,
                 )
-                .is_ok(),
+                .map(|config| config.map(|config| config.template_base_url)),
+                Ok(Some(public.to_string())),
                 "{public} is a public name and must be accepted"
             );
         }

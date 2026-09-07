@@ -91,6 +91,29 @@ esac
                 "curl",
                 r"""#!/bin/sh
 args="$*"
+
+# The bearer travels in a curl config file so it stays out of `ps`, and a
+# Google API call that arrives without one is a 401, not an answer. Routing on
+# the URL alone was how dropping `--config` from either Drive call or from
+# either cleanup poll left every test in this file green while the harness ran
+# unauthenticated: measured, all fifteen passed with the flag removed.
+#
+# The template probe is deliberately exempt. It fetches a public page and
+# carries no `--config`, so the rule is scoped to googleapis.com rather than
+# applied to every call.
+credentialed=no
+for argument in "$@"; do
+  [ "$argument" != --config ] || credentialed=yes
+done
+case "$args" in
+  *googleapis.com*)
+    if [ "$credentialed" = no ]; then
+      if echo "$args" | grep -q '%{http_code}'; then echo 401; exit 0; fi
+      echo '{"error":{"code":401,"message":"Login Required"}}' >&2
+      exit 22
+    fi ;;
+esac
+
 if echo "$args" | grep -q '%{http_code}'; then
   if echo "$args" | grep -q 'storage.googleapis.com'; then
     case "$args" in *'codetrial%2F%2F'*) echo 200 ;; *) echo "$FAKE_CLEANUP_GCS_STATUS" ;; esac

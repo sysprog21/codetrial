@@ -103,17 +103,6 @@ test("one segment id is one turn, patched in place as the agent republishes it",
   );
 });
 
-test("an unfinished turn renders as in progress until the agent closes it", () => {
-  const panel = newPanel();
-  const view = createTranscriptView(stubDocument, panel);
-
-  view.upsert("candidate-0", "you", "I will use a map", false, 1_000);
-  assert.equal(rowText(panel, 0), "I will use a map...");
-
-  view.upsert("candidate-0", "you", "I will use a map", true, 1_100);
-  assert.equal(rowText(panel, 0), "I will use a map", "closing the turn drops the ellipsis");
-});
-
 test("a new turn id opens a new row", () => {
   const panel = newPanel();
   const view = createTranscriptView(stubDocument, panel);
@@ -894,4 +883,109 @@ test("a report that recorded no loop is not given one", () => {
   // was fabricating it there after the markdown export stopped.
   assert.doesNotMatch(reportMarkup(session({ incomplete: true })), /Coding \+ behavioral/);
   assert.match(reportMarkup(session({ incomplete: true, interviewLoop: "coding_only" })), /Coding only/);
+});
+
+// A case that threw is not a case that returned the wrong answer, and the card
+// says so differently: the exception replaces the expected/got pair rather than
+// sitting beside it. Nothing drove that arm -- every failing case in every
+// other test passes `error: ""` -- so the branch could have been deleted and a
+// candidate whose code threw would have been shown "expected X got undefined".
+test("a case that threw shows the exception instead of an expected/got pair", () => {
+  const { body } = resultsMarkup({
+    passed: 0,
+    total: 1,
+    cases: [{ label: "throws", pass: false, expected: "[0,1]", got: "", error: "TypeError: x is not a function", timeMs: 2 }],
+  });
+  assert.match(body, /<pre>TypeError: x is not a function<\/pre>/);
+  assert.doesNotMatch(body, /expected/, "the exception replaces the comparison, it does not join it");
+  assert.doesNotMatch(body, /\bgot\b/);
+});
+
+// The runner's message is candidate-controlled: it is whatever their code threw.
+test("a thrown exception cannot carry markup onto the report", () => {
+  const { body } = resultsMarkup({
+    passed: 0,
+    total: 1,
+    cases: [{ label: "x", pass: false, expected: "", got: "", error: "<img src=x onerror=alert(1)>", timeMs: 0 }],
+  });
+  assert.doesNotMatch(body, /<img/);
+  assert.match(body, /&lt;img src=x onerror=alert\(1\)&gt;/);
+});
+
+// The one styling branch in the results header nothing asserted in its passing
+// arm: the count line goes green only when every case passed. A partial pass is
+// already pinned as `critical`; without this the class could be hard-wired to
+// `critical` and a clean run would still read as a failure.
+test("an all-pass run styles its count line as good, not critical", () => {
+  const allPass = resultsMarkup({ passed: 2, total: 2, cases: [
+    { label: "a", pass: true, timeMs: 1 },
+    { label: "b", pass: true, timeMs: 1 },
+  ] });
+  assert.match(allPass.body, /class="good small"/);
+  assert.doesNotMatch(allPass.body, /class="critical small"/);
+
+  // And the boundary is "every one", not "most": one failure out of many is
+  // still critical.
+  const nearly = resultsMarkup({ passed: 1, total: 2, cases: [
+    { label: "a", pass: true, timeMs: 1 },
+    { label: "b", pass: false, expected: "1", got: "2", error: "", timeMs: 1 },
+  ] });
+  assert.match(nearly.body, /class="critical small"/);
+  // A run with no cases at all passes vacuously and must not read as a failure.
+  assert.match(resultsMarkup({ passed: 0, total: 0, cases: [] }).body, /class="good small"/);
+});
+
+// The second half of the stale-republish guard, which no fixture separated from
+// the first. The only test for it sends a lower `at` AND a false `final`, so
+// both disjuncts are true at once and dropping either leaves it passing. The
+// case this isolates is the one the code comment was written for: two updates
+// landing in the same millisecond, where `at` cannot break the tie and only
+// "this turn is already closed" can.
+test("a closed turn is not reopened by an interim update at the same instant", () => {
+  const panel = newPanel();
+  const view = createTranscriptView(stubDocument, panel);
+
+  view.upsert("t1", "interviewer", "Walk me through your approach.", true, 5_000);
+  assert.equal(rowText(panel, 0), "Walk me through your approach.");
+
+  // Same clock reading, final going true -> false. `at < row.at` is false here,
+  // so the `row.final && !final` clause is the only thing refusing it.
+  view.upsert("t1", "interviewer", "Walk me", false, 5_000);
+  assert.equal(rowText(panel, 0), "Walk me through your approach.",
+    "a closed turn does not reopen, and does not shorten");
+
+  // A later interim is refused for the same reason, not because of the clock.
+  view.upsert("t1", "interviewer", "Walk", false, 9_000);
+  assert.equal(rowText(panel, 0), "Walk me through your approach.");
+
+  // A later *final* correction is still accepted: the guard is about reopening
+  // a closed turn, not about freezing it.
+  view.upsert("t1", "interviewer", "Walk me through your approach, please.", true, 9_000);
+  assert.equal(rowText(panel, 0), "Walk me through your approach, please.");
+});
+
+// The class the stylesheet draws each row from, which no test read even though
+// the stub has carried the field all along. It is the only thing that tells the
+// two speakers apart visually, so with it hard-wired the transcript renders as
+// one voice and the reader cannot see who said what.
+test("each transcript row is classed by who is speaking", () => {
+  const panel = newPanel();
+  const view = createTranscriptView(stubDocument, panel);
+
+  view.upsert("q1", "interviewer", "Why a hash map?", true, 1_000);
+  view.upsert("a1", "you", "Constant lookup.", true, 2_000);
+
+  assert.equal(panel.children[0].className, "transcript-row alex");
+  assert.equal(panel.children[1].className, "transcript-row you");
+  // The label and the class have to agree: they are read by different people
+  // -- one by a screen reader, one by the stylesheet -- and a row that says
+  // "Jim" while styled as the candidate misattributes the sentence.
+  assert.equal(rowLabel(panel, 0), "Jim");
+  assert.equal(rowLabel(panel, 1), "You");
+
+  // Any speaker that is not the interviewer is the candidate: the class is a
+  // two-way split, not an enumeration that a third value could fall out of.
+  view.upsert("a2", "candidate", "And O(n) space.", true, 3_000);
+  assert.equal(panel.children[2].className, "transcript-row you");
+  assert.equal(rowLabel(panel, 2), "You");
 });

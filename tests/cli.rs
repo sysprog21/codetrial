@@ -767,27 +767,17 @@ fn binary_with_no_arguments_defaults_to_web_mode() {
     );
 }
 
-/// The solo self-serve cold start: no config anywhere, so it serves the
-/// Setup page instead of refusing.
-#[test]
-fn binary_web_serves_a_setup_page_when_no_config_exists() {
-    let dir = exe_temp_path("cold-start");
-    std::fs::create_dir_all(&dir).unwrap();
-    let exe = binary_beside(&dir);
-
-    let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
-    let response = http_request(
-        &addr,
-        &format!("GET / HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-
-    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
-    assert!(response.contains("Setup"), "{response}");
-}
-
-/// Field names are the contract with `submit_setup`'s JSON keys; pinned so
-/// page and handler can't drift apart.
+/// The solo self-serve cold start: no config anywhere, so it serves the Setup
+/// page instead of refusing. Field names are the contract with `submit_setup`'s
+/// JSON keys; pinned so page and handler can't drift apart.
+///
+/// This was two tests. The other one built the same directory, spawned the same
+/// cold start, sent the same `GET /` and asserted the same status line, adding
+/// only `contains("Setup")` to what is asserted here. Every production mutation
+/// it could reach is on that shared path: point the setup router's `/` route
+/// elsewhere, or make `is_cold_start` always false, and both failed together on
+/// assertions this test still makes. A second binary spawn for one more
+/// substring of a page four substrings of are already read here.
 #[test]
 fn setup_page_renders_a_form_with_all_four_credential_fields() {
     let dir = exe_temp_path("setup-form");
@@ -1568,10 +1558,27 @@ fn setup_page_rejects_a_submission_missing_a_field() {
 }
 
 /// `CODETRIAL_GEMINI_LIVE_URL` redirects validation to a local mock that
-/// never sends `setupComplete`, which is a rejected key. LiveKit's mock passes
-/// so this isolates the Gemini rejection.
+/// accepts the socket and closes without ever sending `setupComplete`.
+/// LiveKit's double holds the submitted pair and accepts, so the only refusal
+/// on this path is the Gemini one.
+///
+/// What this pins is the probe happening and its failure being fatal: drop the
+/// `google_api_key` branch out of `submit_setup`, or keep it and let a failed
+/// handshake fall through, and the submission is written to disk instead.
+/// `!written` is the assertion that notices, and nothing else in this suite
+/// does.
+///
+/// What it cannot pin, unlike the LiveKit refusal below, is that the *key* is
+/// what was judged. The name used to say it did. LiveKit's credential rides in
+/// an `Authorization` header, so a double reached through a redirected URL
+/// still receives it and can hold the project's real secret against it; this
+/// seam replaces the whole URL, and Gemini's credential is the `?key=` inside
+/// the URL that was replaced. The mock is therefore handed no key, refuses
+/// every caller alike, and `"bad-key"` in the body below is a label rather than
+/// a cause. Making it a cause needs a seam that redirects the host and keeps
+/// the query, which is production's to offer and not a test's to fake.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn setup_page_rejects_a_google_api_key_that_fails_live_validation() {
+async fn setup_page_refuses_to_write_when_the_gemini_handshake_fails() {
     let dir = exe_temp_path("setup-bad-gemini-key");
     std::fs::create_dir_all(&dir).unwrap();
     let exe = binary_beside(&dir);
