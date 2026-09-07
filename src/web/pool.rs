@@ -389,6 +389,15 @@ mod tests {
     use super::*;
     use crate::config::{PRIMARY_PROVIDER_ID, Provider, provider_id_from_room};
 
+    /// The LiveKit credentials every project in `config_with` is built from,
+    /// and the pair [`quota_stub`] verifies the probe's token against. Named
+    /// rather than repeated so the two cannot drift: a stub holding a different
+    /// secret from the config under test would refuse every probe, which reads
+    /// as a quota answer rather than as a broken fixture. Nothing here is a
+    /// real credential; the server it signs for exists only in this binary.
+    const STUB_API_KEY: &str = "k";
+    const STUB_API_SECRET: &str = "s";
+
     fn config_with(ids: &[&str]) -> WebServerConfig {
         WebServerConfig {
             web_dir: std::path::PathBuf::new(),
@@ -411,8 +420,8 @@ mod tests {
                     .map(|id| Provider {
                         id: (*id).to_string(),
                         url: "wss://host.example".to_string(),
-                        api_key: "k".to_string(),
-                        api_secret: "s".to_string(),
+                        api_key: STUB_API_KEY.to_string(),
+                        api_secret: STUB_API_SECRET.to_string(),
                         google_api_key: String::new(),
                     })
                     .collect(),
@@ -420,14 +429,81 @@ mod tests {
         }
     }
 
-    /// A stub that answers every probe with one status, standing in for a
-    /// LiveKit project with or without minutes left.
+    /// Whether a probe carries a credential this project would accept: a
+    /// bearer JWT naming this project as its issuer and signed with this
+    /// project's secret.
+    ///
+    /// Read backwards from what `probe_not_exhausted` mints, and deliberately
+    /// through the crate's own verifier rather than a second copy of it, so a
+    /// change to the signing that this file does not follow shows up as a
+    /// refusal here instead of passing unnoticed.
+    ///
+    /// One of three copies of this shape; `tests/web.rs` and
+    /// `src/livekit/rooms.rs` carry the others, and the one in
+    /// `src/livekit/rooms.rs` states why they stay copies.
+    fn probe_credential_accepted(
+        headers: &axum::http::HeaderMap,
+        api_key: &str,
+        api_secret: &str,
+    ) -> bool {
+        let Some(token) = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+        else {
+            return false;
+        };
+        if crate::token::livekit_token_issuer(token).as_deref() != Some(api_key) {
+            return false;
+        }
+
+        // `rsplit_once` splits a four-segment string as happily as a
+        // three-segment one, so a structural check belongs somewhere -- but it
+        // is already above. `livekit_token_issuer` takes the payload as
+        // everything between the first dot and the last, and base64url has no
+        // dot in it, so a token with a segment glued on fails to decode there
+        // and never reaches this line. A check here would be a line no test
+        // could reach; the test in `tests/web.rs` asks for the four-segment
+        // case instead, so that a parser which stopped refusing it is a failure
+        // rather than a silent widening.
+        let Some((signing_input, signature)) = token.rsplit_once('.') else {
+            return false;
+        };
+        crate::token::verify_hs256(api_secret, signing_input, signature)
+    }
+
+    /// A stub that answers one status to a probe carrying this project's
+    /// credential, standing in for a LiveKit project with or without minutes
+    /// left, and 401 to anything else.
+    ///
+    /// The credential check is the difference between a test that exercises the
+    /// probe and one that only exercises its URL. `/rtc/validate` is an
+    /// authenticated endpoint: the real LiveKit answers 401 to an anonymous GET
+    /// and never reaches the quota question at all. A stub that answered its
+    /// status to any caller would let the probe drop `.bearer_auth`, sign with
+    /// the wrong project's secret, or mint a token for a project it is not
+    /// asking about, and every test here would still pass -- while production
+    /// learned nothing about quota, because 401 is not 429 and this module
+    /// reads everything that is not 429 as "still has minutes". That is the
+    /// same shape as the GitHub stub that answered one profile to any bearer
+    /// token, which let a broken token exchange pass the whole suite.
+    ///
+    /// A pool is more than one project, so the check is against this project's
+    /// key and secret rather than merely against a well-formed token: probing
+    /// project B with project A's credential is a failure only a per-project
+    /// check can see, and it is the failure a rotation over several projects is
+    /// most able to make.
     async fn quota_stub(status: axum::http::StatusCode) -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let app = axum::Router::new().route(
             "/rtc/validate",
-            axum::routing::get(move || async move { status }),
+            axum::routing::get(move |headers: axum::http::HeaderMap| async move {
+                if !probe_credential_accepted(&headers, STUB_API_KEY, STUB_API_SECRET) {
+                    return axum::http::StatusCode::UNAUTHORIZED;
+                }
+                status
+            }),
         );
         let server = tokio::spawn(async move {
             let _ = axum::serve(listener, app).await;
@@ -439,6 +515,88 @@ mod tests {
     /// returning the wrong set is the difference between routing around a spent
     /// project and routing into it. Dropping the negation reported exactly the
     /// projects that still had minutes, and nothing noticed.
+    /// The credential check on the quota stub is a tripwire, and this is what
+    /// proves the wire is live.
+    ///
+    /// The only other caller reads the stub's answer through `refresh_all`,
+    /// which reads everything that is not 429 as "still has minutes" -- so a
+    /// stub that quietly stopped checking would go on passing there: the probe
+    /// would arrive with no credential, be refused, and the refusal would read
+    /// as a healthy project. Asking the stub directly is the only place the
+    /// refusal is observable on its own, and without it this check is pinned
+    /// only in the direction that does not matter, the one where it refuses
+    /// everything.
+    #[tokio::test]
+    async fn the_quota_stub_refuses_a_probe_that_carries_the_wrong_credential() {
+        /// The credential the probe mints, so the test asks with what
+        /// `probe_not_exhausted` asks with rather than with a token shaped
+        /// like it.
+        fn probe_token(api_key: &str, api_secret: &str) -> String {
+            crate::token::livekit_token(crate::token::LivekitTokenInput {
+                api_key,
+                api_secret,
+                name: "quota-probe",
+                identity: "quota-probe",
+                room: "quota-probe",
+                metadata: "",
+                now_seconds: 1_700_000_000,
+                agent: false,
+            })
+            .unwrap()
+        }
+
+        let (url, server) = quota_stub(axum::http::StatusCode::OK).await;
+
+        // The pool entry is a `ws://` URL and the probe reaches the same server
+        // over `http://`, through the conversion production uses.
+        let origin = super::super::policy::livekit_http_origin(&url).unwrap();
+        let probe = format!("{origin}/rtc/validate");
+        let client = crate::http_client();
+
+        for (why, bearer) in [
+            ("no credential at all", None),
+            (
+                "a bearer that is not a token",
+                Some("not-a-jwt".to_string()),
+            ),
+            (
+                "a token signed with another project's secret",
+                Some(probe_token(STUB_API_KEY, "someone-elses-secret")),
+            ),
+            // Well formed, correctly signed, and for a project this stub does
+            // not serve. A pool holds more than one LiveKit project, so
+            // reaching for the wrong entry's credentials is a real way to get
+            // this wrong and one only a per-project check can see.
+            (
+                "a token minted for another project",
+                Some(probe_token("other-key", STUB_API_SECRET)),
+            ),
+        ] {
+            let request = client.get(&probe);
+            let request = match bearer {
+                Some(token) => request.bearer_auth(token),
+                None => request,
+            };
+            assert_eq!(
+                request.send().await.unwrap().status(),
+                401,
+                "the stub must refuse {why}, or it is not checking anything"
+            );
+        }
+
+        // And the credential the pool actually mints is accepted, so the four
+        // refusals are a check rather than a stub that refuses everything.
+        let accepted = client
+            .get(&probe)
+            .bearer_auth(probe_token(STUB_API_KEY, STUB_API_SECRET))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), 200);
+
+        server.abort();
+    }
+
     #[tokio::test]
     async fn refresh_all_names_the_projects_that_refused() {
         let (spent_url, spent_server) = quota_stub(axum::http::StatusCode::TOO_MANY_REQUESTS).await;

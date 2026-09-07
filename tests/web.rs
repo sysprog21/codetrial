@@ -1,3 +1,5 @@
+mod common;
+
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -7143,12 +7145,36 @@ fn interview_rows(path: &std::path::Path) -> Vec<(String, String, i64, Option<i6
         .collect()
 }
 
+/// Whether a quota probe carries a credential this project would accept.
+///
+/// The token comes out of the `HeaderMap` here and the judgement is
+/// `common::livekit_token_matches`, which `tests/cli.rs` makes about the same
+/// credential in front of a different double. Sharing the judgement and not the
+/// extraction is the split: what a token has to be is one rule, and where it is
+/// found is each double's own business.
+fn livekit_probe_accepted(
+    headers: &axum::http::HeaderMap,
+    api_key: &str,
+    api_secret: &str,
+) -> bool {
+    let Some(token) = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+    else {
+        return false;
+    };
+    common::livekit_token_matches(token, api_key, api_secret)
+}
+
 /// The quota stub without a hit counter, which is all most callers need.
 async fn spawn_livekit_quota_stub(
     status: axum::http::StatusCode,
     delay: Duration,
+    api_key: &str,
+    api_secret: &str,
 ) -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
-    let (url, _hits, server) = spawn_counting_quota_stub(status, delay).await;
+    let (url, _hits, server) = spawn_counting_quota_stub(status, delay, api_key, api_secret).await;
     (url, server)
 }
 
@@ -7156,9 +7182,31 @@ async fn spawn_livekit_quota_stub(
 /// asked. The count is the whole point of the test below: it is the difference
 /// between a pool that probes on a candidate's request and one that already
 /// knew.
+///
+/// `api_key` and `api_secret` are the credentials the caller puts in the pool
+/// entry pointing at this stub, and the probe is answered only when its token
+/// verifies against them; anything else gets 401, which is what the real
+/// `/rtc/validate` answers an unauthenticated GET.
+///
+/// The check is here because without it this stub answered its status to any
+/// caller, and then the probe's credential was the one thing no test in this
+/// binary looked at. Dropping `.bearer_auth`, signing with a different
+/// project's secret, or minting a token for a project the probe is not asking
+/// about would all have left every assertion below intact -- while production
+/// learned nothing, since 401 is not 429 and the pool reads everything that is
+/// not 429 as "still has minutes". That is the shape of the GitHub stub that
+/// answered one profile to any bearer token and let a broken token exchange
+/// pass the whole suite.
+///
+/// Per project rather than merely well-formed, because a pool is more than one
+/// project: several of the tests below run two or three stubs at once, each
+/// with its own key and secret, so a probe that reached for the wrong entry's
+/// credentials is a failure only a per-project check can see.
 async fn spawn_counting_quota_stub(
     status: axum::http::StatusCode,
     delay: Duration,
+    api_key: &str,
+    api_secret: &str,
 ) -> (
     String,
     std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -7166,15 +7214,23 @@ async fn spawn_counting_quota_stub(
 ) {
     let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter = hits.clone();
+    let credentials = std::sync::Arc::new((api_key.to_string(), api_secret.to_string()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let router = axum::Router::new().route(
         "/rtc/validate",
-        axum::routing::get(move || {
+        axum::routing::get(move |headers: axum::http::HeaderMap| {
             let counter = counter.clone();
+            let credentials = credentials.clone();
             async move {
+                // Counted before the credential is judged: a refused probe is
+                // still a probe, and the caching test below is about how many
+                // times this project was asked, not how many times it agreed.
                 counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 tokio::time::sleep(delay).await;
+                if !livekit_probe_accepted(&headers, &credentials.0, &credentials.1) {
+                    return (axum::http::StatusCode::UNAUTHORIZED, "unauthorized");
+                }
                 if status == axum::http::StatusCode::TOO_MANY_REQUESTS {
                     (
                         status,
@@ -7200,7 +7256,8 @@ async fn spawn_counting_quota_stub(
 #[tokio::test]
 async fn the_pool_probes_in_the_background_so_a_token_request_does_not() {
     let (provider, hits, stub) =
-        spawn_counting_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
+        spawn_counting_quota_stub(axum::http::StatusCode::OK, Duration::ZERO, "key", "secret")
+            .await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("quota-background-probe");
     config.pool = primary_pool(&provider, "key", "secret");
@@ -7246,12 +7303,116 @@ async fn the_pool_probes_in_the_background_so_a_token_request_does_not() {
     remove_database(db_path);
 }
 
+/// The quota stub is a tripwire, and this is what proves the wire is live.
+///
+/// Every other test here reads the stub's answer through the pool, and the pool
+/// reads anything that is not 429 as "still has minutes", so a stub that had
+/// quietly stopped checking would be invisible on each of them that answers
+/// 200: the probe would arrive with no credential, be refused, and the refusal
+/// would read as a healthy project. This asks the stub directly instead, which
+/// is the only place the refusal is observable at all until somebody decides
+/// what a 401 should mean for pooling.
+#[tokio::test]
+async fn the_quota_stub_refuses_a_probe_that_carries_the_wrong_credential() {
+    /// The credential the probe mints, so the test asks with what production
+    /// asks with rather than with a token shaped like it.
+    fn probe_token(api_key: &str, api_secret: &str) -> String {
+        codetrial::token::livekit_token(codetrial::token::LivekitTokenInput {
+            api_key,
+            api_secret,
+            name: "quota-probe",
+            identity: "quota-probe",
+            room: "quota-probe",
+            metadata: "",
+            now_seconds: 1_700_000_000,
+            agent: false,
+        })
+        .unwrap()
+    }
+
+    let (provider, stub) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::OK,
+        Duration::ZERO,
+        "available-key",
+        "available-secret",
+    )
+    .await;
+    let client = reqwest::Client::new();
+
+    // The pool entry is the `ws://` URL a LiveKit project would be configured
+    // with, and the probe reaches the same server over `http://`;
+    // `livekit_http_origin` is what production converts with and is
+    // `pub(crate)`, so this does the one substitution that fixture's own shape
+    // makes exact rather than widening a production surface for a test.
+    let probe = format!("{}/rtc/validate", provider.replace("ws://", "http://"));
+
+    for (why, bearer) in [
+        ("no credential at all", None),
+        (
+            "a bearer that is not a token",
+            Some("not-a-jwt".to_string()),
+        ),
+        (
+            "a token signed with another project's secret",
+            Some(probe_token("available-key", "someone-elses-secret")),
+        ),
+        (
+            "a token minted for a different project",
+            Some(probe_token("other-key", "available-secret")),
+        ),
+        // Four segments, and the fourth is a real signature over the first
+        // three, so `rsplit_once` and `verify_hs256` between them would be
+        // satisfied. What refuses it is `livekit_token_issuer`: it reads the
+        // payload as everything between the first dot and the last, and the
+        // glued segment puts a dot inside that, which base64url cannot decode.
+        // Signed rather than glued on at random, because an unsigned tail is
+        // refused by the signature check and would say nothing about the parser
+        // that is really doing the work here.
+        (
+            "a fourth segment signed over the other three",
+            Some({
+                let inner = probe_token("available-key", "available-secret");
+                let outer = codetrial::token::sign_hs256("available-secret", &inner);
+                format!("{inner}.{outer}")
+            }),
+        ),
+    ] {
+        let request = client.get(&probe);
+        let request = match bearer {
+            Some(token) => request.bearer_auth(token),
+            None => request,
+        };
+        assert_eq!(
+            request.send().await.unwrap().status(),
+            401,
+            "the stub must refuse {why}, or it is not checking anything"
+        );
+    }
+
+    // And the credential the pool actually mints is accepted, so the four
+    // refusals above are a check rather than a stub that refuses everything.
+    let accepted = client
+        .get(&probe)
+        .bearer_auth(probe_token("available-key", "available-secret"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), 200);
+
+    stub.abort();
+}
+
 /// A quota check must never make starting an interview wait for the shared
 /// client's 30-second backstop when a provider accepts connections but stalls.
 #[tokio::test]
 async fn a_stalled_quota_probe_does_not_delay_token_issuance() {
-    let (provider, stub) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::from_secs(3)).await;
+    let (provider, stub) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::OK,
+        Duration::from_secs(3),
+        "available-key",
+        "available-secret",
+    )
+    .await;
     let (mut config, cookie, db_path) = signed_in_web_config("quota-probe-timeout");
     config.pool = primary_pool(&provider, "available-key", "available-secret");
     let (base, server) = spawn_web_server(config).await;
@@ -7283,10 +7444,20 @@ async fn a_stalled_quota_probe_does_not_delay_token_issuance() {
 /// so the server has to ask before it hands the token out.
 #[tokio::test]
 async fn a_provider_out_of_connection_minutes_is_passed_over() {
-    let (exhausted, first) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::TOO_MANY_REQUESTS, Duration::ZERO).await;
-    let (healthy, second) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
+    let (exhausted, first) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::TOO_MANY_REQUESTS,
+        Duration::ZERO,
+        "spent-key",
+        "spent-secret",
+    )
+    .await;
+    let (healthy, second) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::OK,
+        Duration::ZERO,
+        "spare-key",
+        "spare-secret",
+    )
+    .await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("quota-failover");
     config.pool = codetrial::config::ProviderPool {
@@ -7352,10 +7523,20 @@ async fn a_provider_out_of_connection_minutes_is_passed_over() {
 /// candidate and the agent end up in different ones.
 #[tokio::test]
 async fn a_pinned_room_on_an_exhausted_project_falls_back_to_the_pool() {
-    let (exhausted, first) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::TOO_MANY_REQUESTS, Duration::ZERO).await;
-    let (healthy, second) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
+    let (exhausted, first) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::TOO_MANY_REQUESTS,
+        Duration::ZERO,
+        "spent-key",
+        "spent-secret",
+    )
+    .await;
+    let (healthy, second) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::OK,
+        Duration::ZERO,
+        "spare-key",
+        "spare-secret",
+    )
+    .await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("pinned-quota-failover");
     config.fixed_room_name = Some("interview-local".to_string());
@@ -7414,7 +7595,7 @@ async fn a_pinned_room_on_an_exhausted_project_falls_back_to_the_pool() {
 #[tokio::test]
 async fn a_pinned_room_on_a_healthy_project_is_kept() {
     let (healthy, stub) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
+        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO, "key", "secret").await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("pinned-quota-healthy");
     config.fixed_room_name = Some("interview-local".to_string());
@@ -7449,8 +7630,13 @@ async fn a_pinned_room_on_a_healthy_project_is_kept() {
 /// already knows is spent.
 #[tokio::test]
 async fn every_provider_out_of_minutes_is_refused_with_the_reason() {
-    let (exhausted, stub) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::TOO_MANY_REQUESTS, Duration::ZERO).await;
+    let (exhausted, stub) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::TOO_MANY_REQUESTS,
+        Duration::ZERO,
+        "spent-key",
+        "spent-secret",
+    )
+    .await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("quota-exhausted");
     config.pool = primary_pool(&exhausted, "spent-key", "spent-secret");
@@ -7483,12 +7669,27 @@ async fn every_provider_out_of_minutes_is_refused_with_the_reason() {
 /// split three and three, not four and two.
 #[tokio::test]
 async fn a_dead_project_does_not_skew_the_rotation() {
-    let (spent, spent_stub) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::TOO_MANY_REQUESTS, Duration::ZERO).await;
-    let (first, first_stub) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
-    let (second, second_stub) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
+    let (spent, spent_stub) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::TOO_MANY_REQUESTS,
+        Duration::ZERO,
+        "spent-key",
+        "spent-secret",
+    )
+    .await;
+    let (first, first_stub) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::OK,
+        Duration::ZERO,
+        "first-key",
+        "first-secret",
+    )
+    .await;
+    let (second, second_stub) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::OK,
+        Duration::ZERO,
+        "second-key",
+        "second-secret",
+    )
+    .await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("quota-rotation");
     config.pool = codetrial::config::ProviderPool {
