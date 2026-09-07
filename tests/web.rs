@@ -2927,6 +2927,69 @@ async fn github_callback_sets_session_and_clears_oauth_state() {
     remove_database(path);
 }
 
+/// The callback answers 502 on two separate legs -- a refused token exchange
+/// and a refused profile request -- so the status alone cannot say which one
+/// ran. The message is the only thing that tells them apart, which is why this
+/// pins the text and not just the code: without it, a token exchange that had
+/// stopped working entirely would still satisfy every 502 assertion in this
+/// file, because the profile leg it never reaches is the one they were really
+/// describing.
+///
+/// The stub refuses any `code` but the fixture, so asking for a different one
+/// is enough to fail the exchange while leaving `/user` perfectly healthy.
+#[tokio::test]
+async fn a_refused_code_exchange_names_the_token_leg_not_the_profile_leg() {
+    let (github_base, github_server) = spawn_mock_github().await;
+    let path = std::env::temp_dir().join(format!(
+        "codetrial-callback-bad-code-{}-{}.db",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut config = web_config();
+    config.github_client_id = Some("client".to_string());
+    config.github_client_secret = Some("secret".to_string());
+    config.session_secret = Some("session-secret".to_string());
+    config.db_path = Some(path.clone());
+    config.github_oauth_base_url = Some(github_base.clone());
+    config.github_api_base_url = Some(github_base);
+
+    // The schema is created once at startup, not per request, so a caller that
+    // builds the router directly has to do what `main` does.
+    initialize_account_database(&path).unwrap();
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    let response = client
+        .get(format!("{base}/api/callback?code=stale&state=state-token"))
+        .header(
+            "cookie",
+            format!(
+                "codetrial_oauth_state={}",
+                signed_cookie("state-token", "session-secret")
+            ),
+        )
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 502);
+    let body = response.json::<Value>().await.unwrap();
+    assert_eq!(
+        body["error"], "GitHub token exchange failed.",
+        "a refused code fails the exchange, not the profile request"
+    );
+
+    server.abort();
+    github_server.abort();
+    remove_database(path);
+}
+
 /// Hiding the start button proves nothing: /interview is a URL anyone can open,
 /// and the token is a live LiveKit credential. Where accounts exist, the
 /// credential is what has to refuse.
@@ -3674,48 +3737,176 @@ async fn spawn_web_server_with_dispatcher(
     (format!("http://{addr}"), server)
 }
 
-async fn spawn_mock_github() -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
+/// The OAuth fixtures every caller of the two GitHub stubs configures: the
+/// client id and the secret each test writes into its `WebServerConfig`, and
+/// the `?code=` its callback request carries. Credentials of a server that
+/// exists only inside this test binary, so nothing here is a real secret.
+const MOCK_GITHUB_CLIENT_ID: &str = "client";
+const MOCK_GITHUB_CLIENT_SECRET: &str = "secret";
+const MOCK_GITHUB_CODE: &str = "ok";
+
+type MockGitHubResponse = (
+    axum::http::StatusCode,
+    [(axum::http::HeaderName, &'static str); 1],
+    String,
+);
+
+/// The token a stub has issued so far, `None` before its first successful
+/// exchange. Cloned out from under the guard at every read so no lock is held
+/// across an await.
+type MockGitHubIssued = std::sync::Arc<std::sync::Mutex<Option<String>>>;
+
+/// Distinguishes tokens minted within the same clock tick, which two stubs
+/// spawned back to back in one test can be.
+static MOCK_GITHUB_MINTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn mock_github_mint() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let sequence = MOCK_GITHUB_MINTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("mock-github-token-{nanos:x}-{sequence}")
+}
+
+/// GitHub's answer to a request carrying a token it never issued.
+fn mock_github_unauthorized() -> MockGitHubResponse {
+    (
+        axum::http::StatusCode::UNAUTHORIZED,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        json!({"message":"Bad credentials"}).to_string(),
+    )
+}
+
+/// Whether this request may read the account: only if the stub has issued a
+/// token and this is that token.
+fn mock_github_authorized(headers: &axum::http::HeaderMap, issued: &MockGitHubIssued) -> bool {
+    let Some(token) = issued.lock().unwrap().clone() else {
+        return false;
+    };
+    headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        == Some(format!("Bearer {token}").as_str())
+}
+
+/// GitHub as the sign-in path sees it, with the two checks that make the
+/// handshake load bearing: the token endpoint answers only the fixture
+/// credentials, and the API endpoints answer only the token it issued.
+///
+/// Both checks are here because without them the stub answered every caller
+/// the same profile, so a `github_access_token` that never contacted GitHub
+/// and returned a constant, or the empty string, completed sign-in exactly as
+/// the real one does and no test could tell the difference.
+///
+/// The token is issued by the exchange rather than fixed in advance, which is
+/// two separate properties and both are needed. Until a POST carrying the
+/// fixture credentials succeeds this stub holds no token at all, so an
+/// implementation that skipped the exchange has nothing `/user` accepts,
+/// whatever string it returns. And the issued value mixes a clock reading with
+/// a process-wide counter, so it cannot be spelled ahead of time either --
+/// which a value derived from the stub's address could be, the code under test
+/// being handed that address.
+///
+/// `emails` is the entire difference between the two stubs built on this, so
+/// it is the only parameter: one passes an address list, the other the 403
+/// GitHub sends while rate limiting. Everything else has to stay identical or
+/// the rate-limit test would be comparing two servers that differ in more than
+/// the failure it is about.
+async fn spawn_github_stub(
+    emails: (axum::http::StatusCode, Value),
+) -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let emails = std::sync::Arc::new(emails);
+    let issued = MockGitHubIssued::default();
+    let exchange_issued = issued.clone();
+    let user_issued = issued.clone();
     let router = axum::Router::new()
         .route(
             "/login/oauth/access_token",
-            axum::routing::post(|| async {
-                (
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    json!({"access_token":"mock-token"}).to_string(),
-                )
+            axum::routing::post(move |body: String| {
+                let exchange_issued = exchange_issued.clone();
+                async move {
+                    let posted = serde_json::from_str::<Value>(&body).unwrap_or(Value::Null);
+                    let field = |name: &str| {
+                        posted
+                            .get(name)
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string()
+                    };
+                    if field("client_id") != MOCK_GITHUB_CLIENT_ID
+                        || field("client_secret") != MOCK_GITHUB_CLIENT_SECRET
+                        || field("code") != MOCK_GITHUB_CODE
+                    {
+                        return (
+                            axum::http::StatusCode::BAD_REQUEST,
+                            [(axum::http::header::CONTENT_TYPE, "application/json")],
+                            json!({"error":"bad_verification_code"}).to_string(),
+                        );
+                    }
+                    let token = mock_github_mint();
+                    *exchange_issued.lock().unwrap() = Some(token.clone());
+                    (
+                        axum::http::StatusCode::OK,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        json!({ "access_token": token }).to_string(),
+                    )
+                }
             }),
         )
         .route(
             "/user",
-            axum::routing::get(|| async {
-                (
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    json!({"id":303,"login":"octocat","avatar_url":"https://example.test/avatar.png"}).to_string(),
-                )
+            axum::routing::get(move |headers: axum::http::HeaderMap| {
+                let user_issued = user_issued.clone();
+                async move {
+                    if !mock_github_authorized(&headers, &user_issued) {
+                        return mock_github_unauthorized();
+                    }
+                    (
+                        axum::http::StatusCode::OK,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        json!({"id":303,"login":"octocat","avatar_url":"https://example.test/avatar.png"})
+                            .to_string(),
+                    )
+                }
             }),
         )
-
-        // What `read:user` alone cannot answer. The unverified and secondary
-        // entries are here because selecting the wrong one is the failure this
-        // endpoint exists to make possible.
         .route(
             "/user/emails",
-            axum::routing::get(|| async {
-                (
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    json!([
-                        {"email":"unverified@example.test","primary":false,"verified":false},
-                        {"email":"secondary@example.test","primary":false,"verified":true},
-                        {"email":"octocat@example.test","primary":true,"verified":true}
-                    ])
-                    .to_string(),
-                )
+            axum::routing::get(move |headers: axum::http::HeaderMap| {
+                let emails = emails.clone();
+                let issued = issued.clone();
+                async move {
+                    if !mock_github_authorized(&headers, &issued) {
+                        return mock_github_unauthorized();
+                    }
+                    (
+                        emails.0,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        emails.1.to_string(),
+                    )
+                }
             }),
         );
     let server = tokio::spawn(async move { axum::serve(listener, router).await });
     (format!("http://{addr}"), server)
+}
+
+async fn spawn_mock_github() -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
+    // What `read:user` alone cannot answer. The unverified and secondary
+    // entries are here because selecting the wrong one is the failure this
+    // endpoint exists to make possible.
+    spawn_github_stub((
+        axum::http::StatusCode::OK,
+        json!([
+            {"email":"unverified@example.test","primary":false,"verified":false},
+            {"email":"secondary@example.test","primary":false,"verified":true},
+            {"email":"octocat@example.test","primary":true,"verified":true}
+        ]),
+    ))
+    .await
 }
 
 /// The bank as the browser will see it, assembled from the per-problem files
@@ -4385,10 +4576,21 @@ async fn a_failed_email_lookup_does_not_unverify_an_account() {
     second.github_oauth_base_url = Some(rate_limited.clone());
     second.github_api_base_url = Some(rate_limited);
     let (base, server) = spawn_web_server(second).await;
+    let failed = callback(base).await;
     assert_eq!(
-        callback(base).await.status(),
+        failed.status(),
         502,
         "a failed lookup fails the sign-in rather than downgrading the account"
+    );
+
+    // Both 502 legs of the callback carry the same status, so the status alone
+    // would still pass here if the token exchange had broken and the profile
+    // request were never reached. The message is what says this run got as far
+    // as the leg the test is about.
+    let failed = failed.json::<Value>().await.unwrap();
+    assert_eq!(
+        failed["error"], "GitHub profile request failed.",
+        "the rate limit fails the profile request, not the token exchange"
     );
 
     let (email, verified): (Option<String>, i64) = rusqlite::Connection::open(&path)
@@ -4412,39 +4614,11 @@ async fn a_failed_email_lookup_does_not_unverify_an_account() {
 /// answer rather than an error to anything that does not check the status.
 async fn spawn_rate_limited_github() -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>)
 {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let router = axum::Router::new()
-        .route(
-            "/login/oauth/access_token",
-            axum::routing::post(|| async {
-                (
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    json!({"access_token":"mock-token"}).to_string(),
-                )
-            }),
-        )
-        .route(
-            "/user",
-            axum::routing::get(|| async {
-                (
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    json!({"id":303,"login":"octocat","avatar_url":"https://example.test/avatar.png"}).to_string(),
-                )
-            }),
-        )
-        .route(
-            "/user/emails",
-            axum::routing::get(|| async {
-                (
-                    axum::http::StatusCode::FORBIDDEN,
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    json!({"message":"API rate limit exceeded"}).to_string(),
-                )
-            }),
-        );
-    let server = tokio::spawn(async move { axum::serve(listener, router).await });
-    (format!("http://{addr}"), server)
+    spawn_github_stub((
+        axum::http::StatusCode::FORBIDDEN,
+        json!({"message":"API rate limit exceeded"}),
+    ))
+    .await
 }
 
 /// The `scope` parameter of a redirect location, percent-decoded.
