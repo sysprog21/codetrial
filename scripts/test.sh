@@ -198,15 +198,25 @@ gate clippy cargo clippy --locked --all-targets --manifest-path "$ROOT/Cargo.tom
 gate cargo-test cargo test --locked --manifest-path "$ROOT/Cargo.toml"
 
 gate gen-problems python3 "$ROOT/scripts/gen-problems.py" --check
-gate gen-problems-tests python3 -m unittest "$ROOT/tests/test_gen_problems.py"
+
+# Each unittest suite runs its cases across a thread pool.
+# `scripts/run-python-tests.py` carries the measurement and the isolation a
+# suite has to meet before it is added here; the numbers live there rather than
+# in a copy that drifts. Still one gate per suite, so a failure names which one.
+unittest_gate()
+{
+    python3 "$ROOT/scripts/run-python-tests.py" "$@"
+}
+
+gate gen-problems-tests unittest_gate "$ROOT/tests/test_gen_problems.py"
 gate gen-problem-cards python3 "$ROOT/scripts/gen-problem-cards.py" --check
 gate wire-fixtures node "$ROOT/scripts/gen-wire-fixtures.mjs" --check
 gate recording-fixtures node "$ROOT/scripts/gen-recording-fixtures.mjs" --check
-gate recording-provision-check-tests python3 -m unittest "$ROOT/tests/test_recording_provision_check.py"
-gate recording-integration-harness-tests python3 -m unittest "$ROOT/tests/test_recording_integration_harness.py"
+gate recording-provision-check-tests unittest_gate "$ROOT/tests/test_recording_provision_check.py"
+gate recording-integration-harness-tests unittest_gate "$ROOT/tests/test_recording_integration_harness.py"
 gate study-plan-guards python3 "$ROOT/scripts/check-study-plan-guards.py"
 gate calibration-fixtures python3 "$ROOT/scripts/gen-calibration-fixtures.py" --check
-gate calibration-tests python3 -m unittest "$ROOT/tests/test_calibrate_framework.py"
+gate calibration-tests unittest_gate "$ROOT/tests/test_calibrate_framework.py"
 gate browser-tests browser_tests
 gate eslint eslint_gate
 gate cargo-audit cargo_audit_gate
