@@ -112,10 +112,17 @@ fn each_token_carries_only_the_grant_its_purpose_needs() {
     let observer = claims_of(
         &livekit_observer_token(KEY, SECRET, "observer-1", "interview-a1b2c3d4", NOW).unwrap(),
     );
+    assert_eq!(observer["iss"], json!(KEY));
     assert_eq!(observer["video"]["canPublish"], json!(false));
     assert_eq!(observer["video"]["canPublishData"], json!(false));
     assert_eq!(observer["video"]["canSubscribe"], json!(true));
     assert_eq!(observer["video"]["roomAdmin"], Value::Null);
+
+    // Metadata is how a participant announces itself to the room, and the
+    // browser reads the interviewer's. An observer that can rewrite its own is
+    // a listener that can still say things, which is the one thing the
+    // publish-free grants above exist to prevent.
+    assert_eq!(observer["video"]["canUpdateOwnMetadata"], json!(false));
 
     // `roomAdmin` can mutate a room, `roomRecord` cannot. Neither may do the
     // other's job, which is the whole reason they are two functions.
@@ -126,8 +133,14 @@ fn each_token_carries_only_the_grant_its_purpose_needs() {
     assert_eq!(admin["video"]["roomJoin"], Value::Null);
 
     let egress = claims_of(&livekit_egress_token(KEY, SECRET, "interview-a1b2c3d4", NOW).unwrap());
+    assert_eq!(egress["iss"], json!(KEY));
     assert_eq!(egress["video"]["roomRecord"], json!(true));
     assert_eq!(egress["video"]["roomAdmin"], Value::Null);
+
+    // The room, because "room-scoped" is the whole claim this minter makes over
+    // a project-wide recording credential, and a grant that dropped the name
+    // would record every interview in the project.
+    assert_eq!(egress["video"]["room"], json!("interview-a1b2c3d4"));
 
     // Named no room, and cannot be given one after the fact: the Setup page
     // signs this with credentials nobody has verified yet, only to learn from
@@ -226,6 +239,63 @@ fn a_recorder_token_proves_its_room_and_nothing_else_does() {
         livekit_room_from_token(KEY, SECRET, &admin, NOW + 60),
         Err(WebhookRejection::Malformed),
         "roomAdmin without roomJoin must not pass as a recorder"
+    );
+
+    // A joinable token naming no room proves nothing. The caller compares the
+    // answer against the room it is serving, so an empty string returned as a
+    // room name is a comparison against a value no interview can hold, and the
+    // refusal has to happen here rather than being left to that comparison.
+    let unnamed = livekit_token(LivekitTokenInput {
+        api_key: KEY,
+        api_secret: SECRET,
+        name: "Recorder",
+        identity: "egress",
+        room: "",
+        metadata: "{}",
+        now_seconds: NOW,
+        agent: false,
+    })
+    .unwrap();
+    assert_eq!(
+        livekit_room_from_token(KEY, SECRET, &unnamed, NOW + 60),
+        Err(WebhookRejection::Malformed),
+        "an empty room name is not a room"
+    );
+}
+
+/// The cross-purpose direction the module states nowhere: every credential in
+/// this file is signed with the same secret, so nothing about a token's
+/// signature says which door it was minted for. A candidate's own join token
+/// has the right `iss`, verifies under this server's secret and sits inside its
+/// validity window -- every check a webhook passes except the last one. The
+/// body digest is the only thing between it and a forged `room_finished`, which
+/// is why LiveKit puts the digest inside the token rather than trusting the
+/// signature alone.
+#[test]
+fn a_join_token_is_not_a_webhook_signature() {
+    let body = br#"{"event":"room_finished"}"#;
+    let join = livekit_token(LivekitTokenInput {
+        api_key: KEY,
+        api_secret: SECRET,
+        name: "Ada",
+        identity: "candidate-1",
+        room: "interview-a1b2c3d4",
+        metadata: "{}",
+        now_seconds: NOW,
+        agent: false,
+    })
+    .unwrap();
+
+    // Everything before the digest accepts it, so the refusal below is the
+    // digest check and cannot be an earlier one passing for it.
+    assert_eq!(
+        livekit_room_from_token(KEY, SECRET, &join, NOW + 60).unwrap(),
+        "interview-a1b2c3d4"
+    );
+    assert_eq!(
+        verify_livekit_webhook(KEY, SECRET, &join, body, NOW + 60),
+        Err(WebhookRejection::BodyMismatch),
+        "a token carrying no digest must not vouch for a body"
     );
 }
 

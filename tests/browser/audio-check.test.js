@@ -165,3 +165,40 @@ test("output counts as usable only once the context is running", () => {
   assert.equal(outputUsable("closed"), false);
   assert.equal(outputUsable(undefined), false);
 });
+
+// The one arm of the blocker ladder nothing reached. Its microphone twin has
+// two tests; a camera the browser refused had none, so `camera-error` could
+// have been deleted outright and the gate would have fallen through to
+// whichever check came next and reported the wrong cause.
+test("a refused camera reports the camera as the reason and stays closed", () => {
+  const state = mediaReadiness({ ...passingMedia, cameraReady: false, cameraError: "NotReadableError" });
+  assert.equal(state.ready, false);
+  assert.equal(state.blocker, "camera-error");
+  assert.match(state.message, /Camera unavailable: NotReadableError/);
+  // Un-ticked, and only it: a camera failure is not evidence about the mic.
+  assert.equal(state.steps.camera, false);
+  assert.equal(state.steps.mic, true);
+  assert.equal(state.steps.output, true);
+
+  // The error alone un-ticks the step. A camera that reported itself ready and
+  // then failed is the case where `!cameraError` is the deciding conjunct
+  // rather than a second opinion about `cameraReady`, and it is how a candidate
+  // whose camera was unplugged mid-check keeps a green tick they should not.
+  const late = mediaReadiness({ ...passingMedia, cameraReady: true, cameraError: "NotReadableError" });
+  assert.equal(late.steps.camera, false, "an error un-ticks the step on its own");
+  assert.equal(late.blocker, "camera-error");
+});
+
+// The ladder is ordered, and the order is the claim: a candidate with two
+// things wrong is told about the microphone first, because it is the one the
+// interview cannot start without.
+test("a microphone failure outranks a camera failure", () => {
+  const state = mediaReadiness({
+    ...passingMedia,
+    cameraReady: false,
+    cameraError: "NotReadableError",
+    micError: "NotAllowedError",
+  });
+  assert.equal(state.blocker, "mic-error");
+  assert.equal(state.steps.camera, false, "the camera step still shows what it knows");
+});

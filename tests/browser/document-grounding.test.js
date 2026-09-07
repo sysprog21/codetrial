@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   consumeGroundingPacket, groundingStorageKey, maxGroundingFileBytes, maxGroundingPacketBytes,
-  parseGroundingFile, selectedGroundingPacket, storeGroundingPacket,
+  groundingConsentVersion, parseGroundingFile, selectedGroundingPacket, storeGroundingPacket,
 } from "../../web/document-grounding.js";
 import { memoryStorage } from "./source.js";
 
@@ -87,4 +87,65 @@ test("a repeated snippet is refused rather than silently losing every snippet", 
     selectedGroundingPacket(extracted, { requirements: [0, 2], skills: [], anchors: [] }, true).requirements,
     ["Ship weekly", "Mentor"],
   );
+});
+
+// The consent version is the reason the stored packet carries one, and no test
+// read it back. A packet written under an earlier wording of the consent must
+// not be replayed into an interview the candidate agreed to under a later one:
+// the whole guarantee is that what reaches the agent is what they were shown.
+test("a packet stored under a different consent version is not handed back", async () => {
+  const storage = memoryStorage();
+  const packet = { consentVersion: groundingConsentVersion, requirements: ["Rust"], skills: [], anchors: [] };
+  storeGroundingPacket(storage, packet);
+  assert.deepEqual(consumeGroundingPacket(storage), packet, "the current version round-trips");
+
+  for (const stale of [groundingConsentVersion - 1, groundingConsentVersion + 1, "1", null, undefined]) {
+    storage.setItem(groundingStorageKey, JSON.stringify({ ...packet, consentVersion: stale }));
+    assert.equal(consumeGroundingPacket(storage), null, `version ${JSON.stringify(stale)} must not be replayed`);
+    // Refused and still consumed: leaving it behind would let the next read
+    // find it again, which is the one-time rule this key is stored under.
+    assert.equal(storage.getItem(groundingStorageKey), null);
+  }
+});
+
+// A stored value that is not JSON at all -- a half-written key, or another tab
+// writing the same name -- reads as no packet rather than throwing into the
+// caller, which sits on the path that starts an interview.
+test("a corrupt stored packet reads as no packet", () => {
+  const storage = memoryStorage();
+  storage.setItem(groundingStorageKey, "{not json");
+  assert.equal(consumeGroundingPacket(storage), null);
+  storage.setItem(groundingStorageKey, "null");
+  assert.equal(consumeGroundingPacket(storage), null);
+  // An absent key is the ordinary case and is also not a throw.
+  assert.equal(consumeGroundingPacket(memoryStorage()), null);
+});
+
+// `pick` is the only thing between a hostile or stale `selected` array and the
+// packet that reaches the agent. Every index it accepts becomes a line the
+// interviewer is told the candidate chose.
+test("selection indexes outside the extracted list are dropped, not clamped", async () => {
+  const extracted = await parseGroundingFile(
+    txt("Must have Rust\nMust have SQL\nMust have Go\n"),
+    "jd",
+  );
+  assert.deepEqual(extracted.requirements, ["Must have Rust", "Must have SQL", "Must have Go"]);
+  const pickWith = (indexes) =>
+    selectedGroundingPacket(extracted, { requirements: indexes, skills: [], anchors: [] }, true)?.requirements;
+
+  // A repeated index selects one line, not two: a duplicate would let a
+  // candidate weight one requirement by asking for it twice.
+  assert.deepEqual(pickWith([0, 0, 1]), ["Must have Rust", "Must have SQL"]);
+  // Out of range, negative, fractional, and non-numeric are dropped rather
+  // than clamped onto a neighbouring line the candidate never chose.
+  assert.deepEqual(pickWith([0, 3, 99]), ["Must have Rust"]);
+  assert.deepEqual(pickWith([-1, 2]), ["Must have Go"]);
+  assert.deepEqual(pickWith([1.5, 0]), ["Must have Rust"]);
+  // Nothing survives the guard, so there is no packet at all rather than an
+  // empty one the caller would send as if the candidate had chosen it.
+  assert.equal(pickWith(["1", null, undefined, NaN, Infinity]), undefined,
+    "an all-invalid selection is no packet");
+  assert.equal(selectedGroundingPacket(extracted, { requirements: [7], skills: [], anchors: [] }, true), null);
+  // Order follows the indexes as given, not the document.
+  assert.deepEqual(pickWith([2, 0]), ["Must have Go", "Must have Rust"]);
 });

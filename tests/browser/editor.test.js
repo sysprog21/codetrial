@@ -49,6 +49,9 @@ test("a selected blank line is indented like any other", () => {
 test("Tab inside a line's indentation indents the line, not the caret", () => {
   assert.deepEqual(indentSelection("    foo", 2, 2), { value: "        foo", start: 6, end: 6 });
   assert.deepEqual(indentSelection("\tfoo", 1, 1), { value: "    \tfoo", start: 5, end: 5 });
+  // The contrast the rule is stated against, and the reason this line is also
+  // asserted in the first test: a caret past the indentation types where it
+  // sits rather than at column 0.
   assert.deepEqual(indentSelection("abc", 1, 1), { value: "a    bc", start: 5, end: 5 });
 });
 

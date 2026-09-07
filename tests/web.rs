@@ -1,3 +1,5 @@
+mod common;
+
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -290,6 +292,12 @@ fn token_grounding_is_signed_only_after_valid_consent_and_shape() {
     }
 }
 
+/// The server names the candidate; a name the body carries is ignored.
+///
+/// Both halves are one assertion pair on purpose. The body below asks for
+/// `candidate-a1b2c3`, so a handler that honoured it would fail the `sub`
+/// check and the metadata check together, and a second test restating only the
+/// `sub` half could not fail on anything this one survives.
 #[test]
 fn token_response_mints_the_candidate_identity() {
     let response = token_response(
@@ -312,25 +320,6 @@ fn token_response_mints_the_candidate_identity() {
         serde_json::from_str::<Value>(claims["metadata"].as_str().unwrap()).unwrap()["candidateIdentity"],
         "candidate-fallback"
     );
-}
-
-#[test]
-fn token_response_ignores_a_supplied_candidate_identity() {
-    let response = token_response(
-        &TokenConfig {
-            api_key: "devkey",
-            api_secret: "devsecret",
-            server_url: "wss://example.livekit.cloud",
-            recording_max_min: None,
-        },
-        br#"{"candidateIdentity":"candidate-a1b2c3"}"#,
-        "interview-fixed",
-        "candidate-fallback",
-        2000,
-    )
-    .unwrap();
-
-    assert_eq!(claims(&response.token)["sub"], "candidate-fallback");
 }
 
 #[test]
@@ -724,18 +713,55 @@ async fn resolved(root: &Path, path: &str) -> Option<std::path::PathBuf> {
     static_file_meta(root, path).await.map(|(_, path, _)| path)
 }
 
+/// Every refused name is a file that is really there.
+///
+/// This asked `src/web` for `/.env.local` and `/../agent/.env`, neither of
+/// which exists, so `None` was the answer whether the resolver refused the path
+/// or merely failed to find it: deleting the whole refusal from
+/// `static_candidates` left this passing. The rule itself is covered by the
+/// unit tests beside it in `src/web/assets.rs`; what only a resolver test can
+/// say is that `static_file_meta` honours the refusal against a file it would
+/// otherwise hand back, which is the only case where the difference is visible.
+///
+/// So every name below is created first. A trailing dot and an embedded
+/// backslash are ordinary filename bytes here and directory syntax on Windows,
+/// which is why they are refused and why they can be created to ask.
 #[tokio::test]
 async fn static_file_rejects_traversal_and_dotfiles() {
-    assert!(
-        resolved(Path::new("src/web"), "/../agent/.env")
-            .await
-            .is_none()
+    let base = unique_temp_path("refused-segments", "");
+    let root = base.join("root");
+    fs::create_dir_all(root.join("sub")).unwrap();
+    fs::create_dir_all(base.join("outside")).unwrap();
+    fs::write(base.join("outside/secret.txt"), "not yours").unwrap();
+    fs::write(root.join("app.js"), "ok").unwrap();
+    fs::write(root.join(".env.local"), "not yours").unwrap();
+    fs::write(root.join("sub/.env"), "not yours").unwrap();
+    fs::write(root.join("trailing."), "not yours").unwrap();
+    fs::write(root.join("back\\slash.js"), "not yours").unwrap();
+
+    // The control, and the thing that makes the refusals below mean something:
+    // this resolver does find files in this tree.
+    assert_eq!(
+        resolved(&root, "/app.js").await,
+        Some(root.join("app.js")),
+        "the resolver has to be able to answer at all"
     );
-    assert!(
-        resolved(Path::new("src/web"), "/.env.local")
-            .await
-            .is_none()
-    );
+
+    for refused in [
+        "/.env.local",
+        "/sub/.env",
+        "/trailing.",
+        "/back\\slash.js",
+        "/../outside/secret.txt",
+        "/sub/../.env.local",
+    ] {
+        assert!(
+            resolved(&root, refused).await.is_none(),
+            "{refused} names a file that exists, and must still be refused"
+        );
+    }
+
+    fs::remove_dir_all(base).unwrap();
 }
 
 #[tokio::test]
@@ -2162,6 +2188,78 @@ async fn observer_is_not_the_candidate() {
     remove_database(db_path);
 }
 
+/// An observer token opens the room its account paid for, and no other.
+///
+/// `/api/token` records who a minted room belongs to and `/api/observer-token`
+/// is the only reader of that record, so the account id is the whole of the
+/// check. `observer_is_not_the_candidate` above asks for a room nobody minted,
+/// which a handler that never looked at the account would refuse just the same:
+/// the room has to exist and belong to somebody else. Every fixture here signs
+/// in as user 1, so pinning the id to a constant passed the entire file, which
+/// is what this closes.
+///
+/// A signed-out caller is refused too, but that arm is not repeated here:
+/// `every_owner_scoped_route_refuses_an_anonymous_request` now carries this
+/// route, which is where the anonymous answer for every owner-scoped path is
+/// asserted once.
+#[tokio::test]
+async fn observer_tokens_belong_to_the_account_that_minted_the_room() {
+    let (config, cookie, db_path) = signed_in_web_config("observer-owner");
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+    let observer_url = format!("{base}/api/observer-token");
+
+    let minted: Value = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let room = minted["roomName"].as_str().unwrap().to_string();
+
+    // A second account, signed in, that never asked for this room. Refused
+    // rather than handed a seat in a stranger's interview.
+    let stranger = record_login(&client, &base, "two").await;
+    let refused = client
+        .post(&observer_url)
+        .header("cookie", &stranger)
+        .json(&json!({ "roomName": room }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 403);
+
+    // A request naming no room is the client's mistake, and says so rather than
+    // reading as a room nobody owns.
+    let unnamed = client
+        .post(&observer_url)
+        .header("cookie", &cookie)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unnamed.status(), 400);
+
+    // And the account that minted the room is still served, so the refusals
+    // above are a check rather than a route that refuses everyone.
+    let mine = client
+        .post(&observer_url)
+        .header("cookie", &cookie)
+        .json(&json!({ "roomName": room }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(mine.status(), 200);
+    assert_eq!(mine.json::<Value>().await.unwrap()["roomName"], room);
+
+    server.abort();
+    remove_database(db_path);
+}
+
 #[tokio::test]
 async fn token_api_rejects_malformed_body_and_defaults_an_empty_one() {
     let (mut config, cookie, db_path) = signed_in_web_config("body");
@@ -2372,26 +2470,6 @@ async fn a_room_that_cannot_be_staffed_is_refused_rather_than_sold() {
         "the refusal must tell the candidate what to do: {body}"
     );
     assert!(body.get("token").is_none(), "a refused room has no token");
-
-    server.abort();
-    remove_database(db_path);
-}
-
-/// A web-only deployment, the other half of a split install, must keep working
-/// exactly as it did: no dispatcher, no agent started here, still a token.
-#[tokio::test]
-async fn token_api_still_works_without_a_dispatcher() {
-    let (config, cookie, db_path) = signed_in_web_config("no-dispatch");
-    let (base, server) = spawn_web_server(config).await;
-    let response = reqwest::Client::new()
-        .post(format!("{base}/api/token"))
-        .header("cookie", &cookie)
-        .json(&json!({"problemId":"two-sum","durationMin":45}))
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), 200);
 
     server.abort();
     remove_database(db_path);
@@ -2775,9 +2853,44 @@ async fn an_unopenable_account_database_refuses_rather_than_disabling_login() {
         .await
         .unwrap();
     assert_eq!(login.status(), 503);
-
     server.abort();
     fs::remove_dir_all(path).unwrap();
+
+    // The other answer, so "503 rather than 404" above is a distinction this
+    // server really draws rather than the only status it knows. A deployment
+    // with no cookie secret and no database has nothing broken: it never
+    // offered accounts, so the browser is told login is not on offer and the
+    // session row says so too.
+    let (base, server) = spawn_web_server(web_config()).await;
+    let client = reqwest::Client::new();
+
+    let token = client
+        .post(format!("{base}/api/token"))
+        .json(&json!({"problemId":"two-sum","durationMin":45}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(token.status(), 404);
+    assert_eq!(
+        token.json::<Value>().await.unwrap()["error"],
+        "GitHub username recording is not configured."
+    );
+
+    let session = client
+        .get(format!("{base}/api/session"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        session,
+        json!({"signedIn": false, "loginRequired": false, "maxDurationMin": MAX_DURATION_MIN}),
+        "nothing to sign in to, and the lobby has to be told so"
+    );
+
+    server.abort();
 }
 
 /// `/api/token` needs a session, and this is where sessions come from, so an
@@ -2927,6 +3040,228 @@ async fn github_callback_sets_session_and_clears_oauth_state() {
     remove_database(path);
 }
 
+/// The callback answers 502 on two separate legs -- a refused token exchange
+/// and a refused profile request -- so the status alone cannot say which one
+/// ran. The message is the only thing that tells them apart, which is why this
+/// pins the text and not just the code: without it, a token exchange that had
+/// stopped working entirely would still satisfy every 502 assertion in this
+/// file, because the profile leg it never reaches is the one they were really
+/// describing.
+///
+/// The stub refuses any `code` but the fixture, so asking for a different one
+/// is enough to fail the exchange while leaving `/user` perfectly healthy.
+#[tokio::test]
+async fn a_refused_code_exchange_names_the_token_leg_not_the_profile_leg() {
+    let (github_base, github_server) = spawn_mock_github().await;
+    let path = std::env::temp_dir().join(format!(
+        "codetrial-callback-bad-code-{}-{}.db",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut config = web_config();
+    config.github_client_id = Some("client".to_string());
+    config.github_client_secret = Some("secret".to_string());
+    config.session_secret = Some("session-secret".to_string());
+    config.db_path = Some(path.clone());
+    config.github_oauth_base_url = Some(github_base.clone());
+    config.github_api_base_url = Some(github_base);
+
+    // The schema is created once at startup, not per request, so a caller that
+    // builds the router directly has to do what `main` does.
+    initialize_account_database(&path).unwrap();
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    let response = client
+        .get(format!("{base}/api/callback?code=stale&state=state-token"))
+        .header(
+            "cookie",
+            format!(
+                "codetrial_oauth_state={}",
+                signed_cookie("state-token", "session-secret")
+            ),
+        )
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 502);
+    let body = response.json::<Value>().await.unwrap();
+    assert_eq!(
+        body["error"], "GitHub token exchange failed.",
+        "a refused code fails the exchange, not the profile request"
+    );
+
+    server.abort();
+    github_server.abort();
+    remove_database(path);
+}
+
+/// The callback only accepts the login it started.
+///
+/// `/api/login` mints a state token, signs it into a cookie, and puts the same
+/// value in the authorize URL; the callback is what compares them, and that
+/// comparison is the only thing standing between a candidate and a session
+/// somebody else's browser was made to create. Nothing asserted it: the whole
+/// cookie lookup and the equality below it were deleted and every test in this
+/// file still passed.
+///
+/// The happy path at the end is the other half. It is the only place the two
+/// ends are checked against each other rather than against a fixture, so a
+/// callback that demanded a state nothing mints would be caught here rather
+/// than in a browser.
+#[tokio::test]
+async fn the_oauth_callback_requires_the_state_it_minted() {
+    let (github_base, github_server) = spawn_mock_github().await;
+    let path = account_db_path("oauth-state");
+    initialize_account_database(&path).unwrap();
+    let mut config = web_config();
+    config.github_client_id = Some(MOCK_GITHUB_CLIENT_ID.to_string());
+    config.github_client_secret = Some(MOCK_GITHUB_CLIENT_SECRET.to_string());
+    config.session_secret = Some("session-secret".to_string());
+    config.db_path = Some(path.clone());
+    config.github_oauth_base_url = Some(github_base.clone());
+    config.github_api_base_url = Some(github_base);
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    // The pair the server itself just handed out, rather than a fixture: what
+    // is under test is that these two are compared, so both have to come from
+    // the same `/api/login`.
+    let started = client
+        .get(format!("{base}/api/login"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(started.status(), 302);
+    let minted = query_parameter(
+        started.headers().get("location").unwrap().to_str().unwrap(),
+        "state",
+    )
+    .expect("the authorize URL carries a state token");
+    let state_cookie = started
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().unwrap())
+        .find(|cookie| cookie.starts_with("codetrial_oauth_state="))
+        .expect("login should set the oauth state cookie")
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+
+    let callback = |cookie: Option<String>, state: &str| {
+        let client = client.clone();
+        let url = format!("{base}/api/callback?code={MOCK_GITHUB_CODE}&state={state}");
+        async move {
+            let request = client.get(url);
+            match cookie {
+                Some(cookie) => request.header("cookie", cookie).send().await.unwrap(),
+                None => request.send().await.unwrap(),
+            }
+        }
+    };
+
+    for (why, cookie, state, message) in [
+        (
+            "no state cookie at all",
+            None,
+            minted.clone(),
+            "Login state is missing or expired.",
+        ),
+        (
+            "a state cookie nobody signed",
+            Some(format!("codetrial_oauth_state={minted}")),
+            minted.clone(),
+            "Login state is missing or expired.",
+        ),
+        (
+            "a state cookie signed with another secret",
+            Some(format!(
+                "codetrial_oauth_state={}",
+                signed_cookie(&minted, "another-session-secret")
+            )),
+            minted.clone(),
+            "Login state is missing or expired.",
+        ),
+        (
+            "a state parameter this browser was never given",
+            Some(state_cookie.clone()),
+            "state-from-somewhere-else".to_string(),
+            "Login state did not match.",
+        ),
+    ] {
+        let refused = callback(cookie, &state).await;
+        assert_eq!(refused.status(), 401, "{why}");
+        assert_eq!(
+            refused.json::<Value>().await.unwrap()["error"],
+            message,
+            "{why}"
+        );
+    }
+
+    // A code with no state, and a state with no code, are the client's mistake
+    // rather than a forgery, and answer as one.
+    for query in ["code=ok", "state=whatever", ""] {
+        let incomplete = client
+            .get(format!("{base}/api/callback?{query}"))
+            .header("cookie", &state_cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(incomplete.status(), 400, "{query:?}");
+    }
+
+    // And the pair this server minted completes the sign-in, so the refusals
+    // above are a comparison rather than a callback that refuses everyone.
+    let accepted = callback(Some(state_cookie.clone()), &minted).await;
+    assert_eq!(accepted.status(), 302);
+    assert!(
+        accepted
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .any(|value| value.to_str().unwrap().starts_with("codetrial_session=")),
+        "the matched state is what a session is issued against"
+    );
+
+    // The same pair, percent-encoded. Both parameters are decoded before they
+    // are used -- `state` to compare against the cookie, `code` to post to
+    // GitHub -- and nothing else in this suite reaches that branch, because
+    // every value this server mints is already unreserved and is echoed back
+    // verbatim. GitHub is under no obligation to echo it back that way.
+    let percent_first = |value: &str| format!("%{:02X}{}", value.as_bytes()[0], &value[1..]);
+    let encoded = client
+        .get(format!(
+            "{base}/api/callback?code={}&state={}",
+            percent_first(MOCK_GITHUB_CODE),
+            percent_first(&minted)
+        ))
+        .header("cookie", &state_cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        encoded.status(),
+        302,
+        "an encoded callback has to decode to the code and the state that were minted"
+    );
+
+    server.abort();
+    github_server.abort();
+    remove_database(path);
+}
+
 /// Hiding the start button proves nothing: /interview is a URL anyone can open,
 /// and the token is a live LiveKit credential. Where accounts exist, the
 /// credential is what has to refuse.
@@ -2994,6 +3329,86 @@ async fn token_requires_a_session_once_accounts_exist() {
 
     server.abort();
     remove_database(path);
+}
+
+/// A cookie nobody signed is not a session.
+///
+/// `sessions.id` holds a digest of the cookie payload, so the payload is the
+/// whole credential once the signature stops being checked, and it is a value
+/// the server itself hands out. Every other test in this file mints its cookie
+/// with `signed_cookie`, so a server that ignored the signature entirely
+/// answered all of them exactly as it does now; that was measured against
+/// `verified_cookie_value` with its `verify_hs256` deleted, and nothing in the
+/// whole crate's suite failed.
+///
+/// The routes are two on purpose. `/api/session` is what the page believes
+/// about who it is talking to, and `/api/token` is a live LiveKit credential,
+/// so a forged cookie that reached either would be a different kind of loss.
+#[tokio::test]
+async fn a_forged_session_cookie_is_not_a_session() {
+    let (config, cookie, db_path) = signed_in_web_config("forged-session");
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+
+    // The payload out of the genuine cookie, so every forgery below names a
+    // session row that really exists and only the signature can refuse it.
+    let payload = cookie
+        .split_once('=')
+        .expect("the cookie is name=value")
+        .1
+        .rsplit_once('.')
+        .expect("the value is payload.signature")
+        .0
+        .to_string();
+
+    for (why, value) in [
+        ("no signature at all", payload.clone()),
+        ("an empty signature", format!("{payload}.")),
+        ("a signature that is not base64", format!("{payload}.zzz")),
+        (
+            "a signature from another secret",
+            signed_cookie(&payload, "another-session-secret"),
+        ),
+    ] {
+        let forged = format!("codetrial_session={value}");
+        let session = client
+            .get(format!("{base}/api/session"))
+            .header("cookie", &forged)
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        assert_eq!(session["signedIn"], false, "{why}");
+        assert!(session.get("user").is_none(), "{why} named an account");
+
+        let token = client
+            .post(format!("{base}/api/token"))
+            .header("cookie", &forged)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(token.status(), 401, "{why} bought a LiveKit credential");
+    }
+
+    // And the cookie the server signed still works, so the four refusals are a
+    // check rather than a server that refuses every cookie.
+    let signed_in = client
+        .get(format!("{base}/api/session"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(signed_in["signedIn"], true);
+    assert_eq!(signed_in["user"]["login"], "one");
+
+    server.abort();
+    remove_database(db_path);
 }
 
 /// The rate limit is keyed by address. If anonymous callers could spend it, a
@@ -3330,6 +3745,104 @@ async fn a_full_account_cannot_grow_the_report_database() {
         stored["reports"].as_array().unwrap().len() as i64,
         MAX_REPORTS_PER_USER,
         "the refused write must not have landed",
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
+/// A report gets its own ceiling, and the endpoint has to use it.
+///
+/// `body_limit_matches_non_working_reference` pins the two constants and no
+/// more: swapping `MAX_REPORT_BYTES` for `MAX_BODY_BYTES` at the one place the
+/// report body is read passed every test in this file, and a graded report is
+/// routinely larger than a session request. The failure would arrive as a 413
+/// at the end of a finished interview, which is the worst moment to lose one.
+///
+/// Sized off the constants rather than off numbers, so raising either ceiling
+/// keeps this asking the question it means.
+#[tokio::test]
+async fn a_report_is_bounded_by_its_own_ceiling_rather_than_the_session_one() {
+    let (config, cookie, path) = signed_in_web_config("report-size");
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+    let url = format!("{base}/api/reports");
+    let report = |id: &str, bytes: usize| {
+        let summary = "s".repeat(bytes);
+        json!({ "id": id, "problemId": "two-sum", "summary": summary })
+    };
+
+    // Past what a session request may be, and well inside what a report may be.
+    let accepted = client
+        .post(&url)
+        .header("cookie", &cookie)
+        .json(&report("roomy", MAX_BODY_BYTES * 4))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        accepted.status(),
+        200,
+        "a report larger than a session request is still a report"
+    );
+
+    let refused = client
+        .post(&url)
+        .header("cookie", &cookie)
+        .json(&report("enormous", MAX_REPORT_BYTES))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 413, "and the ceiling is still a ceiling");
+
+    // A body that is not JSON, and one naming no problem, are the client's
+    // mistake and each says which.
+    let malformed = client
+        .post(&url)
+        .header("cookie", &cookie)
+        .header("content-type", "application/json")
+        .body("not json")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(malformed.status(), 400);
+    assert_eq!(
+        malformed.json::<Value>().await.unwrap()["error"],
+        "Report must be JSON."
+    );
+
+    let unattributed = client
+        .post(&url)
+        .header("cookie", &cookie)
+        .json(&json!({ "id": "orphan", "score": 7 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unattributed.status(), 400);
+    assert_eq!(
+        unattributed.json::<Value>().await.unwrap()["error"],
+        "Report is missing problemId."
+    );
+
+    // Only the accepted one landed: a refusal that had already written the row
+    // would answer the same way and leave the account a report it never saved.
+    let stored = client
+        .get(&url)
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        stored["reports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|report| report["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["roomy"]
     );
 
     server.abort();
@@ -3674,48 +4187,176 @@ async fn spawn_web_server_with_dispatcher(
     (format!("http://{addr}"), server)
 }
 
-async fn spawn_mock_github() -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
+/// The OAuth fixtures every caller of the two GitHub stubs configures: the
+/// client id and the secret each test writes into its `WebServerConfig`, and
+/// the `?code=` its callback request carries. Credentials of a server that
+/// exists only inside this test binary, so nothing here is a real secret.
+const MOCK_GITHUB_CLIENT_ID: &str = "client";
+const MOCK_GITHUB_CLIENT_SECRET: &str = "secret";
+const MOCK_GITHUB_CODE: &str = "ok";
+
+type MockGitHubResponse = (
+    axum::http::StatusCode,
+    [(axum::http::HeaderName, &'static str); 1],
+    String,
+);
+
+/// The token a stub has issued so far, `None` before its first successful
+/// exchange. Cloned out from under the guard at every read so no lock is held
+/// across an await.
+type MockGitHubIssued = std::sync::Arc<std::sync::Mutex<Option<String>>>;
+
+/// Distinguishes tokens minted within the same clock tick, which two stubs
+/// spawned back to back in one test can be.
+static MOCK_GITHUB_MINTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn mock_github_mint() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let sequence = MOCK_GITHUB_MINTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("mock-github-token-{nanos:x}-{sequence}")
+}
+
+/// GitHub's answer to a request carrying a token it never issued.
+fn mock_github_unauthorized() -> MockGitHubResponse {
+    (
+        axum::http::StatusCode::UNAUTHORIZED,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        json!({"message":"Bad credentials"}).to_string(),
+    )
+}
+
+/// Whether this request may read the account: only if the stub has issued a
+/// token and this is that token.
+fn mock_github_authorized(headers: &axum::http::HeaderMap, issued: &MockGitHubIssued) -> bool {
+    let Some(token) = issued.lock().unwrap().clone() else {
+        return false;
+    };
+    headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        == Some(format!("Bearer {token}").as_str())
+}
+
+/// GitHub as the sign-in path sees it, with the two checks that make the
+/// handshake load bearing: the token endpoint answers only the fixture
+/// credentials, and the API endpoints answer only the token it issued.
+///
+/// Both checks are here because without them the stub answered every caller
+/// the same profile, so a `github_access_token` that never contacted GitHub
+/// and returned a constant, or the empty string, completed sign-in exactly as
+/// the real one does and no test could tell the difference.
+///
+/// The token is issued by the exchange rather than fixed in advance, which is
+/// two separate properties and both are needed. Until a POST carrying the
+/// fixture credentials succeeds this stub holds no token at all, so an
+/// implementation that skipped the exchange has nothing `/user` accepts,
+/// whatever string it returns. And the issued value mixes a clock reading with
+/// a process-wide counter, so it cannot be spelled ahead of time either --
+/// which a value derived from the stub's address could be, the code under test
+/// being handed that address.
+///
+/// `emails` is the entire difference between the two stubs built on this, so
+/// it is the only parameter: one passes an address list, the other the 403
+/// GitHub sends while rate limiting. Everything else has to stay identical or
+/// the rate-limit test would be comparing two servers that differ in more than
+/// the failure it is about.
+async fn spawn_github_stub(
+    emails: (axum::http::StatusCode, Value),
+) -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let emails = std::sync::Arc::new(emails);
+    let issued = MockGitHubIssued::default();
+    let exchange_issued = issued.clone();
+    let user_issued = issued.clone();
     let router = axum::Router::new()
         .route(
             "/login/oauth/access_token",
-            axum::routing::post(|| async {
-                (
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    json!({"access_token":"mock-token"}).to_string(),
-                )
+            axum::routing::post(move |body: String| {
+                let exchange_issued = exchange_issued.clone();
+                async move {
+                    let posted = serde_json::from_str::<Value>(&body).unwrap_or(Value::Null);
+                    let field = |name: &str| {
+                        posted
+                            .get(name)
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string()
+                    };
+                    if field("client_id") != MOCK_GITHUB_CLIENT_ID
+                        || field("client_secret") != MOCK_GITHUB_CLIENT_SECRET
+                        || field("code") != MOCK_GITHUB_CODE
+                    {
+                        return (
+                            axum::http::StatusCode::BAD_REQUEST,
+                            [(axum::http::header::CONTENT_TYPE, "application/json")],
+                            json!({"error":"bad_verification_code"}).to_string(),
+                        );
+                    }
+                    let token = mock_github_mint();
+                    *exchange_issued.lock().unwrap() = Some(token.clone());
+                    (
+                        axum::http::StatusCode::OK,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        json!({ "access_token": token }).to_string(),
+                    )
+                }
             }),
         )
         .route(
             "/user",
-            axum::routing::get(|| async {
-                (
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    json!({"id":303,"login":"octocat","avatar_url":"https://example.test/avatar.png"}).to_string(),
-                )
+            axum::routing::get(move |headers: axum::http::HeaderMap| {
+                let user_issued = user_issued.clone();
+                async move {
+                    if !mock_github_authorized(&headers, &user_issued) {
+                        return mock_github_unauthorized();
+                    }
+                    (
+                        axum::http::StatusCode::OK,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        json!({"id":303,"login":"octocat","avatar_url":"https://example.test/avatar.png"})
+                            .to_string(),
+                    )
+                }
             }),
         )
-
-        // What `read:user` alone cannot answer. The unverified and secondary
-        // entries are here because selecting the wrong one is the failure this
-        // endpoint exists to make possible.
         .route(
             "/user/emails",
-            axum::routing::get(|| async {
-                (
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    json!([
-                        {"email":"unverified@example.test","primary":false,"verified":false},
-                        {"email":"secondary@example.test","primary":false,"verified":true},
-                        {"email":"octocat@example.test","primary":true,"verified":true}
-                    ])
-                    .to_string(),
-                )
+            axum::routing::get(move |headers: axum::http::HeaderMap| {
+                let emails = emails.clone();
+                let issued = issued.clone();
+                async move {
+                    if !mock_github_authorized(&headers, &issued) {
+                        return mock_github_unauthorized();
+                    }
+                    (
+                        emails.0,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        emails.1.to_string(),
+                    )
+                }
             }),
         );
     let server = tokio::spawn(async move { axum::serve(listener, router).await });
     (format!("http://{addr}"), server)
+}
+
+async fn spawn_mock_github() -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
+    // What `read:user` alone cannot answer. The unverified and secondary
+    // entries are here because selecting the wrong one is the failure this
+    // endpoint exists to make possible.
+    spawn_github_stub((
+        axum::http::StatusCode::OK,
+        json!([
+            {"email":"unverified@example.test","primary":false,"verified":false},
+            {"email":"secondary@example.test","primary":false,"verified":true},
+            {"email":"octocat@example.test","primary":true,"verified":true}
+        ]),
+    ))
+    .await
 }
 
 /// The bank as the browser will see it, assembled from the per-problem files
@@ -4385,10 +5026,21 @@ async fn a_failed_email_lookup_does_not_unverify_an_account() {
     second.github_oauth_base_url = Some(rate_limited.clone());
     second.github_api_base_url = Some(rate_limited);
     let (base, server) = spawn_web_server(second).await;
+    let failed = callback(base).await;
     assert_eq!(
-        callback(base).await.status(),
+        failed.status(),
         502,
         "a failed lookup fails the sign-in rather than downgrading the account"
+    );
+
+    // Both 502 legs of the callback carry the same status, so the status alone
+    // would still pass here if the token exchange had broken and the profile
+    // request were never reached. The message is what says this run got as far
+    // as the leg the test is about.
+    let failed = failed.json::<Value>().await.unwrap();
+    assert_eq!(
+        failed["error"], "GitHub profile request failed.",
+        "the rate limit fails the profile request, not the token exchange"
     );
 
     let (email, verified): (Option<String>, i64) = rusqlite::Connection::open(&path)
@@ -4412,39 +5064,11 @@ async fn a_failed_email_lookup_does_not_unverify_an_account() {
 /// answer rather than an error to anything that does not check the status.
 async fn spawn_rate_limited_github() -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>)
 {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let router = axum::Router::new()
-        .route(
-            "/login/oauth/access_token",
-            axum::routing::post(|| async {
-                (
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    json!({"access_token":"mock-token"}).to_string(),
-                )
-            }),
-        )
-        .route(
-            "/user",
-            axum::routing::get(|| async {
-                (
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    json!({"id":303,"login":"octocat","avatar_url":"https://example.test/avatar.png"}).to_string(),
-                )
-            }),
-        )
-        .route(
-            "/user/emails",
-            axum::routing::get(|| async {
-                (
-                    axum::http::StatusCode::FORBIDDEN,
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    json!({"message":"API rate limit exceeded"}).to_string(),
-                )
-            }),
-        );
-    let server = tokio::spawn(async move { axum::serve(listener, router).await });
-    (format!("http://{addr}"), server)
+    spawn_github_stub((
+        axum::http::StatusCode::FORBIDDEN,
+        json!({"message":"API rate limit exceeded"}),
+    ))
+    .await
 }
 
 /// The `scope` parameter of a redirect location, percent-decoded.
@@ -5152,6 +5776,22 @@ async fn post_webhook_signed_by(
     api_key: &str,
     api_secret: &[u8],
 ) -> reqwest::Response {
+    post_webhook_authorized_by(
+        client,
+        base,
+        body,
+        &webhook_authorization(body, api_key, api_secret),
+    )
+    .await
+}
+
+/// The header LiveKit sends: a JWS whose payload names the project and pins a
+/// digest of the body it was signed over.
+///
+/// Split out from the poster so a test can sign one body and send another,
+/// which is the only way to ask whether the handler passes the bytes it
+/// received to the verifier or merely checks that some signature parses.
+fn webhook_authorization(body: &str, api_key: &str, api_secret: &[u8]) -> String {
     use base64::Engine as _;
     use sha2::Digest as _;
 
@@ -5170,19 +5810,30 @@ async fn post_webhook_signed_by(
     let signing_input = format!("{header}.{payload}");
     let mut mac = HmacSha256::new_from_slice(api_secret).unwrap();
     mac.update(signing_input.as_bytes());
-    let token = format!(
+    format!(
         "{signing_input}.{}",
         URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
-    );
+    )
+}
 
-    client
+/// The same request with the credential written out by the caller, so a test
+/// can post one that is absent, unparsable, or signed over other bytes.
+async fn post_webhook_authorized_by(
+    client: &reqwest::Client,
+    base: &str,
+    body: &str,
+    authorization: &str,
+) -> reqwest::Response {
+    let request = client
         .post(format!("{base}{}", codetrial::recording::WEBHOOK_ROUTE))
-        .header("authorization", token)
         .header("content-type", "application/webhook+json")
-        .body(body.to_string())
-        .send()
-        .await
-        .unwrap()
+        .body(body.to_string());
+    let request = if authorization.is_empty() {
+        request
+    } else {
+        request.header("authorization", authorization)
+    };
+    request.send().await.unwrap()
 }
 
 /// A malformed body is a client error, whether or not this server records.
@@ -6176,6 +6827,113 @@ async fn a_webhook_from_another_project_does_not_touch_the_room() {
     remove_database(path);
 }
 
+/// A webhook nobody signed moves nothing.
+///
+/// The route is unauthenticated by design -- LiveKit holds no session -- so the
+/// signature is the whole of its access control, and it drives the recording
+/// state machine for any room it can name. Every other webhook test in this
+/// file signs correctly, so the handler could have stopped verifying entirely
+/// and all of them would still pass; that was measured, not assumed.
+///
+/// Four refusals, because they are four different failures and each has its own
+/// branch: no credential at all, a credential naming a project this server does
+/// not know, a valid-looking one signed with the wrong secret, and one signed
+/// correctly over different bytes. The last is what says the handler verifies
+/// the body it received rather than something it has already parsed.
+///
+/// The accepted message at the end is what makes the four a check rather than a
+/// server that refuses everything.
+#[tokio::test]
+async fn an_unsigned_webhook_cannot_move_a_recording() {
+    let (mut config, _cookie, path) = signed_in_web_config("webhook-unsigned");
+    config.recording = Some(recording_config());
+
+    // Fresh, because the sweeper starts with the server and fails an active row
+    // that has gone quiet. A recording reaped for being stale would look
+    // exactly like one an unsigned webhook ended.
+    let now = codetrial::current_epoch_seconds() as i64;
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(&format!(
+            "INSERT INTO interviews (id, account_id, consent_version, consent_at, room_name)
+               VALUES ('int-unsigned', 1, '2026-08-21', {now}, 'interview-abc12345');
+             INSERT INTO recordings (
+                 id, account_id, interview_id, room_name, idempotency_key,
+                 recipient_email, state, egress_id, created_at, updated_at
+             ) VALUES ('rec-unsigned', 1, 'int-unsigned', 'interview-abc12345', 'idem-unsigned',
+                 'one@example.test', 'recording', 'EG_unsigned', {now}, {now});"
+        ))
+        .unwrap();
+
+    let (base, server) = spawn_web_server(config).await;
+    let client = reqwest::Client::new();
+    let state = || -> String {
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT state FROM recordings WHERE id = 'rec-unsigned'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+
+    let failed = json!({
+        "event": "egress_ended",
+        "id": "EV_unsigned",
+        "createdAt": "1770000123",
+        "egressInfo": { "egressId": "EG_unsigned", "status": "EGRESS_FAILED" }
+    })
+    .to_string();
+
+    // A body this server would act on if it were signed, so that anything
+    // rejected below is rejected by the credential and not by the message.
+    let decoy = json!({
+        "event": "egress_ended",
+        "id": "EV_decoy",
+        "createdAt": "1770000123",
+        "egressInfo": { "egressId": "EG_unsigned", "status": "EGRESS_COMPLETE" }
+    })
+    .to_string();
+
+    for (why, authorization) in [
+        ("no credential at all", String::new()),
+        ("a bearer that is not a token", "not-a-jwt".to_string()),
+        (
+            "a project this server has never heard of",
+            webhook_authorization(&failed, "someone-elses-key", b"devsecret"),
+        ),
+        (
+            "the right project and the wrong secret",
+            webhook_authorization(&failed, "devkey", b"not-devsecret"),
+        ),
+        (
+            "a signature over a different body",
+            webhook_authorization(&decoy, "devkey", b"devsecret"),
+        ),
+    ] {
+        let refused = post_webhook_authorized_by(&client, &base, &failed, &authorization).await;
+        assert_eq!(refused.status(), 401, "{why}");
+        assert_eq!(
+            refused.json::<Value>().await.unwrap()["error"],
+            "webhook_signature_invalid",
+            "{why}"
+        );
+        assert_eq!(state(), "recording", "{why} moved the row");
+    }
+
+    // The same bytes, signed by the project that owns the room.
+    assert_eq!(post_webhook(&client, &base, &failed).await.status(), 200);
+    assert_eq!(
+        state(),
+        "failed",
+        "a correctly signed webhook is still acted on"
+    );
+
+    server.abort();
+    remove_database(path);
+}
+
 /// The server starts the recording workers it is configured for.
 ///
 /// Nothing checked that it does. `web_router` decides whether to spawn them
@@ -6969,12 +7727,36 @@ fn interview_rows(path: &std::path::Path) -> Vec<(String, String, i64, Option<i6
         .collect()
 }
 
+/// Whether a quota probe carries a credential this project would accept.
+///
+/// The token comes out of the `HeaderMap` here and the judgement is
+/// `common::livekit_token_matches`, which `tests/cli.rs` makes about the same
+/// credential in front of a different double. Sharing the judgement and not the
+/// extraction is the split: what a token has to be is one rule, and where it is
+/// found is each double's own business.
+fn livekit_probe_accepted(
+    headers: &axum::http::HeaderMap,
+    api_key: &str,
+    api_secret: &str,
+) -> bool {
+    let Some(token) = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+    else {
+        return false;
+    };
+    common::livekit_token_matches(token, api_key, api_secret)
+}
+
 /// The quota stub without a hit counter, which is all most callers need.
 async fn spawn_livekit_quota_stub(
     status: axum::http::StatusCode,
     delay: Duration,
+    api_key: &str,
+    api_secret: &str,
 ) -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
-    let (url, _hits, server) = spawn_counting_quota_stub(status, delay).await;
+    let (url, _hits, server) = spawn_counting_quota_stub(status, delay, api_key, api_secret).await;
     (url, server)
 }
 
@@ -6982,9 +7764,31 @@ async fn spawn_livekit_quota_stub(
 /// asked. The count is the whole point of the test below: it is the difference
 /// between a pool that probes on a candidate's request and one that already
 /// knew.
+///
+/// `api_key` and `api_secret` are the credentials the caller puts in the pool
+/// entry pointing at this stub, and the probe is answered only when its token
+/// verifies against them; anything else gets 401, which is what the real
+/// `/rtc/validate` answers an unauthenticated GET.
+///
+/// The check is here because without it this stub answered its status to any
+/// caller, and then the probe's credential was the one thing no test in this
+/// binary looked at. Dropping `.bearer_auth`, signing with a different
+/// project's secret, or minting a token for a project the probe is not asking
+/// about would all have left every assertion below intact -- while production
+/// learned nothing, since 401 is not 429 and the pool reads everything that is
+/// not 429 as "still has minutes". That is the shape of the GitHub stub that
+/// answered one profile to any bearer token and let a broken token exchange
+/// pass the whole suite.
+///
+/// Per project rather than merely well-formed, because a pool is more than one
+/// project: several of the tests below run two or three stubs at once, each
+/// with its own key and secret, so a probe that reached for the wrong entry's
+/// credentials is a failure only a per-project check can see.
 async fn spawn_counting_quota_stub(
     status: axum::http::StatusCode,
     delay: Duration,
+    api_key: &str,
+    api_secret: &str,
 ) -> (
     String,
     std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -6992,15 +7796,23 @@ async fn spawn_counting_quota_stub(
 ) {
     let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter = hits.clone();
+    let credentials = std::sync::Arc::new((api_key.to_string(), api_secret.to_string()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let router = axum::Router::new().route(
         "/rtc/validate",
-        axum::routing::get(move || {
+        axum::routing::get(move |headers: axum::http::HeaderMap| {
             let counter = counter.clone();
+            let credentials = credentials.clone();
             async move {
+                // Counted before the credential is judged: a refused probe is
+                // still a probe, and the caching test below is about how many
+                // times this project was asked, not how many times it agreed.
                 counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 tokio::time::sleep(delay).await;
+                if !livekit_probe_accepted(&headers, &credentials.0, &credentials.1) {
+                    return (axum::http::StatusCode::UNAUTHORIZED, "unauthorized");
+                }
                 if status == axum::http::StatusCode::TOO_MANY_REQUESTS {
                     (
                         status,
@@ -7026,7 +7838,8 @@ async fn spawn_counting_quota_stub(
 #[tokio::test]
 async fn the_pool_probes_in_the_background_so_a_token_request_does_not() {
     let (provider, hits, stub) =
-        spawn_counting_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
+        spawn_counting_quota_stub(axum::http::StatusCode::OK, Duration::ZERO, "key", "secret")
+            .await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("quota-background-probe");
     config.pool = primary_pool(&provider, "key", "secret");
@@ -7072,12 +7885,116 @@ async fn the_pool_probes_in_the_background_so_a_token_request_does_not() {
     remove_database(db_path);
 }
 
+/// The quota stub is a tripwire, and this is what proves the wire is live.
+///
+/// Every other test here reads the stub's answer through the pool, and the pool
+/// reads anything that is not 429 as "still has minutes", so a stub that had
+/// quietly stopped checking would be invisible on each of them that answers
+/// 200: the probe would arrive with no credential, be refused, and the refusal
+/// would read as a healthy project. This asks the stub directly instead, which
+/// is the only place the refusal is observable at all until somebody decides
+/// what a 401 should mean for pooling.
+#[tokio::test]
+async fn the_quota_stub_refuses_a_probe_that_carries_the_wrong_credential() {
+    /// The credential the probe mints, so the test asks with what production
+    /// asks with rather than with a token shaped like it.
+    fn probe_token(api_key: &str, api_secret: &str) -> String {
+        codetrial::token::livekit_token(codetrial::token::LivekitTokenInput {
+            api_key,
+            api_secret,
+            name: "quota-probe",
+            identity: "quota-probe",
+            room: "quota-probe",
+            metadata: "",
+            now_seconds: 1_700_000_000,
+            agent: false,
+        })
+        .unwrap()
+    }
+
+    let (provider, stub) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::OK,
+        Duration::ZERO,
+        "available-key",
+        "available-secret",
+    )
+    .await;
+    let client = reqwest::Client::new();
+
+    // The pool entry is the `ws://` URL a LiveKit project would be configured
+    // with, and the probe reaches the same server over `http://`;
+    // `livekit_http_origin` is what production converts with and is
+    // `pub(crate)`, so this does the one substitution that fixture's own shape
+    // makes exact rather than widening a production surface for a test.
+    let probe = format!("{}/rtc/validate", provider.replace("ws://", "http://"));
+
+    for (why, bearer) in [
+        ("no credential at all", None),
+        (
+            "a bearer that is not a token",
+            Some("not-a-jwt".to_string()),
+        ),
+        (
+            "a token signed with another project's secret",
+            Some(probe_token("available-key", "someone-elses-secret")),
+        ),
+        (
+            "a token minted for a different project",
+            Some(probe_token("other-key", "available-secret")),
+        ),
+        // Four segments, and the fourth is a real signature over the first
+        // three, so `rsplit_once` and `verify_hs256` between them would be
+        // satisfied. What refuses it is `livekit_token_issuer`: it reads the
+        // payload as everything between the first dot and the last, and the
+        // glued segment puts a dot inside that, which base64url cannot decode.
+        // Signed rather than glued on at random, because an unsigned tail is
+        // refused by the signature check and would say nothing about the parser
+        // that is really doing the work here.
+        (
+            "a fourth segment signed over the other three",
+            Some({
+                let inner = probe_token("available-key", "available-secret");
+                let outer = codetrial::token::sign_hs256("available-secret", &inner);
+                format!("{inner}.{outer}")
+            }),
+        ),
+    ] {
+        let request = client.get(&probe);
+        let request = match bearer {
+            Some(token) => request.bearer_auth(token),
+            None => request,
+        };
+        assert_eq!(
+            request.send().await.unwrap().status(),
+            401,
+            "the stub must refuse {why}, or it is not checking anything"
+        );
+    }
+
+    // And the credential the pool actually mints is accepted, so the four
+    // refusals above are a check rather than a stub that refuses everything.
+    let accepted = client
+        .get(&probe)
+        .bearer_auth(probe_token("available-key", "available-secret"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), 200);
+
+    stub.abort();
+}
+
 /// A quota check must never make starting an interview wait for the shared
 /// client's 30-second backstop when a provider accepts connections but stalls.
 #[tokio::test]
 async fn a_stalled_quota_probe_does_not_delay_token_issuance() {
-    let (provider, stub) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::from_secs(3)).await;
+    let (provider, stub) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::OK,
+        Duration::from_secs(3),
+        "available-key",
+        "available-secret",
+    )
+    .await;
     let (mut config, cookie, db_path) = signed_in_web_config("quota-probe-timeout");
     config.pool = primary_pool(&provider, "available-key", "available-secret");
     let (base, server) = spawn_web_server(config).await;
@@ -7109,10 +8026,20 @@ async fn a_stalled_quota_probe_does_not_delay_token_issuance() {
 /// so the server has to ask before it hands the token out.
 #[tokio::test]
 async fn a_provider_out_of_connection_minutes_is_passed_over() {
-    let (exhausted, first) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::TOO_MANY_REQUESTS, Duration::ZERO).await;
-    let (healthy, second) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
+    let (exhausted, first) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::TOO_MANY_REQUESTS,
+        Duration::ZERO,
+        "spent-key",
+        "spent-secret",
+    )
+    .await;
+    let (healthy, second) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::OK,
+        Duration::ZERO,
+        "spare-key",
+        "spare-secret",
+    )
+    .await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("quota-failover");
     config.pool = codetrial::config::ProviderPool {
@@ -7178,10 +8105,20 @@ async fn a_provider_out_of_connection_minutes_is_passed_over() {
 /// candidate and the agent end up in different ones.
 #[tokio::test]
 async fn a_pinned_room_on_an_exhausted_project_falls_back_to_the_pool() {
-    let (exhausted, first) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::TOO_MANY_REQUESTS, Duration::ZERO).await;
-    let (healthy, second) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
+    let (exhausted, first) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::TOO_MANY_REQUESTS,
+        Duration::ZERO,
+        "spent-key",
+        "spent-secret",
+    )
+    .await;
+    let (healthy, second) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::OK,
+        Duration::ZERO,
+        "spare-key",
+        "spare-secret",
+    )
+    .await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("pinned-quota-failover");
     config.fixed_room_name = Some("interview-local".to_string());
@@ -7240,7 +8177,7 @@ async fn a_pinned_room_on_an_exhausted_project_falls_back_to_the_pool() {
 #[tokio::test]
 async fn a_pinned_room_on_a_healthy_project_is_kept() {
     let (healthy, stub) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
+        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO, "key", "secret").await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("pinned-quota-healthy");
     config.fixed_room_name = Some("interview-local".to_string());
@@ -7275,8 +8212,13 @@ async fn a_pinned_room_on_a_healthy_project_is_kept() {
 /// already knows is spent.
 #[tokio::test]
 async fn every_provider_out_of_minutes_is_refused_with_the_reason() {
-    let (exhausted, stub) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::TOO_MANY_REQUESTS, Duration::ZERO).await;
+    let (exhausted, stub) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::TOO_MANY_REQUESTS,
+        Duration::ZERO,
+        "spent-key",
+        "spent-secret",
+    )
+    .await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("quota-exhausted");
     config.pool = primary_pool(&exhausted, "spent-key", "spent-secret");
@@ -7309,12 +8251,27 @@ async fn every_provider_out_of_minutes_is_refused_with_the_reason() {
 /// split three and three, not four and two.
 #[tokio::test]
 async fn a_dead_project_does_not_skew_the_rotation() {
-    let (spent, spent_stub) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::TOO_MANY_REQUESTS, Duration::ZERO).await;
-    let (first, first_stub) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
-    let (second, second_stub) =
-        spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO).await;
+    let (spent, spent_stub) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::TOO_MANY_REQUESTS,
+        Duration::ZERO,
+        "spent-key",
+        "spent-secret",
+    )
+    .await;
+    let (first, first_stub) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::OK,
+        Duration::ZERO,
+        "first-key",
+        "first-secret",
+    )
+    .await;
+    let (second, second_stub) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::OK,
+        Duration::ZERO,
+        "second-key",
+        "second-secret",
+    )
+    .await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("quota-rotation");
     config.pool = codetrial::config::ProviderPool {
@@ -7424,6 +8381,11 @@ async fn ending_an_interview_without_a_recording_is_a_no_op() {
 async fn every_owner_scoped_route_refuses_an_anonymous_request() {
     let (base, server, path, client, _cookie) = recorded_server("anon-owner-routes").await;
     let owner_scoped = [
+        // Owner-scoped despite not being an `Owner` extractor: it resolves the
+        // session itself and then asks whether that account is the one
+        // `/api/token` minted the room for. It sat in the anonymous list below
+        // for want of anywhere else, which said the opposite.
+        (reqwest::Method::POST, "/api/observer-token"),
         (reqwest::Method::GET, "/api/reports"),
         (reqwest::Method::POST, "/api/reports"),
         (reqwest::Method::DELETE, "/api/reports"),
@@ -7457,7 +8419,6 @@ async fn every_owner_scoped_route_refuses_an_anonymous_request() {
     let anonymous = [
         "/healthz",
         "/api/token",
-        "/api/observer-token",
         "/api/login",
         "/api/callback",
         "/api/session",

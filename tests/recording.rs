@@ -772,6 +772,42 @@ pub(crate) mod lifecycle {
         assert!(start(&accounts, &recorder, "int-2", "rec-2").is_ok());
     }
 
+    /// An interview that never claimed a room.
+    ///
+    /// `StartRefusal::NoRoom` had no test: the insert refuses the row through
+    /// its own `WHERE`, and the read underneath it that decides *why* could
+    /// have answered `NoConsent` for this and nothing would have failed. It is
+    /// a different sentence to the candidate and a different thing for an
+    /// operator to do -- consent was given, the interview simply has not
+    /// started -- so answering the wrong one sends somebody to look at the
+    /// wrong thing.
+    #[tokio::test]
+    async fn lifecycle_an_interview_with_no_room_is_refused_before_the_provider() {
+        let (scratch, accounts, provider, _clock, recorder) = harness("no-room");
+        scratch
+            .open()
+            .execute(
+                "UPDATE interviews SET room_name = NULL WHERE id = 'int-1'",
+                [],
+            )
+            .unwrap();
+
+        assert_eq!(
+            start(&accounts, &recorder, "int-1", "rec-1"),
+            Err(StartRefusal::NoRoom)
+        );
+        assert_eq!(provider.starts(), 0, "there is nothing to record");
+        assert!(
+            recording_by_id(&accounts, "rec-1").unwrap().is_none(),
+            "and no row that a sweeper would later have to fail"
+        );
+
+        // Consent is intact, so the interview that did claim a room still
+        // records: this is the refusal being about the room and not about the
+        // account.
+        assert!(start(&accounts, &recorder, "int-2", "rec-2").is_ok());
+    }
+
     #[tokio::test]
     async fn lifecycle_consent_withdrawn() {
         let (scratch, accounts, provider, _clock, recorder) = harness("withdrawn");
@@ -1299,14 +1335,13 @@ mod failure {
 
     use codetrial::accounts::Accounts;
     use codetrial::recording::{
-        Clock, DeliveryProvider, Failure, Recorder, Recording, RecordingState, STALE_SECONDS,
+        Clock, DeliveryProvider, Failure, Recorder, Recording, RecordingState,
         completed_with_output, delete_recording, deliver_recording, recording_by_id, stale_after,
         sweep_recordings, transition,
     };
     use serde_json::json;
 
-    use super::Scratch;
-    use super::lifecycle::{TestClock, harness, start, state_of};
+    use super::lifecycle::{harness, start, state_of};
 
     /// Drive, as far as this pipeline is concerned: three calls, each of which
     /// can be told to refuse.
@@ -1468,11 +1503,7 @@ mod failure {
     }
 
     /// A recording that reached `transferring`, which is where delivery starts.
-    async fn transferring(
-        accounts: &Arc<Accounts>,
-        recorder: &Recorder,
-        clock: &TestClock,
-    ) -> Recording {
+    async fn transferring(accounts: &Arc<Accounts>, recorder: &Recorder) -> Recording {
         let recording = start(accounts, recorder, "int-1", "rec-1").unwrap();
         codetrial::recording::record_egress_id(
             accounts,
@@ -1496,7 +1527,6 @@ mod failure {
             None,
         )
         .unwrap();
-        let _ = clock;
         recording_by_id(accounts, &recording.id).unwrap().unwrap()
     }
 
@@ -1530,7 +1560,6 @@ mod failure {
         // anything can be started again, and saying so is the difference
         // between a status and an instruction.
         assert_eq!(failure.recovery(), "start_again");
-        let _ = STALE_SECONDS;
     }
 
     #[tokio::test]
@@ -1636,7 +1665,7 @@ mod failure {
         #[tokio::test]
         async fn transfer_no_duplicate_drive_file() {
             let (_scratch, accounts, _provider, clock, recorder) = harness("transfer-duplicate");
-            let recording = transferring(&accounts, &recorder, &clock).await;
+            let recording = transferring(&accounts, &recorder).await;
             enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
 
             // The second start is what a webhook LiveKit sent twice looks like.
@@ -1716,7 +1745,7 @@ mod failure {
         #[tokio::test]
         async fn transfer_resumes_after_restart() {
             let (scratch, accounts, _provider, clock, recorder) = harness("transfer-restart");
-            let recording = transferring(&accounts, &recorder, &clock).await;
+            let recording = transferring(&accounts, &recorder).await;
             enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
 
             // A worker that uploaded and then died with the process: the file
@@ -1778,7 +1807,7 @@ mod failure {
         #[tokio::test]
         async fn transfer_gives_up_on_a_schedule() {
             let (_scratch, accounts, _provider, clock, recorder) = harness("transfer-schedule");
-            let recording = transferring(&accounts, &recorder, &clock).await;
+            let recording = transferring(&accounts, &recorder).await;
             enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
             let delivery = FakeDelivery::default();
             *delivery.refuse_transfer.lock().unwrap() = true;
@@ -1823,7 +1852,7 @@ mod failure {
         #[tokio::test]
         async fn transfer_retries_a_delivery_an_operator_asked_for() {
             let (_scratch, accounts, _provider, clock, recorder) = harness("transfer-reopen");
-            let recording = transferring(&accounts, &recorder, &clock).await;
+            let recording = transferring(&accounts, &recorder).await;
             enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
             let delivery = FakeDelivery::default();
             *delivery.refuse_transfer.lock().unwrap() = true;
@@ -1884,7 +1913,7 @@ mod failure {
             // one waits behind it, so a recording the queue still owes work on
             // is not stale however old its row looks.
             let (_scratch, accounts, _provider, clock, recorder) = harness("transfer-not-stale");
-            let recording = transferring(&accounts, &recorder, &clock).await;
+            let recording = transferring(&accounts, &recorder).await;
             enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
             clock.advance(codetrial::recording::STALE_SECONDS * 2);
 
@@ -1908,7 +1937,7 @@ mod failure {
             // owes a delivery and a queue that has never heard of it, and
             // without this the sweeper would abandon it fifteen minutes later.
             let (_scratch, accounts, _provider, clock, recorder) = harness("transfer-orphan");
-            let recording = transferring(&accounts, &recorder, &clock).await;
+            let recording = transferring(&accounts, &recorder).await;
             assert_eq!(delivery_attempts(&accounts, &recording.id).unwrap(), None);
 
             assert_eq!(
@@ -1945,7 +1974,7 @@ mod failure {
         #[tokio::test]
         async fn transfer_skips_a_recording_that_moved_on() {
             let (scratch, accounts, _provider, clock, recorder) = harness("transfer-withdrawn");
-            let recording = transferring(&accounts, &recorder, &clock).await;
+            let recording = transferring(&accounts, &recorder).await;
             enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
 
             // A withdrawal that landed while the delivery was queued. The media
@@ -1971,8 +2000,8 @@ mod failure {
 
     #[tokio::test]
     async fn failure_drive_leaves_the_bytes_where_they_are() {
-        let (_scratch, accounts, _provider, clock, recorder) = harness("failure-drive");
-        let recording = transferring(&accounts, &recorder, &clock).await;
+        let (_scratch, accounts, _provider, _clock, recorder) = harness("failure-drive");
+        let recording = transferring(&accounts, &recorder).await;
         let delivery = FakeDelivery::default();
 
         *delivery.refuse_transfer.lock().unwrap() = true;
@@ -2021,90 +2050,6 @@ mod failure {
         );
     }
 
-    #[tokio::test]
-    async fn failure_drive_after_the_upload_keeps_the_file_id() {
-        let (scratch, accounts, _provider, clock, recorder) = harness("failure-share");
-        let recording = transferring(&accounts, &recorder, &clock).await;
-        let delivery = FakeDelivery::default();
-        *delivery.refuse_share.lock().unwrap() = true;
-
-        assert_eq!(
-            deliver_recording(
-                &accounts,
-                &recorder,
-                &delivery,
-                &recording,
-                "one@example.test",
-                86_400,
-            )
-            .await,
-            Err(Failure::Drive)
-        );
-
-        // The file is in the Shared Drive. A row that forgot its id is a file
-        // nothing can find, and nothing can delete. It stays `transferring`,
-        // because the share is the step that failed and the upload is not worth
-        // doing again.
-        let drive_file: Option<String> = scratch
-            .open()
-            .query_row(
-                "SELECT drive_file_id FROM recordings WHERE id = 'rec-1'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(drive_file.as_deref(), Some("drive-file-1"));
-    }
-
-    /// A retry after a share failure does not upload the file again.
-    ///
-    /// The first attempt already put it in the Shared Drive. Uploading again
-    /// leaves that one there with nothing naming it, which is a file nobody can
-    /// find and nobody can delete.
-    #[tokio::test]
-    async fn failure_drive_retry_keeps_the_file_it_already_uploaded() {
-        let (_scratch, accounts, _provider, clock, recorder) = harness("failure-retry");
-        let recording = transferring(&accounts, &recorder, &clock).await;
-        let delivery = FakeDelivery::default();
-        *delivery.refuse_share.lock().unwrap() = true;
-        assert!(
-            deliver_recording(
-                &accounts,
-                &recorder,
-                &delivery,
-                &recording,
-                "one@example.test",
-                86_400,
-            )
-            .await
-            .is_err()
-        );
-
-        *delivery.refuse_share.lock().unwrap() = false;
-        let row = recording_by_id(&accounts, "rec-1").unwrap().unwrap();
-        assert_eq!(
-            deliver_recording(
-                &accounts,
-                &recorder,
-                &delivery,
-                &row,
-                "one@example.test",
-                86_400,
-            )
-            .await,
-            Ok(RecordingState::Ready)
-        );
-        assert_eq!(
-            delivery
-                .calls()
-                .iter()
-                .filter(|call| *call == "transfer")
-                .count(),
-            1,
-            "one upload, however many times the share is attempted"
-        );
-    }
-
     /// A recording that already ended reaches no provider at all.
     ///
     /// The staged object is written down first and only for a `transferring`
@@ -2112,8 +2057,8 @@ mod failure {
     /// Drive copy of a recording nobody consented to keep.
     #[tokio::test]
     async fn failure_drive_refuses_a_recording_that_already_ended() {
-        let (scratch, accounts, _provider, clock, recorder) = harness("failure-ended");
-        let recording = transferring(&accounts, &recorder, &clock).await;
+        let (scratch, accounts, _provider, _clock, recorder) = harness("failure-ended");
+        let recording = transferring(&accounts, &recorder).await;
         scratch
             .open()
             .execute(
@@ -2150,8 +2095,8 @@ mod failure {
     /// come back for it.
     #[tokio::test]
     async fn failure_drive_that_loses_its_row_cleans_up_after_itself() {
-        let (scratch, accounts, _provider, clock, recorder) = harness("failure-lost");
-        let recording = transferring(&accounts, &recorder, &clock).await;
+        let (scratch, accounts, _provider, _clock, recorder) = harness("failure-lost");
+        let recording = transferring(&accounts, &recorder).await;
 
         let delivery = FakeDelivery::default();
         *delivery.preempt.lock().unwrap() = Some(scratch.path().to_path_buf());
@@ -2188,8 +2133,8 @@ mod failure {
     /// call lost a race takes media from somebody who still wants it.
     #[tokio::test]
     async fn failure_drive_that_loses_to_another_delivery_keeps_the_shared_object() {
-        let (scratch, accounts, _provider, clock, recorder) = harness("failure-shared");
-        let recording = transferring(&accounts, &recorder, &clock).await;
+        let (scratch, accounts, _provider, _clock, recorder) = harness("failure-shared");
+        let recording = transferring(&accounts, &recorder).await;
 
         // The winner writes its own file id while this one is uploading, and
         // leaves the row transferring: another delivery is still working.
@@ -2247,8 +2192,8 @@ mod failure {
     /// deleting must not use it.
     #[tokio::test]
     async fn failure_drive_loser_revokes_its_permission_without_deleting_a_borrowed_file() {
-        let (scratch, accounts, _provider, clock, recorder) = harness("failure-borrowed");
-        let recording = transferring(&accounts, &recorder, &clock).await;
+        let (scratch, accounts, _provider, _clock, recorder) = harness("failure-borrowed");
+        let recording = transferring(&accounts, &recorder).await;
 
         // An earlier attempt already uploaded, so this one reuses that file.
         scratch
@@ -2290,6 +2235,58 @@ mod failure {
         );
     }
 
+    /// A loser that deleted its own file gives the handle back too.
+    ///
+    /// The row named `drive-file-1` -- the upload recorded it, and only the
+    /// permission write lost the race -- so a row left naming it after the
+    /// cleanup deleted it is worse than a row naming nothing: the next attempt
+    /// reads that id, skips the upload, and shares a file that is not there.
+    /// Measured: with `forget_drive_file` replaced by `Ok(())`, every other
+    /// test in this file still passed.
+    #[tokio::test]
+    async fn failure_drive_loser_stops_naming_the_file_it_deleted() {
+        let (scratch, accounts, _provider, _clock, recorder) = harness("failure-forget");
+        let recording = transferring(&accounts, &recorder).await;
+
+        // The withdrawal lands while the share is in flight, which is after the
+        // file id is written down and before the permission id is.
+        let delivery = FakeDelivery::default();
+        *delivery.preempt_share.lock().unwrap() = Some(scratch.path().to_path_buf());
+
+        assert_eq!(
+            deliver_recording(
+                &accounts,
+                &recorder,
+                &delivery,
+                &recording,
+                "one@example.test",
+                86_400,
+            )
+            .await,
+            Err(Failure::Drive)
+        );
+        let cleanup = delivery
+            .calls()
+            .into_iter()
+            .find(|call| call.starts_with("revoke_and_delete"))
+            .expect("this attempt uploaded the file, so it is this attempt's to delete");
+        assert!(cleanup.contains("file=drive-file-1"), "{cleanup}");
+
+        let (file, permission): (Option<String>, Option<String>) = scratch
+            .open()
+            .query_row(
+                "SELECT drive_file_id, drive_permission_id FROM recordings WHERE id = 'rec-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (file, permission),
+            (None, None),
+            "a handle for a file this call just deleted has to go with it"
+        );
+    }
+
     /// The same loss, against a winner that has already failed its own share.
     ///
     /// `drive_failed` means the queue will come back, so the staged object
@@ -2297,8 +2294,8 @@ mod failure {
     /// nobody and still has to go.
     #[tokio::test]
     async fn failure_drive_loser_deletes_its_file_even_when_the_winner_will_retry() {
-        let (scratch, accounts, _provider, clock, recorder) = harness("failure-both");
-        let recording = transferring(&accounts, &recorder, &clock).await;
+        let (scratch, accounts, _provider, _clock, recorder) = harness("failure-both");
+        let recording = transferring(&accounts, &recorder).await;
 
         let delivery = FakeDelivery::default();
         *delivery.preempt.lock().unwrap() = Some(scratch.path().to_path_buf());
@@ -2334,7 +2331,7 @@ mod failure {
     #[tokio::test]
     async fn failure_drive_delivers_when_it_can() {
         let (scratch, accounts, _provider, clock, recorder) = harness("delivery");
-        let recording = transferring(&accounts, &recorder, &clock).await;
+        let recording = transferring(&accounts, &recorder).await;
         let delivery = FakeDelivery::default();
 
         // Read off the clock the delivery itself reads, because the deadline is
@@ -2388,10 +2385,9 @@ mod failure {
         async fn delivered(
             accounts: &Arc<codetrial::accounts::Accounts>,
             recorder: &codetrial::recording::Recorder,
-            clock: &super::super::lifecycle::TestClock,
             delivery: &FakeDelivery,
         ) -> codetrial::recording::Recording {
-            let recording = transferring(accounts, recorder, clock).await;
+            let recording = transferring(accounts, recorder).await;
             codetrial::recording::deliver_recording(
                 accounts,
                 recorder,
@@ -2409,7 +2405,7 @@ mod failure {
         async fn retention_revokes_and_deletes() {
             let (scratch, accounts, _provider, clock, recorder) = harness("retention-deletes");
             let delivery = Arc::new(FakeDelivery::default());
-            let ready = delivered(&accounts, &recorder, &clock, &delivery).await;
+            let ready = delivered(&accounts, &recorder, &delivery).await;
 
             // The replay is part of what was recorded, so it is part of what is
             // deleted.
@@ -2480,7 +2476,7 @@ mod failure {
             // media into a bucket this pass has just emptied.
             let (scratch, accounts, provider, clock, recorder) = harness("retention-unstopped");
             let delivery = Arc::new(FakeDelivery::default());
-            let ready = delivered(&accounts, &recorder, &clock, &delivery).await;
+            let ready = delivered(&accounts, &recorder, &delivery).await;
             scratch
                 .open()
                 .execute(
@@ -2509,11 +2505,85 @@ mod failure {
             );
         }
 
+        /// The first step failing, which is the only one that can show the
+        /// loop stops.
+        ///
+        /// `refuse_revoke` was a field on the fake that no test ever set, so
+        /// the arm of `delete_recording` that gives up on the revoke had
+        /// nothing pointed at it. A partial failure at the *last* step cannot
+        /// see the `break`: there is nothing after it either way. Failing at
+        /// the first step is what distinguishes stopping from carrying on and
+        /// deleting a file whose permission is still live.
+        #[tokio::test]
+        async fn retention_stops_at_the_step_that_failed() {
+            let (scratch, accounts, _provider, clock, recorder) = harness("retention-revoke");
+            let delivery = Arc::new(FakeDelivery::default());
+            let ready = delivered(&accounts, &recorder, &delivery).await;
+            clock.advance(86_401);
+
+            *delivery.refuse_revoke.lock().unwrap() = true;
+            let before = delivery.calls().len();
+            let error = delete_recording(&accounts, &recorder, delivery.as_ref(), &ready, "expiry")
+                .await
+                .expect_err("a revoke that will not land is a cleanup failure");
+            assert!(
+                error.starts_with("revoke: "),
+                "the reason names the step that failed, got {error}"
+            );
+            assert_eq!(
+                delivery.calls()[before..],
+                ["revoke on=drive-file-1 permission=permission-1".to_string()],
+                "nothing after the failure was attempted"
+            );
+            assert_eq!(
+                state_of(&accounts, &ready.id),
+                RecordingState::CleanupFailed
+            );
+
+            // No handle cleared, because no step landed. A row that forgot the
+            // file or the object here would leave media nothing names.
+            let (file, permission, object): (Option<String>, Option<String>, Option<String>) =
+                scratch
+                    .open()
+                    .query_row(
+                        "SELECT drive_file_id, drive_permission_id, gcs_object FROM recordings WHERE id = ?1",
+                        [&ready.id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .unwrap();
+            assert_eq!(
+                (file.as_deref(), permission.as_deref(), object.as_deref()),
+                (
+                    Some("drive-file-1"),
+                    Some("permission-1"),
+                    Some("codetrial/rec-1.mp4")
+                ),
+                "the row still names everything that is still there"
+            );
+
+            // And the retry runs all three, in order, once the provider agrees.
+            *delivery.refuse_revoke.lock().unwrap() = false;
+            let again = recording_by_id(&accounts, &ready.id).unwrap().unwrap();
+            let before = delivery.calls().len();
+            delete_recording(&accounts, &recorder, delivery.as_ref(), &again, "expiry")
+                .await
+                .expect("the retry should complete");
+            assert_eq!(
+                delivery.calls()[before..],
+                [
+                    "revoke on=drive-file-1 permission=permission-1".to_string(),
+                    "delete_file file=drive-file-1".to_string(),
+                    "delete_object object=codetrial/rec-1.mp4".to_string(),
+                ]
+            );
+            assert_eq!(state_of(&accounts, &ready.id), RecordingState::Deleted);
+        }
+
         #[tokio::test]
         async fn retention_partial_failure_retries() {
             let (scratch, accounts, _provider, clock, recorder) = harness("retention-partial");
             let delivery = Arc::new(FakeDelivery::default());
-            let ready = delivered(&accounts, &recorder, &clock, &delivery).await;
+            let ready = delivered(&accounts, &recorder, &delivery).await;
             clock.advance(86_401);
 
             // The staged object refuses. The revoke and the file deletion
@@ -2577,9 +2647,9 @@ mod failure {
                 return;
             }
 
-            let (scratch, accounts, _provider, clock, recorder) = harness("retention-script");
+            let (scratch, accounts, _provider, _clock, recorder) = harness("retention-script");
             let delivery = Arc::new(FakeDelivery::default());
-            let ready = delivered(&accounts, &recorder, &clock, &delivery).await;
+            let ready = delivered(&accounts, &recorder, &delivery).await;
             scratch
                 .open()
                 .execute(
@@ -2683,7 +2753,7 @@ mod failure {
         async fn retention_tombstone_fields() {
             let (scratch, accounts, _provider, clock, recorder) = harness("retention-tombstone");
             let delivery = Arc::new(FakeDelivery::default());
-            let ready = delivered(&accounts, &recorder, &clock, &delivery).await;
+            let ready = delivered(&accounts, &recorder, &delivery).await;
             clock.advance(86_401);
             delete_recording(&accounts, &recorder, delivery.as_ref(), &ready, "expiry")
                 .await
@@ -2724,7 +2794,7 @@ mod failure {
             // which is the whole schedule.
             let (_scratch, accounts, _provider, clock, recorder) = harness("retention-withdrawn");
             let delivery = Arc::new(FakeDelivery::default());
-            let ready = delivered(&accounts, &recorder, &clock, &delivery).await;
+            let ready = delivered(&accounts, &recorder, &delivery).await;
 
             // Withdrawn after delivery, which is the case the transition table
             // will not carry: a `ready` row cannot become `failed`, so the
@@ -2746,8 +2816,8 @@ mod failure {
 
     #[tokio::test]
     async fn cleanup_failure() {
-        let (scratch, accounts, _provider, clock, recorder) = harness("cleanup");
-        let recording = transferring(&accounts, &recorder, &clock).await;
+        let (scratch, accounts, _provider, _clock, recorder) = harness("cleanup");
+        let recording = transferring(&accounts, &recorder).await;
         let delivery = FakeDelivery::default();
         deliver_recording(
             &accounts,
@@ -2870,8 +2940,6 @@ mod failure {
         let parsed: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert!(parsed["error"].as_str().unwrap().len() < 1_000);
     }
-
-    fn _unused(_: &Scratch) {}
 }
 
 /// The replay schema: one envelope, six kinds, and everything a replay must not
@@ -2973,10 +3041,31 @@ mod replay {
                 "a second batch continues where the first stopped"
             );
 
+            // A batch with nothing in it answers `Empty` and spends no sequence
+            // number. Answering `Stored` for it would hand the browser a range
+            // nobody was given, and spending a number would put a hole in the
+            // very ordering this test is about.
+            assert_eq!(
+                append_replay_events(&accounts, "int-1", 1, &[], 11).unwrap(),
+                Ingest::Empty
+            );
+            assert_eq!(
+                append_replay_events(
+                    &accounts,
+                    "int-1",
+                    1,
+                    &[event(ReplayKind::Transcript, "four")],
+                    12
+                )
+                .unwrap(),
+                Ingest::Stored { first: 3, last: 3 },
+                "the empty batch took no number with it"
+            );
+
             let stored = replay_events(&accounts, "int-1", 1, -1).unwrap();
             assert_eq!(
                 stored.iter().map(|(seq, _)| *seq).collect::<Vec<_>>(),
-                vec![0, 1, 2],
+                vec![0, 1, 2, 3],
                 "no gaps and no repeats, which is the whole ordering guarantee"
             );
             assert_eq!(stored[0].1.payload["text"], "one");
@@ -3412,9 +3501,6 @@ mod replay {
                 parse_replay_event(&oversize),
                 Err(ReplayRejection::Oversize)
             );
-
-            let (_scratch, accounts) = harness("ingest-oversize");
-            assert_eq!(replay_events(&accounts, "int-1", 1, -1).unwrap().len(), 0);
         }
 
         #[tokio::test]

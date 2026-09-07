@@ -44,6 +44,26 @@ becomes a problem, measure it first.
 Budget for a commissioned replacement: upper body only, 1 to 3 materials, 512
 to 1024 px textures, minimal physics, 5 to 15 MB.
 
+The size half of that budget is enforced rather than advisory. `MODEL_MAX_BYTES`
+in `web/avatar/model.js` is the 15 MB top of this range, and the fetch refuses a
+declared `Content-Length` above it before reading the body and stops the read
+once the streamed total passes it. So the number now says two things: what a
+commission may weigh, and what a candidate's browser will accept from the
+model's origin. Raising one raises the other, in the same edit.
+
+What that bounds precisely is the bytes accepted from the response body, plus
+one chunk of overshoot before the read stops. It is not a bound on how much
+memory the load costs: the body is copied once into the buffer that is hashed,
+and `store` copies it again into a `Response` on the way to the cache, so a
+model at the ceiling occupies a multiple of it for as long as the parse runs.
+Two things keep that multiple constant rather than open-ended. The read grows
+one buffer instead of keeping a chunk per read, because how many chunks a body
+arrives in is the origin's choice and not the size's, and an array of them costs
+heap in proportion to the splitting rather than to the bytes. And
+the fetch carries the renderer's own `LOAD_TIMEOUT_MS` as an abort signal, so an
+origin that trickles under the ceiling forever is a bounded cost rather than a
+permanent one.
+
 The delivered VRM must be uncompressed glTF: no `KHR_draco_mesh_compression`,
 no `KHR_texture_basisu`, no `EXT_meshopt_compression`. The vendored bundle
 registers no decoder for any of them, and `GLTFLoader` rejects outright with
@@ -94,6 +114,16 @@ Every failure lands on `unavailable`: an unreachable model, a browser with no
 WebGL, bytes that miss the pin, a corrupt model, and a host that accepts the
 connection and then hangs are one path, not five. The load timeout is
 `LOAD_TIMEOUT_MS`, 60000 ms, and it covers the download as well as the parse.
+
+Two timers rather than one, because the race in `web/avatar/avatar.js` decides
+when the panel appears and cannot cancel what it stopped waiting for.
+`web/avatar/model.js` imports that same constant and hands it to the fetch as an
+`AbortSignal`, rather than keeping a second copy of the number: a panel that
+gives up while the socket is still open is how a hung host used to keep a
+buffer, a reader and a retry alive for the rest of the page's life, and the two
+timers only agree if they are one number. The deadline covers the retry as well
+as the first attempt, being created once per load, so a transient failure cannot
+buy a second 60 seconds.
 
 ## How the model gets there
 
@@ -148,10 +178,14 @@ exchange the release binary is 11 MB smaller and the bytes are never
 redistributed by this project. A deployment that cannot accept a third-party
 runtime dependency during an interview should serve the model from its own
 origin and change `MODEL_URL` and `MODEL_SHA256` in `web/avatar/model.js` and
-`AVATAR_MODEL_ORIGIN` in `src/web/policy.rs` together. A test asserts the URL
-sits under the origin the CSP permits, because that drift is otherwise
-invisible: the download is blocked and the avatar shows the same neutral panel
-every other failure shows.
+`AVATAR_MODEL_ORIGIN` in `src/web/policy.rs` together. Two tests in
+`tests/browser/avatar-model.test.js` hold that URL down, and both are in the
+`node --test` lane rather than the Rust one: one asserts it sits under the
+origin the CSP permits, because that drift is otherwise invisible, the download
+being blocked and the avatar showing the same neutral panel every other failure
+shows; the other asserts the path names a full commit sha, because the
+force-push sentence above is a claim about a commit-pinned path and says nothing
+about a branch.
 
 ## Behavior
 

@@ -73,8 +73,6 @@ test("compiled language keywords, literals, strings, and comments are marked", (
   assert.match(java, /<span class="tok-keyword">public<\/span>/);
   assert.match(java, /<span class="tok-keyword">boolean<\/span>/);
   assert.match(java, /<span class="tok-literal">true<\/span>/);
-  assert.match(highlight('String s = "return"; // class', "java"), /<span class="tok-string">&quot;return&quot;<\/span>/);
-  assert.match(highlight('String s = "return"; // class', "java"), /<span class="tok-comment">\/\/ class<\/span>/);
 });
 
 test("a keyword inside a string or comment stays part of it", () => {

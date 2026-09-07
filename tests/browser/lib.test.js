@@ -23,6 +23,7 @@ import {
   escapeHtml,
   formatTime,
   INTEGRITY_DETAIL_MAX,
+  MAX_INTEGRITY_ROWS,
   integrityEventPayload,
   normalize,
   orPlaceholder,
@@ -1611,4 +1612,84 @@ test("the interview ending is not a question, and a lost resume is not the rest 
     [true, false],
     "the window that saw the pause is marked and the interview after it is not",
   );
+});
+
+// The reason ladder has four arms and only two were driven. These two carry the
+// outages a candidate can act on, and each is a distinct sentence: a provider
+// with no session capacity left is not the same problem as a microphone that
+// never got published, and telling somebody the wrong one sends them to fix
+// the wrong thing.
+test("each provider outage names its own cause", () => {
+  const reason = (detail) => providerUiState("degraded", detail).message;
+  const distinct = new Set();
+  for (const [detail, pattern] of [
+    ["429 Too Many Requests", /busy or rate limited/],
+    ["RESOURCE_EXHAUSTED: quota exceeded", /no available session capacity/],
+    ["insufficient connection minutes remaining", /no available session capacity/],
+    ["failed to publish microphone track", /microphone could not be connected/],
+    ["ECONNREFUSED", /could not be reached/],
+  ]) {
+    assert.match(reason(detail), pattern, detail);
+    distinct.add(reason(detail));
+  }
+  assert.equal(distinct.size, 4, "four causes, four sentences");
+
+  // Ordered, and the order is a claim: rate limiting is reported ahead of quota
+  // because a detail naming both is a busy provider, not an exhausted account.
+  assert.match(reason("429: quota exceeded"), /busy or rate limited/);
+  assert.match(reason("quota exceeded while publishing microphone"), /no available session capacity/);
+  // Matched case-insensitively, because the provider's wording is not ours.
+  assert.match(reason("QUOTA EXCEEDED"), /no available session capacity/);
+});
+
+// An agent-supplied severity reaches the report card as a CSS class name, so
+// the allowlist is what stops a report styling itself. Every fixture in the
+// suite used "high" or "info", so the allowlist could have been deleted.
+test("a severity the report card cannot style is read as info", () => {
+  const severities = (events) => sanitizeReport({ decision: "HIRE", integrityEvents: events }).integrityEvents
+    .map((event) => event.severity);
+  assert.deepEqual(severities([
+    { type: "A", severity: "info" }, { type: "B", severity: "warning" },
+    { type: "C", severity: "high" }, { type: "D", severity: "critical" },
+  ]), ["info", "warning", "high", "critical"], "all four styleable severities survive");
+
+  assert.deepEqual(severities([
+    { type: "A", severity: "catastrophic" },
+    { type: "B", severity: "critical\" onload=\"alert(1)" },
+    { type: "C", severity: "INFO" },
+    { type: "D", severity: 3 },
+    { type: "E", severity: null },
+    { type: "F" },
+  ]), ["info", "info", "info", "info", "info", "info"]);
+});
+
+// The two clamps beside it, on the same row. `durationMs` is rendered as a
+// number of seconds a reviewer reads, and `seq` indexes the hash chain.
+test("an integrity row cannot carry an unbounded duration or sequence", () => {
+  const [row] = sanitizeReport({
+    decision: "HIRE",
+    integrityEvents: [{ type: "A", durationMs: 999_999_999_999, seq: -5 }],
+  }).integrityEvents;
+  assert.equal(row.durationMs, 86_400_000, "a day is the ceiling");
+  assert.equal(row.seq, 0, "a negative sequence is not a position in the chain");
+
+  const [negative] = sanitizeReport({
+    decision: "HIRE",
+    integrityEvents: [{ type: "A", durationMs: -1, seq: 4.9 }],
+  }).integrityEvents;
+  assert.equal(negative.durationMs, 0, "an event cannot have lasted less than no time");
+  assert.equal(negative.seq, 4, "a fractional sequence is truncated, not rounded up");
+});
+
+// The cap on the list itself. The existing test for it supplies 64 invalid rows
+// and one valid one, and the filter removes the invalid rows before the slice
+// runs -- so the slice has never actually trimmed anything.
+test("more integrity rows than the report holds are trimmed to the cap", () => {
+  const many = Array.from({ length: MAX_INTEGRITY_ROWS + 20 }, (_, index) => ({
+    type: "CAMERA_STOPPED", at: "00:01", severity: "high", source: "camera", seq: index,
+  }));
+  const kept = sanitizeReport({ decision: "HIRE", integrityEvents: many }).integrityEvents;
+  assert.equal(kept.length, MAX_INTEGRITY_ROWS);
+  // The head is kept, not the tail: the chain is read from its start.
+  assert.deepEqual(kept.map((event) => event.seq), [...Array(MAX_INTEGRITY_ROWS).keys()]);
 });

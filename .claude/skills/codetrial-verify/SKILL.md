@@ -97,16 +97,41 @@ without running it is caught here.
 
 ## Writing a test
 
-Rust tests sit beside the suites already in `tests/`, browser tests in
-`tests/browser/*.test.js` under `node --test`, Python tests in
-`tests/test_*.py` under `python3 -m unittest`. The golden fixtures in
-`tests/golden/` are the compatibility contract: a diff there is a claim that
-the observable output changed on purpose, and it belongs in the commit body.
+No test code goes under `src/`; codetrial-conventions has the rule and the
+four things that bite when it is applied carelessly. Which of the two kinds you
+are writing is decided by what the test needs to see:
+
+- Reaching a private or `pub(crate)` item makes it a unit test. It goes in
+  `tests/unit/`, mirroring the path under `src/`, and the `src/` file declares
+  it with `#[cfg(test)] #[path = "..."] mod tests;`. Adding a new one means
+  adding that declaration too, or the file compiles and the test never runs.
+- Reaching only the public API makes it an integration test, and it goes in
+  `tests/*.rs` beside the suites already there. Those link the plain rlib, so a
+  `#[cfg(test)]` item is invisible to them: the two halves cannot share a
+  module, which is why `tests/common/` exists for what the integration tests
+  share and why the same credential predicate is deliberately written twice.
+
+Browser tests go in `tests/browser/*.test.js` under `node --test`, Python tests
+in `tests/test_*.py` under `scripts/run-python-tests.py`, which runs a file's
+cases across a thread pool; a suite added there must keep every case owning its
+own sandbox, or it races. The golden fixtures in `tests/golden/` are the
+compatibility contract: a diff there is a claim that the observable output
+changed on purpose, and it belongs in the commit body.
 
 A test that passes without running anything is the failure mode this tree has
 already been bitten by, hence commits like "Prove an empty test run is not a
 pass". Assert on the count as well as the content when a suite discovers its
 own cases.
+
+The quieter version of that is a test that runs and cannot fail, and a sweep of
+this suite found every shape of it worth knowing: a refusal asserted against a
+double that was *scripted* to refuse, so the script answered and not the code; a
+hash compared against one the test computed with the function under test; a
+traversal guard asked for files that did not exist, so "not found" read as
+"refused"; a `/enforce/` regex over a seventy-line document; and a module's whole
+wiring pinned by source-text matches that a rename walked straight past. The
+check that separates them is cheap and is the one to run before believing a new
+test: break the thing it names, watch it fail, put it back.
 
 ## Seeing it work in the app
 

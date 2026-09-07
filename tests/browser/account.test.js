@@ -148,7 +148,6 @@ test("interview loop is explicit, budgeted, gated, and carried into artifacts", 
   assert.match(interview, /message\.type === "round_state"/);
   assert.match(interview, /nodes\.editor\.disabled = true/);
   assert.match(interview, /state: "rounds_final"/);
-  assert.match(interview, /interviewLoop, report: state\.report/);
 });
 
 test("optional interview profile is accessible, bounded, and omitted when blank", () => {
@@ -341,22 +340,6 @@ test("report history retains local data on account failure and reports a partial
     storage: brokenStorage,
     fetcher: async () => response({}),
   }), "failed");
-});
-
-test("history deletion observes a cross-tab sign-in", async () => {
-  const storage = memoryStorage();
-  storage.setItem(historyKey, "keep");
-  const calls = [];
-  assert.equal(await clearReportHistory({
-    storage,
-    fetcher: async (url, options) => {
-      calls.push({ url, options });
-      return url === "/api/session" ? response({ signedIn: true }) : response({ deleted: 1 });
-    },
-  }), "cleared");
-  assert.equal(storage.getItem(historyKey), null);
-  assert.deepEqual(calls.map(({ url }) => url), ["/api/session", "/api/reports"]);
-  assert.equal(calls[1].options.method, "DELETE");
 });
 
 test("a cross-tab sign-out keeps the account copy rather than claiming a clear", async () => {

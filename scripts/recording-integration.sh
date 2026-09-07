@@ -354,7 +354,7 @@ json.dump(document, open(sys.argv[1], "w"), indent=2)
 print(json.dumps(document, indent=2))
 PY
     echo "wrote $acceptance"
-    echo "now run: CODETRIAL_RECORDING_INTEGRATION=1 cargo test --test recording_integration media_acceptance"
+    echo "now run: CODETRIAL_RECORDING_INTEGRATION=1 cargo test --test recording_integration -- --ignored media_acceptance"
 fi
 
 if runs delivery || runs cleanup; then
@@ -511,6 +511,6 @@ json.dump({"recording_id": recording_id, "cleanup_status": cleanup}, open(path, 
 PY
         update_acceptance "$work/cleanup.json"
         echo "cleanup verified: Drive file and GCS object are absent"
-        echo "now run: CODETRIAL_RECORDING_INTEGRATION=1 CODETRIAL_RECORDING_LIFECYCLE_ACCEPTANCE=1 cargo test --test recording_integration lifecycle_acceptance"
+        echo "now run: CODETRIAL_RECORDING_INTEGRATION=1 CODETRIAL_RECORDING_LIFECYCLE_ACCEPTANCE=1 cargo test --test recording_integration -- --ignored lifecycle_acceptance"
     fi
 fi
