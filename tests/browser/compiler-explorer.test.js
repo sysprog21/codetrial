@@ -1,9 +1,10 @@
-import { test } from "node:test";
+import { describe, it, test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import {
   ALL_LANGUAGES,
@@ -136,18 +137,56 @@ test("harness generator covers every class problem without network access", () =
   }
 });
 
-test("C Two Sum harness can produce passing Compiler Explorer JSON", (t) => {
+// A promisified execFile, and one cached probe per tool.
+//
+// Do not "simplify" the seven tests below back to `execFileSync`. They compile
+// and run real C, C++ and Java, which costs 1-3 seconds each, and they are the
+// only slow thing in the browser lane. Two facts decide the shape:
+//
+//   * `node:test` runs top-level `test()` calls one after another even when
+//     they are async, so the seven have to be `it()` children of a suite
+//     declared `{ concurrency: true }` to be scheduled together at all.
+//   * A concurrent scheduler cannot overlap anything that blocks the event
+//     loop. `execFileSync` does exactly that, so with it the seven would still
+//     run end to end no matter how the suite is declared.
+//
+// Both changes are needed; either one alone buys nothing. Each test compiles
+// into its own `mkdtempSync` directory and removes it in a `finally`, so they
+// share no path and can overlap safely.
+const run = promisify(execFile);
+
+/// Whether a tool answers at all. Probed once per tool rather than once per
+/// test, and synchronously, which is safe here because a blocking call cannot
+/// interleave with the concurrent bodies below: this all runs before they do.
+function present(command, versionArg) {
   try {
-    execFileSync("cc", ["--version"], { stdio: "ignore" });
+    execFileSync(command, [versionArg], { stdio: "ignore" });
+    return true;
   } catch {
-    t.skip("cc is not available");
-    return;
+    return false;
   }
-  const dir = mkdtempSync(join(tmpdir(), "codetrial-c-"));
-  try {
-    const source = join(dir, "twosum.c");
-    const binary = join(dir, "twosum");
-    writeFileSync(source, generateHarness("c", judges["two-sum"], `int* twoSum(int* nums, int numsSize, int target, int* returnSize) {
+}
+
+// Declared, not performed. `node:test` takes `skip` as a reason string in the
+// options, so a missing compiler is stated where the test is named and the body
+// never runs. The imperative form this replaces called `t.skip()` inside the
+// body, which only marks the result: one guard was written without the `return`
+// that has to follow it, and that test reported itself skipped and then failed
+// on the missing compiler. There is nothing left here to forget.
+const noCc = present("cc", "--version") ? false : "cc is not available";
+const noGpp = present("g++", "--version") ? false : "g++ is not available";
+const noJava =
+  present("javac", "-version") && present("java", "-version")
+    ? false
+    : "javac/java are not available";
+
+describe("toolchain harnesses", { concurrency: true }, () => {
+  it("C Two Sum harness can produce passing Compiler Explorer JSON", { skip: noCc }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "codetrial-c-"));
+    try {
+      const source = join(dir, "twosum.c");
+      const binary = join(dir, "twosum");
+      writeFileSync(source, generateHarness("c", judges["two-sum"], `int* twoSum(int* nums, int numsSize, int target, int* returnSize) {
     int* out = malloc(sizeof(int) * 2);
     for (int i = 0; i < numsSize; i++) {
         for (int j = i + 1; j < numsSize; j++) {
@@ -162,29 +201,24 @@ test("C Two Sum harness can produce passing Compiler Explorer JSON", (t) => {
     *returnSize = 0;
     return out;
 }`));
-    execFileSync("cc", ["-std=c17", source, "-o", binary]);
-    assert.deepEqual(parseCompilerResults(execFileSync(binary, { encoding: "utf8" })).results.map((result) => result.actual), [
-      [0, 1],
-      [1, 2],
-      [0, 1],
-      [0, 2],
-    ]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+      await run("cc", ["-std=c17", source, "-o", binary]);
+      assert.deepEqual(parseCompilerResults((await run(binary, [], { encoding: "utf8" })).stdout).results.map((result) => result.actual), [
+        [0, 1],
+        [1, 2],
+        [0, 1],
+        [0, 2],
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
-test("C Merge k Sorted Lists harness can produce passing Compiler Explorer JSON", (t) => {
-  try {
-    execFileSync("cc", ["--version"], { stdio: "ignore" });
-  } catch {
-    t.skip("cc is not available");
-  }
-  const dir = mkdtempSync(join(tmpdir(), "codetrial-c-"));
-  try {
-    const source = join(dir, "mergek.c");
-    const binary = join(dir, "mergek");
-    writeFileSync(source, generateHarness("c", judges["merge-k-sorted-lists"], `struct ListNode* mergeKLists(struct ListNode** lists, int listsSize) {
+  it("C Merge k Sorted Lists harness can produce passing Compiler Explorer JSON", { skip: noCc }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "codetrial-c-"));
+    try {
+      const source = join(dir, "mergek.c");
+      const binary = join(dir, "mergek");
+      writeFileSync(source, generateHarness("c", judges["merge-k-sorted-lists"], `struct ListNode* mergeKLists(struct ListNode** lists, int listsSize) {
     struct ListNode dummy = {0, NULL};
     struct ListNode* tail = &dummy;
     for (;;) {
@@ -200,25 +234,19 @@ test("C Merge k Sorted Lists harness can produce passing Compiler Explorer JSON"
     }
     return dummy.next;
 }`));
-    execFileSync("cc", ["-std=c17", source, "-o", binary]);
-    assert.deepEqual(parseCompilerResults(execFileSync(binary, { encoding: "utf8" })).results.map((result) => result.actual), judges["merge-k-sorted-lists"].cases.map((testCase) => testCase.expected));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+      await run("cc", ["-std=c17", source, "-o", binary]);
+      assert.deepEqual(parseCompilerResults((await run(binary, [], { encoding: "utf8" })).stdout).results.map((result) => result.actual), judges["merge-k-sorted-lists"].cases.map((testCase) => testCase.expected));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
-test("C Construct Quad Tree harness can produce passing Compiler Explorer JSON", (t) => {
-  try {
-    execFileSync("cc", ["--version"], { stdio: "ignore" });
-  } catch {
-    t.skip("cc is not available");
-    return;
-  }
-  const dir = mkdtempSync(join(tmpdir(), "codetrial-c-quad-"));
-  try {
-    const source = join(dir, "quad.c");
-    const binary = join(dir, "quad");
-    writeFileSync(source, generateHarness("c", judges["construct-quad-tree"], `static bool same(int** grid, int row, int col, int size) {
+  it("C Construct Quad Tree harness can produce passing Compiler Explorer JSON", { skip: noCc }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "codetrial-c-quad-"));
+    try {
+      const source = join(dir, "quad.c");
+      const binary = join(dir, "quad");
+      writeFileSync(source, generateHarness("c", judges["construct-quad-tree"], `static bool same(int** grid, int row, int col, int size) {
     int first = grid[row][col];
     for (int r = row; r < row + size; r++) {
         for (int c = col; c < col + size; c++) {
@@ -249,25 +277,19 @@ struct Node* construct(int** grid, int gridSize, int* gridColSize) {
     (void)gridColSize;
     return build(grid, 0, 0, gridSize);
 }`));
-    execFileSync("cc", ["-std=c17", source, "-o", binary]);
-    assert.deepEqual(parseCompilerResults(execFileSync(binary, { encoding: "utf8" })).results.map((result) => result.actual), judges["construct-quad-tree"].cases.map((testCase) => testCase.expected));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+      await run("cc", ["-std=c17", source, "-o", binary]);
+      assert.deepEqual(parseCompilerResults((await run(binary, [], { encoding: "utf8" })).stdout).results.map((result) => result.actual), judges["construct-quad-tree"].cases.map((testCase) => testCase.expected));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
-test("C++ MinStack class harness can produce passing Compiler Explorer JSON", (t) => {
-  try {
-    execFileSync("g++", ["--version"], { stdio: "ignore" });
-  } catch {
-    t.skip("g++ is not available");
-    return;
-  }
-  const dir = mkdtempSync(join(tmpdir(), "codetrial-cpp-class-"));
-  try {
-    const source = join(dir, "minstack.cpp");
-    const binary = join(dir, "minstack");
-    writeFileSync(source, generateHarness("cpp", judges["min-stack"], `class MinStack {
+  it("C++ MinStack class harness can produce passing Compiler Explorer JSON", { skip: noGpp }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "codetrial-cpp-class-"));
+    try {
+      const source = join(dir, "minstack.cpp");
+      const binary = join(dir, "minstack");
+      writeFileSync(source, generateHarness("cpp", judges["min-stack"], `class MinStack {
     vector<int> values;
     vector<int> minimums;
 public:
@@ -283,25 +305,18 @@ public:
     int top() { return values.back(); }
     int getMin() { return minimums.back(); }
 };`));
-    execFileSync("g++", ["-std=c++20", source, "-o", binary]);
-    assert.deepEqual(parseCompilerResults(execFileSync(binary, { encoding: "utf8" })).results.map((result) => result.actual), judges["min-stack"].cases.map((testCase) => testCase.expected));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+      await run("g++", ["-std=c++20", source, "-o", binary]);
+      assert.deepEqual(parseCompilerResults((await run(binary, [], { encoding: "utf8" })).stdout).results.map((result) => result.actual), judges["min-stack"].cases.map((testCase) => testCase.expected));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
-test("Java BSTIterator class harness can produce passing Compiler Explorer JSON", (t) => {
-  try {
-    execFileSync("javac", ["-version"], { stdio: "ignore" });
-    execFileSync("java", ["-version"], { stdio: "ignore" });
-  } catch {
-    t.skip("javac/java are not available");
-    return;
-  }
-  const dir = mkdtempSync(join(tmpdir(), "codetrial-java-class-"));
-  try {
-    const source = join(dir, "Main.java");
-    writeFileSync(source, generateHarness("java", judges["binary-search-tree-iterator"], `class BSTIterator {
+  it("Java BSTIterator class harness can produce passing Compiler Explorer JSON", { skip: noJava }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "codetrial-java-class-"));
+    try {
+      const source = join(dir, "Main.java");
+      writeFileSync(source, generateHarness("java", judges["binary-search-tree-iterator"], `class BSTIterator {
     private final ArrayDeque<TreeNode> stack = new ArrayDeque<>();
     public BSTIterator(TreeNode root) { pushLeft(root); }
     private void pushLeft(TreeNode node) {
@@ -317,25 +332,19 @@ test("Java BSTIterator class harness can produce passing Compiler Explorer JSON"
     }
     public boolean hasNext() { return !stack.isEmpty(); }
 }`));
-    execFileSync("javac", [source]);
-    assert.deepEqual(parseCompilerResults(execFileSync("java", ["-cp", dir, "Main"], { encoding: "utf8" })).results.map((result) => result.actual), judges["binary-search-tree-iterator"].cases.map((testCase) => testCase.expected));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+      await run("javac", [source]);
+      assert.deepEqual(parseCompilerResults((await run("java", ["-cp", dir, "Main"], { encoding: "utf8" })).stdout).results.map((result) => result.actual), judges["binary-search-tree-iterator"].cases.map((testCase) => testCase.expected));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
-test("C++ Construct Quad Tree harness can produce passing Compiler Explorer JSON", (t) => {
-  try {
-    execFileSync("g++", ["--version"], { stdio: "ignore" });
-  } catch {
-    t.skip("g++ is not available");
-    return;
-  }
-  const dir = mkdtempSync(join(tmpdir(), "codetrial-cpp-quad-"));
-  try {
-    const source = join(dir, "quad.cpp");
-    const binary = join(dir, "quad");
-    writeFileSync(source, generateHarness("cpp", judges["construct-quad-tree"], `class Solution {
+  it("C++ Construct Quad Tree harness can produce passing Compiler Explorer JSON", { skip: noGpp }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "codetrial-cpp-quad-"));
+    try {
+      const source = join(dir, "quad.cpp");
+      const binary = join(dir, "quad");
+      writeFileSync(source, generateHarness("cpp", judges["construct-quad-tree"], `class Solution {
     bool same(vector<vector<int>>& grid, int row, int col, int size) {
         int first = grid[row][col];
         for (int r = row; r < row + size; r++) {
@@ -359,25 +368,19 @@ public:
         return build(grid, 0, 0, grid.size());
     }
 };`));
-    execFileSync("g++", ["-std=c++20", source, "-o", binary]);
-    assert.deepEqual(parseCompilerResults(execFileSync(binary, { encoding: "utf8" })).results.map((result) => result.actual), judges["construct-quad-tree"].cases.map((testCase) => testCase.expected));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+      await run("g++", ["-std=c++20", source, "-o", binary]);
+      assert.deepEqual(parseCompilerResults((await run(binary, [], { encoding: "utf8" })).stdout).results.map((result) => result.actual), judges["construct-quad-tree"].cases.map((testCase) => testCase.expected));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
-test("C++ LRUCache class harness supports standard list-based solutions", (t) => {
-  try {
-    execFileSync("g++", ["--version"], { stdio: "ignore" });
-  } catch {
-    t.skip("g++ is not available");
-    return;
-  }
-  const dir = mkdtempSync(join(tmpdir(), "codetrial-cpp-lru-"));
-  try {
-    const source = join(dir, "lru.cpp");
-    const binary = join(dir, "lru");
-    writeFileSync(source, generateHarness("cpp", judges["lru-cache"], `class LRUCache {
+  it("C++ LRUCache class harness supports standard list-based solutions", { skip: noGpp }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "codetrial-cpp-lru-"));
+    try {
+      const source = join(dir, "lru.cpp");
+      const binary = join(dir, "lru");
+      writeFileSync(source, generateHarness("cpp", judges["lru-cache"], `class LRUCache {
     int capacity;
     list<pair<int, int>> order;
     unordered_map<int, list<pair<int, int>>::iterator> byKey;
@@ -404,11 +407,12 @@ public:
         }
     }
 };`));
-    execFileSync("g++", ["-std=c++20", source, "-o", binary]);
-    assert.deepEqual(parseCompilerResults(execFileSync(binary, { encoding: "utf8" })).results.map((result) => result.actual), judges["lru-cache"].cases.map((testCase) => testCase.expected));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+      await run("g++", ["-std=c++20", source, "-o", binary]);
+      assert.deepEqual(parseCompilerResults((await run(binary, [], { encoding: "utf8" })).stdout).results.map((result) => result.actual), judges["lru-cache"].cases.map((testCase) => testCase.expected));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 test("harness generator handles output parameter and output prefix specs", () => {
