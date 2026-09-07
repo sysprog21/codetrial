@@ -8,16 +8,17 @@
 /// is that project's api key, and its signature verifies under that project's
 /// secret.
 ///
-/// Its own module because it is a judgement rather than a stub: `tests/web.rs`
-/// stands a double in front of the pool's quota probe, and what makes a token
-/// that project's is the part of that double worth stating once. The double
-/// exists because one that answers its status to any caller leaves the
-/// credential production sends as the one thing no test looks at, so a second
-/// copy of the judgement would be a second place for it to get weaker quietly.
+/// Shared because two integration tests now stand a double in front of the same
+/// credential and have to make the same judgement about it. `tests/web.rs` puts
+/// one in front of the pool's quota probe, `tests/cli.rs` in front of the Setup
+/// page's, and both exist because a double that answers its status to any
+/// caller leaves what production sends as the one thing no test looks at. A
+/// second copy of that judgement is a second place for it to get weaker
+/// quietly.
 ///
-/// Only the judgement is here. Getting the token out stays with the caller,
-/// which reads an `axum` `HeaderMap`, and nothing is gained by teaching this
-/// function about where a token was found.
+/// Only the judgement is here. Getting the token out stays with each caller:
+/// one reads an `axum` `HeaderMap`, the other a raw request head off a
+/// `TcpStream`, and nothing is gained by teaching this function about either.
 ///
 /// Two more copies live in `src/web/pool.rs` and `src/livekit/rooms.rs`, and
 /// neither can use this one. A unit test compiles against the crate under
@@ -38,7 +39,7 @@ pub fn livekit_token_matches(token: &str, api_key: &str, api_secret: &str) -> bo
     // `livekit_token_issuer` takes the payload as everything between the first
     // dot and the last, and base64url has no dot in it, so a token with a
     // segment glued on fails to decode there and never reaches this line. A
-    // check here would be a line no test could reach; the caller asks for the
+    // check here would be a line no test could reach; both callers ask for the
     // four-segment case instead, so that a parser which stopped refusing it is
     // a failure rather than a silent widening.
     let Some((signing_input, signature)) = token.rsplit_once('.') else {

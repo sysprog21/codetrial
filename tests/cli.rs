@@ -1,3 +1,5 @@
+mod common;
+
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -123,11 +125,32 @@ fn cli_command(args: &[&str], envs: &[(&str, &str)], cwd: &Path) -> Command {
     command
 }
 
+/// An address for a child process to bind, given up the moment it is named.
+///
 /// Binding then dropping is inherently racy: the child re-binds the port a
 /// moment later. The OS reissuing the same freed port to a sibling test is the
-/// dominant collision, so remember what has already been handed out and keep
-/// each rejected listener open until a fresh port turns up.
+/// dominant collision, and `reserve_listener` is where that is dealt with.
 fn free_addr() -> String {
+    reserve_listener()
+        .local_addr()
+        .expect("a bound listener has an address")
+        .to_string()
+}
+
+/// A listener on a port this suite has not used before.
+///
+/// Every socket these tests open goes through here, the doubles included, and
+/// that is the point rather than tidiness. The registry only guards one
+/// direction if `free_addr` is its only caller: it stops a port being handed
+/// out twice, but not a listener bound elsewhere from landing on a port handed
+/// out a moment ago and not yet claimed by the child that was given it. That
+/// window is real -- a child process takes milliseconds to start -- and what
+/// lands in it answers the child's traffic. A LiveKit double that landed there
+/// replies 401 to `GET /`, `wait_for_http` accepts anything beginning `HTTP/`
+/// as the server being up, and the test then reads a refusal from a RoomService
+/// double where it expected the Setup page. That is not hypothetical; it is
+/// what one run in thirty did before the doubles came through here.
+fn reserve_listener() -> TcpListener {
     static TAKEN: std::sync::Mutex<Option<std::collections::HashSet<u16>>> =
         std::sync::Mutex::new(None);
 
@@ -136,9 +159,12 @@ fn free_addr() -> String {
     let mut rejected = Vec::new();
     for _ in 0..64 {
         let listener = TcpListener::bind("127.0.0.1:0").expect("free port should bind");
-        let addr = listener.local_addr().unwrap();
-        if taken.insert(addr.port()) {
-            return addr.to_string();
+        let port = listener
+            .local_addr()
+            .expect("a bound listener has an address")
+            .port();
+        if taken.insert(port) {
+            return listener;
         }
         rejected.push(listener);
     }
@@ -368,6 +394,155 @@ CODETRIAL_DB_PATH={}/accounts.db
         web_dir.display()
     );
     std::fs::write(path, text).expect("config should write");
+}
+
+/// What one request may cost the double, head and body alike. It is a budget
+/// rather than a protocol limit: nothing here asks for more than a Twirp `{}`,
+/// so a request wanting this much has gone wrong, and a thread that parks
+/// forever on a length nobody will send is a hung gate rather than a failing
+/// one, which is the more expensive of the two to read.
+const REQUEST_BUDGET: usize = 8 * 1024;
+
+/// The head of one HTTP request, up to and including the blank line that ends
+/// it, or `None` when the peer closed before sending one.
+///
+/// A byte at a time, and no further than the blank line: what the double below
+/// reads is the `Authorization` header, and a chunked read would have to hand
+/// the surplus of the body back to whoever wanted it. A few hundred syscalls on
+/// a loopback socket for one request is not a cost worth structure. The cap is
+/// there so a peer that never sends a blank line ends this thread rather than
+/// growing a buffer for the rest of the run.
+fn read_request_head(socket: &mut TcpStream) -> Option<String> {
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        if head.len() >= REQUEST_BUDGET || socket.read(&mut byte).ok()? != 1 {
+            return None;
+        }
+        head.push(byte[0]);
+    }
+    String::from_utf8(head).ok()
+}
+
+/// One header's value out of a request head, or `None` when the head does not
+/// carry it.
+///
+/// The name is compared without regard to case because that is what HTTP says
+/// it is; the value is returned exactly as it was sent, only trimmed of the
+/// space after the colon, since a token's base64url is case significant. The
+/// request line has no colon in it and so is never mistaken for a header.
+fn header_value<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(field, _)| field.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.trim())
+}
+
+/// Whether a RoomService call carries a credential this project would accept.
+///
+/// The token comes out of the raw request head here and the judgement is
+/// `common::livekit_token_matches`, which `tests/web.rs` makes about the same
+/// credential in front of a different double. Sharing the judgement and not the
+/// extraction is the split: what a token has to be is one rule, and where it is
+/// found is each double's own business.
+fn livekit_call_authorized(head: &str, api_key: &str, api_secret: &str) -> bool {
+    let Some(token) =
+        header_value(head, "authorization").and_then(|value| value.strip_prefix("Bearer "))
+    else {
+        return false;
+    };
+    common::livekit_token_matches(token, api_key, api_secret)
+}
+
+/// A stand-in for the LiveKit RoomService the Setup page probes, answering as
+/// the project holding `api_key` and `api_secret` would: an empty room list to
+/// a call that proves it holds them, and the 401 a real LiveKit answers an
+/// unsigned Twirp call with to everything else. Returns the address to submit
+/// as `livekitUrl`.
+///
+/// The credential check is the difference between a test that exercises the
+/// Setup page's probe and one that only exercises its URL. The doubles this
+/// replaces read into a discarded buffer and answered one canned status to any
+/// caller, and then the credential the binary sends was the one thing no test
+/// in this suite looked at -- while the Setup form's whole answer is "these
+/// credentials work". `submit_setup` hands `validate_livekit_credentials` the
+/// key and the secret the form was given; swap those two arguments, pass a
+/// constant, or drop `.bearer_auth` in `post_room_service`, and every assertion
+/// in this file still held. Nothing else covers that hand-off: `submit_setup`
+/// is reachable only by starting the binary in a directory with no config on
+/// any path it searches, so this suite is its only test.
+///
+/// The refusal case is the same point read the other way, and is why
+/// `setup_page_rejects_livekit_credentials_that_fail_live_validation` now hands
+/// this a secret the submission does not carry instead of scripting a 401: a
+/// double that answers 401 to anything proves that a 401 propagates, not that a
+/// bad credential was noticed.
+///
+/// `api_key` and `api_secret` have to be the pair the submission under test
+/// carries, or the trimmed form of it. A double holding a different pair
+/// refuses every probe, and that refusal arrives as a 400 from the Setup page,
+/// which reads as the submission being rejected on its merits rather than as a
+/// broken fixture.
+///
+/// Connections are served in a loop rather than one and done, so a double is a
+/// server a test can ask more than once, which the direct test of this check
+/// needs. The thread outlives the test that spawned it and parks in `accept`
+/// for the rest of the binary's run; that is what the one-shot threads it
+/// replaces already did whenever nothing connected to them, and it is why the
+/// port comes from `reserve_listener` -- a socket that answers HTTP for the
+/// whole run must not be sitting on a port another test is about to be told is
+/// its own.
+fn spawn_livekit_room_service(api_key: &str, api_secret: &str) -> std::net::SocketAddr {
+    let listener = reserve_listener();
+    let addr = listener
+        .local_addr()
+        .expect("a bound listener has an address");
+    let (api_key, api_secret) = (api_key.to_string(), api_secret.to_string());
+    thread::spawn(move || {
+        while let Ok((mut socket, _)) = listener.accept() {
+            let Some(head) = read_request_head(&mut socket) else {
+                continue;
+            };
+
+            // The request body is drained and discarded, not skipped. Dropping
+            // a socket that still has unread bytes in its receive queue makes
+            // the kernel answer with RST rather than FIN, and the reply written
+            // a moment earlier goes with it: the caller sees a connection reset
+            // instead of the status this double just sent. Nothing here reads
+            // the body -- the Twirp request for `ListRooms` is `{}` -- but it
+            // has to be taken off the socket for the answer to arrive.
+            let length = header_value(&head, "content-length")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0);
+            if length > REQUEST_BUDGET {
+                continue;
+            }
+            let mut discarded = vec![0u8; length];
+            if length > 0 && socket.read_exact(&mut discarded).is_err() {
+                continue;
+            }
+
+            let (status, body) = if livekit_call_authorized(&head, &api_key, &api_secret) {
+                ("200 OK", r#"{"rooms":[]}"#)
+            } else {
+                ("401 Unauthorized", r#"{"msg":"invalid api key"}"#)
+            };
+
+            // The length is measured rather than written down. The doubles this
+            // replaces declared 10 for a 12-byte body, which cost nothing only
+            // because `validate_livekit_credentials` reads the status and never
+            // parses what it is given on the way through.
+            let _ = socket.write_all(
+                format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+        }
+    });
+    addr
 }
 
 #[test]
@@ -653,17 +828,7 @@ async fn setup_page_accepts_credentials_and_writes_the_primary_config_file() {
     std::fs::create_dir_all(&dir).unwrap();
     let exe = binary_beside(&dir);
 
-    let livekit_mock = TcpListener::bind("127.0.0.1:0").unwrap();
-    let livekit_addr = livekit_mock.local_addr().unwrap();
-    thread::spawn(move || {
-        if let Ok((mut socket, _)) = livekit_mock.accept() {
-            let mut buffer = [0u8; 1024];
-            let _ = socket.read(&mut buffer);
-            let _ = socket.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"rooms\":[]}",
-            );
-        }
-    });
+    let livekit_addr = spawn_livekit_room_service("key", "secret");
 
     let gemini_mock = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let gemini_addr = gemini_mock.local_addr().unwrap();
@@ -735,17 +900,7 @@ fn setup_page_accepts_credentials_without_a_google_api_key() {
     std::fs::create_dir_all(&dir).unwrap();
     let exe = binary_beside(&dir);
 
-    let livekit_mock = TcpListener::bind("127.0.0.1:0").unwrap();
-    let livekit_addr = livekit_mock.local_addr().unwrap();
-    thread::spawn(move || {
-        if let Ok((mut socket, _)) = livekit_mock.accept() {
-            let mut buffer = [0u8; 1024];
-            let _ = socket.read(&mut buffer);
-            let _ = socket.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"rooms\":[]}",
-            );
-        }
-    });
+    let livekit_addr = spawn_livekit_room_service("key", "secret");
 
     let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
 
@@ -795,17 +950,7 @@ fn a_cold_start_in_a_checkout_writes_into_the_checkout_config_directory() {
     .unwrap();
     let exe = binary_beside(&home);
 
-    let mock = TcpListener::bind("127.0.0.1:0").unwrap();
-    let mock_addr = mock.local_addr().unwrap();
-    thread::spawn(move || {
-        if let Ok((mut socket, _)) = mock.accept() {
-            let mut buffer = [0u8; 1024];
-            let _ = socket.read(&mut buffer);
-            let _ = socket.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"rooms\":[]}",
-            );
-        }
-    });
+    let mock_addr = spawn_livekit_room_service("key", "secret");
 
     let (addr, _server) = spawn_cold_start(&exe, &work, &[]);
 
@@ -893,17 +1038,7 @@ fn setup_page_refuses_to_write_through_a_dangling_symlink() {
     std::os::unix::fs::symlink(&target, dir.join("config").join("codetrial.env.local"))
         .expect("the symlink should be planted");
 
-    let livekit_mock = TcpListener::bind("127.0.0.1:0").unwrap();
-    let livekit_addr = livekit_mock.local_addr().unwrap();
-    thread::spawn(move || {
-        if let Ok((mut socket, _)) = livekit_mock.accept() {
-            let mut buffer = [0u8; 1024];
-            let _ = socket.read(&mut buffer);
-            let _ = socket.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"rooms\":[]}",
-            );
-        }
-    });
+    let livekit_addr = spawn_livekit_room_service("key", "secret");
 
     let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
 
@@ -946,17 +1081,7 @@ async fn setup_page_continues_serving_the_full_app_after_a_successful_submission
     std::fs::create_dir_all(&dir).unwrap();
     let exe = binary_beside(&dir);
 
-    let livekit_mock = TcpListener::bind("127.0.0.1:0").unwrap();
-    let livekit_addr = livekit_mock.local_addr().unwrap();
-    thread::spawn(move || {
-        if let Ok((mut socket, _)) = livekit_mock.accept() {
-            let mut buffer = [0u8; 1024];
-            let _ = socket.read(&mut buffer);
-            let _ = socket.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"rooms\":[]}",
-            );
-        }
-    });
+    let livekit_addr = spawn_livekit_room_service("key", "secret");
 
     let gemini_mock = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let gemini_addr = gemini_mock.local_addr().unwrap();
@@ -1067,27 +1192,23 @@ fn a_production_cold_start_without_a_session_secret_refuses_to_serve() {
 }
 
 /// Whitespace survives a paste, and everything after the required-field check
-/// used to assume it had not. The URL is the reachable half: it passes
+/// used to assume it had not. The URL is one reachable half: it passes
 /// `validate_livekit_url`, which trims to decide, and then reaches the rewrite
 /// that only matches `wss` at offset 0, so working credentials come back as
-/// "did not work".
+/// "did not work". The key and the secret are the other half, now that the
+/// double reads them: it holds the trimmed pair, so an untrimmed key would be
+/// signed into the JWT verbatim and refused, exactly as a real project would
+/// refuse it. `submit_setup`'s own comment has said so all along and nothing
+/// checked it. The config file written afterwards was the only place the
+/// trimming showed, and that file is written from the same trimmed strings the
+/// probe is built from, so it could never have told the two apart.
 #[test]
 fn setup_page_trims_what_it_was_given() {
     let dir = exe_temp_path("setup-untrimmed");
     std::fs::create_dir_all(&dir).unwrap();
     let exe = binary_beside(&dir);
 
-    let mock = TcpListener::bind("127.0.0.1:0").unwrap();
-    let mock_addr = mock.local_addr().unwrap();
-    thread::spawn(move || {
-        if let Ok((mut socket, _)) = mock.accept() {
-            let mut buffer = [0u8; 1024];
-            let _ = socket.read(&mut buffer);
-            let _ = socket.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"rooms\":[]}",
-            );
-        }
-    });
+    let mock_addr = spawn_livekit_room_service("key", "secret");
 
     let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
 
@@ -1122,26 +1243,20 @@ fn setup_page_trims_what_it_was_given() {
 /// raw is probed as one string and loaded as another. The file format cannot
 /// carry it, and saying so on the form is the only place a user can act on it.
 ///
-/// The LiveKit mock answers as working credentials would, so the refusal has
-/// to be this rule: without it the submission is accepted and written, and a
-/// 400 for any other reason would be a test that passes for the wrong one.
+/// The LiveKit double holds the very pair this submission carries, so it
+/// answers as a project that had accepted these credentials would and the
+/// refusal has to be this rule: without it the submission is probed, accepted
+/// and written, and a 400 for any other reason would be a test that passes for
+/// the wrong one. The quote check runs ahead of the probe, so nothing reaches
+/// the double while the rule holds -- which is the point. It is here to be the
+/// thing that would say yes.
 #[test]
 fn setup_page_rejects_a_value_edged_with_a_quote() {
     let dir = exe_temp_path("setup-quoted");
     std::fs::create_dir_all(&dir).unwrap();
     let exe = binary_beside(&dir);
 
-    let mock = TcpListener::bind("127.0.0.1:0").unwrap();
-    let mock_addr = mock.local_addr().unwrap();
-    thread::spawn(move || {
-        if let Ok((mut socket, _)) = mock.accept() {
-            let mut buffer = [0u8; 1024];
-            let _ = socket.read(&mut buffer);
-            let _ = socket.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"rooms\":[]}",
-            );
-        }
-    });
+    let mock_addr = spawn_livekit_room_service("key", "'abc");
 
     let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
 
@@ -1461,17 +1576,7 @@ async fn setup_page_rejects_a_google_api_key_that_fails_live_validation() {
     std::fs::create_dir_all(&dir).unwrap();
     let exe = binary_beside(&dir);
 
-    let livekit_mock = TcpListener::bind("127.0.0.1:0").unwrap();
-    let livekit_addr = livekit_mock.local_addr().unwrap();
-    thread::spawn(move || {
-        if let Ok((mut socket, _)) = livekit_mock.accept() {
-            let mut buffer = [0u8; 1024];
-            let _ = socket.read(&mut buffer);
-            let _ = socket.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"rooms\":[]}",
-            );
-        }
-    });
+    let livekit_addr = spawn_livekit_room_service("key", "secret");
 
     let gemini_mock = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let gemini_addr = gemini_mock.local_addr().unwrap();
@@ -1512,30 +1617,39 @@ async fn setup_page_rejects_a_google_api_key_that_fails_live_validation() {
     assert!(!written, "a rejected key must not write a config file");
 }
 
-/// LiveKit is validated too, via `ListRooms`; the mock refuses every
-/// request, standing in for a wrong key/secret.
+/// LiveKit is validated too, via `ListRooms`, and a wrong secret is refused.
+///
+/// The double holds the project's real secret and the submission carries a
+/// different one, so the 401 is the double's own answer to the credential the
+/// binary sent. It used to be a script: the double answered 401 to any caller,
+/// which made "the mock stands in for a wrong key/secret" a claim about a
+/// server that read neither.
+///
+/// A refusal test can only ever say so much on its own. Everything that makes a
+/// credential invalid, up to and including sending none at all, comes back as
+/// the same 401, and it is the tests above that expect the double to *accept*
+/// which notice those. What the rework buys here is the reason: the two
+/// assertions below pin the 401 and LiveKit's own words, so a 400 raised
+/// anywhere else on this path stops counting as this rule. A probe sent to a
+/// port nothing is listening on, or a token that failed to sign before a
+/// request was ever made, both produce a 400 naming `livekitUrl`, and both used
+/// to pass here.
+///
+/// The key is right and only the secret is wrong, so the refusal is the
+/// signature check and not the issuer check. Either would do here; the issuer
+/// half is asked for on its own in the direct test below.
 #[test]
 fn setup_page_rejects_livekit_credentials_that_fail_live_validation() {
     let dir = exe_temp_path("setup-bad-livekit");
     std::fs::create_dir_all(&dir).unwrap();
     let exe = binary_beside(&dir);
 
-    let mock = TcpListener::bind("127.0.0.1:0").unwrap();
-    let mock_addr = mock.local_addr().unwrap();
-    thread::spawn(move || {
-        if let Ok((mut socket, _)) = mock.accept() {
-            let mut buffer = [0u8; 1024];
-            let _ = socket.read(&mut buffer);
-            let _ = socket.write_all(
-                b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            );
-        }
-    });
+    let mock_addr = spawn_livekit_room_service("key", "the-projects-real-secret");
 
     let (addr, _server) = spawn_cold_start(&exe, &dir, &[]);
 
     let body = format!(
-        r#"{{"livekitUrl":"http://{mock_addr}","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":"google"}}"#
+        r#"{{"livekitUrl":"http://{mock_addr}","livekitApiKey":"key","livekitApiSecret":"not-the-projects-secret","googleApiKey":"google"}}"#
     );
     let response = http_request(
         &addr,
@@ -1554,10 +1668,106 @@ fn setup_page_rejects_livekit_credentials_that_fail_live_validation() {
         "{response}"
     );
     assert!(response.contains("livekitUrl"), "{response}");
+
+    // The double's own words, so what reached the form is the answer it gave
+    // rather than a failure to reach it at all: a connection refused is a 400
+    // here too, for a reason that has nothing to do with a credential.
+    assert!(response.contains("401"), "{response}");
+    assert!(response.contains("invalid api key"), "{response}");
     assert!(
         !written,
         "a rejected LiveKit credential must not write a config file"
     );
+}
+
+/// The credential check on the LiveKit double is a tripwire, and this is what
+/// proves each strand of it is live.
+///
+/// The tests above read the double's answer through the binary, and between
+/// them they do notice a check that stopped entirely: the seven that expect an
+/// accept fail if it refuses everything, and the one that expects a refusal
+/// fails if it accepts everything. What they cannot see is a check that decayed
+/// to something weaker, because the binary only ever sends one shape of
+/// credential -- this project's key, this project's secret, correctly signed. A
+/// double that verified the signature and ignored the issuer would answer every
+/// one of them exactly as it does now, and would go on to wave through a token
+/// minted for a project it does not serve. Asking the double directly is the
+/// only place each leg of the refusal is observable on its own, and it is what
+/// keeps the check from decaying back into the discarded buffer it came from.
+#[test]
+fn the_livekit_double_refuses_a_call_without_the_projects_credential() {
+    /// The token the probe mints, called the way `validate_livekit_credentials`
+    /// calls it, so the test asks with what production asks with rather than
+    /// with a token shaped like it -- and a change to the minting fails here
+    /// instead of being copied into this fixture and agreeing with itself.
+    fn list_token(api_key: &str, api_secret: &str) -> String {
+        codetrial::token::livekit_room_list_token(api_key, api_secret, 1_700_000_000)
+            .expect("a room-list token should sign")
+    }
+
+    let mock_addr = spawn_livekit_room_service("project-key", "project-secret");
+    let call = |bearer: Option<String>| {
+        let authorization = match bearer {
+            Some(token) => format!("Authorization: Bearer {token}\r\n"),
+            None => String::new(),
+        };
+        http_request(
+            &mock_addr.to_string(),
+            &format!(
+                "POST /twirp/livekit.RoomService/ListRooms HTTP/1.1\r\nHost: {mock_addr}\r\n\
+                 {authorization}Content-Type: application/json\r\nContent-Length: 2\r\n\
+                 Connection: close\r\n\r\n{{}}"
+            ),
+        )
+    };
+
+    for (why, bearer) in [
+        ("no credential at all", None),
+        (
+            "a bearer that is not a token",
+            Some("not-a-jwt".to_string()),
+        ),
+        (
+            "a token signed with another project's secret",
+            Some(list_token("project-key", "someone-elses-secret")),
+        ),
+        // Well formed and correctly signed, for a project this double does not
+        // serve. An operator running more than one LiveKit project can paste
+        // one project's key beside another's secret, and that is the mistake
+        // only a check against both halves can see.
+        (
+            "a token minted for another project",
+            Some(list_token("other-key", "project-secret")),
+        ),
+        // Four segments, the fourth a real signature over the first three, so
+        // `rsplit_once` and `verify_hs256` between them would be satisfied.
+        // What refuses it is `livekit_token_issuer`, which reads the payload as
+        // everything between the first dot and the last: the glued segment puts
+        // a dot inside that span and base64url cannot decode it. Signed rather
+        // than glued on at random, or the signature check would refuse it first
+        // and this would say nothing about the parser doing the work.
+        (
+            "a fourth segment signed over the other three",
+            Some({
+                let inner = list_token("project-key", "project-secret");
+                let outer = codetrial::token::sign_hs256("project-secret", &inner);
+                format!("{inner}.{outer}")
+            }),
+        ),
+    ] {
+        let response = call(bearer);
+        assert!(
+            response.starts_with("HTTP/1.1 401"),
+            "the double must refuse {why}, or it is not checking anything: {response}"
+        );
+    }
+
+    // And the credential the probe actually mints is accepted, so the five
+    // refusals are a check rather than a double that refuses everything -- the
+    // hole this whole change exists to close, read from the other side.
+    let response = call(Some(list_token("project-key", "project-secret")));
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(response.ends_with(r#"{"rooms":[]}"#), "{response}");
 }
 
 #[test]
