@@ -279,11 +279,158 @@ pub(super) async fn evict_duplicate_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    /// The LiveKit credentials [`RoomService::config`] hands the production
+    /// code and the pair the server verifies its callers against. Named rather
+    /// than written twice so the two cannot drift: a server holding a different
+    /// secret from the config under test would refuse every call, and a refusal
+    /// reads here as LiveKit saying no rather than as a broken fixture.
+    /// Neither is a real credential; the project they name exists only in this
+    /// binary.
+    const STUB_API_KEY: &str = "devkey";
+    const STUB_API_SECRET: &str = "devsecret";
+
+    /// The bearer token on a request, or `None` when it carries no
+    /// `Authorization` header.
+    ///
+    /// The header name is compared without regard to case because that is what
+    /// HTTP says it is; the value is read exactly as it was sent, since
+    /// lowercasing the head the way the `content-length` scan does would
+    /// destroy a token whose base64url is case significant.
+    fn bearer_token(head: &str) -> Option<&str> {
+        head.lines()
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            .map(|(_, value)| value.trim())
+            .and_then(|value| value.strip_prefix("Bearer "))
+    }
+
+    /// The `video` grant a token carries, without checking who signed it.
+    ///
+    /// The decode is `livekit_token_issuer` read one claim further along, and
+    /// the same warning applies: nothing here is trusted. It runs after the
+    /// signature check below, so by the time a caller acts on it the claims are
+    /// ones this project's secret has already vouched for.
+    fn token_video_grant(token: &str) -> Option<serde_json::Value> {
+        let (signing_input, _) = token.rsplit_once('.')?;
+        let (_, payload) = signing_input.split_once('.')?;
+        let claims: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).ok()?).ok()?;
+        claims.get("video").cloned()
+    }
+
+    /// Whether the grant in a token is the one this Twirp method needs:
+    /// `roomList` and nothing more for `ListRooms`, `roomAdmin` and nothing
+    /// more everywhere else.
+    ///
+    /// This is checked because a call site can reach for the wrong minter and
+    /// nothing else would notice. `tests/token.rs` pins what each token
+    /// *contains* down to the null `roomAdmin` on a list token, and every test
+    /// here goes through a production function, so *which* of the two each call
+    /// site mints is pinned nowhere: swap `livekit_room_list_token` and
+    /// `livekit_room_admin_token` between `validate_livekit_credentials` and
+    /// `livekit_room_service_request` and both files still pass. The direction
+    /// that matters is the credential check's: its whole job is to prove a key
+    /// works as cheaply as a key can be proved, and handing that probe the
+    /// authority to mutate a room is an over-grant on the one path with the
+    /// least excuse for one.
+    ///
+    /// "Matches" is the needed grant present and true and the other one absent,
+    /// rather than merely the needed one present. Present-only would catch the
+    /// straight swap -- neither token carries the other's grant -- but it would
+    /// wave through a token carrying both, and a token carrying both is exactly
+    /// the over-grant this exists to see. Absent rather than false-or-absent
+    /// because both minters omit the key they do not use, so anything spelling
+    /// it out is a third shape that should come past here for a reading.
+    ///
+    /// It stops there. Expiry, the room name inside a `roomAdmin` grant and the
+    /// identity are all unread, and a real LiveKit reads every one of them:
+    /// this is a test double noticing that a caller picked the wrong token, not
+    /// an emulation of LiveKit's authorization.
+    fn grant_fits_method(token: &str, method: &str) -> bool {
+        let Some(video) = token_video_grant(token) else {
+            return false;
+        };
+        let granted =
+            |name: &str| video.get(name).and_then(serde_json::Value::as_bool) == Some(true);
+        let quiet = |name: &str| video.get(name).is_none();
+
+        // Every method named, and anything else refused. A catch-all reading
+        // "and everything else needs roomAdmin" would hand an assumed grant to
+        // the next call this file learns to make, which is the one nobody has
+        // thought about yet; refusing it costs whoever adds it one line here
+        // and a moment deciding which token it should carry.
+        //
+        // `quiet` is the half no test reaches, and deliberately: neither minter
+        // spells out the grant it does not use, so a token carrying both is a
+        // third shape nothing in the tree produces and a fixture would have to
+        // forge. It is here because that shape is exactly the over-grant this
+        // check exists to see -- `validate_livekit_credentials` holding room
+        // authority it has no use for -- and the day something starts minting
+        // one, this refuses it rather than reading only the half it expected.
+        match method {
+            "ListRooms" => granted("roomList") && quiet("roomAdmin"),
+            "ListParticipants" | "RemoveParticipant" => granted("roomAdmin") && quiet("roomList"),
+            _ => false,
+        }
+    }
+
+    /// Whether a RoomService call carries a credential this project would
+    /// accept: a bearer JWT naming this project as its issuer, signed with this
+    /// project's secret, and granting what the method being called needs.
+    ///
+    /// Read backwards from what `livekit_room_service_request` and
+    /// `validate_livekit_credentials` mint, and deliberately through the
+    /// crate's own verifier rather than a second copy of it, so a change to the
+    /// signing this file does not follow surfaces as a refusal here instead of
+    /// passing unnoticed.
+    ///
+    /// It is the third copy of a shape `src/web/pool.rs` and `tests/web.rs`
+    /// also carry, and stays one. Not because sharing is impossible: the
+    /// `pool.rs` copy is in this same crate, and a `#[cfg(test)]` module at the
+    /// crate root would reach both with no production surface at all. It stays
+    /// because what is actually common is three lines -- the issuer, the split,
+    /// the signature -- while each site's token source differs (two read a
+    /// `HeaderMap`, this one a raw request head), this one adds
+    /// `grant_fits_method` that the others have no analogue for, and the doc
+    /// each carries is about its own call path. Sharing the three lines would
+    /// leave every part that matters duplicated anyway. The `tests/web.rs` copy
+    /// could not be shared even if that trade came out the other way: an
+    /// integration test links the plain rlib, from which `#[cfg(test)]` items
+    /// have already been stripped, so no visibility makes them reachable.
+    ///
+    /// The order is the order LiveKit's own receiver uses and is forced: `iss`
+    /// names the project whose secret verifies the token, so it comes out of an
+    /// unverified payload first, and the grant is only read once the signature
+    /// has vouched for the claims it sits in.
+    fn room_service_credential_accepted(
+        head: &str,
+        path: &str,
+        api_key: &str,
+        api_secret: &str,
+    ) -> bool {
+        let Some(token) = bearer_token(head) else {
+            return false;
+        };
+        if crate::token::livekit_token_issuer(token).as_deref() != Some(api_key) {
+            return false;
+        }
+        let Some((signing_input, signature)) = token.rsplit_once('.') else {
+            return false;
+        };
+        if !crate::token::verify_hs256(api_secret, signing_input, signature) {
+            return false;
+        }
+        grant_fits_method(token, path.rsplit('/').next().unwrap_or_default())
+    }
+
     /// A RoomService that answers what the test tells it to and remembers what
-    /// it was asked.
+    /// it was asked, once the caller proves it holds this project's
+    /// credentials; anything else gets the 401 a real LiveKit answers an
+    /// unsigned Twirp call with.
     ///
     /// A real socket rather than an injected transport, because what these
     /// functions do with a reply is bound up with how they make the request:
@@ -291,6 +438,19 @@ mod tests {
     /// worth pinning, and none of them survives being stubbed out one layer up.
     /// Replies are answered in order and the last one repeats, so a caller that
     /// polls needs one entry rather than twenty.
+    ///
+    /// The credential check is here because the bearer token was the one thing
+    /// on that list nothing looked at: the head was scanned for
+    /// `content-length:` and for nothing else, so every call was answered on
+    /// its path and its body alone. Dropping `.bearer_auth`, signing with
+    /// another project's secret, or minting a token for a project this server
+    /// does not serve would all have left every assertion below intact.
+    /// `validate_livekit_credentials` exists to prove a LiveKit credential
+    /// works and was the worst of it: it reported success against a server that
+    /// never read one, so the Setup form's whole answer rested on a check no
+    /// test performed. That is the same shape as the GitHub stub that answered
+    /// one profile to any bearer token and let a broken token exchange pass the
+    /// whole suite.
     struct RoomService {
         url: String,
         seen: Arc<Mutex<Vec<(String, String)>>>,
@@ -340,12 +500,28 @@ mod tests {
                     if length > 0 && socket.read_exact(&mut body).await.is_err() {
                         return;
                     }
+                    let accepted = room_service_credential_accepted(
+                        &head,
+                        &path,
+                        STUB_API_KEY,
+                        STUB_API_SECRET,
+                    );
                     recorded
                         .lock()
                         .unwrap()
                         .push((path, String::from_utf8_lossy(&body).to_string()));
 
-                    let (status, reply) = last;
+                    // Recorded, and its scripted reply consumed, whether or not
+                    // the credential passed: a refused call is still a call the
+                    // production code made, and `requests()` is what the tests
+                    // read the method and the body out of. A refusal that
+                    // vanished from that list would look like a request that
+                    // was never sent.
+                    let (status, reply) = if accepted {
+                        last
+                    } else {
+                        (401, r#"{"code":"unauthenticated","msg":"invalid token"}"#)
+                    };
                     let response = format!(
                         "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\n\
                          content-length: {}\r\nconnection: close\r\n\r\n{reply}",
@@ -361,8 +537,8 @@ mod tests {
         fn config(&self) -> AgentConfig {
             crate::config::load_from_pairs([
                 ("LIVEKIT_URL", self.url.as_str()),
-                ("LIVEKIT_API_KEY", "devkey"),
-                ("LIVEKIT_API_SECRET", "devsecret"),
+                ("LIVEKIT_API_KEY", STUB_API_KEY),
+                ("LIVEKIT_API_SECRET", STUB_API_SECRET),
                 ("GOOGLE_API_KEY", "google"),
             ])
             .unwrap()
@@ -422,21 +598,164 @@ mod tests {
     #[tokio::test]
     async fn a_credential_check_reports_what_livekit_said() {
         let accepted = RoomService::start(vec![(200, "{}")]).await;
-        validate_livekit_credentials(&accepted.url, "devkey", "devsecret", 1_700_000_000)
+        validate_livekit_credentials(&accepted.url, STUB_API_KEY, STUB_API_SECRET, 1_700_000_000)
             .await
             .expect("a project that answers ListRooms has usable credentials");
         let (path, _) = accepted.requests().into_iter().next().unwrap();
         assert_eq!(path, "/twirp/livekit.RoomService/ListRooms");
 
+        // A refusal the token cannot account for: the credentials are this
+        // project's, and the server says no anyway, which is what a key that
+        // has been revoked or was never on this server looks like. It is the
+        // scripted reply that is under test here, because the message the Setup
+        // form repeats is the only thing a reader can act on.
         let refused = RoomService::start(vec![(401, r#"{"msg":"invalid api key"}"#)]).await;
-        let error = validate_livekit_credentials(&refused.url, "devkey", "wrong", 1_700_000_000)
-            .await
-            .unwrap_err();
+        let error = validate_livekit_credentials(
+            &refused.url,
+            STUB_API_KEY,
+            STUB_API_SECRET,
+            1_700_000_000,
+        )
+        .await
+        .unwrap_err();
         assert!(error.contains("401"), "{error}");
         assert!(error.contains("invalid api key"), "{error}");
         assert!(
             !error.ends_with("..."),
             "a reason that fits is not truncated"
+        );
+
+        // And a secret that is not this project's is refused by the server
+        // itself, over a script that would otherwise answer 200. This is the
+        // case the check exists for and the one that used to pass: the whole
+        // point of this function is that a working credential and a broken one
+        // come back differently, and against a server that read no credential
+        // they did not.
+        let wrong_secret = RoomService::start(vec![(200, "{}")]).await;
+        let error = validate_livekit_credentials(
+            &wrong_secret.url,
+            STUB_API_KEY,
+            "not-this-project's-secret",
+            1_700_000_000,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("401"), "{error}");
+    }
+
+    /// The credential check on the RoomService server is a tripwire, and this
+    /// is what proves the wire is live.
+    ///
+    /// Every other test in this file reads the server's answer through the
+    /// production code, and each of those that scripts a success would go on
+    /// passing if the server quietly stopped checking: the call would arrive
+    /// with no credential at all and still be answered 200. Asking the server
+    /// directly is the only place the refusal is observable on its own, which
+    /// is what keeps the check from decaying back into the header scan it
+    /// replaced.
+    #[tokio::test]
+    async fn the_room_service_refuses_a_call_that_carries_the_wrong_credential() {
+        /// The two minters the production code above reaches for, called the
+        /// way it calls them, so a change to either fails here rather than
+        /// being copied into this fixture and agreeing with itself.
+        fn list_token(api_key: &str, api_secret: &str) -> String {
+            crate::token::livekit_room_list_token(api_key, api_secret, 1_700_000_000).unwrap()
+        }
+        fn admin_token(api_key: &str, api_secret: &str) -> String {
+            crate::token::livekit_room_admin_token(
+                api_key,
+                api_secret,
+                "interview-abc12345",
+                1_700_000_000,
+            )
+            .unwrap()
+        }
+
+        let service = RoomService::start(vec![(200, "{}")]).await;
+        let client = crate::http_client();
+        let call = |method: &str, bearer: Option<String>| {
+            let url = format!("{}/twirp/livekit.RoomService/{method}", service.url);
+            async move {
+                let request = client.post(url).json(&serde_json::json!({}));
+                let request = match bearer {
+                    Some(token) => request.bearer_auth(token),
+                    None => request,
+                };
+                request.send().await.unwrap().status()
+            }
+        };
+
+        for (why, method, bearer) in [
+            ("no credential at all", "ListRooms", None),
+            (
+                "a bearer that is not a token",
+                "ListRooms",
+                Some("not-a-jwt".to_string()),
+            ),
+            (
+                "a token signed with another project's secret",
+                "ListRooms",
+                Some(list_token(STUB_API_KEY, "someone-elses-secret")),
+            ),
+            // Well formed, correctly signed, and for a project this server does
+            // not serve. A pool holds more than one LiveKit project, so
+            // reaching for the wrong entry's credentials is a real way to get
+            // this wrong and one that only a per-project check can see.
+            (
+                "a token minted for another project",
+                "ListRooms",
+                Some(list_token("other-key", STUB_API_SECRET)),
+            ),
+            // A method nothing in this file sends, asked with a credential that
+            // is otherwise perfect. This is what fail-closed means here and it
+            // is the only thing that asks for it: with a catch-all arm reading
+            // "everything else needs roomAdmin", the next call somebody teaches
+            // this module to make would arrive holding a grant nobody chose for
+            // it, and would be answered.
+            (
+                "a method this server was never taught",
+                "DeleteRoom",
+                Some(admin_token(STUB_API_KEY, STUB_API_SECRET)),
+            ),
+            // The two halves of the swap. Both are this project's, both verify,
+            // and each asks a method the other's grant is for: a room-admin
+            // token on the credential check's path is the over-grant, since
+            // `ListRooms` needs nothing but `roomList` and that path exists to
+            // prove a key as cheaply as a key can be proved; a list token on a
+            // path that administers a room is the same mistake read the other
+            // way, and is the half a real LiveKit would refuse outright.
+            (
+                "a room-admin token on the credential check's path",
+                "ListRooms",
+                Some(admin_token(STUB_API_KEY, STUB_API_SECRET)),
+            ),
+            (
+                "a list token on a path that administers a room",
+                "ListParticipants",
+                Some(list_token(STUB_API_KEY, STUB_API_SECRET)),
+            ),
+        ] {
+            assert_eq!(
+                call(method, bearer).await,
+                401,
+                "the server must refuse {why}, or it is not checking anything"
+            );
+        }
+
+        // And each credential on the path production sends it to is accepted,
+        // so the six refusals are a check rather than a server that refuses
+        // everything.
+        assert_eq!(
+            call("ListRooms", Some(list_token(STUB_API_KEY, STUB_API_SECRET))).await,
+            200
+        );
+        assert_eq!(
+            call(
+                "ListParticipants",
+                Some(admin_token(STUB_API_KEY, STUB_API_SECRET))
+            )
+            .await,
+            200
         );
     }
 
@@ -453,9 +772,10 @@ mod tests {
         assert_eq!(OVER.len(), 210);
 
         let wordy = RoomService::start(vec![(500, OVER)]).await;
-        let error = validate_livekit_credentials(&wordy.url, "devkey", "devsecret", 1_700_000_000)
-            .await
-            .unwrap_err();
+        let error =
+            validate_livekit_credentials(&wordy.url, STUB_API_KEY, STUB_API_SECRET, 1_700_000_000)
+                .await
+                .unwrap_err();
         assert!(
             error.ends_with("..."),
             "an over-long reason is cut and marked"
@@ -469,10 +789,14 @@ mod tests {
         // reason that fits to the last character is whole, not cut.
         let exact = &OVER[..200];
         let fitting = RoomService::start(vec![(500, exact)]).await;
-        let error =
-            validate_livekit_credentials(&fitting.url, "devkey", "devsecret", 1_700_000_000)
-                .await
-                .unwrap_err();
+        let error = validate_livekit_credentials(
+            &fitting.url,
+            STUB_API_KEY,
+            STUB_API_SECRET,
+            1_700_000_000,
+        )
+        .await
+        .unwrap_err();
         assert!(
             error.ends_with(exact),
             "a reason of exactly the limit is not marked as cut: {error}"
