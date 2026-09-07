@@ -99,7 +99,46 @@ config/         Env file templates and per-provider credentials
 docs/           Contracts and operational notes
 scripts/        Build, gate, hook and integration scripts
 tests/          Rust, Python and browser tests, plus golden fixtures
+tests/unit/     Unit test bodies, compiled into src/ by `#[path]`
+tests/common/   What the integration tests share
 ```
+
+## No test code under src/
+
+`src/` holds implementation. A file there may declare a test module but must not
+contain one:
+
+```rust
+#[cfg(test)]
+#[path = "../tests/unit/gemini.rs"]
+mod tests;
+```
+
+Three lines, and the body lives in `tests/unit/`, mirroring the path under
+`src/`. `tests/unit/web/pool.rs` holds what `src/web/pool.rs` declares.
+
+The indirection is what keeps both halves of the promise. A test under
+`tests/*.rs` is an integration test: it links the plain rlib and can reach only
+the public API, so moving these outright would have meant publishing internals
+for the tests' benefit. Declared this way they are still unit tests -- same
+module path, `super::` still the containing module, private and `pub(crate)`
+items still in reach -- and none of it is visible to a dependent.
+
+Four rules follow, and each of them cost something to learn:
+
+- **Never name a file `tests/<dir>/main.rs`.** Cargo reads that as an
+  integration-test target and compiles it a second time as a crate root, where
+  every `super::` in it fails. `src/main.rs` declares `tests/unit/bin.rs` for
+  this reason. Any other name under `tests/unit/` is inert to autodiscovery.
+- **`include_str!` and `include_bytes!` resolve against the file that writes
+  them**, so a test reading its own production source needs the path rewritten
+  when it moves. Two such tests failed loudly on the move and two more kept
+  passing while reading the test file instead of the source, which is worse.
+- A second test module in one file keeps its name:
+  `src/accounts/schema.rs` declares `tests/unit/accounts/schema.migration_tests.rs`.
+- `tests/unit/` is not scanned by the gate's browser or Python lanes and has no
+  `main.rs`, so nothing under it becomes a target on its own. It compiles only
+  because something in `src/` names it.
 
 Generated files live under `web/` but are owned by `problem-bank/` and by the
 generators in `scripts/`. Editing one by hand is a drift the gate catches.

@@ -20,11 +20,22 @@
 /// one reads an `axum` `HeaderMap`, the other a raw request head off a
 /// `TcpStream`, and nothing is gained by teaching this function about either.
 ///
-/// Two more copies live in `src/web/pool.rs` and `src/livekit/rooms.rs`, and
-/// neither can use this one. A unit test compiles against the crate under
-/// `--cfg test` while an integration test links the plain rlib, so those two
-/// halves of the tree cannot see one module. `src/livekit/rooms.rs` carries the
-/// argument for why that pair stays a pair.
+/// Two more copies live in the unit tests that `src/web/pool.rs` and
+/// `src/livekit/rooms.rs` declare, and they stay copies by choice rather than
+/// by necessity. The necessity argument used to be written here and was wrong:
+/// it said a unit test compiles under `--cfg test` while an integration test
+/// links the plain rlib, so the two halves cannot see one module. They cannot
+/// share a compiled module, but they can share this source -- the same
+/// `#[path]`
+/// that moved every unit test body under `tests/` would include this file too,
+/// needing only `extern crate self as codetrial;` in `src/lib.rs` for the paths
+/// below to resolve on the inside.
+///
+/// What actually keeps them apart is the trade `src/livekit/rooms.rs` states:
+/// three lines are common, while each site's token source and follow-on check
+/// are not. This copy exists because two integration tests in the same position
+/// needed the same judgement; that reason does not reach a unit test, and the
+/// day it does, the mechanism is available rather than forbidden.
 ///
 /// The issuer and the signature, and nothing else: not the algorithm header,
 /// the expiry, or the grant. That is the whole claim a caller may make of it,
