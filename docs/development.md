@@ -159,6 +159,33 @@ npm ci && npx playwright install chromium
 scripts/browser-check.sh
 ```
 
+`BROWSER_CHECK_FLOW=soak` is the long-conversation acceptance, and the only
+check that covers an interview outliving one Gemini socket. It needs real
+credentials and runs for eleven minutes:
+
+```bash
+BROWSER_CHECK_FLOW=soak BROWSER_CHECK_AGENT=dispatch scripts/browser-check.sh
+```
+
+The duration defaults to 660 seconds, past the Live API's ten-minute connection
+cap, because a soak that stops short of the cap crosses no handover and proves
+only that the room stayed up. `BROWSER_CHECK_SOAK_SECONDS` lengthens it and
+belongs to this flow alone; naming it on another one fails rather than being
+ignored, and so does a value under the cap.
+
+Presence is the weakest of the four things it judges, because the interviewer
+stays in the room through every way this can go wrong. So the flow also
+requires, from the runtime log and the transcript panel:
+
+- Gemini asked for the restart, which is the proactive path. Reaching a new
+  socket by way of the close resumes too, so a check that asked only whether it
+  resumed would pass with that path dead.
+- The replacement resumed rather than restarting cold. A cold one keeps the
+  interviewer in the room having lost the conversation.
+- No degraded restart at any point, reported where it happened.
+- The transcript grew after the handover. Jim nudges an idle candidate, so
+  turns keep arriving without the browser having to speak.
+
 Checks that need credentials or a running service stay out of the gate and are
 run on their own: `scripts/server-check.sh`, `gemini-check.sh`,
 `parity-check.sh`, `report-parity-check.sh`, `visual-parity-check.sh`,

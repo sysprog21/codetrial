@@ -424,6 +424,10 @@ async fn replace_gemini_session(
     publish_interviewer_state(room, false).await?;
 
     if resumed {
+        // Matched literally by the soak in scripts/browser-check.cjs, which has
+        // no other way to tell a resumption from a cold replacement: both leave
+        // the interviewer in the room. Rewording this line without moving that
+        // one turns the soak's only positive signal into a timeout.
         eprintln!("Gemini session resumed; the interview continues where it left off");
         return Ok(ControlFlow::Continue(()));
     }
