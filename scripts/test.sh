@@ -179,8 +179,36 @@ shell_syntax()
     return "$status"
 }
 
+# The mutation gate runs in CI against the diff, so nothing here reproduces it.
+# What this checks is the one thing about it that drifts offline: the list of
+# functions it has been told not to judge. Each entry is defensible on its own
+# and the list only ever grows, so the total is declared in the file header and
+# compared here -- an entry added without moving the number fails, which is what
+# puts the trend in front of a reviewer instead of in the file's tail.
+mutants_exclusions()
+{
+    config=$ROOT/.cargo/mutants.toml
+
+    # Both reads below go quiet on a file that is not there, and an empty
+    # declared count then equals an empty actual one, so the gate agreed with
+    # itself about a file it never opened.
+    if [ ! -r "$config" ]; then
+        echo "$config is missing or unreadable." >&2
+        return 1
+    fi
+    declared=$(sed -n 's/^# EXCLUSIONS: \([0-9][0-9]*\)$/\1/p' "$config")
+    actual=$(grep -c '^    "' "$config")
+    if [ "$declared" = "$actual" ]; then
+        return 0
+    fi
+    echo "$config declares $declared exclusions and lists $actual." >&2
+    echo "Update the EXCLUSIONS line in its header in the same change." >&2
+    return 1
+}
+
 gate fetch-vendor "$ROOT/scripts/fetch-vendor.sh"
 gate verify-vendor "$ROOT/scripts/verify-vendor.sh"
+gate mutants-exclusions mutants_exclusions
 
 # `--locked` on the two that resolve dependencies: Cargo.lock is committed, and
 # without it a semver-compatible upstream release changes what the gate actually

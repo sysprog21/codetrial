@@ -74,6 +74,14 @@ test, so `ReplayKind::ALL` being `[Self; 6]` makes "six kinds" safe to write.
 A present-tense count of anything else is a liability. Either drop the number,
 naming the things instead, or move it somewhere a run can fail on it.
 
+`.cargo/mutants.toml` is the second shape. Its header declares how many
+functions the mutation gate has been told not to judge, and `scripts/test.sh`
+compares that against the list, so an entry added without moving the number
+fails the gate. The number is not the point: each exclusion is defensible on its
+own and the list only ever grows, and a gate that judges steadily less is the
+thing worth putting in front of a reviewer. Removing an entry, by making the
+function reachable from `cargo test`, is the direction it should travel.
+
 ## Git hooks
 
 `scripts/test-git-hooks.sh` drives all four hooks against a scratch repository
