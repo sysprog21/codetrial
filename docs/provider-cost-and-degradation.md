@@ -8,8 +8,10 @@ and what the candidate sees when it does.
 Each admitted interview spends one LiveKit and Gemini live-session open, plus
 one open per Gemini socket close it survives. Gemini caps a single connection at
 around ten minutes, so a long interview spends several on its normal path: a
-close is resumed onto the same conversation when the server issued a handle, and
-started cold when it did not.
+close is resumed onto the same conversation when the server issued a handle. If
+the handle is unavailable or refused, the restart is logged as degraded and is
+grounded from the bounded local transcript tail, editor, round and evidence
+state instead.
 
 `GEMINI_RESTART_LIMIT` bounds a failing endpoint rather than a long interview.
 It allows 8 opens in a row, and any socket that lived past a minute clears the

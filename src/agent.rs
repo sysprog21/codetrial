@@ -930,27 +930,65 @@ pub struct DataEventResult {
 /// session; it exists so a pathological one cannot grow the prompt without a
 /// ceiling. The tail is what matters to a grader: the closing reasoning, not
 /// the opening pleasantries.
-pub const MAX_TRANSCRIPT_CHARS: usize = 60_000;
+///
+/// Bytes, because that is what bounds the request. A transcript in a language
+/// that spends three bytes a character therefore carries fewer characters, not
+/// more bytes than it can afford.
+pub const MAX_TRANSCRIPT_BYTES: usize = 60_000;
 
 /// Joins the session transcript for the report prompt, keeping the most recent
 /// entries when the whole thing would not fit.
 pub fn transcript_for_report(lines: &[String]) -> String {
-    let total = lines.iter().map(|line| line.len() + 1).sum::<usize>();
-    if total <= MAX_TRANSCRIPT_CHARS {
-        return lines.join("\n");
-    }
+    transcript_tail(lines, MAX_TRANSCRIPT_BYTES)
+}
+
+/// The newest entries that fit in `budget` bytes, joined.
+///
+/// Two callers want the same tail against different ceilings: the report prompt
+/// above, and the briefing a cold-restarted interviewer is rebuilt from. The
+/// beginning is the least useful part to lose in both, and the notice below is
+/// what stops either reader from taking the opening as missing rather than
+/// dropped. Empty in, empty out: naming that case is the caller's, because a
+/// report says nothing about it and a restart has to.
+pub fn transcript_tail(lines: &[String], mut budget: usize) -> String {
     let mut kept = Vec::new();
-    let mut budget = MAX_TRANSCRIPT_CHARS;
     for line in lines.iter().rev() {
         let Some(remaining) = budget.checked_sub(line.len() + 1) else {
+            // One line can outrun the whole budget on its own. Dropping it
+            // would answer a cold restart with nothing but the notice, so keep
+            // the end of it: that is the part the conversation stopped in the
+            // middle of.
+            if kept.is_empty() {
+                kept.push(tail_within(line, budget));
+            }
+
+            // Pushed newest-first like everything else here, so the reverse
+            // below carries it to the front.
+            kept.push("(earlier conversation omitted)");
             break;
         };
         budget = remaining;
         kept.push(line.as_str());
     }
     kept.reverse();
-    // Said out loud so the grader does not read the opening as missing.
-    format!("(earlier conversation omitted)\n{}", kept.join("\n"))
+    kept.join("\n")
+}
+
+/// The longest suffix of `line` that starts on a character boundary and fits in
+/// `budget` bytes.
+///
+/// Written as that sentence rather than as a walk from `len - budget`, which is
+/// the same answer arrived at by arithmetic that has two ways to be wrong: a
+/// step in the other direction also lands on a boundary and quietly returns
+/// more than `budget`, and a step that fails to advance never terminates. The
+/// suffix a candidate speaking a three-byte-per-character language gets is up
+/// to two bytes shorter than one speaking ASCII, which is the cost of the slice
+/// being valid.
+fn tail_within(line: &str, budget: usize) -> &str {
+    line.char_indices()
+        .map(|(start, _)| &line[start..])
+        .find(|suffix| suffix.len() <= budget)
+        .unwrap_or("")
 }
 
 pub fn format_transcript(items: &[TranscriptItem<'_>]) -> String {
