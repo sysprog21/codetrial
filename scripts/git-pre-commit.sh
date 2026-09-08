@@ -117,8 +117,14 @@ if [ -n "$sh_files" ]; then
     for file in $sh_files; do
         run_in_work sh -n "$file"
     done
+
+    # `-x` because the gate reaches the same conclusion by another route: it
+    # passes every script at once, so a sourced file is an input there and is
+    # followed. Here only the staged ones are named, and without this a script
+    # that sources another is SC1091 the moment it is committed alone, for a
+    # file the checkout above already put beside it.
     # shellcheck disable=SC2086
-    have shellcheck && run_in_work shellcheck $sh_files
+    have shellcheck && run_in_work shellcheck -x $sh_files
     # shellcheck disable=SC2086
     have commentflow && run_in_work commentflow --check $sh_files
     # shellcheck disable=SC2086
