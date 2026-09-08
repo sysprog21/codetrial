@@ -1137,3 +1137,39 @@ fn observer_is_not_the_candidate() {
         r#"{"candidateIdentity":"candidate-other"}"#,
     ));
 }
+
+/// The browser reveals "leave the room" on its own timer, and that timer has to
+/// clear the deadline the agent is working to. They are two constants in two
+/// languages that only ever agreed because whoever moved one remembered to move
+/// the other, which is how `REPORT_TIMEOUT` went from 45 to 125 seconds in this
+/// tree: by hand, in three files, with nothing to catch the file that got
+/// missed. A candidate offered the escape hatch before their report lands takes
+/// it, and leaving never saves the report.
+///
+/// The page owns the number and this reads it, in the shape
+/// `the_integrity_detail_bound_is_the_same_number_on_both_sides` established:
+/// a test that restated the literal would be the third copy of the thing it is
+/// here to prevent.
+#[test]
+fn the_browser_escape_hatch_outlasts_the_report_deadline() {
+    let page = std::fs::read_to_string("web/interview.js").expect("the page is readable");
+    let declaration = "const REPORT_ESCAPE_WAIT_MS = ";
+    let start = page
+        .find(declaration)
+        .expect("web/interview.js declares REPORT_ESCAPE_WAIT_MS")
+        + declaration.len();
+    let rest = &page[start..];
+    let end = rest.find(';').expect("the declaration ends in a semicolon");
+    let wait = Duration::from_millis(
+        rest[..end]
+            .trim()
+            .parse()
+            .expect("REPORT_ESCAPE_WAIT_MS is a number"),
+    );
+
+    assert!(
+        wait >= REPORT_TIMEOUT + WRAP_UP_WAIT,
+        "a report bounded at {REPORT_TIMEOUT:?} after a {WRAP_UP_WAIT:?} wrap-up cannot land \
+         before the page offers to leave at {wait:?}"
+    );
+}

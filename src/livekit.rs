@@ -132,10 +132,15 @@ const WRAP_UP_WAIT: Duration = Duration::from_secs(8);
 /// Below this, a queued turn is not a wait anyone experiences, and saying so
 /// costs a log line per turn that reads as zero.
 const NOTABLE_PLAYOUT_BACKLOG: Duration = Duration::from_millis(500);
-/// Covers the normal report attempt, one schema repair, and bounded transient
+/// Covers the normal report attempt, its schema repairs, and bounded transient
 /// retries. The candidate is watching a spinner, so this is the point where
 /// waiting stops being worth more than an honest incomplete report.
-pub(super) const REPORT_TIMEOUT: Duration = Duration::from_secs(45);
+///
+/// How many calls that pays for is asserted rather than described, by
+/// `report_network_budget_covers_every_repair_and_retry_per_generation`: the
+/// sentence that used to give the count here was already naming a budget
+/// `src/gemini.rs` no longer had.
+pub(super) const REPORT_TIMEOUT: Duration = Duration::from_secs(125);
 /// Whether the candidate is in the room, and since when they have not been.
 ///
 /// The departure, the return and the grace check happen in three different

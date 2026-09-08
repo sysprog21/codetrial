@@ -30,7 +30,7 @@ pub use prompts::{
     test_results_reaction, time_warning, wrap_up,
 };
 pub use report::{
-    fallback_report, final_report, report_response_schema, validate_report,
+    MAX_SUMMARY_TEXT, fallback_report, final_report, report_response_schema, validate_report,
     validate_report_candidate,
 };
 pub use value::json_number;

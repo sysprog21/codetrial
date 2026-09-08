@@ -2033,11 +2033,13 @@ fn static_interview_script_keeps_exit_fallback_short() {
     let source = fs::read_to_string("web/interview.js").unwrap();
     let ending = source_block(&source, "function endInterview", "function leaveRoom");
 
-    // Short, but never shorter than the agent takes to answer: REPORT_TIMEOUT
-    // bounds report generation at 45s and a timer-driven end spends
+    // Short, but never shorter than the agent takes to answer: report
+    // generation is bounded by REPORT_TIMEOUT and a timer-driven end spends
     // WRAP_UP_WAIT before that. Revealing the escape hatch first loses reports
-    // that arrive.
-    assert!(ending.contains("55000"));
+    // that arrive. The wait itself is named and checked against those constants
+    // in the_browser_escape_hatch_outlasts_the_report_deadline, so what is left
+    // here is that this block is the one that waits.
+    assert!(ending.contains("REPORT_ESCAPE_WAIT_MS"));
     assert!(!ending.contains("25000"), "shorter than REPORT_TIMEOUT");
 }
 

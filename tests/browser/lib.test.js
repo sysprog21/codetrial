@@ -472,9 +472,10 @@ test("sanitizeReport bounds text so the largest possible report still fits", () 
 // the missing decision to NO_HIRE, re-fabricating the rejection one layer later
 // than the bug that was just fixed.
 test("sanitizeReport keeps an unevaluated session unevaluated", () => {
+  const diagnostic = "x".repeat(600);
   const report = sanitizeReport({
     incomplete: true,
-    summary: "The interviewer disconnected and this session produced no evaluation.",
+    summary: `The interviewer disconnected: ${diagnostic}. This session produced no evaluation.`,
     hintsUsed: 0,
   });
 
@@ -482,6 +483,7 @@ test("sanitizeReport keeps an unevaluated session unevaluated", () => {
   assert.equal(report.decision, undefined, "no verdict may be invented on the way out of storage");
   assert.equal(report.codingScore, undefined);
   assert.equal(report.communicationScore, undefined);
+  assert.ok(report.summary.includes(diagnostic), "the agent's bounded diagnostic survives browser sanitizing");
   assert.match(report.summary, /produced no evaluation/);
 
   // And a scored report is untouched by the new branch.
@@ -529,6 +531,18 @@ test("sanitizeReport preserves a well-formed agent report", () => {
     frameworkAssessment: null,
     frameworkEvidence: [],
   });
+});
+
+test("a scored summary reaches the candidate whole", () => {
+  // The grader is validated at 1200 characters and writes 400 to 450, and this
+  // was cut at the generic 300-character field bound, which reads as a sentence
+  // the grader stopped writing. The failed-report note is the same bound on the
+  // other branch, asserted where that branch is tested.
+  const prose = "You explained the invariant clearly. ".repeat(12).trim();
+  assert.equal(
+    sanitizeReport({ codingScore: 82, communicationScore: 74, decision: "HIRE", summary: prose }).summary,
+    prose,
+  );
 });
 
 test("report contract migration preserves legacy and rejects unknown provenance", () => {

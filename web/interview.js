@@ -1441,6 +1441,13 @@ function flushPendingCodePublish() {
   recordReplay("editor", { code: currentCode(), language: state.language });
 }
 
+/// When the page stops waiting for the report and offers to leave. Held against
+/// the agent's own deadline by
+/// the_browser_escape_hatch_outlasts_the_report_deadline, which reads this
+/// declaration: the value lives here, and Rust checks that it clears
+/// REPORT_TIMEOUT plus WRAP_UP_WAIT rather than keeping a copy of it.
+const REPORT_ESCAPE_WAIT_MS = 135000;
+
 function endInterview(reason) {
   if (state.phase !== "live") return;
   state.phase = "ending";
@@ -1460,11 +1467,12 @@ function endInterview(reason) {
   nodes.ending.hidden = false;
   nodes.forceReport.hidden = Boolean(state.room);
   if (state.room) {
-    // Longer than the agent's worst case, not shorter: REPORT_TIMEOUT in
-    // src/livekit.rs is 45s, and a timer-driven end spends WRAP_UP_WAIT ahead
-    // of it. Offering "leave the room" before that elapses invites the
-    // candidate to walk out on a report that is still coming, and leaving
-    // never saves it.
+    // Longer than the agent's worst case, not shorter: the report is bounded
+    // by REPORT_TIMEOUT in src/livekit.rs and a timer-driven end spends
+    // WRAP_UP_WAIT ahead of it. Offering "leave the room" before that elapses
+    // invites the candidate to walk out on a report that is still coming, and
+    // leaving never saves it. REPORT_ESCAPE_WAIT_MS has to clear both, and
+    // says where that is checked.
     setTimeout(() => {
       if (state.phase === "ending") nodes.endingDetail.textContent = providerUiState("report_generating").message;
     }, 8000);
@@ -1473,7 +1481,7 @@ function endInterview(reason) {
         nodes.endingDetail.textContent = providerUiState("retry_ready").message;
         nodes.leaveRoom.hidden = false;
       }
-    }, 55000);
+    }, REPORT_ESCAPE_WAIT_MS);
   }
   publish(topics.control, endInterviewPayload(reason, currentCode(), state.language));
   if (!state.room) setTimeout(showReport, 300);
