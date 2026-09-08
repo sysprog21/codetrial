@@ -7,11 +7,15 @@ and what the candidate sees when it does.
 
 Each admitted interview spends one LiveKit and Gemini live-session open, plus
 one open per Gemini socket close it survives. Gemini caps a single connection at
-around ten minutes, so a long interview spends several on its normal path: a
-close is resumed onto the same conversation when the server issued a handle. If
-the handle is unavailable or refused, the restart is logged as degraded and is
-grounded from the bounded local transcript tail, editor, round and evidence
-state instead.
+around ten minutes, so a long interview spends several on its normal path. A
+`GoAway` moves to a replacement before that close, at the first moment nothing
+is lost by it: no reply generating, no reply awaited, and nothing left in the
+LiveKit playout queue. A candidate talking over the queued reply is such a
+moment, so the advisory is spent then rather than held for a turn boundary that
+Gemini will not send. The replacement resumes the same conversation when the
+server issued a handle; if the handle is unavailable or refused, the restart is
+logged as degraded and is grounded from the bounded local transcript tail,
+editor, round and evidence state instead.
 
 `GEMINI_RESTART_LIMIT` bounds a failing endpoint rather than a long interview.
 It allows 8 opens in a row, and any socket that lived past a minute clears the

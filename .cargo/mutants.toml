@@ -85,9 +85,9 @@
 # line of it is a socket to Google or the sleep between two of them, and what it
 # decides in between is `take_restart_attempt`, which is tested.
 #
-# `restart_after_close` is the arm of the loop that puts the interview back on a
-# new Gemini socket. Every line of it either opens a socket to Google or writes
-# to a LiveKit room, so `Ok(ControlFlow::Continue(()))` looks the same
+# `replace_gemini_session` is the arm of the loop that puts the interview back
+# on a new Gemini socket. Every line of it either opens a socket to Google or
+# writes to a LiveKit room, so `Ok(ControlFlow::Continue(()))` looks the same
 # from outside as doing the work, for the reason `run_room` itself does. The one
 # decision it makes that is not a network call is `take_restart_attempt`, which
 # is a counter and a duration and is tested beside it.
@@ -192,7 +192,7 @@ exclude_re = [
     "generate_report",
     "report_packet",
     "publish_report",
-    "restart_after_close",
+    "replace_gemini_session",
     "open_cold_session",
     "open_live_session_at",
     "leave_room",

@@ -23,7 +23,7 @@
 //!
 //! Session setup is the region that looks separable and is not, which is worth
 //! writing down so the next reader does not spend the afternoon finding out.
-//! `open_session` and `restart_after_close` name `InterviewContext`,
+//! `open_session` and `replace_gemini_session` name `InterviewContext`,
 //! `GeminiEventContext`, `OutputAudio`, `CandidateMedia` and `TurnState`, and
 //! call `join_room`, `close_turns`, `cut_off_turn`, `set_agent_state`,
 //! `publish_interviewer_state` and `candidate_bootstrap`. Moving it out moves
@@ -52,6 +52,16 @@ use crate::runtime::TOPIC_CONTROL;
 /// it itself. The browser normally ends the interview; this only has to catch
 /// the case where it never does, so it is generous rather than tight.
 const INTERVIEW_DEADLINE_GRACE: Duration = Duration::from_secs(120);
+
+/// How long after the room opens the process ends the interview itself.
+///
+/// The planned minutes plus the grace, and a function rather than an expression
+/// inside the loop so both terms are reachable from a test: this is what bounds
+/// a metered Gemini session when a candidate closes the tab, so an arithmetic
+/// slip here is billed for, not noticed.
+fn interview_hard_deadline(duration_min: u32) -> Duration {
+    Duration::from_secs(u64::from(duration_min) * 60) + INTERVIEW_DEADLINE_GRACE
+}
 
 /// How long a freshly joined agent waits for its candidate. The agent is now
 /// dispatched when `/api/token` names the room, which is before the browser has
@@ -215,12 +225,85 @@ fn take_restart_attempt(restarts: &mut usize, socket_age: Duration) -> bool {
     true
 }
 
+/// The agent's output has settled: nothing generating, and nothing left in the
+/// LiveKit playout queue. The floor alone is not enough, because it is stamped
+/// once when a turn completes and the queue drains on its own afterwards.
+///
+/// Two things wait on this. The goodbye is over when it is true, and a `GoAway`
+/// may replace the transport when it is true: replacing Gemini interrupts its
+/// output queue, so anything still in flight would be cut.
+fn output_settled(floor: Floor, audio_playing: bool) -> bool {
+    floor != Floor::Speaking && !audio_playing
+}
+
+/// The held half of a `GoAway`: the advisory arrives whenever Gemini decides,
+/// and the socket may only be replaced once the output has settled, so the two
+/// are separated by however long the current turn has left.
+///
+/// Kept as a type rather than a bare `bool` because four places in the room
+/// loop touch the same advisory, and the one that forgets a rule is how it ends
+/// up either cutting a reply or never being spent at all.
+#[derive(Default)]
+struct DeferredRestart(bool);
+
+impl DeferredRestart {
+    /// Some other path replaced the socket. Leaving the advisory armed would
+    /// make the first completed turn on the new socket pay for a second
+    /// replacement.
+    fn cancel(&mut self) {
+        self.0 = false;
+    }
+
+    /// A `GoAway` arrived. `true` is the caller's cue to replace the socket
+    /// now; otherwise the advisory is held for `take_if_due`.
+    ///
+    /// Armed first and then spent through `take_if_due`, so the settled rule
+    /// lives in one place and this method holds only what it adds to it.
+    ///
+    /// `reply_pending` is that addition, and the one signal `output_settled`
+    /// cannot carry. `Floor::Speaking` is stamped on the first audio chunk, so
+    /// a turn that has issued a tool call and produced no audio is still
+    /// generating under a `Listening` floor. Without it a `GoAway` landing
+    /// there throws the generation away after its tool response has already
+    /// gone out on the old socket.
+    fn request(
+        &mut self,
+        floor: Floor,
+        audio_playing: bool,
+        reply_pending: bool,
+        tool_owed: bool,
+    ) -> bool {
+        self.0 = true;
+        !reply_pending && self.take_if_due(floor, audio_playing, tool_owed)
+    }
+
+    /// Spends a held advisory at the first settled moment after it.
+    ///
+    /// Weighs `tool_response_outstanding` and deliberately not the pending
+    /// reply that `request` also reads. The two are not the same debt. A
+    /// candidate talking over the queued reply ends the turn this was deferred
+    /// behind without Gemini ever calling it an interruption, and that same
+    /// event stamps a pending reply; holding on it would carry the advisory
+    /// across another whole turn until `timeLeft` was spent and the socket
+    /// dropped mid-generation, which is the outcome deferring exists to avoid.
+    /// A tool response is the opposite case: it is generation already paid for
+    /// on this socket, it leaves the floor `Listening` with nothing playing, so
+    /// every term above reads settled while the answer is still owed.
+    fn take_if_due(&mut self, floor: Floor, audio_playing: bool, tool_owed: bool) -> bool {
+        if !self.0 || tool_owed || !output_settled(floor, audio_playing) {
+            return false;
+        }
+        self.0 = false;
+        true
+    }
+}
+
 /// Opens a session that remembers nothing, retrying while the budget allows.
 ///
 /// `None` is the budget running out, which is the caller's cue to end the
-/// interview. Split from `restart_after_close` because a loop with its own exit
-/// inside an arm of a match inside an arm of a match put the give-up path four
-/// levels deep in a function that is otherwise a sequence of steps.
+/// interview. Split from `replace_gemini_session` because a loop with its own
+/// exit inside an arm of a match inside an arm of a match put the give-up path
+/// four levels deep in a function that is otherwise a sequence of steps.
 async fn open_cold_session(
     interview: InterviewContext<'_>,
     restarts: &mut usize,
@@ -240,8 +323,8 @@ async fn open_cold_session(
     }
 }
 
-/// Puts the interview back on a new Gemini socket after the old one closed, or
-/// reports that it cannot be.
+/// Puts the interview back on a new Gemini socket, or reports that it cannot
+/// be.
 ///
 /// `Break` means the interview is over. Nothing restarts it: the dispatcher
 /// spawns one task per room and drops the slot when it returns, so this leaves
@@ -256,7 +339,7 @@ async fn open_cold_session(
 ///
 /// The reason the socket closed came over it and is logged by the reader task.
 /// The lines below tie that to the room.
-async fn restart_after_close(
+async fn replace_gemini_session(
     room: &Room,
     context: &mut GeminiEventContext<'_>,
     interview: InterviewContext<'_>,
@@ -277,9 +360,10 @@ async fn restart_after_close(
     // is gone.
     publish_interviewer_state(room, true).await?;
 
-    // The socket is already gone; this closes the writer half and the reader
-    // task. A close on a dead socket errors, and that error says nothing the
-    // caller can act on.
+    // Closes the writer half and the reader task. A socket that is already gone
+    // errors on the close, and that error says nothing the caller can act on;
+    // one being replaced ahead of its `GoAway` is still live and this is the
+    // orderly hang-up. Ignored either way for that reason.
     let _ = context.gemini.shutdown().await;
 
     // A handle is worth one try and no more: one the server refuses fails
@@ -331,6 +415,10 @@ async fn restart_after_close(
     // way out. That turn is the cold-restart briefing, which is the one turn
     // this whole path exists to deliver.
     context.activity.discarding_output = false;
+
+    // Whatever the old socket owed is unrecoverable, and leaving this set would
+    // hold the next advisory against a debt no socket can now pay.
+    context.activity.tool_response_outstanding = false;
     close_turns(room, context).await?;
     set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
     publish_interviewer_state(room, false).await?;
@@ -344,7 +432,9 @@ async fn restart_after_close(
     // someone to speak first, holding whatever they say against a rubric it
     // thinks nobody has started yet, and the editor is the one part of the lost
     // conversation that still exists in this process.
-    eprintln!("Gemini session restarted cold; the interview continues without what was said");
+    eprintln!(
+        "Gemini session restart degraded; resumption was unavailable and the interviewer is rebuilding from local transcript, editor and interview state"
+    );
 
     // Except while the interview is paused, which is the one state where making
     // Jim talk is the wrong move: the reply would be discarded on the way out.
@@ -529,6 +619,7 @@ pub async fn run_room(
     };
 
     let mut restarts = 0usize;
+    let mut deferred_restart = DeferredRestart::default();
 
     let mut watch = tokio::time::interval(Duration::from_secs_f64(WATCH_TICK_S));
 
@@ -547,10 +638,7 @@ pub async fn run_room(
     // The grace is deliberate: the browser normally ends the interview itself,
     // and this only has to catch the case where it never does.
     let hard_deadline = tokio::time::sleep_until(
-        (Instant::now()
-            + Duration::from_secs(u64::from(boot.duration_min) * 60)
-            + INTERVIEW_DEADLINE_GRACE)
-            .into(),
+        (Instant::now() + interview_hard_deadline(boot.duration_min)).into(),
     );
     tokio::pin!(hard_deadline);
 
@@ -642,9 +730,11 @@ pub async fn run_room(
                     // Gemini hung up. Usually that is the ten-minute cap on a
                     // single connection rather than anything wrong, so the
                     // session continues on a new socket instead of ending the
-                    // interview.
+                    // interview. The close itself performs the replacement, so
+                    // any advisory still held is already paid for.
+                    deferred_restart.cancel();
                     let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
-                    if restart_after_close(&room, &mut context, interview, &mut restarts)
+                    if replace_gemini_session(&room, &mut context, interview, &mut restarts)
                         .await?
                         .is_break()
                     {
@@ -652,8 +742,53 @@ pub async fn run_room(
                     }
                     continue;
                 };
+                if let GeminiEvent::GoAway { time_left } = &event {
+                    eprintln!(
+                        "Gemini requested a transport restart in {time_left}; room={room_name}"
+                    );
+
+                    // A turn still generating can be carrying a tool call or an
+                    // audio fragment that has not reached the room. Generated
+                    // audio is also still live work: replace_gemini_session
+                    // clears its queue, so wait for the playout arm to drain
+                    // it.
+                    if deferred_restart.request(
+                        turn.activity.floor,
+                        output_audio.is_playing(),
+                        turn.activity.reply_in_flight(),
+                        turn.activity.tool_response_outstanding,
+                    ) {
+                        let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
+                        if replace_gemini_session(&room, &mut context, interview, &mut restarts)
+                            .await?
+                            .is_break()
+                        {
+                            return Ok(());
+                        }
+                    }
+                    continue;
+                }
                 let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
                 handle_gemini_event(&room, &mut context, event, Interruptible::Yes).await?;
+
+                // Asked after every event, not only after a turn boundary. A
+                // candidate talking over the draining queue empties it through
+                // `drop_stale_playout` on an `InputTranscript`, and Gemini
+                // sends no `Interrupted` for a turn it already considers
+                // finished, so a boundary-only check waits out the whole
+                // `timeLeft` and lets the socket drop cold instead.
+                if deferred_restart
+                    .take_if_due(
+                        context.activity.floor,
+                        context.output_audio.is_playing(),
+                        context.activity.tool_response_outstanding,
+                    )
+                    && replace_gemini_session(&room, &mut context, interview, &mut restarts)
+                        .await?
+                        .is_break()
+                {
+                    return Ok(());
+                }
             }
             _ = tokio::time::sleep_until(output_audio.playout_deadline.into()), if turn.activity.floor == Floor::AwaitingPlayout && output_audio.is_playing() => {
                 if output_audio.is_playing() {
@@ -661,6 +796,19 @@ pub async fn run_room(
                 }
                 turn.activity.mark_listening();
                 set_agent_state(&room, &mut turn.agent_state, AGENT_STATE_LISTENING).await?;
+                if deferred_restart.take_if_due(
+                    turn.activity.floor,
+                    output_audio.is_playing(),
+                    turn.activity.tool_response_outstanding,
+                ) {
+                    let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
+                    if replace_gemini_session(&room, &mut context, interview, &mut restarts)
+                        .await?
+                        .is_break()
+                    {
+                        return Ok(());
+                    }
+                }
             }
             frame = next_audio_frame(&mut media.audio), if media.audio.is_some() => {
                 // The fastest writer in the loop, and so the one that reaches a
@@ -1104,28 +1252,65 @@ struct GeminiEventContext<'a> {
     candidate_identity: Option<&'a str>,
 }
 
+/// What to do with an inbound Gemini event before its own arm sees it.
+///
+/// The two ways a reply is unwanted, and they are not the same. A pause is a
+/// standing condition: it silences output for as long as it lasts and nothing
+/// about the event changes it. A discard is one turn's sentence, armed when a
+/// pause cut a reply already in flight, and the turn's own end is what serves
+/// it -- which is why `Deliver` is not the whole answer here and
+/// `EndsTheDiscard` exists.
+#[derive(Debug, PartialEq, Eq)]
+enum OutputDisposition {
+    Deliver,
+    Drop,
+    EndsTheDiscard,
+}
+
+/// Split out of `handle_gemini_event` because it is the whole of what that
+/// function decides before dispatching, and none of it needs a room, a socket
+/// or an await. It is also the rule a restart has to get right: the discard
+/// belongs to the socket that armed it, and a replacement that inherits one
+/// drops its own first turn, which is the cold-restart briefing.
+fn output_disposition(event: &GeminiEvent, discarding: bool, paused: bool) -> OutputDisposition {
+    let is_output = matches!(
+        event,
+        GeminiEvent::Audio { .. } | GeminiEvent::OutputTranscript(_)
+    );
+    let ends_turn = matches!(event, GeminiEvent::TurnComplete | GeminiEvent::Interrupted);
+
+    if discarding {
+        if is_output {
+            return OutputDisposition::Drop;
+        }
+        if ends_turn {
+            return OutputDisposition::EndsTheDiscard;
+        }
+    }
+
+    // Checked after the discard, not before it: a turn ending while paused
+    // still has to serve the discard's sentence, and `TurnComplete` is not
+    // output so it was never the thing a pause silences.
+    if paused && is_output {
+        return OutputDisposition::Drop;
+    }
+    OutputDisposition::Deliver
+}
+
 async fn handle_gemini_event(
     room: &Room,
     context: &mut GeminiEventContext<'_>,
     event: GeminiEvent,
     interruptible: Interruptible,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if context.activity.discarding_output {
-        match &event {
-            GeminiEvent::Audio { .. } | GeminiEvent::OutputTranscript(_) => return Ok(()),
-            GeminiEvent::TurnComplete | GeminiEvent::Interrupted => {
-                context.activity.discarding_output = false;
-            }
-            _ => {}
-        }
-    }
-    if context.state.paused
-        && matches!(
-            &event,
-            GeminiEvent::Audio { .. } | GeminiEvent::OutputTranscript(_)
-        )
-    {
-        return Ok(());
+    match output_disposition(
+        &event,
+        context.activity.discarding_output,
+        context.state.paused,
+    ) {
+        OutputDisposition::Drop => return Ok(()),
+        OutputDisposition::EndsTheDiscard => context.activity.discarding_output = false,
+        OutputDisposition::Deliver => {}
     }
     match event {
         GeminiEvent::ToolCall(calls) => {
@@ -1133,6 +1318,10 @@ async fn handle_gemini_event(
                 let shown_before = framework_progress(context.state);
                 let response = execute_tool_call(context.state, &call);
                 context.gemini.send_tool_response(&call, response).await?;
+
+                // Gemini now owes a generation for this, and will deliver it on
+                // this socket or not at all.
+                context.activity.tool_response_outstanding = true;
                 if checklist_changed(&shown_before, context.state) {
                     publish_framework_progress(room, context.state).await?;
                 }
@@ -1220,6 +1409,9 @@ async fn handle_gemini_event(
             }
         }
         GeminiEvent::TurnComplete => {
+            // Whatever the tool response was owed has now arrived.
+            context.activity.tool_response_outstanding = false;
+
             // The gap between Gemini finishing and the queue emptying. Gemini
             // synthesises far faster than speech plays, so this is how long the
             // agent will still be talking after it has stopped thinking, and
@@ -1281,6 +1473,12 @@ async fn handle_gemini_event(
 
             set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
         }
+
+        // Named rather than left to the catch-all: the room loop intercepts
+        // this before dispatching, so the only way one arrives here is through
+        // `send_wrap_up_and_wait`, where the interview ends within
+        // `WRAP_UP_WAIT` and there is no socket left to replace.
+        GeminiEvent::GoAway { .. } => {}
         _ => {}
     }
     Ok(())
@@ -1417,7 +1615,8 @@ async fn send_wrap_up_and_wait(
         if Instant::now() >= deadline {
             return Ok(());
         }
-        if wrap_up_settled(context.output_audio, context.activity) {
+        // The closing message is the one turn that plays to the end.
+        if output_settled(context.activity.floor, context.output_audio.is_playing()) {
             context.activity.mark_listening();
             set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
             return Ok(());
@@ -1434,11 +1633,6 @@ async fn send_wrap_up_and_wait(
             }
         }
     }
-}
-
-/// The goodbye is done once nothing is queued and Gemini is not mid-turn.
-fn wrap_up_settled(output_audio: &OutputAudio, activity: &RuntimeActivity) -> bool {
-    !output_audio.is_playing() && activity.floor != Floor::Speaking
 }
 
 /// Throws away agent audio that is queued but no longer wanted.
@@ -1496,6 +1690,9 @@ fn cut_off_turn(activity: &mut RuntimeActivity, output_audio: &mut OutputAudio) 
     // without its own transcript measured from it: the same lie this field was
     // split out of `last_user_speech` to stop telling, one turn later.
     activity.awaiting_reply_since = None;
+
+    // The generation this was waiting for died with the turn.
+    activity.tool_response_outstanding = false;
     unplayed
 }
 

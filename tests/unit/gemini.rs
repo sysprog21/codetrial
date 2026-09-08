@@ -303,11 +303,35 @@ fn resumption_update_is_taken_only_once_the_server_marks_it_resumable() {
 }
 
 #[test]
-fn go_away_time_left_is_read_and_carries_no_events() {
+fn go_away_time_left_is_read_as_a_restart_event() {
     let message = parse_server_message(r#"{"goAway":{"timeLeft":"9.5s"}}"#);
 
-    assert_eq!(message.go_away_time_left.as_deref(), Some("9.5s"));
-    assert!(message.events.is_empty());
+    assert_eq!(
+        message.events,
+        vec![GeminiEvent::GoAway {
+            time_left: "9.5s".to_string()
+        }]
+    );
+}
+
+/// Content in the same frame has to reach the room before the loop considers
+/// replacing the transport. In particular, TurnComplete is the safe boundary
+/// a GoAway received during speech waits for.
+#[test]
+fn go_away_follows_the_turn_it_is_asking_to_finish() {
+    let message = parse_server_message(
+        r#"{"serverContent":{"turnComplete":true},"goAway":{"timeLeft":"9.5s"}}"#,
+    );
+
+    assert_eq!(
+        message.events,
+        vec![
+            GeminiEvent::TurnComplete,
+            GeminiEvent::GoAway {
+                time_left: "9.5s".to_string()
+            }
+        ]
+    );
 }
 
 /// The two halves of one frame: Gemini attaches a resumption update to a

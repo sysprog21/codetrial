@@ -141,12 +141,20 @@ impl GeminiLiveSession {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GeminiEvent {
-    Audio { bytes: Vec<u8>, mime_type: String },
+    Audio {
+        bytes: Vec<u8>,
+        mime_type: String,
+    },
     Text(String),
     InputTranscript(String),
     OutputTranscript(String),
     TurnComplete,
     Interrupted,
+    /// The server will close this transport shortly. The room loop can move to
+    /// a fresh socket at the next turn boundary instead of waiting for a drop.
+    GoAway {
+        time_left: String,
+    },
     ToolCall(Vec<GeminiFunctionCall>),
 }
 
@@ -391,9 +399,6 @@ pub(crate) async fn open_live_session_at(
             let message = parse_server_message(&text);
             if let Some(handle) = message.resumption_handle {
                 *handles.lock().unwrap_or_else(|error| error.into_inner()) = Some(handle);
-            }
-            if let Some(time_left) = message.go_away_time_left {
-                eprintln!("Gemini will close this connection in {time_left}; will resume");
             }
             for event in message.events {
                 // Bounded on purpose: a stalled main loop must slow the socket
@@ -660,10 +665,6 @@ struct ServerMessage {
     /// point resumable. An update that is not resumable carries a handle that
     /// would be refused on reconnect, so it must not overwrite a good one.
     resumption_handle: Option<String>,
-    /// From `goAway`: how long this socket has left. Advisory, and logged
-    /// rather than acted on, because the reconnect path is driven by the close
-    /// itself and works whether or not the warning arrives.
-    go_away_time_left: Option<String>,
 }
 
 #[cfg(test)]
@@ -687,11 +688,6 @@ fn parse_server_message(text: &str) -> ServerMessage {
         })
         .and_then(|update| update.get("newHandle").and_then(Value::as_str))
         .filter(|handle| !handle.is_empty())
-        .map(str::to_string);
-
-    let go_away_time_left = message
-        .pointer("/goAway/timeLeft")
-        .and_then(Value::as_str)
         .map(str::to_string);
 
     if let Some(parts) = message
@@ -763,10 +759,20 @@ fn parse_server_message(text: &str) -> ServerMessage {
         }
     }
 
+    // How long this socket has left. Advisory, and carried as an event rather
+    // than a field of its own so the room loop sees it in order against the
+    // content of the same frame: pushed after it, because a GoAway accompanying
+    // the last audio chunk must not replace the socket before that chunk has
+    // marked the turn as in flight. The loop then waits for TurnComplete.
+    if let Some(time_left) = message.pointer("/goAway/timeLeft").and_then(Value::as_str) {
+        events.push(GeminiEvent::GoAway {
+            time_left: time_left.to_string(),
+        });
+    }
+
     ServerMessage {
         events,
         resumption_handle,
-        go_away_time_left,
     }
 }
 
