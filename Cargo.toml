@@ -3,6 +3,20 @@ name = "codetrial"
 version = "0.1.0"
 edition = "2024"
 
+# The gate already runs `cargo clippy -- -D warnings`, and an editor running a
+# bare `cargo clippy` used to disagree with it: warnings there, a red gate here,
+# and the difference only visible after a push. Stating the level in the
+# manifest makes every caller agree, the gate included.
+#
+# `unsafe_code` is forbidden rather than denied. There is none in this crate --
+# every match for the word is a Content-Security-Policy string or a comment --
+# and `forbid` is what stops a local `#[allow]` from quietly reintroducing it.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+
 [dependencies]
 axum = "0.8"
 base64 = "0.22"

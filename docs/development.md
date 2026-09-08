@@ -19,6 +19,13 @@ npm install                       # eslint
 cargo install cargo-audit         # the dependency advisory scan
 ```
 
+Lint levels live in `Cargo.toml` rather than only in the gate's command line.
+`[lints.clippy] all = "deny"` is why an editor running a bare `cargo clippy`
+agrees with `make check` instead of reporting warnings for what the gate calls
+an error, and `[lints.rust] unsafe_code = "forbid"` is what keeps this crate's
+`unsafe` count at zero — `forbid` rather than `deny`, so a local `#[allow]`
+cannot reintroduce it.
+
 `shellcheck`, `ruff` and `actionlint` come from the system package manager. CI
 installs all of them, so what is optional locally is enforced on a pull request
 — the summary exists so that a contributor knows which of the two they are
