@@ -282,6 +282,243 @@ fn only_the_candidates_parseable_packet_on_a_topic_drives_the_runtime() {
     );
 }
 
+/// The planned minutes plus the grace. Both terms matter: this clock is what
+/// stops a metered Gemini session when a candidate closes the tab, so it is
+/// billed for rather than merely wrong.
+#[test]
+fn the_server_side_deadline_is_the_planned_minutes_plus_the_grace() {
+    assert_eq!(
+        interview_hard_deadline(45),
+        Duration::from_secs(45 * 60) + INTERVIEW_DEADLINE_GRACE
+    );
+
+    // The longest interview the config admits still fits, which is the only
+    // reason the seconds are computed in `u64`.
+    assert_eq!(
+        interview_hard_deadline(90),
+        Duration::from_secs(90 * 60) + INTERVIEW_DEADLINE_GRACE
+    );
+}
+
+/// A pause silences output for as long as it lasts, and nothing about the
+/// event changes that.
+#[test]
+fn a_pause_drops_output_and_passes_everything_else_through() {
+    let audio = GeminiEvent::Audio {
+        bytes: vec![0],
+        mime_type: "audio/pcm".to_string(),
+    };
+
+    assert_eq!(
+        output_disposition(&audio, false, true),
+        OutputDisposition::Drop
+    );
+    assert_eq!(
+        output_disposition(
+            &GeminiEvent::OutputTranscript("hi".to_string()),
+            false,
+            true
+        ),
+        OutputDisposition::Drop
+    );
+
+    // Not output, so never the thing a pause silences: a tool call still has to
+    // be answered or Gemini waits on a response that is never sent.
+    assert_eq!(
+        output_disposition(&GeminiEvent::ToolCall(Vec::new()), false, true),
+        OutputDisposition::Deliver
+    );
+    assert_eq!(
+        output_disposition(&GeminiEvent::InputTranscript("hi".to_string()), false, true),
+        OutputDisposition::Deliver
+    );
+}
+
+/// A discard is one turn's sentence, not a standing condition, and the turn's
+/// own end is what serves it.
+#[test]
+fn a_discard_lasts_exactly_one_turn() {
+    let audio = GeminiEvent::Audio {
+        bytes: vec![0],
+        mime_type: "audio/pcm".to_string(),
+    };
+
+    assert_eq!(
+        output_disposition(&audio, true, false),
+        OutputDisposition::Drop
+    );
+    assert_eq!(
+        output_disposition(&GeminiEvent::TurnComplete, true, false),
+        OutputDisposition::EndsTheDiscard
+    );
+    assert_eq!(
+        output_disposition(&GeminiEvent::Interrupted, true, false),
+        OutputDisposition::EndsTheDiscard
+    );
+
+    // Nothing to serve once it is spent.
+    assert_eq!(
+        output_disposition(&audio, false, false),
+        OutputDisposition::Deliver
+    );
+}
+
+/// The ordering the two rules are checked in. A turn that ends while the
+/// interview is still paused has to serve the discard, or the sentence outlives
+/// the turn it belonged to and the next reply is dropped as well.
+#[test]
+fn a_turn_ending_under_a_pause_still_ends_the_discard() {
+    assert_eq!(
+        output_disposition(&GeminiEvent::TurnComplete, true, true),
+        OutputDisposition::EndsTheDiscard
+    );
+}
+
+/// The boundary both the goodbye and a `GoAway` wait for. The floor alone is
+/// not enough: it is stamped once when a turn completes, and the LiveKit
+/// playout queue drains on its own afterwards.
+#[test]
+fn output_is_settled_only_once_nothing_is_generating_or_queued() {
+    assert!(!output_settled(Floor::Speaking, false));
+    assert!(!output_settled(Floor::AwaitingPlayout, true));
+    assert!(output_settled(Floor::Listening, false));
+    assert!(output_settled(Floor::AwaitingPlayout, false));
+}
+
+/// `Floor::Speaking` is stamped by the first audio chunk, so a turn that has
+/// issued a tool call and produced nothing yet still reads as settled.
+/// Replacing the socket there sends the tool response out on a socket the reply
+/// will never come back on, which is why `request` weighs one signal
+/// `output_settled` cannot carry.
+#[test]
+fn a_go_away_waits_for_a_reply_that_has_not_started() {
+    let mut deferred = DeferredRestart::default();
+
+    assert!(output_settled(Floor::Listening, false));
+    assert!(!deferred.request(Floor::Listening, false, true, false));
+}
+
+/// The test above hands `request` the boolean directly, which pins the rule and
+/// not the wiring: an inverted `reply_in_flight` would keep every one of these
+/// tests green and reverse the behaviour in the room, replacing the socket
+/// during the tool call it exists to protect and holding the advisory through
+/// the settled moment it exists to use. Both of its mutants survived until this
+/// test read the field the accessor reads.
+#[test]
+fn a_pending_reply_is_what_the_advisory_reads_as_in_flight() {
+    let mut activity = RuntimeActivity::new(Instant::now() - Duration::from_secs(15));
+    assert!(
+        !activity.reply_in_flight(),
+        "nothing has been asked of Gemini yet"
+    );
+
+    // The stamp is armed only off the floor, so this is the state a tool call
+    // is issued from: settled to `output_settled`, and still owed a reply.
+    activity.floor = Floor::Listening;
+    activity.note_candidate_finished(Instant::now());
+    assert!(
+        activity.reply_in_flight(),
+        "the candidate is waiting on Gemini"
+    );
+
+    let mut deferred = DeferredRestart::default();
+    assert!(
+        !deferred.request(
+            activity.floor,
+            false,
+            activity.reply_in_flight(),
+            activity.tool_response_outstanding,
+        ),
+        "a settled floor is not enough while a reply is owed"
+    );
+
+    // Cleared when the turn is cut, and the same advisory is then due.
+    let (mut output_audio, _frames) = test_output_audio(Vec::new());
+    cut_off_turn(&mut activity, &mut output_audio);
+    assert!(!activity.reply_in_flight(), "a cut turn owes nothing");
+    assert!(deferred.take_if_due(
+        activity.floor,
+        output_audio.is_playing(),
+        activity.tool_response_outstanding,
+    ));
+}
+
+#[test]
+fn a_go_away_mid_turn_is_held_until_the_queue_drains() {
+    let mut deferred = DeferredRestart::default();
+
+    assert!(!deferred.request(Floor::Speaking, false, false, false));
+    assert!(!deferred.take_if_due(Floor::Speaking, false, false));
+    assert!(!deferred.take_if_due(Floor::AwaitingPlayout, true, false));
+    assert!(deferred.take_if_due(Floor::Listening, false, false));
+
+    // Spent once. A second boundary must not buy another replacement.
+    assert!(!deferred.take_if_due(Floor::Listening, false, false));
+}
+
+/// The regression this type exists for. A candidate talking over the draining
+/// queue empties it on an `InputTranscript`, and Gemini sends no `Interrupted`
+/// for a turn it already considers over, so waiting for a turn boundary waits
+/// out the whole `timeLeft` and the socket drops cold instead. That same event
+/// stamps `awaiting_reply_since`, which is why the held advisory ignores it.
+#[test]
+fn a_held_go_away_is_spent_when_a_barge_in_drains_the_queue() {
+    let mut deferred = DeferredRestart::default();
+
+    assert!(!deferred.request(Floor::AwaitingPlayout, true, false, false));
+    assert!(deferred.take_if_due(Floor::Listening, false, false));
+}
+
+/// A tool response is generation already paid for on the old socket, and it
+/// leaves no trace in the terms `output_settled` reads: the floor is still
+/// `Listening` because no audio chunk has stamped it, and nothing is queued.
+/// A held advisory spent there closes the socket the answer was coming back
+/// on, so the turn is lost and a cold restart is what replaces it.
+#[test]
+fn a_held_go_away_waits_for_a_tool_response_it_already_paid_for() {
+    let mut deferred = DeferredRestart::default();
+
+    // Deferred mid-turn, then the turn issues a tool call and produces no
+    // audio: every term below reads settled while the answer is still owed.
+    assert!(!deferred.request(Floor::Speaking, true, false, false));
+    assert!(output_settled(Floor::Listening, false));
+    assert!(!deferred.take_if_due(Floor::Listening, false, true));
+
+    // Still held, so the answer arriving is what spends it.
+    assert!(deferred.take_if_due(Floor::Listening, false, false));
+}
+
+/// The same debt refuses the advisory on arrival, not only afterwards.
+#[test]
+fn a_go_away_arriving_on_an_owed_tool_response_is_held() {
+    let mut deferred = DeferredRestart::default();
+
+    assert!(!deferred.request(Floor::Listening, false, false, true));
+    assert!(deferred.take_if_due(Floor::Listening, false, false));
+}
+
+/// The close performs the replacement itself. Left armed, the advisory would
+/// spend the first completed turn on the new socket on a second one.
+#[test]
+fn a_close_before_the_boundary_cancels_the_held_go_away() {
+    let mut deferred = DeferredRestart::default();
+
+    assert!(!deferred.request(Floor::Speaking, false, false, false));
+    deferred.cancel();
+    assert!(!deferred.take_if_due(Floor::Listening, false, false));
+}
+
+/// A second advisory on a settled floor restarts now, and must not leave the
+/// first one armed behind it.
+#[test]
+fn an_immediate_go_away_clears_an_advisory_already_held() {
+    let mut deferred = DeferredRestart::default();
+
+    assert!(!deferred.request(Floor::Speaking, false, false, false));
+    assert!(deferred.request(Floor::Listening, false, false, false));
+    assert!(!deferred.take_if_due(Floor::Listening, false, false));
+}
+
 /// Ending an interview because a tab reloaded, and keeping a metered Gemini
 /// session open because a return never cleared the clock, are the two ways
 /// this goes wrong. Both used to be spread across three `select!` arms with
@@ -503,25 +740,25 @@ fn wrap_up_wait_finishes_after_turn_and_playout_complete() {
     let playing = now + Duration::from_secs(1);
 
     // Idle and nothing queued: the goodbye is already over.
-    assert!(wrap_up_settled(&output_audio, &activity));
+    assert!(output_settled(activity.floor, output_audio.is_playing()));
 
     // Mid-turn always waits, queued audio or not.
     activity.floor = Floor::Speaking;
     output_audio.playout_deadline = drained;
-    assert!(!wrap_up_settled(&output_audio, &activity));
+    assert!(!output_settled(activity.floor, output_audio.is_playing()));
     output_audio.playout_deadline = playing;
-    assert!(!wrap_up_settled(&output_audio, &activity));
+    assert!(!output_settled(activity.floor, output_audio.is_playing()));
 
     // Turn produced, audio still draining: wait for the buffer.
     activity.floor = Floor::AwaitingPlayout;
-    assert!(!wrap_up_settled(&output_audio, &activity));
+    assert!(!output_settled(activity.floor, output_audio.is_playing()));
 
     output_audio.playout_deadline = drained;
-    assert!(wrap_up_settled(&output_audio, &activity));
+    assert!(output_settled(activity.floor, output_audio.is_playing()));
 
     // Barge-in hands the floor back with audio cleared.
     activity.floor = Floor::Listening;
-    assert!(wrap_up_settled(&output_audio, &activity));
+    assert!(output_settled(activity.floor, output_audio.is_playing()));
 }
 
 #[test]
@@ -602,7 +839,7 @@ fn agent_state_attributes_preserve_existing_values() {
 }
 
 /// The closing message is the one turn barge-in must not touch. Cutting it
-/// leaves the candidate without the ending, and `wrap_up_settled` reads the
+/// leaves the candidate without the ending, and the wrap-up wait reads the
 /// emptied queue as the turn being over, so the interview ended there.
 #[test]
 fn the_closing_message_is_not_cut_short_by_a_candidate_talking_over_it() {

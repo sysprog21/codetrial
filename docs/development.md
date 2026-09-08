@@ -19,6 +19,13 @@ npm install                       # eslint
 cargo install cargo-audit         # the dependency advisory scan
 ```
 
+Lint levels live in `Cargo.toml` rather than only in the gate's command line.
+`[lints.clippy] all = "deny"` is why an editor running a bare `cargo clippy`
+agrees with `make check` instead of reporting warnings for what the gate calls
+an error, and `[lints.rust] unsafe_code = "forbid"` is what keeps this crate's
+`unsafe` count at zero — `forbid` rather than `deny`, so a local `#[allow]`
+cannot reintroduce it.
+
 `shellcheck`, `ruff` and `actionlint` come from the system package manager. CI
 installs all of them, so what is optional locally is enforced on a pull request
 — the summary exists so that a contributor knows which of the two they are
@@ -66,6 +73,14 @@ test, so `ReplayKind::ALL` being `[Self; 6]` makes "six kinds" safe to write.
 
 A present-tense count of anything else is a liability. Either drop the number,
 naming the things instead, or move it somewhere a run can fail on it.
+
+`.cargo/mutants.toml` is the second shape. Its header declares how many
+functions the mutation gate has been told not to judge, and `scripts/test.sh`
+compares that against the list, so an entry added without moving the number
+fails the gate. The number is not the point: each exclusion is defensible on its
+own and the list only ever grows, and a gate that judges steadily less is the
+thing worth putting in front of a reviewer. Removing an entry, by making the
+function reachable from `cargo test`, is the direction it should travel.
 
 ## Git hooks
 
@@ -143,6 +158,33 @@ The end-to-end browser check additionally needs Playwright and Chromium:
 npm ci && npx playwright install chromium
 scripts/browser-check.sh
 ```
+
+`BROWSER_CHECK_FLOW=soak` is the long-conversation acceptance, and the only
+check that covers an interview outliving one Gemini socket. It needs real
+credentials and runs for eleven minutes:
+
+```bash
+BROWSER_CHECK_FLOW=soak BROWSER_CHECK_AGENT=dispatch scripts/browser-check.sh
+```
+
+The duration defaults to 660 seconds, past the Live API's ten-minute connection
+cap, because a soak that stops short of the cap crosses no handover and proves
+only that the room stayed up. `BROWSER_CHECK_SOAK_SECONDS` lengthens it and
+belongs to this flow alone; naming it on another one fails rather than being
+ignored, and so does a value under the cap.
+
+Presence is the weakest of the four things it judges, because the interviewer
+stays in the room through every way this can go wrong. So the flow also
+requires, from the runtime log and the transcript panel:
+
+- Gemini asked for the restart, which is the proactive path. Reaching a new
+  socket by way of the close resumes too, so a check that asked only whether it
+  resumed would pass with that path dead.
+- The replacement resumed rather than restarting cold. A cold one keeps the
+  interviewer in the room having lost the conversation.
+- No degraded restart at any point, reported where it happened.
+- The transcript grew after the handover. Jim nudges an idle candidate, so
+  turns keep arriving without the browser having to speak.
 
 Checks that need credentials or a running service stay out of the gate and are
 run on their own: `scripts/server-check.sh`, `gemini-check.sh`,

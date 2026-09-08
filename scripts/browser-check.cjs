@@ -13,6 +13,26 @@ const http = require("http");
 const { spawn } = require("child_process");
 let livekitServerSdk;
 
+const soakSeconds = Number(process.env.BROWSER_CHECK_SOAK_SECONDS || "0");
+if (!Number.isSafeInteger(soakSeconds) || soakSeconds < 0) {
+  throw new Error("BROWSER_CHECK_SOAK_SECONDS must be a whole number of seconds");
+}
+
+/// The Live API closes a socket at about ten minutes. A soak shorter than that
+/// proves the room stays up; only one that crosses the cap can prove the
+/// replacement kept the conversation.
+const CONNECTION_CAP_SECONDS = 600;
+
+/// What the runtime says as it hands one interview between two sockets, matched
+/// literally because presence cannot tell any of these apart: the interviewer
+/// stays in the room through all of them, including the one that lost the
+/// conversation. Each is printed by src/livekit.rs and each is noted there.
+const HANDOVER_SIGNALS = {
+  goAway: "Gemini requested a transport restart in",
+  resumed: "Gemini session resumed; the interview continues where it left off",
+  degraded: "Gemini session restart degraded",
+};
+
 function redact(text) {
   let output = String(text);
   for (const key of ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "GOOGLE_API_KEY"]) {
@@ -76,6 +96,86 @@ function agentParticipantIdentities(participants) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/// The dispatched agent logs through the server, so this is where its runtime
+/// lines land. Absent for the flows that run no server, and redacted here
+/// rather than at each caller because both of them put it in front of a human.
+function readServerLog() {
+  if (!process.env.SERVER_LOG || !fs.existsSync(process.env.SERVER_LOG)) return "";
+  return redact(fs.readFileSync(process.env.SERVER_LOG, "utf8"));
+}
+
+/// How many turns the transcript panel is showing. The page accumulates these
+/// client-side, so it keeps counting across a handover the browser never sees.
+function transcriptTurns(page) {
+  return page.locator("p").filter({ hasText: /^(Jim|You)$/ }).count();
+}
+
+/// Holds a real room open without making the browser a second interviewer, and
+/// judges the handover onto a new socket. Only ever reached past the connection
+/// cap, because a shorter soak is refused before the interview starts rather
+/// than run to no purpose.
+///
+/// Four things have to be true, and presence is only the first. The interviewer
+/// stays in the room whether the transport was replaced early, replaced late,
+/// or replaced having forgotten the conversation, so the rest is read from what
+/// the runtime says and from whether the interview went on afterwards.
+async function soakInterview(page, roomName, agentIdentity, agentOutput) {
+  const deadline = Date.now() + soakSeconds * 1000;
+
+  // Latched on the way past rather than read at the end: agentOutput is a
+  // rolling window, so whatever the agent logs over the rest of the soak can
+  // evict the line this is looking for.
+  const seen = { goAway: false, resumed: false, degraded: false };
+  let turnsAtHandover = null;
+
+  while (Date.now() < deadline) {
+    await sleep(Math.min(15_000, deadline - Date.now()));
+    const { participants } = await listRoomParticipants(roomName);
+    if (!agentParticipantIdentities(participants).includes(agentIdentity)) {
+      throw new Error(`interviewer left during ${soakSeconds}s soak`);
+    }
+
+    // One read per tick rather than one per signal: this is the whole server
+    // log, and the loop runs for minutes.
+    const log = agentOutput.join("") + readServerLog();
+    for (const [name, needle] of Object.entries(HANDOVER_SIGNALS)) {
+      seen[name] ||= log.includes(needle);
+    }
+
+    // The failure this whole path exists to avoid, and it is worth reporting
+    // where it happened rather than as a missing resume at the end.
+    if (seen.degraded) {
+      throw new Error(`Gemini restarted cold during ${soakSeconds}s soak; the conversation was lost`);
+    }
+
+    // Sampled when the handover is first seen, so the growth asserted below is
+    // growth after it and not the turns that came before.
+    if (seen.goAway && turnsAtHandover === null) {
+      turnsAtHandover = await transcriptTurns(page);
+    }
+  }
+
+  // Gemini warns before it hangs up, and acting on that warning is the point:
+  // reaching a new socket by way of the close still resumes, so a soak that
+  // only asked "did it resume" would pass with the proactive path dead.
+  if (!seen.goAway) {
+    throw new Error(`no transport restart was requested during ${soakSeconds}s soak`);
+  }
+  if (!seen.resumed) {
+    throw new Error(`Gemini did not resume during ${soakSeconds}s soak`);
+  }
+
+  // A resumption that nothing was said across is not one anybody would notice
+  // working. Jim nudges an idle candidate, so turns keep arriving without the
+  // browser speaking.
+  const turnsAtEnd = await transcriptTurns(page);
+  if (turnsAtEnd <= turnsAtHandover) {
+    throw new Error(
+      `the interview said nothing after the handover: ${turnsAtHandover} turns before, ${turnsAtEnd} after`,
+    );
+  }
 }
 
 /// scripts/session-cookie.sh hands over a bare `name=value`, attributes already
@@ -262,6 +362,14 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
     // script starts the agent; in `dispatch` the server does, which is the
     // whole point of that mode.
     const credentialed = mode === "rust" || mode === "dispatch";
+
+    // A soak below the cap outlives no socket, so it would hold a real
+    // interview open for minutes and prove only that the room stayed up.
+    if (flow === "soak" && soakSeconds < CONNECTION_CAP_SECONDS) {
+      throw new Error(
+        `BROWSER_CHECK_SOAK_SECONDS=${soakSeconds} is under the ${CONNECTION_CAP_SECONDS}s connection cap, so no handover would happen`,
+      );
+    }
     let agentFailure;
     const agentOutput = [];
     let sawRustMetadataConfig = false;
@@ -1212,6 +1320,9 @@ WordDictionary.prototype.search = function(word) {
         }
         await page.getByRole("button", { name: "Transcript" }).click();
         await page.getByText("No conversation yet").waitFor({ state: "detached", timeout: 120000 });
+        if (flow === "soak") {
+          await soakInterview(page, roomName, rustAgentIdentity, agentOutput);
+        }
         let testResultText = null;
         let candidateSegmentCount = null;
         let agentAfterCandidate = false;
@@ -1286,10 +1397,8 @@ WordDictionary.prototype.search = function(word) {
       if (agentOutput.length > 0) {
         console.error(redact(agentOutput.join("")));
       }
-      if (process.env.SERVER_LOG && fs.existsSync(process.env.SERVER_LOG)) {
-        const serverLog = fs.readFileSync(process.env.SERVER_LOG, "utf8");
-        if (serverLog) console.error(redact(serverLog));
-      }
+      const serverLog = readServerLog();
+      if (serverLog) console.error(serverLog);
       throw error;
     });
     agentDone = true;

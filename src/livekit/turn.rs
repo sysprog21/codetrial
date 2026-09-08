@@ -33,6 +33,8 @@ pub(super) struct RuntimeActivity {
     /// a reply that followed one measured from whatever the seed was: on the
     /// first turn that is the start of the interview, which is how a candidate
     /// who waited under a second was reported as having waited fifteen.
+    ///
+    /// Read as liveness as well as latency; see `reply_in_flight`.
     pub(super) awaiting_reply_since: Option<Instant>,
     pub(super) last_agent_speech: Instant,
     pub(super) last_nudge: Instant,
@@ -44,6 +46,12 @@ pub(super) struct RuntimeActivity {
     /// A pause can arrive between Gemini producing a reply and this loop
     /// receiving its final event. Drop that old turn after resume too.
     pub(super) discarding_output: bool,
+    /// A tool response went out on this socket and its generation has not come
+    /// back. Distinct from `awaiting_reply_since`, which a barge-in also stamps
+    /// while Gemini owes nothing: this is generation already paid for, and
+    /// replacing the transport under it throws the answer away on a socket
+    /// nothing will ever read.
+    pub(super) tool_response_outstanding: bool,
 }
 
 /// Whether a pause landing now leaves output still on its way.
@@ -87,6 +95,7 @@ impl RuntimeActivity {
             code_at_last_review: String::new(),
             floor: Floor::Listening,
             discarding_output: false,
+            tool_response_outstanding: false,
         }
     }
 
@@ -94,6 +103,18 @@ impl RuntimeActivity {
     /// conversation until Gemini reports the turn complete.
     pub(super) fn mark_speaking(&mut self) {
         self.floor = Floor::Speaking;
+    }
+
+    /// Gemini owes a reply it has not begun to deliver.
+    ///
+    /// The second reader of `awaiting_reply_since`, and the reason its
+    /// lifecycle is no longer only a metric's business: a `GoAway` weighs this
+    /// before replacing the transport, because `Floor::Speaking` is stamped on
+    /// the first audio chunk and so does not cover a turn that has issued a
+    /// tool call and produced nothing yet. Tightening when the stamp is cleared
+    /// now also changes when a socket is replaced.
+    pub(super) fn reply_in_flight(&self) -> bool {
+        self.awaiting_reply_since.is_some()
     }
 
     /// Turn finished and audio drained: hand the floor back to the candidate.
@@ -205,7 +226,7 @@ pub(super) enum Interruptible {
     /// An ordinary exchange. The candidate speaking wins the floor.
     Yes,
     /// The closing message. Cutting it leaves the candidate without the ending,
-    /// and `wrap_up_settled` reads the emptied queue as the turn being over, so
+    /// and the wrap-up wait reads the emptied queue as the turn being over, so
     /// a "thanks" mid sentence ended the interview there.
     No,
 }

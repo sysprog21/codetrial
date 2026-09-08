@@ -5,16 +5,55 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$ROOT/scripts/session-cookie.sh"
 BROWSER_CHECK_AGENT=${BROWSER_CHECK_AGENT:-home}
 
-# Flows: voice (default), report, barge, avatar. `avatar` is dispatched before
-# the agent mode, so it needs no credentials and ignores BROWSER_CHECK_AGENT.
+# Flows: voice (default), report, barge, avatar, soak. `avatar` is dispatched
+# before the agent mode, so it needs no credentials and ignores
+# BROWSER_CHECK_AGENT. `soak` is the long-conversation acceptance: it holds one
+# interview past the Live API's connection cap and judges the handover onto a
+# new socket, so it is the one flow whose duration is worth naming.
 BROWSER_CHECK_FLOW=${BROWSER_CHECK_FLOW:-voice}
 case $BROWSER_CHECK_FLOW in
-    voice | report | barge | avatar) ;;
+    voice | report | barge | avatar | soak) ;;
     *)
-        echo "BROWSER_CHECK_FLOW must be voice, report, barge, or avatar." >&2
+        echo "BROWSER_CHECK_FLOW must be voice, report, barge, avatar, or soak." >&2
         exit 2
         ;;
 esac
+
+# Long enough to outlive one connection by default, because a soak that stops
+# short of the cap proves only that the room stayed up. Overridable for a
+# deliberately longer run; a shorter one is answered by the .cjs, which is where
+# the cap that makes it meaningless is written down.
+if [ "$BROWSER_CHECK_FLOW" = soak ]; then
+    SOAK_SECONDS=${BROWSER_CHECK_SOAK_SECONDS:-660}
+elif [ "${BROWSER_CHECK_SOAK_SECONDS+x}" ]; then
+
+    # Ignoring it is how a mistyped invocation spends eleven minutes proving
+    # nothing and then exits green.
+    echo "BROWSER_CHECK_SOAK_SECONDS applies to BROWSER_CHECK_FLOW=soak," >&2
+    echo "not to $BROWSER_CHECK_FLOW." >&2
+    exit 2
+else
+    SOAK_SECONDS=0
+fi
+case $SOAK_SECONDS in
+    *[!0-9]*)
+        echo "BROWSER_CHECK_SOAK_SECONDS must be a whole number of seconds." >&2
+        exit 2
+        ;;
+esac
+if [ "$BROWSER_CHECK_FLOW" = soak ]; then
+    case $BROWSER_CHECK_AGENT in
+        rust | dispatch) ;;
+        *)
+
+            # The other agents drive a stub, so there is no Gemini socket for a
+            # soak to outlive and nothing it could judge.
+            echo "BROWSER_CHECK_FLOW=soak needs BROWSER_CHECK_AGENT=rust or" >&2
+            echo "dispatch, not $BROWSER_CHECK_AGENT." >&2
+            exit 2
+            ;;
+    esac
+fi
 if [ "${BROWSER_CHECK_COMPILER_EXPLORER_BASE_URL+x}" ]; then
     COMPILER_EXPLORER_BASE_URL_ARG=$BROWSER_CHECK_COMPILER_EXPLORER_BASE_URL
 else
@@ -209,6 +248,7 @@ fi
 BASE_URL="$BASE_URL" \
     BROWSER_CHECK_AGENT="$BROWSER_CHECK_AGENT" \
     BROWSER_CHECK_FLOW="$BROWSER_CHECK_FLOW" \
+    BROWSER_CHECK_SOAK_SECONDS="$SOAK_SECONDS" \
     BROWSER_CHECK_CAPTURE="${BROWSER_CHECK_CAPTURE:-}" \
     BROWSER_CHECK_BARGE_AUDIO_FILE="$BARGE_AUDIO_FILE" \
     BROWSER_CHECK_COMPILER_EXPLORER_BASE_URL="$COMPILER_EXPLORER_BASE_URL_ARG" \

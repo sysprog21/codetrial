@@ -1,6 +1,16 @@
 # Functions the mutation gate cannot judge, because `cargo test` cannot reach
 # them. Matched against the mutant names that `cargo mutants --list` prints.
 #
+# EXCLUSIONS: 36
+#
+# That number is checked by `scripts/test.sh`, so adding an entry means editing
+# this line too. The point is not the count, it is that the list only ever grows
+# and every entry below is individually defensible while the trend is not: each
+# one is a function the gate has stopped judging, and a growing list is a gate
+# quietly meaning less. Making the total move in the same diff as the entry puts
+# it in front of a reviewer. Removing an entry, by making the function reachable
+# from `cargo test`, is the direction this should travel.
+#
 # `run_room` is the agent's async loop: it joins a LiveKit room, drives Gemini,
 # and returns when the interview ends. Nothing in `cargo test` starts a LiveKit
 # server, so every mutant in it survives, including replacing the whole body
@@ -75,10 +85,10 @@
 # line of it is a socket to Google or the sleep between two of them, and what it
 # decides in between is `take_restart_attempt`, which is tested.
 #
-# `restart_after_close` is the arm of the loop that puts the interview back on a
-# new Gemini socket. Every line of it either opens a socket to Google or writes
-# to a LiveKit room, so `Ok(ControlFlow::Continue(()))` looks the same from
-# outside as doing the work, for the reason `run_room` itself does. The one
+# `replace_gemini_session` is the arm of the loop that puts the interview back
+# on a new Gemini socket. Every line of it either opens a socket to Google or
+# writes to a LiveKit room, so `Ok(ControlFlow::Continue(()))` looks the same
+# from outside as doing the work, for the reason `run_room` itself does. The one
 # decision it makes that is not a network call is `take_restart_attempt`, which
 # is a counter and a duration and is tested beside it.
 #
@@ -182,7 +192,7 @@ exclude_re = [
     "generate_report",
     "report_packet",
     "publish_report",
-    "restart_after_close",
+    "replace_gemini_session",
     "open_cold_session",
     "open_live_session_at",
     "leave_room",
