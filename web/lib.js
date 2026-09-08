@@ -670,7 +670,7 @@ export function sanitizeReport(raw) {
       incomplete: true,
       summary: unsupportedContract
         ? "This report uses an unsupported or malformed interview contract and cannot be scored by this version of CodeTrial."
-        : typeof raw?.summary === "string" ? boundedText(raw.summary) : "",
+        : typeof raw?.summary === "string" ? boundedText(raw.summary, MAX_SUMMARY_TEXT) : "",
       integrityEvents: integrityEvents(raw?.integrityEvents),
       ...checkpoint(raw),
       hintsUsed: bounded(raw?.hintsUsed, 99),
@@ -687,7 +687,7 @@ export function sanitizeReport(raw) {
     codingScore: score(raw?.codingScore),
     communicationScore: score(raw?.communicationScore),
     decision: raw?.decision === "HIRE" ? "HIRE" : "NO_HIRE",
-    summary: typeof raw?.summary === "string" ? boundedText(raw.summary) : "",
+    summary: typeof raw?.summary === "string" ? boundedText(raw.summary, MAX_SUMMARY_TEXT) : "",
     codingFeedback,
     communicationFeedback,
     improvementPlan,
@@ -731,6 +731,13 @@ function integrityEvents(events) {
 // body with a 413 the candidate can do nothing about, so long grader text or an
 // event flood would silently cost someone their history.
 const MAX_REPORT_TEXT = 300;
+/// The summary is the one field written to be read as prose, and the agent
+/// validates it at 1200 characters, so anything shorter here is the renderer
+/// quietly editing the grader: real summaries run 400 to 450 characters and
+/// were arriving cut mid-sentence at 300. The same bound covers the note a
+/// failed report carries, which is the interview's only diagnosis and is
+/// framed by a further 212 characters of explanation before it gets here.
+const MAX_SUMMARY_TEXT = 1200;
 
 // Code points, not UTF-16 units, because `detail` now carries whatever the
 // candidate named their camera. `slice` cut an 80-code-point label down to 44
@@ -879,7 +886,7 @@ export function providerUiState(kind, detail = "") {
     // session dropped and it cannot hear anything said until it is back.
     interviewer_reconnecting: { label: "Reconnecting", message: "The interviewer is reconnecting and cannot hear you for a moment. Keep working; nothing is lost.", personalized: true, retry: false },
     degraded: { label: "Offline", message: `${reason} You can still work the problem, but it will not create a personalized evaluation.`, personalized: false, retry: true },
-    report_generating: { label: "Preparing report", message: "Preparing your personalized report. A slow grader can take up to a minute.", personalized: true, retry: false },
+    report_generating: { label: "Preparing report", message: "Preparing your personalized report. A slow grader can take a couple of minutes.", personalized: true, retry: false },
     incomplete_report: { label: "Incomplete report", message: "The provider could not produce a valid personalized evaluation. No scores or verdict were created.", personalized: false, retry: true },
     retry_ready: { label: "Retry available", message: "The report is still unavailable. Leave safely, then retry the interview when the provider recovers.", personalized: false, retry: true },
   };

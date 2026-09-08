@@ -1633,11 +1633,17 @@ fn report_schema_uses_only_what_gemini_accepts() {
 fn improvement_plans_are_linked_bounded_deduplicated_and_ranked() {
     let mut raw = valid_strict_report();
     raw["improvementPlan"].as_array_mut().unwrap().swap(0, 3);
-    raw["improvementPlan"][0]["impact"] = json!("high");
-    raw["improvementPlan"][1]["impact"] = json!("low");
-    assert!(
-        validate_report_candidate(&raw).is_err(),
-        "unsorted plan was accepted"
+    raw["improvementPlan"][0]["impact"] = json!("low");
+    raw["improvementPlan"][1]["impact"] = json!("high");
+    let ranked = validate_report_candidate(&raw).expect("order is fixed, not refused");
+    assert_eq!(
+        ranked["improvementPlan"][0]["weakness"], raw["improvementPlan"][1]["weakness"],
+        "the high-impact item leads the plan the candidate reads"
+    );
+    assert_eq!(
+        ranked["improvementPlan"].as_array().unwrap().len(),
+        raw["improvementPlan"].as_array().unwrap().len(),
+        "sorting a plan neither drops nor invents an item"
     );
 
     let mut unrelated = valid_strict_report();
@@ -1665,10 +1671,53 @@ fn framework_assessments_require_all_phases_and_preserve_unassessed_gaps() {
     let mut malformed = raw.clone();
     malformed["frameworkAssessment"]["phases"][2]["score"] = json!(101);
     assert!(validate_report_candidate(&malformed).is_err());
+
+    // Tags are a projection of the plan, so a row that names another phase's
+    // weakness is corrected rather than refused: Algorithm carries the
+    // Algorithm plan item and nothing else, whatever the model wrote here.
     raw["frameworkAssessment"]["phases"][2]["weaknessTags"] = json!(["State the result"]);
-    assert!(
-        validate_report_candidate(&raw).is_err(),
-        "cross-phase tag accepted"
+    let derived = validate_report_candidate(&raw).expect("a stray tag is overwritten, not fatal");
+    assert_eq!(
+        derived["frameworkAssessment"]["phases"][2]["weaknessTags"],
+        json!(["Explain complexity"])
+    );
+    assert_eq!(
+        derived["frameworkAssessment"]["phases"][0]["weaknessTags"],
+        json!([]),
+        "a phase with no plan item carries no tags"
+    );
+
+    // A row holds four tags and a plan may put more than four items on one
+    // phase, so the cap decides which weaknesses the candidate reads against
+    // that phase. Sorting runs first for exactly this: what is dropped is the
+    // cheapest of them, never whichever the model happened to write last.
+    let mut crowded = valid_strict_report();
+    let improvements = ["a", "b", "c", "d", "e"];
+    crowded["codingFeedback"]["improvements"] = json!(improvements[..2]);
+    crowded["communicationFeedback"]["improvements"] = json!(improvements[2..]);
+
+    // Every item is the fixture's own, retargeted. The drill and its checks are
+    // not what this is about, and typing them again is a third copy of them to
+    // keep in step with the two that already exist in this file.
+    let template = crowded["improvementPlan"][0].clone();
+    crowded["improvementPlan"] = json!(
+        improvements
+            .iter()
+            .enumerate()
+            .map(|(index, weakness)| {
+                let mut item = template.clone();
+                item["phase"] = json!("Coding");
+                item["weakness"] = json!(weakness);
+                item["frequency"] = json!(index + 1);
+                item
+            })
+            .collect::<Vec<_>>()
+    );
+    let capped = validate_report_candidate(&crowded).expect("five items on one phase are valid");
+    assert_eq!(
+        capped["frameworkAssessment"]["phases"][3]["weaknessTags"],
+        json!(["e", "d", "c", "b"]),
+        "the four most frequent survive the cap, worst first"
     );
 }
 
@@ -3200,6 +3249,39 @@ fn browser_test_result_packets_are_classified_correctly_by_the_agent() {
     }
 }
 
+/// Both halves of the summary bound, held against each other.
+///
+/// The browser's copy sat at the generic 300-character field bound while the
+/// agent validated at 1200, so every real summary, which runs 400 characters
+/// and up, reached the candidate cut mid-sentence. Nothing failed: both sides
+/// were internally consistent and neither named the other. The same is true of
+/// the other nine text bounds this pair does not cover, which is worth fixing
+/// the day one of them moves.
+#[test]
+fn the_summary_bound_is_the_same_number_on_both_sides() {
+    let browser = std::fs::read_to_string("web/lib.js").expect("web/lib.js is readable");
+    let declaration = "const MAX_SUMMARY_TEXT = ";
+    let start = browser
+        .find(declaration)
+        .expect("web/lib.js declares MAX_SUMMARY_TEXT")
+        + declaration.len();
+    let rest = &browser[start..];
+    let end = rest.find(';').expect("the declaration ends in a semicolon");
+    let browser_max: usize = rest[..end]
+        .trim()
+        .parse()
+        .expect("MAX_SUMMARY_TEXT is a number");
+
+    assert_eq!(
+        browser_max,
+        codetrial::agent::MAX_SUMMARY_TEXT,
+        "the browser renders {browser_max} characters of a summary the agent \
+         accepts {} of, so the grader is edited on the way to the candidate and \
+         the cut lands mid-sentence",
+        codetrial::agent::MAX_SUMMARY_TEXT
+    );
+}
+
 /// Both halves of the `detail` bound, held against each other.
 ///
 /// `tests/fixtures/integrity-chain.json` proves an 80-character detail survives
@@ -4416,30 +4498,47 @@ fn report_validation_holds_its_bounds_and_its_ordering() {
         report
     };
 
-    let misordered = impacts([("medium", 1), ("high", 9), ("medium", 1), ("medium", 1)]);
-    assert!(
-        validate_report_candidate(&misordered)
-            .expect_err("a plan that buries the worst item is not ordered")
-            .join("\n")
-            .contains("$.improvementPlan"),
+    // Order is applied here rather than demanded of the model, which used to
+    // lose an otherwise sound report over the sequence of four items.
+    fn ranks(report: &serde_json::Value) -> Vec<(&str, u64)> {
+        report["improvementPlan"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| {
+                (
+                    item["impact"].as_str().unwrap(),
+                    item["frequency"].as_u64().unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    // The rarest item leads because it is the costliest, which is the whole of
+    // what impact outranking frequency means. Collapse high into medium and
+    // this order inverts.
+    let buried = impacts([("medium", 9), ("high", 1), ("medium", 2), ("medium", 1)]);
+    assert_eq!(
+        ranks(&validate_report_candidate(&buried).expect("a burying order is sorted, not refused")),
+        [("high", 1), ("medium", 9), ("medium", 2), ("medium", 1)],
     );
 
-    // The same items the right way round. This also pins that high outranks
-    // medium: collapse those two ranks and this stops being ordered.
-    let ordered = impacts([("high", 1), ("medium", 9), ("medium", 2), ("medium", 1)]);
-    assert!(
-        validate_report_candidate(&ordered).is_ok(),
-        "high outranks medium however often the medium one came up: {:?}",
-        validate_report_candidate(&ordered).err()
+    // Medium outranks low the same way, which the case above cannot show:
+    // collapse medium into the same rank as low and frequency decides instead,
+    // so the item that came up nine times leads a costlier one.
+    let over_low = impacts([("low", 9), ("medium", 1), ("low", 2), ("low", 1)]);
+    assert_eq!(
+        ranks(
+            &validate_report_candidate(&over_low).expect("a medium item leads a frequent low one")
+        ),
+        [("medium", 1), ("low", 9), ("low", 2), ("low", 1)],
     );
 
     // And within one rank it is the frequency that orders them.
-    let by_frequency = impacts([("medium", 1), ("medium", 9), ("medium", 1), ("medium", 1)]);
-    assert!(
-        validate_report_candidate(&by_frequency)
-            .expect_err("a rarer weakness does not come first")
-            .join("\n")
-            .contains("$.improvementPlan"),
+    let by_frequency = impacts([("medium", 1), ("medium", 9), ("medium", 2), ("medium", 1)]);
+    assert_eq!(
+        ranks(&validate_report_candidate(&by_frequency).expect("frequency order is applied")),
+        [("medium", 9), ("medium", 2), ("medium", 1), ("medium", 1)],
     );
 }
 

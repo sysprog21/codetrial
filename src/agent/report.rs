@@ -24,7 +24,11 @@ use super::RUBRIC_VERSION;
 /// that travelled beside it reached no consumer and was a second name for the
 /// same fact.
 pub fn fallback_report(hints_used: u32, note: &str) -> serde_json::Value {
-    let note = note.chars().take(240).collect::<String>();
+    // Long enough for the reason to survive alongside the sentence that frames
+    // it. At 240 the boilerplate about the runner and the editor filled the
+    // budget and the actual cause was cut off mid-word, so a lost report said
+    // only that it was lost.
+    let note = note.chars().take(600).collect::<String>();
     serde_json::json!({
         "incomplete": true,
         "summary": format!(
@@ -73,7 +77,7 @@ pub fn report_response_schema() -> serde_json::Value {
         "properties": {
             "phase": { "type": "STRING", "enum": IMPROVEMENT_PHASES },
             "score": { "type": "INTEGER", "minimum": 0, "maximum": 100, "nullable": true },
-            "weaknessTags": strings(0, 4)
+            "weaknessTags": strings(0, MAX_WEAKNESS_TAGS as u32)
         },
         "required": ["phase", "score", "weaknessTags"]
     });
@@ -119,6 +123,14 @@ pub fn validate_report(
     Ok(report)
 }
 
+/// Whether a model response is a report, and the report if it is.
+///
+/// What comes back is not `raw`: the fields the server owns are applied to the
+/// accepted copy, so the plan is in its final order and the phase rows carry
+/// the tags that follow from it. A caller that keeps `raw` instead keeps a
+/// report the model happened to order, which is not the one the candidate is
+/// shown. `validate_report` adds the last of those fields, `hintsUsed`, which
+/// is counted here rather than claimed by the model.
 pub fn validate_report_candidate(
     raw: &serde_json::Value,
 ) -> Result<serde_json::Value, Vec<String>> {
@@ -161,7 +173,12 @@ pub fn validate_report_candidate(
         "$.decision",
         &mut errors,
     );
-    strict_text(object.get("summary"), 1200, "$.summary", &mut errors);
+    strict_text(
+        object.get("summary"),
+        MAX_SUMMARY_TEXT,
+        "$.summary",
+        &mut errors,
+    );
     for key in ["codingFeedback", "communicationFeedback"] {
         validate_feedback(object.get(key), &format!("$.{key}"), &mut errors);
     }
@@ -183,11 +200,7 @@ pub fn validate_report_candidate(
         .map(str::trim)
         .collect::<Vec<_>>();
     validate_improvement_plan(object.get("improvementPlan"), &improvements, &mut errors);
-    validate_framework_assessment(
-        object.get("frameworkAssessment"),
-        object.get("improvementPlan"),
-        &mut errors,
-    );
+    validate_framework_assessment(object.get("frameworkAssessment"), &mut errors);
     for key in [
         "summary",
         "codingFeedback",
@@ -201,7 +214,80 @@ pub fn validate_report_candidate(
     if !errors.is_empty() {
         return Err(errors);
     }
-    Ok(raw.clone())
+    let mut report = raw.clone();
+    sort_improvement_plan(&mut report);
+    apply_weakness_tags(&mut report);
+    Ok(report)
+}
+
+/// Which weaknesses tag a phase is not a judgment: the rule was always
+/// "the weakness of every plan item whose phase is this one", which is a
+/// `filter` the model was being asked to run by hand across ten rows. It got it
+/// wrong often enough to lose reports over, so the rows are filled here from
+/// the plan they had to agree with. Runs after `sort_improvement_plan` and not
+/// before: a phase can hold more items than a row has tags, and what the cap
+/// drops has to be the cheapest of them rather than whichever the model wrote
+/// last.
+///
+/// The counterpart copy, `improvementPlan[].weakness` against the feedback
+/// improvements, stays the model's to get right. It is the only one of the
+/// three that is a mapping rather than a projection, and the cheap way to kill
+/// it, referencing improvements by index, changes the response schema and so
+/// the contract bundle. A bundle bump makes `sanitizeReport` refuse every
+/// report already in a candidate's history: no scores, no plan, "cannot be
+/// scored by this version". That is not worth paying to spare the repair pass a
+/// call it recovers from.
+fn apply_weakness_tags(report: &mut serde_json::Value) {
+    let tags = |phase: &str| {
+        report
+            .get("improvementPlan")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|item| item.get("phase").and_then(serde_json::Value::as_str) == Some(phase))
+            .filter_map(|item| item.get("weakness").cloned())
+            .take(MAX_WEAKNESS_TAGS)
+            .collect::<Vec<_>>()
+    };
+    let derived = IMPROVEMENT_PHASES.map(tags);
+    let Some(rows) = report
+        .get_mut("frameworkAssessment")
+        .and_then(|assessment| assessment.get_mut("phases"))
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for (row, tags) in rows.iter_mut().zip(derived) {
+        if let Some(row) = row.as_object_mut() {
+            row.insert("weaknessTags".to_string(), serde_json::Value::Array(tags));
+        }
+    }
+}
+
+/// Plan order is presentation, not judgment: the same items in the wrong
+/// sequence are the same assessment. The model got this wrong often enough that
+/// whole reports were rejected over it and the candidate saw "no evaluation",
+/// so the order is applied here instead of demanded from the model. Stable, so
+/// items of equal impact and frequency keep the order they were written in.
+fn sort_improvement_plan(report: &mut serde_json::Value) {
+    let Some(items) = report
+        .get_mut("improvementPlan")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    items.sort_by_key(|item| {
+        let rank = match item.get("impact").and_then(serde_json::Value::as_str) {
+            Some("high") => 3,
+            Some("medium") => 2,
+            _ => 1,
+        };
+        let frequency = item
+            .get("frequency")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        std::cmp::Reverse((rank, frequency))
+    });
 }
 
 fn validate_observable_judgments(value: &serde_json::Value, path: &str, errors: &mut Vec<String>) {
@@ -424,7 +510,6 @@ fn validate_improvement_plan(
         errors.push("$.improvementPlan: expected at most 8 items".to_string());
     }
     let mut seen = std::collections::HashSet::new();
-    let mut previous_order = None;
     for (index, item) in items.iter().take(9).enumerate() {
         let path = format!("$.improvementPlan[{index}]");
         let Some(object) = item.as_object() else {
@@ -468,33 +553,19 @@ fn validate_improvement_plan(
                 errors.push(format!("{path}.weakness: duplicate"));
             }
         }
-        let impact = strict_enum(
+        strict_enum(
             object.get("impact"),
             &["high", "medium", "low"],
             &format!("{path}.impact"),
             errors,
         );
-        let frequency = strict_integer(
+        strict_integer(
             object.get("frequency"),
             1,
             99,
             &format!("{path}.frequency"),
             errors,
         );
-        if let (Some(impact), Some(frequency)) = (impact, frequency) {
-            let rank = match impact {
-                "high" => 3,
-                "medium" => 2,
-                _ => 1,
-            };
-            let order = (rank, frequency);
-            if previous_order.is_some_and(|previous| previous < order) {
-                errors.push(format!(
-                    "{path}: items must be sorted by impact then frequency descending"
-                ));
-            }
-            previous_order = Some(order);
-        }
         strict_text(object.get("drill"), 400, &format!("{path}.drill"), errors);
         strict_integer(
             object.get("durationMin"),
@@ -534,11 +605,7 @@ fn validate_improvement_plan(
     }
 }
 
-fn validate_framework_assessment(
-    value: Option<&serde_json::Value>,
-    plan: Option<&serde_json::Value>,
-    errors: &mut Vec<String>,
-) {
+fn validate_framework_assessment(value: Option<&serde_json::Value>, errors: &mut Vec<String>) {
     let Some(object) = value.and_then(serde_json::Value::as_object) else {
         errors.push("$.frameworkAssessment: expected object".to_string());
         return;
@@ -563,16 +630,18 @@ fn validate_framework_assessment(
     if rows.len() != IMPROVEMENT_PHASES.len() {
         errors.push("$.frameworkAssessment.phases: expected exactly 10 ordered phases".to_string());
     }
-    let plan = plan
-        .and_then(serde_json::Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
     for (index, expected_phase) in IMPROVEMENT_PHASES.iter().enumerate() {
         let path = format!("$.frameworkAssessment.phases[{index}]");
         let Some(row) = rows.get(index).and_then(serde_json::Value::as_object) else {
             errors.push(format!("{path}: expected object"));
             continue;
         };
+
+        // `weaknessTags` is required here because the response schema asks for
+        // it and a response answering a different shape is not the one that was
+        // ordered. Its contents are not checked: `apply_weakness_tags`
+        // overwrites the row from the plan, so a rule on it would be judging a
+        // value nothing downstream ever sees.
         exact_keys(row, &["phase", "score", "weaknessTags"], &path, errors);
         if row.get("phase").and_then(serde_json::Value::as_str) != Some(*expected_phase) {
             errors.push(format!("{path}.phase: expected {expected_phase}"));
@@ -580,42 +649,22 @@ fn validate_framework_assessment(
         if row.get("score") != Some(&serde_json::Value::Null) {
             strict_integer(row.get("score"), 0, 100, &format!("{path}.score"), errors);
         }
-        validate_string_array(
-            row.get("weaknessTags"),
-            0,
-            4,
-            400,
-            &format!("{path}.weaknessTags"),
-            errors,
-        );
-        if let Some(tags) = row
-            .get("weaknessTags")
-            .and_then(serde_json::Value::as_array)
-        {
-            // Trimmed on both sides, like every other comparison in this
-            // module: `validate_improvement_plan` matches a plan weakness to a
-            // feedback improvement after trimming, so a tag that is an exact
-            // copy of an accepted weakness apart from surrounding whitespace
-            // has to be accepted here too. Comparing raw rejected the whole
-            // report over a trailing space and spent the one repair on it.
-            let allowed = plan
-                .iter()
-                .filter(|item| {
-                    item.get("phase").and_then(serde_json::Value::as_str) == Some(*expected_phase)
-                })
-                .filter_map(|item| item.get("weakness").and_then(serde_json::Value::as_str))
-                .map(str::trim)
-                .collect::<std::collections::HashSet<_>>();
-            for tag in tags.iter().filter_map(serde_json::Value::as_str) {
-                if !allowed.contains(tag.trim()) {
-                    errors.push(format!(
-                        "{path}.weaknessTags: tag has no same-phase improvement"
-                    ));
-                }
-            }
-        }
     }
 }
+
+/// The longest summary the grader may write, and the number `web/lib.js` has to
+/// bound the same field at. Named rather than typed into the validator call
+/// because the browser's copy was 300 for the life of the field: every real
+/// summary runs 400 characters and up, so every candidate read one that stopped
+/// mid-sentence, and nothing in either tree pointed at the other. Held together
+/// by `the_summary_bound_is_the_same_number_on_both_sides`.
+pub const MAX_SUMMARY_TEXT: usize = 1200;
+
+/// What one phase row holds, and what `strings(0, ...)` declares for it in the
+/// response schema. One constant because the deriver fills the row and the
+/// schema describes it, and a row longer than the schema admits is a report the
+/// model is blamed for.
+const MAX_WEAKNESS_TAGS: usize = 4;
 
 const IMPROVEMENT_PHASES: [&str; 10] = [
     "Repeat",

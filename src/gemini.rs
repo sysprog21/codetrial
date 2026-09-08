@@ -24,13 +24,37 @@ const SETUP_TIMEOUT: Duration = Duration::from_secs(15);
 /// candidate leaves during a stalled reconnect would not notice they had gone,
 /// and its own deadline would not fire either.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-/// Per transport attempt. Eight seconds leaves room inside `REPORT_TIMEOUT`
-/// for an initial response plus the one semantic repair and its transient
-/// retries; the outer timeout still stops two fully exhausted retry sequences.
-const REPORT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(8);
-const REPORT_RETRY_BACKOFF: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
-const MAX_REPORT_REPAIRS: usize = 1;
-const MAX_REPORT_HTTP_ATTEMPTS: usize = (MAX_REPORT_REPAIRS + 1) * (REPORT_RETRY_BACKOFF.len() + 1);
+/// Per transport attempt. Measured against the live report model, a call for a
+/// full-length interview lands in six seconds at the median and past twelve at
+/// the tail, so the eight seconds this used to allow cancelled healthy calls:
+/// the retry that followed was not recovering from an upstream fault, it was
+/// racing the same latency again with the budget already spent.
+const REPORT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(20);
+/// Between transport attempts. What is being waited out is a 503 or a rate
+/// limit, which clears in about that long.
+const REPORT_RETRY_BACKOFF: Duration = Duration::from_secs(1);
+/// Two, because roughly one response in six fails validation on a rule the
+/// schema cannot express, and a single repair leaves that residual reaching the
+/// candidate as "no evaluation". A repair costs a few seconds only in the runs
+/// that need it; `REPORT_TIMEOUT` still bounds the whole sequence, and pays for
+/// every call this budget allows.
+const MAX_REPORT_REPAIRS: usize = 2;
+/// Calls one report may cost, spent by whichever loop needs them rather than
+/// split between the two in advance. It used to be a product, so many transport
+/// attempts times so many semantic ones, which meant a report died with four of
+/// its six calls unspent: two 503s in a row is a burst that clears, and the
+/// transport had already used the two it was allotted. A repair needs a
+/// response to repair, so a run that cannot get one is entitled to the whole
+/// pool.
+///
+/// Five is what `REPORT_TIMEOUT` pays for at `REPORT_ATTEMPT_TIMEOUT` a call,
+/// with the backoffs and the parsing left room; the arithmetic is asserted
+/// against the deadline in the tests.
+const MAX_REPORT_HTTP_ATTEMPTS: usize = 5;
+/// Not a bound on the model, which cannot reach it: `maxOutputTokens` is 16384,
+/// so a response tops out around a quarter of this. What it bounds is a
+/// transport that answers with something other than the model's report, which
+/// is read into memory and matched against the schema either way.
 const MAX_REPORT_RESPONSE_BYTES: usize = 256 * 1024;
 /// Gemini streams audio in 20ms-ish chunks, so this is a few seconds of slack
 /// for a main loop that is briefly busy publishing or writing a report.
@@ -184,8 +208,12 @@ pub async fn resume_live_session(
 }
 
 /// Gemini answers 503 often enough that a single attempt loses reports for a
-/// reason that clears in seconds. The candidate is waiting, so the budget stays
-/// small: three tries, short backoff, bounded by `REPORT_TIMEOUT` upstream.
+/// reason that clears in seconds, and answers a rule the response schema cannot
+/// carry often enough that one pass at the prompt loses them for a reason the
+/// model can fix. So there are two loops here, and they are not the same loop:
+/// this one hands the model back its own invalid output, and the transport
+/// inside it retries a call that never produced any. The candidate is waiting,
+/// so both stay small and `REPORT_TIMEOUT` bounds them together.
 pub async fn generate_report(
     api_key: &str,
     model: &str,
@@ -199,10 +227,21 @@ pub async fn generate_report(
         match report_semantic_step(prompt, &output, semantic_attempt) {
             ReportSemanticStep::Complete(report) => return Ok(report),
             ReportSemanticStep::Repair(repair) => request_prompt = repair,
-            ReportSemanticStep::Failed => {
+
+            // Naming the rules that failed, because this string is the whole of
+            // what the candidate and the logs get when a report is lost.
+            // "failed schema validation" said only that something was wrong.
+            // The rules are ours and so are the paths, but `unknown field`
+            // quotes a key the model chose, so this reaches the report card as
+            // model-authored text: the browser escapes the summary it lands in,
+            // and `fallback_report` bounds how much of it is shown.
+            ReportSemanticStep::Failed(errors) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "Gemini report repair failed schema validation",
+                    format!(
+                        "Gemini report failed schema validation after {MAX_REPORT_REPAIRS} repairs: {}",
+                        bounded_errors(&errors).join("; ")
+                    ),
                 )
                 .into());
             }
@@ -223,6 +262,10 @@ impl ReportCallBudget {
         }
     }
 
+    fn is_exhausted(self) -> bool {
+        self.remaining == 0
+    }
+
     fn spend(&mut self) -> Result<usize, io::Error> {
         if self.remaining == 0 {
             return Err(io::Error::other("Gemini report call budget exhausted"));
@@ -235,7 +278,7 @@ impl ReportCallBudget {
 enum ReportSemanticStep {
     Complete(Value),
     Repair(String),
-    Failed,
+    Failed(Vec<String>),
 }
 
 fn report_semantic_step(original: &str, output: &str, repairs_used: usize) -> ReportSemanticStep {
@@ -244,7 +287,7 @@ fn report_semantic_step(original: &str, output: &str, repairs_used: usize) -> Re
         Err(errors) if repairs_used < MAX_REPORT_REPAIRS => {
             ReportSemanticStep::Repair(repair_prompt(original, output, &errors))
         }
-        Err(_) => ReportSemanticStep::Failed,
+        Err(errors) => ReportSemanticStep::Failed(errors),
     }
 }
 
@@ -254,28 +297,21 @@ async fn generate_report_transport(
     prompt: &str,
     budget: &mut ReportCallBudget,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let mut attempt = 0;
     loop {
         let call = budget.spend()?;
         let error = match generate_report_once(api_key, model, prompt).await {
             Ok(report) => return Ok(report),
             Err(error) => error,
         };
-        let Some(backoff) = REPORT_RETRY_BACKOFF
-            .get(attempt)
-            .copied()
-            .filter(|_| is_retryable(error.as_ref()))
-        else {
+        if budget.is_exhausted() || !is_retryable(error.as_ref()) {
             return Err(error);
-        };
+        }
         eprintln!(
-            "gemini report transport_failed call={call} retry={} backoff_s={} error={}",
-            attempt + 1,
-            backoff.as_secs(),
+            "gemini report transport_failed call={call} backoff_s={} error={}",
+            REPORT_RETRY_BACKOFF.as_secs(),
             redact_api_key(&error.to_string(), api_key)
         );
-        tokio::time::sleep(backoff).await;
-        attempt += 1;
+        tokio::time::sleep(REPORT_RETRY_BACKOFF).await;
     }
 }
 
@@ -290,13 +326,22 @@ fn parse_and_validate_report(text: &str) -> Result<Value, Vec<String>> {
     crate::agent::validate_report_candidate(&raw)
 }
 
-fn repair_prompt(original: &str, invalid: &str, errors: &[String]) -> String {
-    let invalid = invalid.chars().take(12_000).collect::<String>();
-    let errors = errors
+/// The one bound on error text, used by both places errors leave this module:
+/// the prompt that asks for a repair, and the sentence a candidate is left with
+/// when none came. A response can break the same rule on every array element,
+/// and neither a model fixing them nor a person reading them gets further for
+/// having all of them.
+fn bounded_errors(errors: &[String]) -> Vec<String> {
+    errors
         .iter()
         .take(12)
         .map(|error| error.chars().take(240).collect::<String>())
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+fn repair_prompt(original: &str, invalid: &str, errors: &[String]) -> String {
+    let invalid = invalid.chars().take(12_000).collect::<String>();
+    let errors = bounded_errors(errors);
     let invalid = serde_json::to_string(&invalid).expect("a string always serializes");
     let errors = serde_json::to_string(&errors).expect("strings always serialize");
     format!(
@@ -306,6 +351,12 @@ fn repair_prompt(original: &str, invalid: &str, errors: &[String]) -> String {
 
 /// Transient upstream conditions only. A bad key or a bad model is answered the
 /// same way every time, so retrying it just makes the candidate wait longer.
+///
+/// A 200 carrying no usable text is deliberately not in here. What produces one
+/// is a safety block or a refusal, which is a property of this transcript and
+/// answers the same way on the next call; the other cause, an output budget
+/// spent entirely on thinking, is closed by pinning the thinking budget to
+/// zero.
 fn is_retryable(error: &(dyn std::error::Error + 'static)) -> bool {
     let Some(error) = error.downcast_ref::<reqwest::Error>() else {
         return false;
@@ -609,6 +660,18 @@ fn generate_report_request(prompt: &str) -> Value {
             "responseMimeType": "application/json",
             "responseSchema": crate::agent::report_response_schema(),
             "maxOutputTokens": 16384,
+
+            // Thinking tokens come out of `maxOutputTokens`, and raising the
+            // level spends all of it: measured against the report model, a
+            // thinking response came back `MAX_TOKENS` with the JSON cut off
+            // mid-string, which reaches the candidate as a failed report rather
+            // than as a slow one. Off is what the endpoint does today for this
+            // model, so this pins that rather than changing it, and pins it
+            // against a server-side default that moves. `thinkingBudget` over
+            // `thinkingLevel` because the older field is accepted by both model
+            // generations, and an operator who has pointed
+            // `GEMINI_REPORT_MODEL` at an earlier model is not owed a 400.
+            "thinkingConfig": { "thinkingBudget": 0 },
             "temperature": 0.3
         }
     })
