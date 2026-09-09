@@ -135,3 +135,58 @@ export function videoTrackReady(track) {
 export function outputUsable(audioContextState) {
   return audioContextState === "running";
 }
+
+/// Every signal the media gate reads, in one call.
+///
+/// A function rather than eight reads at each call site, so a new signal is
+/// added here and both callers get it. The camera's error is the one thing
+/// written on the way through: it is the only signal that can only be judged
+/// against a track the candidate already granted.
+///
+/// `micPeak` arrives as a function rather than a value because the drop below
+/// changes it: dropping an ended microphone fires the meter's `onLost`, which
+/// forgets the peak it had proven. A peak read at the call site is read before
+/// that, so an unplugged microphone would answer this sample with the level
+/// the device that went away once reached -- and the sample that matters most
+/// is the one `finish` takes when the candidate clicks Start.
+export function preflightReadiness({
+  pool,
+  browserSupported,
+  outputConfirmed,
+  micPeak,
+  faceCheck,
+}) {
+  // Keyed on the track, not on the pool's stream. The stream exists from the
+  // moment the preflight asks for a device, so testing it here would overwrite
+  // the reason the request actually failed -- the permission the candidate
+  // denied -- with "no active video track" on every frame, and paint the panel
+  // red while the prompt is still on screen.
+  const camera = pool.trackOf("video");
+  if (camera) pool.setError("video", videoTrackReady(camera) ? null : "no active video track");
+  // An ended track never revives, and while it sits in the stream the retry
+  // sees a device of that kind and asks for nothing. The gate has no bypass,
+  // so an unplugged device would strand the candidate. A muted track can come
+  // back on its own, so only the ended one is dropped.
+  //
+  // Both kinds, one rule. The camera is dropped here rather than left to the
+  // retry tick because its liveness is judged per frame just above; the
+  // microphone has no such judgement, because a meter over a device that went
+  // away reports silence rather than an error. `dropTrack` fires `onLost`, so
+  // whatever was running over the track is torn down with it.
+  for (const kind of ["audio", "video"]) {
+    const track = pool.trackOf(kind);
+    if (track?.readyState !== "ended") continue;
+    pool.dropTrack(track);
+    pool.retry();
+  }
+  return mediaReadiness({
+    browserSupported,
+    outputConfirmed,
+    micPeak: micPeak(),
+    micError: pool.errorOf("audio"),
+    cameraReady: videoTrackReady(pool.trackOf("video")),
+    cameraError: pool.errorOf("video"),
+    faceReady: faceCheck.ready,
+    faceError: faceCheck.error,
+  });
+}

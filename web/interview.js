@@ -1,16 +1,14 @@
 import { loadJudge, loadProblem } from "./problem-data.js";
 import {
-  MIC_CONFIRM_FRAMES,
-  mediaReadiness,
   outputUsable,
-  peakLevel,
+  preflightReadiness,
   videoTrackReady,
-  sustainedPeak,
 } from "./audio-check.js";
 import { highlight } from "./highlight.js";
 import { indentSelection } from "./editor.js";
 import { createDevicePool } from "./devices.js";
 import { createFaceCheck } from "./face-check.js";
+import { createMicMeter, startMediaMeter } from "./mic-meter.js";
 import {
   createTranscriptView,
   finalRunnerStatus,
@@ -497,6 +495,24 @@ async function signInRequired() {
   return true;
 }
 
+/// The preflight's readiness, on the page.
+///
+/// Out of `refresh` because none of it is a decision: every line here is one
+/// signal of `mediaReadiness` written to the one node that shows it, and the
+/// decisions that surround it -- which hint outranks the status, when focus
+/// moves on -- were hard to find among nine assignments that never branch.
+function paintPreflight(state, hint) {
+  nodes.audioStatus.textContent = hint || state.message;
+  nodes.audioOutputState.textContent = state.steps.output ? "Confirmed" : "play a short tone.";
+  nodes.cameraState.textContent = state.steps.camera ? "Ready" : "grant access and keep video on.";
+  nodes.audioStatus.classList.toggle("critical", ["mic-error", "camera-error", "face-error", "browser"].includes(state.blocker));
+  nodes.audioStepOutput.classList.toggle("done", state.steps.output);
+  nodes.audioStepMic.classList.toggle("done", state.steps.mic);
+  nodes.audioStepCamera.classList.toggle("done", state.steps.camera);
+  nodes.audioHeard.disabled = state.steps.output;
+  nodes.audioHeard.textContent = state.steps.output ? "Confirmed" : "I heard it";
+}
+
 /// Resolves once the candidate has proven output, microphone, and camera.
 /// The tone doubles as the user gesture browsers require before
 /// any audio plays, so confirming it also unblocks the interviewer's voice.
@@ -505,7 +521,6 @@ function runAudioCheck() {
     const mediaDevices = navigator.mediaDevices;
     const browserSupported = Boolean(mediaDevices?.getUserMedia);
     let outputConfirmed = false;
-    let meterRetry = null;
     let advanced = false;
 
     // Built before anything reads it: `refresh` runs on the first frame and
@@ -515,26 +530,40 @@ function runAudioCheck() {
       isFinished: () => finished,
       onChange: () => refresh(),
     });
-    const trackOf = (kind) => pool.trackOf(kind);
     // Derived, not stored. This was a `let` written inside `sampleReadiness`
     // and read from the face check, so whether the camera worked depended on
     // who had run most recently.
-    const cameraReady = () => videoTrackReady(trackOf("video"));
-    let micPeak = 0;
+    const cameraReady = () => videoTrackReady(pool.trackOf("video"));
     const faceCheck = createFaceCheck({
       video: nodes.cameraIntegrityVideo,
-      trackOf: () => trackOf("video"),
+      trackOf: () => pool.trackOf("video"),
       isReady: cameraReady,
       isFinished: () => finished,
       createDetector: createFacePresenceDetector,
       verdictOf: facePresenceVerdict,
       onVerdict: () => refresh(),
     });
+    const meter = createMicMeter({
+      pool,
+      isFinished: () => finished,
+      startMeter: startMediaMeter,
+      // The bar is the page's, not the meter's: the module is kept free of
+      // nodes so it can run against a fake meter in a test.
+      onLevel: (level) => {
+        nodes.audioMeterFill.style.width = `${Math.min(100, Math.round(level * 300))}%`;
+        refresh();
+      },
+      onFailure: () => {
+        // The hint outranks the status line on every frame, so a stale one
+        // would leave the bar red and still reading "play the test tone".
+        hint = null;
+        refresh();
+      },
+    });
     let context = null;
     let hint = null;
     let hintUntil = 0;
     let finished = false;
-    const recentPeaks = [];
     // Set once, because refresh() runs on every animation frame: the
     // candidate is the only reliable output sensor, so confirming is
     // accepted whenever they click rather than gated on tone timing.
@@ -549,58 +578,19 @@ function runAudioCheck() {
       refresh();
     };
 
-    // Reads all eight signals in one call, so a new signal is added here and
-    // both callers get it. The camera's error is the one thing still written on
-    // the way through: it is the only signal that can only be judged against a
-    // track the candidate already granted.
-    const sampleReadiness = () => {
-      // Keyed on the track, not on the pool's stream. The stream exists from
-      // the moment the preflight asks for a device, so testing it here would
-      // overwrite the reason the request actually failed -- the permission the
-      // candidate denied -- with "no active video track" on every frame, and
-      // paint the panel red while the prompt is still on screen.
-      const camera = trackOf("video");
-      if (camera) pool.setError("video", cameraReady() ? null : "no active video track");
-      // An ended track never revives, and while it sits in the stream the retry
-      // sees a device of that kind and asks for nothing. The gate has no bypass,
-      // so an unplugged device would strand the candidate. A muted track can
-      // come back on its own, so only the ended one is dropped.
-      //
-      // Both kinds, one rule. The camera is dropped here rather than left to the
-      // retry tick because its liveness is judged per frame just above; the
-      // microphone has no such judgement, because a meter over a device that
-      // went away reports silence rather than an error. `dropTrack` fires
-      // `onLost`, so whatever was running over the track is torn down with it.
-      for (const kind of ["audio", "video"]) {
-        const track = trackOf(kind);
-        if (track?.readyState !== "ended") continue;
-        pool.dropTrack(track);
-        pool.retry();
-      }
-      return mediaReadiness({
+    const sampleReadiness = () =>
+      preflightReadiness({
+        pool,
         browserSupported,
         outputConfirmed,
-        micPeak,
-        micError: pool.errorOf("audio"),
-        cameraReady: cameraReady(),
-        cameraError: pool.errorOf("video"),
-        faceReady: faceCheck.ready,
-        faceError: faceCheck.error,
+        micPeak: meter.peak,
+        faceCheck,
       });
-    };
 
     const refresh = () => {
       const state = sampleReadiness();
       if (hint && Date.now() >= hintUntil) hint = null;
-      nodes.audioStatus.textContent = hint || state.message;
-      nodes.audioOutputState.textContent = state.steps.output ? "Confirmed" : "play a short tone.";
-      nodes.cameraState.textContent = state.steps.camera ? "Ready" : "grant access and keep video on.";
-      nodes.audioStatus.classList.toggle("critical", ["mic-error", "camera-error", "face-error", "browser"].includes(state.blocker));
-      nodes.audioStepOutput.classList.toggle("done", state.steps.output);
-      nodes.audioStepMic.classList.toggle("done", state.steps.mic);
-      nodes.audioStepCamera.classList.toggle("done", state.steps.camera);
-      nodes.audioHeard.disabled = state.steps.output;
-      nodes.audioHeard.textContent = state.steps.output ? "Confirmed" : "I heard it";
+      paintPreflight(state, hint);
       // Consent is a separate gate from media readiness on purpose. It is not
       // a device that can be proven, it is an answer, and folding it into
       // `mediaReadiness` would put a legal question inside the function that
@@ -627,7 +617,7 @@ function runAudioCheck() {
       if (!sampleReadiness().ready) return;
       finished = true;
       nodes.audioCheck.hidden = true;
-      clearTimeout(meterRetry);
+      meter.stop();
       pool.cancelRetry();
       faceCheck.close();
       void context?.close().catch(() => {});
@@ -689,54 +679,13 @@ function runAudioCheck() {
     nodes.recordingConsentStep.hidden = !recordingEnabled;
     nodes.recordingConsent.addEventListener("change", refresh);
 
-    // One meter at a time. The pool can hand back a replacement microphone
-    // now, and both ways back into here -- a fresh track and the meter's own
-    // retry -- would otherwise leave the previous AudioContext reading the
-    // track that went away and repainting the bar from it every frame.
-    let meterGeneration = 0;
-    const watchMic = () => {
-      const generation = ++meterGeneration;
-      return startMediaMeter(
-        pool.stream,
-        (peak) => {
-          pool.setError("audio", null);
-          recentPeaks.push(peak);
-          if (recentPeaks.length > MIC_CONFIRM_FRAMES) recentPeaks.shift();
-          // Latched once proven: the candidate should not have to keep talking
-          // to hold the Start button open while they read the screen.
-          micPeak = Math.max(micPeak, sustainedPeak(recentPeaks));
-          nodes.audioMeterFill.style.width = `${Math.min(100, Math.round(peak * 300))}%`;
-          refresh();
-        },
-        (error) => {
-          pool.setError("audio", error);
-          // A device that went away has not proven anything about the one that
-          // replaces it.
-          micPeak = 0;
-          recentPeaks.length = 0;
-          // The hint outranks the status line on every frame, so a stale one
-          // would leave the bar red and still reading "play the test tone".
-          hint = null;
-          refresh();
-          // The gate has no bypass, so it must recover on its own once the
-          // candidate grants access or plugs a device back in. Distinct from
-          // the pool's retry: this one restarts the level meter over a track we
-          // already hold, that one asks the browser for a device again.
-          meterRetry = setTimeout(watchMic, 2000);
-        },
-        () => finished || generation !== meterGeneration,
-      );
-    };
     // A live track is enough for the microphone: the meter is what proves one
     // actually carries sound, and it runs for the rest of the preflight.
     pool.configure("audio", {
       accept: (track) => Boolean(track),
-      onTrack: () => watchMic(),
+      onTrack: () => meter.start(),
       onLost: () => {
-        meterGeneration += 1;
-        micPeak = 0;
-        recentPeaks.length = 0;
-        clearTimeout(meterRetry);
+        meter.forget();
         nodes.audioMeterFill.style.width = "0%";
         refresh();
       },
@@ -757,27 +706,6 @@ function runAudioCheck() {
   });
 }
 
-async function startMediaMeter(stream, onPeak, onError, shouldStop) {
-  try {
-    const context = new (window.AudioContext || window.webkitAudioContext)();
-    const analyser = context.createAnalyser();
-    analyser.fftSize = 1024;
-    context.createMediaStreamSource(stream).connect(analyser);
-    const samples = new Uint8Array(analyser.frequencyBinCount);
-    const tick = () => {
-      if (shouldStop()) {
-        void context.close().catch(() => {});
-        return;
-      }
-      analyser.getByteTimeDomainData(samples);
-      onPeak(peakLevel(samples));
-      requestAnimationFrame(tick);
-    };
-    tick();
-  } catch (error) {
-    onError(String(error?.message || error));
-  }
-}
 
 async function connect(preflight, presenting = false) {
   setAgentStateLabel(providerUiState("connecting").label);

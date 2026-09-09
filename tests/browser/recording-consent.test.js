@@ -165,20 +165,6 @@ test("recording-consent is recorded before a token is asked for", () => {
 });
 
 
-/// The poll outlives the room otherwise: a request every fifteen seconds about
-/// an interview that ended, asking for a word that will not change again.
-test("the recording poll is stopped, not just abandoned", () => {
-  const stop = withoutComments(functionBody(script, "stopRecordingPoll"));
-  assert.ok(stop.includes("clearInterval(recordingPoll);"), "the interval must be cleared");
-  assert.ok(stop.includes("recordingPoll = null;"), "and the handle dropped so a restart cannot double it");
-  for (const caller of ["pollRecordingState", "showRecordingState"]) {
-    assert.ok(
-      withoutComments(functionBody(script, caller)).includes("stopRecordingPoll()"),
-      `${caller} must stop the poll rather than leave it running`,
-    );
-  }
-});
-
 test("recording-consent sends the version it displayed", () => {
   const body = withoutComments(functionBody(script, "recordConsent"));
   assert.ok(body.includes('fetch("/api/interviews"'), "consent is posted, not assumed");

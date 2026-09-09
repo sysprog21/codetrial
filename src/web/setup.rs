@@ -1,7 +1,7 @@
 //! The solo self-serve cold start's Setup page: served instead of the full
 //! app when `run_web` finds no config file at all.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::Json;
@@ -212,29 +212,61 @@ const SETUP_PAGE: &str = r#"<!doctype html>
 </html>
 "#;
 
-/// Writes the config to `config_path`, which `primary_config_path` searches
-/// for: the file has to be found again on the next launch, from whatever
-/// directory that launch happens to start in.
+/// The four values a submission carries, trimmed and checked.
+struct SetupFields {
+    livekit_url: String,
+    livekit_api_key: String,
+    livekit_api_secret: String,
+    google_api_key: String,
+}
+
+impl SetupFields {
+    /// The keys this submission becomes, in the order the file writes them.
+    ///
+    /// One list, hanging off the values it is derived from: what the launch is
+    /// probed with has to be what gets written, or the answer was about a
+    /// different config.
+    ///
+    /// A blank `googleApiKey` leaves the key out rather than writing it empty.
+    /// `read_config_file` keeps an empty value, and `load_values` lays file
+    /// pairs over the environment, so the line would erase a `GOOGLE_API_KEY`
+    /// the operator had exported and drop the process to web-only -- announced
+    /// on a console a double-clicked binary does not have. A hand-written
+    /// config omits the key to defer to the environment, and this writes the
+    /// same file.
+    fn pairs(&self) -> Vec<(&str, &str)> {
+        let mut pairs = vec![
+            ("LIVEKIT_URL", self.livekit_url.as_str()),
+            ("LIVEKIT_API_KEY", self.livekit_api_key.as_str()),
+            ("LIVEKIT_API_SECRET", self.livekit_api_secret.as_str()),
+        ];
+        if !self.google_api_key.is_empty() {
+            pairs.push(("GOOGLE_API_KEY", self.google_api_key.as_str()));
+        }
+        pairs
+    }
+}
+
+/// Everything a submission can be refused for before anything is sent or
+/// written.
 ///
-/// Parsed as `Value`, not a derived struct: this crate has no `serde`
-/// derive dependency, and a missing field reads as empty rather than a
-/// parse error.
-async fn submit_setup(
-    Json(submission): Json<Value>,
-    ready: Arc<Notify>,
-    production: bool,
-    path: PathBuf,
-) -> Response {
-    // Trimmed here, once, because everything downstream assumes it was. A
-    // pasted URL keeps its leading space through `validate_livekit_url`, which
-    // trims to decide and hands the original on, and `livekit_scheme` then
-    // matches at offset 0 and rewrites nothing: working credentials come back
-    // as "did not work". A key with a trailing space is signed into the JWT
-    // verbatim and refused, though the same value hand-written into the config
-    // file works, because `read_config_file` trims what it reads. And a
-    // `googleApiKey` of spaces is not empty to `is_empty`, so it takes the
-    // branch that probes Gemini and fails there for a field the form calls
-    // optional.
+/// Read out of a `Value`, not a derived struct: this crate has no `serde`
+/// derive dependency, and a missing field reads as empty rather than a parse
+/// error.
+///
+/// One function because the three rules answer one question -- can this file
+/// hold this value and be read back as the same value -- and they are only
+/// correct together. Trimmed here, once, because everything downstream assumes
+/// it was. A pasted URL keeps its leading space through `validate_livekit_url`,
+/// which trims to decide and hands the original on, and `livekit_scheme` then
+/// matches at offset 0 and rewrites nothing: working credentials come back as
+/// "did not work". A key with a trailing space is signed into the JWT verbatim
+/// and refused, though the same value hand-written into the config file works,
+/// because `read_config_file` trims what it reads. And a `googleApiKey` of
+/// spaces is not empty to `is_empty`, so it takes the branch that probes Gemini
+/// and fails there for a field the form calls optional.
+#[allow(clippy::result_large_err)] // Responses are immediately returned by HTTP handlers.
+fn validated_fields(submission: &Value) -> Result<SetupFields, Response> {
     let field = |key: &str| {
         submission
             .get(key)
@@ -253,10 +285,10 @@ async fn submit_setup(
         // calls it missing, so accepting one here would write a file the launch
         // on the other side of this page refuses.
         if field(key).is_empty() {
-            return super::json_response(
+            return Err(super::json_response(
                 StatusCode::BAD_REQUEST,
                 json!({ "error": format!("{key} is required") }),
-            );
+            ));
         }
     }
 
@@ -273,10 +305,10 @@ async fn submit_setup(
         "googleApiKey",
     ] {
         if field(key).chars().any(char::is_control) {
-            return super::json_response(
+            return Err(super::json_response(
                 StatusCode::BAD_REQUEST,
                 json!({ "error": format!("{key} must not contain control characters") }),
-            );
+            ));
         }
 
         // `read_config_file` does `trim_matches('"')` then
@@ -289,7 +321,7 @@ async fn submit_setup(
             .into_iter()
             .find(|quote| field(key).starts_with(*quote) || field(key).ends_with(*quote))
         {
-            return super::json_response(
+            return Err(super::json_response(
                 StatusCode::BAD_REQUEST,
                 json!({
                     "error": format!(
@@ -298,34 +330,25 @@ async fn submit_setup(
                          one checked here"
                     )
                 }),
-            );
+            ));
         }
     }
 
-    let livekit_url = field("livekitUrl");
-    let livekit_api_key = field("livekitApiKey");
-    let livekit_api_secret = field("livekitApiSecret");
-    let google_api_key = field("googleApiKey");
+    Ok(SetupFields {
+        livekit_url: field("livekitUrl"),
+        livekit_api_key: field("livekitApiKey"),
+        livekit_api_secret: field("livekitApiSecret"),
+        google_api_key: field("googleApiKey"),
+    })
+}
 
-    // The keys this submission becomes, in the order the file below writes
-    // them. One list: what the launch is asked about has to be what gets
-    // written, or the answer was about a different config.
-    //
-    // A blank `googleApiKey` leaves the key out rather than writing it empty.
-    // `read_config_file` keeps an empty value, and `load_values` lays file
-    // pairs over the environment, so the line would erase a `GOOGLE_API_KEY`
-    // the operator had exported and drop the process to web-only -- announced
-    // on a console a double-clicked binary does not have. A hand-written config
-    // omits the key to defer to the environment, and this writes the same file.
-    let mut pairs = vec![
-        ("LIVEKIT_URL", livekit_url.as_str()),
-        ("LIVEKIT_API_KEY", livekit_api_key.as_str()),
-        ("LIVEKIT_API_SECRET", livekit_api_secret.as_str()),
-    ];
-    if !google_api_key.is_empty() {
-        pairs.push(("GOOGLE_API_KEY", google_api_key.as_str()));
-    }
-
+/// Proves the credentials before a file is written from them.
+///
+/// `Some` is the refusal. The order is the point: the URL rule is local and
+/// instant, the LiveKit probe is one round trip, and the Gemini probe opens a
+/// live session, so a submission wrong in the cheapest way is not made to wait
+/// for the most expensive check to say so.
+async fn probe_credentials(fields: &SetupFields, production: bool) -> Option<Response> {
     // The rule the launch on the other side of this page applies to the URL,
     // applied while there is still a form to report it in. Without it a URL
     // this accepts and `web_provider_pool` refuses is written, answered with
@@ -340,80 +363,91 @@ async fn submit_setup(
     // Reported as it stands, naming `LIVEKIT_URL` rather than the form's
     // `livekitUrl`: the two spellings are the same value, and the one in the
     // message is what the reader will find in the file afterwards.
-    if let Err(error) = crate::config::validate_livekit_url(&livekit_url, production) {
-        return super::json_response(StatusCode::BAD_REQUEST, json!({ "error": error }));
+    if let Err(error) = crate::config::validate_livekit_url(&fields.livekit_url, production) {
+        return Some(super::json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": error }),
+        ));
     }
 
     if let Err(error) = crate::livekit::validate_livekit_credentials(
-        &livekit_url,
-        &livekit_api_key,
-        &livekit_api_secret,
+        &fields.livekit_url,
+        &fields.livekit_api_key,
+        &fields.livekit_api_secret,
         crate::current_epoch_seconds(),
     )
     .await
     {
-        return super::json_response(
+        return Some(super::json_response(
             StatusCode::BAD_REQUEST,
             json!({
                 "error": format!(
                     "livekitUrl, livekitApiKey or livekitApiSecret did not work: {error}"
                 )
             }),
-        );
+        ));
     }
 
-    if !google_api_key.is_empty() {
-        let config = match load_from_pairs(pairs.iter().copied()) {
-            Ok(config) => config,
-            Err(error) => {
-                return super::json_response(
-                    StatusCode::BAD_REQUEST,
-                    json!({ "error": error.to_string() }),
-                );
-            }
-        };
+    if fields.google_api_key.is_empty() {
+        return None;
+    }
+    let config = match load_from_pairs(fields.pairs().iter().copied()) {
+        Ok(config) => config,
+        Err(error) => {
+            return Some(super::json_response(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": error.to_string() }),
+            ));
+        }
+    };
 
-        // Same proof as `check-gemini`: open a real session.
-        // `CODETRIAL_GEMINI_LIVE_URL` lets tests redirect this away from the
-        // real endpoint.
-        let room_name = format!("{}-smoke", config.room_prefix);
-        let boot = bootstrap(&config, &room_name, None, config.default_duration_min);
-        let url = std::env::var("CODETRIAL_GEMINI_LIVE_URL")
-            .unwrap_or_else(|_| gemini_live_websocket_url(&config.google_api_key));
-        match open_live_session_at(&url, &boot, None).await {
-            Ok(session) => {
-                let _ = session.close().await;
-            }
-            Err(error) => {
-                // Redacted like every other caller of this chain. The close
-                // frame's reason is folded in at the bottom of it, so the text
-                // here is partly Gemini's, and the key was sent in the URL.
-                let reason = crate::gemini::redact_api_key(
-                    &format!("googleApiKey did not work: {error}"),
-                    &google_api_key,
-                );
-                return super::json_response(StatusCode::BAD_REQUEST, json!({ "error": reason }));
-            }
+    // Same proof as `check-gemini`: open a real session.
+    // `CODETRIAL_GEMINI_LIVE_URL` lets tests redirect this away from the real
+    // endpoint.
+    let room_name = format!("{}-smoke", config.room_prefix);
+    let boot = bootstrap(&config, &room_name, None, config.default_duration_min);
+    let url = std::env::var("CODETRIAL_GEMINI_LIVE_URL")
+        .unwrap_or_else(|_| gemini_live_websocket_url(&config.google_api_key));
+    match open_live_session_at(&url, &boot, None).await {
+        Ok(session) => {
+            let _ = session.close().await;
+            None
+        }
+        Err(error) => {
+            // Redacted like every other caller of this chain. The close frame's
+            // reason is folded in at the bottom of it, so the text here is
+            // partly Gemini's, and the key was sent in the URL.
+            let reason = crate::gemini::redact_api_key(
+                &format!("googleApiKey did not work: {error}"),
+                &fields.google_api_key,
+            );
+            Some(super::json_response(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": reason }),
+            ))
         }
     }
+}
 
-    // From `pairs`, so the file holds exactly the config that was checked and
-    // probed above. Every value is known to carry no newline by now, which is
-    // what makes one line per key a faithful encoding of it.
-    let contents = pairs
-        .iter()
-        .map(|(key, value)| format!("{key}={value}\n"))
-        .collect::<String>();
-
+/// Writes the config file, and refuses rather than overwriting one.
+///
+/// The path is `config_path`, which `primary_config_path` searches for: the
+/// file has to be found again on the next launch, from whatever directory that
+/// launch happens to start in.
+///
+/// `Some` is the refusal. The mode and the `create_new` are the whole reason
+/// this is not two lines: the file holds `LIVEKIT_API_SECRET` and
+/// `GOOGLE_API_KEY`, and both defaults are wrong for it.
+fn write_config_file(path: &Path, contents: &str) -> Option<Response> {
     // The directory is the caller's answer, and a released binary's copy of it
     // does not exist until the first submission.
     if let Some(parent) = path.parent()
         && let Err(error) = std::fs::create_dir_all(parent)
     {
-        return super::json_response(
+        return Some(super::json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             json!({ "error": format!("could not create {}: {error}", parent.display()) }),
-        );
+        ));
     }
 
     // `create_new`, so an existing name is reported rather than followed and
@@ -432,21 +466,52 @@ async fn submit_setup(
         options.mode(0o600);
     }
     let written = options
-        .open(&path)
+        .open(path)
         .and_then(|mut file| std::io::Write::write_all(&mut file, contents.as_bytes()));
-    if let Err(error) = written {
-        let reason = if error.kind() == std::io::ErrorKind::AlreadyExists {
-            format!(
-                "{} already exists; move it aside and reload",
-                path.display()
-            )
-        } else {
-            format!("could not write {}: {error}", path.display())
-        };
-        return super::json_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            json!({ "error": reason }),
-        );
+    let Err(error) = written else {
+        return None;
+    };
+    let reason = if error.kind() == std::io::ErrorKind::AlreadyExists {
+        format!(
+            "{} already exists; move it aside and reload",
+            path.display()
+        )
+    } else {
+        format!("could not write {}: {error}", path.display())
+    };
+    Some(super::json_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        json!({ "error": reason }),
+    ))
+}
+
+/// One submission: checked, probed, written, and the app let out behind it.
+async fn submit_setup(
+    Json(submission): Json<Value>,
+    ready: Arc<Notify>,
+    production: bool,
+    path: PathBuf,
+) -> Response {
+    let fields = match validated_fields(&submission) {
+        Ok(fields) => fields,
+        Err(response) => return response,
+    };
+
+    if let Some(refusal) = probe_credentials(&fields, production).await {
+        return refusal;
+    }
+
+    // From `pairs`, so the file holds exactly the config that was checked and
+    // probed above. Every value is known to carry no newline by now, which is
+    // what makes one line per key a faithful encoding of it.
+    let contents = fields
+        .pairs()
+        .iter()
+        .map(|(key, value)| format!("{key}={value}\n"))
+        .collect::<String>();
+
+    if let Some(refusal) = write_config_file(&path, &contents) {
+        return refusal;
     }
 
     // Only reached once the file is on disk; tells the caller to stop serving

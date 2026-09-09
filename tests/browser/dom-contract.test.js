@@ -299,15 +299,15 @@ test("a replacement preflight camera gets a fresh face check", () => {
 // which has no bypass, stayed shut for the rest of the preflight.
 test("a preflight microphone that goes away is asked for again", () => {
   const script = interviewSource();
-  // One loop covers both kinds, so the microphone is no longer the case that
-  // can be forgotten: naming a kind here is what asks the pool to look again.
-  assert.match(script,
-    /for \(const kind of \["audio", "video"\]\)[\s\S]*?pool\.dropTrack\(track\);\s*pool\.retry\(\);/,
-    "a dead device of either kind must reopen the request the pool makes");
+  // The drop itself moved into `preflightReadiness` in `web/audio-check.js`,
+  // where `tests/browser/mic-meter.test.js` drives it against a pool holding a
+  // dead track. What is left here is the wiring only this file can show.
   // Anchored to the audio hook and lazily matched, so a rename of the video
-  // hook cannot silently widen the slice this is read out of.
+  // hook cannot silently widen the slice this is read out of. What `forget`
+  // has to do is not asserted here: it lives in `web/mic-meter.js` now, and
+  // `tests/browser/mic-meter.test.js` drives it rather than reading it.
   assert.match(script,
-    /pool\.configure\("audio",[\s\S]*?onLost: \(\) => \{\s*meterGeneration \+= 1;\s*micPeak = 0;\s*recentPeaks\.length = 0;/,
+    /pool\.configure\("audio",[\s\S]*?onLost: \(\) => \{\s*meter\.forget\(\);/,
     "dropping a microphone must invalidate its meter and readiness state");
 });
 
