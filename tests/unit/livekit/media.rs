@@ -6,6 +6,8 @@
 
 use super::*;
 use crate::config::load_from_pairs;
+use crate::livekit::GEMINI_OUTPUT_AUDIO_SAMPLE_RATE;
+use crate::livekit::tests::test_output_audio;
 use ::livekit::webrtc::video_frame::{I420Buffer, VideoBuffer, VideoFrame, VideoRotation};
 
 /// A sink that records instead of dialling Gemini, and can be told to fail.
@@ -53,20 +55,8 @@ fn the_agent_voice_is_published_as_a_microphone() {
 /// re-arms the timer for zero and spins.
 #[test]
 fn playout_ends_on_its_deadline() {
-    let (frames, _queued) = tokio::sync::mpsc::channel(1);
-    let output_audio = OutputAudio {
-        source: NativeAudioSource::new(
-            AudioSourceOptions::default(),
-            24_000,
-            LIVEKIT_OUTPUT_CHANNELS,
-            LIVEKIT_OUTPUT_QUEUE_MS,
-        ),
-        sample_rate: 24_000,
-        pending_bytes: Vec::new(),
-        playout_deadline: Instant::now() + Duration::from_secs(1),
-        frames,
-        output_cancellation: CancellationToken::new(),
-    };
+    let (mut output_audio, _frames) = test_output_audio();
+    output_audio.playout_deadline = Instant::now() + Duration::from_secs(1);
     let deadline = output_audio.playout_deadline;
     assert!(output_audio.playing_at(deadline - Duration::from_nanos(1)));
     assert!(
@@ -396,7 +386,8 @@ fn pcm16_bytes_serializes_little_endian_samples() {
 
 #[test]
 fn output_audio_interrupt_clears_partial_pcm_frame_and_cancels_old_queue() {
-    let (mut output_audio, _) = test_output_audio(vec![1, 2, 3]);
+    let (mut output_audio, _) = test_output_audio();
+    output_audio.pending_bytes = vec![1, 2, 3];
     let old_cancellation = output_audio.output_cancellation.clone();
     output_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
 
@@ -410,13 +401,16 @@ fn output_audio_interrupt_clears_partial_pcm_frame_and_cancels_old_queue() {
 
 #[tokio::test]
 async fn output_audio_capture_queues_frames_with_current_cancellation_token() {
-    let (mut output_audio, mut queued_frames) = test_output_audio(Vec::new());
+    let (mut output_audio, mut queued_frames) = test_output_audio();
     let start_deadline = output_audio.playout_deadline;
     let bytes = vec![0_u8; 240 * 2];
 
     assert!(
         output_audio
-            .capture(&bytes, "audio/pcm;rate=24000")
+            .capture(
+                &bytes,
+                &format!("audio/pcm;rate={GEMINI_OUTPUT_AUDIO_SAMPLE_RATE}"),
+            )
             .await
             .unwrap()
     );

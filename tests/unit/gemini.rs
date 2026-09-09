@@ -588,8 +588,8 @@ fn tool_response_message_matches_live_websocket_shape() {
 }
 
 #[test]
-fn parse_server_events_extracts_audio_transcripts_and_tool_calls() {
-    let events = parse_server_events(
+fn parse_server_message_extracts_audio_transcripts_and_tool_calls() {
+    let events = parse_server_message(
         r#"{
             "serverContent": {
                 "modelTurn": {
@@ -609,7 +609,8 @@ fn parse_server_events_extracts_audio_transcripts_and_tool_calls() {
                 ]
             }
         }"#,
-    );
+    )
+    .events;
 
     assert_eq!(
         events,

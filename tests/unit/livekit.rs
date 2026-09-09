@@ -4,13 +4,44 @@
 //! test and not an integration test: private items are in scope.
 
 use super::*;
+use ::livekit::webrtc::audio_source::AudioSourceOptions;
+use ::livekit::webrtc::audio_source::native::NativeAudioSource;
+use tokio::sync::mpsc;
+
+use crate::config::load_from_pairs;
 
 // Only the tests below reach for it now: the report packet that carries this
 // topic is built in `report.rs`, and what is left here asserts which topics the
 // loop refuses from a browser.
 use crate::runtime::TOPIC_REPORT;
 
-use crate::config::load_from_pairs;
+/// An `OutputAudio` wired to a channel instead of a room.
+///
+/// `pub(super)` and defined here rather than in each of the two test modules
+/// that build one: `media`'s tests are a descendant of `livekit`, so they can
+/// name it, and a second copy is a second thing to keep in step with the
+/// fields.
+///
+/// The rate is the constant rather than the 24000 it expands to, because
+/// `accepts` compares it against the rate in the mime type a caller hands
+/// `capture`. A fixture pinned to the literal on both sides would keep passing
+/// while testing a rate production had moved off.
+pub(super) fn test_output_audio() -> (OutputAudio, mpsc::Receiver<QueuedOutputFrame>) {
+    let (frames, queued_frames) = mpsc::channel(4);
+    (
+        OutputAudio::new(
+            NativeAudioSource::new(
+                AudioSourceOptions::default(),
+                GEMINI_OUTPUT_AUDIO_SAMPLE_RATE,
+                LIVEKIT_OUTPUT_CHANNELS,
+                LIVEKIT_OUTPUT_QUEUE_MS,
+            ),
+            GEMINI_OUTPUT_AUDIO_SAMPLE_RATE,
+            frames,
+        ),
+        queued_frames,
+    )
+}
 
 /// The interview starts from the plan its token was minted for.
 ///
@@ -433,7 +464,7 @@ fn a_pending_reply_is_what_the_advisory_reads_as_in_flight() {
     );
 
     // Cleared when the turn is cut, and the same advisory is then due.
-    let (mut output_audio, _frames) = test_output_audio(Vec::new());
+    let (mut output_audio, _frames) = test_output_audio();
     cut_off_turn(&mut activity, &mut output_audio);
     assert!(!activity.reply_in_flight(), "a cut turn owes nothing");
     assert!(deferred.take_if_due(
@@ -838,7 +869,7 @@ fn recent_typing_holds_off_the_periodic_review() {
 #[test]
 fn wrap_up_wait_finishes_after_turn_and_playout_complete() {
     let now = Instant::now();
-    let (mut output_audio, _) = test_output_audio(Vec::new());
+    let (mut output_audio, _) = test_output_audio();
     let mut activity = RuntimeActivity::new(now);
     let drained = now - Duration::from_secs(1);
     let playing = now + Duration::from_secs(1);
@@ -947,7 +978,7 @@ fn agent_state_attributes_preserve_existing_values() {
 /// emptied queue as the turn being over, so the interview ended there.
 #[test]
 fn the_closing_message_is_not_cut_short_by_a_candidate_talking_over_it() {
-    let (mut output_audio, _frames) = test_output_audio(Vec::new());
+    let (mut output_audio, _frames) = test_output_audio();
     let closing = output_audio.output_cancellation.clone();
     output_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
     let mut activity = RuntimeActivity::new(Instant::now());
@@ -965,7 +996,7 @@ fn the_closing_message_is_not_cut_short_by_a_candidate_talking_over_it() {
 /// queueing this whole mechanism exists to avoid.
 #[test]
 fn only_a_chunk_that_will_be_queued_is_worth_dropping_a_turn_for() {
-    let (output_audio, _frames) = test_output_audio(Vec::new());
+    let (output_audio, _frames) = test_output_audio();
     let rate = GEMINI_OUTPUT_AUDIO_SAMPLE_RATE;
 
     assert!(output_audio.accepts(&[1, 0], &format!("audio/pcm;rate={rate}")));
@@ -1030,7 +1061,7 @@ fn the_reply_latency_stamp_is_armed_and_cleared_by_the_floor() {
 
     // A turn that gets cut takes the pending measurement with it: the candidate
     // is talking again, so nobody is waiting.
-    let (mut output_audio, _frames) = test_output_audio(Vec::new());
+    let (mut output_audio, _frames) = test_output_audio();
     output_audio.playout_deadline = Instant::now() + Duration::from_secs(3);
     cut_off_turn(&mut activity, &mut output_audio);
     assert_eq!(
@@ -1067,7 +1098,7 @@ fn a_reply_nobody_was_measured_waiting_for_reports_no_latency() {
 /// length of speech nobody heard.
 #[test]
 fn a_cut_off_turn_stamps_the_moment_it_was_cut_not_when_it_would_have_ended() {
-    let (mut output_audio, _frames) = test_output_audio(Vec::new());
+    let (mut output_audio, _frames) = test_output_audio();
     let cut = output_audio.output_cancellation.clone();
     output_audio.playout_deadline = Instant::now() + Duration::from_secs(15);
     let mut activity = RuntimeActivity::new(Instant::now());
@@ -1092,7 +1123,7 @@ fn a_cut_off_turn_stamps_the_moment_it_was_cut_not_when_it_would_have_ended() {
 /// draining.
 #[test]
 fn a_candidate_speaking_over_a_draining_turn_drops_what_is_left_of_it() {
-    let (mut output_audio, _frames) = test_output_audio(Vec::new());
+    let (mut output_audio, _frames) = test_output_audio();
     let stale = output_audio.output_cancellation.clone();
     output_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
     let mut activity = RuntimeActivity::new(Instant::now());
@@ -1136,7 +1167,7 @@ fn nothing_is_dropped_once_the_queue_has_drained_or_while_the_agent_speaks() {
             "candidate already holds the floor",
         ),
     ] {
-        let (mut output_audio, _frames) = test_output_audio(Vec::new());
+        let (mut output_audio, _frames) = test_output_audio();
         let live = output_audio.output_cancellation.clone();
         output_audio.playout_deadline = deadline;
         let mut activity = RuntimeActivity::new(Instant::now());

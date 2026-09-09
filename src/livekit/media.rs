@@ -23,11 +23,8 @@ use jpeg_encoder::{ColorType, Encoder};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::gemini::GeminiLiveSession;
-
-#[cfg(test)]
-use super::GEMINI_OUTPUT_AUDIO_SAMPLE_RATE;
 use super::is_interview_participant;
+use crate::gemini::GeminiLiveSession;
 
 pub(super) const GEMINI_AUDIO_SAMPLE_RATE: i32 = 16_000;
 
@@ -297,6 +294,21 @@ pub(super) struct QueuedOutputFrame {
 }
 
 impl OutputAudio {
+    pub(super) fn new(
+        source: NativeAudioSource,
+        sample_rate: u32,
+        frames: mpsc::Sender<QueuedOutputFrame>,
+    ) -> Self {
+        Self {
+            source,
+            sample_rate,
+            pending_bytes: Vec::new(),
+            playout_deadline: Instant::now(),
+            frames,
+            output_cancellation: CancellationToken::new(),
+        }
+    }
+
     pub(super) fn interrupt(&mut self) {
         self.output_cancellation.cancel();
         self.output_cancellation = CancellationToken::new();
@@ -436,14 +448,7 @@ pub(super) async fn publish_output_audio(
         sample_rate,
         queued_frames,
     ));
-    Ok(OutputAudio {
-        source,
-        sample_rate,
-        pending_bytes: Vec::new(),
-        playout_deadline: Instant::now(),
-        frames,
-        output_cancellation: CancellationToken::new(),
-    })
+    Ok(OutputAudio::new(source, sample_rate, frames))
 }
 
 pub(super) fn append_pcm16_bytes(frame: &AudioFrame<'_>, bytes: &mut Vec<u8>) {
@@ -591,35 +596,6 @@ pub(super) async fn encode_video_frame_jpeg_off_thread(
     tokio::task::spawn_blocking(move || encode_rgba_jpeg(&rgba, jpeg_width, jpeg_height, quality))
         .await
         .map_err(|error| format!("jpeg encode task did not finish: {error}"))?
-}
-
-/// An `OutputAudio` wired to a channel instead of a room.
-///
-/// At module scope rather than inside `mod tests` because both this
-/// file's tests and the room loop's in `livekit.rs` build one, and it
-/// used to live in `livekit.rs` where the fields it sets are private to
-/// here. A test module cannot export it to a sibling; this can.
-#[cfg(test)]
-pub(super) fn test_output_audio(
-    pending_bytes: Vec<u8>,
-) -> (OutputAudio, mpsc::Receiver<QueuedOutputFrame>) {
-    let (frames, queued_frames) = mpsc::channel(4);
-    (
-        OutputAudio {
-            source: NativeAudioSource::new(
-                AudioSourceOptions::default(),
-                GEMINI_OUTPUT_AUDIO_SAMPLE_RATE,
-                LIVEKIT_OUTPUT_CHANNELS,
-                LIVEKIT_OUTPUT_QUEUE_MS,
-            ),
-            sample_rate: GEMINI_OUTPUT_AUDIO_SAMPLE_RATE,
-            pending_bytes,
-            playout_deadline: Instant::now(),
-            frames,
-            output_cancellation: CancellationToken::new(),
-        },
-        queued_frames,
-    )
 }
 
 #[cfg(test)]

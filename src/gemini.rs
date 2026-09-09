@@ -806,11 +806,6 @@ struct ServerMessage {
     resumption_handle: Option<String>,
 }
 
-#[cfg(test)]
-fn parse_server_events(text: &str) -> Vec<GeminiEvent> {
-    parse_server_message(text).events
-}
-
 fn parse_server_message(text: &str) -> ServerMessage {
     let Ok(message) = serde_json::from_str::<Value>(text) else {
         return ServerMessage::default();
