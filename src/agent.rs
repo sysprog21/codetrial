@@ -759,15 +759,17 @@ pub fn code_head(code: &str, budget: usize) -> String {
         return code.to_string();
     }
 
-    // No floor of its own: index 0 is always a character boundary, so this
-    // stops at the start of the string whatever it is handed, and `budget` is
-    // below `code.len()` by the early return above, so it indexes the string.
-    // The `end > 0` this used to carry could never decide anything, which is
-    // how the mutation gate found it.
-    let mut end = budget;
-    while !code.is_char_boundary(end) {
-        end -= 1;
-    }
+    // A bounded search rather than a decrementing loop. Both walk back to the
+    // same byte -- index 0 is always a character boundary, so neither can run
+    // off the front, and `budget` indexes the string by the early return above
+    // -- but a loop that advances by hand can be made not to advance, and that
+    // is a hang rather than a wrong answer. The mutation gate reports a hang as
+    // a timeout, which is neither a pass nor a finding; a search over a range
+    // cannot be turned into one.
+    let end = (0..=budget)
+        .rev()
+        .find(|end| code.is_char_boundary(*end))
+        .unwrap_or_default();
     format!("{}\n(remainder of the editor omitted)", &code[..end])
 }
 
