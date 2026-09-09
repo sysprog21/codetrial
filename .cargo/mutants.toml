@@ -1,7 +1,7 @@
 # Functions the mutation gate cannot judge, because `cargo test` cannot reach
 # them. Matched against the mutant names that `cargo mutants --list` prints.
 #
-# EXCLUSIONS: 36
+# EXCLUSIONS: 39
 #
 # That number is checked by `scripts/test.sh`, so adding an entry means editing
 # this line too. The point is not the count, it is that the list only ever grows
@@ -164,6 +164,27 @@
 # reaches. The decision it makes with an error in hand is `is_locked`, which is
 # tested.
 #
+# `generate_content_once` is the one call both report generation and the
+# idle-window review now go through, and it is the transport the `generate_
+# report` entry above already describes: it posts to Google and reads the text
+# back, so every line of it needs an API key. It became its own function when
+# the two callers stopped each carrying a copy of the same request. What it is
+# handed is `content_request` and the two generation configs, and what it reads
+# out is `gemini_text`; all three are tested in tests/unit/gemini.rs.
+#
+# `generate_interim_review` is that transport with the interim config and its
+# own deadline around it, so `Ok(String::new())` -- an empty note -- looks the
+# same from outside as a call nobody made. The same case as `generate_report`,
+# one layer down. What comes back is bounded and stored by
+# `record_interim_notes`, which is tested.
+#
+# `end_through_control` is the two lines the server deadline and the
+# interviewer's own ending share: it builds an `end_interview` packet and hands
+# it to `handle_data_packet`, which is already in this list for taking a
+# `&Room`. Replacing it with `Ok(())` publishes no report, and a test with no
+# room cannot tell that from publishing one. What it decides before it writes
+# is `ready_to_close`, tested in tests/unit/livekit.rs.
+#
 # Keep this list short and each entry justified. An entry that is really "we
 # never got around to testing this" belongs in a test, not here.
 exclude_re = [
@@ -197,6 +218,9 @@ exclude_re = [
     "open_live_session_at",
     "leave_room",
     "publish_interviewer_state",
+    "generate_content_once",
+    "generate_interim_review",
+    "end_through_control",
     "handle_media_event",
     "attach_audio",
     "next_audio_frame",

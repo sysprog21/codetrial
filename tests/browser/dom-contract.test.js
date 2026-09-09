@@ -486,3 +486,171 @@ test("runner progress statuses stay wired to each execution path", () => {
   assert.match(script, /reportStatus\??\.\("compiling"\)|reportStatus\("compiling"\)/);
   assert.match(script, /reportStatus\??\.\("running"\)|reportStatus\("running"\)/);
 });
+
+/// A report that never arrives must not leave "leave the room" as the only way
+/// out.
+///
+/// Both buttons exist already; what was wrong is when each is offered.
+/// `#force-report` builds the summary from what this page is already holding,
+/// and it was hidden for the whole life of a session that had a room --  which
+/// is every real session -- so the candidate whose report was lost was shown
+/// one option, and it was the one that navigates away and discards the
+/// interview. Issue 31 was reported by someone who took it.
+test("a report that never lands still offers the offline summary", () => {
+  const ending = functionBody(interviewSource(), "endInterview");
+
+  // Ordering, not a byte window: both reveals live in the escape timeout, and
+  // the only thing worth pinning is that the offline summary is revealed there
+  // too rather than left hidden behind "leave the room".
+  const escape = ending.indexOf("REPORT_ESCAPE_WAIT_MS");
+  assert.ok(escape !== -1, "the escape timeout left endInterview");
+  assert.ok(ending.indexOf("nodes.leaveRoom.hidden = false") > escape);
+  assert.ok(
+    ending.indexOf("nodes.forceReport.hidden = false") > escape,
+    "past the escape deadline the offline summary is offered beside leaving, not instead of it",
+  );
+});
+
+/// A spinner cannot say whether anything is still happening; a number can.
+///
+/// The clock is stopped where the interview actually finishes, not at each exit
+/// that remembered to: `renderReport` is where every report path lands, agent
+/// sent and offline alike, and `leaveRoom` is the one exit that renders none.
+/// Hanging it off `showReport` missed `receiveReport`, which is the path every
+/// successful interview takes, and left the interval running for the life of
+/// the tab.
+test("the ending overlay counts the wait it is asking the candidate to sit through", () => {
+  const script = interviewSource();
+  const ending = functionBody(script, "endInterview");
+
+  assert.match(ending, /startEndingClock\(\)/);
+  assert.match(functionBody(script, "startEndingClock"), /nodes\.endingElapsed\.textContent/);
+  for (const exit of ["renderReport", "leaveRoom"]) {
+    assert.match(
+      functionBody(script, exit),
+      /stopEndingClock\(\)/,
+      `${exit} leaves the ending clock running`,
+    );
+  }
+});
+
+/// A paused interview still has a deadline.
+///
+/// `tickTimer` used to return early while paused, so the countdown froze and
+/// `time_up` never fired: the session sat until the agent's own deadline, the
+/// full duration plus a two-minute grace, behind a stopped clock. That is issue
+/// 31's symptom -- an interview waiting on a clock nobody is watching --
+/// arriving by a second route. A pause stops the conversation, not the
+/// deadline, so what it suppresses is only what would talk into the room.
+test("a paused interview still counts down and still ends", () => {
+  const tick = functionBody(interviewSource(), "tickTimer");
+
+  assert.doesNotMatch(
+    tick,
+    /state\.phase !== "live" \|\| state\.paused/,
+    "a pause must not stop the countdown reaching time_up",
+  );
+  assert.ok(
+    tick.indexOf('endInterview("time_up")') > tick.indexOf("if (!state.paused)"),
+    "the ending is outside the pause guard, so a paused interview still reaches it",
+  );
+
+  // Sent once, and only from a tick that was allowed to publish. A crossing
+  // latched separately from the send would be one tick wide, so a pause across
+  // it loses the event; a level plus the flag cannot be missed.
+  for (const spoken of ["round_transition", "timeWarningPayload"]) {
+    const at = tick.indexOf(spoken);
+    assert.ok(at !== -1, `${spoken} left tickTimer`);
+    assert.match(tick.slice(0, at), /if \(!state\.paused\)/, `${spoken} would talk into a paused room`);
+    assert.doesNotMatch(
+      tick.slice(0, at),
+      /previousRemaining/,
+      `${spoken} is edge-triggered again, so a pause across the crossing loses it`,
+    );
+  }
+});
+
+/// The interviewer can end the session itself, and that route does not pass
+/// through `endInterview`.
+///
+/// `replayTimeline` breaks its window scan on the `ended` lifecycle frame, so a
+/// replay missing one shows a trailing unanswered question window that is
+/// really the goodbye. `endInterview` writes it for the two routes the page
+/// drives; `receiveReport` has to write it for the one it does not.
+test("an interview the interviewer ended still records that it ended", () => {
+  const receive = functionBody(interviewSource(), "receiveReport");
+
+  assert.match(receive, /recordReplay\("lifecycle", \{ state: "ended"/);
+  assert.match(
+    receive,
+    /state\.phase === "live"/,
+    "a browser-driven end already wrote the frame, and two would be worse than none",
+  );
+});
+
+/// A level is worth having because it can be asked again -- but only the one
+/// that went unheard.
+///
+/// A pause releases a latch so a threshold published into the pause round trip,
+/// which the agent drops, gets asked again on resume. Releasing every latch
+/// instead re-asks thresholds that were already announced, and the agent treats
+/// a second time warning as news: Jim breaks in with "exactly N minutes remain"
+/// once per pause cycle. `togglePause` snapshots what had already been heard as
+/// the request leaves, and only the rest is released.
+test("a pause releases only the threshold latches it prevented from being heard", () => {
+  const script = interviewSource();
+  const pause = functionBody(script, "applyPause");
+
+  assert.match(pause, /if \(paused\)/, "the release belongs to pausing, not to resuming twice");
+  assert.match(
+    pause,
+    /state\.latchedBeforePause/,
+    "without the snapshot the release cannot tell an unheard threshold from an announced one",
+  );
+  for (const latch of ["roundTransitionSent", "timeWarningSent"]) {
+    assert.match(
+      pause,
+      new RegExp(`if \\(!announced\\?\\.${latch}\\) state\\.${latch} = false`),
+      `${latch} is released unconditionally, so a threshold already announced is announced again`,
+    );
+  }
+  assert.match(
+    functionBody(script, "togglePause"),
+    /state\.latchedBeforePause = \{/,
+    "the snapshot has to be taken as the request leaves, not when the echo lands",
+  );
+});
+
+/// The page has two ways to reach a report it did not ask for, and they are not
+/// the same event.
+///
+/// The interviewer can close a finished session, and the agent's own deadline
+/// publishes a report too when a suspended tab never fired its own `time_up`.
+/// Both arrive in phase "live", so the reason has to be derived rather than
+/// assumed, or the replay records a decision Jim never made.
+test("a report that arrives unasked says which clock ended the interview", () => {
+  const receive = functionBody(interviewSource(), "receiveReport");
+
+  assert.match(
+    receive,
+    /state\.endsAt/,
+    "the reason is hardcoded, so the agent's deadline is logged as the interviewer's decision",
+  );
+  assert.match(receive, /"time_up"/);
+  assert.match(receive, /"interviewer_ended"/);
+});
+
+/// The offline summary is now offered while a room is still up, which it was
+/// not before: `#force-report` used to be hidden for the whole life of one.
+///
+/// That makes `showReport` the one report path that can leave the agent in an
+/// interview nobody is attending. `receiveReport` disconnects because the agent
+/// has already published and left; here nothing has, and a candidate reading a
+/// local summary would still be paying for a Gemini session behind it.
+test("taking the offline summary releases the room", () => {
+  const show = functionBody(interviewSource(), "showReport");
+
+  assert.match(show, /state\.room\?\.disconnect/, "the offline report leaves the agent connected");
+  assert.match(show, /state\.room = null/);
+  assert.match(show, /state\.connected = false/);
+});

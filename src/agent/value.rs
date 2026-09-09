@@ -74,3 +74,21 @@ fn python_repr(value: &serde_json::Value) -> String {
 #[cfg(test)]
 #[path = "../../tests/unit/agent/value.rs"]
 mod tests;
+
+/// Model or candidate text cut to a length and stripped of what could forge a
+/// line break in a prompt.
+///
+/// The control filter alone is not the bound. U+2028 and U+2029 are not control
+/// characters and `str::lines` does not split on them, so text carrying one
+/// survives every line-oriented check this tree makes and still reaches the
+/// model as two lines: the thing being defended is what the model sees, not
+/// what `str::lines` splits on. That reasoning was written once, for a test
+/// run's failure text, and then re-derived three more times without it.
+pub(crate) fn bounded_model_text(text: &str, max_chars: usize) -> String {
+    text.chars()
+        .filter(|character| {
+            !character.is_control() && !matches!(character, '\u{2028}' | '\u{2029}')
+        })
+        .take(max_chars)
+        .collect()
+}

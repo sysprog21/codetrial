@@ -41,9 +41,10 @@ use ::livekit::data_stream::api::StreamTextOptions;
 use ::livekit::prelude::{DataPacket, RemoteParticipant, Room, RoomEvent, RoomOptions};
 
 use crate::agent::{
-    RuntimeState, SpeakerTurn, WATCH_TICK_S, apply_data_event, framework_evidence_json,
-    framework_progress, parse_participant_metadata, read_editor_text, record_framework_evidence,
-    wrap_up,
+    CANDIDATE_SPEAKER, INTERIM_CONTEXT_NOTES, InterimReviewInput, RuntimeState, SpeakerTurn,
+    WATCH_TICK_S, apply_data_event, code_head, framework_evidence_json, framework_progress,
+    interim_review_prompt, parse_participant_metadata, read_editor_text, record_framework_evidence,
+    record_interim_notes, transcript_tail, unreviewed_from, wrap_up,
 };
 use crate::config::AgentConfig;
 use crate::runtime::TOPIC_CONTROL;
@@ -77,11 +78,12 @@ const CANDIDATE_JOIN_LIMIT: Duration = Duration::from_secs(300);
 const CANDIDATE_ABSENCE_LIMIT: Duration = Duration::from_secs(90);
 
 use crate::gemini::{
-    GeminiEvent, GeminiFunctionCall, GeminiLiveSession, open_live_session, resume_live_session,
+    GeminiEvent, GeminiFunctionCall, GeminiLiveSession, generate_interim_review, open_live_session,
+    redact_api_key, resume_live_session,
 };
 use crate::runtime::{
-    AGENT_NAME, RuntimeBootstrap, TOOL_LOG_HINT, TOOL_READ_EDITOR, TOOL_RECORD_FRAMEWORK_EVIDENCE,
-    TOPIC_TRANSCRIPTION, agent_identity,
+    AGENT_NAME, RuntimeBootstrap, TOOL_END_INTERVIEW, TOOL_LOG_HINT, TOOL_READ_EDITOR,
+    TOOL_RECORD_FRAMEWORK_EVIDENCE, TOPIC_TRANSCRIPTION, agent_identity,
 };
 use crate::token::{LivekitTokenInput, livekit_token};
 
@@ -413,17 +415,7 @@ async fn replace_gemini_session(
     // panel and the report both read the two as one.
     cut_off_turn(context.activity, context.output_audio);
 
-    // The discard belonged to the socket that just died. It is set when a pause
-    // cuts a reply in flight and cleared by the `turnComplete` or `interrupted`
-    // that answers it, which a closed socket never sends, so a restart in that
-    // window left it set and the new session's first turn was dropped on the
-    // way out. That turn is the cold-restart briefing, which is the one turn
-    // this whole path exists to deliver.
-    context.activity.discarding_output = false;
-
-    // Whatever the old socket owed is unrecoverable, and leaving this set would
-    // hold the next advisory against a debt no socket can now pay.
-    context.activity.tool_response_outstanding = false;
+    clear_abandoned_socket_work(context.state, context.activity);
     close_turns(room, context).await?;
     set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
     publish_interviewer_state(room, false).await?;
@@ -469,6 +461,138 @@ async fn replace_gemini_session(
     }
     context.activity.mark_speaking();
     Ok(ControlFlow::Continue(()))
+}
+
+/// Drops work that could only have been completed by the replaced socket.
+///
+/// A close request follows its tool acknowledgement: without that generation,
+/// the loop must not turn a request from the old socket into a closing from the
+/// new one. The other two flags are the same kind of debt. A closed socket
+/// cannot send the event that clears them, and carrying either into its
+/// replacement makes the new interviewer discard output or wait on work it did
+/// not create.
+fn clear_abandoned_socket_work(state: &mut RuntimeState, activity: &mut RuntimeActivity) {
+    activity.discarding_output = false;
+    activity.tool_response_outstanding = false;
+    state.end_requested = false;
+}
+
+/// Reads the stretch of interview nobody has assessed yet, off to one side.
+///
+/// The room loop never waits on this. That is the whole point: the evaluation
+/// that used to happen after the candidate stopped talking happens here
+/// instead, in a pause, while the loop carries on handling their next word. It
+/// is collected on a later watch tick, once the handle reports itself finished,
+/// and nothing fails if it never does.
+fn spawn_interim_review(
+    state: &mut RuntimeState,
+    interview: InterviewContext<'_>,
+) -> tokio::task::JoinHandle<String> {
+    let prompt = take_interim_review_window(state, interview.boot);
+    let api_key = interview.config.google_api_key.clone();
+    let model = interview.boot.report_model.to_string();
+    tokio::spawn(async move {
+        match generate_interim_review(&api_key, &model, &prompt).await {
+            Ok(text) => text,
+
+            // Logged and answered with nothing. This is an optimization on a
+            // report that will be written from the transcript regardless, so an
+            // outage here is not the candidate's problem and must never become
+            // one. An empty note records nothing.
+            Err(error) => {
+                eprintln!(
+                    "interim review skipped: {}",
+                    redact_api_key(&error.to_string(), &api_key)
+                );
+                String::new()
+            }
+        }
+    })
+}
+
+/// The one review that may be in flight, owned rather than let loose.
+///
+/// Two things a bare `tokio::spawn` got wrong. A task that panics sends no
+/// result, so a loop tracking "a review is running" in a bool would believe one
+/// forever and spend a single panic to disable every remaining pause in the
+/// interview; asking the handle is the same question with no second copy of the
+/// answer. And `JoinHandle` detaches on drop, so an interview that ended under
+/// a review left a task holding a cloned API key and writing to a log nobody
+/// was reading any more. `run_room` has several exits and none of them should
+/// have to remember this, so the abort is the drop.
+#[derive(Default)]
+struct InterimReview(Option<tokio::task::JoinHandle<String>>);
+
+impl InterimReview {
+    fn is_running(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// The handle once it has finished, leaving the slot empty.
+    ///
+    /// `is_finished` is true for a task that panicked as well as one that
+    /// returned, and awaiting a handle that has finished does not block, so
+    /// this is the one place a review leaves the slot, however it ended.
+    fn finished(&mut self) -> Option<tokio::task::JoinHandle<String>> {
+        if self.0.as_ref()?.is_finished() {
+            self.0.take()
+        } else {
+            None
+        }
+    }
+
+    fn start(&mut self, handle: tokio::task::JoinHandle<String>) {
+        if let Some(replaced) = self.0.replace(handle) {
+            replaced.abort();
+        }
+    }
+}
+
+impl Drop for InterimReview {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            handle.abort();
+        }
+    }
+}
+
+/// The stretch to review, with the cursor moved past it.
+///
+/// Split from the spawn above so the part that can be wrong is reachable from a
+/// test. Which lines a pause reads, and whether the pause after it reads the
+/// ones since rather than the same ones again, is the whole behavior here; the
+/// rest is an HTTP call.
+///
+/// The window is marked read here, before the call goes out, rather than when
+/// one returns. A call that fails would otherwise hand the same stretch to the
+/// next pause, which would then be reading old speech instead of the speech
+/// since -- and the transcript reaches the final reviewer whole either way, so
+/// a window nobody managed to summarize is not a window anybody lost.
+fn take_interim_review_window(state: &mut RuntimeState, boot: &RuntimeBootstrap<'_>) -> String {
+    // Both halves bounded. The cursor only moves when a review actually fires,
+    // so a stretch that never offers a quiet moment banks lines indefinitely,
+    // and the editor is unbounded on the way in -- either one would otherwise
+    // hand a call that has twelve seconds an input too large to read.
+    let window = transcript_tail(
+        &state.transcript[unreviewed_from(state)..],
+        INTERIM_WINDOW_BYTES,
+    );
+    state.interim_transcript_lines = state.transcript.len();
+
+    // The tail, not the whole list. Every review used to be sent every note
+    // taken so far, which is prefill growing quadratically across a session to
+    // defend against a repeat `record_interim_notes` already drops.
+    let recent = state
+        .interim_notes
+        .len()
+        .saturating_sub(INTERIM_CONTEXT_NOTES);
+    interim_review_prompt(&InterimReviewInput {
+        problem: boot.problem,
+        transcript_window: &window,
+        code: &code_head(&state.code, INTERIM_CODE_BYTES),
+        language: &state.language,
+        already_recorded: &state.interim_notes[recent..].join("\n"),
+    })
 }
 
 /// Everything the interview loop needs, owned, once the candidate has joined
@@ -630,6 +754,11 @@ pub async fn run_room(
     let mut restarts = 0usize;
     let mut deferred_restart = DeferredRestart::default();
 
+    // At most one idle-window review at a time, collected on the watch tick
+    // below. A tick of latency on a note nobody is waiting for is not worth an
+    // arm in the select.
+    let mut interim_review = InterimReview::default();
+
     let mut watch = tokio::time::interval(Duration::from_secs_f64(WATCH_TICK_S));
 
     // Checked on the watch tick rather than given its own timer arm: the tick
@@ -659,25 +788,24 @@ pub async fn run_room(
                     boot.room_name, boot.duration_min
                 );
 
-                // Fed through the same path the browser's own end takes, so the
-                // wrap-up, the report and the teardown are the ones that are
-                // already tested rather than a second copy that drifts.
                 let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
-
-                // The result is always Break for an end_interview packet, and
-                // the report has been published by the time it returns.
-                let _ = handle_data_packet(
+                end_through_control(
                     &room,
                     &mut context,
                     interview,
-                    TOPIC_CONTROL,
-                    &serde_json::json!({ "type": "end_interview", "reason": "time_up" }),
+                    "time_up",
+                    &mut interim_review,
                 )
                 .await?;
                 return Ok(());
             }
             _ = watch.tick(), if !turn.state.ended => {
-                if presence.gave_up(Instant::now()) {
+                // One reading of the clock for the whole tick. Three calls gave
+                // three instants microseconds apart, so a cooldown stamped from
+                // one and tested against another was answering a question
+                // nobody asked.
+                let tick_at = Instant::now();
+                if presence.gave_up(tick_at) {
                     // No report: it would be graded from a session the
                     // candidate walked out of, and there is nobody in the room
                     // to receive it. The browser writes the report the
@@ -687,7 +815,37 @@ pub async fn run_room(
                     leave_room(&room).await;
                     return Ok(());
                 }
-                if let Some(prompt) = turn.activity.watch_prompt(&turn.state, Instant::now()) {
+
+                if let Some(review) = interim_review.finished() {
+                    match review.await {
+                        Ok(notes) => record_interim_notes(&mut turn.state, &notes),
+
+                        // A panicked or cancelled review is a review that did
+                        // not happen. The slot is already clear, so the next
+                        // pause takes it.
+                        Err(error) => {
+                            eprintln!("interim review ended abnormally: {error}");
+                        }
+                    }
+                }
+
+                // Ahead of the nudge below, and cheap when it declines. The
+                // pause this reads is the same pause the interview is spending
+                // anyway, and what it buys is a final reviewer that arrives at
+                // a session somebody has already read.
+                //
+                // Not a shorter wait: the report call is bounded at
+                // REPORT_TIMEOUT and measures seconds, and the transcript still
+                // reaches it whole, so this is bought for what the report is
+                // written from rather than for when it lands. The ten minutes
+                // in issue 31 were the interview's own clock, and it is
+                // `end_interview` that answers those.
+                if !interim_review.is_running()
+                    && turn.activity.claim_interim_review(&turn.state, tick_at)
+                {
+                    interim_review.start(spawn_interim_review(&mut turn.state, interview));
+                }
+                if let Some(prompt) = turn.activity.watch_prompt(&turn.state, tick_at) {
                     // Not `?`. Every write below is one the reader may be about
                     // to explain: a socket Gemini has closed fails the next
                     // send long before `next_event` drains and reports it, and
@@ -779,6 +937,46 @@ pub async fn run_room(
                 }
                 let mut context = turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
                 handle_gemini_event(&room, &mut context, event, Interruptible::Yes).await?;
+
+                // Jim called `end_interview`. Fed through the same packet the
+                // browser and the server-side deadline both send, for the
+                // reason the deadline arm gives: the wrap-up, the report and
+                // the teardown are then the ones that are already tested.
+                //
+                // Read here rather than inside the tool call because this is
+                // where the room, the report and the way out of the loop are
+                // all in scope.
+                //
+                // Held until the tool response's own generation has landed.
+                // Gemini owes one for every tool response, so acting on the
+                // flag the instant it is set means the closing is requested
+                // while that acknowledgement is still coming: it is the
+                // acknowledgement's `TurnComplete` that settles the output,
+                // `send_wrap_up_and_wait` returns on it, and the closing turn
+                // -- the thanks the candidate hears and the `skipped` evidence
+                // calls the wrap-up asks for -- is cut off by the shutdown
+                // behind it. `TurnComplete`, `Interrupted` and a socket
+                // replacement all clear the flag, so this is a beat, not a
+                // condition that can hold the interview open. Not while paused.
+                // The closing would be generated into a room whose output this
+                // loop drops (`output_disposition`), so the candidate hears
+                // none of it and is handed a report out of a silence they did
+                // not know had ended. Pausing also clears the
+                // outstanding-response flag, so without this the next event of
+                // any kind ends the interview. Held instead until they come
+                // back; if they never do, the deadline still ends it.
+                if ready_to_close(context.state, context.activity) {
+                    eprintln!("interviewer ended the interview: room={room_name}");
+                    end_through_control(
+                        &room,
+                        &mut context,
+                        interview,
+                        "interview_complete",
+                        &mut interim_review,
+                    )
+                    .await?;
+                    return Ok(());
+                }
 
                 // Asked after every event, not only after a turn boundary. A
                 // candidate talking over the draining queue empties it through
@@ -1170,6 +1368,60 @@ pub(super) fn browser_packet(
     })
 }
 
+/// Whether the interviewer's request to close may be acted on yet.
+///
+/// A predicate rather than four conditions in the select arm, because three of
+/// them are load-bearing in ways nothing else states. `paused`: the closing
+/// would be generated into a room whose output this loop drops, so the
+/// candidate hears none of it and is handed a report out of a silence they did
+/// not know had ended -- and pausing also clears the flag below, so without
+/// this the next event of any kind would end the interview.
+/// `tool_response_outstanding`: Gemini owes a generation for the tool response,
+/// and acting before it lands means `send_wrap_up_and_wait` returns on the
+/// acknowledgement's `TurnComplete` with the real closing cut off behind it.
+/// `ended`: the report has already gone.
+fn ready_to_close(state: &RuntimeState, activity: &RuntimeActivity) -> bool {
+    state.end_requested && !state.ended && !state.paused && !activity.tool_response_outstanding
+}
+
+/// Ends the interview by handing the loop the packet the browser would send.
+///
+/// Three routes reach the same ending now -- the candidate's own button, the
+/// server-side deadline, and the interviewer's `end_interview` tool -- and the
+/// last two arrive at the first one's path rather than at a copy of it, because
+/// that is where the wrap-up, the report and the teardown are, and where they
+/// are already tested. The result is always `Break` and the report has been
+/// published by the time this returns, so there is nothing for a caller to do
+/// but stop -- which holds because both callers check `ended` first. Called on
+/// an interview that has already ended it would return having published
+/// nothing, and the caller would stop just the same.
+async fn end_through_control(
+    room: &Room,
+    context: &mut GeminiEventContext<'_>,
+    interview: InterviewContext<'_>,
+    reason: &str,
+    review: &mut InterimReview,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // A review that came back between two watch ticks is a pause already paid
+    // for, and the report is about to be written. Collected here rather than
+    // left to the tick that will not run, because the alternative is the drop
+    // below aborting a result that had already arrived.
+    if let Some(finished) = review.finished()
+        && let Ok(notes) = finished.await
+    {
+        record_interim_notes(context.state, &notes);
+    }
+    let _ = handle_data_packet(
+        room,
+        context,
+        interview,
+        TOPIC_CONTROL,
+        &serde_json::json!({ "type": "end_interview", "reason": reason }),
+    )
+    .await?;
+    Ok(())
+}
+
 /// Applies one decoded data packet. `Break` means the interview is over and the
 /// report has been published.
 async fn handle_data_packet(
@@ -1362,7 +1614,7 @@ async fn handle_gemini_event(
                 context.activity.note_candidate_finished(Instant::now());
                 let turn = &mut context.turns.candidate;
                 let whole = turn
-                    .record(&mut context.state.transcript, "Candidate", &text)
+                    .record(&mut context.state.transcript, CANDIDATE_SPEAKER, &text)
                     .to_string();
                 publish_transcript(
                     room,
@@ -1451,6 +1703,18 @@ async fn handle_gemini_event(
             }
         }
         GeminiEvent::Interrupted => {
+            // A barge-in cancels a pending close. `cut_off_turn` below clears
+            // `tool_response_outstanding`, which is the only thing holding the
+            // end back, so without this the candidate who says "wait, actually"
+            // over Jim's acknowledgement clears the hold with the same event
+            // that carries their objection, and is cut off and handed a report.
+            // Ending is the one decision here nobody can take back, and someone
+            // who has just started a sentence is not finished. Jim can call the
+            // tool again once they are.
+            if std::mem::take(&mut context.state.end_requested) {
+                eprintln!("interviewer's ending cancelled: the candidate spoke over the close");
+            }
+
             // The only other path that empties the queue, and it used to do so
             // silently. If a turn is cut this way the candidate hears a
             // fragment or nothing, and without this line the log shows only the
@@ -1535,6 +1799,43 @@ fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) -> ser
             Ok(evidence) => serde_json::json!({ "result": framework_evidence_json(&evidence) }),
             Err(error) => serde_json::json!({ "error": error }),
         },
+
+        // A request, answered here, acted on by the room loop. Ending the
+        // interview publishes a report and leaves the room, and none of that is
+        // reachable from a function whose whole world is the state: what this
+        // can do is say so, and be read on the way out of the event that
+        // carried it.
+        //
+        // The response tells Jim to stay quiet because Gemini owes a generation
+        // for every tool response, and the closing is about to be prompted for
+        // properly. Without this it says goodbye twice.
+        //
+        // Gated on the same trusted evidence the behavioral round opens on, and
+        // for the same reason: this is the model judging that its own interview
+        // is finished, and the cost of believing it wrongly is a candidate cut
+        // off partway. A two-round interview also has to reach the reserved
+        // round's explicit started-or-skipped disposition. Refusing costs
+        // nothing -- the timer still ends the session, which is what happened
+        // before this tool existed -- so the gate is on the claim, not on the
+        // clock.
+        TOOL_END_INTERVIEW => {
+            if !crate::agent::coding_round_complete(state) {
+                return serde_json::json!({
+                    "error": "The coding round has no Test and Optimizations evidence yet, so the interview is not finished. Continue, and record evidence when the candidate earns it."
+                });
+            }
+            if state.interview_loop == crate::agent::InterviewLoop::CodingBehavioral
+                && !state.round_transition_seen
+            {
+                return serde_json::json!({
+                    "error": "The behavioral reserve has not started or been skipped yet, so the interview is not finished. Continue until its round transition arrives."
+                });
+            }
+            state.end_requested = true;
+            serde_json::json!({
+                "result": "Recorded. Say nothing further; the closing will be requested in a moment."
+            })
+        }
         name => serde_json::json!({ "error": format!("unknown tool: {name}") }),
     }
 }

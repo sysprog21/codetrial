@@ -221,6 +221,11 @@
         <div class="spinner"></div>
         <p>Jim is writing up your evaluation...</p>
         <p id="ending-detail">Scoring your code and communication - this usually takes a few seconds.</p>
+        <!-- A spinner says "something is happening"; only a number says
+             "something is still happening". A candidate watching a report that
+             never came had no way to tell it apart from one that was nearly
+             ready, and closed the tab. -->
+        <p id="ending-elapsed" class="ending-elapsed"></p>
         <button id="leave-room" class="pill-button" type="button" hidden>Taking too long? Leave the room</button>
         <button id="force-report" class="pill-button" type="button">Show offline summary</button>
       </section>

@@ -965,6 +965,16 @@ p {
   padding: 1rem;
 }
 
+/* Tabular figures because this counts up once a second in place: proportional
+   digits make the whole line shuffle sideways on every tick, which reads as the
+   page doing something rather than as the wait it is reporting. `--sub` and not
+   `--muted` for the reason the fieldset legend gives: this is normal text and
+   `--muted` measures under 4.5. */
+.ending-elapsed {
+  color: var(--sub);
+  font-variant-numeric: tabular-nums;
+}
+
 .spinner {
   width: 2.5rem;
   height: 2.5rem;

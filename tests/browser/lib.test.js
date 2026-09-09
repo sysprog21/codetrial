@@ -427,6 +427,14 @@ test("sanitizeReport clamps scores and strips markup from a hostile report", () 
   assert.equal(report.hintsUsed, 0);
   assert.equal(sanitizeReport({ hintsUsed: JSON.parse("1e999") }).hintsUsed, 0, "non-finite counts collapse to 0, like scores");
   assert.equal(sanitizeReport({ hintsUsed: 500 }).hintsUsed, 99, "absurd counts are clamped");
+
+  // A closed set. The page turns this into a replay row and stores it, so a
+  // value from an agent that ends sessions some way this build does not know
+  // about reads as "cannot say" rather than as a decision nobody made.
+  assert.equal(sanitizeReport({ endReason: "time_up" }).endReason, "time_up");
+  assert.equal(sanitizeReport({ endReason: "interview_complete" }).endReason, "interview_complete");
+  assert.equal(sanitizeReport({ endReason: "abandoned_by_llm" }).endReason, null);
+  assert.equal(sanitizeReport({}).endReason, null, "a report from before the field carries none");
 });
 
 // `/api/reports` answers an oversized body with a 413 the UI has nothing to do
@@ -498,6 +506,7 @@ test("sanitizeReport preserves a well-formed agent report", () => {
     // it here. Absence means a report written before loops existed, and that
     // is the one case sanitizeReport must not invent a value for.
     interviewLoop: "coding_behavioral",
+    endReason: "interview_complete",
     codingScore: 82,
     communicationScore: 74,
     decision: "HIRE",
@@ -514,6 +523,7 @@ test("sanitizeReport preserves a well-formed agent report", () => {
     interviewContract: null,
     mode: undefined,
     interviewLoop: "coding_behavioral",
+    endReason: "interview_complete",
     rounds: [],
     codingScore: 82,
     communicationScore: 74,
@@ -709,37 +719,31 @@ test("report mode is kept only where a report actually recorded one", () => {
 test("the countdown derives from the deadline rather than accumulating", () => {
   const endsAt = 1_000_000;
 
-  assert.equal(countdown(2700, endsAt, endsAt - 2_700_000).remaining, 2700);
-  assert.equal(countdown(45, endsAt, endsAt).remaining, 0);
+  assert.equal(countdown(endsAt, endsAt - 2_700_000).remaining, 2700);
+  assert.equal(countdown(endsAt, endsAt).remaining, 0);
 
   // Never negative: an overdue deadline reads as no time left, not as a
   // negative timer counting up.
-  assert.equal(countdown(1, endsAt, endsAt + 60_000).remaining, 0);
+  assert.equal(countdown(endsAt, endsAt + 60_000).remaining, 0);
 });
 
-test("the time warning fires on the crossing, not on the number", () => {
+test("the time warning threshold is a level, so no tick can miss it", () => {
   const endsAt = 1_000_000;
   const at = (remaining) => endsAt - remaining * 1000;
 
-  assert.equal(countdown(TIME_WARNING_S + 100, endsAt, at(TIME_WARNING_S)).warn, true);
+  assert.equal(countdown(endsAt, at(TIME_WARNING_S)).urgent, true);
 
-  // The failure this replaced: a throttled tab skipping from 400 to 240 never
+  // The failure this guards: a throttled tab skipping from 400 to 240 never
   // equals 300, so an equality test would let the interview run to the end with
-  // the agent never told the candidate was near time.
-  assert.equal(countdown(400, endsAt, at(240)).warn, true);
+  // the agent never told the candidate was near time. `countdown` used to
+  // answer that with a `warn` crossing, which is one tick wide and so could be
+  // missed by a pause instead. A level cannot be missed; `tickTimer` latches it
+  // to send once.
+  assert.equal(countdown(endsAt, at(240)).urgent, true);
+  assert.equal(countdown(endsAt, at(400)).urgent, false);
 
-  // Once, though. A warning re-sent on every later tick is a nag, and the agent
-  // treats each one as news.
-  assert.equal(countdown(TIME_WARNING_S, endsAt, at(240)).warn, false);
-  assert.equal(countdown(TIME_WARNING_S + 100, endsAt, at(TIME_WARNING_S + 1)).warn, false);
-
-  // `urgent` paints, so unlike `warn` it stays true for the rest of the run.
-  assert.equal(countdown(400, endsAt, at(240)).urgent, true);
-  assert.equal(countdown(TIME_WARNING_S, endsAt, at(240)).urgent, true);
-  assert.equal(countdown(400, endsAt, at(400)).urgent, false);
-
-  assert.equal(countdown(10, endsAt, endsAt).expired, true);
-  assert.equal(countdown(10, endsAt, at(1)).expired, false);
+  assert.equal(countdown(endsAt, endsAt).expired, true);
+  assert.equal(countdown(endsAt, at(1)).expired, false);
 });
 
 // The rule that decides whether this browser is allowed to put a hiring verdict

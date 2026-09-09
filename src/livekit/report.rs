@@ -11,7 +11,7 @@ use ::livekit::prelude::{DataPacket, Room};
 
 use crate::agent::{
     ReportPromptInput, RuntimeState, final_report, format_test_run, framework_evidence_json,
-    interview_contract_json, report_prompt, transcript_for_report,
+    interview_contract_json, report_prompt, rolling_assessment, transcript_for_report,
 };
 use crate::gemini::{generate_report, redact_api_key};
 use crate::runtime::{RuntimeBootstrap, TOPIC_REPORT};
@@ -69,7 +69,7 @@ async fn report_packet(
     };
     stamp_report_contract(&mut report);
     Ok(report_data_packet(report_with_integrity_events(
-        report, state,
+        report, state, reason,
     ))?)
 }
 
@@ -82,6 +82,7 @@ fn stamp_report_contract(report: &mut serde_json::Value) {
 fn report_with_integrity_events(
     mut report: serde_json::Value,
     state: &RuntimeState,
+    reason: &str,
 ) -> serde_json::Value {
     if let Some(object) = report.as_object_mut() {
         // The evidence, plus the heartbeats that bookend it, merged by sequence
@@ -126,33 +127,28 @@ fn report_with_integrity_events(
                     .collect(),
             ),
         );
-        let coding_gate = [
-            crate::agent::FrameworkPhase::Test,
-            crate::agent::FrameworkPhase::Optimizations,
-        ]
-        .iter()
-        .all(|phase| {
-            state.framework_evidence.iter().any(|item| {
-                item.phase == *phase && item.kind != crate::agent::EvidenceKind::Skipped
-            })
-        });
+        let coding_gate = crate::agent::coding_round_complete(state);
         object.insert(
             "interviewLoop".to_string(),
             serde_json::json!(state.interview_loop.as_str()),
         );
+
+        // Why the interview ended, from the side that ended it. The page can
+        // see that a report arrived unasked but not which clock produced it,
+        // and it was deriving the answer from its own countdown: an interview
+        // the interviewer closed after a suspended tab drifted past its
+        // deadline was then recorded as having run out of time.
+        object.insert("endReason".to_string(), serde_json::json!(reason));
         let star_complete = state.behavioral_round_started
-            && [
-                crate::agent::FrameworkPhase::Situation,
-                crate::agent::FrameworkPhase::Task,
-                crate::agent::FrameworkPhase::Action,
-                crate::agent::FrameworkPhase::Result,
-            ]
-            .iter()
-            .all(|phase| {
-                state.framework_evidence.iter().any(|item| {
-                    item.phase == *phase && item.kind != crate::agent::EvidenceKind::Skipped
-                })
-            });
+            && crate::agent::phases_evidenced(
+                state,
+                &[
+                    crate::agent::FrameworkPhase::Situation,
+                    crate::agent::FrameworkPhase::Task,
+                    crate::agent::FrameworkPhase::Action,
+                    crate::agent::FrameworkPhase::Result,
+                ],
+            );
         object.insert("rounds".to_string(), serde_json::json!([
             {"kind":"coding","budgetMin": state.coding_minutes, "status": if coding_gate { "complete" } else { "incomplete" }},
             {"kind":"behavioral","budgetMin": state.behavioral_minutes, "status": if state.interview_loop == crate::agent::InterviewLoop::CodingOnly { "not_configured" } else if star_complete { "complete" } else if state.behavioral_round_started { "started" } else { "skipped" }}
@@ -166,11 +162,13 @@ fn report_prompt_text(
     state: &RuntimeState,
     elapsed_min: f64,
 ) -> String {
+    let rolling = rolling_assessment(&state.framework_evidence, &state.interim_notes);
     let transcript = transcript_for_report(&state.transcript);
     let test_summary = format_test_run(state.last_test_run.as_ref(), state.test_runs);
     report_prompt(ReportPromptInput {
         problem: boot.problem,
         transcript: &transcript,
+        rolling_assessment: &rolling,
         final_code: &state.code,
         language: &state.language,
         hints_used: state.hints_used,

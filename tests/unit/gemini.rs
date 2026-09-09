@@ -266,6 +266,14 @@ fn live_setup_uses_native_audio_voice_tools_and_transcription() {
             .get("frameworkVersion")
             .is_none()
     );
+
+    // The tool that lets an interview end when it is over rather than when the
+    // clock says so. No parameters: the reason is always the same one, and a
+    // free-text field here would be a second place for the closing to be
+    // written.
+    let ending_tool = &setup["tools"][0]["functionDeclarations"][3];
+    assert_eq!(ending_tool["name"], TOOL_END_INTERVIEW);
+    assert!(ending_tool.get("parameters").is_none());
     assert_eq!(setup["inputAudioTranscription"], json!({}));
     assert_eq!(setup["outputAudioTranscription"], json!({}));
     assert_eq!(
@@ -872,4 +880,41 @@ async fn a_resumed_session_keeps_its_handle_until_a_new_one_arrives() {
     assert_eq!(session.next_event().await, None);
     assert_eq!(session.resumption_handle().as_deref(), Some("handle-in"));
     server.await.unwrap();
+}
+
+/// The idle-window call is not the report call, and the difference is the whole
+/// config: prose rather than a schema, a small ceiling, and thinking off.
+///
+/// Both go out through `generate_content_once`, so the envelope is shared and
+/// only this decides what comes back. An empty config would hand the endpoint
+/// its own defaults, which for this model means a JSON-less answer of whatever
+/// length it likes, arriving at a twelve-second deadline.
+#[test]
+fn the_interim_review_asks_for_bounded_prose_and_no_thinking() {
+    let request = content_request("read this stretch", interim_generation_config());
+    let config = &request["generationConfig"];
+
+    assert_eq!(
+        request["contents"][0]["parts"][0]["text"],
+        "read this stretch"
+    );
+    assert_eq!(config["responseMimeType"], "text/plain");
+    assert_eq!(config["maxOutputTokens"], 512);
+    assert_eq!(config["thinkingConfig"]["thinkingBudget"], 0);
+    assert!(
+        config.get("responseSchema").is_none(),
+        "a schema here would reject the prose the prompt asks for"
+    );
+
+    // The report's own config still goes through the shared envelope unchanged.
+    let report = generate_report_request("write the debrief");
+    assert_eq!(
+        report["generationConfig"]["responseMimeType"],
+        "application/json"
+    );
+    assert!(report["generationConfig"]["responseSchema"].is_object());
+    assert_eq!(
+        report["contents"][0]["parts"][0]["text"],
+        "write the debrief"
+    );
 }

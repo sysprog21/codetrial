@@ -168,7 +168,6 @@ function applyGrantedDuration(granted) {
   durationMin = granted;
   behavioralMinutes = interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
   codingMinutes = durationMin - behavioralMinutes;
-  state.remaining = durationMin * 60;
   // The budget is on screen by now: `bindEvents` wrote it during setup, from
   // the length the URL asked for. Leaving it there would put the old number in
   // front of the candidate for the whole interview.
@@ -192,8 +191,19 @@ const state = {
   paused: false,
   codeByLanguage: { ...problem.starterCode },
   language: "python",
-  remaining: durationMin * 60,
+  // Thresholds already announced. A latch is released when the room pauses only
+  // if it was set inside the pause round trip, because the agent drops either
+  // packet while paused and the browser does not learn it is paused until that
+  // echo arrives -- so a threshold crossed inside that window is published,
+  // latched, and dropped, and re-asking is the only way it is ever heard. A
+  // threshold announced before the request went out was heard, and the agent
+  // dedupes only the round transition, so re-asking that one says the time
+  // warning twice. See togglePause, tickTimer and applyPause.
   roundTransitionSent: false,
+  timeWarningSent: false,
+  /// What had already been announced when the pause request left, or `null`
+  /// outside that round trip. Read once, by the echo it was taken for.
+  latchedBeforePause: null,
   // Wall-clock deadline, set when the interview starts. The countdown is
   // derived from it rather than accumulated, so throttling and suspend cannot
   // bend it.
@@ -266,6 +276,7 @@ const nodes = {
   forceReport: document.querySelector("#force-report"),
   leaveRoom: document.querySelector("#leave-room"),
   endingDetail: document.querySelector("#ending-detail"),
+  endingElapsed: document.querySelector("#ending-elapsed"),
   report: document.querySelector("#report-modal"),
   audioCheck: document.querySelector("#audio-check"),
   audioTestTone: document.querySelector("#audio-test-tone"),
@@ -1033,6 +1044,26 @@ async function receiveReport(room, payload) {
     if (state.report.incomplete) {
       setBanner("session", providerUiState("incomplete_report").message);
     }
+    // The interviewer can end the session itself now, and that route never
+    // passes through `endInterview`, which is the only other writer of this
+    // frame. `replayTimeline` breaks its window scan on it, so without one
+    // every interview Jim closes replays with a trailing question window that
+    // is really the goodbye. Written only when this page did not already write
+    // it: a browser-driven end is still in phase "ending" when the report lands.
+    if (state.phase === "live") {
+      // Two agent-side routes land here, and the deadline tells them apart: the
+      // agent ends a session of its own after the duration plus a grace, which
+      // a tab suspended past the deadline reaches before its own tick does.
+      // Calling that one "interviewer_ended" put a decision Jim never made into
+      // the replay.
+      // The agent's own word for it, where the report carries one. Falling
+      // back on this page's countdown is a guess, and the wrong one whenever a
+      // suspended tab drifted past its deadline before the interviewer closed
+      // a finished session; kept only for a report from an older agent.
+      const reason = state.report.endReason
+        || (Date.now() >= state.endsAt ? "time_up" : "interviewer_ended");
+      recordReplay("lifecycle", { state: "ended", reason });
+    }
     recordReplay("lifecycle", { state: "rounds_final", interviewLoop, rounds: state.report.rounds, interviewContract: state.report.interviewContract });
     void flushReplay();
     state.phase = "report";
@@ -1232,7 +1263,7 @@ function updatePresenceBanner(eventType) {
 }
 
 
-/// A repaint, not a clock. `state.remaining` used to be decremented once per
+/// A repaint, not a clock. The remaining seconds used to be decremented once per
 /// firing, so a hidden or minimised tab, which browsers throttle to roughly one
 /// timer per minute, showed a countdown drifting arbitrarily far from reality
 /// and never reached zero. Meet presentation mode steers candidates into a
@@ -1240,28 +1271,59 @@ function updatePresenceBanner(eventType) {
 /// a lid close stopped it entirely; this file already reasons about exactly
 /// that hazard for the face sampler.
 function tickTimer() {
-  if (state.phase !== "live" || state.paused) return;
-  const previousRemaining = state.remaining;
-  const tick = countdown(state.remaining, state.endsAt, Date.now());
-  state.remaining = tick.remaining;
+  if (state.phase !== "live") return;
+  const tick = countdown(state.endsAt, Date.now());
   nodes.timer.textContent = formatTime(tick.remaining);
   nodes.timer.classList.toggle("urgent", tick.urgent);
-  recordStageTick(tick.remaining);
-  if (interviewLoop === "coding_behavioral" && !state.roundTransitionSent
-    && previousRemaining > behavioralMinutes * 60 && tick.remaining <= behavioralMinutes * 60) {
-    state.roundTransitionSent = true;
-    // No remainingSeconds: the agent decides the round boundary from its own
-    // clock, and a number on the wire that nothing reads is one the next
-    // reader assumes is checked.
-    publish(topics.control, { type: "round_transition", round: "behavioral" });
-    recordReplay("lifecycle", { state: "round_reserve_started", round: "behavioral", remainingSeconds: tick.remaining, interviewLoop });
+  // A pause stops the conversation, not the deadline: the agent says so where
+  // it handles the packet, and its own clock runs on wall time either way. So
+  // the countdown above and the ending below run regardless, and what a pause
+  // holds back is only what would talk into a room nobody is listening in --
+  // plus the replay stage frame, which would otherwise repeat a clock nobody
+  // is watching every fifteen seconds.
+  //
+  // Returning early on `paused`, as this used to, meant a paused interview
+  // never reached `time_up` at all. It sat until the agent's own deadline --
+  // the full duration plus a two-minute grace -- behind a frozen timer, which
+  // is issue 31's symptom arriving by a second route.
+  if (!state.paused) {
+    recordStageTick(tick.remaining);
+
+    // Latched levels, not crossings. A crossing is one tick wide and this tick
+    // is missable twice over: a hidden tab is throttled to roughly one firing
+    // a minute, and a pause now lets the clock run past the threshold with the
+    // publish suppressed. Either one loses the event for the rest of the
+    // interview, so the reserve never opens and the warning is never spoken.
+    // Asking whether the clock is past the threshold is true on every tick
+    // after it, so nothing has to be caught. The flag makes it happen once, and
+    // `applyPause` releases it, because a publish the agent drops while paused
+    // has announced nothing.
+    if (interviewLoop === "coding_behavioral" && !state.roundTransitionSent
+      && tick.remaining <= behavioralMinutes * 60) {
+      state.roundTransitionSent = true;
+      // No remainingSeconds: the agent decides the round boundary from its own
+      // clock, and a number on the wire that nothing reads is one the next
+      // reader assumes is checked.
+      publish(topics.control, { type: "round_transition", round: "behavioral" });
+      recordReplay("lifecycle", { state: "round_reserve_started", round: "behavioral", remainingSeconds: tick.remaining, interviewLoop });
+    }
+    if (tick.urgent && !state.timeWarningSent) {
+      state.timeWarningSent = true;
+      publish(topics.control, timeWarningPayload(tick.remaining));
+    }
   }
-  if (tick.warn) publish(topics.control, timeWarningPayload(tick.remaining));
   if (tick.expired) endInterview("time_up");
 }
 
 function togglePause() {
   if (state.phase !== "live") return;
+  // Taken as the request goes out, so the echo can tell a threshold that was
+  // announced from one that was published into the round trip and dropped by an
+  // agent already paused. Only the second kind is worth asking again.
+  state.latchedBeforePause = {
+    roundTransitionSent: state.roundTransitionSent,
+    timeWarningSent: state.timeWarningSent,
+  };
   publish(topics.control, { type: "pause_interview", paused: !state.paused });
   // No room, no acknowledgement coming, so this browser is the authority.
   // `state.room`, not `state.joinedRoom`: the latter stays true for the rest
@@ -1274,6 +1336,12 @@ function togglePause() {
 
 let frameworkPhases = [];
 let frameworkHintTimer = null;
+/// The ending overlay's count-up. Stopped in `renderReport`, which every report
+/// path lands in, and in `leaveRoom`, the one exit that renders none. Hanging
+/// it off individual exits instead missed `receiveReport` -- the agent's report
+/// arriving, which is the path every successful interview takes -- and left a
+/// one-second interval running for the life of the tab.
+let endingClock = 0;
 
 /// The checklist, redrawn from the phases the interviewer has banked.
 ///
@@ -1353,11 +1421,29 @@ function applyPause(paused) {
   if (paused === state.paused) return;
   state.paused = paused;
   // The deadline is absolute and pause no longer moves it, matching the
-  // server, which stopped extending its own when practice mode went. Ticking
-  // stops while paused, so the display goes stale and the first tick after
-  // resume corrects it. Adding the paused time back, as this used to, would
+  // server, which stopped extending its own when practice mode went. The
+  // countdown keeps painting through a pause, so there is no stale display to
+  // correct on resume. Adding the paused time back, as this used to, would
   // promise minutes the server has already decided to end the interview
   // without.
+  //
+  // A threshold latch is released here only if it was set inside the pause
+  // round trip. The agent drops a round transition or a time warning that
+  // arrives while it is paused, and this echo is the first the page hears of
+  // that, so one published into that window was announced to nobody and has to
+  // be asked again on the first tick after the resume.
+  //
+  // Releasing unconditionally, as this used to, also re-asked thresholds that
+  // had already been heard. The agent dedupes a second round transition on its
+  // own `round_transition_seen`, but nothing dedupes `time_warning` -- it
+  // treats each one as news -- so every pause and resume inside the last five
+  // minutes had Jim break in with "exactly N minutes remain" all over again.
+  if (paused) {
+    const announced = state.latchedBeforePause;
+    state.latchedBeforePause = null;
+    if (!announced?.roundTransitionSent) state.roundTransitionSent = false;
+    if (!announced?.timeWarningSent) state.timeWarningSent = false;
+  }
   nodes.pause.textContent = paused ? "Resume" : "Pause";
   // Resuming must not hand back a control the round already retired. The
   // behavioral round disables the editor and the runner on purpose, and a
@@ -1466,6 +1552,7 @@ function endInterview(reason) {
   nodes.end.disabled = true;
   nodes.ending.hidden = false;
   nodes.forceReport.hidden = Boolean(state.room);
+  startEndingClock();
   if (state.room) {
     // Longer than the agent's worst case, not shorter: the report is bounded
     // by REPORT_TIMEOUT in src/livekit.rs and a timer-driven end spends
@@ -1480,6 +1567,13 @@ function endInterview(reason) {
       if (state.phase === "ending") {
         nodes.endingDetail.textContent = providerUiState("retry_ready").message;
         nodes.leaveRoom.hidden = false;
+        // Offered beside leaving, not instead of it. Past this point the report
+        // is not coming, and the two ways out are not equivalent: leaving
+        // navigates away and the session is gone, while the offline summary is
+        // built from what this page already holds. A candidate who has just sat
+        // through a whole interview should not have to pick "leave" to find out
+        // there was another option.
+        nodes.forceReport.hidden = false;
       }
     }, REPORT_ESCAPE_WAIT_MS);
   }
@@ -1487,7 +1581,31 @@ function endInterview(reason) {
   if (!state.room) setTimeout(showReport, 300);
 }
 
+/// How long the candidate has been waiting, counted up rather than promised.
+///
+/// The report is bounded by REPORT_TIMEOUT on the agent, so this never counts
+/// far; what it answers is the question a bare spinner cannot, which is whether
+/// anything is still happening. Issue 31 was reported as "it took over ten
+/// minutes, I could not tell whether it was stuck, so I closed it" -- and most
+/// of those minutes were the interview's own clock, not the report.
+function startEndingClock() {
+  const startedAt = Date.now();
+  const paint = () => {
+    nodes.endingElapsed.textContent = `Waiting ${formatTime(Math.round((Date.now() - startedAt) / 1000))}`;
+  };
+  paint();
+  globalThis.clearInterval(endingClock);
+  endingClock = globalThis.setInterval(paint, 1000);
+}
+
+function stopEndingClock() {
+  globalThis.clearInterval(endingClock);
+  endingClock = 0;
+  nodes.endingElapsed.textContent = "";
+}
+
 function leaveRoom() {
+  stopEndingClock();
   void state.room?.disconnect?.();
   stopAvatar();
   stopLocalMedia();
@@ -1497,6 +1615,14 @@ function leaveRoom() {
 async function showReport() {
   if (state.phase === "report") return;
   state.phase = "report";
+  // The offline summary is now offered while a room is still up -- it used to
+  // be hidden for the whole life of one -- so this is the one report path that
+  // can leave the agent in an interview nobody is attending. `receiveReport`
+  // disconnects because the agent published and left; here nothing has, and a
+  // candidate reading a local summary is still paying for a Gemini session.
+  void state.room?.disconnect?.().catch?.(() => {});
+  state.room = null;
+  state.connected = false;
   const passed = state.latestSummary?.passed || 0;
   const total = state.latestSummary?.total || 0;
   // Only the candidate's own turns count as having communicated. Jim's greeting
@@ -1535,6 +1661,7 @@ function renderReport() {
   // candidate was looking at a screen telling them the interview had ended.
   stopAvatar();
   stopLocalMedia();
+  stopEndingClock();
   nodes.ending.hidden = true;
   nodes.report.hidden = false;
   nodes.report.innerHTML = reportMarkup({
