@@ -1,7 +1,7 @@
 # Functions the mutation gate cannot judge, because `cargo test` cannot reach
 # them. Matched against the mutant names that `cargo mutants --list` prints.
 #
-# EXCLUSIONS: 39
+# EXCLUSIONS: 48
 #
 # That number is checked by `scripts/test.sh`, so adding an entry means editing
 # this line too. The point is not the count, it is that the list only ever grows
@@ -18,6 +18,28 @@
 # red for any change touching a line inside it, which is how a gate gets
 # ignored. What covers this path is the browser interview check and
 # scripts/browser-check.sh, not unit tests.
+#
+# `on_watch_tick`, `on_gemini_event` and `on_playout_settled` are three of
+# `run_room`'s select arms, lifted into named handlers so the loop reads as the
+# seven things it dispatches rather than three hundred lines of arm bodies.
+# `on_turn_complete` is the same move one layer down, out of
+# `handle_gemini_event`. Every mutant `cargo mutants` finds in them was already
+# in this list a moment ago, inside the two functions they came out of, and is
+# unreachable for the same reason: none of it runs without a LiveKit room and a
+# Gemini socket. Four names where there were two is the honest cost of the
+# split, and it buys no new unjudged code -- the same lines were unjudged when
+# they were arm bodies. The sibling handlers the same change created
+# (`on_hard_deadline`, `on_tool_calls`, `on_output_transcript`,
+# `on_input_transcript`, `on_generated_audio`, `on_interruption`) are absent
+# from the list on purpose was wrong, and the gate said so: `cargo mutants`
+# replaces a whole function body as well as flipping operators, so five of them
+# grew a `with Ok(())` mutant that no test can kill for the same reason their
+# parent's could not. They are listed now. `on_hard_deadline` is still absent,
+# and for a different reason worth writing down: its mutants are unviable
+# rather than unreachable, because `ControlFlow` has no `new` or `From` for
+# `cargo mutants` to call, so they never compile and never run. A return type
+# that gains one would make them viable, and the gate going red is how that
+# would announce itself.
 #
 # `open_session` is the first half of `run_room`, split out of it: it joins the
 # room, waits for a candidate, brings up the audio track and the Gemini session,
@@ -198,6 +220,15 @@ exclude_re = [
     "replace > with >= in create_interview",
     "replace > with == in create_interview",
     "run_room",
+    "on_watch_tick",
+    "on_gemini_event",
+    "on_playout_settled",
+    "on_turn_complete",
+    "on_tool_calls",
+    "on_output_transcript",
+    "on_input_transcript",
+    "on_generated_audio",
+    "on_interruption",
     "open_session",
     "run_gemini_check",
     "run_livekit",
