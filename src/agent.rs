@@ -24,17 +24,18 @@ use integrity::integrity_hash;
 pub use integrity::{sanitize_integrity_event, sanitize_test_run};
 pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, get_problem, topics_for};
 pub use prompts::{
-    LanguageChoiceContext, ReportPromptInput, build_instructions_for_plan, cold_restart,
-    format_test_run, greeting, language_choice, log_hint_text, numbered, proactive_review,
-    read_editor_text, report_prompt, significant_change, silence_nudge, spoken_language,
-    test_results_reaction, time_warning, wrap_up,
+    InterimReviewInput, LanguageChoiceContext, ReportPromptInput, build_instructions_for_plan,
+    cold_restart, format_test_run, greeting, interim_review_prompt, language_choice, log_hint_text,
+    numbered, proactive_review, read_editor_text, report_prompt, rolling_assessment,
+    significant_change, silence_nudge, spoken_language, test_results_reaction, time_warning,
+    wrap_up,
 };
 pub use report::{
     MAX_SUMMARY_TEXT, fallback_report, final_report, report_response_schema, validate_report,
     validate_report_candidate,
 };
 pub use value::json_number;
-pub(crate) use value::{json_int, python_truthy, truthy_string, value_string};
+pub(crate) use value::{bounded_model_text, json_int, python_truthy, truthy_string, value_string};
 
 use crate::config::{DEFAULT_DURATION_MIN, MAX_DURATION_MIN, MIN_DURATION_MIN};
 
@@ -99,6 +100,14 @@ pub const SPEECH_SETTLE_S: f64 = 4.0;
 /// the second means the behavioral round never begins at all. What the gate is
 /// for is a forged jump past the coding round, which is minutes early.
 const ROUND_TRANSITION_SKEW: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Where the browser announces the interview is nearly over, in seconds left.
+///
+/// The page owns the countdown and decides when to say so; this side owns
+/// whether to believe it. `TIME_WARNING_S` in web/lib.js is the same number,
+/// and the two are held together by
+/// `the_time_warning_threshold_is_the_same_number_on_both_sides`.
+pub const TIME_WARNING_S: u64 = 300;
 
 pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 4;
 pub const LIVE_PROMPT_VERSION: u32 = 1;
@@ -580,6 +589,11 @@ pub struct RuntimeState {
     pub coding_minutes: u32,
     pub behavioral_minutes: u32,
     pub round_transition_seen: bool,
+    /// The one five-minute warning the interviewer has accepted. The browser
+    /// re-sends its level after a pause in case the first packet arrived while
+    /// the server was paused, so this is the acknowledgement that prevents a
+    /// delivered warning from becoming a second interruption.
+    pub time_warning_seen: bool,
     pub behavioral_round_started: bool,
     pub paused: bool,
     pub framework_evidence: Vec<FrameworkEvidence>,
@@ -629,6 +643,19 @@ pub struct RuntimeState {
     /// the line resuming sends otherwise assumes an interviewer who was here
     /// for the whole interview.
     pub needs_cold_brief: bool,
+    /// Observations a reviewer recorded in the pauses, while the interview was
+    /// still running. Held apart from `framework_evidence`, which is the
+    /// interviewer's own bookkeeping about which phase happened: these are the
+    /// reading of it, and only the final report consumes them.
+    pub interim_notes: Vec<String>,
+    /// How many transcript lines an idle-window reviewer has already been
+    /// shown. The window it gets is everything after this, so a pause that
+    /// arrives with nothing new said costs no call at all.
+    pub interim_transcript_lines: usize,
+    /// The interviewer said the session is over. Read by the room loop, which
+    /// ends the interview through the same packet the browser sends, so this is
+    /// a request and not the end itself; `ended` is the end itself.
+    pub end_requested: bool,
     pub ended: bool,
 }
 
@@ -640,6 +667,7 @@ impl Default for RuntimeState {
             coding_minutes: 37,
             behavioral_minutes: 8,
             round_transition_seen: false,
+            time_warning_seen: false,
             behavioral_round_started: false,
             paused: false,
             framework_evidence: Vec::new(),
@@ -656,6 +684,9 @@ impl Default for RuntimeState {
             integrity_first_heartbeat: None,
             integrity_last_heartbeat: None,
             needs_cold_brief: false,
+            interim_notes: Vec::new(),
+            interim_transcript_lines: 0,
+            end_requested: false,
             ended: false,
         }
     }
@@ -664,6 +695,92 @@ impl Default for RuntimeState {
 pub const FRAMEWORK_VERSION: u32 = 1;
 pub const MAX_FRAMEWORK_EVIDENCE: usize = 64;
 const MAX_FRAMEWORK_SUMMARY_CHARS: usize = 240;
+/// Lines of idle-window assessment one interview keeps. Each is one bounded
+/// observation, and the report prompt carries all of them, so this is a size
+/// budget rather than a retention policy.
+pub const MAX_INTERIM_NOTES: usize = 48;
+pub(crate) const MAX_INTERIM_LINE_CHARS: usize = 300;
+/// Observations one idle-window review may contribute. The prompt asks for at
+/// most four; this is the same number where it can be relied on.
+pub const MAX_INTERIM_LINES_PER_REVIEW: usize = 4;
+/// How many of those notes a later review is shown, so it does not return one
+/// of them reworded.
+///
+/// The whole list was passed at first, which meant every review re-sent every
+/// note taken so far: prefill growing quadratically across a session, to defend
+/// against a repeat that `record_interim_notes` already drops. The recent
+/// ones are the ones a new note is likely to duplicate, so this is where the
+/// defense is worth paying for.
+///
+/// The notes have no phase to protect, so they cannot be evicted by the rule
+/// the evidence uses. They are still ordered in time, though, and a plain
+/// oldest-first cap spends the opening of the interview first -- the problem
+/// restatement and the clarifying questions, which is REACTO's R and E and the
+/// part a reviewer has the least other evidence for. So the opening is
+/// reserved and the eviction starts after it.
+pub(crate) const INTERIM_CONTEXT_NOTES: usize = 12;
+/// Notes from the opening of the interview that the cap may not evict.
+pub(crate) const INTERIM_OPENING_KEPT: usize = 8;
+
+// `Vec::remove` panics out of bounds, so the reserve being smaller than the
+// store is not a preference: it is what stops an interview crashing on its
+// forty-ninth note. Checked at build time rather than left to whoever next
+// tunes one of them.
+const _: () = assert!(INTERIM_OPENING_KEPT < MAX_INTERIM_NOTES);
+
+/// What `SpeakerTurn::record` is passed for the human in the room, and so the
+/// prefix its lines carry.
+///
+/// Both speakers land in one transcript, so "has anything been said since the
+/// last review" has to mean the candidate specifically: four of Jim's own turns
+/// are not a stretch of interview worth reading, and counting them spent a call
+/// on one. Named here and passed at the call site, so a rename cannot leave
+/// `candidate_lines` quietly answering zero forever.
+pub(crate) const CANDIDATE_SPEAKER: &str = "Candidate";
+
+/// Where the transcript nobody has reviewed yet begins.
+///
+/// Clamped rather than indexed directly: the cursor counts lines already shown,
+/// and nothing forbids a future caller from clearing the transcript under it. A
+/// panic here would take the interview with it.
+pub(crate) fn unreviewed_from(state: &RuntimeState) -> usize {
+    state.interim_transcript_lines.min(state.transcript.len())
+}
+
+/// The head of the editor, within a byte budget, on a character boundary.
+///
+/// The head and not the tail, unlike a transcript: code is read from the top,
+/// and the signature and the approach are what a reviewer needs. Nothing
+/// bounds `state.code` on the way in -- `apply_code_update` appends whatever
+/// the browser sent -- so a large paste would otherwise be re-sent whole to
+/// every idle-window review, each of which has twelve seconds to answer.
+pub fn code_head(code: &str, budget: usize) -> String {
+    if code.len() <= budget {
+        return code.to_string();
+    }
+
+    // A bounded search rather than a decrementing loop. Both walk back to the
+    // same byte -- index 0 is always a character boundary, so neither can run
+    // off the front, and `budget` indexes the string by the early return above
+    // -- but a loop that advances by hand can be made not to advance, and that
+    // is a hang rather than a wrong answer. The mutation gate reports a hang as
+    // a timeout, which is neither a pass nor a finding; a search over a range
+    // cannot be turned into one.
+    let end = (0..=budget)
+        .rev()
+        .find(|end| code.is_char_boundary(*end))
+        .unwrap_or_default();
+    format!("{}\n(remainder of the editor omitted)", &code[..end])
+}
+
+/// The candidate's own turns in a stretch of transcript.
+pub(crate) fn candidate_lines(lines: &[String]) -> usize {
+    let prefix = format!("{CANDIDATE_SPEAKER}: ");
+    lines
+        .iter()
+        .filter(|line| line.starts_with(&prefix))
+        .count()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameworkPhase {
@@ -703,6 +820,78 @@ pub struct FrameworkEvidence {
     pub confidence: u8,
     pub summary: String,
     pub framework_version: u32,
+}
+
+/// Which observation the cap gives up, once one has to go.
+///
+/// Dropping the oldest is what a bounded log does and it is wrong here. The
+/// first rows written are `repeat` and `example`, so the oldest-first rule
+/// spent them first, and the interview that overran the cap -- the long one,
+/// whose report needs this evidence most -- reached the reviewer having lost
+/// the phases it opened with. What is disposable is a phase's second and later
+/// observations, because the phase survives them.
+///
+/// So: the oldest row belonging to a phase that has another one. There are ten
+/// phases and the cap is far above that, so at the moment this is called some
+/// phase always holds a spare and the fallback below is unreachable; it is the
+/// answer to "what if the cap were ever lowered past the phase count", not a
+/// case that runs.
+fn evict_one_observation(evidence: &mut Vec<FrameworkEvidence>) {
+    // "The phase has another row" is not enough on its own. What the report and
+    // `phases_evidenced` read is a phase's non-skipped rows, so a phase holding
+    // one real observation and one skip has exactly one row that matters, and
+    // taking it turns a completed round back into an incomplete one -- which
+    // also refuses the interviewer its own ending, because that gate reads the
+    // same rows. A skip is expendable whenever anything else covers its phase;
+    // an observation only when another observation does.
+    let expendable = |index: usize| {
+        let item = &evidence[index];
+        evidence.iter().enumerate().any(|(other, row)| {
+            other != index
+                && row.phase == item.phase
+                && (item.kind == EvidenceKind::Skipped || row.kind != EvidenceKind::Skipped)
+        })
+    };
+    let doomed = (0..evidence.len()).find(|index| expendable(*index));
+    evidence.remove(doomed.unwrap_or(0));
+}
+
+/// One line of what a pause-time reviewer saw, bounded the way a summary is.
+///
+/// The text is model output and reaches the report prompt, so it is trimmed to
+/// one line per observation and cut to a length: an idle-window call that
+/// returns a paragraph, or a hundred of them, must not be able to crowd out the
+/// transcript it sits beside.
+pub fn record_interim_notes(state: &mut RuntimeState, text: &str) {
+    let mut taken = 0usize;
+    for line in text.lines() {
+        // The prompt's own ceiling, enforced rather than trusted. Without it a
+        // single degenerate response -- the answer is prose, so nothing but the
+        // token cap bounds its line count -- walks the whole session's notes
+        // out of the list one `remove(0)` at a time, and the report is then
+        // written from one bad pause instead of the interview.
+        if taken == MAX_INTERIM_LINES_PER_REVIEW {
+            break;
+        }
+
+        // A bullet followed by a space, not every leading dash: the prompt asks
+        // for "- ", and stripping the character on its own would edit "-1 is
+        // the case they missed" down to a different claim.
+        let line = line.trim();
+        let line = line.strip_prefix("- ").unwrap_or(line).trim();
+        if line.is_empty() {
+            continue;
+        }
+        let line = bounded_model_text(line, MAX_INTERIM_LINE_CHARS);
+        if state.interim_notes.iter().any(|held| held == &line) {
+            continue;
+        }
+        taken += 1;
+        if state.interim_notes.len() == MAX_INTERIM_NOTES {
+            state.interim_notes.remove(INTERIM_OPENING_KEPT);
+        }
+        state.interim_notes.push(line);
+    }
 }
 
 pub fn record_framework_evidence(
@@ -750,18 +939,15 @@ pub fn record_framework_evidence(
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|summary| !summary.is_empty())
-        .ok_or("invalid summary")?
-        .chars()
-        .filter(|character| !character.is_control())
-        .take(MAX_FRAMEWORK_SUMMARY_CHARS)
-        .collect::<String>();
+        .ok_or("invalid summary")
+        .map(|summary| bounded_model_text(summary, MAX_FRAMEWORK_SUMMARY_CHARS))?;
     if let Some(index) = state.framework_evidence.iter().position(|item| {
         item.phase == phase && item.source == source && item.kind == kind && item.summary == summary
     }) {
         return Ok(state.framework_evidence[index].clone());
     }
     if state.framework_evidence.len() == MAX_FRAMEWORK_EVIDENCE {
-        state.framework_evidence.remove(0);
+        evict_one_observation(&mut state.framework_evidence);
     }
     state.framework_evidence.push(FrameworkEvidence {
         at_ms: state
@@ -781,6 +967,38 @@ pub fn record_framework_evidence(
         .last()
         .expect("just appended evidence")
         .clone())
+}
+
+/// Whether the coding round is finished on evidence rather than on the clock.
+///
+/// Test and Optimizations, both observed or inferred and neither skipped: a
+/// candidate who ran their cases and justified their complexity has reached the
+/// end of REACTO, and one who did not has not, whatever the timer says. Three
+/// callers ask this same question -- whether to open the behavioral round,
+/// whether a report may call the coding round complete, and whether the
+/// interviewer may close the session -- and they were three copies of the same
+/// closure, which is three chances for the gate to mean something slightly
+/// different in each.
+pub(crate) fn coding_round_complete(state: &RuntimeState) -> bool {
+    phases_evidenced(
+        state,
+        &[FrameworkPhase::Test, FrameworkPhase::Optimizations],
+    )
+}
+
+/// Every one of these phases observed or inferred, none of them skipped.
+///
+/// The phase list is the parameter because the rule is not: the coding gate and
+/// the behavioral one differ only in which phases they name, and writing the
+/// `any`-inside-`all` out per caller is how there came to be four readings of
+/// "this round is finished" across three files.
+pub(crate) fn phases_evidenced(state: &RuntimeState, phases: &[FrameworkPhase]) -> bool {
+    phases.iter().all(|phase| {
+        state
+            .framework_evidence
+            .iter()
+            .any(|item| item.phase == *phase && item.kind != EvidenceKind::Skipped)
+    })
 }
 
 /// The phases this interview has evidence for, in the id spelling the browser
@@ -827,7 +1045,7 @@ pub const REACTO_PHASE_IDS: [&str; 6] = [
     "optimizations",
 ];
 
-const fn phase_id(phase: FrameworkPhase) -> &'static str {
+pub(crate) const fn phase_id(phase: FrameworkPhase) -> &'static str {
     match phase {
         FrameworkPhase::Repeat => "repeat",
         FrameworkPhase::Example => "example",
@@ -842,19 +1060,29 @@ const fn phase_id(phase: FrameworkPhase) -> &'static str {
     }
 }
 
-pub fn framework_evidence_json(evidence: &FrameworkEvidence) -> serde_json::Value {
-    let phase = phase_id(evidence.phase);
-    let source = match evidence.source {
+/// The wire spelling of a source, shared by the browser's row and the report
+/// prompt's line so the two cannot come to disagree about what to call one.
+pub(crate) const fn evidence_source_id(source: EvidenceSource) -> &'static str {
+    match source {
         EvidenceSource::CandidateSpeech => "candidate_speech",
         EvidenceSource::EditorSnapshot => "editor_snapshot",
         EvidenceSource::TestEvent => "test_event",
         EvidenceSource::SessionTiming => "session_timing",
-    };
-    let kind = match evidence.kind {
+    }
+}
+
+pub(crate) const fn evidence_kind_id(kind: EvidenceKind) -> &'static str {
+    match kind {
         EvidenceKind::Observed => "observed",
         EvidenceKind::Inferred => "inferred",
         EvidenceKind::Skipped => "skipped",
-    };
+    }
+}
+
+pub fn framework_evidence_json(evidence: &FrameworkEvidence) -> serde_json::Value {
+    let phase = phase_id(evidence.phase);
+    let source = evidence_source_id(evidence.source);
+    let kind = evidence_kind_id(evidence.kind);
     serde_json::json!({
         "atMs": evidence.at_ms,
         "phase": phase,

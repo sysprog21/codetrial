@@ -13,7 +13,8 @@ use tokio_tungstenite::{
 };
 
 use crate::runtime::{
-    RuntimeBootstrap, TOOL_LOG_HINT, TOOL_READ_EDITOR, TOOL_RECORD_FRAMEWORK_EVIDENCE,
+    RuntimeBootstrap, TOOL_END_INTERVIEW, TOOL_LOG_HINT, TOOL_READ_EDITOR,
+    TOOL_RECORD_FRAMEWORK_EVIDENCE,
 };
 
 const LIVE_WEBSOCKET_ENDPOINT: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
@@ -33,6 +34,12 @@ const REPORT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(20);
 /// Between transport attempts. What is being waited out is a 503 or a rate
 /// limit, which clears in about that long.
 const REPORT_RETRY_BACKOFF: Duration = Duration::from_secs(1);
+/// The idle-window note-taker's one attempt. Shorter than the report's, because
+/// this is spending a pause in someone's interview rather than a deadline they
+/// are already watching: a call still outstanding when the candidate starts
+/// talking again has missed the window it existed for, and the next pause will
+/// cover the same ground.
+pub(crate) const INTERIM_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(12);
 /// Two, because roughly one response in six fails validation on a rule the
 /// schema cannot express, and a single repair leaves that residual reaching the
 /// candidate as "no evaluation". A repair costs a few seconds only in the runs
@@ -369,29 +376,100 @@ fn is_retryable(error: &(dyn std::error::Error + 'static)) -> bool {
     })
 }
 
-async fn generate_report_once(
+/// The pause-time note-taker. One attempt, no repair loop, no retry.
+///
+/// Everything `generate_report` spends its budget defending is absent here on
+/// purpose. There is no schema to violate, because the answer is lines of
+/// prose; there is nobody waiting on it, because the interview is still
+/// running; and there is nothing lost when it fails, because the transcript
+/// this was reading still reaches the final reviewer whole. A retry would only
+/// take a second pause to re-read a stretch the next call sees anyway.
+pub async fn generate_interim_review(
     api_key: &str,
     model: &str,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    generate_content_once(
+        api_key,
+        model,
+        &content_request(prompt, interim_generation_config()),
+        INTERIM_ATTEMPT_TIMEOUT,
+        "interim review",
+    )
+    .await
+}
+
+/// Plain text and a small ceiling, where the report asks for JSON against a
+/// schema. The prompt caps the answer at four lines; this caps what an answer
+/// that ignores that can cost. Thinking is off for the reason it is off on the
+/// report: the budget it spends comes out of the same allowance as the output.
+/// The temperature is below the report's because this is note-taking, not
+/// writing.
+fn interim_generation_config() -> Value {
+    json!({
+        "responseMimeType": "text/plain",
+        "maxOutputTokens": 512,
+        "thinkingConfig": { "thinkingBudget": 0 },
+        "temperature": 0.2
+    })
+}
+
+/// The `generateContent` envelope. One prompt part, and whatever the caller
+/// wants generated from it -- the two callers here differ only in the config,
+/// and the envelope is the wire contract, which is not a thing to assert in two
+/// places.
+fn content_request(prompt: &str, generation_config: Value) -> Value {
+    json!({
+        "contents": [ { "parts": [ { "text": prompt } ] } ],
+        "generationConfig": generation_config
+    })
+}
+
+/// One `generateContent` call, with no opinion about retries.
+///
+/// Both callers post the same envelope to the same URL with the same header and
+/// read the same text out of the answer; only the deadline, the config and the
+/// name in the error differ. Written twice, an auth-header change or a
+/// different reading of a text-less response lands in one of them.
+async fn generate_content_once(
+    api_key: &str,
+    model: &str,
+    request: &Value,
+    timeout: Duration,
+    what: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let response = crate::http_client()
         .post(gemini_generate_content_url(model))
         .header("x-goog-api-key", api_key)
-        .timeout(REPORT_ATTEMPT_TIMEOUT)
-        .json(&generate_report_request(prompt))
+        .timeout(timeout)
+        .json(request)
         .send()
         .await?
         .error_for_status()?
         .json::<Value>()
         .await?;
-    let Some(text) = gemini_text(&response) else {
-        return Err(io::Error::new(
+    gemini_text(&response).ok_or_else(|| {
+        io::Error::new(
             io::ErrorKind::InvalidData,
-            "Gemini report response had no text",
+            format!("Gemini {what} response had no text"),
         )
-        .into());
-    };
-    Ok(text)
+        .into()
+    })
+}
+
+async fn generate_report_once(
+    api_key: &str,
+    model: &str,
+    prompt: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    generate_content_once(
+        api_key,
+        model,
+        &generate_report_request(prompt),
+        REPORT_ATTEMPT_TIMEOUT,
+        "report",
+    )
+    .await
 }
 
 pub(crate) async fn open_live_session_at(
@@ -571,6 +649,10 @@ fn live_setup_message(boot: &RuntimeBootstrap<'_>, resume: Option<&str>) -> Valu
                                 },
                                 "required": ["phase", "source", "kind", "confidence", "summary"]
                             }
+                        },
+                        {
+                            "name": TOOL_END_INTERVIEW,
+                            "description": "Close the interview because it is genuinely finished and there is nothing further to ask. The platform speaks the closing; do not say goodbye before calling this."
                         }
                     ]
                 }
@@ -648,15 +730,9 @@ fn tool_response_message(call: &GeminiFunctionCall, response: Value) -> Value {
 }
 
 fn generate_report_request(prompt: &str) -> Value {
-    json!({
-        "contents": [
-            {
-                "parts": [
-                    { "text": prompt }
-                ]
-            }
-        ],
-        "generationConfig": {
+    content_request(
+        prompt,
+        json!({
             "responseMimeType": "application/json",
             "responseSchema": crate::agent::report_response_schema(),
             "maxOutputTokens": 16384,
@@ -673,8 +749,8 @@ fn generate_report_request(prompt: &str) -> Value {
             // `GEMINI_REPORT_MODEL` at an earlier model is not owed a 400.
             "thinkingConfig": { "thinkingBudget": 0 },
             "temperature": 0.3
-        }
-    })
+        }),
+    )
 }
 
 async fn wait_for_setup_complete(

@@ -6,8 +6,8 @@
 //! so each applier decides what it is willing to believe before it stores it.
 
 use super::{
-    DataEventResult, EvidenceKind, FrameworkPhase, InterviewLoop, LanguageChoiceContext,
-    MAX_INTEGRITY_EVENTS, ROUND_TRANSITION_SKEW, RuntimeState, cold_restart, format_test_run,
+    DataEventResult, InterviewLoop, LanguageChoiceContext, MAX_INTEGRITY_EVENTS,
+    ROUND_TRANSITION_SKEW, RuntimeState, TIME_WARNING_S, cold_restart, format_test_run,
     integrity_hash, json_int, language_choice, python_truthy, sanitize_integrity_event,
     sanitize_test_run, spoken_language, spoken_minutes_from_remaining_seconds,
     test_reaction_decision, test_results_reaction, time_warning,
@@ -185,7 +185,12 @@ fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
         {
             control_round_transition(state)
         }
-        Some("time_warning") if !state.ended && !state.paused => {
+        Some("time_warning")
+            if !state.ended
+                && !state.paused
+                && !state.time_warning_seen
+                && time_warning_is_due(state) =>
+        {
             control_time_warning(state, payload)
         }
         Some("end_interview") if !state.ended => control_end_interview(state, payload),
@@ -236,13 +241,7 @@ fn control_pause(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
 /// The reserved behavioral round, opened or refused, once.
 fn control_round_transition(state: &mut RuntimeState) -> DataEventResult {
     state.round_transition_seen = true;
-    let completed = |phase| {
-        state
-            .framework_evidence
-            .iter()
-            .any(|item| item.phase == phase && item.kind != EvidenceKind::Skipped)
-    };
-    if completed(FrameworkPhase::Test) && completed(FrameworkPhase::Optimizations) {
+    if super::coding_round_complete(state) {
         state.behavioral_round_started = true;
         DataEventResult {
             round_changed: Some("started"),
@@ -258,11 +257,29 @@ fn control_round_transition(state: &mut RuntimeState) -> DataEventResult {
     }
 }
 
-/// The clock crossing the warning threshold.
+/// Whether the interview has actually run far enough to be nearly over.
 ///
-/// The one control message that reads the state without writing any, which is
-/// what the shared reference says.
-fn control_time_warning(state: &RuntimeState, payload: &serde_json::Value) -> DataEventResult {
+/// The browser owns the countdown and the candidate owns the browser, so this
+/// packet is a claim like any other from that side. Unchecked it was worse than
+/// noise: accepting one at minute one both interrupts the candidate with a
+/// warning that is not true and consumes `time_warning_seen`, so the real
+/// five-minute warning is then refused for the rest of the interview. The
+/// adjacent round transition has been validated against this clock all along;
+/// this is the same check for the same reason.
+fn time_warning_is_due(state: &RuntimeState) -> bool {
+    let planned = u64::from(state.coding_minutes + state.behavioral_minutes) * 60;
+    state.started_at.elapsed() + ROUND_TRANSITION_SKEW
+        >= std::time::Duration::from_secs(planned.saturating_sub(TIME_WARNING_S))
+}
+
+/// The clock crossing the warning threshold, once.
+///
+/// The browser releases its own latch after a pause because its first packet
+/// may have arrived while this side was paused. Remembering an accepted warning
+/// here lets that retry through when needed while refusing it after it already
+/// interrupted the candidate.
+fn control_time_warning(state: &mut RuntimeState, payload: &serde_json::Value) -> DataEventResult {
+    state.time_warning_seen = true;
     let remaining_seconds = payload
         .get("remainingSeconds")
         .and_then(json_int)

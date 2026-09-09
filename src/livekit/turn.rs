@@ -13,9 +13,36 @@
 use std::time::{Duration, Instant};
 
 use crate::agent::{
-    RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput, numbered, proactive_review,
-    significant_change, silence_nudge, timing_decision,
+    RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput, candidate_lines, numbered,
+    proactive_review, significant_change, silence_nudge, timing_decision, unreviewed_from,
 };
+
+/// How long the room has to be quiet before a pause is worth reading into.
+///
+/// Well under `SILENCE_THRESHOLD_S`, and that is the point: this is meant to
+/// land in the ordinary gaps of an interview -- someone reading the problem,
+/// typing, composing a sentence -- rather than in the stuck silences the
+/// interviewer already steps into. It costs the candidate nothing either way,
+/// because the call it starts runs beside the room instead of inside it.
+pub(super) const INTERIM_IDLE: Duration = Duration::from_secs(8);
+/// Between two idle-window reviews. A pause every eight seconds would spend a
+/// call on every breath; this is roughly the interval at which an interview has
+/// produced a new stretch worth reading.
+pub(super) const INTERIM_COOLDOWN: Duration = Duration::from_secs(75);
+/// What one review may read, in bytes.
+///
+/// The pause it runs in is the budget: `INTERIM_ATTEMPT_TIMEOUT` gives the call
+/// twelve seconds, and a window too large to summarize in that spends its
+/// prefill and returns nothing. Far below `MAX_TRANSCRIPT_BYTES`, which bounds
+/// a whole interview rather than one stretch of it.
+pub(super) const INTERIM_WINDOW_BYTES: usize = 8 * 1024;
+/// What one review may read of the editor. Smaller than the transcript budget:
+/// the code is re-sent in full on every review, where the transcript is only
+/// the stretch since the last one.
+pub(super) const INTERIM_CODE_BYTES: usize = 4 * 1024;
+/// Candidate turns a pause has to have produced before one is read. Below this,
+/// the window is an "mm-hm" and the note would be about nothing.
+pub(super) const INTERIM_MIN_NEW_TURNS: usize = 4;
 
 /// A candidate who has just typed is still working, even if their speech has
 /// paused. Give them a beat before a periodic review tries to take the floor.
@@ -46,6 +73,8 @@ pub(super) struct RuntimeActivity {
     /// A pause can arrive between Gemini producing a reply and this loop
     /// receiving its final event. Drop that old turn after resume too.
     pub(super) discarding_output: bool,
+    /// When a pause was last read into. Sized against `INTERIM_COOLDOWN`.
+    pub(super) last_interim: Instant,
     /// A tool response went out on this socket and its generation has not come
     /// back. Distinct from `awaiting_reply_since`, which a barge-in also stamps
     /// while Gemini owes nothing: this is generation already paid for, and
@@ -96,6 +125,11 @@ impl RuntimeActivity {
             floor: Floor::Listening,
             discarding_output: false,
             tool_response_outstanding: false,
+
+            // Seeded at `now` rather than in the past: the first minutes of an
+            // interview are the greeting and the problem statement, and there
+            // is nothing to assess in them.
+            last_interim: now,
         }
     }
 
@@ -141,6 +175,45 @@ impl RuntimeActivity {
         if self.floor != Floor::Speaking {
             self.awaiting_reply_since = Some(now);
         }
+    }
+
+    /// Whether this pause is worth spending an idle-window review on.
+    ///
+    /// Every condition here is "nothing is happening": nobody holds the floor,
+    /// no reply or tool response is owed, the interview is neither paused nor
+    /// over, and the candidate has been quiet long enough that a call started
+    /// now will probably finish before they speak again. The last one is not
+    /// about the room at all -- it asks whether anything has been said since
+    /// the last review, because a pause in a silent stretch is not new
+    /// evidence, it is the same silence.
+    ///
+    /// Nothing here blocks the interview. A `false` costs a comparison, and a
+    /// `true` starts a call that runs beside the room loop; the interview is
+    /// never waiting on either.
+    ///
+    /// Stamps its own cooldown on the way out, the way `watch_prompt` below
+    /// applies the stamps its decision asks for. The caller doing it instead
+    /// made this the one cooldown in the file kept somewhere other than where
+    /// it is read, and left half the bookkeeping for a pause two functions from
+    /// the other half. `ended` is not among the conditions: the only caller is
+    /// a select arm already guarded on it, and `watch_prompt` does not re-ask
+    /// it either.
+    pub(super) fn claim_interim_review(&mut self, state: &RuntimeState, now: Instant) -> bool {
+        let due = self.interim_review_due(state, now);
+        if due {
+            self.last_interim = now;
+        }
+        due
+    }
+
+    fn interim_review_due(&self, state: &RuntimeState, now: Instant) -> bool {
+        !state.paused
+            && self.floor == Floor::Listening
+            && !self.reply_in_flight()
+            && !self.tool_response_outstanding
+            && now.duration_since(self.last_user_speech) >= INTERIM_IDLE
+            && now.duration_since(self.last_interim) >= INTERIM_COOLDOWN
+            && candidate_lines(&state.transcript[unreviewed_from(state)..]) >= INTERIM_MIN_NEW_TURNS
     }
 
     /// `now` is passed in rather than sampled here, like every other method on

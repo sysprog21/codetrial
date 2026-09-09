@@ -534,6 +534,18 @@ function reportRounds(raw, interviewLoop) {
   return total >= 10 && total <= 90 && behavioralFits ? rounds : [];
 }
 
+/// Why the interview ended, as the agent recorded it, or null.
+///
+/// A closed set, because the page turns this into a replay row and stores it.
+/// An unrecognized value is a report from an agent that ends sessions some way
+/// this build does not know about, and null says so; guessing is what reading
+/// the browser's own countdown was doing before this field existed.
+const END_REASONS = ["time_up", "candidate_ended", "interview_complete"];
+
+export function endReason(raw) {
+  return END_REASONS.includes(raw) ? raw : null;
+}
+
 export function sanitizeReport(raw) {
   const { interviewContract, unsupported: unsupportedContract } = reportContract(raw);
   // Only what the report actually recorded. Defaulting this to "scored" put a
@@ -667,6 +679,7 @@ export function sanitizeReport(raw) {
       mode,
       interviewLoop: recordedLoop,
       rounds: roundSummary,
+      endReason: endReason(raw?.endReason),
       incomplete: true,
       summary: unsupportedContract
         ? "This report uses an unsupported or malformed interview contract and cannot be scored by this version of CodeTrial."
@@ -684,6 +697,7 @@ export function sanitizeReport(raw) {
     mode,
     interviewLoop: recordedLoop,
     rounds: roundSummary,
+    endReason: endReason(raw?.endReason),
     codingScore: score(raw?.codingScore),
     communicationScore: score(raw?.communicationScore),
     decision: raw?.decision === "HIRE" ? "HIRE" : "NO_HIRE",
@@ -772,19 +786,21 @@ export const TIME_WARNING_S = 300;
 
 /// How much time is left, and what crossing that number means.
 ///
-/// Split from the tick that paints it because both decisions here are about a
+/// Split from the tick that paints it because the decision here is about a
 /// clock that jumps: a throttled or suspended tab skips whole minutes. That is
-/// why the warning is a crossing and not an equality, and why it needs the
-/// previous value rather than deriving everything from `endsAt` alone;
-/// `remaining === TIME_WARNING_S` never fires when the value goes from 400 to
-/// 240 in one tick. `now` is a parameter so this is assertable without waiting
-/// out an interview.
-export function countdown(previous, endsAt, now) {
+/// why `urgent` is a threshold and not an equality: `remaining ===
+/// TIME_WARNING_S` never fires when the value goes from 400 to 240 in one tick.
+///
+/// This used to also report the crossing, which needed the caller's previous
+/// value. A crossing is one tick wide, and this tick is missable -- a throttled
+/// tab, or an interview paused across it -- so the caller latches the threshold
+/// instead and everything here derives from `endsAt`. `now` is a parameter so
+/// this is assertable without waiting out an interview.
+export function countdown(endsAt, now) {
   const remaining = Math.max(0, Math.round((endsAt - now) / 1000));
   return {
     remaining,
     urgent: remaining <= TIME_WARNING_S,
-    warn: previous > TIME_WARNING_S && remaining <= TIME_WARNING_S,
     expired: remaining === 0,
   };
 }

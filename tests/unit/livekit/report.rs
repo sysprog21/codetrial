@@ -18,7 +18,7 @@ use crate::runtime::bootstrap;
 #[test]
 fn the_rounds_a_report_calls_complete_are_the_ones_with_evidence() {
     let rounds = |state: &RuntimeState| {
-        report_with_integrity_events(serde_json::json!({}), state)["rounds"].clone()
+        report_with_integrity_events(serde_json::json!({}), state, "time_up")["rounds"].clone()
     };
     let bank = |state: &mut RuntimeState, phase: &str, kind: &str| {
         crate::agent::record_framework_evidence(
@@ -198,6 +198,7 @@ fn report_helpers_use_report_topic_prompt_state_and_error_note() {
             })],
             ..RuntimeState::default()
         },
+        "time_up",
     );
     let prompt = report_prompt_text(&boot, &state, 12.4);
 
@@ -213,6 +214,153 @@ fn report_helpers_use_report_topic_prompt_state_and_error_note() {
     );
     assert_eq!(payload["hintsUsed"], 2);
     assert_eq!(report["integrityEvents"][0]["type"], "SESSION_START");
+
+    // The page can see that a report arrived unasked but not which clock
+    // produced it, and was reading its own countdown to guess. This is the
+    // answer from the side that made the decision.
+    assert_eq!(report["endReason"], "time_up");
+}
+
+/// What the interview recorded about itself while it was running reaches the
+/// final reviewer, and the transcript still reaches it whole.
+///
+/// The second half is the part worth pinning. An earlier attempt at issue 31
+/// treated the rolling assessment as a replacement and cut the transcript down
+/// to a closing window, which traded away the spoken evidence the
+/// communication score is almost entirely read from, to save prefill on a call
+/// that measures six seconds. The assessment is additional evidence. It is
+/// never the record.
+#[test]
+fn the_report_prompt_carries_both_the_rolling_assessment_and_the_whole_transcript() {
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google"),
+    ])
+    .unwrap();
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let mut state = RuntimeState {
+        transcript: vec![
+            "Candidate: early reasoning about the hash map".to_string(),
+            "Candidate: closing reasoning about the complexity".to_string(),
+        ],
+        ..RuntimeState::default()
+    };
+    record_framework_evidence(
+        &mut state,
+        &serde_json::json!({
+            "phase": "algorithm", "source": "candidate_speech", "kind": "observed",
+            "confidence": 90, "summary": "Candidate chose a hash map and said why."
+        }),
+    )
+    .unwrap();
+    crate::agent::record_interim_notes(
+        &mut state,
+        "- Candidate enumerated the empty-input case before writing any code.",
+    );
+
+    let prompt = report_prompt_text(&boot, &state, 45.0);
+
+    // Delimited, like the transcript and the editor are wherever candidate
+    // material reaches a model: the notes are a reading of that material, so an
+    // instruction inside one arrived from the candidate by way of a note-taker.
+    assert!(prompt.contains("BEGIN UNTRUSTED ROLLING ASSESSMENT"));
+    assert!(prompt.contains("END UNTRUSTED ROLLING ASSESSMENT"));
+    assert!(prompt.contains("Phase evidence the interviewer recorded"));
+    assert!(prompt.contains("Candidate chose a hash map and said why."));
+    assert!(prompt.contains("Observations recorded during pauses"));
+    assert!(prompt.contains("Candidate enumerated the empty-input case"));
+    assert!(prompt.contains("FULL SPOKEN TRANSCRIPT"));
+    assert!(
+        prompt.contains("early reasoning about the hash map"),
+        "the assessment is evidence beside the transcript, never a replacement for it"
+    );
+    assert!(prompt.contains("closing reasoning about the complexity"));
+}
+
+/// A session that recorded nothing about itself is still reportable, and says
+/// nothing about a rolling assessment it does not have.
+#[test]
+fn a_session_with_no_recorded_assessment_keeps_the_plain_report_prompt() {
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google"),
+    ])
+    .unwrap();
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let prompt = report_prompt_text(
+        &boot,
+        &RuntimeState {
+            transcript: vec!["Candidate: only evidence".to_string()],
+            ..RuntimeState::default()
+        },
+        1.0,
+    );
+    assert!(prompt.contains("FULL SPOKEN TRANSCRIPT"));
+    assert!(prompt.contains("Candidate: only evidence"));
+    assert!(!prompt.contains("ROLLING ASSESSMENT"));
+}
+
+/// The long interview -- the one issue 31 was reported against -- is exactly
+/// the one that overruns the evidence cap, and it must still arrive with every
+/// phase it reached.
+#[test]
+fn an_interview_past_the_evidence_cap_still_reports_every_phase_it_reached() {
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google"),
+    ])
+    .unwrap();
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let mut state = RuntimeState::default();
+    for phase in [
+        "repeat",
+        "example",
+        "algorithm",
+        "coding",
+        "test",
+        "optimizations",
+    ] {
+        record_framework_evidence(
+            &mut state,
+            &serde_json::json!({
+                "phase": phase, "source": "candidate_speech", "kind": "observed",
+                "confidence": 90, "summary": format!("Candidate completed {phase}.")
+            }),
+        )
+        .unwrap();
+    }
+
+    // Well past the cap, not one short of it. A chatty interviewer records this
+    // many observations about the phase the candidate spends the most time in,
+    // and the old eviction rule answered that by dropping `repeat` first.
+    for index in 0..(crate::agent::MAX_FRAMEWORK_EVIDENCE * 2) {
+        record_framework_evidence(
+            &mut state,
+            &serde_json::json!({
+                "phase": "coding", "source": "editor_snapshot", "kind": "observed",
+                "confidence": 90, "summary": format!("Later coding observation {index}.")
+            }),
+        )
+        .unwrap();
+    }
+
+    let prompt = report_prompt_text(&boot, &state, 45.0);
+    for phase in ["repeat", "example", "algorithm", "test", "optimizations"] {
+        assert!(
+            prompt.contains(&format!("Candidate completed {phase}.")),
+            "the opening phases must survive an interview that overran the cap"
+        );
+    }
+    assert!(prompt.contains(&format!(
+        "Later coding observation {}.",
+        crate::agent::MAX_FRAMEWORK_EVIDENCE * 2 - 1
+    )));
 }
 
 #[test]
@@ -257,6 +405,7 @@ fn the_report_packet_bookends_the_evidence_with_the_liveness_pair() {
                 integrity_chain: Some((9, "b".repeat(64))),
                 ..RuntimeState::default()
             },
+            "time_up",
         )
     };
 
@@ -309,7 +458,7 @@ fn complete_and_incomplete_reports_carry_agent_owned_framework_evidence() {
         serde_json::json!({"decision":"HIRE"}),
         serde_json::json!({"incomplete":true}),
     ] {
-        let report = report_with_integrity_events(report, &state);
+        let report = report_with_integrity_events(report, &state, "time_up");
         assert_eq!(report["frameworkEvidence"][0]["phase"], "result");
         assert_eq!(report["frameworkEvidence"][0]["kind"], "skipped");
         assert_eq!(report["interviewLoop"], "coding_behavioral");

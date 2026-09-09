@@ -638,6 +638,110 @@ fn execute_tool_call_reads_editor_and_tracks_hints() {
     assert_eq!(state.hints_used, 1);
     assert_eq!(evidence["result"]["phase"], "algorithm");
     assert_eq!(state.framework_evidence.len(), 1);
+
+    // An interview with one phase of evidence is not a finished interview, and
+    // the model saying so does not make it one.
+    let refused = execute_tool_call(
+        &mut state,
+        &GeminiFunctionCall {
+            id: "4".to_string(),
+            name: TOOL_END_INTERVIEW.to_string(),
+            args: serde_json::json!({}),
+        },
+    );
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("Test and Optimizations evidence"),
+        "closing the session early is the one mistake here nobody can undo"
+    );
+    assert!(!state.end_requested);
+
+    for phase in ["test", "optimizations"] {
+        record_framework_evidence(
+            &mut state,
+            &serde_json::json!({
+                "phase":phase, "source":"candidate_speech", "kind":"observed",
+                "confidence":90, "summary":format!("Candidate finished {phase}.")
+            }),
+        )
+        .unwrap();
+    }
+
+    // The coding evidence may arrive before the browser opens the behavioral
+    // reserve. Letting the model close in that interval makes the required
+    // round unreachable, so only a started or explicitly skipped reserve
+    // permits the two-round interview to finish.
+    let reserve_pending = execute_tool_call(
+        &mut state,
+        &GeminiFunctionCall {
+            id: "5".to_string(),
+            name: TOOL_END_INTERVIEW.to_string(),
+            args: serde_json::json!({}),
+        },
+    );
+    assert!(
+        reserve_pending["error"]
+            .as_str()
+            .unwrap()
+            .contains("behavioral reserve has not started or been skipped")
+    );
+    assert!(!state.end_requested);
+
+    // Nothing here ends anything. The tool records a request and the room loop
+    // reads it on the way out of the event that carried it, because ending
+    // means publishing a report and leaving a room, and this function has
+    // neither in scope.
+    state.round_transition_seen = true;
+    let ending = execute_tool_call(
+        &mut state,
+        &GeminiFunctionCall {
+            id: "6".to_string(),
+            name: TOOL_END_INTERVIEW.to_string(),
+            args: serde_json::json!({}),
+        },
+    );
+    assert!(state.end_requested);
+    assert!(!state.ended, "the request is not the ending");
+    assert!(
+        ending["result"]
+            .as_str()
+            .unwrap()
+            .contains("Say nothing further"),
+        "Gemini owes a generation for every tool response, and the closing is \
+         about to be prompted for: without this Jim says goodbye twice"
+    );
+}
+
+#[test]
+fn end_interview_allows_a_completed_coding_only_plan() {
+    let mut state = RuntimeState {
+        interview_loop: crate::agent::InterviewLoop::CodingOnly,
+        ..RuntimeState::default()
+    };
+    for phase in ["test", "optimizations"] {
+        record_framework_evidence(
+            &mut state,
+            &serde_json::json!({
+                "phase": phase, "source": "candidate_speech", "kind": "observed",
+                "confidence": 90, "summary": format!("Candidate finished {phase}.")
+            }),
+        )
+        .unwrap();
+    }
+
+    let ending = execute_tool_call(
+        &mut state,
+        &GeminiFunctionCall {
+            id: "1".to_string(),
+            name: TOOL_END_INTERVIEW.to_string(),
+            args: serde_json::json!({}),
+        },
+    );
+
+    assert!(ending["result"].is_string());
+    assert!(state.end_requested);
 }
 
 #[test]
@@ -1172,4 +1276,219 @@ fn the_browser_escape_hatch_outlasts_the_report_deadline() {
         "a report bounded at {REPORT_TIMEOUT:?} after a {WRAP_UP_WAIT:?} wrap-up cannot land \
          before the page offers to leave at {wait:?}"
     );
+}
+
+/// Each pause reads the stretch since the last one, and never that stretch
+/// twice.
+///
+/// The cursor is the whole of what makes this cheap. Left unmoved, every pause
+/// re-reads the interview from the beginning, which is the cost this exists to
+/// remove, and the notes would pile up restating the opening minutes.
+#[test]
+fn each_pause_reviews_the_speech_since_the_last_one() {
+    let config = crate::config::load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google"),
+    ])
+    .unwrap();
+    let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let mut state = RuntimeState {
+        transcript: vec![
+            "Candidate: first I restate the problem".to_string(),
+            "Candidate: then I pick a hash map".to_string(),
+        ],
+        code: "seen = {}".to_string(),
+        ..RuntimeState::default()
+    };
+
+    let first = take_interim_review_window(&mut state, &boot);
+    assert!(first.contains("first I restate the problem"));
+    assert!(first.contains("then I pick a hash map"));
+    assert!(first.contains("seen = {}"));
+    assert!(first.contains("(nothing recorded yet)"));
+    assert_eq!(state.interim_transcript_lines, 2);
+
+    record_interim_notes(&mut state, "- Candidate restated the problem.");
+    state
+        .transcript
+        .push("Candidate: now the duplicate case".to_string());
+
+    let second = take_interim_review_window(&mut state, &boot);
+    assert!(second.contains("now the duplicate case"));
+    assert!(
+        !second.contains("first I restate the problem"),
+        "a stretch already reviewed is not paid for a second time"
+    );
+    assert!(
+        second.contains("Candidate restated the problem."),
+        "what is already on record is passed along so the next note does not repeat it"
+    );
+    assert_eq!(state.interim_transcript_lines, 3);
+
+    // A transcript shorter than the cursor is not reachable today. It is one
+    // future edit away, and the arithmetic that would panic on it is in here.
+    state.transcript.clear();
+    let third = take_interim_review_window(&mut state, &boot);
+    assert!(third.contains("(no speech was captured)"));
+    assert_eq!(state.interim_transcript_lines, 0);
+
+    // Only the recent notes travel. Sending the whole list grew the prefill of
+    // every review by every note before it, to prevent a repeat that
+    // `record_interim_notes` drops on arrival anyway.
+    for index in 0..(INTERIM_CONTEXT_NOTES * 2) {
+        record_interim_notes(&mut state, &format!("- note {index}"));
+    }
+    let bounded = take_interim_review_window(&mut state, &boot);
+    assert!(
+        bounded.contains(&format!("note {}", INTERIM_CONTEXT_NOTES * 2 - 1)),
+        "the newest notes are the ones a new note might repeat"
+    );
+    assert!(
+        !bounded.contains("note 0\n"),
+        "a review carries the recent notes, not the whole session"
+    );
+}
+
+/// A review is owned for as long as it runs, and only for as long as it runs.
+///
+/// Both halves cost something. A task that panics answers nothing, so a loop
+/// that tracked "one is running" separately would believe one forever and spend
+/// a single panic to disable every remaining pause. And a handle dropped
+/// without an abort keeps running against a room that has gone, holding a
+/// cloned API key.
+#[tokio::test]
+async fn a_review_slot_clears_however_its_task_ended() {
+    let mut slot = InterimReview::default();
+    assert!(!slot.is_running());
+    assert!(slot.finished().is_none());
+
+    // Bounded, like the drop cases below. A slot that stopped handing back
+    // finished reviews would otherwise spin here until something outside the
+    // test gave up, which reads as a hung suite rather than as the answer.
+    async fn collect(slot: &mut InterimReview) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while slot.finished().is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("a finished review has to leave the slot");
+    }
+
+    slot.start(tokio::spawn(async { "notes".to_string() }));
+    assert!(slot.is_running());
+    collect(&mut slot).await;
+    assert!(!slot.is_running(), "a collected review leaves the slot");
+
+    slot.start(tokio::spawn(async { panic!("the reviewer fell over") }));
+    collect(&mut slot).await;
+    assert!(
+        !slot.is_running(),
+        "a panicked review must not hold the slot for the rest of the interview"
+    );
+
+    // What the drop is for: the interview ends and the task goes with it.
+    // Bounded rather than spun on, so a drop that stopped aborting fails here
+    // instead of hanging the suite until something else times it out.
+    let survivor = tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        "never".to_string()
+    });
+    let watched = survivor.abort_handle();
+    let mut ending = InterimReview::default();
+    ending.start(survivor);
+    drop(ending);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !watched.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("dropping the slot has to abort the review it was holding");
+
+    // And `start` aborts what it replaces, so the type's promise that no call
+    // site has to remember the abort holds for the one that hands it a second
+    // handle as well.
+    let replaced = tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        "never".to_string()
+    });
+    let watched = replaced.abort_handle();
+    let mut slot = InterimReview::default();
+    slot.start(replaced);
+    slot.start(tokio::spawn(async { "second".to_string() }));
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !watched.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("replacing a running review has to abort the one it displaced");
+}
+
+/// Ending is the one decision here nobody can take back, so each thing that
+/// holds it back is worth pinning.
+///
+/// A pause is the subtle one: `output_disposition` drops every audio frame
+/// while paused, so a closing requested then is generated, dropped, and
+/// followed by a report the candidate never heard coming. Pausing also clears
+/// `tool_response_outstanding`, so the guard cannot be left to that flag.
+#[test]
+fn the_interviewers_close_waits_for_a_room_that_can_hear_it() {
+    let mut activity = RuntimeActivity::new(Instant::now());
+    let asked = RuntimeState {
+        end_requested: true,
+        ..RuntimeState::default()
+    };
+    assert!(ready_to_close(&asked, &activity));
+
+    assert!(
+        !ready_to_close(&RuntimeState::default(), &activity),
+        "nobody asked to close"
+    );
+    assert!(
+        !ready_to_close(
+            &RuntimeState {
+                paused: true,
+                ..asked.clone()
+            },
+            &activity
+        ),
+        "the closing would be spoken into a room whose output is dropped"
+    );
+    assert!(
+        !ready_to_close(
+            &RuntimeState {
+                ended: true,
+                ..asked.clone()
+            },
+            &activity
+        ),
+        "the report has already gone"
+    );
+
+    activity.tool_response_outstanding = true;
+    assert!(
+        !ready_to_close(&asked, &activity),
+        "the acknowledgement Gemini owes would be mistaken for the closing"
+    );
+}
+
+#[test]
+fn replacing_a_socket_drops_its_pending_close_request() {
+    let mut state = RuntimeState {
+        end_requested: true,
+        ..RuntimeState::default()
+    };
+    let mut activity = RuntimeActivity::new(Instant::now());
+    activity.discarding_output = true;
+    activity.tool_response_outstanding = true;
+
+    clear_abandoned_socket_work(&mut state, &mut activity);
+
+    assert!(!state.end_requested);
+    assert!(!activity.discarding_output);
+    assert!(!activity.tool_response_outstanding);
 }
