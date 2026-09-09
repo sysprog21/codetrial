@@ -61,6 +61,12 @@ env:
   # have none.
   RUFF_VERSION: 0.15.2
 
+  # The workflow's own linter, pinned like the three above. Installed rather
+  # than assumed: `scripts/test.sh` skips this gate when the binary is absent,
+  # and absent is what it was here, so the file that describes every other
+  # check was the one file nothing checked.
+  ACTIONLINT_VERSION: 1.7.12
+
 jobs:
   check:
     # Pinned rather than `ubuntu-latest`: that label moves to a new image on
@@ -271,44 +277,28 @@ jobs:
       # installed ahead of the gate.
       #
       # It ships as a release binary rather than an apt package, and its only
-      # tag is a rolling "latest", so the asset moves under a fixed URL. The
-      # bytes are checked against the sha256 GitHub records for the asset,
-      # read from the API in this same step rather than copied into this file:
-      # a hash written here has to be recomputed by hand on every upstream
-      # republish, and it fails as two hex strings that differ, which says
-      # nothing about what moved.
-      #
-      # What that buys and does not: it catches a truncated or tampered
-      # transfer, since the digest comes from the API rather than the CDN path
-      # the tarball travels. It does not freeze the version, so a republished
-      # "latest" is picked up silently. Comment reflow is a formatting gate, so
-      # the failure mode is a diff in the indent check rather than a wrong
-      # binary running against the tree, and that diff is what surfaces it.
+      # tag is a rolling "latest", so the version is not frozen: a republished
+      # "latest" is picked up silently. That is tolerable here and nowhere
+      # else in this job. Comment reflow is a formatting gate, so the failure
+      # mode is a diff in the indent check rather than a wrong binary running
+      # against the tree, and that diff is what surfaces it.
       - name: Install commentflow
         env:
-          COMMENTFLOW_REPO: sysprog21/commentflow
-          COMMENTFLOW_ASSET: commentflow-x86_64-unknown-linux-gnu.tar.gz
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          meta=$(gh api "repos/$COMMENTFLOW_REPO/releases/tags/latest")
+        run: >-
+          ./scripts/install-release-binary.sh sysprog21/commentflow latest
+          commentflow-x86_64-unknown-linux-gnu.tar.gz commentflow
 
-          # An absent digest means the release predates the field. A download
-          # nothing verifies is not worth having, so stop rather than install
-          # bytes this step cannot check.
-          digest=$(jq -r --arg n "$COMMENTFLOW_ASSET" \
-            '.assets[] | select(.name == $n) | .digest // ""' <<< "$meta")
-          url=$(jq -r --arg n "$COMMENTFLOW_ASSET" \
-            '.assets[] | select(.name == $n) | .browser_download_url // ""' \
-            <<< "$meta")
-          if [ -z "$digest" ] || [ -z "$url" ]; then
-            echo "no digest or download URL recorded for $COMMENTFLOW_ASSET" >&2
-            exit 1
-          fi
-
-          curl -fsSL -o /tmp/commentflow.tar.gz "$url"
-          echo "${digest#sha256:}  /tmp/commentflow.tar.gz" | sha256sum -c -
-          sudo tar -xzf /tmp/commentflow.tar.gz -C /usr/local/bin commentflow
+      # Pinned to a tag rather than tracking a rolling one, unlike commentflow
+      # above: this one judges the workflow, so a linter that moves on its own
+      # turns an unrelated push red.
+      - name: Install actionlint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          ./scripts/install-release-binary.sh rhysd/actionlint
+          "v$ACTIONLINT_VERSION"
+          "actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" actionlint
 
       - name: Run gates
         run: ./scripts/test.sh
@@ -551,6 +541,9 @@ jobs:
           - name: Linux x86_64
             os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+            image: rust:1.98.0-bullseye
+            glibc: '2.31'
+            glibcxx: '3.4.28'
             extension: ''
             archive: tar.gz
           - name: macOS arm64
@@ -577,12 +570,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      # The image is part of the key, because on this leg it is the compiler.
+      # `rust-cache` keys on the runner's rustc, which is no longer the one that
+      # builds here, and it declines to save when an exact key hit came back: a
+      # `target/` filled by the old runner build therefore survives under this
+      # key indefinitely. Let the container's rustc match the runner's once, and
+      # cargo would call those objects fresh and link glibc 2.39 C objects into
+      # a Bullseye binary. Naming the image keeps each compiler's artifacts in
+      # its own entry, and bumping the pin rotates the cache with it.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-${{ matrix.target }}
-      - name: Install Linux build dependency
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev
+          key: release-${{ matrix.target }}${{ matrix.image && format('-{0}', matrix.image) || '' }}
       # The same entry the check job saves, on the same key. Without it all
       # three platform legs re-download 24 MB that one job already fetched and
       # stored on this commit, and the fetch script no-ops on a hit.
@@ -603,7 +601,93 @@ jobs:
         run: ./scripts/verify-vendor.sh
         shell: bash
       - name: Build the self-contained executable
+        if: runner.os != 'Linux'
         run: cargo build --release --locked --target ${{ matrix.target }}
+      # GitHub retired the Ubuntu 20.04 runner, but its glibc 2.31 remains the
+      # useful Linux release baseline. Build inside Bullseye, which carries the
+      # same glibc, rather than on the runner. This is deliberately not musl:
+      # the archive stays an ordinary dynamically linked Linux executable.
+      #
+      # The image pin in the matrix is the one thing here that has to be
+      # maintained by hand. Every other leg compiles with whatever stable
+      # resolved to that day, so this is the only compiler in the workflow that
+      # can fall behind the one the gates ran, and it runs on push to main
+      # alone: a stable-only API compiles in the pull request and breaks the leg
+      # that publishes, after the merge. Bump it when stable moves.
+      #
+      # `--user` rather than the container's root. Root here writes root-owned
+      # objects into the mounted workspace, `Swatinem/rust-cache` then hits
+      # EACCES pruning them, and it swallows that error at debug level: the
+      # cache silently keeps a multi-gigabyte unpruned `target/` and evicts the
+      # entries the gates depend on.
+      #
+      # No `apt-get`, which is what leaves nothing here needing root. The base
+      # image already carries `libglib2.0-dev`, and reaching for Debian's
+      # mirrors at build time would buy a scheduled outage: bullseye is past
+      # its LTS window and moves to archive.debian.org on someone else's
+      # timetable, which `Acquire::Check-Valid-Until=false` does not answer. A
+      # base image that ever drops glib fails loudly at pkg-config.
+      #
+      # `CARGO_HOME` is the runner's, mounted in. It is what the cache restored
+      # a step ago, and the container cannot see it otherwise: without this
+      # every release re-downloads the registry and the prebuilt libwebrtc.
+      - name: Build Linux executable against the compatibility baseline
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --volume "$HOME/.cargo:/cargo" \
+            --workdir /workspace \
+            --env CARGO_HOME=/cargo \
+            ${{ matrix.image }} \
+            cargo build --release --locked --target ${{ matrix.target }}
+      # Two libraries set the floor, not one. The C++ half of this build links
+      # libstdc++, so a newer compiler raises the GLIBCXX_ requirement whether
+      # or not it touches GLIBC_, and a binary refused for either reason is
+      # refused the same way: in the loader, before main. The pattern reads
+      # numeric versions only, which is what leaves a name like
+      # GLIBC_ABI_DT_RELR out: it is a marker, not a version to compare.
+      - name: Verify Linux release compatibility
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          binary=target/${{ matrix.target }}/release/codetrial
+          # Not `readelf | grep -q`. A `shell: bash` step runs under pipefail,
+          # `grep -q` closes the pipe at its first match, and a producer whose
+          # output does not fit the pipe buffer then dies of SIGPIPE and takes
+          # the pipeline's status with it: the check would fail here on a
+          # binary that passes it. A dynamic section is small enough today that
+          # it never fires, which is the worst size for a trap to be.
+          grep -qF 'Shared library: [libc.so.6]' <<< "$(readelf -d "$binary")" \
+            || { echo 'Linux release is not dynamically linked to glibc' >&2; exit 1; }
+          floor() {
+            required=$(LC_ALL=C readelf -W --version-info "$binary" \
+              | sed -nE "s/.*Name: $1_([0-9.]+)[[:space:]]+Flags:.*/\1/p" \
+              | sort -V | tail -n 1)
+            [ -n "$required" ] \
+              || { echo "Linux release has no $1 symbol requirement" >&2; exit 1; }
+            newest=$(printf '%s\n%s\n' "$required" "$2" | sort -V | tail -n 1)
+            [ "$newest" = "$2" ] \
+              || { echo "Linux release requires $1_$required, not $1_$2 or older" >&2; exit 1; }
+          }
+          floor GLIBC '${{ matrix.glibc }}'
+          floor GLIBCXX '${{ matrix.glibcxx }}'
+      # The symbol table says the binary asks for nothing newer; this says the
+      # loader agrees. Every other step that runs it runs it on the runner,
+      # whose glibc is 2.39, where the failure in issue #30 cannot reproduce.
+      # `--help` is the whole test: a binary that needs a newer glibc never
+      # reaches main to print it.
+      - name: Prove the Linux release starts on the baseline userland
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace:ro" \
+            --workdir /workspace \
+            debian:bullseye-slim \
+            ./target/${{ matrix.target }}/release/codetrial --help
       # The only place the embed is exercised as an embed. `rust-embed` matches
       # keys exactly in release and reads the same names off the filesystem in
       # debug, so every test binary the suite builds resolves these paths

@@ -119,17 +119,32 @@ eslint_gate()
 # job produced. actionlint reads the YAML, the shell inside a run block, and the
 # workflow expressions, so all three are the kind of thing it refuses.
 #
-# Skipped when absent, like eslint above. It is a single Go binary rather than
-# something `npm ci` brings in, and a checkout without it should say so and move
-# on rather than fail a gate it cannot run.
+# The image when the binary is absent, because a skip here leaves the workflow
+# read by nothing and actionlint publishes itself as a container. The version
+# comes out of the workflow rather than being written here too: a tool version
+# in two places that can drift is one of the things this gate exists to catch.
+#
+# `docker info` and not just the client: a host with docker installed and no
+# daemon reachable would otherwise turn an optional lane into a failing one.
+# Both absent is still a skip, on the same contract as eslint above.
 actionlint_gate()
 {
-    if ! command -v actionlint > /dev/null 2>&1; then
-        skip "actionlint: installing it checks .github/workflows, which is code too"
-        return 0
+    if command -v actionlint > /dev/null 2>&1; then
+        (cd "$ROOT" && actionlint)
+        return "$?"
     fi
 
-    (cd "$ROOT" && actionlint)
+    version=$(sed -n 's/^ *ACTIONLINT_VERSION: *//p' \
+        "$ROOT/.github/workflows/check.yml")
+    if [ -n "$version" ] && command -v docker > /dev/null 2>&1 \
+        && docker info > /dev/null 2>&1; then
+        docker run --rm --volume "$ROOT:/repo" --workdir /repo \
+            "rhysd/actionlint:$version"
+        return "$?"
+    fi
+
+    skip "actionlint: installing it, or docker, checks .github/workflows"
+    return 0
 }
 
 cargo_audit_gate()
@@ -162,18 +177,23 @@ ruff_gate()
 # local ones carry a directive naming why, beside the code it is about.
 #
 # Optional the way cargo-audit is: CI installs it, and a contributor without it
-# gets a note rather than a failure they cannot act on.
+# gets a note rather than a failure they cannot act on. That note counts the
+# scripts off the same glob the loop walks, because the number was typed into
+# the sentence once and adding a script left it describing a tree that no longer
+# existed.
 shell_syntax()
 {
     status=0
+    scripts=0
     for script in "$ROOT"/scripts/*.sh; do
+        scripts=$((scripts + 1))
         sh -n "$script" || status=1
     done
 
     if command -v shellcheck > /dev/null 2>&1; then
         (cd "$ROOT" && shellcheck scripts/*.sh) || status=1
     else
-        skip "shellcheck: installing it checks what 21 shell scripts mean, not just that they parse"
+        skip "shellcheck: installing it checks what $scripts shell scripts mean, not just that they parse"
     fi
 
     return "$status"

@@ -72,6 +72,12 @@ if you would rather keep it somewhere else; see
 
 Platform notes:
 
+- Linux binaries are built against glibc 2.31 and the libstdc++ that ships
+  beside it, the pair Ubuntu 20.04 and Debian 11 carry, so they run there and
+  on anything newer. The release build checks that floor and fails rather than
+  publishing a binary that asks for more, because a system whose glibc is
+  older refuses one in the loader, before `main`, naming a symbol version it
+  does not have. Older distributions build from source.
 - macOS binaries carry only the ad-hoc signature the linker applies, which is
   what lets an arm64 binary run at all. They are not Developer ID signed and not
   notarized, because that needs a paid Apple Developer Program membership this
