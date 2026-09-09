@@ -61,6 +61,12 @@ env:
   # have none.
   RUFF_VERSION: 0.15.2
 
+  # The workflow's own linter, pinned like the three above. Installed rather
+  # than assumed: `scripts/test.sh` skips this gate when the binary is absent,
+  # and absent is what it was here, so the file that describes every other
+  # check was the one file nothing checked.
+  ACTIONLINT_VERSION: 1.7.12
+
 jobs:
   check:
     # Pinned rather than `ubuntu-latest`: that label moves to a new image on
@@ -271,44 +277,28 @@ jobs:
       # installed ahead of the gate.
       #
       # It ships as a release binary rather than an apt package, and its only
-      # tag is a rolling "latest", so the asset moves under a fixed URL. The
-      # bytes are checked against the sha256 GitHub records for the asset,
-      # read from the API in this same step rather than copied into this file:
-      # a hash written here has to be recomputed by hand on every upstream
-      # republish, and it fails as two hex strings that differ, which says
-      # nothing about what moved.
-      #
-      # What that buys and does not: it catches a truncated or tampered
-      # transfer, since the digest comes from the API rather than the CDN path
-      # the tarball travels. It does not freeze the version, so a republished
-      # "latest" is picked up silently. Comment reflow is a formatting gate, so
-      # the failure mode is a diff in the indent check rather than a wrong
-      # binary running against the tree, and that diff is what surfaces it.
+      # tag is a rolling "latest", so the version is not frozen: a republished
+      # "latest" is picked up silently. That is tolerable here and nowhere
+      # else in this job. Comment reflow is a formatting gate, so the failure
+      # mode is a diff in the indent check rather than a wrong binary running
+      # against the tree, and that diff is what surfaces it.
       - name: Install commentflow
         env:
-          COMMENTFLOW_REPO: sysprog21/commentflow
-          COMMENTFLOW_ASSET: commentflow-x86_64-unknown-linux-gnu.tar.gz
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          meta=$(gh api "repos/$COMMENTFLOW_REPO/releases/tags/latest")
+        run: >-
+          ./scripts/install-release-binary.sh sysprog21/commentflow latest
+          commentflow-x86_64-unknown-linux-gnu.tar.gz commentflow
 
-          # An absent digest means the release predates the field. A download
-          # nothing verifies is not worth having, so stop rather than install
-          # bytes this step cannot check.
-          digest=$(jq -r --arg n "$COMMENTFLOW_ASSET" \
-            '.assets[] | select(.name == $n) | .digest // ""' <<< "$meta")
-          url=$(jq -r --arg n "$COMMENTFLOW_ASSET" \
-            '.assets[] | select(.name == $n) | .browser_download_url // ""' \
-            <<< "$meta")
-          if [ -z "$digest" ] || [ -z "$url" ]; then
-            echo "no digest or download URL recorded for $COMMENTFLOW_ASSET" >&2
-            exit 1
-          fi
-
-          curl -fsSL -o /tmp/commentflow.tar.gz "$url"
-          echo "${digest#sha256:}  /tmp/commentflow.tar.gz" | sha256sum -c -
-          sudo tar -xzf /tmp/commentflow.tar.gz -C /usr/local/bin commentflow
+      # Pinned to a tag rather than tracking a rolling one, unlike commentflow
+      # above: this one judges the workflow, so a linter that moves on its own
+      # turns an unrelated push red.
+      - name: Install actionlint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          ./scripts/install-release-binary.sh rhysd/actionlint
+          "v$ACTIONLINT_VERSION"
+          "actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" actionlint
 
       - name: Run gates
         run: ./scripts/test.sh
