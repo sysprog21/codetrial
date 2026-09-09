@@ -101,6 +101,14 @@ pub const SPEECH_SETTLE_S: f64 = 4.0;
 /// for is a forged jump past the coding round, which is minutes early.
 const ROUND_TRANSITION_SKEW: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Where the browser announces the interview is nearly over, in seconds left.
+///
+/// The page owns the countdown and decides when to say so; this side owns
+/// whether to believe it. `TIME_WARNING_S` in web/lib.js is the same number,
+/// and the two are held together by
+/// `the_time_warning_threshold_is_the_same_number_on_both_sides`.
+pub const TIME_WARNING_S: u64 = 300;
+
 pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 4;
 pub const LIVE_PROMPT_VERSION: u32 = 1;
 pub const REPORT_PROMPT_VERSION: u32 = 4;

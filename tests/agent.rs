@@ -199,6 +199,17 @@ fn timing_constants_match_frozen_fixture() {
 
 /// Every prompt the agent sends, in one place, so the frozen fixture and the
 /// regeneration path cannot drift apart.
+/// A state whose clock has reached the point the browser announces the warning
+/// at, which the agent now checks before believing the packet.
+fn near_time_up(state: RuntimeState) -> RuntimeState {
+    let planned = u64::from(state.coding_minutes + state.behavioral_minutes) * 60;
+    RuntimeState {
+        started_at: std::time::Instant::now()
+            - std::time::Duration::from_secs(planned - TIME_WARNING_S),
+        ..state
+    }
+}
+
 fn prompt_samples() -> Value {
     let problem = get_problem(Some("two-sum"));
     let cold_state = RuntimeState {
@@ -2057,7 +2068,7 @@ fn round_transition_is_one_shot_plan_scoped_and_evidence_gated() {
             .generate_reply
             .is_none()
     );
-    let mut complete = RuntimeState::default();
+    let mut complete = near_time_up(RuntimeState::default());
     past_the_coding_round(&mut complete);
     for phase in ["test", "optimizations"] {
         record_framework_evidence(&mut complete, &json!({"phase":phase,"source":"candidate_speech","kind":"observed","confidence":90,"summary":format!("candidate completed {phase}")})).unwrap();
@@ -2710,11 +2721,11 @@ fn every_offered_language_has_a_spoken_name() {
 
 #[test]
 fn data_event_handling_uses_frontend_topics() {
-    let mut state = RuntimeState {
+    let mut state = near_time_up(RuntimeState {
         code: "old".to_string(),
         language: "python".to_string(),
         ..RuntimeState::default()
-    };
+    });
 
     let code_update = apply_data_event(
         &mut state,
@@ -3405,7 +3416,7 @@ fn browser_control_packets_all_reach_the_agent() {
             continue;
         }
         warnings += 1;
-        let mut state = RuntimeState::default();
+        let mut state = near_time_up(RuntimeState::default());
         let result = apply_data_event(&mut state, &topic, payload, TEST_REACTION_COOLDOWN_S);
         assert!(
             result.generate_reply.is_some(),
@@ -5197,7 +5208,7 @@ fn a_spoken_minute_count_never_falls_below_one() {
 
     // Through the wire, because the cast that turns a negative into a 32-bit
     // absurdity is on that side rather than in the helper.
-    let mut state = RuntimeState::default();
+    let mut state = near_time_up(RuntimeState::default());
     let reply = apply_data_event(
         &mut state,
         TOPIC_CONTROL,
@@ -5212,12 +5223,85 @@ fn a_spoken_minute_count_never_falls_below_one() {
     );
 }
 
+/// The countdown is the browser's, and the browser is the candidate's.
+///
+/// An early warning is not merely noise: accepting one consumes the latch, so
+/// the real five-minute warning is refused for the rest of the interview. The
+/// round transition beside it has been checked against this clock all along.
+#[test]
+fn a_time_warning_the_clock_has_not_reached_is_refused() {
+    let warning = json!({"type": "time_warning", "remainingSeconds": 300});
+    let mut early = RuntimeState {
+        coding_minutes: 37,
+        behavioral_minutes: 8,
+        ..RuntimeState::default()
+    };
+    assert!(
+        apply_data_event(
+            &mut early,
+            TOPIC_CONTROL,
+            &warning,
+            TEST_REACTION_COOLDOWN_S
+        )
+        .generate_reply
+        .is_none(),
+        "a warning minutes before the threshold is a forged clock"
+    );
+    assert!(
+        !early.time_warning_seen,
+        "and it must not spend the latch the real warning needs"
+    );
+
+    // The same packet, once the interview has actually run that long. The
+    // planned length is the two round budgets, and the threshold is five
+    // minutes short of it.
+    let planned = u64::from(early.coding_minutes + early.behavioral_minutes) * 60;
+    let due = RuntimeState {
+        started_at: std::time::Instant::now()
+            - std::time::Duration::from_secs(planned - TIME_WARNING_S),
+        ..early
+    };
+    let mut due = due;
+    assert!(
+        apply_data_event(&mut due, TOPIC_CONTROL, &warning, TEST_REACTION_COOLDOWN_S)
+            .generate_reply
+            .is_some()
+    );
+    assert!(due.time_warning_seen);
+}
+
+/// The page decides when to say the interview is nearly over; this side decides
+/// whether to believe it. Two copies of one number, held together here.
+#[test]
+fn the_time_warning_threshold_is_the_same_number_on_both_sides() {
+    let page = std::fs::read_to_string("web/lib.js").expect("the page is readable");
+    let declaration = "export const TIME_WARNING_S = ";
+    let start = page
+        .find(declaration)
+        .expect("web/lib.js declares TIME_WARNING_S")
+        + declaration.len();
+    let rest = &page[start..];
+    let end = rest.find(';').expect("the declaration ends in a semicolon");
+    assert_eq!(
+        rest[..end].trim().parse::<u64>().expect("it is a number"),
+        TIME_WARNING_S
+    );
+}
+
 /// The browser retries a warning after a pause because the first packet may
 /// have arrived while the server was paused. Once one reached the interviewer,
 /// though, a second one is an interruption rather than recovery.
 #[test]
 fn a_delivered_time_warning_is_not_replayed_after_a_pause() {
-    let mut state = RuntimeState::default();
+    // Far enough in that the clock check below accepts it; what is under test
+    // here is the second one, not the first.
+    let default = RuntimeState::default();
+    let planned = u64::from(default.coding_minutes + default.behavioral_minutes) * 60;
+    let mut state = RuntimeState {
+        started_at: std::time::Instant::now()
+            - std::time::Duration::from_secs(planned - TIME_WARNING_S),
+        ..default
+    };
     let warning = json!({"type": "time_warning", "remainingSeconds": 300});
     assert!(
         apply_data_event(

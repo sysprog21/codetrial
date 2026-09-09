@@ -7,10 +7,10 @@
 
 use super::{
     DataEventResult, InterviewLoop, LanguageChoiceContext, MAX_INTEGRITY_EVENTS,
-    ROUND_TRANSITION_SKEW, RuntimeState, cold_restart, format_test_run, integrity_hash, json_int,
-    language_choice, python_truthy, sanitize_integrity_event, sanitize_test_run, spoken_language,
-    spoken_minutes_from_remaining_seconds, test_reaction_decision, test_results_reaction,
-    time_warning,
+    ROUND_TRANSITION_SKEW, RuntimeState, TIME_WARNING_S, cold_restart, format_test_run,
+    integrity_hash, json_int, language_choice, python_truthy, sanitize_integrity_event,
+    sanitize_test_run, spoken_language, spoken_minutes_from_remaining_seconds,
+    test_reaction_decision, test_results_reaction, time_warning,
 };
 use crate::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
 
@@ -185,7 +185,12 @@ fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
         {
             control_round_transition(state)
         }
-        Some("time_warning") if !state.ended && !state.paused && !state.time_warning_seen => {
+        Some("time_warning")
+            if !state.ended
+                && !state.paused
+                && !state.time_warning_seen
+                && time_warning_is_due(state) =>
+        {
             control_time_warning(state, payload)
         }
         Some("end_interview") if !state.ended => control_end_interview(state, payload),
@@ -250,6 +255,21 @@ fn control_round_transition(state: &mut RuntimeState) -> DataEventResult {
             ..DataEventResult::default()
         }
     }
+}
+
+/// Whether the interview has actually run far enough to be nearly over.
+///
+/// The browser owns the countdown and the candidate owns the browser, so this
+/// packet is a claim like any other from that side. Unchecked it was worse than
+/// noise: accepting one at minute one both interrupts the candidate with a
+/// warning that is not true and consumes `time_warning_seen`, so the real
+/// five-minute warning is then refused for the rest of the interview. The
+/// adjacent round transition has been validated against this clock all along;
+/// this is the same check for the same reason.
+fn time_warning_is_due(state: &RuntimeState) -> bool {
+    let planned = u64::from(state.coding_minutes + state.behavioral_minutes) * 60;
+    state.started_at.elapsed() + ROUND_TRANSITION_SKEW
+        >= std::time::Duration::from_secs(planned.saturating_sub(TIME_WARNING_S))
 }
 
 /// The clock crossing the warning threshold, once.
