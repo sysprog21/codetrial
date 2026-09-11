@@ -56,19 +56,31 @@ fn the_policy_names_the_host_the_avatar_model_is_fetched_from() {
     assert!(connect.contains(AVATAR_MODEL_ORIGIN), "{connect}");
 }
 
-/// both fail over to a regional host and both need the wildcard. Each gets
-/// its own: a deployment on one has no reason to reach the other.
+/// Both cloud domains fail over to regional hosts and need their own wildcard.
+/// A deployment on one has no reason to reach the other.
 #[test]
-fn each_cloud_domain_gets_only_its_own_wildcard() {
-    let cloud = policy_for("wss://example.livekit.cloud");
-    assert!(cloud.contains("https://*.livekit.cloud"), "{cloud}");
-    assert!(cloud.contains("wss://*.livekit.cloud"), "{cloud}");
-    assert!(!cloud.contains("*.livekit.run"), "{cloud}");
+fn cloud_domains_admit_regional_hosts_without_widening_to_each_other() {
+    for (url, domain, other_domain) in [
+        (
+            "wss://example.livekit.cloud",
+            "livekit.cloud",
+            "livekit.run",
+        ),
+        ("wss://example.livekit.run", "livekit.run", "livekit.cloud"),
+    ] {
+        let policy = policy_for(url);
+        assert!(policy.contains(&format!("https://*.{domain}")), "{policy}");
+        assert!(policy.contains(&format!("wss://*.{domain}")), "{policy}");
+        assert!(!policy.contains(&format!("*.{other_domain}")), "{policy}");
+    }
 
-    let run = policy_for("wss://example.livekit.run");
-    assert!(run.contains("https://*.livekit.run"), "{run}");
-    assert!(run.contains("wss://*.livekit.run"), "{run}");
-    assert!(!run.contains("*.livekit.cloud"), "{run}");
+    // Regional signaling hosts have labels below both the project and cloud
+    // domains. The configured project's wildcard must therefore cover this
+    // shape, not merely a sibling project directly under `livekit.cloud`.
+    assert_eq!(
+        livekit_cloud_domain("wss://conversation-xxx.otokyo1b.production.livekit.cloud"),
+        Some("livekit.cloud")
+    );
 }
 
 /// A self-hosted server has no region indirection, so widening its policy
@@ -132,6 +144,17 @@ fn a_malformed_url_is_refused_one_term_at_a_time() {
     );
 }
 
+/// A server-side URL may need userinfo, but a CSP source is only a scheme and
+/// host. Leaving the userinfo in makes the browser discard the entry, which is
+/// a silent connection failure for a self-hosted deployment.
+#[test]
+fn csp_origins_strip_userinfo() {
+    let policy = policy_for("wss://key:secret@project.example:7880");
+    assert!(policy.contains("https://project.example:7880"), "{policy}");
+    assert!(policy.contains("wss://project.example:7880"), "{policy}");
+    assert!(!policy.contains("key:secret"), "{policy}");
+}
+
 /// `validate_livekit_url` accepts the scheme case-insensitively, so an
 /// uppercase one is a URL the server starts on. Every reader here matches
 /// the scheme exactly, and each fails differently: the quota probe finds no
@@ -149,14 +172,6 @@ fn an_uppercase_scheme_is_normalized_before_anything_matches_on_it() {
         Some("https://host.example".to_string()),
         "without this the quota probe never runs and the project is assumed available"
     );
-    assert_eq!(
-        livekit_origins("WSS://host.example"),
-        vec![
-            "https://host.example".to_string(),
-            "wss://host.example".to_string()
-        ],
-        "the sibling origin is what the SDK reaches for regions"
-    );
 
     // All four schemes, not just the one a cloud deployment uses. A self-hosted
     // LiveKit is reached over `ws://` in development, and the arm that pairs it
@@ -168,11 +183,9 @@ fn an_uppercase_scheme_is_normalized_before_anything_matches_on_it() {
         ("https://host.example", "wss://host.example"),
         ("http://host.example", "ws://host.example"),
     ] {
-        assert_eq!(
-            livekit_origins(configured),
-            vec![sibling.to_string(), configured.to_string()],
-            "{configured} must also name {sibling}"
-        );
+        let policy = policy_for(configured);
+        assert!(policy.contains(sibling), "{configured}: {policy}");
+        assert!(policy.contains(configured), "{configured}: {policy}");
     }
 
     let policy = policy_for("WSS://uppercase-scheme.livekit.cloud");

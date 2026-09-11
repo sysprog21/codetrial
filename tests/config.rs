@@ -737,12 +737,24 @@ fn plaintext_livekit_is_local_only() {
     for url in [
         "wss://example.livekit.cloud",
         "https://example.livekit.cloud",
+        "wss://example.livekit.cloud:443",
+        "wss://[2001:db8::1]:7880",
     ] {
         assert!(codetrial::config::validate_livekit_url(url, true).is_ok());
     }
     // Prefix matching alone let all of these through.
     for url in [
         "wss://",
+        "wss://@",
+        "wss://project.example;script-src=*",
+        "wss://project.example'",
+        "wss://project.example,evil.example",
+        "wss://project.example*",
+        "wss://project.example:notaport",
+        "wss://project.example:0",
+        "wss://project.example:65536",
+        "wss://[2001:db8::1",
+        "wss://[not-ipv6]",
         "https://",
         "example.livekit.cloud",
         "ftp://x.example",

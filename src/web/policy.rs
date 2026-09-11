@@ -81,20 +81,14 @@ pub(crate) fn content_security_policy(config: &WebServerConfig) -> String {
 
     // LiveKit Cloud answers `/settings/regions` with a regional hostname and
     // the SDK retries there, so the configured host alone is not enough.
-    // Self-hosted deployments have no such indirection and keep their exact
-    // origins.
-    //
-    // One pass, so a third source of endpoints is added to the iterator above
-    // and both the exact origins and the wildcard follow from it. The wildcard
-    // names the domain it was granted for, because a deployment on one cloud
-    // domain has no reason to reach the other.
-    let mut cloud: Vec<&'static str> = Vec::new();
+    // Keeping the wildcard beside the endpoint's two exact origins means a
+    // future endpoint source cannot add only the initial signaling host and
+    // bring this browser-only failure back.
     for url in endpoints {
-        connect.extend(livekit_origins(url));
-        if let Some(domain) = livekit_cloud_domain(url).filter(|it| !cloud.contains(it)) {
-            cloud.push(domain);
-            connect.push(format!("https://*.{domain}"));
-            connect.push(format!("wss://*.{domain}"));
+        for source in livekit_connect_sources(url) {
+            if !connect.contains(&source) {
+                connect.push(source);
+            }
         }
     }
     if !config.production {
@@ -141,10 +135,7 @@ pub(crate) fn content_security_policy(config: &WebServerConfig) -> String {
 /// HTTPS calls to the same host, region settings among them. Naming only the
 /// `wss://` origin lets the socket open and then blocks those, which surfaces
 /// as a connection that fails for no stated reason.
-pub(crate) fn livekit_origins(url: &str) -> Vec<String> {
-    let Some(origin) = url_origin(url) else {
-        return Vec::new();
-    };
+fn livekit_origins_for_csp_origin(origin: &str) -> Vec<String> {
     let Some((scheme, host)) = origin.split_once("://") else {
         return Vec::new();
     };
@@ -153,9 +144,36 @@ pub(crate) fn livekit_origins(url: &str) -> Vec<String> {
         "ws" => "http",
         "https" => "wss",
         "http" => "ws",
-        _ => return vec![origin],
+        _ => return Vec::new(),
     };
-    vec![format!("{sibling}://{host}"), origin]
+    vec![format!("{sibling}://{host}"), origin.to_string()]
+}
+
+/// The origin spelling CSP accepts. A LiveKit URL may carry userinfo for a
+/// server-side client, but credentials are not part of a CSP host source and
+/// would make the browser discard the source that needs to admit the socket.
+fn csp_origin(url: &str) -> Option<String> {
+    let origin = url_origin(url)?;
+    crate::config::livekit_scheme(&origin)?;
+    let (scheme, authority) = origin.split_once("://")?;
+    let host = authority.rsplit('@').next()?;
+    crate::config::livekit_host_is_csp_safe(host).then(|| format!("{scheme}://{host}"))
+}
+
+/// Every CSP source a LiveKit endpoint needs. Cloud projects redirect the
+/// browser to a regional hostname, while a self-hosted project has only the
+/// exact HTTP and WebSocket origins from the CSP-safe endpoint.
+fn livekit_connect_sources(url: &str) -> Vec<String> {
+    let Some(origin) = csp_origin(url) else {
+        return Vec::new();
+    };
+
+    let mut sources = livekit_origins_for_csp_origin(&origin);
+    if let Some(domain) = livekit_cloud_domain(&origin) {
+        sources.push(format!("https://*.{domain}"));
+        sources.push(format!("wss://*.{domain}"));
+    }
+    sources
 }
 
 /// The two domains `livekit-client.js` treats as LiveKit Cloud, which is what
@@ -207,7 +225,7 @@ pub(crate) fn livekit_http_origin(url: &str) -> Option<String> {
 /// configure and the server will start on. Every reader below then matches the
 /// scheme exactly, and each one fails differently on the uppercase form: the
 /// quota probe finds no HTTP origin and treats the project as available, so an
-/// exhausted project is never passed over, and `livekit_origins` finds no
+/// exhausted project is never passed over, and the CSP origin pairing finds no
 /// sibling, so the CSP omits the `https://` origin the SDK needs for
 /// `/settings/regions` and the socket opens onto blocked requests. One
 /// normalization at the boundary is the alternative to three readers each
