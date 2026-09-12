@@ -1863,16 +1863,15 @@ async fn on_interruption(
 
     // What Gemini heard is the whole diagnosis. It interrupts on its own voice
     // activity detection, so a cut with the candidate mid-sentence is barge-in
-    // working, and a cut with nothing transcribed is the microphone hearing the
-    // interviewer through the candidate's speakers. The line reported the size
-    // of the loss and left the cause to guesswork across a whole session of
-    // them.
+    // working. A cut with nothing transcribed is usually speaker echo or room
+    // noise, and naming those makes the log actionable without pretending the
+    // server can tell them apart.
     let heard = context.turns.candidate.tail(80);
     eprintln!(
         "timing: Gemini cut its own turn, {:.1}s of it unplayed; candidate audio so far: {}",
         unplayed.as_secs_f64(),
         if heard.is_empty() {
-            "(nothing transcribed)"
+            "(nothing transcribed; check speaker echo or background noise)"
         } else {
             heard
         }

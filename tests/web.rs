@@ -677,6 +677,33 @@ async fn responses_carry_baseline_security_headers() {
     server.abort();
 }
 
+/// `web_service` is public, so its caller may not have used the binary's
+/// configuration loader. Invalid endpoints must cost only their CSP sources.
+#[tokio::test]
+async fn public_web_service_omits_malformed_livekit_origins() {
+    for (url, forbidden) in [
+        ("wss://project.example;frame-src=*", "project.example"),
+        ("wss://project.example:notaport", "project.example"),
+        ("wss://[2001:db8::1", "2001:db8::1"),
+        ("ftp://project.livekit.cloud", "livekit.cloud"),
+    ] {
+        let mut config = web_config();
+        config.pool = primary_pool(url, "devkey", "devsecret");
+        let (base, server) = spawn_web_server(config).await;
+        let policy = reqwest::get(&base)
+            .await
+            .unwrap()
+            .headers()
+            .get("content-security-policy")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(!policy.contains(forbidden), "{url}: {policy}");
+        server.abort();
+    }
+}
+
 #[tokio::test]
 async fn production_policy_names_no_loopback_origins() {
     let (base, server) = spawn_web_server(WebServerConfig {

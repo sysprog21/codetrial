@@ -506,22 +506,42 @@ pub(crate) fn livekit_scheme(url: &str) -> Option<&'static (&'static str, bool, 
     })
 }
 
-/// Rejects what `url_origin` in `web.rs` would otherwise have to cope with: a
-/// scheme nothing here knows, or a scheme with no host after it. The URL never
-/// appears in the message, because the message reaches stderr and a LiveKit URL
-/// can carry a query string.
+pub(crate) fn livekit_host_is_csp_safe(authority: &str) -> bool {
+    let Some((host, port)) = split_authority(authority) else {
+        return false;
+    };
+    let host_is_safe = if authority.starts_with('[') {
+        host.parse::<std::net::Ipv6Addr>().is_ok()
+    } else {
+        !host.is_empty()
+            && host
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+    };
+    host_is_safe && port.is_none_or(|port| port.parse::<u16>().is_ok_and(|port| port != 0))
+}
+
+/// Rejects what the URL's consumers would otherwise have to cope with: an
+/// unknown scheme, no host, or host syntax that cannot become a CSP source.
+/// The URL never appears in the message, because the message reaches stderr
+/// and a LiveKit URL can carry a query string.
 pub fn validate_livekit_url(url: &str, production: bool) -> Result<(), String> {
     let trimmed = url.trim();
     let Some((scheme, encrypted, _)) = livekit_scheme(trimmed) else {
         return Err("LIVEKIT_URL must start with wss://, https://, ws:// or http://".to_string());
     };
-    if trimmed[scheme.len()..]
+    let host = trimmed[scheme.len()..]
         .split(['/', '?', '#'])
         .next()
         .unwrap_or_default()
-        .is_empty()
-    {
+        .rsplit('@')
+        .next()
+        .unwrap_or_default();
+    if host.is_empty() {
         return Err("LIVEKIT_URL has a scheme but no host".to_string());
+    }
+    if !livekit_host_is_csp_safe(host) {
+        return Err("LIVEKIT_URL host contains invalid characters".to_string());
     }
     if production && !encrypted {
         return Err("LIVEKIT_URL must use wss:// or https:// when NODE_ENV=production".to_string());
