@@ -339,6 +339,14 @@
     },
     {
       "difficulty": "Medium",
+      "id": "fixed-capacity-ring-buffer",
+      "optimal": "Use a fixed array with head, tail, and count. Write at tail and advance modulo capacity, read at head and advance modulo capacity, and use count to distinguish empty from full. Each method is O(1).",
+      "pitfalls": "Using head equals tail alone to represent both empty and full; shifting an array on every pop; advancing an index without wrapping it; changing the front value on a failed push; forgetting that a successful pop frees one slot.",
+      "summary": "Design a fixed-capacity FIFO buffer that accepts and removes values in constant time without shifting stored elements.",
+      "title": "Bounded Event Queue"
+    },
+    {
+      "difficulty": "Medium",
       "id": "flatten-binary-tree-to-linked-list",
       "optimal": "Use reverse preorder recursion with a previous pointer, or splice each left subtree between the node and its right subtree. O(n) time; O(h) stack for recursion or O(1) extra space for iterative splicing.",
       "pitfalls": "Leaving any left pointers non-null; using inorder instead of preorder; losing the original right subtree when moving the left subtree; returning a separate list instead of mutating root.",

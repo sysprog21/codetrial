@@ -369,7 +369,7 @@ def check_new_names(problem: dict, judge: dict, variant: dict) -> None:
     # held to the same list of names it may not bring back.
     published_names = {
         camel_words(name)
-        for name in (problem["title"], judge.get("entry"), judge.get("className"))
+        for name in (problem.get("title"), judge.get("entry"), judge.get("className"))
         if name
     }
     pattern = r"[a-z][A-Za-z0-9]+" if declared == "entry" else r"[A-Z][A-Za-z0-9]+"
@@ -550,7 +550,9 @@ def rendered_examples(problem: dict, variant: dict, graded: dict) -> tuple[list,
                 )
         # Judge data is on the page too, and a published sample sentence can
         # carry the title: "This is an example of text justification."
-        if names_source(problem["title"], " ".join(rendered.values())):
+        if problem.get("title") and names_source(
+            problem["title"], " ".join(rendered.values())
+        ):
             raise RuntimeError(f"{problem_id}: examples[{at}] names the source title")
         examples.append(rendered)
     return examples, shown
@@ -593,11 +595,16 @@ def validated_variant(problem: dict, judge: dict, variant: object) -> dict:
     check_new_names(problem, judge, variant)
     shipped, graded = posed(problem, judge, variant)
     check_labels(problem_id, {**judge, "cases": graded["cases"]})
-    check_source_absent(problem, variant, text, shipped, graded)
+    original = problem.get("origin") == "original"
+    if not original:
+        check_source_absent(problem, variant, text, shipped, graded)
     check_entry_named(problem_id, text["brief"], shipped, graded)
-    quotable, published = published_cases(problem, judge)
+    quotable, published = (
+        published_cases(problem, judge) if not original else (set(), set())
+    )
     examples, shown = rendered_examples(problem, variant, graded)
-    check_prose_quotes_nothing(problem_id, variant, text, quotable)
+    if not original:
+        check_prose_quotes_nothing(problem_id, variant, text, quotable)
     # The published examples are the most recognisable thing about a problem:
     # "pwwkew" or "paper" and "title" name it as surely as the title does. None
     # of them is shown, so a judge built only from them needs a case of its own.

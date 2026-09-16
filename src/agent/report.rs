@@ -281,12 +281,9 @@ pub fn validate_report_candidate(
     ] {
         if let Some(value) = object.get(key) {
             validate_observable_judgments(value, &format!("$.{key}"), &mut errors);
-            validate_published_problem_names(
-                value,
-                &format!("$.{key}"),
-                problem.title,
-                &mut errors,
-            );
+            if let Some(title) = problem.source_title() {
+                validate_published_problem_names(value, &format!("$.{key}"), title, &mut errors);
+            }
         }
     }
     if !errors.is_empty() {

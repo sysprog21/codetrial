@@ -6850,5 +6850,46 @@
       "If you had a way to build the tree for any smaller square, how would the tree for a square relate to the trees for its four quarters?",
       "What do you check about a region before deciding to split it, and if all four quarters come back as leaves with the same value, what should that region become?"
     ]
+  },
+  "fixed-capacity-ring-buffer": {
+    "title": "Bounded Event Queue",
+    "className": "EventQueue",
+    "brief": [
+      "A telemetry collector keeps the most recent events waiting to be processed in a fixed amount of memory. It must accept events in arrival order, hand them to the worker in that same order, and never allocate more space once configured.",
+      "Implement EventQueue. EventQueue(capacity) creates an empty queue. push(value) appends value and returns false when the queue is full. pop() removes and returns the oldest value, or -1 when empty. front() reads that value without removing it, also returning -1 when empty. size() returns the number of queued events."
+    ],
+    "contract": "EventQueue(capacity) starts empty with exactly capacity slots. push(value) returns true and appends at the back when a slot is free, otherwise returns false without changing the queue. pop() returns and removes the oldest value, while front() returns it without removing it; both return -1 when empty. size() reports the current number of values. The grader compares null for the constructor and every later return value exactly.",
+    "examples": [
+      {"case": 1},
+      {"case": 2}
+    ],
+    "clarifications": [
+      {
+        "question": "Does a rejected push replace the oldest event?",
+        "answer": "No. When all slots are occupied, it returns false and leaves every queued value unchanged."
+      },
+      {
+        "question": "What should reads from an empty queue return?",
+        "answer": "Both pop and front return -1 until a value is added."
+      },
+      {
+        "question": "Can values be negative?",
+        "answer": "Yes. A stored value may be any integer from -10^9 through 10^9, including -1."
+      },
+      {
+        "question": "What work is expected per method call?",
+        "answer": "Each method should run in constant time."
+      }
+    ],
+    "followUps": [
+      "The collector now overwrites the oldest event when full. Which operation changes and what remains the same?",
+      "Events can have variable-sized payloads. How would you keep the memory limit meaningful?",
+      "Several producers and consumers use the queue concurrently. What synchronization would you add?"
+    ],
+    "hints": [
+      "If items stay in one array but the oldest item moves forward, what makes removing it expensive?",
+      "Which two positions identify where the next value is read and where the next value is written?",
+      "Those positions eventually reach the end of the array. How can they return to the beginning, and what separate count tells empty from full?"
+    ]
   }
 }

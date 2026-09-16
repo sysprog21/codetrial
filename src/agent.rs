@@ -14,6 +14,7 @@
 mod events;
 mod integrity;
 mod problem_guides;
+mod problem_rubrics;
 mod problem_topics;
 mod problem_variants;
 mod problems;
@@ -257,6 +258,12 @@ impl Problem {
     /// to `PROBLEMS`.
     pub fn variant(&self) -> &'static ProblemVariant {
         variant_for(self.id).expect("every problem has a variant")
+    }
+
+    /// The published title for an imported exercise. Original exercises use
+    /// their scenario title as `title`, so there is no source name to filter.
+    pub fn source_title(&self) -> Option<&'static str> {
+        (self.title != self.variant().title).then_some(self.title)
     }
 
     pub fn question_metadata(&self) -> QuestionMetadata<'_> {

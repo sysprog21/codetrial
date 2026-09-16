@@ -14701,5 +14701,36 @@
         ]
       }
     ]
+  },
+  "fixed-capacity-ring-buffer": {
+    "kind": "class",
+    "className": "RingBuffer",
+    "checker": "exact",
+    "cases": [
+      {
+        "label": "empty reads and rejected overflow",
+        "input": [
+          ["RingBuffer", "pop", "front", "push", "push", "push", "size", "front"],
+          [[2], [], [], [7], [9], [11], [], []]
+        ],
+        "expected": [null, -1, -1, true, true, false, 2, 7]
+      },
+      {
+        "label": "wrap after removing the oldest",
+        "input": [
+          ["RingBuffer", "push", "push", "pop", "push", "front", "pop", "pop", "size"],
+          [[3], [4], [5], [], [6], [], [], [], []]
+        ],
+        "expected": [null, true, true, 4, true, 5, 5, 6, 0]
+      },
+      {
+        "label": "one slot can be reused repeatedly",
+        "input": [
+          ["RingBuffer", "push", "pop", "push", "front", "size"],
+          [[1], [12], [], [-3], [], []]
+        ],
+        "expected": [null, true, 12, true, -3, 1]
+      }
+    ]
   }
 }

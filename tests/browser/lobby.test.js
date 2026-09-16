@@ -503,20 +503,27 @@ lobbyTest("published problem names stay hidden until the candidate asks, and the
   const visibleSources = () => page.evaluate(() =>
     [...document.querySelectorAll(".problem-source")].filter((source) => !source.hidden).length);
   assert.equal(await visibleSources(), 0, "a published name is on screen by default");
-  assert.equal(await page.evaluate(() => document.querySelectorAll(".problem-source").length), 150);
+  const sourceCount = await page.evaluate(() => document.querySelectorAll(".problem-source").length);
+  assert.equal(
+    sourceCount,
+    await page.evaluate(() => document.querySelectorAll(".problem-card").length),
+    "every picker card has one source slot",
+  );
+  const namedSourceCount = Object.values(JSON.parse(read("web/problem-pages.json")))
+    .filter((entry) => entry.source).length;
 
   await page.evaluate(() => { document.querySelector(".problem-picker").open = true; });
   await page.check("#show-sources");
   // The names arrive with the map, fetched on the first request for them.
-  await page.waitForFunction(() =>
-    [...document.querySelectorAll(".problem-source")].filter((source) => !source.hidden).length === 150);
+  await page.waitForFunction((count) =>
+    [...document.querySelectorAll(".problem-source")].filter((source) => !source.hidden).length === count, namedSourceCount);
   assert.match(await page.locator(`[data-problem="${pageOf("two-sum")}"] .problem-source`).textContent(), /LeetCode: Two Sum/);
   // The recommendation still names the scenario only.
   assert.doesNotMatch(await page.locator("#recommendation").textContent(), /LeetCode:/);
 
   await lobby(page);
-  await page.waitForFunction(() =>
-    [...document.querySelectorAll(".problem-source")].filter((source) => !source.hidden).length === 150);
+  await page.waitForFunction((count) =>
+    [...document.querySelectorAll(".problem-source")].filter((source) => !source.hidden).length === count, namedSourceCount);
 });
 
 lobbyTest("the lobby never suggests a length past its own default", async (page) => {

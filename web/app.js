@@ -93,7 +93,9 @@ try {
 const applySources = async () => {
   if (showSources.checked) {
     const pages = await loadPageMap().catch(() => null);
-    const sourceOf = new Map(Object.values(pages ?? {}).map((entry) => [entry.page, entry.source]));
+    const sourceOf = new Map(Object.values(pages ?? {})
+      .filter((entry) => entry.source)
+      .map((entry) => [entry.page, entry.source]));
     for (const card of cards) {
       const source = card.button.querySelector(".problem-source");
       if (sourceOf.has(card.id)) source.textContent = `LeetCode: ${sourceOf.get(card.id)}`;

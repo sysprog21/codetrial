@@ -152,4 +152,5 @@ pub const PROBLEM_TOPICS: &[(&str, &[&str])] = &[
     ("merge-k-sorted-lists", &["Linked List", "Divide and Conquer", "Heap", "Merge Sort"]),
     ("find-median-from-data-stream", &["Two Pointers", "Design", "Sorting", "Heap", "Data Stream"]),
     ("construct-quad-tree", &["Array", "Divide and Conquer", "Matrix"]),
+    ("fixed-capacity-ring-buffer", &["Array", "Design"]),
 ];

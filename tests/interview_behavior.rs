@@ -39,7 +39,9 @@ fn names_source(problem: &Problem, reply: &str) -> bool {
         || spoken
             .windows(2)
             .any(|pair| pair[0] == "leet" && pair[1] == "code")
-        || names_published_problem(problem.title, reply)
+        || problem
+            .source_title()
+            .is_some_and(|title| names_published_problem(title, reply))
 }
 
 /// The limits a candidate has to ask for, as they could be said: `10^4` also

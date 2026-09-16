@@ -1499,7 +1499,10 @@ fn static_problem_bank_and_judges_cover_each_problem() {
             spec["cases"].as_array().unwrap().len() >= 3,
             "not enough judge cases for {id}"
         );
-        for language in ["python", "javascript", "c", "cpp", "java"] {
+        for language in ["python", "javascript", "c", "cpp", "java"]
+            .into_iter()
+            .filter(|language| spec["kind"] != "class" || *language != "c")
+        {
             assert!(
                 problem["starterCode"].get(language).is_some(),
                 "missing {language} starter for {id}"

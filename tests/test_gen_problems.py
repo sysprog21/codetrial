@@ -15,6 +15,49 @@ SPEC.loader.exec_module(GEN)
 
 
 class ProblemMetadataGeneratorTests(unittest.TestCase):
+    def test_an_original_problem_outside_the_plan_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "problems.json"
+            path.write_text(
+                json.dumps(
+                    [{"id": "imported"}, {"id": "original", "origin": "original"}]
+                )
+            )
+            GEN.check_plan_slugs(["imported"], path)
+
+    def test_an_unmarked_problem_outside_the_plan_is_refused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "problems.json"
+            path.write_text(json.dumps([{"id": "imported"}, {"id": "extra"}]))
+            with self.assertRaisesRegex(RuntimeError, "plan drops"):
+                GEN.check_plan_slugs(["imported"], path)
+
+    def test_an_original_problem_has_no_published_fields(self):
+        original = {
+            "id": "ring-buffer",
+            "origin": "original",
+            "difficulty": "Medium",
+            "topics": ["Design"],
+            "summary": "Store bounded values.",
+            "optimal": "Use a circular array.",
+            "pitfalls": "Do not overwrite the wrong end.",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "problems.json"
+            path.write_text(json.dumps([original]))
+            self.assertEqual(GEN.validated_problems(path), [original])
+            path.write_text(json.dumps([{**original, "title": "Ring Buffer"}]))
+            with self.assertRaisesRegex(RuntimeError, "no published title"):
+                GEN.validated_problems(path)
+
+    def test_an_original_problem_omits_candidate_source(self):
+        entry = {
+            "problem": {"origin": "original", "difficulty": "Easy", "starterCode": {}},
+            "variant": {"title": "Ring Desk", "brief": []},
+            "examples": [],
+        }
+        self.assertNotIn("source", GEN.candidate_problem(entry))
+
     def test_rejects_duplicate_ids_and_invalid_topic_lists(self):
         valid = {"id": "one", "difficulty": "Easy", "topics": ["Array"]}
         for problems in (
@@ -631,6 +674,7 @@ class PageNameTests(unittest.TestCase):
             # The bank by path: the gate runs these cases on a thread pool.
             GEN.camel_words(problem["title"])
             for problem in GEN.read_json(ROOT / "problem-bank" / "problems.json")
+            if problem.get("origin", "leetcode") == "leetcode"
         }
         checkers = {
             judge["checker"] for judge in GEN.read_json(GEN.JUDGE_SOURCE).values()

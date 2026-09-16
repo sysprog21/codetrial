@@ -63,6 +63,8 @@ RUST_VARIANTS = ROOT / "src" / "agent" / "problem_variants.rs"
 
 RUST_GUIDES = ROOT / "src" / "agent" / "problem_guides.rs"
 
+RUST_RUBRICS = ROOT / "src" / "agent" / "problem_rubrics.rs"
+
 
 REACTO_STAGES = ("repeat", "example", "algorithm", "coding", "test", "optimizations")
 
@@ -211,6 +213,20 @@ def validated_problems(source: Path = SOURCE) -> list[dict]:
         if not named(problem_id) or problem_id in seen:
             raise RuntimeError(f"missing or duplicate problem id: {problem_id!r}")
         seen.add(problem_id)
+        origin = problem.get("origin", "leetcode")
+        if origin not in {"leetcode", "original"}:
+            raise RuntimeError(f"{problem_id}: origin must be leetcode or original")
+        if origin == "original" and ("title" in problem or "examples" in problem):
+            raise RuntimeError(
+                f"{problem_id}: an original problem has no published title or examples"
+            )
+        if origin == "leetcode" and not named(problem.get("title")):
+            raise RuntimeError(
+                f"{problem_id}: an imported problem needs its published title"
+            )
+        for field_name in ("summary", "optimal", "pitfalls"):
+            if not named(problem.get(field_name)):
+                raise RuntimeError(f"{problem_id}: missing rubric {field_name}")
         if problem.get("difficulty") not in {"Easy", "Medium", "Hard"}:
             raise RuntimeError(f"{problem_id}: unknown difficulty")
         topics = problem.get("topics")

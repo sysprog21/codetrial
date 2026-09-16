@@ -228,6 +228,7 @@ recorded rather than left implicit. See
 | [LiveKit troubleshooting](docs/livekit-connection-troubleshooting.md) | Telling four connection failures apart |
 | [Observable delivery policy](docs/observable-delivery-policy.md) | What a report may and may not assess |
 | [Interview contract versions](docs/interview-contract-versions.md) | The five versions every report carries |
+| [Adding a problem](docs/adding-a-problem.md) | Add an imported or original interview exercise |
 | [Rubric calibration](docs/rubric-calibration.md) | Calibration status of the framework scores |
 | [Provider cost and degradation](docs/provider-cost-and-degradation.md) | Gemini budgets, restarts, concurrency |
 

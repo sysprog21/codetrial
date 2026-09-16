@@ -91,7 +91,10 @@ fn stamp_report_debrief(
 ) {
     let problem = boot.problem;
     let safe = |field: &str, text: &str| {
-        if crate::agent::names_published_problem(problem.title, text) {
+        if problem
+            .source_title()
+            .is_some_and(|title| crate::agent::names_published_problem(title, text))
+        {
             eprintln!(
                 "codetrial report_debrief_dropped problem={} field={field}",
                 problem.id

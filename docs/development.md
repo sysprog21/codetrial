@@ -127,6 +127,12 @@ python3 scripts/gen-problems.py
 python3 scripts/gen-problem-cards.py
 ```
 
+The generated Rust tables include scenario metadata, topics, private guides,
+and the private rubric in `src/agent/problem_rubrics.rs`. Do not edit a
+generated table directly. [Adding a problem](adding-a-problem.md) describes
+the source files, required checks, and the difference between an imported and
+an original exercise.
+
 `scripts/top-interview-150.json` records which problems the study plan asks
 for. Refresh it from LeetCode with:
 
@@ -135,8 +141,10 @@ python3 scripts/gen-problems.py --sync-study-plan
 ```
 
 The sync refuses to write when the plan and `problem-bank/` disagree, naming
-the problems each side is missing. Port those first. `--check` holds the
-committed manifest to the same rule, so drift fails the gate offline.
+the imported problems each side is missing. Port those first. Original
+exercises are deliberately outside the plan, so sync and drift checks leave
+them alone. `--check` holds the committed manifest to the same imported set,
+so drift fails the gate offline.
 
 Two commands cover the porting. `--plan-drift` asks LeetCode what changed
 without writing anything, and `--scaffold SLUG` prints the `problems.json` and

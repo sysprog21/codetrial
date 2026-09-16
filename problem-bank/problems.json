@@ -39,7 +39,10 @@
       "c": "bool isValid(char* s) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "class Solution {\npublic:\n    bool isValid(string s) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "class Solution {\n    public boolean isValid(String s) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a string of only '()[]{}', return whether the brackets are valid: every open bracket is closed by the same type, in the correct order.",
+    "optimal": "Single pass with a stack: push open brackets, and on a close bracket check the top of the stack matches; valid iff the stack is empty at the end. O(n) time, O(n) space.",
+    "pitfalls": "Popping from an empty stack on a leading close bracket like ')('; forgetting the final stack-empty check for unclosed brackets like '('; only counting bracket totals (fails '([)]'); slow repeated string replacement of '()' pairs instead of a stack."
   },
   {
     "id": "two-sum",
@@ -81,7 +84,10 @@
       "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* twoSum(int* nums, int numsSize, int target, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<int> twoSum(vector<int>& nums, int target) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public int[] twoSum(int[] nums, int target) {\n        // Think out loud as you go!\n        return new int[]{};\n    }\n}\n"
-    }
+    },
+    "summary": "Given an array of integers `nums` and an integer `target`, return the indices of the two numbers that add up to `target`. Exactly one solution exists and the same element may not be used twice.",
+    "optimal": "One-pass hash map: for each value, check whether (target - value) was already seen; O(n) time, O(n) space. Brute force is O(n^2).",
+    "pitfalls": "Using the same element twice; returning values instead of indices; breaking on duplicate values (e.g. [3,3] target 6); claiming sorting + two pointers works without noticing it destroys the original indices."
   },
   {
     "id": "merge-sorted-array",
@@ -123,7 +129,10 @@
       "c": "void merge(int* nums1, int nums1Size, int m, int* nums2, int nums2Size, int n) {\n    // Think out loud as you go!\n}\n",
       "cpp": "class Solution {\npublic:\n    void merge(vector<int>& nums1, int m, vector<int>& nums2, int n) {\n        // Think out loud as you go!\n    }\n};\n",
       "java": "class Solution {\n    public void merge(int[] nums1, int m, int[] nums2, int n) {\n        // Think out loud as you go!\n    }\n}\n"
-    }
+    },
+    "summary": "Given two sorted arrays where `nums1` has trailing empty slots, merge `nums2` into `nums1` in place so `nums1` ends sorted.",
+    "optimal": "Work backward from the initialized tails of `nums1` and `nums2`, writing the larger value into the last open slot. This avoids shifting and runs in O(m+n) time with O(1) extra space.",
+    "pitfalls": "Merging forward overwrites unread values in `nums1`; forgetting that the output is the mutated `nums1`; mishandling m=0 or n=0; failing duplicates or negative numbers by using set-like logic instead of stable comparisons."
   },
   {
     "id": "remove-element",
@@ -158,7 +167,10 @@
       "c": "int removeElement(int* nums, int numsSize, int val) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int removeElement(vector<int>& nums, int val) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int removeElement(int[] nums, int val) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given an array and a target value, remove all target occurrences in place and return how many elements remain; only the kept prefix matters.",
+    "optimal": "Use a write pointer: scan every value, copy non-target values into the next kept slot, and return the write count. O(n) time, O(1) extra space.",
+    "pitfalls": "Returning the original length; deleting while iterating and skipping adjacent targets; preserving values after the returned prefix instead of focusing on the kept prefix; assuming output order matters when it does not."
   },
   {
     "id": "remove-duplicates-from-sorted-array",
@@ -193,7 +205,10 @@
       "c": "int removeDuplicates(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int removeDuplicates(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int removeDuplicates(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a sorted array, compact it in place so each distinct value appears once and return the length of that unique prefix.",
+    "optimal": "Keep a write pointer for the next unique slot and copy a value only when it differs from the previous kept value. O(n) time, O(1) extra space.",
+    "pitfalls": "Using a set and losing order or in-place behavior; counting unique values but not writing the prefix; mishandling all-unique or all-duplicate arrays; comparing against the previous read value instead of the previous kept value in variants."
   },
   {
     "id": "remove-duplicates-from-sorted-array-ii",
@@ -228,7 +243,10 @@
       "c": "int removeDuplicates(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int removeDuplicates(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int removeDuplicates(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a sorted array, compact it in place so each distinct value appears at most twice and return the length of the kept prefix.",
+    "optimal": "Scan left to right with a write pointer; keep a value when fewer than two copies are already in the written prefix, commonly by checking `nums[write - 2] != value`. O(n) time, O(1) extra space.",
+    "pitfalls": "Solving the easier one-copy version; allowing three copies after long duplicate runs; using extra arrays instead of in-place writes; failing short arrays where every value should be kept."
   },
   {
     "id": "majority-element",
@@ -265,7 +283,10 @@
       "c": "int majorityElement(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int majorityElement(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int majorityElement(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given an array where one value appears more than half the time, return that majority value.",
+    "optimal": "Boyer-Moore voting keeps one candidate and a counter, canceling different values as it scans. Because a majority is guaranteed, the final candidate is the answer. O(n) time, O(1) space.",
+    "pitfalls": "Returning the first or most recent value without counting; using a map when asked for constant space; forgetting the guarantee and adding unnecessary no-answer behavior; mishandling negative values or a one-element input."
   },
   {
     "id": "rotate-array",
@@ -301,7 +322,10 @@
       "c": "void rotate(int* nums, int numsSize, int k) {\n    // Think out loud as you go!\n}\n",
       "cpp": "class Solution {\npublic:\n    void rotate(vector<int>& nums, int k) {\n        // Think out loud as you go!\n    }\n};\n",
       "java": "class Solution {\n    public void rotate(int[] nums, int k) {\n        // Think out loud as you go!\n    }\n}\n"
-    }
+    },
+    "summary": "Given an array and k, rotate the array to the right by k steps in place.",
+    "optimal": "Reduce k modulo n, then reverse the whole array, reverse the first k elements, and reverse the remaining suffix. O(n) time, O(1) extra space.",
+    "pitfalls": "Forgetting k can exceed the array length; rotating left instead of right; allocating a second array despite the in-place requirement; off-by-one errors in reversal boundaries; breaking k=0 or n=1."
   },
   {
     "id": "best-time-to-buy-and-sell-stock",
@@ -335,7 +359,10 @@
       "c": "int maxProfit(int* prices, int pricesSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int maxProfit(vector<int>& prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int maxProfit(int[] prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given daily prices, choose one buy day and one later sell day to maximize profit, or return 0 if every sale loses money.",
+    "optimal": "Scan once while tracking the lowest price seen so far and the best profit from selling today. O(n) time, O(1) space.",
+    "pitfalls": "Allowing a sell before the buy by using max-min without order; returning a negative profit on decreasing prices; resetting the minimum after calculating profit in the wrong order; solving the multi-transaction variant."
   },
   {
     "id": "best-time-to-buy-and-sell-stock-ii",
@@ -374,7 +401,10 @@
       "c": "int maxProfit(int* prices, int pricesSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int maxProfit(vector<int>& prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int maxProfit(int[] prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given daily prices, make any number of non-overlapping buy-sell transactions to maximize total profit.",
+    "optimal": "Add every positive day-to-day price increase. This is equivalent to buying before each rising run and selling at its peak. O(n) time, O(1) space.",
+    "pitfalls": "Solving the one-transaction version; holding more than one share at once; adding negative drops; missing several small rises that together beat one wide trade."
   },
   {
     "id": "jump-game",
@@ -409,7 +439,10 @@
       "c": "bool canJump(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "class Solution {\npublic:\n    bool canJump(vector<int>& nums) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "class Solution {\n    public boolean canJump(int[] nums) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Given maximum jump lengths from each index, return whether index 0 can reach the last index.",
+    "optimal": "Scan while tracking the farthest reachable index; if the scan index ever exceeds it, return false, otherwise extend it and succeed once the end is reachable. O(n) time, O(1) space.",
+    "pitfalls": "Using local largest jumps instead of reachability; failing the single-element array; getting stuck on zeros that can be jumped over; using exponential DFS without memoization."
   },
   {
     "id": "jump-game-ii",
@@ -445,7 +478,10 @@
       "c": "int jump(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int jump(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int jump(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given reachable maximum jump lengths from each index, return the minimum number of jumps needed to reach the last index.",
+    "optimal": "Greedy level scan: track the end of the current jump window and the farthest index reachable from it; when the scan reaches the window end, take one jump and advance the window. O(n) time, O(1) space.",
+    "pitfalls": "Returning reachability instead of a count; incrementing jumps for every index; failing an already-at-end array; choosing the locally largest nums[i] instead of farthest i + nums[i]."
   },
   {
     "id": "h-index",
@@ -480,7 +516,10 @@
       "c": "int hIndex(int* citations, int citationsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int hIndex(vector<int>& citations) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int hIndex(int[] citations) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given citation counts for a researcher's papers, return the largest h such that at least h papers have h or more citations.",
+    "optimal": "Sort citations descending and find the last position where citations[i] >= i+1, or use buckets capped at n for O(n). Sorting is O(n log n) time and O(1) to O(n) space depending on language.",
+    "pitfalls": "Confusing h with the maximum citation count; forgetting h cannot exceed the number of papers; mishandling all-zero inputs; using > instead of >= at the threshold."
   },
   {
     "id": "insert-delete-getrandom-o1",
@@ -514,7 +553,10 @@
       "c": "typedef struct {\n    // Think out loud as you go!\n} RandomizedSet;\n\nRandomizedSet* randomizedSetCreate() {\n    return NULL;\n}\n\nbool randomizedSetInsert(RandomizedSet* obj, int val) {\n    return false;\n}\n\nbool randomizedSetRemove(RandomizedSet* obj, int val) {\n    return false;\n}\n\nint randomizedSetGetRandom(RandomizedSet* obj) {\n    return 0;\n}\n\nvoid randomizedSetFree(RandomizedSet* obj) {\n}\n",
       "cpp": "class RandomizedSet {\npublic:\n    RandomizedSet() {\n    }\n\n    bool insert(int val) {\n        return false;\n    }\n\n    bool remove(int val) {\n        return false;\n    }\n\n    int getRandom() {\n        return 0;\n    }\n};\n",
       "java": "class RandomizedSet {\n    public RandomizedSet() {\n    }\n\n    public boolean insert(int val) {\n        return false;\n    }\n\n    public boolean remove(int val) {\n        return false;\n    }\n\n    public int getRandom() {\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Design an integer set with insert, remove, and getRandom, each expected O(1), with getRandom choosing uniformly among current values.",
+    "optimal": "Store values in an array plus a hash map from value to index. Insert appends, remove swaps the removed value with the last array item and updates its index before popping, and getRandom indexes the array. O(1) expected time.",
+    "pitfalls": "Using a set alone and making getRandom O(n); removing from the middle of an array without the swap-with-last trick; failing duplicate insert or missing remove return values; leaving stale indices after a remove."
   },
   {
     "id": "product-of-array-except-self",
@@ -549,7 +591,10 @@
       "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* productExceptSelf(int* nums, int numsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<int> productExceptSelf(vector<int>& nums) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public int[] productExceptSelf(int[] nums) {\n        // Think out loud as you go!\n        return new int[]{};\n    }\n}\n"
-    }
+    },
+    "summary": "Given nums, return an array where each position contains the product of every other value, without using division.",
+    "optimal": "Write prefix products into the output, then scan from the right with a running suffix product and multiply it into each slot. O(n) time, O(1) extra space beyond the output.",
+    "pitfalls": "Using division, which breaks the constraint and zeros; mishandling one or two zeros; allocating separate prefix and suffix arrays unnecessarily; sign mistakes with negative values."
   },
   {
     "id": "gas-station",
@@ -584,7 +629,10 @@
       "c": "int canCompleteCircuit(int* gas, int gasSize, int* cost, int costSize) {\n    // Think out loud as you go!\n    return -1;\n}\n",
       "cpp": "class Solution {\npublic:\n    int canCompleteCircuit(vector<int>& gas, vector<int>& cost) {\n        // Think out loud as you go!\n        return -1;\n    }\n};\n",
       "java": "class Solution {\n    public int canCompleteCircuit(int[] gas, int[] cost) {\n        // Think out loud as you go!\n        return -1;\n    }\n}\n"
-    }
+    },
+    "summary": "Given gas and travel costs around a circular route, return a starting station that can complete the circuit, or -1 if none exists.",
+    "optimal": "If total gas is less than total cost, no solution exists. Otherwise scan once with a running tank; whenever it drops below zero, the next station becomes the only possible new start. O(n) time, O(1) space.",
+    "pitfalls": "Trying every start for O(n^2); forgetting the total feasibility check; returning the first locally positive station; mishandling wraparound or a single exact station."
   },
   {
     "id": "candy",
@@ -618,7 +666,10 @@
       "c": "int candy(int* ratings, int ratingsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int candy(vector<int>& ratings) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int candy(int[] ratings) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given child ratings in a line, assign the fewest candies so every child has at least one and higher-rated neighbors get more.",
+    "optimal": "Two passes: left-to-right enforces increases from the left, right-to-left enforces increases from the right, summing the max requirement per child. O(n) time and O(n) space; slope counting can reduce space.",
+    "pitfalls": "Treating equal ratings as needing more candy; only scanning one direction; missing valleys that need both sides; failing a single child or long descending tail."
   },
   {
     "id": "trapping-rain-water",
@@ -655,7 +706,10 @@
       "c": "int trap(int* height, int heightSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int trap(vector<int>& height) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int trap(int[] height) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given bar heights, compute the total water trapped between bars after raining.",
+    "optimal": "Use two pointers with left and right maxima: advance the side with the lower max and add trapped water there. O(n) time, O(1) space. Prefix/suffix max arrays are also acceptable at O(n) space.",
+    "pitfalls": "Using only the nearest walls instead of max walls; double-counting basins; missing flat or monotonic arrays; off-by-one around the endpoints, which cannot trap water."
   },
   {
     "id": "roman-to-integer",
@@ -695,7 +749,10 @@
       "c": "int romanToInt(char* s) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int romanToInt(string s) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int romanToInt(String s) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a valid Roman numeral string, return its integer value.",
+    "optimal": "Scan left to right with a symbol-value map. If a symbol is smaller than the next symbol, subtract it; otherwise add it. O(n) time and O(1) space because the symbol set is fixed.",
+    "pitfalls": "Adding every symbol without handling subtractive pairs; trying to special-case only IV and IX; reading past the end when comparing with the next symbol; accepting invalid input when the prompt guarantees validity."
   },
   {
     "id": "integer-to-roman",
@@ -733,7 +790,10 @@
       "c": "char* intToRoman(int num) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
       "cpp": "class Solution {\npublic:\n    string intToRoman(int num) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
       "java": "class Solution {\n    public String intToRoman(int num) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
-    }
+    },
+    "summary": "Given an integer from 1 to 3999, return its Roman numeral representation.",
+    "optimal": "Greedily append symbols from largest to smallest, including subtractive entries like CM, XC, and IV in the table. O(1) time for the bounded range and O(1) extra space outside the output.",
+    "pitfalls": "Omitting subtractive forms; generating repeated symbols like IIII or DCCCC; processing digits without place value; mishandling the upper bound near 3999."
   },
   {
     "id": "length-of-last-word",
@@ -771,7 +831,10 @@
       "c": "int lengthOfLastWord(char* s) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int lengthOfLastWord(string s) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int lengthOfLastWord(String s) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a string containing words and spaces, return the length of the final word.",
+    "optimal": "Skip trailing spaces from the end, then count characters backward until the next space or the beginning. O(n) time in the worst case and O(1) space.",
+    "pitfalls": "Counting trailing spaces as part of the word; splitting in a way that keeps empty tokens; assuming there are exactly two words; failing a one-word string with leading spaces."
   },
   {
     "id": "longest-common-prefix",
@@ -806,7 +869,10 @@
       "c": "char* longestCommonPrefix(char** strs, int strsSize) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
       "cpp": "class Solution {\npublic:\n    string longestCommonPrefix(vector<string>& strs) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
       "java": "class Solution {\n    public String longestCommonPrefix(String[] strs) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
-    }
+    },
+    "summary": "Given an array of strings, return the longest prefix shared by every string, or the empty string if none exists.",
+    "optimal": "Keep a candidate prefix and shrink it until every string starts with it, or compare characters column by column until a mismatch. O(total characters inspected) time and O(1) extra space outside the returned prefix.",
+    "pitfalls": "Assuming at least two strings; forgetting an empty string makes the answer empty; reading past the shortest string; returning a prefix shared by only adjacent or sorted-looking examples."
   },
   {
     "id": "reverse-words-in-a-string",
@@ -845,7 +911,10 @@
       "c": "char* reverseWords(char* s) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
       "cpp": "class Solution {\npublic:\n    string reverseWords(string s) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
       "java": "class Solution {\n    public String reverseWords(String s) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
-    }
+    },
+    "summary": "Given a string of words separated by spaces, return the words in reverse order with exactly one space between them.",
+    "optimal": "Split into non-empty words, reverse their order, and join with single spaces. O(n) time and O(n) space; in-place reversal is possible in mutable languages if asked.",
+    "pitfalls": "Preserving leading, trailing, or duplicate internal spaces; reversing characters instead of word order; treating punctuation specially when spaces alone separate words; failing a one-word input."
   },
   {
     "id": "zigzag-conversion",
@@ -883,7 +952,10 @@
       "c": "char* convert(char* s, int numRows) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
       "cpp": "class Solution {\npublic:\n    string convert(string s, int numRows) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
       "java": "class Solution {\n    public String convert(String s, int numRows) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
-    }
+    },
+    "summary": "Given a string and row count, place characters along a down-and-up zigzag path and read the rows in order.",
+    "optimal": "Append each character to its current row while walking the row index down and up between the bounds. O(n) time and O(n) space for row buffers. Return the original string immediately when numRows is 1 or at least the string length.",
+    "pitfalls": "Dividing by a zero-length cycle when numRows is 1; mishandling the turn at the top or bottom row; allocating a full grid unnecessarily; losing character order within each row."
   },
   {
     "id": "find-the-index-of-the-first-occurrence-in-a-string",
@@ -918,7 +990,10 @@
       "c": "int strStr(char* haystack, char* needle) {\n    // Think out loud as you go!\n    return -1;\n}\n",
       "cpp": "class Solution {\npublic:\n    int strStr(string haystack, string needle) {\n        // Think out loud as you go!\n        return -1;\n    }\n};\n",
       "java": "class Solution {\n    public int strStr(String haystack, String needle) {\n        // Think out loud as you go!\n        return -1;\n    }\n}\n"
-    }
+    },
+    "summary": "Given haystack and needle strings, return the first index where needle appears in haystack, or -1 if it does not appear.",
+    "optimal": "For interview purposes, a clear scan checking each possible start is acceptable at O(n*m) for these constraints; KMP or another linear string-matching algorithm is the deeper optimization if asked.",
+    "pitfalls": "Returning the last match instead of the first; stopping before checking the final possible start; mishandling overlapping partial matches; treating a failed partial match as proof the needle never appears later."
   },
   {
     "id": "text-justification",
@@ -956,7 +1031,10 @@
       "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nchar** fullJustify(char** words, int wordsSize, int maxWidth, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<string> fullJustify(vector<string>& words, int maxWidth) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public List<String> fullJustify(String[] words, int maxWidth) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
-    }
+    },
+    "summary": "Given words and a maximum width, pack words into lines and distribute spaces so each line has exactly that width.",
+    "optimal": "Greedily pack as many words as fit per line. For non-final lines, divide spaces across gaps with earlier gaps receiving extras; for final or single-word lines, left-justify and pad the right. O(total output size) time.",
+    "pitfalls": "Forgetting every line must be exactly maxWidth characters; giving extra spaces to the rightmost gaps; fully justifying the final line; dividing by zero on a single-word line; accidentally trimming required trailing spaces."
   },
   {
     "id": "valid-palindrome",
@@ -994,7 +1072,10 @@
       "c": "bool isPalindrome(char* s) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "class Solution {\npublic:\n    bool isPalindrome(string s) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "class Solution {\n    public boolean isPalindrome(String s) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a string, decide whether its alphanumeric characters form a palindrome when compared case-insensitively.",
+    "optimal": "Use two pointers from both ends, skipping non-alphanumeric characters and comparing lowercase forms. O(n) time and O(1) space.",
+    "pitfalls": "Comparing punctuation or spaces; forgetting digits are valid characters; lowercasing only one side; building a filtered string when asked for constant space."
   },
   {
     "id": "is-subsequence",
@@ -1030,7 +1111,10 @@
       "c": "bool isSubsequence(char* s, char* t) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "class Solution {\npublic:\n    bool isSubsequence(string s, string t) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "class Solution {\n    public boolean isSubsequence(String s, String t) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Given strings s and t, decide whether s can be formed by deleting zero or more characters from t without changing order.",
+    "optimal": "Walk t with one pointer into s, advancing the s pointer only on matches. When the pointer reaches the end of s, it is a subsequence. O(|t|) time and O(1) space.",
+    "pitfalls": "Checking for substring instead of subsequence; mishandling an empty s; consuming repeated characters out of order; requiring characters to be contiguous."
   },
   {
     "id": "container-with-most-water",
@@ -1065,7 +1149,10 @@
       "c": "int maxArea(int* height, int heightSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int maxArea(vector<int>& height) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int maxArea(int[] height) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given line heights, choose two positions that maximize width times the shorter height.",
+    "optimal": "Use two pointers at the ends. Record each area, then move the pointer at the shorter height because only a taller boundary can compensate for reduced width. O(n) time and O(1) space.",
+    "pitfalls": "Moving the taller pointer; using the taller height for area; missing the width calculation; trying all pairs at O(n^2) without recognizing the greedy proof."
   },
   {
     "id": "two-sum-ii-input-array-is-sorted",
@@ -1107,7 +1194,10 @@
       "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* twoSum(int* numbers, int numbersSize, int target, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<int> twoSum(vector<int>& numbers, int target) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public int[] twoSum(int[] numbers, int target) {\n        // Think out loud as you go!\n        return new int[]{};\n    }\n}\n"
-    }
+    },
+    "summary": "Given a sorted 1-indexed integer array and a target, return the two indices whose values add to the target.",
+    "optimal": "Use left and right pointers. If the sum is too small, move left; if too large, move right; otherwise return 1-indexed positions. O(n) time and O(1) space.",
+    "pitfalls": "Returning zero-indexed positions; missing duplicate values; moving both pointers after a mismatch; ignoring that the input is sorted and falling back to extra hash storage."
   },
   {
     "id": "3sum",
@@ -1146,7 +1236,10 @@
       "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** threeSum(int* nums, int numsSize, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<vector<int>> threeSum(vector<int>& nums) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public List<List<Integer>> threeSum(int[] nums) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
-    }
+    },
+    "summary": "Given an integer array, return all unique triplets whose values sum to zero.",
+    "optimal": "Sort the array, fix one number, and use a two-pointer sweep for the remaining pair while skipping duplicate fixed and pointer values. O(n^2) time and O(1) extra space outside the output.",
+    "pitfalls": "Returning duplicate triplets; forgetting to sort before the two-pointer sweep; moving pointers incorrectly after a match; treating output order as important; using the same element twice."
   },
   {
     "id": "happy-number",
@@ -1180,7 +1273,10 @@
       "c": "bool isHappy(int n) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "class Solution {\npublic:\n    bool isHappy(int n) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "class Solution {\n    public boolean isHappy(int n) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Repeatedly replace a positive integer by the sum of squared digits and decide whether the sequence reaches 1.",
+    "optimal": "Detect cycles with a set or Floyd's slow/fast pointers over the digit-square transform. Reaching 1 means happy; revisiting a value means not happy. O(log n) per transform and bounded sequence length.",
+    "pitfalls": "Looping forever on unhappy cycles; summing digits instead of squared digits; mishandling n = 1; assuming values always shrink immediately."
   },
   {
     "id": "longest-substring-without-repeating-characters",
@@ -1219,7 +1315,10 @@
       "c": "int lengthOfLongestSubstring(char* s) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int lengthOfLongestSubstring(string s) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int lengthOfLongestSubstring(String s) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a string, return the length of the longest contiguous substring with no repeated characters.",
+    "optimal": "Maintain a sliding window and a map from character to most recent index. When a duplicate appears inside the current window, move the left boundary just past its previous index. O(n) time and O(min(n, alphabet)) space.",
+    "pitfalls": "Treating subsequences as valid; moving the left boundary backward on an old duplicate; off-by-one in window length; failing the empty string."
   },
   {
     "id": "minimum-window-substring",
@@ -1259,7 +1358,10 @@
       "c": "char* minWindow(char* s, char* t) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
       "cpp": "class Solution {\npublic:\n    string minWindow(string s, string t) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
       "java": "class Solution {\n    public String minWindow(String s, String t) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
-    }
+    },
+    "summary": "Given strings s and t, return the shortest substring of s that contains every character required by t, including duplicates.",
+    "optimal": "Count required characters from t, expand the right edge until all requirements are met, then shrink the left edge while preserving validity. Track the best valid window. O(|s| + |t|) time and O(alphabet) space.",
+    "pitfalls": "Ignoring duplicate required characters; treating character case as interchangeable; stopping at the first valid window instead of shrinking; returning a window when no valid one exists."
   },
   {
     "id": "substring-with-concatenation-of-all-words",
@@ -1300,7 +1402,10 @@
       "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* findSubstring(char* s, char** words, int wordsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<int> findSubstring(string s, vector<string>& words) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public List<Integer> findSubstring(String s, String[] words) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
-    }
+    },
+    "summary": "Given a string and equal-length words, return every start index where a substring concatenates all words exactly once in any order.",
+    "optimal": "Use word-length aligned sliding windows. For each offset, count fixed-size word chunks, shrink when a count exceeds what is required, and record starts when the window holds all words. O(n * word length) substring work, usually described as O(n) chunk scans.",
+    "pitfalls": "Ignoring duplicate words; scanning only offset zero; allowing partial-word starts; accepting windows with too many copies of a word; rebuilding every candidate from scratch."
   },
   {
     "id": "minimum-size-subarray-sum",
@@ -1341,7 +1446,10 @@
       "c": "int minSubArrayLen(int target, int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int minSubArrayLen(int target, vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int minSubArrayLen(int target, int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a target and positive integers, return the smallest contiguous subarray length with sum at least the target, or 0 if none exists.",
+    "optimal": "Use a sliding window because all numbers are positive: expand right to grow the sum, then shrink left while the sum still meets the target. O(n) time and O(1) space. Prefix sums with binary search are also valid at O(n log n).",
+    "pitfalls": "Using a fixed-size window; forgetting to return 0 when no window qualifies; failing to shrink after reaching the target; applying this sliding-window proof to arrays with negative numbers."
   },
   {
     "id": "valid-sudoku",
@@ -1377,7 +1485,10 @@
       "c": "bool isValidSudoku(char** board, int boardSize, int* boardColSize) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "class Solution {\npublic:\n    bool isValidSudoku(vector<vector<char>>& board) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "class Solution {\n    public boolean isValidSudoku(char[][] board) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a 9 x 9 partially filled Sudoku board, return whether every filled row, column, and 3 x 3 box contains no repeated digit.",
+    "optimal": "Scan all 81 cells, skip '.', and track seen digits for each row, column, and box. A duplicate in any unit makes the board invalid. O(1) time and space because the board size is fixed.",
+    "pitfalls": "Checking rows but forgetting columns or boxes; treating '.' as a duplicate value; validating whether the puzzle is solvable instead of only the current filled cells; computing the box index incorrectly."
   },
   {
     "id": "spiral-matrix",
@@ -1414,7 +1525,10 @@
       "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* spiralOrder(int** matrix, int matrixSize, int* matrixColSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<int> spiralOrder(vector<vector<int>>& matrix) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public List<Integer> spiralOrder(int[][] matrix) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
-    }
+    },
+    "summary": "Given an m x n matrix, return its values in clockwise spiral order starting from the top-left corner.",
+    "optimal": "Maintain top, bottom, left, and right boundaries. Traverse the current top row, right column, bottom row, and left column while tightening bounds and guarding single remaining rows or columns. O(m*n) time and O(1) extra space besides the output.",
+    "pitfalls": "Assuming the matrix is square; double-visiting the middle row or column; stopping before all cells are emitted; mixing up boundary updates after each side."
   },
   {
     "id": "rotate-image",
@@ -1450,7 +1564,10 @@
       "c": "void rotate(int** matrix, int matrixSize, int* matrixColSize) {\n    // Think out loud as you go!\n}\n",
       "cpp": "class Solution {\npublic:\n    void rotate(vector<vector<int>>& matrix) {\n        // Think out loud as you go!\n    }\n};\n",
       "java": "class Solution {\n    public void rotate(int[][] matrix) {\n        // Think out loud as you go!\n    }\n}\n"
-    }
+    },
+    "summary": "Given an n x n matrix, rotate it 90 degrees clockwise in place.",
+    "optimal": "Either transpose across the main diagonal then reverse every row, or rotate four cells at a time layer by layer. Both run in O(n^2) time and O(1) extra space.",
+    "pitfalls": "Returning a new matrix without mutating the input; rotating counterclockwise; failing odd-sized matrices with a center cell; overwriting values before saving the four-way swap."
   },
   {
     "id": "set-matrix-zeroes",
@@ -1487,7 +1604,10 @@
       "c": "void setZeroes(int** matrix, int matrixSize, int* matrixColSize) {\n    // Think out loud as you go!\n}\n",
       "cpp": "class Solution {\npublic:\n    void setZeroes(vector<vector<int>>& matrix) {\n        // Think out loud as you go!\n    }\n};\n",
       "java": "class Solution {\n    public void setZeroes(int[][] matrix) {\n        // Think out loud as you go!\n    }\n}\n"
-    }
+    },
+    "summary": "Given an m x n matrix, if any original cell is zero, set that cell's entire row and column to zero in place.",
+    "optimal": "Use the first row and first column as marker storage, plus two booleans for whether they originally contained zero. Mark rows and columns from the interior, zero marked interiors, then handle the first row and column. O(m*n) time and O(1) extra space.",
+    "pitfalls": "Letting newly written zeroes cascade into extra rows or columns; mishandling zeroes in the first row or first column when using them as markers; returning a new matrix without mutating; assuming the matrix is square."
   },
   {
     "id": "game-of-life",
@@ -1524,7 +1644,10 @@
       "c": "void gameOfLife(int** board, int boardSize, int* boardColSize) {\n    // Think out loud as you go!\n}\n",
       "cpp": "class Solution {\npublic:\n    void gameOfLife(vector<vector<int>>& board) {\n        // Think out loud as you go!\n    }\n};\n",
       "java": "class Solution {\n    public void gameOfLife(int[][] board) {\n        // Think out loud as you go!\n    }\n}\n"
-    }
+    },
+    "summary": "Given a board of 0/1 cells, update it in place to the next generation of the classic cellular automaton using all eight neighbors and simultaneous updates.",
+    "optimal": "Encode transitional states in place, such as live-to-dead and dead-to-live sentinel values, while neighbor counts read the original live/dead state. Then make a final pass to collapse sentinels to 0 or 1. O(m*n) time and O(1) extra space.",
+    "pitfalls": "Updating cells immediately and letting earlier changes affect later neighbor counts; checking only four neighbors; getting boundary checks wrong; forgetting live cells survive with exactly two or three live neighbors."
   },
   {
     "id": "ransom-note",
@@ -1563,7 +1686,10 @@
       "c": "bool canConstruct(char* ransomNote, char* magazine) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "class Solution {\npublic:\n    bool canConstruct(string ransomNote, string magazine) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "class Solution {\n    public boolean canConstruct(String ransomNote, String magazine) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Given message and tiles strings, return whether message can be built from the characters of tiles using each character of tiles at most once.",
+    "optimal": "Count the characters of tiles, then consume counts for each character of message, failing when a needed count is missing. With lowercase letters, a fixed 26-slot array is enough. O(n + m) time and O(1) space.",
+    "pitfalls": "Checking only whether each distinct letter exists and ignoring multiplicity; decrementing counts below zero; accidentally treating order as important; using nested scans that become O(n*m)."
   },
   {
     "id": "isomorphic-strings",
@@ -1602,7 +1728,10 @@
       "c": "bool isIsomorphic(char* s, char* t) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "class Solution {\npublic:\n    bool isIsomorphic(string s, string t) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "class Solution {\n    public boolean isIsomorphic(String s, String t) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Given equal-length strings s and t, return whether each character in s can be replaced consistently to produce t with a one-to-one mapping.",
+    "optimal": "Track mappings in both directions while scanning: s char to t char and t char back to s char. Any conflicting existing mapping fails. O(n) time and O(alphabet) space.",
+    "pitfalls": "Only checking the forward mapping and allowing two source characters to map to one target; comparing character frequency counts instead of positions; forgetting mappings must stay consistent across the whole string."
   },
   {
     "id": "word-pattern",
@@ -1642,7 +1771,10 @@
       "c": "bool wordPattern(char* pattern, char* s) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "class Solution {\npublic:\n    bool wordPattern(string pattern, string s) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "class Solution {\n    public boolean wordPattern(String pattern, String s) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a pattern string and a space-separated sentence, return whether pattern characters and words have a one-to-one correspondence.",
+    "optimal": "Split the sentence into words, reject length mismatches, then scan with maps in both directions from pattern character to word and word to pattern character. O(n) time and space for the words and maps.",
+    "pitfalls": "Not checking word count against pattern length; only mapping pattern to word and allowing two pattern letters to share one word; treating the sentence as characters instead of words; mishandling repeated words."
   },
   {
     "id": "valid-anagram",
@@ -1677,7 +1809,10 @@
       "c": "bool isAnagram(char* s, char* t) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "class Solution {\npublic:\n    bool isAnagram(string s, string t) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "class Solution {\n    public boolean isAnagram(String s, String t) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Given strings s and t, return whether they contain exactly the same characters with the same multiplicities, regardless of order.",
+    "optimal": "Reject different lengths, then count characters from one string and decrement with the other. For lowercase English letters, a 26-slot array is enough; sorting both strings is simpler at O(n log n).",
+    "pitfalls": "Checking only distinct character sets and missing multiplicity; forgetting the length check; using substring or order-sensitive comparison; assuming Unicode behavior when the constraints are lowercase English letters."
   },
   {
     "id": "group-anagrams",
@@ -1718,7 +1853,10 @@
       "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nchar*** groupAnagrams(char** strs, int strsSize, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<vector<string>> groupAnagrams(vector<string>& strs) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public List<List<String>> groupAnagrams(String[] strs) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
-    }
+    },
+    "summary": "Given a list of strings, return groups where each group contains strings that are anagrams of one another.",
+    "optimal": "Build a hash map keyed by each word's sorted characters or by its 26-count signature, appending each original word to that key's group. O(total characters log word length) with sorted keys, or O(total characters) with count keys.",
+    "pitfalls": "Returning only one representative per group; losing duplicate input strings; making output order part of the logic; using a key that collides for non-anagrams such as only string length."
   },
   {
     "id": "contains-duplicate-ii",
@@ -1758,7 +1896,10 @@
       "c": "bool containsNearbyDuplicate(int* nums, int numsSize, int k) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "class Solution {\npublic:\n    bool containsNearbyDuplicate(vector<int>& nums, int k) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "class Solution {\n    public boolean containsNearbyDuplicate(int[] nums, int k) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Given nums and k, return whether the same value appears at two different indices whose absolute difference is at most k.",
+    "optimal": "Track the most recent index for each value in a hash map; when a value repeats, check the distance before updating the index. O(n) time and O(n) space. A sliding set of the last k values also works.",
+    "pitfalls": "Solving Contains Duplicate I and ignoring k; using the same index twice when k is zero; failing negative values; keeping the first index forever instead of the most recent one."
   },
   {
     "id": "longest-consecutive-sequence",
@@ -1797,7 +1938,10 @@
       "c": "int longestConsecutive(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int longestConsecutive(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int longestConsecutive(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given an unsorted array, return the length of the longest consecutive integer run, regardless of the values' positions in the array.",
+    "optimal": "Insert all values into a hash set. Only start counting from a value when value - 1 is absent, then walk upward until the run ends. Each value is visited at most once across starts, so this is O(n) time and O(n) space.",
+    "pitfalls": "Sorting when the expected optimal answer is linear; letting duplicate values extend a run; starting a scan from every value and drifting to O(n^2); forgetting the empty array returns 0."
   },
   {
     "id": "summary-ranges",
@@ -1831,7 +1975,10 @@
       "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nchar** summaryRanges(int* nums, int numsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<string> summaryRanges(vector<int>& nums) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public List<String> summaryRanges(int[] nums) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
-    }
+    },
+    "summary": "Given a sorted unique array, compress each maximal consecutive run into either a single number string or a start->end range string.",
+    "optimal": "Scan once with a start index for the current run. When the next value is not current + 1 or the array ends, emit either the single value or start->end, then begin the next run. O(n) time and O(1) extra space besides output.",
+    "pitfalls": "Forgetting empty input; formatting singletons as ranges; off-by-one when flushing the final run; failing negative numbers or runs crossing zero."
   },
   {
     "id": "insert-interval",
@@ -1867,7 +2014,10 @@
       "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** insert(int** intervals, int intervalsSize, int* intervalsColSize, int* newInterval, int newIntervalSize, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<vector<int>> insert(vector<vector<int>>& intervals, vector<int>& newInterval) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public int[][] insert(int[][] intervals, int[] newInterval) {\n        // Think out loud as you go!\n        return new int[][]{};\n    }\n}\n"
-    }
+    },
+    "summary": "Given sorted non-overlapping intervals and a new interval, insert it and merge overlaps to return sorted non-overlapping coverage.",
+    "optimal": "Append all intervals ending before the new interval, merge every interval starting before or at the new interval's end, append the merged interval, then append the rest. O(n) time and O(n) output space.",
+    "pitfalls": "Not merging touching endpoints; losing intervals before or after the insertion point; assuming the new interval always overlaps; mutating newInterval boundaries in the wrong order."
   },
   {
     "id": "minimum-number-of-arrows-to-burst-balloons",
@@ -1907,7 +2057,10 @@
       "c": "int findMinArrowShots(int** points, int pointsSize, int* pointsColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int findMinArrowShots(vector<vector<int>>& points) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int findMinArrowShots(int[][] points) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given balloon intervals on an x-axis, return the fewest arrow positions needed so every interval contains at least one arrow.",
+    "optimal": "Sort by interval end, shoot at the earliest possible end, and start a new arrow only when the next balloon starts after the current arrow position. O(n log n) time and O(1) extra space after sorting.",
+    "pitfalls": "Sorting by start and choosing arrows too late; treating touching endpoints as non-overlapping; using < instead of <= around the arrow position; overflowing comparisons by subtracting large endpoints."
   },
   {
     "id": "simplify-path",
@@ -1946,7 +2099,10 @@
       "c": "char* simplifyPath(char* path) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
       "cpp": "class Solution {\npublic:\n    string simplifyPath(string path) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
       "java": "class Solution {\n    public String simplifyPath(String path) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
-    }
+    },
+    "summary": "Given an absolute Unix-style path, return its canonical simplified form with single slashes, no '.' segments, and resolved '..' segments.",
+    "optimal": "Split on '/', use a stack of directory names, skip empty segments and '.', pop for '..' when possible, and join with leading '/'. O(n) time and O(n) space.",
+    "pitfalls": "Treating names like '...' as parent directories; popping above root; leaving repeated or trailing slashes; forgetting that the input is absolute and output must start with '/'."
   },
   {
     "id": "min-stack",
@@ -1977,7 +2133,10 @@
       "c": "typedef struct {\n    // Think out loud as you go!\n} MinStack;\n\nMinStack* minStackCreate() {\n    return NULL;\n}\n\nvoid minStackPush(MinStack* obj, int value) {\n}\n\nvoid minStackPop(MinStack* obj) {\n}\n\nint minStackTop(MinStack* obj) {\n    return 0;\n}\n\nint minStackGetMin(MinStack* obj) {\n    return 0;\n}\n\nvoid minStackFree(MinStack* obj) {\n}\n",
       "cpp": "class MinStack {\npublic:\n    MinStack() {\n    }\n\n    void push(int value) {\n    }\n\n    void pop() {\n    }\n\n    int top() {\n        return 0;\n    }\n\n    int getMin() {\n        return 0;\n    }\n};\n",
       "java": "class MinStack {\n    public MinStack() {\n    }\n\n    public void push(int value) {\n    }\n\n    public void pop() {\n    }\n\n    public int top() {\n        return 0;\n    }\n\n    public int getMin() {\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Design a stack supporting push, pop, top, and getMin, where getMin returns the current minimum value and every operation is O(1).",
+    "optimal": "Keep a normal value stack plus a second stack storing the minimum at each depth or storing value/count pairs for minima. Push and pop update both stacks so getMin reads the current minimum directly.",
+    "pitfalls": "Recomputing the minimum by scanning on every getMin; losing duplicate minima after one pop; not updating min state on pop; returning stale minima after the minimum value is removed."
   },
   {
     "id": "evaluate-reverse-polish-notation",
@@ -2018,7 +2177,10 @@
       "c": "int evalRPN(char** tokens, int tokensSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int evalRPN(vector<string>& tokens) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int evalRPN(String[] tokens) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a valid Reverse Polish Notation token list, evaluate it using integer arithmetic with division truncating toward zero.",
+    "optimal": "Use a stack of integers. Push operands; for an operator, pop right then left operands, apply the operation, and push the result. O(n) time and O(n) space.",
+    "pitfalls": "Reversing operand order for '-' or '/'; using floor division for negative values instead of truncating toward zero; treating negative numbers as operators; failing multi-digit numbers."
   },
   {
     "id": "basic-calculator",
@@ -2060,7 +2222,10 @@
       "c": "int calculate(char* s) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int calculate(string s) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int calculate(String s) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a valid arithmetic expression string containing nonnegative integers, '+', '-', parentheses, and spaces, evaluate and return its integer value.",
+    "optimal": "Scan once while building multi-digit numbers and tracking the current sign. Use a stack of prior result/sign pairs when entering parentheses, or use recursive descent over parenthesized subexpressions. O(n) time and O(n) space.",
+    "pitfalls": "Applying a sign outside parentheses only to the first number inside; losing multi-digit numbers; forgetting to skip spaces; using eval instead of parsing; assuming '*' or '/' operators are present."
   },
   {
     "id": "linked-list-cycle",
@@ -2100,7 +2265,10 @@
       "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nbool hasCycle(struct ListNode *head) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode(int x) : val(x), next(NULL) {}\n * };\n */\nclass Solution {\npublic:\n    bool hasCycle(ListNode *head) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "/**\n * Definition for singly-linked list.\n * class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode(int x) {\n *         val = x;\n *         next = null;\n *     }\n * }\n */\npublic class Solution {\n    public boolean hasCycle(ListNode head) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Given the head of a singly linked list, determine whether following next pointers ever revisits a node.",
+    "optimal": "Use Floyd's slow and fast pointers: move slow one step and fast two steps, returning true if they meet and false if fast reaches the end. O(n) time and O(1) space.",
+    "pitfalls": "Dereferencing fast.next without checking fast first; comparing node values instead of node identity; failing empty or single-node lists; using extra memory when asked for constant space."
   },
   {
     "id": "add-two-numbers",
@@ -2140,7 +2308,10 @@
       "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* addTwoNumbers(struct ListNode* l1, struct ListNode* l2) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* addTwoNumbers(ListNode* l1, ListNode* l2) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode addTwoNumbers(ListNode l1, ListNode l2) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Given two non-empty linked lists storing digits in reverse order, add the represented numbers and return the sum in the same linked-list format.",
+    "optimal": "Walk both lists together with a carry, appending sum % 10 to a dummy-tail result and carrying sum / 10. Continue while either list or carry remains. O(max(m,n)) time and output space.",
+    "pitfalls": "Forgetting the final carry; stopping when the shorter list ends; treating digits as forward-order numbers; mutating input unexpectedly; mishandling zero-only lists."
   },
   {
     "id": "merge-two-sorted-lists",
@@ -2179,7 +2350,10 @@
       "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* mergeTwoLists(struct ListNode* list1, struct ListNode* list2) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* mergeTwoLists(ListNode* list1, ListNode* list2) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode mergeTwoLists(ListNode list1, ListNode list2) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Given two sorted linked lists, merge their nodes into one sorted linked list and return its head.",
+    "optimal": "Use a dummy head and tail pointer, repeatedly attach the smaller current node, then append the remaining suffix. O(m+n) time and O(1) extra space if nodes are reused.",
+    "pitfalls": "Dropping the remaining suffix after one list empties; advancing the wrong pointer; losing the head without a dummy node; mishandling empty lists; using < when <= is needed for stable ordering."
   },
   {
     "id": "copy-list-with-random-pointer",
@@ -2218,7 +2392,10 @@
       "c": "/**\n * Definition for a Node.\n * struct Node {\n *     int val;\n *     struct Node *next;\n *     struct Node *random;\n * };\n */\n\nstruct Node* copyRandomList(struct Node* head) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/*\n// Definition for a Node.\nclass Node {\npublic:\n    int val;\n    Node* next;\n    Node* random;\n\n    Node(int _val) {\n        val = _val;\n        next = NULL;\n        random = NULL;\n    }\n};\n*/\n\nclass Solution {\npublic:\n    Node* copyRandomList(Node* head) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/*\n// Definition for a Node.\nclass Node {\n    int val;\n    Node next;\n    Node random;\n\n    public Node(int val) {\n        this.val = val;\n        this.next = null;\n        this.random = null;\n    }\n}\n*/\n\nclass Solution {\n    public Node copyRandomList(Node head) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a linked list whose nodes have next and random pointers, return a deep copy with the same values and pointer relationships.",
+    "optimal": "Use a hash map from original node to copied node, then wire each copy's next and random pointers from the map. O(n) time and O(n) space. The interleaving-node approach is also O(n) time with O(1) extra space.",
+    "pitfalls": "Returning original nodes instead of a deep copy; copying next pointers but not random pointers; using node values as map keys when values can repeat; failing null random pointers; losing the original list while interleaving."
   },
   {
     "id": "reverse-linked-list-ii",
@@ -2252,7 +2429,10 @@
       "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* reverseBetween(struct ListNode* head, int left, int right) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* reverseBetween(ListNode* head, int left, int right) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode reverseBetween(ListNode head, int left, int right) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Given the head of a singly linked list and one-based positions left and right, reverse only the nodes in that span and return the head.",
+    "optimal": "Use a dummy node so reversing from position one needs no special case. Walk to the node before left, then splice each following node to the front of the span until right is reached. O(n) time and O(1) extra space.",
+    "pitfalls": "Off-by-one errors from one-based positions; failing when left equals one without a dummy node; losing the node before the span or the node after it; reversing values instead of relinking nodes; mishandling left equal to right."
   },
   {
     "id": "reverse-nodes-in-k-group",
@@ -2288,7 +2468,10 @@
       "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* reverseKGroup(struct ListNode* head, int k) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* reverseKGroup(ListNode* head, int k) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode reverseKGroup(ListNode head, int k) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a linked list and k, reverse nodes in complete groups of k while leaving a final short group unchanged.",
+    "optimal": "Use a dummy node and group predecessor. For each group, first verify k nodes exist, reverse exactly that block in place, reconnect it, and advance to the next group. O(n) time and O(1) extra space.",
+    "pitfalls": "Reversing the final group with fewer than k nodes; losing the next group boundary; off-by-one errors when locating the kth node; changing node values instead of links; mishandling k = 1."
   },
   {
     "id": "remove-nth-node-from-end-of-list",
@@ -2326,7 +2509,10 @@
       "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* removeNthFromEnd(struct ListNode* head, int n) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* removeNthFromEnd(ListNode* head, int n) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode removeNthFromEnd(ListNode head, int n) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a linked list head, remove the nth node from the end and return the modified head.",
+    "optimal": "Use a dummy node and two pointers. Advance fast n steps, then move fast and slow together until fast reaches the tail; slow.next is the node to remove. O(n) time and O(1) space.",
+    "pitfalls": "Failing when the head is removed; off-by-one spacing between fast and slow; not handling a one-node list; doing two passes when one pass was requested; returning the old head instead of dummy.next."
   },
   {
     "id": "remove-duplicates-from-sorted-list-ii",
@@ -2361,7 +2547,10 @@
       "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* deleteDuplicates(struct ListNode* head) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* deleteDuplicates(ListNode* head) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode deleteDuplicates(ListNode head) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a sorted linked list, delete every value that appears more than once so only originally unique values remain.",
+    "optimal": "Use a dummy node before head and scan groups of equal values. If a group has duplicates, skip the whole group; otherwise keep it and advance the predecessor. O(n) time and O(1) space.",
+    "pitfalls": "Keeping one copy of a duplicated value; failing duplicate runs at the head or tail; advancing the predecessor after deleting a group; mishandling an all-duplicate list."
   },
   {
     "id": "rotate-list",
@@ -2395,7 +2584,10 @@
       "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* rotateRight(struct ListNode* head, int k) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* rotateRight(ListNode* head, int k) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode rotateRight(ListNode head, int k) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a linked list head and integer k, rotate the list right by k places and return the new head.",
+    "optimal": "Compute length and tail, reduce k modulo length, connect tail to head temporarily, then break the cycle at length - k steps to form the rotated list. O(n) time and O(1) space.",
+    "pitfalls": "Not reducing k modulo length; failing empty or single-node lists; breaking at the wrong node; leaving a cycle in the result; treating rotation left instead of right."
   },
   {
     "id": "partition-list",
@@ -2430,7 +2622,10 @@
       "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* partition(struct ListNode* head, int x) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* partition(ListNode* head, int x) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode partition(ListNode head, int x) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a linked list and x, reorder nodes so values less than x come first while preserving relative order inside both partitions.",
+    "optimal": "Build two chains with dummy heads: one for nodes less than x and one for nodes greater than or equal to x, then terminate the second chain and concatenate. O(n) time and O(1) extra node space.",
+    "pitfalls": "Sorting instead of stable partitioning; losing relative order within a partition; forgetting to terminate the greater-or-equal chain; dropping nodes equal to x; creating unnecessary new nodes."
   },
   {
     "id": "lru-cache",
@@ -2465,7 +2660,10 @@
       "c": "typedef struct {\n    // Think out loud as you go!\n} LRUCache;\n\nLRUCache* lRUCacheCreate(int capacity) {\n    return NULL;\n}\n\nint lRUCacheGet(LRUCache* obj, int key) {\n    return -1;\n}\n\nvoid lRUCachePut(LRUCache* obj, int key, int value) {\n}\n\nvoid lRUCacheFree(LRUCache* obj) {\n}\n",
       "cpp": "class LRUCache {\npublic:\n    LRUCache(int capacity) {\n    }\n\n    int get(int key) {\n        return -1;\n    }\n\n    void put(int key, int value) {\n    }\n};\n",
       "java": "class LRUCache {\n    public LRUCache(int capacity) {\n    }\n\n    public int get(int key) {\n        return -1;\n    }\n\n    public void put(int key, int value) {\n    }\n}\n"
-    }
+    },
+    "summary": "Design a data structure implementing a Least Recently Used cache with a fixed capacity. get(key) returns the value or -1; put(key, value) inserts or updates and evicts the least recently used entry when over capacity. Both operations should run in O(1) average time.",
+    "optimal": "Hash map pointing into a doubly linked list (or an ordered dict): map for O(1) lookup, list for O(1) recency reordering and eviction from the tail. Both get and put must refresh recency.",
+    "pitfalls": "Forgetting that get() also refreshes recency; forgetting that put() on an existing key updates the value AND recency without evicting; evicting before checking whether the key already exists; O(n) recency updates via a plain list; off-by-one on the capacity check."
   },
   {
     "id": "maximum-depth-of-binary-tree",
@@ -2501,7 +2699,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nint maxDepth(struct TreeNode* root) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    int maxDepth(TreeNode* root) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public int maxDepth(TreeNode root) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a binary tree root, return the number of nodes on the longest root-to-leaf path.",
+    "optimal": "Use DFS recursion returning 1 + max(left depth, right depth), with 0 for null nodes. Iterative BFS level counting is also O(n). O(n) time and O(h) recursion stack.",
+    "pitfalls": "Returning edges instead of nodes; failing empty trees; ignoring one side of an unbalanced tree; recursing without a null base case; stack depth on highly skewed trees."
   },
   {
     "id": "same-tree",
@@ -2540,7 +2741,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nbool isSameTree(struct TreeNode* p, struct TreeNode* q) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    bool isSameTree(TreeNode* p, TreeNode* q) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public boolean isSameTree(TreeNode p, TreeNode q) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Given two binary tree roots, determine whether both trees have identical structure and node values.",
+    "optimal": "Traverse both trees together. Two null nodes match; exactly one null node fails; otherwise values must match and both child pairs must match. O(n) time and O(h) stack.",
+    "pitfalls": "Comparing only traversal value sequences; ignoring null child positions; accepting same values in different shapes; failing when both trees are empty."
   },
   {
     "id": "invert-binary-tree",
@@ -2579,7 +2783,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nstruct TreeNode* invertTree(struct TreeNode* root) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    TreeNode* invertTree(TreeNode* root) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public TreeNode invertTree(TreeNode root) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a binary tree root, swap every node's left and right children and return the root.",
+    "optimal": "DFS or BFS over every node, swapping left and right children in place, then return the original root. O(n) time and O(h) recursion stack or O(w) queue space.",
+    "pitfalls": "Swapping only the root's children; losing a subtree during the swap; failing empty trees; returning a newly built partial tree; not preserving sparse child positions."
   },
   {
     "id": "symmetric-tree",
@@ -2615,7 +2822,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nbool isSymmetric(struct TreeNode* root) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    bool isSymmetric(TreeNode* root) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public boolean isSymmetric(TreeNode root) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a binary tree root, decide whether the left and right halves are mirror images in both structure and value.",
+    "optimal": "Compare node pairs from the outside inward: left.left with right.right and left.right with right.left. Recursion or a queue both run in O(n) time with O(h) stack or O(w) queue space.",
+    "pitfalls": "Comparing ordinary traversals without null markers; checking equal child values but not mirrored positions; accepting same values on the wrong sparse side; failing single-node trees."
   },
   {
     "id": "construct-binary-tree-from-preorder-and-inorder-traversal",
@@ -2654,7 +2864,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nstruct TreeNode* buildTree(int* preorder, int preorderSize, int* inorder, int inorderSize) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    TreeNode* buildTree(vector<int>& preorder, vector<int>& inorder) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public TreeNode buildTree(int[] preorder, int[] inorder) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Given preorder and inorder traversal arrays with unique values, reconstruct the binary tree and return its root.",
+    "optimal": "Preorder gives each subtree root first. Use a value-to-index map for inorder, then recursively split left and right ranges while advancing through preorder. O(n) time and O(n) space.",
+    "pitfalls": "Searching the inorder array on every recursive call; off-by-one range splits; building right before left while consuming preorder; assuming balanced trees; losing skewed subtree shape."
   },
   {
     "id": "construct-binary-tree-from-inorder-and-postorder-traversal",
@@ -2693,7 +2906,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nstruct TreeNode* buildTree(int* inorder, int inorderSize, int* postorder, int postorderSize) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    TreeNode* buildTree(vector<int>& inorder, vector<int>& postorder) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public TreeNode buildTree(int[] inorder, int[] postorder) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Given inorder and postorder traversal arrays with unique values, reconstruct the binary tree and return its root.",
+    "optimal": "Postorder gives each subtree root last. Use an inorder index map and consume postorder from the end, building right before left so the traversal order lines up. O(n) time and O(n) space.",
+    "pitfalls": "Building left before right while consuming postorder backward; repeated linear searches; incorrect inclusive or exclusive bounds; mishandling single-node and skewed trees."
   },
   {
     "id": "populating-next-right-pointers-in-each-node-ii",
@@ -2730,7 +2946,10 @@
       "c": "/**\n * Definition for a Node.\n * struct Node {\n *     int val;\n *     struct Node *left;\n *     struct Node *right;\n *     struct Node *next;\n * };\n */\n\nstruct Node* connect(struct Node* root) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/*\n// Definition for a Node.\nclass Node {\npublic:\n    int val;\n    Node* left;\n    Node* right;\n    Node* next;\n\n    Node() : val(0), left(NULL), right(NULL), next(NULL) {}\n\n    Node(int _val) : val(_val), left(NULL), right(NULL), next(NULL) {}\n\n    Node(int _val, Node* _left, Node* _right, Node* _next)\n        : val(_val), left(_left), right(_right), next(_next) {}\n};\n*/\n\nclass Solution {\npublic:\n    Node* connect(Node* root) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/*\n// Definition for a Node.\nclass Node {\n    public int val;\n    public Node left;\n    public Node right;\n    public Node next;\n\n    public Node() {}\n    \n    public Node(int _val) {\n        val = _val;\n    }\n\n    public Node(int _val, Node _left, Node _right, Node _next) {\n        val = _val;\n        left = _left;\n        right = _right;\n        next = _next;\n    }\n};\n*/\n\nclass Solution {\n    public Node connect(Node root) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Given any binary tree, set each node's next pointer to its neighbor on the same level, or null for the rightmost node.",
+    "optimal": "Walk one level using existing next pointers while building the next level with a dummy head and tail pointer. This uses O(1) extra space beyond the traversal variables and O(n) time. A queue-based BFS is acceptable if space constraints are discussed.",
+    "pitfalls": "Assuming the tree is perfect; missing gaps between sparse children; forgetting to terminate the end of each level with null; overwriting child links; returning a new tree instead of the original root."
   },
   {
     "id": "flatten-binary-tree-to-linked-list",
@@ -2771,7 +2990,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nvoid flatten(struct TreeNode* root) {\n    // Think out loud as you go!\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    void flatten(TreeNode* root) {\n        // Think out loud as you go!\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public void flatten(TreeNode root) {\n        // Think out loud as you go!\n    }\n}\n"
-    }
+    },
+    "summary": "Given a binary tree root, mutate it into a right-child-only chain in preorder traversal order.",
+    "optimal": "Use reverse preorder recursion with a previous pointer, or splice each left subtree between the node and its right subtree. O(n) time; O(h) stack for recursion or O(1) extra space for iterative splicing.",
+    "pitfalls": "Leaving any left pointers non-null; using inorder instead of preorder; losing the original right subtree when moving the left subtree; returning a separate list instead of mutating root."
   },
   {
     "id": "path-sum",
@@ -2812,7 +3034,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nbool hasPathSum(struct TreeNode* root, int targetSum) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    bool hasPathSum(TreeNode* root, int targetSum) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public boolean hasPathSum(TreeNode root, int targetSum) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a binary tree root and target sum, decide whether any root-to-leaf path adds up exactly to the target.",
+    "optimal": "DFS subtracts each node value from the remaining target and succeeds only at a leaf when the remainder equals the leaf value. O(n) time and O(h) recursion stack; iterative stack is equivalent.",
+    "pitfalls": "Accepting a prefix path that stops before a leaf; treating an empty tree with target 0 as true; mishandling negative values; checking only one branch."
   },
   {
     "id": "sum-root-to-leaf-numbers",
@@ -2848,7 +3073,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nint sumNumbers(struct TreeNode* root) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    int sumNumbers(TreeNode* root) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public int sumNumbers(TreeNode root) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a binary tree whose node values are digits, sum the numbers represented by every root-to-leaf path.",
+    "optimal": "DFS carries the current number as current * 10 + node.val and adds it only at leaves. O(n) time and O(h) recursion stack; iterative stack with accumulated values is equivalent.",
+    "pitfalls": "Adding partial prefixes before reaching leaves; treating paths as digit sums instead of decimal numbers; mishandling zero digits; forgetting skewed trees."
   },
   {
     "id": "binary-tree-maximum-path-sum",
@@ -2884,7 +3112,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nint maxPathSum(struct TreeNode* root) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    int maxPathSum(TreeNode* root) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public int maxPathSum(TreeNode root) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a non-empty binary tree, return the maximum sum over any connected path with no repeated node.",
+    "optimal": "Postorder DFS returns the best one-sided gain to the parent while updating a global answer with node.val plus positive left and right gains. O(n) time and O(h) stack.",
+    "pitfalls": "Forcing the path to include the root; allowing negative child gains to lower the sum; returning a split path to the parent; failing all-negative trees."
   },
   {
     "id": "binary-search-tree-iterator",
@@ -2920,7 +3151,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\ntypedef struct {\n    // Think out loud as you go!\n} BSTIterator;\n\nBSTIterator* bSTIteratorCreate(struct TreeNode* root) {\n    return NULL;\n}\n\nint bSTIteratorNext(BSTIterator* obj) {\n    return 0;\n}\n\nbool bSTIteratorHasNext(BSTIterator* obj) {\n    return false;\n}\n\nvoid bSTIteratorFree(BSTIterator* obj) {\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass BSTIterator {\npublic:\n    BSTIterator(TreeNode* root) {\n    }\n\n    int next() {\n        return 0;\n    }\n\n    bool hasNext() {\n        return false;\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass BSTIterator {\n    public BSTIterator(TreeNode root) {\n    }\n\n    public int next() {\n        return 0;\n    }\n\n    public boolean hasNext() {\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Design an iterator over a BST that returns values in ascending order and reports whether another value is available.",
+    "optimal": "Maintain a stack of the path to the next smallest node. Push all left descendants initially and after each next() on the popped node's right child. next() and hasNext() are amortized O(1), with O(h) space.",
+    "pitfalls": "Flattening the whole tree when asked for iterator space behavior; returning preorder instead of inorder; not handling left-skewed trees; making hasNext() advance the iterator."
   },
   {
     "id": "count-complete-tree-nodes",
@@ -2961,7 +3195,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nint countNodes(struct TreeNode* root) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    int countNodes(TreeNode* root) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public int countNodes(TreeNode root) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a complete binary tree root, return the number of nodes in the tree.",
+    "optimal": "Compare leftmost and rightmost heights to detect perfect subtrees in O(log n), otherwise recurse into children. This gives O(log^2 n) time and O(log n) stack on complete trees; plain traversal is O(n).",
+    "pitfalls": "Ignoring the complete-tree property; off-by-one height counts; treating null as height one; assuming every complete tree is perfect; failing empty and single-node trees."
   },
   {
     "id": "lowest-common-ancestor-of-a-binary-tree",
@@ -3002,7 +3239,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nstruct TreeNode* lowestCommonAncestor(struct TreeNode* root, struct TreeNode* p, struct TreeNode* q) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode(int x) : val(x), left(NULL), right(NULL) {}\n * };\n */\nclass Solution {\npublic:\n    TreeNode* lowestCommonAncestor(TreeNode* root, TreeNode* p, TreeNode* q) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode(int x) { val = x; }\n * }\n */\nclass Solution {\n    public TreeNode lowestCommonAncestor(TreeNode root, TreeNode p, TreeNode q) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a binary tree root and two nodes in the tree, return the deepest node that has both targets in its subtree.",
+    "optimal": "DFS returns the current node if it matches either target, otherwise returns a non-null child result. If both sides return non-null, the current node is the LCA. O(n) time and O(h) stack.",
+    "pitfalls": "Assuming BST ordering; comparing only node values when references are available; failing when one target is an ancestor of the other; searching the same subtree repeatedly."
   },
   {
     "id": "binary-tree-right-side-view",
@@ -3046,7 +3286,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\n/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* rightSideView(struct TreeNode* root, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    vector<int> rightSideView(TreeNode* root) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public List<Integer> rightSideView(TreeNode root) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
-    }
+    },
+    "summary": "Given a binary tree root, return the rightmost visible value at each depth.",
+    "optimal": "Use BFS level order and record the last node of each level, or DFS visiting right before left and record the first node seen at each depth. O(n) time and O(w) queue or O(h) stack.",
+    "pitfalls": "Taking only the right child chain; missing left nodes visible after right branches end; appending multiple nodes per depth; failing empty trees."
   },
   {
     "id": "average-of-levels-in-binary-tree",
@@ -3082,7 +3325,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\n/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\ndouble* averageOfLevels(struct TreeNode* root, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    vector<double> averageOfLevels(TreeNode* root) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public List<Double> averageOfLevels(TreeNode root) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
-    }
+    },
+    "summary": "Given a binary tree root, return the average node value at each depth from top to bottom.",
+    "optimal": "BFS by level, accumulating sum and count for each row, then append sum / count. DFS with per-depth sums and counts is equivalent. O(n) time and O(w) queue or O(h) stack.",
+    "pitfalls": "Averaging child pairs instead of whole levels; integer division; overflow if sums use too-small integer types; failing negative values."
   },
   {
     "id": "binary-tree-level-order-traversal",
@@ -3121,7 +3367,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\n/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** levelOrder(struct TreeNode* root, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    vector<vector<int>> levelOrder(TreeNode* root) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public List<List<Integer>> levelOrder(TreeNode root) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
-    }
+    },
+    "summary": "Given a binary tree root, return node values grouped by level from top to bottom and left to right.",
+    "optimal": "Use a queue and process one level size at a time, appending values in encounter order. O(n) time and O(w) space.",
+    "pitfalls": "Mixing values from adjacent levels; using DFS without tracking depth; reversing child order; failing empty trees."
   },
   {
     "id": "binary-tree-zigzag-level-order-traversal",
@@ -3160,7 +3409,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\n/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** zigzagLevelOrder(struct TreeNode* root, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    vector<vector<int>> zigzagLevelOrder(TreeNode* root) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public List<List<Integer>> zigzagLevelOrder(TreeNode root) {\n        // Think out loud as you go!\n        return new ArrayList<>();\n    }\n}\n"
-    }
+    },
+    "summary": "Given a binary tree root, return level-order values while alternating each level's output direction.",
+    "optimal": "BFS by level with a direction flag, reversing each row or filling a deque/indexed row from the correct side. O(n) time and O(w) space.",
+    "pitfalls": "Reversing traversal order instead of only output order; forgetting to flip every level; mishandling sparse nodes; failing empty trees."
   },
   {
     "id": "minimum-absolute-difference-in-bst",
@@ -3197,7 +3449,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nint getMinimumDifference(struct TreeNode* root) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    int getMinimumDifference(TreeNode* root) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public int getMinimumDifference(TreeNode root) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a BST root, return the smallest absolute difference between any pair of node values.",
+    "optimal": "Inorder traversal visits values sorted. Track the previous value and the best adjacent difference. O(n) time and O(h) stack.",
+    "pitfalls": "Comparing only parent-child pairs; ignoring values across subtree boundaries; not using strict sorted inorder order; failing two-node trees."
   },
   {
     "id": "kth-smallest-element-in-a-bst",
@@ -3233,7 +3488,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nint kthSmallest(struct TreeNode* root, int k) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    int kthSmallest(TreeNode* root, int k) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public int kthSmallest(TreeNode root, int k) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a BST root and one-indexed k, return the kth smallest node value.",
+    "optimal": "Inorder traversal yields sorted values. Stop when the kth value is reached, either recursively with a counter or iteratively with a stack. O(h + k) time and O(h) space.",
+    "pitfalls": "Using preorder or level order; off-by-one on k; traversing the whole tree unnecessarily; mishandling left-skewed trees."
   },
   {
     "id": "validate-binary-search-tree",
@@ -3270,7 +3528,10 @@
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nbool isValidBST(struct TreeNode* root) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     TreeNode *left;\n *     TreeNode *right;\n *     TreeNode() : val(0), left(nullptr), right(nullptr) {}\n *     TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}\n *     TreeNode(int x, TreeNode *left, TreeNode *right) : val(x), left(left), right(right) {}\n * };\n */\nclass Solution {\npublic:\n    bool isValidBST(TreeNode* root) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "/**\n * Definition for a binary tree node.\n * public class TreeNode {\n *     int val;\n *     TreeNode left;\n *     TreeNode right;\n *     TreeNode() {}\n *     TreeNode(int val) { this.val = val; }\n *     TreeNode(int val, TreeNode left, TreeNode right) {\n *         this.val = val;\n *         this.left = left;\n *         this.right = right;\n *     }\n * }\n */\nclass Solution {\n    public boolean isValidBST(TreeNode root) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Given a binary tree root, determine whether every node satisfies strict BST ordering against all ancestors.",
+    "optimal": "DFS with open lower and upper bounds, or inorder traversal requiring a strictly increasing sequence. O(n) time and O(h) stack.",
+    "pitfalls": "Checking only immediate children; allowing duplicate values; using non-strict inequalities; overflowing fixed sentinel bounds near integer limits."
   },
   {
     "id": "number-of-islands",
@@ -3307,7 +3568,10 @@
       "c": "int numIslands(char** grid, int gridSize, int* gridColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int numIslands(vector<vector<char>>& grid) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int numIslands(char[][] grid) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Given an m x n grid of '1' (land) and '0' (water), count the islands. An island is a group of adjacent land cells connected horizontally or vertically (not diagonally).",
+    "optimal": "Scan every cell; when you hit unvisited land, increment the count and flood-fill (DFS/BFS) to sink the whole island. O(m*n) time. Marking visited by mutating the grid in place is fine if the candidate calls it out.",
+    "pitfalls": "Missing bounds checks in the flood fill; counting diagonal neighbors; forgetting to mark cells visited (infinite recursion); recursion depth on huge grids (worth probing: could you do it iteratively/BFS?); comparing against integer 1 when the grid holds the character '1'."
   },
   {
     "id": "surrounded-regions",
@@ -3344,7 +3608,10 @@
       "python": "class Solution:\n    def solve(self, board: List[List[str]]) -> None:\n        \"\"\"\n        Do not return anything, modify board in-place instead.\n        \"\"\"\n        ",
       "javascript": "/**\n * @param {character[][]} board\n * @return {void} Do not return anything, modify board in-place instead.\n */\nvar solve = function(board) {\n    \n};",
       "c": "void solve(char** board, int boardSize, int* boardColSize) {\n    \n}"
-    }
+    },
+    "summary": "Given a board of 'X' and 'O', flip every 'O' region fully enclosed by 'X' while preserving any 'O' connected to the border.",
+    "optimal": "Start from border 'O' cells and mark all connected safe cells with DFS/BFS. Then scan the board: flip unmarked 'O' cells to 'X' and restore safe marks. O(m*n) time and O(m*n) worst-case space, or O(1) extra besides recursion if mutating marks count as in-place.",
+    "pitfalls": "Starting from interior cells and trying to prove enclosure directly; treating diagonal contact as connected; forgetting to restore border-connected cells; returning a new board instead of mutating in place."
   },
   {
     "id": "clone-graph",
@@ -3387,7 +3654,10 @@
       "python": "\"\"\"\n# Definition for a Node.\nclass Node:\n    def __init__(self, val = 0, neighbors = None):\n        self.val = val\n        self.neighbors = neighbors if neighbors is not None else []\n\"\"\"\n\nfrom typing import Optional\nclass Solution:\n    def cloneGraph(self, node: Optional['Node']) -> Optional['Node']:\n        ",
       "javascript": "/**\n * // Definition for a _Node.\n * function _Node(val, neighbors) {\n *    this.val = val === undefined ? 0 : val;\n *    this.neighbors = neighbors === undefined ? [] : neighbors;\n * };\n */\n\n/**\n * @param {_Node} node\n * @return {_Node}\n */\nvar cloneGraph = function(node) {\n    \n};",
       "c": "/**\n * Definition for a Node.\n * struct Node {\n *     int val;\n *     int numNeighbors;\n *     struct Node** neighbors;\n * };\n */\n\nstruct Node *cloneGraph(struct Node *s) {\n    \n}"
-    }
+    },
+    "summary": "Given a node in an undirected graph, return a deep copy of every reachable node and edge.",
+    "optimal": "Traverse with DFS or BFS while keeping a map from original node to cloned node. Create each clone once, then wire cloned neighbors through the map. O(V+E) time and O(V) space.",
+    "pitfalls": "Recursing forever on cycles; keying clones by value without checking uniqueness assumptions; reusing original neighbor nodes; failing the null or single-node graph."
   },
   {
     "id": "evaluate-division",
@@ -3430,7 +3700,10 @@
       "python": "class Solution:\n    def calcEquation(self, equations: List[List[str]], values: List[float], queries: List[List[str]]) -> List[float]:\n        ",
       "javascript": "/**\n * @param {string[][]} equations\n * @param {number[]} values\n * @param {string[][]} queries\n * @return {number[]}\n */\nvar calcEquation = function(equations, values, queries) {\n    \n};",
       "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\ndouble* calcEquation(char*** equations, int equationsSize, int* equationsColSize, double* values, int valuesSize, char*** queries, int queriesSize, int* queriesColSize, int* returnSize) {\n    \n}"
-    }
+    },
+    "summary": "Given division equations and values, answer ratio queries or return -1.0 when variables are unknown or disconnected.",
+    "optimal": "Build a weighted bidirectional graph where a/b has weight value and b/a has reciprocal weight. For each query, DFS/BFS from numerator to denominator multiplying edge weights. Weighted union-find is also strong. O(E+Q*(V+E)) for search, or near O((E+Q)*alpha(V)) with union-find.",
+    "pitfalls": "Missing reciprocal edges; returning 1.0 for unknown x/x; not tracking visited nodes in cyclic graphs; accumulating the product in the wrong direction."
   },
   {
     "id": "course-schedule",
@@ -3469,7 +3742,10 @@
       "python": "class Solution:\n    def canFinish(self, numCourses: int, prerequisites: List[List[int]]) -> bool:\n        ",
       "javascript": "/**\n * @param {number} numCourses\n * @param {number[][]} prerequisites\n * @return {boolean}\n */\nvar canFinish = function(numCourses, prerequisites) {\n    \n};",
       "c": "bool canFinish(int numCourses, int** prerequisites, int prerequisitesSize, int* prerequisitesColSize) {\n    \n}"
-    }
+    },
+    "summary": "Given course count and prerequisite pairs, decide whether every course can be completed.",
+    "optimal": "Model prerequisites as a directed graph and detect whether it has a cycle. Kahn's algorithm with indegrees or DFS coloring both run in O(V+E) time and O(V+E) space.",
+    "pitfalls": "Reversing edge direction and misreading [course, prerequisite]; failing disconnected components; not decrementing indegrees correctly; treating a repeated visit in DFS as a cycle instead of only the active recursion stack."
   },
   {
     "id": "course-schedule-ii",
@@ -3508,7 +3784,10 @@
       "python": "class Solution:\n    def findOrder(self, numCourses: int, prerequisites: List[List[int]]) -> List[int]:\n        ",
       "javascript": "/**\n * @param {number} numCourses\n * @param {number[][]} prerequisites\n * @return {number[]}\n */\nvar findOrder = function(numCourses, prerequisites) {\n    \n};",
       "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* findOrder(int numCourses, int** prerequisites, int prerequisitesSize, int* prerequisitesColSize, int* returnSize) {\n    \n}"
-    }
+    },
+    "summary": "Given course count and prerequisite pairs, return any valid order to complete all courses, or an empty array if impossible.",
+    "optimal": "Run topological sort. Kahn's algorithm appends zero-indegree courses while removing outgoing edges; DFS postorder with cycle coloring also works. Return all courses only when no cycle is found. O(V+E) time and O(V+E) space.",
+    "pitfalls": "Expecting one unique order; returning a partial order after a cycle; reversing prerequisite edges; forgetting isolated courses; duplicate or missing course ids in the result."
   },
   {
     "id": "snakes-and-ladders",
@@ -3546,7 +3825,10 @@
       "python": "class Solution:\n    def snakesAndLadders(self, board: List[List[int]]) -> int:\n        ",
       "javascript": "/**\n * @param {number[][]} board\n * @return {number}\n */\nvar snakesAndLadders = function(board) {\n    \n};",
       "c": "int snakesAndLadders(int** board, int boardSize, int* boardColSize) {\n    \n}"
-    }
+    },
+    "summary": "Given a square board with boustrophedon numbering and shortcut jumps, return the fewest die rolls to reach the final square, or -1 if it cannot be reached.",
+    "optimal": "Convert square numbers to board coordinates using the alternating row direction, then BFS from square 1 over die rolls 1 through 6. Apply at most one snake or ladder per move and mark visited destinations. O(n^2) time and space.",
+    "pitfalls": "Mapping rows from the top instead of bottom; applying chains of snakes/ladders in one move; marking pre-teleport squares instead of destinations; using DFS for a shortest path; off-by-one around square numbers."
   },
   {
     "id": "minimum-genetic-mutation",
@@ -3584,7 +3866,10 @@
       "python": "class Solution:\n    def minMutation(self, startGene: str, endGene: str, bank: List[str]) -> int:\n        ",
       "javascript": "/**\n * @param {string} startGene\n * @param {string} endGene\n * @param {string[]} bank\n * @return {number}\n */\nvar minMutation = function(startGene, endGene, bank) {\n    \n};",
       "c": "int minMutation(char* startGene, char* endGene, char** bank, int bankSize) {\n    \n}"
-    }
+    },
+    "summary": "Given start and end genes plus a bank of valid genes, return the minimum number of one-character mutations needed to reach the end gene.",
+    "optimal": "Treat bank genes as graph nodes connected when they differ by one character. BFS from startGene to endGene gives the shortest mutation count. Generate neighbors by trying A/C/G/T at each position or by scanning the small bank. O(B^2 * L) or O(B * L * 4) depending on neighbor generation.",
+    "pitfalls": "Returning a path when endGene is not in the bank; using DFS and missing the shortest path; allowing multi-character jumps; revisiting genes and cycling; counting genes instead of mutation edges."
   },
   {
     "id": "word-ladder",
@@ -3622,7 +3907,10 @@
       "python": "class Solution:\n    def ladderLength(self, beginWord: str, endWord: str, wordList: List[str]) -> int:\n        ",
       "javascript": "/**\n * @param {string} beginWord\n * @param {string} endWord\n * @param {string[]} wordList\n * @return {number}\n */\nvar ladderLength = function(beginWord, endWord, wordList) {\n    \n};",
       "c": "int ladderLength(char* beginWord, char* endWord, char** wordList, int wordListSize) {\n    \n}"
-    }
+    },
+    "summary": "Given a begin word, an end word, and a word list, return the word count in the shortest one-letter-at-a-time transformation sequence.",
+    "optimal": "Run BFS over words, changing one position at a time and checking membership in an unvisited word set, or precompute wildcard buckets. Count levels as number of words in the sequence. O(N * L * alphabet) with direct generation, plus set lookups.",
+    "pitfalls": "Returning edge count instead of word count; forgetting that endWord must be in the list; revisiting words; accepting changes of more than one character; using DFS for shortest path."
   },
   {
     "id": "implement-trie-prefix-tree",
@@ -3655,7 +3943,10 @@
       "python": "class Trie:\n\n    def __init__(self):\n        \n\n    def insert(self, word: str) -> None:\n        \n\n    def search(self, word: str) -> bool:\n        \n\n    def startsWith(self, prefix: str) -> bool:\n        \n\n\n# Your Trie object will be instantiated and called as such:\n# obj = Trie()\n# obj.insert(word)\n# param_2 = obj.search(word)\n# param_3 = obj.startsWith(prefix)",
       "javascript": "\nvar Trie = function() {\n    \n};\n\n/** \n * @param {string} word\n * @return {void}\n */\nTrie.prototype.insert = function(word) {\n    \n};\n\n/** \n * @param {string} word\n * @return {boolean}\n */\nTrie.prototype.search = function(word) {\n    \n};\n\n/** \n * @param {string} prefix\n * @return {boolean}\n */\nTrie.prototype.startsWith = function(prefix) {\n    \n};\n\n/** \n * Your Trie object will be instantiated and called as such:\n * var obj = new Trie()\n * obj.insert(word)\n * var param_2 = obj.search(word)\n * var param_3 = obj.startsWith(prefix)\n */",
       "c": "\n\n\ntypedef struct {\n    \n} Trie;\n\n\nTrie* trieCreate() {\n    \n}\n\nvoid trieInsert(Trie* obj, char* word) {\n    \n}\n\nbool trieSearch(Trie* obj, char* word) {\n    \n}\n\nbool trieStartsWith(Trie* obj, char* prefix) {\n    \n}\n\nvoid trieFree(Trie* obj) {\n    \n}\n\n/**\n * Your Trie struct will be instantiated and called as such:\n * Trie* obj = trieCreate();\n * trieInsert(obj, word);\n \n * bool param_2 = trieSearch(obj, word);\n \n * bool param_3 = trieStartsWith(obj, prefix);\n \n * trieFree(obj);\n*/"
-    }
+    },
+    "summary": "Implement a trie supporting insert, exact word search, and prefix search for lowercase words.",
+    "optimal": "Store children per character at each node and a boolean end-of-word marker. insert creates nodes along the path; search requires the final node to be marked as a complete word; startsWith only requires the path to exist. O(L) per operation.",
+    "pitfalls": "Treating any prefix as a full word in search; forgetting to mark inserted word endings; sharing mutable child maps incorrectly; mishandling words that are prefixes of longer words."
   },
   {
     "id": "design-add-and-search-words-data-structure",
@@ -3689,7 +3980,10 @@
       "python": "class WordDictionary:\n\n    def __init__(self):\n        \n\n    def addWord(self, word: str) -> None:\n        \n\n    def search(self, word: str) -> bool:\n        \n\n\n# Your WordDictionary object will be instantiated and called as such:\n# obj = WordDictionary()\n# obj.addWord(word)\n# param_2 = obj.search(word)",
       "javascript": "\nvar WordDictionary = function() {\n    \n};\n\n/** \n * @param {string} word\n * @return {void}\n */\nWordDictionary.prototype.addWord = function(word) {\n    \n};\n\n/** \n * @param {string} word\n * @return {boolean}\n */\nWordDictionary.prototype.search = function(word) {\n    \n};\n\n/** \n * Your WordDictionary object will be instantiated and called as such:\n * var obj = new WordDictionary()\n * obj.addWord(word)\n * var param_2 = obj.search(word)\n */",
       "c": "\n\n\ntypedef struct {\n    \n} WordDictionary;\n\n\nWordDictionary* wordDictionaryCreate() {\n    \n}\n\nvoid wordDictionaryAddWord(WordDictionary* obj, char* word) {\n    \n}\n\nbool wordDictionarySearch(WordDictionary* obj, char* word) {\n    \n}\n\nvoid wordDictionaryFree(WordDictionary* obj) {\n    \n}\n\n/**\n * Your WordDictionary struct will be instantiated and called as such:\n * WordDictionary* obj = wordDictionaryCreate();\n * wordDictionaryAddWord(obj, word);\n \n * bool param_2 = wordDictionarySearch(obj, word);\n \n * wordDictionaryFree(obj);\n*/"
-    }
+    },
+    "summary": "Design a word dictionary supporting addWord and search, where search patterns may contain '.' as a single-letter wildcard.",
+    "optimal": "Use a trie. addWord inserts characters and marks the final node. search runs DFS over the pattern, branching across children when it sees '.', and only accepts complete word endings. O(L) for literal searches and worst-case branching for wildcard-heavy patterns.",
+    "pitfalls": "Letting '.' match zero or multiple letters; treating prefixes as whole words; not branching across all children for wildcards; forgetting that pattern length must match word length."
   },
   {
     "id": "word-search-ii",
@@ -3730,7 +4024,10 @@
       "python": "class Solution:\n    def findWords(self, board: List[List[str]], words: List[str]) -> List[str]:\n        ",
       "javascript": "/**\n * @param {character[][]} board\n * @param {string[]} words\n * @return {string[]}\n */\nvar findWords = function(board, words) {\n    \n};",
       "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nchar** findWords(char** board, int boardSize, int* boardColSize, char** words, int wordsSize, int* returnSize) {\n    \n}"
-    }
+    },
+    "summary": "Given a board and a list of words, return every listed word that can be formed by walking adjacent board cells without reusing a cell in one word.",
+    "optimal": "Build a trie from words, then DFS from each board cell through matching trie edges. Mark cells visited during the current path, emit each found word once, and optionally prune exhausted trie branches. O(m*n*4^L) worst case, greatly reduced by trie pruning.",
+    "pitfalls": "Searching each word independently without pruning; allowing diagonal moves or cell reuse; returning duplicate words from multiple paths; mutating the board without restoring it; missing words that share prefixes."
   },
   {
     "id": "letter-combinations-of-a-phone-number",
@@ -3765,7 +4062,10 @@
       "python": "class Solution:\n    def letterCombinations(self, digits: str) -> List[str]:\n        ",
       "javascript": "/**\n * @param {string} digits\n * @return {string[]}\n */\nvar letterCombinations = function(digits) {\n    \n};",
       "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nchar** letterCombinations(char* digits, int* returnSize) {\n    \n}"
-    }
+    },
+    "summary": "Given digits 2 through 9, return all strings represented by the phone keypad letter mapping.",
+    "optimal": "Backtrack over the digit string, appending each mapped character for the current digit and emitting a combination when all digits are consumed. O(product of choices) time and output space.",
+    "pitfalls": "Returning one empty string for empty input instead of an empty list; including digits 0 or 1 mappings; mutating one shared buffer incorrectly; missing four-letter digits 7 and 9."
   },
   {
     "id": "combinations",
@@ -3798,7 +4098,10 @@
       "python": "class Solution:\n    def combine(self, n: int, k: int) -> List[List[int]]:\n        ",
       "javascript": "/**\n * @param {number} n\n * @param {number} k\n * @return {number[][]}\n */\nvar combine = function(n, k) {\n    \n};",
       "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** combine(int n, int k, int* returnSize, int** returnColumnSizes) {\n    \n}"
-    }
+    },
+    "summary": "Given n and k, return every size-k group of distinct numbers chosen from 1 through n.",
+    "optimal": "Backtrack from a start value, append choices in increasing order, and stop when the path length reaches k. Prune when not enough values remain. Output size dominates; auxiliary stack is O(k).",
+    "pitfalls": "Generating permutations instead of combinations; reusing a number; off-by-one around n; missing the k == n and k == 1 cases; copying the path too late and mutating emitted rows."
   },
   {
     "id": "permutations",
@@ -3833,7 +4136,10 @@
       "python": "class Solution:\n    def permute(self, nums: List[int]) -> List[List[int]]:\n        ",
       "javascript": "/**\n * @param {number[]} nums\n * @return {number[][]}\n */\nvar permute = function(nums) {\n    \n};",
       "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** permute(int* nums, int numsSize, int* returnSize, int** returnColumnSizes) {\n    \n}"
-    }
+    },
+    "summary": "Given distinct integers, return every possible ordering of the array.",
+    "optimal": "Backtrack by choosing each unused value for the current position, or swap in place from the current index onward. Emit a copy when the permutation is complete. O(n*n!) time including output and O(n) recursion state.",
+    "pitfalls": "Treating permutations as combinations and losing row order; forgetting to unmark or swap back; mutating emitted rows; assuming sorted input; missing negative or zero values."
   },
   {
     "id": "combination-sum",
@@ -3869,7 +4175,10 @@
       "python": "class Solution:\n    def combinationSum(self, candidates: List[int], target: int) -> List[List[int]]:\n        ",
       "javascript": "/**\n * @param {number[]} candidates\n * @param {number} target\n * @return {number[][]}\n */\nvar combinationSum = function(candidates, target) {\n    \n};",
       "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** combinationSum(int* candidates, int candidatesSize, int target, int* returnSize, int** returnColumnSizes) {\n    \n}"
-    }
+    },
+    "summary": "Given distinct candidates and a target, return all unique combinations that sum to the target, allowing each candidate to be reused.",
+    "optimal": "Sort or index candidates and backtrack with a remaining target. At each step either reuse the current candidate or move forward, keeping choices nondecreasing to avoid duplicate combinations. Output size dominates.",
+    "pitfalls": "Using each candidate only once; producing duplicate combinations in different orders; failing to stop when the remaining target is negative; mishandling unsorted candidates; missing the no-solution case."
   },
   {
     "id": "n-queens-ii",
@@ -3901,7 +4210,10 @@
       "python": "class Solution:\n    def totalNQueens(self, n: int) -> int:\n        ",
       "javascript": "/**\n * @param {number} n\n * @return {number}\n */\nvar totalNQueens = function(n) {\n    \n};",
       "c": "int totalNQueens(int n) {\n    \n}"
-    }
+    },
+    "summary": "Given n, count the distinct ways to place n queens on an n by n board so no two queens attack each other.",
+    "optimal": "Backtrack row by row, tracking occupied columns and both diagonal families in sets or bit masks. Try each free column for the current row and count complete placements. Bit masks keep the state compact; the search space is still exponential.",
+    "pitfalls": "Counting board layouts with attacking diagonal queens; forgetting to unmark columns or diagonals on backtrack; treating rotations as duplicates even though placements are counted separately; missing n == 1 and impossible small boards."
   },
   {
     "id": "generate-parentheses",
@@ -3935,7 +4247,10 @@
       "python": "class Solution:\n    def generateParenthesis(self, n: int) -> List[str]:\n        ",
       "javascript": "/**\n * @param {number} n\n * @return {string[]}\n */\nvar generateParenthesis = function(n) {\n    \n};",
       "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nchar** generateParenthesis(int n, int* returnSize) {\n    \n}"
-    }
+    },
+    "summary": "Given n pairs of parentheses, return every balanced string that uses exactly those n opening and n closing parentheses.",
+    "optimal": "Backtrack over the output string, adding '(' while opens remain and ')' only when it would not exceed the number of opens already placed. Emit when length reaches 2n. Output size is the nth Catalan number.",
+    "pitfalls": "Generating all 2^(2n) strings and filtering; allowing a prefix with more closes than opens; returning duplicates; stopping before all n pairs are used; assuming the judge requires one fixed order."
   },
   {
     "id": "word-search",
@@ -3973,7 +4288,10 @@
       "python": "class Solution:\n    def exist(self, board: List[List[str]], word: str) -> bool:\n        ",
       "javascript": "/**\n * @param {character[][]} board\n * @param {string} word\n * @return {boolean}\n */\nvar exist = function(board, word) {\n    \n};",
       "c": "bool exist(char** board, int boardSize, int* boardColSize, char* word) {\n    \n}"
-    }
+    },
+    "summary": "Given a character grid and a word, return whether the word can be formed by walking adjacent horizontal or vertical cells without reusing a cell.",
+    "optimal": "Start DFS from each cell matching the first character. During a path, mark the cell visited, search the four neighbors for the next character, then restore the mark before returning. O(m*n*4^L) worst case.",
+    "pitfalls": "Allowing diagonal moves; reusing a cell in one word path; mutating the board without restoring it; skipping possible start cells; confusing case-sensitive characters."
   },
   {
     "id": "convert-sorted-array-to-binary-search-tree",
@@ -4011,7 +4329,10 @@
       "python": "# Definition for a binary tree node.\n# class TreeNode:\n#     def __init__(self, val=0, left=None, right=None):\n#         self.val = val\n#         self.left = left\n#         self.right = right\nclass Solution:\n    def sortedArrayToBST(self, nums: List[int]) -> Optional[TreeNode]:\n        ",
       "javascript": "/**\n * Definition for a binary tree node.\n * function TreeNode(val, left, right) {\n *     this.val = (val===undefined ? 0 : val)\n *     this.left = (left===undefined ? null : left)\n *     this.right = (right===undefined ? null : right)\n * }\n */\n/**\n * @param {number[]} nums\n * @return {TreeNode}\n */\nvar sortedArrayToBST = function(nums) {\n    \n};",
       "c": "/**\n * Definition for a binary tree node.\n * struct TreeNode {\n *     int val;\n *     struct TreeNode *left;\n *     struct TreeNode *right;\n * };\n */\nstruct TreeNode* sortedArrayToBST(int* nums, int numsSize) {\n    \n}"
-    }
+    },
+    "summary": "Given a strictly increasing array, build a height-balanced binary search tree containing the same values.",
+    "optimal": "Choose the middle array value as the root, recursively build left and right subtrees from the two halves, and return the root. Either middle choice for even lengths is valid if every subtree remains height-balanced. O(n) time and O(log n) recursion depth for balanced splits.",
+    "pitfalls": "Building a linked list shaped tree instead of a balanced tree; dropping or duplicating values; using array indexes with off-by-one errors; rejecting a valid alternate middle choice; violating BST inorder order."
   },
   {
     "id": "merge-intervals",
@@ -4048,7 +4369,10 @@
       "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** merge(int** intervals, int intervalsSize, int* intervalsColSize, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<vector<int>> merge(vector<vector<int>>& intervals) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public int[][] merge(int[][] intervals) {\n        // Think out loud as you go!\n        return new int[][]{};\n    }\n}\n"
-    }
+    },
+    "summary": "Given an array of [start, end] intervals, merge all overlapping intervals and return the non-overlapping result sorted by start.",
+    "optimal": "Sort by start, then sweep once: extend the current merged interval while the next start <= current end, otherwise emit and restart. O(n log n) time for the sort, O(n) space for the output.",
+    "pitfalls": "Forgetting to sort first (fails unsorted input); using < instead of <= so touching intervals like [1,4],[4,5] don't merge; not taking max(current end, next end) for contained intervals like [1,10],[2,3]; mutating the input while iterating over it."
   },
   {
     "id": "longest-palindromic-substring",
@@ -4084,7 +4408,10 @@
       "c": "char* longestPalindrome(char* s) {\n    // Think out loud as you go!\n    return \"\";\n}\n",
       "cpp": "class Solution {\npublic:\n    string longestPalindrome(string s) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
       "java": "class Solution {\n    public String longestPalindrome(String s) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
-    }
+    },
+    "summary": "Given a string s, return the longest substring of s that is a palindrome.",
+    "optimal": "Expand around center over all 2n-1 centers (odd and even), tracking the best window; O(n^2) time, O(1) space. DP table is also acceptable at O(n^2)/O(n^2). Manacher's O(n) is a bonus, not expected.",
+    "pitfalls": "Handling only odd-length centers (fails 'abba'); off-by-one when converting the expanded pointers back to a substring slice; pointer overshooting the string bounds during expansion; confusing substring with subsequence."
   },
   {
     "id": "search-insert-position",
@@ -4124,7 +4451,10 @@
       "c": "int searchInsert(int* nums, int numsSize, int target) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int searchInsert(vector<int>& nums, int target) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int searchInsert(int[] nums, int target) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Find where target belongs in a sorted distinct array, returning an existing index or the insertion point.",
+    "optimal": "Binary search for the first index whose value is greater than or equal to target; return the left boundary after the loop. O(log n) time, O(1) space.",
+    "pitfalls": "Scanning linearly; losing the insertion slot when target is absent; returning the value instead of the index; mishandling before-first, after-last, or single-element inputs."
   },
   {
     "id": "plus-one",
@@ -4163,7 +4493,10 @@
       "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* plusOne(int* digits, int digitsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<int> plusOne(vector<int>& digits) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public int[] plusOne(int[] digits) {\n        // Think out loud as you go!\n        return new int[0];\n    }\n}\n"
-    }
+    },
+    "summary": "Add one to an integer represented as decimal digits and return the resulting digit array.",
+    "optimal": "Walk from the last digit leftward, turning trailing 9s into 0s until a digit can be incremented; if every digit was 9, prepend 1. O(n) time, O(1) extra space besides any required output growth.",
+    "pitfalls": "Converting the whole number to a fixed-width integer; forgetting the all-9s length increase; stopping after changing a 9 to 0 without carrying; adding leading zeroes."
   },
   {
     "id": "add-binary",
@@ -4200,7 +4533,10 @@
       "c": "char* addBinary(char* a, char* b) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    string addBinary(string a, string b) {\n        // Think out loud as you go!\n        return \"\";\n    }\n};\n",
       "java": "class Solution {\n    public String addBinary(String a, String b) {\n        // Think out loud as you go!\n        return \"\";\n    }\n}\n"
-    }
+    },
+    "summary": "Add two binary strings and return their sum as a binary string.",
+    "optimal": "Scan both strings from right to left with a carry, append each sum bit, then reverse the built result. O(n + m) time and output space.",
+    "pitfalls": "Parsing the strings into fixed-width integers; forgetting a final carry; stopping when the shorter string ends; building the answer in reverse without reversing it before return."
   },
   {
     "id": "single-number",
@@ -4239,7 +4575,10 @@
       "c": "int singleNumber(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int singleNumber(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int singleNumber(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Find the only integer that appears once when every other integer in the array appears exactly twice.",
+    "optimal": "XOR every value together. Duplicate pairs cancel to zero and zero XOR the unique value leaves that value. O(n) time, O(1) space.",
+    "pitfalls": "Using a set or map despite the constant-space target; assuming values are positive; returning the first unpaired-looking value before scanning all input; sorting when linear time is expected."
   },
   {
     "id": "palindrome-number",
@@ -4275,7 +4614,10 @@
       "c": "bool isPalindrome(int x) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "class Solution {\npublic:\n    bool isPalindrome(int x) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "class Solution {\n    public boolean isPalindrome(int x) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Return whether an integer reads the same forward and backward, with negative values rejected.",
+    "optimal": "Reject negatives and trailing-zero nonzero values, then reverse half of the digits and compare it with the remaining half. O(log n) time, O(1) space.",
+    "pitfalls": "Treating negative numbers as palindromes after ignoring the sign; accepting numbers like 10; reversing the full integer and risking overflow; forgetting odd digit counts can drop the middle digit."
   },
   {
     "id": "climbing-stairs",
@@ -4309,7 +4651,10 @@
       "c": "int climbStairs(int n) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int climbStairs(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int climbStairs(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Count how many ways to climb n steps when each move takes either one or two steps.",
+    "optimal": "This is the Fibonacci recurrence: ways(n) = ways(n-1) + ways(n-2). Iterate with two rolling counts from the base cases. O(n) time, O(1) space.",
+    "pitfalls": "Using exponential recursion without memoization; off-by-one base cases for n=1 or n=2; starting the sequence at the wrong values; allocating a full DP array when two variables are enough."
   },
   {
     "id": "sqrtx",
@@ -4342,7 +4687,10 @@
       "c": "int mySqrt(int x) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int mySqrt(int x) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int mySqrt(int x) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Return the integer square root of a non-negative integer, rounded down.",
+    "optimal": "Binary search the largest integer r such that r * r <= x, using division or a wider type to avoid overflow. O(log x) time, O(1) space.",
+    "pitfalls": "Returning a rounded floating result instead of flooring; overflowing mid * mid near the 32-bit limit; mishandling x = 0 or x = 1; stopping one step too early on non-perfect squares."
   },
   {
     "id": "factorial-trailing-zeroes",
@@ -4378,7 +4726,10 @@
       "c": "int trailingZeroes(int n) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int trailingZeroes(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int trailingZeroes(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Count how many trailing zeroes appear in n factorial without constructing the factorial.",
+    "optimal": "Each trailing zero comes from a factor pair of 2 and 5, and 5s are rarer. Sum n/5 + n/25 + n/125 + ... until the divisor exceeds n. O(log_5 n) time, O(1) space.",
+    "pitfalls": "Computing the factorial and overflowing; counting only multiples of 10; missing extra factors from 25, 125, and higher powers; mishandling n = 0."
   },
   {
     "id": "house-robber",
@@ -4412,7 +4763,10 @@
       "c": "int rob(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int rob(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int rob(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Choose non-adjacent houses to maximize the robbed amount from a row of non-negative values.",
+    "optimal": "Dynamic programming with two rolling values: for each house, choose max(skip current, rob current plus best before previous). O(n) time, O(1) space.",
+    "pitfalls": "Greedily picking local larger houses; robbing adjacent houses; failing one-house or all-zero inputs; allocating a full table when only two previous states are needed."
   },
   {
     "id": "maximum-subarray",
@@ -4451,7 +4805,10 @@
       "c": "int maxSubArray(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int maxSubArray(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int maxSubArray(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Find the largest sum of any non-empty contiguous subarray.",
+    "optimal": "Kadane's algorithm scans once, keeping the best subarray sum ending at the current index and the best sum seen overall. O(n) time, O(1) space.",
+    "pitfalls": "Returning zero for all-negative arrays; allowing an empty subarray; using a non-contiguous subsequence; failing to restart after a harmful prefix."
   },
   {
     "id": "coin-change",
@@ -4491,7 +4848,10 @@
       "c": "int coinChange(int* coins, int coinsSize, int amount) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int coinChange(vector<int>& coins, int amount) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int coinChange(int[] coins, int amount) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Return the fewest coins needed to make an amount from given denominations, or -1 if impossible.",
+    "optimal": "Use bottom-up dynamic programming where dp[a] is the fewest coins needed for amount a. For each amount and coin, relax dp[a] from dp[a - coin] + 1. O(amount * coins) time, O(amount) space.",
+    "pitfalls": "Using greedy choice on denominations where it fails; returning a large sentinel instead of -1; mishandling amount 0; treating each coin as usable only once."
   },
   {
     "id": "longest-increasing-subsequence",
@@ -4530,7 +4890,10 @@
       "c": "int lengthOfLIS(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int lengthOfLIS(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int lengthOfLIS(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Return the length of the longest strictly increasing subsequence while preserving input order.",
+    "optimal": "Maintain tails where tails[len] is the smallest possible ending value of an increasing subsequence of that length; binary search replacement positions for O(n log n) time and O(n) space. O(n^2) DP is acceptable for the listed constraints.",
+    "pitfalls": "Solving longest increasing contiguous subarray instead of subsequence; allowing equal values in a strictly increasing sequence; losing order by sorting the input; returning the sequence when only length is required."
   },
   {
     "id": "search-a-2d-matrix",
@@ -4567,7 +4930,10 @@
       "c": "bool searchMatrix(int** matrix, int matrixSize, int* matrixColSize, int target) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "class Solution {\npublic:\n    bool searchMatrix(vector<vector<int>>& matrix, int target) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "class Solution {\n    public boolean searchMatrix(int[][] matrix, int target) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Search for a target in a matrix whose rows form one globally sorted sequence.",
+    "optimal": "Treat the m by n matrix as a flat sorted array and binary search indexes 0..m*n-1, mapping mid to row mid/n and column mid%n. O(log(mn)) time, O(1) space.",
+    "pitfalls": "Searching each row linearly; forgetting the row-to-row ordering; off-by-one errors when mapping flat indexes; mishandling single-row or single-cell matrices."
   },
   {
     "id": "find-peak-element",
@@ -4602,7 +4968,10 @@
       "c": "int findPeakElement(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int findPeakElement(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int findPeakElement(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Return an index whose value is greater than its neighbors, treating positions outside the array as negative infinity.",
+    "optimal": "Binary search on the slope: if nums[mid] < nums[mid + 1], a peak exists to the right; otherwise one exists at mid or to the left. O(log n) time, O(1) space.",
+    "pitfalls": "Assuming the peak must be the global maximum; rejecting edge peaks; reading outside the array; returning a value instead of an index."
   },
   {
     "id": "find-minimum-in-rotated-sorted-array",
@@ -4642,7 +5011,10 @@
       "c": "int findMin(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int findMin(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int findMin(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Find the smallest value in a unique sorted array that may have been rotated.",
+    "optimal": "Binary search against the rightmost value: when nums[mid] > nums[right], the minimum is to the right; otherwise it is at mid or to the left. O(log n) time, O(1) space.",
+    "pitfalls": "Using linear search; failing the not-rotated case; losing the candidate minimum by moving the right boundary past mid; assuming duplicates exist and adding unnecessary duplicate handling."
   },
   {
     "id": "minimum-path-sum",
@@ -4677,7 +5049,10 @@
       "c": "int minPathSum(int** grid, int gridSize, int* gridColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int minPathSum(vector<vector<int>>& grid) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int minPathSum(int[][] grid) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Find the minimum sum along a path from the top-left to bottom-right of a non-negative grid, moving only right or down.",
+    "optimal": "Dynamic programming over the grid: each cell's best cost is its value plus the minimum of the best cost from above or left. O(mn) time and O(n) space with a rolling row.",
+    "pitfalls": "Greedily choosing the smaller immediate neighbor; allowing moves up or left; mishandling the first row or first column; forgetting the single-cell grid."
   },
   {
     "id": "unique-paths-ii",
@@ -4712,7 +5087,10 @@
       "c": "int uniquePathsWithObstacles(int** obstacleGrid, int obstacleGridSize, int* obstacleGridColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int uniquePathsWithObstacles(vector<vector<int>>& obstacleGrid) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int uniquePathsWithObstacles(int[][] obstacleGrid) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Count right-and-down paths through a grid from start to finish while avoiding obstacle cells.",
+    "optimal": "Dynamic programming: blocked cells contribute zero paths, and open cells receive paths from the top and left neighbors. O(mn) time and O(n) space with a rolling row.",
+    "pitfalls": "Counting paths through obstacles; forgetting blocked start or finish cells; mishandling first-row or first-column obstacles; using the obstacle grid as if every cell were open."
   },
   {
     "id": "word-break",
@@ -4757,7 +5135,10 @@
       "c": "bool wordBreak(char* s, char** wordDict, int wordDictSize) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "class Solution {\npublic:\n    bool wordBreak(string s, vector<string>& wordDict) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "class Solution {\n    public boolean wordBreak(String s, List<String> wordDict) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Decide whether a string can be segmented into one or more dictionary words, reusing dictionary words as needed.",
+    "optimal": "Use dynamic programming where dp[i] says the prefix s[..i] can be segmented; for each reachable prefix, test dictionary words or previous split points with a word set. O(n^2) substring checks in the common form.",
+    "pitfalls": "Using greedy longest or shortest prefix selection; treating dictionary words as usable only once; missing reuse cases; exponential recursion without memoization."
   },
   {
     "id": "number-of-1-bits",
@@ -4794,7 +5175,10 @@
       "c": "int hammingWeight(int n) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int hammingWeight(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int hammingWeight(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Count how many bits are set to 1 in the binary representation of an integer.",
+    "optimal": "Use Brian Kernighan's trick: repeatedly clear the lowest set bit with n &= n - 1 and count iterations. O(number of set bits) time, O(1) space.",
+    "pitfalls": "Looping over decimal digits; using string conversion when bit operations are expected; mishandling powers of two; failing to make progress when clearing bits."
   },
   {
     "id": "single-number-ii",
@@ -4829,7 +5213,10 @@
       "c": "int singleNumber(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int singleNumber(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int singleNumber(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Find the only integer that appears once when every other integer appears exactly three times.",
+    "optimal": "Track bit counts modulo 3, either per bit or with two bitmask states for bits seen once and twice. The remaining modulo-1 bits form the answer. O(n) time, O(1) space.",
+    "pitfalls": "Using the XOR solution for the twice-duplicate variant; ignoring negative numbers; using a hash map despite the constant-space target; forgetting bit counts must be reduced modulo 3."
   },
   {
     "id": "bitwise-and-of-numbers-range",
@@ -4865,7 +5252,10 @@
       "c": "int rangeBitwiseAnd(int left, int right) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int rangeBitwiseAnd(int left, int right) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int rangeBitwiseAnd(int left, int right) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Compute the bitwise AND of every number in the inclusive range from left to right.",
+    "optimal": "Find the common binary prefix of left and right by shifting both right until equal, then shift the prefix back. O(log right) time, O(1) space.",
+    "pitfalls": "Iterating every number in a huge range; missing that any changing lower bit becomes zero; failing singleton ranges; off-by-one range handling."
   },
   {
     "id": "triangle",
@@ -4900,7 +5290,10 @@
       "c": "int minimumTotal(int** triangle, int triangleSize, int* triangleColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int minimumTotal(vector<vector<int>>& triangle) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int minimumTotal(List<List<Integer>> triangle) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Find the minimum top-to-bottom path sum through a triangle, moving only to adjacent positions in the next row.",
+    "optimal": "Use bottom-up dynamic programming: start from the last row and fold upward, replacing each cell with its value plus the cheaper of its two children. O(n^2) time and O(n) space.",
+    "pitfalls": "Greedily choosing the smaller immediate child; ignoring negative values; treating the triangle as a rectangular grid; using the wrong adjacent indexes in the next row."
   },
   {
     "id": "edit-distance",
@@ -4934,7 +5327,10 @@
       "c": "int minDistance(char* word1, char* word2) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int minDistance(string word1, string word2) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int minDistance(String word1, String word2) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Compute the minimum insertions, deletions, and replacements needed to transform one word into another.",
+    "optimal": "Dynamic programming over prefixes: dp[i][j] is the fewest edits between word1[..i] and word2[..j]. Matching characters copy the diagonal; otherwise take one plus min(insert, delete, replace). O(mn) time and O(n) space with a rolling row.",
+    "pitfalls": "Forgetting empty-string base cases; counting only insertions and deletions; treating replacement as two edits; off-by-one errors between string indexes and DP prefix lengths."
   },
   {
     "id": "maximal-square",
@@ -4973,7 +5369,10 @@
       "c": "int maximalSquare(char** matrix, int matrixSize, int* matrixColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int maximalSquare(vector<vector<char>>& matrix) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int maximalSquare(char[][] matrix) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Find the area of the largest all-1 square in a binary character matrix.",
+    "optimal": "Dynamic programming: for a 1 cell, its largest square side is 1 plus the minimum of top, left, and top-left neighbor sides; track the largest side and return side squared. O(mn) time and O(n) space with a rolling row.",
+    "pitfalls": "Returning side length instead of area; counting rectangles; treating character '0' as truthy; failing first-row or first-column cells."
   },
   {
     "id": "maximum-sum-circular-subarray",
@@ -5014,7 +5413,10 @@
       "c": "int maxSubarraySumCircular(int* nums, int numsSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int maxSubarraySumCircular(vector<int>& nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int maxSubarraySumCircular(int[] nums) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Find the largest sum of a non-empty contiguous segment when the array is considered circular.",
+    "optimal": "Compute the best non-wrapping subarray with Kadane's algorithm and the best wrapping subarray as total sum minus the minimum subarray. If all values are negative, return the non-wrapping best. O(n) time, O(1) space.",
+    "pitfalls": "Returning zero for all-negative input; allowing the wrap case to select no elements; solving only the ordinary maximum subarray; double-counting indexes across the circular join."
   },
   {
     "id": "search-in-rotated-sorted-array",
@@ -5054,7 +5456,10 @@
       "c": "int search(int* nums, int numsSize, int target) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int search(vector<int>& nums, int target) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int search(int[] nums, int target) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Return the index of a target in a unique sorted array that may have been rotated, or -1 if absent.",
+    "optimal": "Binary search while identifying which half is sorted at each step, then keep the half that can contain target. O(log n) time, O(1) space.",
+    "pitfalls": "Using linear search; assuming the array is not rotated; discarding the sorted half that contains target; mishandling single-element or not-rotated arrays."
   },
   {
     "id": "kth-largest-element-in-an-array",
@@ -5091,7 +5496,10 @@
       "c": "int findKthLargest(int* nums, int numsSize, int k) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int findKthLargest(vector<int>& nums, int k) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int findKthLargest(int[] nums, int k) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Return the kth value in descending order from an unsorted array, counting duplicate values as separate positions.",
+    "optimal": "Use Quickselect for expected O(n) time by partitioning around the target index, or maintain a size-k min-heap for O(n log k). Sorting is simpler at O(n log n) and acceptable only if performance pressure is low.",
+    "pitfalls": "Returning the kth distinct value instead of counting duplicates; off-by-one errors between kth largest and zero-based indexes; sorting ascending and taking the wrong side; mutating assumptions about input order."
   },
   {
     "id": "find-first-and-last-position-of-element-in-sorted-array",
@@ -5130,7 +5538,10 @@
       "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* searchRange(int* nums, int numsSize, int target, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<int> searchRange(vector<int>& nums, int target) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public int[] searchRange(int[] nums, int target) {\n        // Think out loud as you go!\n        return new int[0];\n    }\n}\n"
-    }
+    },
+    "summary": "Return the first and last positions of a target in a sorted array, or [-1, -1] if it is absent.",
+    "optimal": "Run two binary searches: one for the first index with value >= target and one for the first index with value > target, then validate the range. O(log n) time, O(1) space.",
+    "pitfalls": "Using linear scans; returning only one matching index; off-by-one errors at the right boundary; failing empty arrays or all-target arrays."
   },
   {
     "id": "powx-n",
@@ -5169,7 +5580,10 @@
       "c": "double myPow(double x, int n) {\n    // Think out loud as you go!\n    return 0.0;\n}\n",
       "cpp": "class Solution {\npublic:\n    double myPow(double x, int n) {\n        // Think out loud as you go!\n        return 0.0;\n    }\n};\n",
       "java": "class Solution {\n    public double myPow(double x, int n) {\n        // Think out loud as you go!\n        return 0.0;\n    }\n}\n"
-    }
+    },
+    "summary": "Compute x raised to an integer exponent n, including negative exponents.",
+    "optimal": "Use exponentiation by squaring, converting n to a wider signed value before negating it for negative exponents. O(log |n|) time, O(1) space.",
+    "pitfalls": "Multiplying x n times; overflowing when negating the minimum 32-bit integer; forgetting reciprocal handling for negative n; treating n = 0 incorrectly."
   },
   {
     "id": "interleaving-string",
@@ -5208,7 +5622,10 @@
       "c": "bool isInterleave(char* s1, char* s2, char* s3) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "class Solution {\npublic:\n    bool isInterleave(string s1, string s2, string s3) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "class Solution {\n    public boolean isInterleave(String s1, String s2, String s3) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
-    }
+    },
+    "summary": "Decide whether s3 can be built from all characters of s1 and s2 while preserving each source string's order.",
+    "optimal": "Use dynamic programming where dp[i][j] means s3[..i+j] can be formed from s1[..i] and s2[..j]. O(mn) time and O(n) space with a rolling row.",
+    "pitfalls": "Ignoring the length check; greedily taking matching characters from one string; allowing characters from a source to be reordered; exponential recursion without memoization."
   },
   {
     "id": "best-time-to-buy-and-sell-stock-iii",
@@ -5246,7 +5663,10 @@
       "c": "int maxProfit(int* prices, int pricesSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int maxProfit(vector<int>& prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int maxProfit(int[] prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Maximize profit from at most two stock transactions while holding at most one share at a time.",
+    "optimal": "Track four states while scanning prices: best after first buy, first sell, second buy, and second sell. O(n) time, O(1) space.",
+    "pitfalls": "Solving only one transaction or unlimited transactions; allowing overlapping holdings; updating transaction states in an order that reuses a price incorrectly; returning negative profit on falling prices."
   },
   {
     "id": "best-time-to-buy-and-sell-stock-iv",
@@ -5281,7 +5701,10 @@
       "c": "int maxProfit(int k, int* prices, int pricesSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int maxProfit(int k, vector<int>& prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int maxProfit(int k, int[] prices) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Maximize stock profit with at most k buy-sell transactions and no overlapping holdings.",
+    "optimal": "Use dynamic programming over transaction count with buy[t] and sell[t] states, plus the unlimited-transactions shortcut when k is at least half the number of days. O(nk) time, O(k) space.",
+    "pitfalls": "Ignoring the k limit; using O(nk) when k is effectively unlimited; allowing multiple shares at once; mishandling k = 0 or a one-day price list."
   },
   {
     "id": "sort-list",
@@ -5322,7 +5745,10 @@
       "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* sortList(struct ListNode* head) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* sortList(ListNode* head) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode sortList(ListNode head) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Sort a singly linked list in ascending order and return the new head.",
+    "optimal": "Use merge sort on the linked list: split with slow/fast pointers, recursively sort halves, and merge sorted lists by rewiring nodes. O(n log n) time and O(log n) recursion stack, or O(1) extra space with bottom-up merge sort.",
+    "pitfalls": "Copying all values into an array when list-node sorting is expected; failing to cut the list before recursing; losing nodes during merge; not preserving duplicate values; mishandling empty or single-node lists."
   },
   {
     "id": "median-of-two-sorted-arrays",
@@ -5359,7 +5785,10 @@
       "c": "double findMedianSortedArrays(int* nums1, int nums1Size, int* nums2, int nums2Size) {\n    // Think out loud as you go!\n    return 0.0;\n}\n",
       "cpp": "class Solution {\npublic:\n    double findMedianSortedArrays(vector<int>& nums1, vector<int>& nums2) {\n        // Think out loud as you go!\n        return 0.0;\n    }\n};\n",
       "java": "class Solution {\n    public double findMedianSortedArrays(int[] nums1, int[] nums2) {\n        // Think out loud as you go!\n        return 0.0;\n    }\n}\n"
-    }
+    },
+    "summary": "Return the middle value, or the mean of the two middle values, of two sorted arrays taken together as one sorted sequence.",
+    "optimal": "Binary search the partition point in the smaller array so the left partition contains half the values and every left value is <= every right value. O(log min(m, n)) time, O(1) space.",
+    "pitfalls": "Fully merging both arrays; binary searching the longer array without boundary care; off-by-one errors for odd versus even totals; failing when one array is empty; using integer division for fractional medians."
   },
   {
     "id": "max-points-on-a-line",
@@ -5397,7 +5826,10 @@
       "c": "int maxPoints(int** points, int pointsSize, int* pointsColSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int maxPoints(vector<vector<int>>& points) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int maxPoints(int[][] points) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Find the largest number of given 2D points that lie on a single straight line.",
+    "optimal": "For each anchor point, count normalized slopes to every later point using dx and dy divided by their gcd, with a canonical sign for vertical, horizontal, and negative slopes. O(n^2) time, O(n) space per anchor.",
+    "pitfalls": "Using floating-point slopes and losing precision; failing to normalize equivalent slopes; mishandling vertical or horizontal lines; double-counting the anchor; ignoring that all points are unique."
   },
   {
     "id": "reverse-bits",
@@ -5431,7 +5863,10 @@
       "c": "int reverseBits(int n) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int reverseBits(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int reverseBits(int n) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Reverse the 32-bit representation of an integer and return the resulting value.",
+    "optimal": "Iterate exactly 32 times, shifting the answer left, adding the current low bit, and shifting the input right. O(32) time and O(1) space.",
+    "pitfalls": "Reversing decimal digits or a trimmed binary string; looping only until n becomes zero and dropping leading zeros; off-by-one on the 32 iterations; using signed overflow-prone cases without a clear unsigned model."
   },
   {
     "id": "ipo",
@@ -5470,7 +5905,10 @@
       "c": "int findMaximizedCapital(int k, int w, int* profits, int profitsSize, int* capital, int capitalSize) {\n    // Think out loud as you go!\n    return 0;\n}\n",
       "cpp": "class Solution {\npublic:\n    int findMaximizedCapital(int k, int w, vector<int>& profits, vector<int>& capital) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n",
       "java": "class Solution {\n    public int findMaximizedCapital(int k, int w, int[] profits, int[] capital) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
-    }
+    },
+    "summary": "Choose up to k affordable projects to maximize final capital, where each chosen project's profit is added to available capital.",
+    "optimal": "Sort projects by required capital, push newly affordable profits into a max-heap as capital grows, and repeatedly take the largest available profit. O(n log n + k log n) time.",
+    "pitfalls": "Choosing projects by profit before they are affordable; using a min-heap for profits; forgetting that each completed project increases capital for later choices; continuing when no project is affordable."
   },
   {
     "id": "find-k-pairs-with-smallest-sums",
@@ -5507,7 +5945,10 @@
       "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** kSmallestPairs(int* nums1, int nums1Size, int* nums2, int nums2Size, int k, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<vector<int>> kSmallestPairs(vector<int>& nums1, vector<int>& nums2, int k) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public List<List<Integer>> kSmallestPairs(int[] nums1, int[] nums2, int k) {\n        // Think out loud as you go!\n        return List.of();\n    }\n}\n"
-    }
+    },
+    "summary": "Return k pairs drawn from two sorted arrays whose sums are smallest, or all pairs if fewer exist.",
+    "optimal": "Use a min-heap seeded with the first pair from each relevant row, then pop the smallest pair and push the next pair from that same row. O(k log min(k, m)) time.",
+    "pitfalls": "Generating every pair for large arrays; losing duplicate pairs from duplicate values; returning more than k pairs; assuming result order matters more than pair sums; failing when k is zero."
   },
   {
     "id": "merge-k-sorted-lists",
@@ -5549,7 +5990,10 @@
       "c": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     struct ListNode *next;\n * };\n */\nstruct ListNode* mergeKLists(struct ListNode** lists, int listsSize) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/**\n * Definition for singly-linked list.\n * struct ListNode {\n *     int val;\n *     ListNode *next;\n *     ListNode() : val(0), next(nullptr) {}\n *     ListNode(int x) : val(x), next(nullptr) {}\n *     ListNode(int x, ListNode *next) : val(x), next(next) {}\n * };\n */\nclass Solution {\npublic:\n    ListNode* mergeKLists(vector<ListNode*>& lists) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/**\n * Definition for singly-linked list.\n * public class ListNode {\n *     int val;\n *     ListNode next;\n *     ListNode() {}\n *     ListNode(int val) { this.val = val; }\n *     ListNode(int val, ListNode next) { this.val = val; this.next = next; }\n * }\n */\nclass Solution {\n    public ListNode mergeKLists(ListNode[] lists) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Merge an array of sorted linked lists into one sorted linked list.",
+    "optimal": "Use a min-heap keyed by node value, seeded with each non-empty list head, repeatedly popping the smallest node and pushing its next node. O(n log k) time, O(k) space. Divide-and-conquer pairwise merge is also O(n log k).",
+    "pitfalls": "Flattening all values and sorting when linked-list merging is expected; losing next pointers while appending nodes; failing empty input or empty lists; using O(k) linear scans for every node; dropping duplicate values."
   },
   {
     "id": "find-median-from-data-stream",
@@ -5583,7 +6027,10 @@
       "c": "// C class-style MedianFinder tests are not supported in this runner yet.\n",
       "cpp": "class MedianFinder {\npublic:\n    MedianFinder() {\n        // Think out loud as you go!\n    }\n\n    void addNum(int num) {\n        // Think out loud as you go!\n    }\n\n    double findMedian() {\n        // Think out loud as you go!\n        return 0.0;\n    }\n};\n",
       "java": "class MedianFinder {\n    public MedianFinder() {\n        // Think out loud as you go!\n    }\n\n    public void addNum(int num) {\n        // Think out loud as you go!\n    }\n\n    public double findMedian() {\n        // Think out loud as you go!\n        return 0.0;\n    }\n}\n"
-    }
+    },
+    "summary": "Design a data structure that accepts numbers from a stream and returns the current median.",
+    "optimal": "Maintain two heaps: a max-heap for the lower half and a min-heap for the upper half. Rebalance so their sizes differ by at most one, then read the median from one or both heap tops. addNum is O(log n), findMedian is O(1).",
+    "pitfalls": "Sorting the full stream on every query; failing to rebalance heap sizes; putting equal values inconsistently and breaking ordering; using integer division for even-count medians; calling findMedian before any value despite the stated precondition."
   },
   {
     "id": "construct-quad-tree",
@@ -5621,6 +6068,36 @@
       "c": "/**\n * Definition for a QuadTree node.\n * struct Node {\n *     int val;\n *     struct Node *next;\n *     struct Node *random;\n *     struct Node **neighbors;\n *     int neighborsSize;\n *     struct Node *left;\n *     struct Node *right;\n *     bool isLeaf;\n *     struct Node *topLeft;\n *     struct Node *topRight;\n *     struct Node *bottomLeft;\n *     struct Node *bottomRight;\n * };\n */\nstruct Node* construct(int** grid, int gridSize, int* gridColSize) {\n    // Think out loud as you go!\n    return NULL;\n}\n",
       "cpp": "/*\n// Definition for a QuadTree node.\nclass Node {\npublic:\n    int val;\n    bool isLeaf;\n    Node* topLeft;\n    Node* topRight;\n    Node* bottomLeft;\n    Node* bottomRight;\n\n    Node() : val(0), isLeaf(false), topLeft(nullptr), topRight(nullptr), bottomLeft(nullptr), bottomRight(nullptr) {}\n    Node(int _val, bool _isLeaf) : val(_val), isLeaf(_isLeaf), topLeft(nullptr), topRight(nullptr), bottomLeft(nullptr), bottomRight(nullptr) {}\n    Node(int _val, bool _isLeaf, Node* _topLeft, Node* _topRight, Node* _bottomLeft, Node* _bottomRight)\n        : val(_val), isLeaf(_isLeaf), topLeft(_topLeft), topRight(_topRight), bottomLeft(_bottomLeft), bottomRight(_bottomRight) {}\n};\n*/\n\nclass Solution {\npublic:\n    Node* construct(vector<vector<int>>& grid) {\n        // Think out loud as you go!\n        return nullptr;\n    }\n};\n",
       "java": "/*\n// Definition for a QuadTree node.\nclass Node {\n    public int val;\n    public boolean isLeaf;\n    public Node topLeft;\n    public Node topRight;\n    public Node bottomLeft;\n    public Node bottomRight;\n\n    public Node() {}\n    public Node(int val, boolean isLeaf) {\n        this.val = val;\n        this.isLeaf = isLeaf;\n    }\n    public Node(int val, boolean isLeaf, Node topLeft, Node topRight, Node bottomLeft, Node bottomRight) {\n        this.val = val;\n        this.isLeaf = isLeaf;\n        this.topLeft = topLeft;\n        this.topRight = topRight;\n        this.bottomLeft = bottomLeft;\n        this.bottomRight = bottomRight;\n    }\n}\n*/\n\nclass Solution {\n    public Node construct(int[][] grid) {\n        // Think out loud as you go!\n        return null;\n    }\n}\n"
-    }
+    },
+    "summary": "Given an n by n binary grid, build a quad tree whose leaves represent uniform square regions.",
+    "optimal": "Use recursive divide and conquer. For each square, scan until a different value is found; if all cells match, return a leaf. Otherwise split into four equal quadrants in top-left, top-right, bottom-left, bottom-right order. With n <= 64, direct uniform scans are simple and fast enough.",
+    "pitfalls": "Returning a leaf for only 1x1 cells; using the wrong child order; forgetting that internal node values are ignored; storing integers where the language starter expects booleans or vice versa; assuming non-power-of-two sizes."
+  },
+  {
+    "id": "fixed-capacity-ring-buffer",
+    "origin": "original",
+    "difficulty": "Medium",
+    "topics": [
+      "Array",
+      "Design"
+    ],
+    "statement": [
+      "Implement a bounded first-in, first-out buffer with constant-time operations.",
+      "The buffer does not grow: a write when it is full is rejected, and reads from an empty buffer report that no value is available."
+    ],
+    "constraints": [
+      "1 <= capacity <= 10^5",
+      "-10^9 <= value <= 10^9",
+      "At most 2 * 10^5 method calls are made."
+    ],
+    "starterCode": {
+      "python": "class RingBuffer:\n    def __init__(self, capacity: int):\n        pass\n\n    def push(self, value: int) -> bool:\n        pass\n\n    def pop(self) -> int:\n        pass\n\n    def front(self) -> int:\n        pass\n\n    def size(self) -> int:\n        pass\n",
+      "javascript": "class RingBuffer {\n  constructor(capacity) {\n  }\n\n  push(value) {\n  }\n\n  pop() {\n  }\n\n  front() {\n  }\n\n  size() {\n  }\n}\n",
+      "cpp": "class RingBuffer {\npublic:\n    RingBuffer(int capacity) {\n    }\n\n    bool push(int value) {\n        return false;\n    }\n\n    int pop() {\n        return -1;\n    }\n\n    int front() {\n        return -1;\n    }\n\n    int size() {\n        return 0;\n    }\n};\n",
+      "java": "class RingBuffer {\n    public RingBuffer(int capacity) {\n    }\n\n    public boolean push(int value) {\n        return false;\n    }\n\n    public int pop() {\n        return -1;\n    }\n\n    public int front() {\n        return -1;\n    }\n\n    public int size() {\n        return 0;\n    }\n}\n"
+    },
+    "summary": "Design a fixed-capacity FIFO buffer that accepts and removes values in constant time without shifting stored elements.",
+    "optimal": "Use a fixed array with head, tail, and count. Write at tail and advance modulo capacity, read at head and advance modulo capacity, and use count to distinguish empty from full. Each method is O(1).",
+    "pitfalls": "Using head equals tail alone to represent both empty and full; shifting an array on every pop; advancing an index without wrapping it; changing the front value on a failed push; forgetting that a successful pop frees one slot."
   }
 ]

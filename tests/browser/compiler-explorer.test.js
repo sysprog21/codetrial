@@ -431,6 +431,42 @@ public:
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("C++ EventQueue original class judge runs end to end", { skip: noGpp }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "codetrial-cpp-event-queue-"));
+    try {
+      const source = join(dir, "event-queue.cpp");
+      const binary = join(dir, "event-queue");
+      writeFileSync(source, generateHarness("cpp", judges["fixed-capacity-ring-buffer"], `class EventQueue {
+    vector<int> values;
+    int head = 0;
+    int tail = 0;
+    int count = 0;
+public:
+    EventQueue(int capacity) : values(capacity) {}
+    bool push(int value) {
+        if (count == (int)values.size()) return false;
+        values[tail] = value;
+        tail = (tail + 1) % values.size();
+        count++;
+        return true;
+    }
+    int pop() {
+        if (count == 0) return -1;
+        int value = values[head];
+        head = (head + 1) % values.size();
+        count--;
+        return value;
+    }
+    int front() { return count == 0 ? -1 : values[head]; }
+    int size() { return count; }
+};`));
+      await run("g++", ["-std=c++20", source, "-o", binary]);
+      assert.deepEqual(parseCompilerResults((await run(binary, [], { encoding: "utf8" })).stdout).results.map((result) => result.actual), judges["fixed-capacity-ring-buffer"].cases.map((testCase) => testCase.expected));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 test("harness generator handles output parameter and output prefix specs", () => {
