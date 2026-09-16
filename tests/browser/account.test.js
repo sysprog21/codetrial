@@ -9,7 +9,9 @@ import {
   clearReportHistory,
   historyKey,
   readLocalHistory,
+  readReviewHistory,
   renameLocalHistory,
+  reviewHistoryKey,
   saveReportHistory,
 } from "../../web/history.js";
 import { functionBody, memoryStorage, root } from "./source.js";
@@ -218,6 +220,22 @@ test("report history writes local storage before account sync", async () => {
   assert.equal(posts.length, 1);
   assert.equal(posts[0].url, "/api/reports");
   assert.equal(posts[0].options.method, "POST");
+});
+
+test("review inputs survive the full-report cap", async () => {
+  const storage = memoryStorage();
+  for (let index = 0; index < 21; index += 1) {
+    await saveReportHistory({
+      problemId: `problem-${index}`,
+      date: `2026-01-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
+      report: { decision: index === 0 ? "NO_HIRE" : "HIRE", incomplete: false, improvementPlan: [] },
+    }, { storage, fetcher: async () => response({ signedIn: false }) });
+  }
+  assert.equal(readLocalHistory(storage).length, 20);
+  const reviews = readReviewHistory(storage);
+  assert.equal(reviews.length, 21);
+  assert.equal(reviews.at(-1).problemId, "problem-0");
+  assert.deepEqual(Object.keys(reviews.at(-1).report), ["decision", "incomplete", "improvementPlan"]);
 });
 
 test("report history keeps anonymous and failed account saves local", async () => {
@@ -431,6 +449,26 @@ test("history saved under published ids is renamed to page names once", () => {
   const counting = { ...unchanged, getItem: (key) => unchanged.getItem(key), setItem: (...args) => { writes += 1; unchanged.setItem(...args); } };
   renameLocalHistory(pages, counting);
   assert.equal(writes, 0, "nothing to rename is nothing written");
+});
+
+// The review list is built from the history the first time it is read, so an
+// interview saved before any lobby visit copies the published ids into it. The
+// rename has to reach that copy too, or those reviews match no card.
+test("a review list built before the rename is renamed with the history", async () => {
+  const storage = memoryStorage();
+  const pages = { "two-sum": { page: "some-scenario" } };
+  storage.setItem(historyKey, JSON.stringify([{ problemId: "two-sum", date: "2026-01-01" }]));
+  const offline = async () => ({ ok: false, status: 401, json: async () => ({}) });
+  await saveReportHistory({ problemId: "some-scenario", date: "2026-02-01", report: {} }, { fetcher: offline, storage });
+  assert.deepEqual(readReviewHistory(storage).map((entry) => entry.problemId), ["some-scenario", "two-sum"]);
+
+  storage.setItem(reviewHistoryKey, JSON.stringify([...readReviewHistory(storage), { problemId: "retired" }]));
+  renameLocalHistory(pages, storage, true);
+  assert.deepEqual(
+    readReviewHistory(storage).map((entry) => [entry.problemId, entry.pageMapChecked ?? false]),
+    [["some-scenario", true], ["some-scenario", false], ["retired", true]],
+    "published ids renamed, and ids the map does not key are marked so the lobby stops asking",
+  );
 });
 
 test("a stored history that is not a list reads as no history", () => {

@@ -1,4 +1,9 @@
 export const historyKey = "codetrial_history";
+export const reviewHistoryKey = "codetrial_review_history";
+
+// JSON.stringify of the widest retained record below is 328 bytes; 500 rows
+// therefore reserve at most about 164 KB, while the full history remains 20.
+const REVIEW_HISTORY_CAP = 500;
 
 /// Every request here is a small same-origin call, and every one of them is
 /// awaited by something the candidate is looking at: a stalled save leaves the
@@ -24,26 +29,58 @@ export function readLocalHistory(storage) {
   }
 }
 
+export function readReviewHistory(storage) {
+  try {
+    storage ||= localStorage;
+    const stored = JSON.parse(storage.getItem(reviewHistoryKey));
+    if (Array.isArray(stored)) return stored;
+    const rebuilt = readLocalHistory(storage).map(reviewEntry);
+    storage.setItem(reviewHistoryKey, JSON.stringify(rebuilt));
+    return rebuilt;
+  } catch {
+    return [];
+  }
+}
+
 /// History saved before problems had page names carries published ids, and a
 /// lobby translating them fetches the page map on every visit. Rewritten once
 /// here, the next visit finds page names and fetches nothing. `pages` is that
 /// map; entries it does not name are left as they are.
-export function renameLocalHistory(pages, storage) {
+///
+/// Both local stores, by one rule. The review list is read against page names
+/// too, and an interview saved before the first lobby visit builds it from the
+/// unrenamed history, so renaming only the history left those reviews matching
+/// no card. Only an existing review list is rewritten: a missing one is built
+/// from the history when it is first read, after this has run.
+export function renameLocalHistory(pages, storage, markUnmapped = false) {
   try {
     storage ||= localStorage;
-    const entries = readLocalHistory(storage);
-    let renamed = false;
-    const next = entries.map((entry) => {
-      const id = entry?.problemId;
-      if (typeof id !== "string" || !Object.hasOwn(pages, id)) return entry;
-      renamed = true;
-      return { ...entry, problemId: pages[id].page };
-    });
-    if (renamed) storage.setItem(historyKey, JSON.stringify(next));
-    return next;
+    const history = renamedEntries(readLocalHistory(storage), pages, markUnmapped);
+    if (history.renamed) storage.setItem(historyKey, JSON.stringify(history.next));
+    const stored = JSON.parse(storage.getItem(reviewHistoryKey));
+    if (Array.isArray(stored)) {
+      const reviews = renamedEntries(stored, pages, markUnmapped);
+      if (reviews.renamed) storage.setItem(reviewHistoryKey, JSON.stringify(reviews.next));
+    }
+    return history.next;
   } catch {
     return readLocalHistory(storage);
   }
+}
+
+function renamedEntries(entries, pages, markUnmapped) {
+  let renamed = false;
+  const next = entries.map((entry) => {
+    const id = entry?.problemId;
+    if (typeof id !== "string" || !Object.hasOwn(pages, id)) {
+      if (!markUnmapped || typeof id !== "string" || entry?.pageMapChecked === true) return entry;
+      renamed = true;
+      return { ...entry, pageMapChecked: true };
+    }
+    renamed = true;
+    return { ...entry, problemId: pages[id].page };
+  });
+  return { next, renamed };
 }
 
 export async function saveReportHistory(entry, { fetcher = fetch, storage } = {}) {
@@ -75,6 +112,7 @@ export async function clearReportHistory({ account = false, fetcher = fetch, sto
     try {
       storage ||= localStorage;
       storage.removeItem(historyKey);
+      storage.removeItem(reviewHistoryKey);
       return "cleared";
     } catch {
       return session === "in" ? "account-cleared-local-failed" : "failed";
@@ -88,11 +126,26 @@ function saveLocalReport(entry, storage) {
   try {
     storage ||= localStorage;
     const previous = readLocalHistory(storage);
+    const reviews = readReviewHistory(storage);
     storage.setItem(historyKey, JSON.stringify([entry, ...previous].slice(0, 20)));
+    storage.setItem(reviewHistoryKey, JSON.stringify([reviewEntry(entry), ...reviews].slice(0, REVIEW_HISTORY_CAP)));
     return "saved";
   } catch {
     return "failed";
   }
+}
+
+function reviewEntry(entry) {
+  const report = entry?.report;
+  return {
+    problemId: entry?.problemId,
+    date: entry?.date,
+    report: {
+      decision: report?.decision,
+      incomplete: report?.incomplete,
+      improvementPlan: report?.improvementPlan,
+    },
+  };
 }
 
 async function saveAccountReport(entry, fetcher) {
