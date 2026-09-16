@@ -3962,7 +3962,7 @@
       },
       {
         "question": "How large can a restored index be?",
-        "answer": "Between 1 and 10^4 keys."
+        "answer": "Between 0 and 10^4 keys. An empty index is valid."
       }
     ],
     "followUps": [

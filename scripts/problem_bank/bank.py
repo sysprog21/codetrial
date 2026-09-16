@@ -185,12 +185,13 @@ def invalid_origins(problems: object) -> list[str]:
     """Problem ids whose origin is neither imported nor authored here."""
     if not isinstance(problems, list):
         return []
-    return sorted(
-        problem.get("id", "?")
-        for problem in problems
-        if not isinstance(problem, dict)
-        or problem.get("origin", "leetcode") not in {"leetcode", "original"}
-    )
+    invalid = []
+    for problem in problems:
+        if not isinstance(problem, dict):
+            invalid.append("?")
+        elif problem.get("origin", "leetcode") not in {"leetcode", "original"}:
+            invalid.append(problem.get("id", "?"))
+    return sorted(invalid)
 
 
 # Which judge argType a LeetCode metaData type needs, derived from the entries

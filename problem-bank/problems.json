@@ -3316,7 +3316,7 @@
       }
     ],
     "constraints": [
-      "1 <= number of nodes <= 10^4",
+      "0 <= number of nodes <= 10^4",
       "-2^31 <= Node.val <= 2^31 - 1"
     ],
     "starterCode": {
