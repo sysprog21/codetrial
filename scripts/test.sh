@@ -147,6 +147,20 @@ actionlint_gate()
     return 0
 }
 
+release_msrv_matches()
+{
+    manifest=$(sed -n 's/^rust-version *= *"\([0-9][0-9.]*\)"$/\1/p' \
+        "$ROOT/Cargo.toml")
+    image=$(sed -n 's/^[[:space:]]*image: rust:\([0-9][0-9.]*\)-bullseye$/\1/p' \
+        "$ROOT/.github/workflows/check.yml")
+    if [ "$(printf '%s' "$manifest" | cut -d. -f1-2)" = \
+        "$(printf '%s' "$image" | cut -d. -f1-2)" ]; then
+        return 0
+    fi
+    echo "release Rust image $image disagrees with rust-version $manifest" >&2
+    return 1
+}
+
 cargo_audit_gate()
 {
     if ! command -v cargo-audit > /dev/null 2>&1; then
@@ -243,6 +257,7 @@ gate fmt cargo fmt --check --manifest-path "$ROOT/Cargo.toml"
 # it is `cargo fmt` alone that drifted.
 gate indent "$ROOT/scripts/indent.sh" --check
 gate clippy cargo clippy --locked --all-targets --manifest-path "$ROOT/Cargo.toml" -- -D warnings
+gate release-msrv release_msrv_matches
 gate cargo-test cargo test --locked --manifest-path "$ROOT/Cargo.toml"
 
 gate gen-problems python3 "$ROOT/scripts/gen-problems.py" --check
