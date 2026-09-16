@@ -182,6 +182,7 @@ fn report_helpers_use_report_topic_prompt_state_and_error_note() {
             &error,
             "google",
         )),
+        boot.problem,
     );
     let packet = report_data_packet(report).unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&packet.payload).unwrap();

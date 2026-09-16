@@ -45,11 +45,12 @@ async fn report_packet(
             api_key,
             boot.report_model,
             &report_prompt_text(boot, state, elapsed_min),
+            boot.problem,
         ),
     )
     .await
     {
-        Ok(Ok(raw)) => final_report(Some(&raw), state.hints_used, None),
+        Ok(Ok(raw)) => final_report(Some(&raw), state.hints_used, None, boot.problem),
         Ok(Err(error)) => final_report(
             None,
             state.hints_used,
@@ -60,11 +61,13 @@ async fn report_packet(
                 error.as_ref(),
                 api_key,
             )),
+            boot.problem,
         ),
         Err(error) => final_report(
             None,
             state.hints_used,
             Some(&report_error_note(boot, state, reason, &error, api_key)),
+            boot.problem,
         ),
     };
     stamp_report_contract(&mut report);

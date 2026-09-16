@@ -35,8 +35,8 @@ pub use prompts::{
     test_setup_error_reaction, time_warning, wrap_up,
 };
 pub use report::{
-    MAX_SUMMARY_TEXT, fallback_report, final_report, report_response_schema, validate_report,
-    validate_report_candidate,
+    MAX_SUMMARY_TEXT, fallback_report, final_report, names_published_problem,
+    report_response_schema, spelled_words, validate_report, validate_report_candidate,
 };
 pub use value::json_number;
 pub(crate) use value::{bounded_model_text, json_int, python_truthy, truthy_string, value_string};

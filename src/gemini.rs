@@ -225,13 +225,14 @@ pub async fn generate_report(
     api_key: &str,
     model: &str,
     prompt: &str,
+    problem: &crate::agent::Problem,
 ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
     let mut request_prompt = prompt.to_string();
     let mut budget = ReportCallBudget::new();
     for semantic_attempt in 0..=MAX_REPORT_REPAIRS {
         let output =
             generate_report_transport(api_key, model, &request_prompt, &mut budget).await?;
-        match report_semantic_step(prompt, &output, semantic_attempt) {
+        match report_semantic_step(prompt, &output, semantic_attempt, problem) {
             ReportSemanticStep::Complete(report) => return Ok(report),
             ReportSemanticStep::Repair(repair) => request_prompt = repair,
 
@@ -288,8 +289,13 @@ enum ReportSemanticStep {
     Failed(Vec<String>),
 }
 
-fn report_semantic_step(original: &str, output: &str, repairs_used: usize) -> ReportSemanticStep {
-    match parse_and_validate_report(output) {
+fn report_semantic_step(
+    original: &str,
+    output: &str,
+    repairs_used: usize,
+    problem: &crate::agent::Problem,
+) -> ReportSemanticStep {
+    match parse_and_validate_report(output, problem) {
         Ok(report) => ReportSemanticStep::Complete(report),
         Err(errors) if repairs_used < MAX_REPORT_REPAIRS => {
             ReportSemanticStep::Repair(repair_prompt(original, output, &errors))
@@ -322,7 +328,10 @@ async fn generate_report_transport(
     }
 }
 
-fn parse_and_validate_report(text: &str) -> Result<Value, Vec<String>> {
+fn parse_and_validate_report(
+    text: &str,
+    problem: &crate::agent::Problem,
+) -> Result<Value, Vec<String>> {
     if text.len() > MAX_REPORT_RESPONSE_BYTES {
         return Err(vec![format!(
             "$: response exceeds {MAX_REPORT_RESPONSE_BYTES} bytes"
@@ -330,7 +339,7 @@ fn parse_and_validate_report(text: &str) -> Result<Value, Vec<String>> {
     }
     let raw = serde_json::from_str::<Value>(text)
         .map_err(|error| vec![format!("$: invalid JSON: {error}")])?;
-    crate::agent::validate_report_candidate(&raw)
+    crate::agent::validate_report_candidate(&raw, problem)
 }
 
 /// The one bound on error text, used by both places errors leave this module:

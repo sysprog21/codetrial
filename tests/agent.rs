@@ -390,7 +390,8 @@ fn valid_strict_report() -> Value {
 #[test]
 fn strict_report_validation_is_atomic_and_server_owns_hints() {
     let valid = valid_strict_report();
-    let report = validate_report(&valid, 3).expect("fixture is valid");
+    let report =
+        validate_report(&valid, 3, get_problem(Some("two-sum"))).expect("fixture is valid");
     assert_eq!(report["hintsUsed"], 3);
 
     let mut hostile = valid.clone();
@@ -400,15 +401,67 @@ fn strict_report_validation_is_atomic_and_server_owns_hints() {
         .as_object_mut()
         .unwrap()
         .insert("extra".into(), json!(true));
-    let errors = validate_report_candidate(&hostile).unwrap_err().join("\n");
+    let errors = validate_report_candidate(&hostile, get_problem(Some("two-sum")))
+        .unwrap_err()
+        .join("\n");
     assert!(errors.contains("$.codingScore"));
     assert!(errors.contains("$.decision"));
     assert!(errors.contains("$.extra"));
 
-    let incomplete = final_report(Some(&hostile), 3, None);
+    let incomplete = final_report(Some(&hostile), 3, None, get_problem(Some("two-sum")));
     assert_eq!(incomplete["incomplete"], true);
     assert!(incomplete.get("codingScore").is_none());
     assert!(incomplete.get("decision").is_none());
+}
+
+#[test]
+fn report_naming_the_published_problem_is_refused() {
+    let problem = get_problem(Some("3sum"));
+    for (path, mutate) in [
+        (
+            "$.summary",
+            Box::new(|report: &mut Value| report["summary"] = json!("This is 3 Sum."))
+                as Box<dyn Fn(&mut Value)>,
+        ),
+        (
+            "$.codingFeedback.strengths[0]",
+            Box::new(|report: &mut Value| {
+                report["codingFeedback"]["strengths"][0] = json!("Found this on LeetCode.")
+            }),
+        ),
+        (
+            "$.communicationFeedback.improvements[0]",
+            Box::new(|report: &mut Value| {
+                report["communicationFeedback"]["improvements"][0] =
+                    json!("Explain the Leet Code solution.")
+            }),
+        ),
+        (
+            "$.improvementPlan[0].drill",
+            Box::new(|report: &mut Value| {
+                report["improvementPlan"][0]["drill"] = json!("Practice 3Sum.")
+            }),
+        ),
+    ] {
+        let mut report = valid_strict_report();
+        mutate(&mut report);
+        let errors = validate_report_candidate(&report, problem).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error == &format!("{path}: names the published problem")),
+            "{path} was not refused: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn report_naming_only_the_scenario_is_accepted() {
+    let problem = get_problem(Some("triangle"));
+    let mut report = valid_strict_report();
+    report["summary"] = json!("You explained the Triangle scenario with a grounded trace.");
+    validate_report_candidate(&report, problem)
+        .unwrap_or_else(|errors| panic!("scenario wording was refused: {errors:?}"));
 }
 
 #[test]
@@ -443,14 +496,14 @@ fn unsupported_delivery_and_personality_judgments_are_rejected_atomically() {
     ] {
         let mut report = valid_strict_report();
         report["summary"] = json!(claim);
-        let errors = validate_report_candidate(&report).unwrap_err();
+        let errors = validate_report_candidate(&report, get_problem(Some("two-sum"))).unwrap_err();
         assert!(
             errors
                 .iter()
                 .any(|error| error == "$.summary: unsupported delivery or personality judgment"),
             "claim escaped delivery policy: {claim:?}: {errors:?}"
         );
-        let incomplete = final_report(Some(&report), 0, None);
+        let incomplete = final_report(Some(&report), 0, None, get_problem(Some("two-sum")));
         assert_eq!(incomplete["incomplete"], true);
         assert!(incomplete.get("codingScore").is_none());
     }
@@ -458,7 +511,9 @@ fn unsupported_delivery_and_personality_judgments_are_rejected_atomically() {
     let mut nested = valid_strict_report();
     nested["communicationFeedback"]["strengths"][0] = json!("Maintained strong eye-contact.");
     nested["improvementPlan"][0]["selfReview"][0] = json!("Check whether you appeared nervous.");
-    let errors = validate_report_candidate(&nested).unwrap_err().join("\n");
+    let errors = validate_report_candidate(&nested, get_problem(Some("two-sum")))
+        .unwrap_err()
+        .join("\n");
     assert!(errors.contains("$.communicationFeedback.strengths[0]"));
     assert!(errors.contains("$.improvementPlan[0].selfReview[0]"));
 }
@@ -472,7 +527,7 @@ fn technical_confidence_language_remains_valid() {
     ] {
         let mut report = valid_strict_report();
         report["summary"] = json!(allowed);
-        validate_report_candidate(&report)
+        validate_report_candidate(&report, get_problem(Some("two-sum")))
             .unwrap_or_else(|errors| panic!("technical statement was rejected: {errors:?}"));
     }
 }
@@ -531,7 +586,7 @@ fn strict_report_validation_rejects_each_semantic_drift_class() {
         let mut report = valid_strict_report();
         mutate(&mut report);
         assert!(
-            validate_report_candidate(&report).is_err(),
+            validate_report_candidate(&report, get_problem(Some("two-sum"))).is_err(),
             "accepted {name}"
         );
     }
@@ -1884,7 +1939,12 @@ fn framework_evaluation_scenarios_exercise_reactions_evidence_and_reports() {
             );
         }
         assert_eq!(state.hints_used, hints, "{id}: hint accounting drift");
-        let report = final_report(Some(&candidate_report), hints, None);
+        let report = final_report(
+            Some(&candidate_report),
+            hints,
+            None,
+            get_problem(Some("two-sum")),
+        );
         assert_ne!(
             report["incomplete"], true,
             "{id}: valid scenario report degraded"
@@ -2183,7 +2243,8 @@ fn improvement_plans_are_linked_bounded_deduplicated_and_ranked() {
     raw["improvementPlan"].as_array_mut().unwrap().swap(0, 3);
     raw["improvementPlan"][0]["impact"] = json!("low");
     raw["improvementPlan"][1]["impact"] = json!("high");
-    let ranked = validate_report_candidate(&raw).expect("order is fixed, not refused");
+    let ranked = validate_report_candidate(&raw, get_problem(Some("two-sum")))
+        .expect("order is fixed, not refused");
     assert_eq!(
         ranked["improvementPlan"][0]["weakness"], raw["improvementPlan"][1]["weakness"],
         "the high-impact item leads the plan the candidate reads"
@@ -2196,7 +2257,7 @@ fn improvement_plans_are_linked_bounded_deduplicated_and_ranked() {
 
     let mut unrelated = valid_strict_report();
     unrelated["improvementPlan"][0]["weakness"] = json!("unrelated advice");
-    let errors = validate_report_candidate(&unrelated)
+    let errors = validate_report_candidate(&unrelated, get_problem(Some("two-sum")))
         .unwrap_err()
         .join("\n");
     assert!(errors.contains("exactly reference"));
@@ -2210,21 +2271,22 @@ fn framework_assessments_require_all_phases_and_preserve_unassessed_gaps() {
         raw["frameworkAssessment"]["phases"][index]["score"] = Value::Null;
     }
     assert!(
-        validate_report_candidate(&raw).is_ok(),
+        validate_report_candidate(&raw, get_problem(Some("two-sum"))).is_ok(),
         "null STAR gaps must remain valid"
     );
     let mut duplicate = raw.clone();
     duplicate["frameworkAssessment"]["phases"][9]["phase"] = json!("Action");
-    assert!(validate_report_candidate(&duplicate).is_err());
+    assert!(validate_report_candidate(&duplicate, get_problem(Some("two-sum"))).is_err());
     let mut malformed = raw.clone();
     malformed["frameworkAssessment"]["phases"][2]["score"] = json!(101);
-    assert!(validate_report_candidate(&malformed).is_err());
+    assert!(validate_report_candidate(&malformed, get_problem(Some("two-sum"))).is_err());
 
     // Tags are a projection of the plan, so a row that names another phase's
     // weakness is corrected rather than refused: Algorithm carries the
     // Algorithm plan item and nothing else, whatever the model wrote here.
     raw["frameworkAssessment"]["phases"][2]["weaknessTags"] = json!(["State the result"]);
-    let derived = validate_report_candidate(&raw).expect("a stray tag is overwritten, not fatal");
+    let derived = validate_report_candidate(&raw, get_problem(Some("two-sum")))
+        .expect("a stray tag is overwritten, not fatal");
     assert_eq!(
         derived["frameworkAssessment"]["phases"][2]["weaknessTags"],
         json!(["Explain complexity"])
@@ -2261,7 +2323,8 @@ fn framework_assessments_require_all_phases_and_preserve_unassessed_gaps() {
             })
             .collect::<Vec<_>>()
     );
-    let capped = validate_report_candidate(&crowded).expect("five items on one phase are valid");
+    let capped = validate_report_candidate(&crowded, get_problem(Some("two-sum")))
+        .expect("five items on one phase are valid");
     assert_eq!(
         capped["frameworkAssessment"]["phases"][3]["weaknessTags"],
         json!(["e", "d", "c", "b"]),
@@ -3528,8 +3591,13 @@ fn final_report_matches_frontend_publish_contract() {
         },
         "communicationFeedback": "bad",
     });
-    let sanitized = final_report(Some(&raw), 2, None);
-    let fallback = final_report(None, 1, Some("model unavailable"));
+    let sanitized = final_report(Some(&raw), 2, None, get_problem(Some("two-sum")));
+    let fallback = final_report(
+        None,
+        1,
+        Some("model unavailable"),
+        get_problem(Some("two-sum")),
+    );
 
     assert_eq!(sanitized["incomplete"], true);
     assert_eq!(fallback, fallback_report(1, "model unavailable"));
@@ -5040,7 +5108,7 @@ fn a_weakness_tag_matches_its_plan_item_across_stray_whitespace() {
     item["weakness"] = json!(padded);
 
     assert!(
-        validate_report_candidate(&raw).is_ok(),
+        validate_report_candidate(&raw, get_problem(Some("two-sum"))).is_ok(),
         "a tag and its plan weakness that differ only in surrounding whitespace \
          must not cost the candidate their report"
     );
@@ -5318,7 +5386,7 @@ fn report_validation_holds_its_bounds_and_its_ordering() {
     for strengths in [json!(["only one"]), json!(["a", "b", "c", "d", "e"])] {
         let mut report = valid_strict_report();
         report["codingFeedback"]["strengths"] = strengths;
-        let errors = validate_report_candidate(&report)
+        let errors = validate_report_candidate(&report, get_problem(Some("two-sum")))
             .expect_err("an out-of-range array is not a report")
             .join("\n");
         assert!(errors.contains("$.codingFeedback.strengths"), "{errors}");
@@ -5329,7 +5397,7 @@ fn report_validation_holds_its_bounds_and_its_ordering() {
     let mut repeated = valid_strict_report();
     repeated["codingFeedback"]["strengths"] = json!(["Same point", "Same point"]);
     assert!(
-        validate_report_candidate(&repeated)
+        validate_report_candidate(&repeated, get_problem(Some("two-sum")))
             .expect_err("a duplicate is not a second strength")
             .join("\n")
             .contains("duplicate")
@@ -5369,7 +5437,10 @@ fn report_validation_holds_its_bounds_and_its_ordering() {
     // this order inverts.
     let buried = impacts([("medium", 9), ("high", 1), ("medium", 2), ("medium", 1)]);
     assert_eq!(
-        ranks(&validate_report_candidate(&buried).expect("a burying order is sorted, not refused")),
+        ranks(
+            &validate_report_candidate(&buried, get_problem(Some("two-sum")))
+                .expect("a burying order is sorted, not refused")
+        ),
         [("high", 1), ("medium", 9), ("medium", 2), ("medium", 1)],
     );
 
@@ -5379,7 +5450,8 @@ fn report_validation_holds_its_bounds_and_its_ordering() {
     let over_low = impacts([("low", 9), ("medium", 1), ("low", 2), ("low", 1)]);
     assert_eq!(
         ranks(
-            &validate_report_candidate(&over_low).expect("a medium item leads a frequent low one")
+            &validate_report_candidate(&over_low, get_problem(Some("two-sum")))
+                .expect("a medium item leads a frequent low one")
         ),
         [("medium", 1), ("low", 9), ("low", 2), ("low", 1)],
     );
@@ -5387,7 +5459,10 @@ fn report_validation_holds_its_bounds_and_its_ordering() {
     // And within one rank it is the frequency that orders them.
     let by_frequency = impacts([("medium", 1), ("medium", 9), ("medium", 2), ("medium", 1)]);
     assert_eq!(
-        ranks(&validate_report_candidate(&by_frequency).expect("frequency order is applied")),
+        ranks(
+            &validate_report_candidate(&by_frequency, get_problem(Some("two-sum")))
+                .expect("frequency order is applied")
+        ),
         [("medium", 9), ("medium", 2), ("medium", 1), ("medium", 1)],
     );
 }
@@ -5550,9 +5625,9 @@ fn an_improvement_plan_may_carry_eight_entries() {
     });
 
     assert!(
-        validate_report_candidate(&report).is_ok(),
+        validate_report_candidate(&report, get_problem(Some("two-sum"))).is_ok(),
         "eight is inside the limit: {:?}",
-        validate_report_candidate(&report).err()
+        validate_report_candidate(&report, get_problem(Some("two-sum"))).err()
     );
 }
 
