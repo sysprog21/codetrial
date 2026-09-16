@@ -4973,21 +4973,40 @@ fn generated_problem_metadata_exposes_no_private_rubric() {
 
 #[test]
 fn interview_contract_versions_are_one_closed_bundle() {
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 5);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 6);
     assert_eq!(LIVE_PROMPT_VERSION, 2);
     assert_eq!(REPORT_PROMPT_VERSION, 5);
     assert_eq!(RUBRIC_VERSION, 1);
-    assert_eq!(REPORT_SCHEMA_VERSION, 1);
+    assert_eq!(REPORT_SCHEMA_VERSION, 2);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 5,
+            "bundleVersion": 6,
             "livePromptVersion": 2,
             "reportPromptVersion": 5,
             "rubricVersion": 1,
-            "reportSchemaVersion": 1,
+            "reportSchemaVersion": 2,
         })
     );
+}
+
+#[test]
+fn no_debrief_field_names_the_published_problem() {
+    for problem in PROBLEMS {
+        let variant = problem.variant();
+        for (field, text) in std::iter::once(("scenario contract", variant.contract))
+            .chain(std::iter::once(("approach", problem.optimal)))
+            .chain(std::iter::once(("pitfalls", problem.pitfalls)))
+            .chain(variant.hints.iter().map(|text| ("hint", *text)))
+            .chain(variant.follow_ups.iter().map(|text| ("follow-up", *text)))
+        {
+            assert!(
+                !names_published_problem(problem.title, text),
+                "{} {field} names its published problem: {text}",
+                problem.id
+            );
+        }
+    }
 }
 
 /// What the candidate sees of their own progress, and what they must not.

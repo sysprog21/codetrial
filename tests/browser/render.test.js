@@ -390,6 +390,56 @@ test("practice-next drills render accessibly in HTML and Markdown", () => {
   assert.match(markdown, /Success: Cover four case classes/);
 });
 
+test("the report shows the debrief collapsed", () => {
+  const body = reportMarkup({
+    report: {
+      incomplete: true,
+      summary: "The evaluator was unavailable.",
+      debrief: {
+        scenarioContract: "Return the matching positions.",
+        approach: "Use one pass and a map in O(n) time.",
+        pitfalls: "Do not reuse a position.",
+        hints: [{ text: "What should the map remember?", given: true }, { text: "Check before inserting.", given: false }],
+        followUps: ["How would repeated queries change the design?"],
+      },
+    },
+    problemTitle: "Scenario",
+    language: "python",
+    code: "pass",
+  });
+  assert.match(body, /<details class="report-debrief"><summary>What the interviewer held back<\/summary>/);
+  assert.doesNotMatch(body, /<details class="report-debrief" open>/);
+  assert.match(body, /Spaced review will bring this problem back/);
+  assert.match(body, /Given:<\/strong> What should the map remember\?/);
+  assert.match(body, /Held back:<\/strong> Check before inserting\./);
+  assert.match(body, /Follow-ups this problem offers/);
+});
+
+test("the markdown report carries the debrief", () => {
+  const markdown = reportMarkdown({
+    report: {
+      incomplete: true,
+      summary: "The evaluator was unavailable.",
+      debrief: {
+        scenarioContract: "Return the matching positions.",
+        approach: "Use one pass and a map in O(n) time.",
+        pitfalls: "Do not reuse a position.",
+        hints: [{ text: "What should the map remember?", given: true }],
+        followUps: ["How would repeated queries change the design?"],
+      },
+    },
+    problemTitle: "Scenario",
+    language: "python",
+    code: "pass",
+    transcript: [],
+    at: "now",
+  });
+  assert.match(markdown, /## What the interviewer held back/);
+  assert.match(markdown, /Spaced review will bring this problem back/);
+  assert.match(markdown, /\*\*Given:\*\* What should the map remember\?/);
+  assert.match(markdown, /### Follow-ups this problem offers/);
+});
+
 test("framework phase scores are labeled formative in HTML and Markdown", () => {
   const report = {
     codingScore: 70, communicationScore: 70, decision: "HIRE", summary: "Grounded",

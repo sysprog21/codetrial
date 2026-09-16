@@ -157,6 +157,16 @@ export function reportMarkup({ report, problemTitle, language, code, saveResult 
         <p><strong>Success:</strong> ${escapeHtml(item.successCriterion)}</p>
         <ul>${item.selfReview.map((check) => `<li>${escapeHtml(check)}</li>`).join("")}</ul>
       </li>`).join("")}</ol></section>`;
+  const debrief = report.debrief
+    ? `<details class="report-debrief"><summary>What the interviewer held back</summary>
+      <p>Spaced review will bring this problem back, so your next attempt tests recall.</p>
+      ${report.debrief.scenarioContract ? `<p><strong>Scenario contract:</strong> ${escapeHtml(report.debrief.scenarioContract)}</p>` : ""}
+      ${report.debrief.approach ? `<p><strong>Approach and complexity:</strong> ${escapeHtml(report.debrief.approach)}</p>` : ""}
+      ${report.debrief.pitfalls ? `<p><strong>Common pitfalls:</strong> ${escapeHtml(report.debrief.pitfalls)}</p>` : ""}
+      ${report.debrief.hints?.length ? `<h3>Hint ladder</h3><ol>${report.debrief.hints.map((hint) => `<li><strong>${hint.given ? "Given" : "Held back"}:</strong> ${escapeHtml(hint.text)}</li>`).join("")}</ol>` : ""}
+      ${report.debrief.followUps?.length ? `<h3>Follow-ups this problem offers</h3><ul>${report.debrief.followUps.map((followUp) => `<li>${escapeHtml(followUp)}</li>`).join("")}</ul>` : ""}
+    </details>`
+    : "";
   const frameworkTimeline = frameworkEvidenceMarkup(report.frameworkEvidence);
   const frameworkCalibration = report.frameworkAssessment
     ? `<p class="muted small">REACTO/STAR phase scores are formative coaching signals, not calibrated hiring evidence.</p>`
@@ -180,6 +190,7 @@ export function reportMarkup({ report, problemTitle, language, code, saveResult 
       <section><h3>${report.incomplete ? "What happened" : "Committee summary"}</h3><p>${escapeHtml(report.summary)}</p></section>
       ${feedback}
       ${practiceNext}
+      ${debrief}
       ${rounds}
       ${frameworkCalibration}
       ${frameworkTimeline}
@@ -254,6 +265,19 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
       ]),
       "",
     ];
+  const debrief = report.debrief
+    ? [
+      "## What the interviewer held back",
+      "",
+      "Spaced review will bring this problem back, so your next attempt tests recall.",
+      ...(report.debrief.scenarioContract ? [`**Scenario contract:** ${mdText(report.debrief.scenarioContract)}`] : []),
+      ...(report.debrief.approach ? [`**Approach and complexity:** ${mdText(report.debrief.approach)}`] : []),
+      ...(report.debrief.pitfalls ? [`**Common pitfalls:** ${mdText(report.debrief.pitfalls)}`] : []),
+      ...(report.debrief.hints?.length ? ["", "### Hint ladder", "", ...report.debrief.hints.map((hint) => `- **${hint.given ? "Given" : "Held back"}:** ${mdText(hint.text)}`)] : []),
+      ...(report.debrief.followUps?.length ? ["", "### Follow-ups this problem offers", "", ...report.debrief.followUps.map((followUp) => `- ${mdText(followUp)}`)] : []),
+      "",
+    ]
+    : [];
   const frameworkTimeline = report.frameworkEvidence?.length
     ? [
       "## Framework evidence",
@@ -326,6 +350,7 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
     ...head,
     "",
     ...practiceNext,
+    ...debrief,
     ...frameworkTimeline,
     // A session with no evaluation can still be one that ended because the
     // camera saw something. Refusing to score it is not a reason to drop the

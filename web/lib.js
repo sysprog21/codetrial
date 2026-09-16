@@ -410,17 +410,17 @@ const textEncoder = new TextEncoder();
 /// function-local, moving it left the whole suite green with the supported-card
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
-  bundleVersion: 5,
+  bundleVersion: 6,
   livePromptVersion: 2,
   reportPromptVersion: 5,
-  reportSchemaVersion: 1,
+  reportSchemaVersion: 2,
   rubricVersion: 1,
 };
 
 /// Report schemas this build can compare with the active rubric. Prompt-only
 /// bundle bumps retain the same score meaning, so compatibility is a predicate
 /// over provenance rather than a list that every prompt edit can forget.
-export const SCORABLE_SCHEMAS = [1];
+export const SCORABLE_SCHEMAS = [1, 2];
 
 /// The report's contract bundle, and whether this build can score against it.
 ///
@@ -559,6 +559,38 @@ export function endReason(raw) {
   return END_REASONS.includes(raw) ? raw : null;
 }
 
+function reportDebrief(raw) {
+  if (raw?.debrief === undefined) return undefined;
+  const debrief = raw?.debrief;
+  if (!debrief || typeof debrief !== "object" || Array.isArray(debrief)) return null;
+  const text = (value) => typeof value === "string" ? boundedText(value, MAX_SUMMARY_TEXT) : null;
+  return {
+    scenarioContract: text(debrief.scenarioContract),
+    approach: text(debrief.approach),
+    pitfalls: text(debrief.pitfalls),
+    hints: Array.isArray(debrief.hints) ? debrief.hints.slice(0, 3).map((hint) => ({
+      text: typeof hint?.text === "string" ? boundedText(hint.text, 400) : "",
+      given: hint?.given === true,
+    })).filter((hint) => hint.text) : [],
+    followUps: Array.isArray(debrief.followUps)
+      ? debrief.followUps.slice(0, 3).filter((item) => typeof item === "string").map((item) => boundedText(item, 400)).filter(Boolean)
+      : [],
+  };
+}
+
+function reportTopics(raw) {
+  if (raw?.topics === undefined) return undefined;
+  return Array.isArray(raw?.topics)
+    ? raw.topics.slice(0, 8).filter((topic) => typeof topic === "string").map((topic) => boundedText(topic, 80)).filter(Boolean)
+    : [];
+}
+
+function reportPracticeLevel(raw) {
+  if (raw?.practiceLevel === undefined) return undefined;
+  return ["intern", "junior", "mid", "senior", "staff", "manager"].includes(raw?.practiceLevel)
+    ? raw.practiceLevel : null;
+}
+
 export function sanitizeReport(raw) {
   const { interviewContract, unsupported: unsupportedContract } = reportContract(raw);
   // Only what the report actually recorded. Defaulting this to "scored" put a
@@ -680,6 +712,9 @@ export function sanitizeReport(raw) {
     }
     : null;
   const frameworkEvidence = reportEvidence(raw);
+  const debrief = reportDebrief(raw);
+  const topics = reportTopics(raw);
+  const practiceLevel = reportPracticeLevel(raw);
 
   // A report with nothing in it must survive normalization as a report with
   // nothing in it. Falling through to the fields below would score the missing
@@ -700,6 +735,9 @@ export function sanitizeReport(raw) {
       integrityEvents: integrityEvents(raw?.integrityEvents),
       ...checkpoint(raw),
       hintsUsed: bounded(raw?.hintsUsed, 99),
+      debrief,
+      topics,
+      practiceLevel,
       improvementPlan: [],
       frameworkAssessment: null,
       frameworkEvidence,
@@ -725,6 +763,9 @@ export function sanitizeReport(raw) {
     // Bounded like the scores: `JSON.parse` turns 1e999 into Infinity, which
     // would otherwise render as "Infinity hints used" and land in history.
     hintsUsed: bounded(raw?.hintsUsed, 99),
+    debrief,
+    topics,
+    practiceLevel,
   };
 }
 
