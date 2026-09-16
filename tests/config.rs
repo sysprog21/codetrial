@@ -2,8 +2,8 @@ use codetrial::config::{
     DEFAULT_COMPILER_EXPLORER_ENABLED, DEFAULT_DURATION_MIN,
     DEFAULT_GEMINI_CANDIDATE_VIDEO_ENABLED, DEFAULT_GEMINI_LIVE_MODEL, DEFAULT_GEMINI_REPORT_MODEL,
     DEFAULT_GEMINI_SILENCE_MS, DEFAULT_GEMINI_START_SENSITIVITY, DEFAULT_GEMINI_VOICE,
-    DEFAULT_MAX_CONCURRENT_INTERVIEWS, DEFAULT_ROOM_PREFIX, MAX_GEMINI_SILENCE_MS, load_from_pairs,
-    max_concurrent_interviews,
+    DEFAULT_MAX_CONCURRENT_INTERVIEWS, DEFAULT_MAX_INTERIM_REVIEWS, DEFAULT_ROOM_PREFIX,
+    MAX_GEMINI_SILENCE_MS, MAX_INTERIM_REVIEWS, load_from_pairs, max_concurrent_interviews,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -38,6 +38,46 @@ fn config_accepts_current_env_names() {
     assert_eq!(config.room_prefix, "room");
     assert_eq!(config.default_duration_min, 30);
     assert!(config.gemini_candidate_video_enabled);
+}
+
+#[test]
+fn config_bounds_interim_review_spending() {
+    let base = [
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "key"),
+        ("LIVEKIT_API_SECRET", "secret"),
+        ("GOOGLE_API_KEY", "google"),
+    ];
+    assert_eq!(
+        load_from_pairs(base)
+            .expect("default config")
+            .max_interim_reviews,
+        DEFAULT_MAX_INTERIM_REVIEWS,
+    );
+    assert_eq!(
+        load_from_pairs([
+            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+            ("LIVEKIT_API_KEY", "key"),
+            ("LIVEKIT_API_SECRET", "secret"),
+            ("GOOGLE_API_KEY", "google"),
+            ("CODETRIAL_MAX_INTERIM_REVIEWS", "999"),
+        ])
+        .expect("bounded config")
+        .max_interim_reviews,
+        MAX_INTERIM_REVIEWS,
+    );
+    assert_eq!(
+        load_from_pairs([
+            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+            ("LIVEKIT_API_KEY", "key"),
+            ("LIVEKIT_API_SECRET", "secret"),
+            ("GOOGLE_API_KEY", "google"),
+            ("CODETRIAL_MAX_INTERIM_REVIEWS", "0"),
+        ])
+        .expect("disabled config")
+        .max_interim_reviews,
+        0,
+    );
 }
 
 #[test]
