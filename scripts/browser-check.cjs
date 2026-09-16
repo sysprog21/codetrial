@@ -34,6 +34,7 @@ function interviewUrl(problemId) {
 }
 
 const soakSeconds = Number(process.env.BROWSER_CHECK_SOAK_SECONDS || "0");
+const requireModel = process.env.BROWSER_CHECK_REQUIRE_MODEL === "1";
 if (!Number.isSafeInteger(soakSeconds) || soakSeconds < 0) {
   throw new Error("BROWSER_CHECK_SOAK_SECONDS must be a whole number of seconds");
 }
@@ -489,6 +490,7 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
           .waitForFunction((from) => (window.__codetrialAvatarFrames?.() ?? 0) > from, first, { timeout: 5000 })
           .catch(() => { throw new Error(`the avatar render loop is not running: stuck at ${first} frames`); });
       } else if (avatarState === "unavailable") {
+        if (requireModel) throw new Error("the pinned avatar model was never delivered");
         if (canvases !== 0) throw new Error("an unavailable avatar must not leave a canvas behind");
         if (!fallbackVisible) throw new Error("the neutral panel must be visible when the avatar is unavailable");
         if (!/avatar is unavailable/.test(note)) throw new Error(`the neutral panel must say why, got: ${note}`);
