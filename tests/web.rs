@@ -7861,11 +7861,13 @@ async fn spawn_counting_quota_stub(
             let counter = counter.clone();
             let credentials = credentials.clone();
             async move {
-                // Counted before the credential is judged: a refused probe is
-                // still a probe, and the caching test below is about how many
-                // times this project was asked, not how many times it agreed.
-                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 tokio::time::sleep(delay).await;
+
+                // Count completion rather than arrival. The background-cache
+                // test uses this as the point after which a token may rely on
+                // the startup verdict, not merely as evidence that a handler
+                // happened to begin receiving a request.
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if !livekit_probe_accepted(&headers, &credentials.0, &credentials.1) {
                     return (axum::http::StatusCode::UNAUTHORIZED, "unauthorized");
                 }

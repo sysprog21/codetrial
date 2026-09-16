@@ -80,7 +80,7 @@ test("a failed review resets the interval", () => {
     new Set(["Easy"]),
     [
       { problemId: "passed", at: now - day, report: { decision: "NO_HIRE" } },
-      completed("passed", now - 3 * day),
+      completed("passed", now - 2 * day),
     ],
     first,
     now,

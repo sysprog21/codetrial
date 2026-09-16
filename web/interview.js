@@ -1447,7 +1447,7 @@ async function runTests() {
   nodes.run.textContent = "Running...";
   nodes.resultsBody.hidden = false;
   setTestStatus(firstRunnerStatus(state.language));
-  if (nodes.candidateCaseInput.value.trim()) {
+  if (state.candidateCases.length < CANDIDATE_CASE_LIMIT && nodes.candidateCaseInput.value.trim()) {
     try {
       await addCandidateCase();
       if (nodes.candidateCaseInput.value.trim()) throw new Error(nodes.candidateCaseStatus.textContent);
@@ -1504,7 +1504,11 @@ async function addCandidateCase() {
     const spec = await loadJudge(problem.page);
     const input = parseCandidateCase(spec, nodes.candidateCaseInput.value);
     const expectedText = nodes.candidateCaseExpected.value.trim();
-    const testCase = { input, ...(expectedText ? { expected: JSON.parse(expectedText) } : {}) };
+    const expected = expectedText ? JSON.parse(expectedText) : undefined;
+    if (expected === null && spec.checker === "palindrome") {
+      throw new Error("A palindrome expectation must be a string, or leave it blank to observe the result.");
+    }
+    const testCase = { input, ...(expectedText ? { expected } : {}) };
     state.candidateCases.push(testCase);
     sessionStorage.setItem(candidateCaseStorageKey, JSON.stringify(state.candidateCases));
     nodes.candidateCaseInput.value = "";

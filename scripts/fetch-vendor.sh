@@ -11,6 +11,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 VENDOR="$ROOT/web/vendor"
+rm -f "$VENDOR/avatar/jim.vrm"
 
 [ -d "$VENDOR" ] || exit 0
 

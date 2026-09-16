@@ -4,11 +4,11 @@ Provider pooling spreads rooms over more than one LiveKit project, so
 concurrent interviews draw on several projects' quotas instead of exhausting
 one. A single-project deployment needs none of this and is unaffected by it.
 
-Before a room token is minted, the server probes each project and excludes a
-fresh 429 response for exhausted connection minutes or a fresh 401/403 response
-for a refused credential. The log names the project and status without printing
-credentials. A refusal is re-probed after the quota cache expires, so replacing
-the credential returns the project to rotation without restarting the server.
+Before a room token is minted, the server uses cached periodic probes and probes
+only providers it tries until one is available. A fresh 429 excludes exhausted
+connection minutes and a fresh 401/403 excludes a refused credential. The log
+names the project and status without printing credentials. Replacing a configured
+credential takes effect after restarting the server.
 
 ## Adding a project
 

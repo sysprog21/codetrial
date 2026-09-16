@@ -105,7 +105,7 @@ pub fn sanitize_test_run(payload: &serde_json::Value) -> serde_json::Value {
     // One reader for both lists: they are the same record shape from the same
     // untrusted payload, and a bound or a stripped field applied to only one of
     // them is how candidate-controlled text reaches the report prompt.
-    let reported_cases = |key: &str| {
+    let reported_cases = |key: &str, limit: usize| {
         payload
             .get(key)
             .and_then(serde_json::Value::as_array)
@@ -116,7 +116,7 @@ pub fn sanitize_test_run(payload: &serde_json::Value) -> serde_json::Value {
                     // walks the whole array to decide it has nothing, so an
                     // array of non-objects costs its full length to yield zero
                     // cases.
-                    .take(MAX_TEST_FAILURES)
+                    .take(limit)
                     .filter_map(serde_json::Value::as_object)
                     .map(|case| {
                         serde_json::json!({
@@ -133,8 +133,8 @@ pub fn sanitize_test_run(payload: &serde_json::Value) -> serde_json::Value {
             })
             .unwrap_or_default()
     };
-    let failures = reported_cases("failures");
-    let candidate_cases = reported_cases("candidateCases");
+    let failures = reported_cases("failures", MAX_TEST_FAILURES);
+    let candidate_cases = reported_cases("candidateCases", crate::agent::MAX_CANDIDATE_CASES);
 
     serde_json::json!({
         "passed": passed,

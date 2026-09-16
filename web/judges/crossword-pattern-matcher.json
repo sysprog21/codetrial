@@ -158,14 +158,19 @@
       "label": "no stored words",
       "input": [
         [
-          "PatternLexicon"
+          "PatternLexicon",
+          "search"
         ],
         [
-          []
+          [],
+          [
+            "a"
+          ]
         ]
       ],
       "expected": [
-        null
+        null,
+        false
       ]
     }
   ],

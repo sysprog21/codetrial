@@ -145,7 +145,7 @@ function reviewStatus(reports, now) {
     const decision = entry?.report?.decision;
     if ((decision !== "HIRE" && decision !== "NO_HIRE") || !Number.isFinite(entry.at)) continue;
     const seen = outcomes.get(entry.problemId) ?? { successes: 0, latest: null };
-    const successes = seen.successes + Number(decision === "HIRE");
+    const successes = decision === "NO_HIRE" ? 0 : seen.successes + 1;
     const latest = !seen.latest || entry.at > seen.latest.at
       ? { at: entry.at, decision }
       : seen.latest;

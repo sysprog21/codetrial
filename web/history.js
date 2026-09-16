@@ -1,9 +1,11 @@
 export const historyKey = "codetrial_history";
 export const reviewHistoryKey = "codetrial_review_history";
 
-// JSON.stringify of the widest retained record below is 328 bytes; 500 rows
-// therefore reserve at most about 164 KB, while the full history remains 20.
+// Full reports are what lets an older attempt reopen after the short history
+// rolls over. Keep as many as fit in this budget, up to 500, rather than
+// pretending every report has the same small serialized size.
 const REVIEW_HISTORY_CAP = 500;
+const REVIEW_HISTORY_BYTES = 164 * 1024;
 
 /// Every request here is a small same-origin call, and every one of them is
 /// awaited by something the candidate is looking at: a stalled save leaves the
@@ -128,7 +130,7 @@ function saveLocalReport(entry, storage) {
     const previous = readLocalHistory(storage);
     const reviews = readReviewHistory(storage);
     storage.setItem(historyKey, JSON.stringify([entry, ...previous].slice(0, 20)));
-    storage.setItem(reviewHistoryKey, JSON.stringify([reviewEntry(entry), ...reviews].slice(0, REVIEW_HISTORY_CAP)));
+    storage.setItem(reviewHistoryKey, JSON.stringify(boundedReviews([reviewEntry(entry), ...reviews])));
     return "saved";
   } catch {
     return "failed";
@@ -136,16 +138,17 @@ function saveLocalReport(entry, storage) {
 }
 
 function reviewEntry(entry) {
-  const report = entry?.report;
-  return {
-    problemId: entry?.problemId,
-    date: entry?.date,
-    report: {
-      decision: report?.decision,
-      incomplete: report?.incomplete,
-      improvementPlan: report?.improvementPlan,
-    },
-  };
+  return entry;
+}
+
+function boundedReviews(reviews) {
+  const retained = [];
+  for (const review of reviews.slice(0, REVIEW_HISTORY_CAP)) {
+    const next = [...retained, review];
+    if (new TextEncoder().encode(JSON.stringify(next)).length > REVIEW_HISTORY_BYTES) break;
+    retained.push(review);
+  }
+  return retained;
 }
 
 async function saveAccountReport(entry, fetcher) {

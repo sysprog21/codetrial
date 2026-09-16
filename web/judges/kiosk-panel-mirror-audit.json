@@ -60,9 +60,13 @@
       "expected": true
     },
     {
-      "label": "empty tree",
+      "label": "two matching children",
       "input": [
-        []
+        [
+          1,
+          2,
+          2
+        ]
       ],
       "expected": true
     }

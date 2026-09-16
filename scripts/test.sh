@@ -153,8 +153,9 @@ release_msrv_matches()
         "$ROOT/Cargo.toml")
     image=$(sed -n 's/^[[:space:]]*image: rust:\([0-9][0-9.]*\)-bullseye$/\1/p' \
         "$ROOT/.github/workflows/check.yml")
-    if [ "$(printf '%s' "$manifest" | cut -d. -f1-2)" = \
-        "$(printf '%s' "$image" | cut -d. -f1-2)" ]; then
+    if [ -n "$manifest" ] && [ -n "$image" ] \
+        && [ "$(printf '%s' "$manifest" | cut -d. -f1-2)" = \
+            "$(printf '%s' "$image" | cut -d. -f1-2)" ]; then
         return 0
     fi
     echo "release Rust image $image disagrees with rust-version $manifest" >&2

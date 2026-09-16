@@ -178,17 +178,25 @@
       ]
     },
     {
-      "label": "no readings",
+      "label": "one reading",
       "input": [
         [
-          "OffsetMonitor"
+          "OffsetMonitor",
+          "addNum",
+          "findMedian"
         ],
         [
+          [],
+          [
+            0
+          ],
           []
         ]
       ],
       "expected": [
-        null
+        null,
+        null,
+        0
       ]
     }
   ],

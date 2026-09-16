@@ -5,10 +5,11 @@
 //! interviewer behaves, not a refactor.
 
 use super::{
-    FrameworkEvidence, InterviewGrounding, InterviewLoop, InterviewProfile, MAX_INTERIM_LINE_CHARS,
-    MAX_INTERIM_LINES_PER_REVIEW, MAX_TEST_FAILURES, Problem, REACTO_PHASE_IDS, RUBRIC_VERSION,
-    RuntimeState, SILENCE_THRESHOLD_S, STAR_PHASE_IDS, evidence_kind_id, evidence_source_id,
-    framework_progress, phase_id, python_truthy, transcript_tail, truthy_string, value_string,
+    FrameworkEvidence, InterviewGrounding, InterviewLoop, InterviewProfile, MAX_CANDIDATE_CASES,
+    MAX_INTERIM_LINE_CHARS, MAX_INTERIM_LINES_PER_REVIEW, MAX_TEST_FAILURES, Problem,
+    REACTO_PHASE_IDS, RUBRIC_VERSION, RuntimeState, SILENCE_THRESHOLD_S, STAR_PHASE_IDS,
+    evidence_kind_id, evidence_source_id, framework_progress, phase_id, python_truthy,
+    transcript_tail, truthy_string, value_string,
 };
 use crate::runtime::AGENT_NAME;
 
@@ -1073,7 +1074,7 @@ pub fn format_test_run(run: Option<&serde_json::Value>, total_runs: u32) -> Stri
         for case in cases
             .iter()
             .filter_map(serde_json::Value::as_object)
-            .take(MAX_TEST_FAILURES)
+            .take(MAX_CANDIDATE_CASES)
         {
             let label = value_string(case.get("label")).unwrap_or_else(|| "?".to_string());
             if let Some(error) = truthy_string(case.get("error")) {

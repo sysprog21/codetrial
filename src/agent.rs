@@ -75,6 +75,7 @@ const MAX_TEST_CASES: i64 = 99;
 /// than a contract. Nothing hashes this list, so a browser that sends more
 /// simply has the extra dropped here, and no same-number test is owed.
 const MAX_TEST_FAILURES: usize = 4;
+pub const MAX_CANDIDATE_CASES: usize = 5;
 pub const WATCH_TICK_S: f64 = 2.0;
 /// How long the candidate has to be both silent and not typing before the
 /// interviewer steps in with a question.

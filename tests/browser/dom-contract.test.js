@@ -338,7 +338,7 @@ test("an unrecorded preflight can continue without a camera", () => {
   const script = interviewSource();
 
   assert.match(page, /id="camera-skip"/, "the optional path needs a reachable control");
-  assert.match(script, /recordingEnabled \|\| cameraSkipped/,
+  assert.match(script, /nodes\.cameraSkip\.hidden = recordingEnabled \|\| cameraSkipped/,
     "recorded interviews must not offer the bypass a second time");
   assert.match(script, /pool\.disable\("video"\)/,
     "declining the camera must stop only its retry path");

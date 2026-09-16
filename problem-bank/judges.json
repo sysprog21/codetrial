@@ -3263,7 +3263,7 @@
             [".", ".", ".", ".", ".", ".", ".", ".", "."],
             [".", ".", ".", ".", ".", ".", ".", ".", "."],
             [".", ".", ".", ".", ".", ".", ".", ".", "."],
-            [".", ".", ".", ".", ".", ".", ".", ".", ".", "."]
+            [".", ".", ".", ".", ".", ".", ".", ".", "."]
           ]
         ],
         "expected": true
@@ -6853,9 +6853,9 @@
         "expected": true
       },
       {
-        "label": "empty tree",
+        "label": "two matching children",
         "input": [
-          []
+          [1, 2, 2]
         ],
         "expected": true
       }
@@ -8704,9 +8704,9 @@
         "expected": true
       },
       {
-        "label": "empty tree",
+        "label": "single key",
         "input": [
-          []
+          [0]
         ],
         "expected": true
       }
@@ -8925,19 +8925,19 @@
         ]
       },
       {
-        "label": "zero pair: nums=[0,5,-5,0], target=0",
+        "label": "zero pair: nums=[0,5,-5,1], target=0",
         "input": [
           [
             0,
             5,
             -5,
-            0
+            1
           ],
           0
         ],
         "expected": [
-          0,
-          3
+          1,
+          2
         ]
       }
     ],
@@ -10552,14 +10552,17 @@
         "label": "no stored words",
         "input": [
           [
-            "Trie"
+            "Trie",
+            "search"
           ],
           [
-            []
+            [],
+            ["a"]
           ]
         ],
         "expected": [
-          null
+          null,
+          false
         ]
       }
     ]
@@ -10724,14 +10727,17 @@
         "label": "no stored words",
         "input": [
           [
-            "WordDictionary"
+            "WordDictionary",
+            "search"
           ],
           [
-            []
+            [],
+            ["a"]
           ]
         ],
         "expected": [
-          null
+          null,
+          false
         ]
       }
     ]
@@ -15228,17 +15234,23 @@
         ]
       },
       {
-        "label": "no readings",
+        "label": "one reading",
         "input": [
           [
-            "MedianFinder"
+            "MedianFinder",
+            "addNum",
+            "findMedian"
           ],
           [
+            [],
+            [0],
             []
           ]
         ],
         "expected": [
-          null
+          null,
+          null,
+          0
         ]
       }
     ]

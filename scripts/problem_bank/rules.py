@@ -265,6 +265,7 @@ def boundary_value(value: object, type_name: str) -> bool:
     if type_name.lower() in {
         "linkedlist",
         "tree",
+        "binarytree",
         "listnode",
         "treenode",
         "node",
@@ -276,13 +277,45 @@ def boundary_value(value: object, type_name: str) -> bool:
 def has_boundary_case(judge: dict) -> bool:
     """Whether one case reaches a boundary valid for this judge's domain."""
     if judge["kind"] == "class":
-        return any(len(case["input"][0]) <= 2 for case in judge["cases"])
+        constructor_types = judge.get("constructorArgTypes", [])
+        for case in judge["cases"]:
+            operations, arguments = case["input"]
+            if not operations or not arguments:
+                continue
+            constructor = arguments[0]
+            if any(
+                boundary_value(value, type_name)
+                for value, type_name in zip(constructor, constructor_types)
+            ):
+                return True
+            # Zero-argument constructors have no value to inspect. Their first
+            # method call still needs an actual small or empty value, rather
+            # than treating a constructor-plus-one-method sequence as proof.
+            if not constructor_types and any(
+                class_boundary_value(value) for args in arguments for value in args
+            ):
+                return True
+        return False
     return any(
         any(
             boundary_value(value, type_name)
             for value, type_name in zip(case["input"], judge["paramTypes"])
         )
         for case in judge["cases"]
+    )
+
+
+def class_boundary_value(value: object) -> bool:
+    """Whether an untyped class-operation argument carries a boundary value."""
+    if (
+        value is None
+        or value == 0
+        or value == 1
+        or (isinstance(value, str) and len(value) <= 1)
+    ):
+        return True
+    return isinstance(value, list) and (
+        not value or any(class_boundary_value(item) for item in value)
     )
 
 

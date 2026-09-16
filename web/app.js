@@ -503,7 +503,7 @@ async function renderLocalHistory() {
       }
     }
     reports = reviews.map(pickerEntry);
-    showProgress(entries, "saved on this device");
+    showProgress(reviews, "saved on this device");
   } catch {
     showProgressError("Could not load progress saved on this device.");
   }
@@ -739,6 +739,7 @@ function showProgressError(message) {
   nodes.progressTrends.replaceChildren();
   nodes.progressWeaknesses.replaceChildren();
   nodes.progressTopics.replaceChildren();
+  nodes.attemptHistory.replaceChildren();
 }
 
 function showProgress(entries, suffix) {
@@ -752,7 +753,6 @@ function showProgress(entries, suffix) {
   syncFilter(nodes.progressDifficulty, model.options.difficulty, (value) => value);
   syncFilter(nodes.progressLanguage, model.options.language, languageLabel);
   syncFilter(nodes.progressDuration, model.options.durationMin, (value) => `${value} min`);
-  renderAttemptHistory(model.attempts);
   renderProgress();
 }
 
@@ -810,6 +810,8 @@ function renderProgress() {
   const model = buildProgressModel(progressEntries, filters);
   nodes.progressTrends.replaceChildren();
   nodes.progressWeaknesses.replaceChildren();
+  nodes.progressTopics.replaceChildren();
+  renderAttemptHistory(model.attempts);
   if (model.total === 0) {
     nodes.history.hidden = true;
     return;

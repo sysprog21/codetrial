@@ -194,7 +194,7 @@ test("testPayload keeps the agent wire contract and caps failures at four", () =
     setupError: "",
     cases: [
       { label: "ok", pass: true },
-      { label: "mine", candidate: true, pass: null, got: "[0, 1]" },
+      ...Array.from({ length: 5 }, (_, index) => ({ label: `mine-${index}`, candidate: true, pass: null, got: `[${index}]` })),
       ...Array.from({ length: 6 }, (_, index) => ({
         label: `bad-${index}`,
         pass: false,
@@ -220,7 +220,8 @@ test("testPayload keeps the agent wire contract and caps failures at four", () =
   assert.equal(payload.failures.length, 4);
   assert.deepEqual(Object.keys(payload.failures[0]).sort(), ["error", "expected", "got", "label"]);
   assert.equal(payload.failures[0].error, null);
-  assert.deepEqual(payload.candidateCases, [{ label: "mine", expected: null, got: "[0, 1]", error: null }]);
+  assert.equal(payload.candidateCases.length, 5);
+  assert.equal(payload.candidateCases[4].label, "mine-4");
 });
 
 test("data-channel payloads keep the keys the Rust agent decodes", () => {

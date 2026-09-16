@@ -224,7 +224,7 @@ export function testPayload(summary) {
     language: summary.language,
     setupError: summary.setupError || null,
     failures: summary.cases.filter((item) => !item.candidate && !item.pass).slice(0, 4).map((item) => ({ label: item.label, expected: item.expected, got: item.got, error: item.error || null })),
-    candidateCases: summary.cases.filter((item) => item.candidate).slice(0, 4).map((item) => ({ label: item.label, expected: item.expected ?? null, got: item.got, error: item.error || null })),
+    candidateCases: summary.cases.filter((item) => item.candidate).slice(0, 5).map((item) => ({ label: item.label, expected: item.expected ?? null, got: item.got, error: item.error || null })),
     at: Date.now(),
   };
 }

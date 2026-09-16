@@ -235,7 +235,11 @@ test("review inputs survive the full-report cap", async () => {
   const reviews = readReviewHistory(storage);
   assert.equal(reviews.length, 21);
   assert.equal(reviews.at(-1).problemId, "problem-0");
-  assert.deepEqual(Object.keys(reviews.at(-1).report), ["decision", "incomplete", "improvementPlan"]);
+  assert.deepEqual(reviews.at(-1), {
+    problemId: "problem-0",
+    date: "2026-01-01T00:00:00Z",
+    report: { decision: "NO_HIRE", incomplete: false, improvementPlan: [] },
+  });
 });
 
 test("report history keeps anonymous and failed account saves local", async () => {

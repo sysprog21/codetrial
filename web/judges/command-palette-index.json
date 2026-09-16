@@ -158,14 +158,19 @@
       "label": "no stored words",
       "input": [
         [
-          "CommandIndex"
+          "CommandIndex",
+          "search"
         ],
         [
-          []
+          [],
+          [
+            "a"
+          ]
         ]
       ],
       "expected": [
-        null
+        null,
+        false
       ]
     }
   ],

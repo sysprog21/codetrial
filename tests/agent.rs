@@ -473,6 +473,19 @@ fn report_naming_the_published_problem_is_refused() {
 }
 
 #[test]
+fn an_original_problem_report_cannot_name_a_practice_site() {
+    let problem = get_problem(Some("fixed-capacity-ring-buffer"));
+    let mut report = valid_strict_report();
+    report["summary"] = json!("You found this on LeetCode.");
+    let errors = validate_report_candidate(&report, problem).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "$.summary: names the published problem")
+    );
+}
+
+#[test]
 fn report_naming_only_the_scenario_is_accepted() {
     let problem = get_problem(Some("triangle"));
     let mut report = valid_strict_report();
@@ -2206,7 +2219,9 @@ fn test_summary_lists_the_candidates_cases() {
         "candidateCases": [
             {"label": "Your case 1", "got": "[0, 1]", "expected": null},
             {"label": "Your case 2", "error": "ValueError"},
-            {"label": "Your case 3", "got": "[0, 1]", "expected": "[1, 2]"}
+            {"label": "Your case 3", "got": "[0, 1]", "expected": "[1, 2]"},
+            {"label": "Your case 4", "got": "4"},
+            {"label": "Your case 5", "got": "5"}
         ]
     }));
     let summary = format_test_run(Some(&run), 1);
@@ -2217,6 +2232,7 @@ fn test_summary_lists_the_candidates_cases() {
     assert!(summary.contains("CANDIDATE CASE Your case 1: got [0, 1]\n"));
     assert!(summary.contains("CANDIDATE CASE Your case 2: raised ValueError"));
     assert!(summary.contains("CANDIDATE CASE Your case 3: got [0, 1], candidate expected [1, 2]"));
+    assert!(summary.contains("CANDIDATE CASE Your case 5: got 5"));
 }
 
 #[test]

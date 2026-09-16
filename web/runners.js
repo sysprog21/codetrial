@@ -59,7 +59,7 @@ export function parseCandidateCase(spec, input) {
     throw new Error("Input must be a JSON argument array.");
   }
   if (!Array.isArray(args)) throw new Error("Input must be a JSON argument array.");
-  if (spec.kind === "class") return parseClassCandidateCase(args);
+  if (spec.kind === "class") return parseClassCandidateCase(spec, args);
   const types = spec.paramTypes || [];
   const names = spec.paramNames || [];
   if (args.length !== types.length) throw new Error(`Expected ${types.length} arguments, received ${args.length}.`);
@@ -85,12 +85,17 @@ function candidateTypeMatches(value, type) {
   return false;
 }
 
-function parseClassCandidateCase(input) {
+function parseClassCandidateCase(spec, input) {
   if (input.length !== 2 || !Array.isArray(input[0]) || !Array.isArray(input[1]) || input[0].length !== input[1].length) {
     throw new Error("A class case needs matching operation and argument arrays.");
   }
   if (!input[0].every((operation) => typeof operation === "string") || !input[1].every(Array.isArray)) {
     throw new Error("Class operations must be strings with JSON argument arrays.");
+  }
+  if (input[0][0] !== spec.className) throw new Error(`The first operation must be ${spec.className}.`);
+  const operations = new Set(spec.cases.flatMap((testCase) => testCase.input?.[0] || []));
+  if (!input[0].every((operation) => operations.has(operation))) {
+    throw new Error("Class case names an operation this exercise does not provide.");
   }
   return input;
 }
@@ -128,8 +133,16 @@ export async function runBrowserTests(problemId, code, language, onStatus = null
         return { label: testCase.label, pass: false, got: "-", expected: renderValue(testCase.expected), error: result?.error || "No result produced.", timeMs: Math.round(result?.timeMs || 0), candidate };
       }
       const observed = candidate && !Object.hasOwn(testCase, "expected");
-      const pass = observed ? null : checkAnswer(spec, testCase, result.actual);
-      return { label: testCase.label, pass, got: renderValue(result.actual), expected: observed ? undefined : renderValue(testCase.expected), timeMs: Math.round(result.timeMs), candidate };
+      let pass = null;
+      let error = null;
+      if (!observed) {
+        try {
+          pass = checkAnswer(spec, testCase, result.actual);
+        } catch (caught) {
+          error = String(caught.message || caught);
+        }
+      }
+      return { label: testCase.label, pass, got: renderValue(result.actual), expected: observed ? undefined : renderValue(testCase.expected), ...(error ? { error } : {}), timeMs: Math.round(result.timeMs), candidate };
     });
     return { ...base, cases, passed: cases.filter((item) => !item.candidate && item.pass === true).length };
   } catch (error) {

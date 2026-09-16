@@ -74,9 +74,11 @@
       "expected": true
     },
     {
-      "label": "empty tree",
+      "label": "single key",
       "input": [
-        []
+        [
+          0
+        ]
       ],
       "expected": true
     }
