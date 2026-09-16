@@ -85,14 +85,15 @@ pub struct WebServerConfig {
     /// LiveKit credentials are configured.
     pub pool: crate::config::ProviderPool,
 
-    /// Whether to keep every project's quota verdict fresh in the background.
+    /// Whether to probe provider availability and keep its verdict fresh in the
+    /// background.
     ///
     /// Opt-in rather than automatic, because `web_router` is also what the
     /// tests build, dozens of times per binary. A timer started there probes a
     /// real LiveKit host on a thirty-second beat for the life of the test
     /// process, which is both live egress from a unit test and work nothing
-    /// asked for. The binaries set it; a test sets it only when the refresher
-    /// is what it is testing, and points it at a stub.
+    /// asked for. The binaries set it; a test enables it only when it is
+    /// exercising provider availability and points it at a stub.
     pub probe_provider_quota: bool,
 }
 
@@ -316,15 +317,12 @@ pub(crate) fn web_router(
     };
 
     // Built here rather than in the state literal below, because the refresher
-    // and the request path have to share one cache: a second `default()` would
-    // give the background task its own map and leave every token request
+    // and the request path have to share one cache: a second `ProviderQuota`
+    // would give the background task its own map and leave every token request
     // probing inline exactly as it did before.
-    let provider_quota = ProviderQuota::default();
-    let quota_refresher = if config.probe_provider_quota {
-        spawn_provider_quota_refresher(provider_quota.clone(), config.pool.clone())
-    } else {
-        QuotaRefresher::default()
-    };
+    let provider_quota = ProviderQuota::new(config.probe_provider_quota);
+    let quota_refresher =
+        spawn_provider_quota_refresher(provider_quota.clone(), config.pool.clone());
     Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/api/token", post(token_handler))

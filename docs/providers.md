@@ -4,6 +4,12 @@ Provider pooling spreads rooms over more than one LiveKit project, so
 concurrent interviews draw on several projects' quotas instead of exhausting
 one. A single-project deployment needs none of this and is unaffected by it.
 
+Before a room token is minted, the server probes each project and excludes a
+fresh 429 response for exhausted connection minutes or a fresh 401/403 response
+for a refused credential. The log names the project and status without printing
+credentials. A refusal is re-probed after the quota cache expires, so replacing
+the credential returns the project to rotation without restarting the server.
+
 ## Adding a project
 
 Add one `config/codetrial.env.<id>` per extra project, each with its own

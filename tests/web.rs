@@ -7848,8 +7848,8 @@ async fn spawn_livekit_quota_stub(
 /// binary looked at. Dropping `.bearer_auth`, signing with a different
 /// project's secret, or minting a token for a project the probe is not asking
 /// about would all have left every assertion below intact -- while production
-/// learned nothing, since 401 is not 429 and the pool reads everything that is
-/// not 429 as "still has minutes". That is the shape of the GitHub stub that
+/// learned nothing, since the old pool read every non-429 as "still has
+/// minutes". That is the shape of the GitHub stub that
 /// answered one profile to any bearer token and let a broken token exchange
 /// pass the whole suite.
 ///
@@ -7961,7 +7961,8 @@ async fn the_pool_probes_in_the_background_so_a_token_request_does_not() {
 /// The quota stub is a tripwire, and this is what proves the wire is live.
 ///
 /// Every other test here reads the stub's answer through the pool, and the pool
-/// reads anything that is not 429 as "still has minutes", so a stub that had
+/// used to read anything that was not 429 as "still has minutes", so a stub
+/// that had
 /// quietly stopped checking would be invisible on each of them that answers
 /// 200: the probe would arrive with no credential, be refused, and the refusal
 /// would read as a healthy project. This asks the stub directly instead, which
@@ -8069,6 +8070,7 @@ async fn a_stalled_quota_probe_does_not_delay_token_issuance() {
     )
     .await;
     let (mut config, cookie, db_path) = signed_in_web_config("quota-probe-timeout");
+    config.probe_provider_quota = true;
     config.pool = primary_pool(&provider, "available-key", "available-secret");
     let (base, server) = spawn_web_server(config).await;
 
@@ -8115,6 +8117,7 @@ async fn a_provider_out_of_connection_minutes_is_passed_over() {
     .await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("quota-failover");
+    config.probe_provider_quota = true;
     config.pool = codetrial::config::ProviderPool {
         providers: vec![
             codetrial::config::Provider {
@@ -8194,6 +8197,7 @@ async fn a_pinned_room_on_an_exhausted_project_falls_back_to_the_pool() {
     .await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("pinned-quota-failover");
+    config.probe_provider_quota = true;
     config.fixed_room_name = Some("interview-local".to_string());
     config.pool = codetrial::config::ProviderPool {
         providers: vec![
@@ -8253,6 +8257,7 @@ async fn a_pinned_room_on_a_healthy_project_is_kept() {
         spawn_livekit_quota_stub(axum::http::StatusCode::OK, Duration::ZERO, "key", "secret").await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("pinned-quota-healthy");
+    config.probe_provider_quota = true;
     config.fixed_room_name = Some("interview-local".to_string());
     config.pool = primary_pool(&healthy, "key", "secret");
     let (base, server) = spawn_web_server(config).await;
@@ -8294,6 +8299,7 @@ async fn every_provider_out_of_minutes_is_refused_with_the_reason() {
     .await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("quota-exhausted");
+    config.probe_provider_quota = true;
     config.pool = primary_pool(&exhausted, "spent-key", "spent-secret");
     let (base, server) = spawn_web_server(config).await;
 
@@ -8308,6 +8314,51 @@ async fn every_provider_out_of_minutes_is_refused_with_the_reason() {
     assert_eq!(response.status(), 503);
     let body = response.json::<Value>().await.unwrap();
     assert_eq!(body["code"], "livekit_quota_exhausted", "{body}");
+
+    server.abort();
+    stub.abort();
+    remove_database(db_path);
+}
+
+/// A revoked credential looks different from spent minutes to the operator,
+/// and it cannot receive a new room while the refusal remains fresh. The probe
+/// stub accepts only its own credential, so configuring another secret creates
+/// the same 401 the LiveKit validation endpoint returns after a rotation.
+#[tokio::test]
+async fn every_credential_refused_provider_is_refused_with_the_reason() {
+    let (provider, stub) = spawn_livekit_quota_stub(
+        axum::http::StatusCode::OK,
+        Duration::ZERO,
+        "current-key",
+        "current-secret",
+    )
+    .await;
+
+    let (mut config, cookie, db_path) = signed_in_web_config("credential-refused");
+    config.probe_provider_quota = true;
+    config.pool = primary_pool(&provider, "current-key", "rotated-secret");
+    let (base, server) = spawn_web_server(config).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 503);
+    let body = response.json::<Value>().await.unwrap();
+    assert_eq!(
+        body["code"], "livekit_provider_credential_refused",
+        "{body}"
+    );
+    assert!(
+        body["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("credential refused (401)")),
+        "the error must name the refusal rather than spending: {body}"
+    );
 
     server.abort();
     stub.abort();
@@ -8347,6 +8398,7 @@ async fn a_dead_project_does_not_skew_the_rotation() {
     .await;
 
     let (mut config, cookie, db_path) = signed_in_web_config("quota-rotation");
+    config.probe_provider_quota = true;
     config.pool = codetrial::config::ProviderPool {
         providers: vec![
             codetrial::config::Provider {
