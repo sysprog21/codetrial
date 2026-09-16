@@ -193,18 +193,6 @@ fn static_candidates(path: &str) -> Option<Vec<String>> {
         .collect::<Vec<_>>()
         .join("/");
 
-    // `jim.vrm` used to be fetched into checkouts and disk assets override the
-    // embedded store. It is now browser-cached from its pinned source, so
-    // refuse the retired URL even when an old ignored file remains on disk.
-    //
-    // Case-insensitively, because the comparison has to be at least as
-    // forgiving as the filesystem underneath it. macOS and Windows both resolve
-    // `JIM.VRM` to the leftover file, so an exact match refused one spelling
-    // and served 10.9 MB for every other. ASCII is the whole alphabet a
-    // vendored filename may use, which `is_refused_segment` already enforces.
-    if clean.eq_ignore_ascii_case("vendor/avatar/jim.vrm") {
-        return None;
-    }
     if clean.is_empty() {
         return Some(vec!["index.html".to_string()]);
     }

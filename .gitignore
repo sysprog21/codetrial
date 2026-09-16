@@ -49,12 +49,6 @@ DONT-MERGE/
 web/vendor/face-detection/*.binarypb
 web/vendor/face-detection/*.tflite
 web/vendor/face-detection/*.wasm
-# A retired local artifact, not a vendored file: the avatar model is fetched by
-# the browser now and nothing puts it here any more. Ignored so that a checkout
-# predating that change keeps its leftover copy invisible to git until
-# scripts/fetch-vendor.sh removes it. Delete this line once no such checkout is
-# plausible.
-web/vendor/avatar/jim.vrm
 # Same rule for Pyodide, pinned in web/vendor/pyodide/SHA256SUMS: 13.7 MB of
 # interpreter, glue and stdlib, none of which changes without a version bump.
 web/vendor/pyodide/*.js

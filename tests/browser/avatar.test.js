@@ -66,9 +66,7 @@ test("avatar vendor manifest pins every redistributed file", () => {
   // SHA256SUMS cannot pin itself, and licenses are provenance rather than bytes
   // the browser runs, which is the same carve-out scripts/verify-vendor.sh
   // makes. Nothing in this directory is fetched any more, so there is no FETCH.
-  // Old checkouts can retain the once-fetched model. It is neither served nor
-  // embedded now, and verify-vendor likewise ignores that retired local path.
-  const exempt = new Set(["SHA256SUMS", "README.md", "LICENSE-three.txt", "LICENSE-three-vrm.txt", "LICENSE-jim-vrm.txt", "jim.vrm"]);
+  const exempt = new Set(["SHA256SUMS", "README.md", "LICENSE-three.txt", "LICENSE-three-vrm.txt", "LICENSE-jim-vrm.txt"]);
   assert.deepEqual(vendored.filter((name) => !hashed.has(name) && !exempt.has(name)), []);
   for (const license of ["LICENSE-three.txt", "LICENSE-three-vrm.txt"]) {
     assert.match(read(`web/vendor/avatar/${license}`), /MIT/, `${license} must carry its terms`);
@@ -108,9 +106,11 @@ test("avatar vendor manifest pins every redistributed file", () => {
   assert.match(read("Makefile"), /verify-vendor:\n\t@\.\/scripts\/verify-vendor\.sh/);
   // And the checker must find directories by glob, not by name, or a new
   // vendor directory is unpinned and silent about it.
-  assert.match(read("scripts/verify-vendor.sh"), /find "\$VENDOR" -name SHA256SUMS/);
-  assert.match(read("scripts/verify-vendor.sh"), /! -path "\$VENDOR\/avatar\/jim\.vrm"/);
-  assert.doesNotMatch(read("scripts/verify-vendor.sh"), /face-detection/);
+  const verifier = read("scripts/verify-vendor.sh");
+  assert.match(verifier, /find "\$VENDOR" -name SHA256SUMS/);
+  assert.match(verifier, /find "\$VENDOR" -type f ! -name SHA256SUMS/);
+  assert.doesNotMatch(verifier, /! -path/);
+  assert.doesNotMatch(verifier, /face-detection/);
 });
 
 test("avatar dom contract", () => {

@@ -65,8 +65,7 @@ rest.
 - `tests/web.rs`: `responses_carry_baseline_security_headers`,
   `production_policy_names_no_loopback_origins`, and
   `the_recording_template_is_reachable_under_a_policy_that_permits_its_room`
-  all pass. Each asserts with `contains`, and this change only adds entries, so
-  no existing assertion moved.
+  all pass.
 - `cargo fmt --check` and `cargo clippy --lib` clean.
 - Confirmed against the live symptom: the CSP refusal disappeared from the
   browser console and the request reached LiveKit.

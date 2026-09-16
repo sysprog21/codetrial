@@ -1034,23 +1034,6 @@ async fn vendored_assets_are_served_typed_and_cached() {
         .unwrap();
     assert_eq!(missing.status(), 404);
 
-    // The retired model URL, over HTTP. `static_candidates` refuses it outright
-    // and `retired_avatar_model_is_never_served_from_disk` pins that refusal
-    // directly, so this is the end-to-end half: the refusal survives routing,
-    // the disk-first override, and the embedded fallback. It is deliberately
-    // not the proof that the model is unembedded, because it cannot be, and
-    // `no_model_is_embedded_in_the_binary` is where that lives.
-    let unserved = client
-        .get(format!("{base}/vendor/avatar/jim.vrm"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(
-        unserved.status(),
-        404,
-        "the avatar model must not be served from this tree"
-    );
-
     // The tree compresses: the wasm is 11 MB and the ratio there is real.
     let compressed = client
         .get(format!("{base}/vendor/face-detection/face_detection.js"))

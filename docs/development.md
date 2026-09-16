@@ -31,9 +31,8 @@ not packaged as widely, so the gate falls back to its container image, pinned to
 the version the workflow installs, whenever the binary is absent and a docker
 daemon answers. CI installs all three, so what is optional locally is enforced
 on a pull request — the summary exists so that a contributor knows which of the
-two they are looking at. One lane needs `javac` 16 or newer and is skipped on an
-older JDK; that is the Java class-harness fixture and nothing else depends on
-it.
+two they are looking at. One lane needs working `javac` and `java`; the Java
+class-harness fixture uses Java 8 syntax, and nothing else depends on it.
 
 Where the time goes, measured on this repo rather than guessed, because the
 answer is not the one a first look gives. Warm, the two Rust lanes are seconds:

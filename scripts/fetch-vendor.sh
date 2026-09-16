@@ -14,10 +14,6 @@ VENDOR="$ROOT/web/vendor"
 
 [ -d "$VENDOR" ] || exit 0
 
-# Releases no longer embed or serve this model; browser Cache API owns it now.
-# Remove the ignored file left by pre-migration checkouts on their next build.
-rm -f "$VENDOR/avatar/jim.vrm"
-
 download()
 {
     if command -v curl > /dev/null 2>&1; then
