@@ -569,6 +569,21 @@ def check_entry_named(
             )
 
 
+def check_c_return_size_ownership(problem_id: str, shipped: dict) -> None:
+    """A C array returned through returnSize states who frees its storage."""
+    code = shipped["starterCode"].get("c")
+    if code is None or not re.search(r"\breturnSize\b", code):
+        return
+    comments = "\n".join(re.findall(r"/\*.*?\*/|//[^\n]*", code, re.DOTALL))
+    note = re.search(
+        r"malloced.*caller calls free", comments, re.IGNORECASE | re.DOTALL
+    )
+    if note is None:
+        raise RuntimeError(
+            f"{problem_id}: C starter with returnSize needs the malloc/free note"
+        )
+
+
 def published_cases(problem: dict, judge: dict) -> tuple[set, set]:
     """What the published examples give away, and which judge cases repeat it.
 
@@ -701,6 +716,7 @@ def validated_variant(problem: dict, judge: dict, variant: object) -> dict:
     if not original:
         check_source_absent(problem, variant, text, shipped, graded)
     check_entry_named(problem_id, text["brief"], shipped, graded)
+    check_c_return_size_ownership(problem_id, shipped)
     quotable, published = (
         published_cases(problem, judge) if not original else (set(), set())
     )

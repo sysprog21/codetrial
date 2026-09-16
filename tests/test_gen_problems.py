@@ -223,6 +223,26 @@ class VariantValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "boundary case"):
             GEN.check_judge_case_coverage("coin-change", without_boundary)
 
+    def test_c_starter_returning_through_return_size_needs_the_malloc_note(self):
+        starter = {
+            "starterCode": {
+                "c": "int* fewestTokens(int* values, int* returnSize) { return 0; }"
+            }
+        }
+        with self.assertRaisesRegex(RuntimeError, "coin-change"):
+            GEN.check_c_return_size_ownership("coin-change", starter)
+        starter["starterCode"]["c"] = (
+            'const char* note = "malloced; caller calls free";\n'
+            "int* fewestTokens(int* values, int* returnSize) { return 0; }"
+        )
+        with self.assertRaisesRegex(RuntimeError, "coin-change"):
+            GEN.check_c_return_size_ownership("coin-change", starter)
+        starter["starterCode"]["c"] = (
+            "/* Returned array must be malloced; caller calls free(). */\n"
+            "int* fewestTokens(int* values, int* returnSize) { return 0; }"
+        )
+        GEN.check_c_return_size_ownership("coin-change", starter)
+
     def test_case_gap_list_rejects_new_and_stale_exceptions(self):
         with tempfile.TemporaryDirectory() as temporary:
             gaps = Path(temporary) / "judge-case-gaps.txt"
