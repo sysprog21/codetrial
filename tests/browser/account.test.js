@@ -242,6 +242,27 @@ test("review inputs survive the full-report cap", async () => {
   });
 });
 
+test("a rebuilt review history keeps the local-storage budget", () => {
+  const storage = memoryStorage();
+  storage.setItem(historyKey, JSON.stringify(Array.from({ length: 20 }, (_, index) => ({
+    problemId: `problem-${index}`,
+    report: { summary: "x".repeat(20_000) },
+  }))));
+  const reviews = readReviewHistory(storage);
+  assert.ok(reviews.length < 20, "oversized full reports cannot bypass the review budget");
+  assert.ok(new TextEncoder().encode(storage.getItem(reviewHistoryKey)).length <= 164 * 1024);
+});
+
+test("an oversized newest review does not erase older review history", async () => {
+  const storage = memoryStorage();
+  storage.setItem(reviewHistoryKey, JSON.stringify([{ problemId: "kept", report: { decision: "HIRE" } }]));
+  await saveReportHistory({
+    problemId: "too-large",
+    report: { summary: "x".repeat(200_000) },
+  }, { storage, fetcher: async () => response({ signedIn: false }) });
+  assert.deepEqual(readReviewHistory(storage).map((entry) => entry.problemId), ["kept"]);
+});
+
 test("report history keeps anonymous and failed account saves local", async () => {
   const anonymous = memoryStorage();
   assert.deepEqual(

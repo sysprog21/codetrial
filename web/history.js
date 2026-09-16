@@ -36,7 +36,7 @@ export function readReviewHistory(storage) {
     storage ||= localStorage;
     const stored = JSON.parse(storage.getItem(reviewHistoryKey));
     if (Array.isArray(stored)) return stored;
-    const rebuilt = readLocalHistory(storage).map(reviewEntry);
+    const rebuilt = boundedReviews(readLocalHistory(storage).map(reviewEntry));
     storage.setItem(reviewHistoryKey, JSON.stringify(rebuilt));
     return rebuilt;
   } catch {
@@ -145,7 +145,7 @@ function boundedReviews(reviews) {
   const retained = [];
   for (const review of reviews.slice(0, REVIEW_HISTORY_CAP)) {
     const next = [...retained, review];
-    if (new TextEncoder().encode(JSON.stringify(next)).length > REVIEW_HISTORY_BYTES) break;
+    if (new TextEncoder().encode(JSON.stringify(next)).length > REVIEW_HISTORY_BYTES) continue;
     retained.push(review);
   }
   return retained;

@@ -3938,7 +3938,7 @@
       "Our storage engine restores index pages from backup as a binary tree of keys. Lookups only work if the restored tree still follows the ordering the engine relies on: keys to the left of a node are smaller than the node's key, and keys to the right are larger.",
       "Implement indexOrderingHolds(root), where root is the TreeNode at the root of the restored index, and return true if the whole tree follows that ordering and false otherwise."
     ],
-    "contract": "indexOrderingHolds(root) receives 1 to 10^4 nodes with 32-bit signed values and returns true only if for every node all values anywhere in its left subtree are strictly smaller and all values anywhere in its right subtree are strictly larger, else false. Any equal value in the constrained position makes it false.",
+    "contract": "indexOrderingHolds(root) receives 0 to 10^4 nodes with 32-bit signed values and returns true only if for every node all values anywhere in its left subtree are strictly smaller and all values anywhere in its right subtree are strictly larger, else false. An empty tree is valid. Any equal value in the constrained position makes it false.",
     "examples": [
       {
         "case": 4

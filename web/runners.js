@@ -139,6 +139,7 @@ export async function runBrowserTests(problemId, code, language, onStatus = null
         try {
           pass = checkAnswer(spec, testCase, result.actual);
         } catch (caught) {
+          pass = false;
           error = String(caught.message || caught);
         }
       }

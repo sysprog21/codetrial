@@ -8709,6 +8709,13 @@
           [0]
         ],
         "expected": true
+      },
+      {
+        "label": "empty tree",
+        "input": [
+          []
+        ],
+        "expected": true
       }
     ],
     "paramNames": [

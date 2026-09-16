@@ -19,6 +19,7 @@ from .bank import (
     STARTER_LANGS,
     STUDY_PLAN_QUERY,
     field,
+    invalid_origins,
     listed,
     named,
     read_json,
@@ -59,13 +60,9 @@ def check_plan_slugs(slugs: list[str], source=SOURCE) -> None:
     if len(unique) != len(slugs):
         raise RuntimeError(f"duplicate slugs in the plan: {repeated(slugs)}")
     problems = read_json(source)
-    invalid_origins = sorted(
-        problem["id"]
-        for problem in problems
-        if problem.get("origin", "leetcode") not in {"leetcode", "original"}
-    )
-    if invalid_origins:
-        raise RuntimeError(f"problem-bank has invalid origins: {invalid_origins}")
+    invalid = invalid_origins(problems)
+    if invalid:
+        raise RuntimeError(f"problem-bank has invalid origins: {invalid}")
     bank = {problem["id"] for problem in problems}
     imported = {
         problem["id"]
@@ -168,13 +165,9 @@ def plan_drift() -> int:
         return 1
     live = set(listed)
     problems = read_json(SOURCE)
-    invalid_origins = sorted(
-        problem["id"]
-        for problem in problems
-        if problem.get("origin", "leetcode") not in {"leetcode", "original"}
-    )
-    if invalid_origins:
-        raise RuntimeError(f"problem-bank has invalid origins: {invalid_origins}")
+    invalid = invalid_origins(problems)
+    if invalid:
+        raise RuntimeError(f"problem-bank has invalid origins: {invalid}")
     bank = {
         problem["id"]
         for problem in problems

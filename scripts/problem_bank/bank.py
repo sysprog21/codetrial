@@ -181,6 +181,18 @@ def repeated(items: list) -> list:
     return sorted({item for item in items if items.count(item) > 1})
 
 
+def invalid_origins(problems: object) -> list[str]:
+    """Problem ids whose origin is neither imported nor authored here."""
+    if not isinstance(problems, list):
+        return []
+    return sorted(
+        problem.get("id", "?")
+        for problem in problems
+        if not isinstance(problem, dict)
+        or problem.get("origin", "leetcode") not in {"leetcode", "original"}
+    )
+
+
 # Which judge argType a LeetCode metaData type needs, derived from the entries
 # already in judges.json. `Node` is deliberately absent: the same name covers
 # graph nodes, next-pointer trees, random-pointer lists and quad trees, and only
@@ -207,6 +219,9 @@ def validated_problems(source: Path = SOURCE) -> list[dict]:
     problems = read_json(source)
     if not isinstance(problems, list):
         raise RuntimeError("problem bank must be a JSON array")
+    invalid = invalid_origins(problems)
+    if invalid:
+        raise RuntimeError(f"problem bank has invalid origins: {invalid}")
     seen: set[str] = set()
     for problem in problems:
         problem_id = problem.get("id") if isinstance(problem, dict) else None
@@ -214,8 +229,6 @@ def validated_problems(source: Path = SOURCE) -> list[dict]:
             raise RuntimeError(f"missing or duplicate problem id: {problem_id!r}")
         seen.add(problem_id)
         origin = problem.get("origin", "leetcode")
-        if origin not in {"leetcode", "original"}:
-            raise RuntimeError(f"{problem_id}: origin must be leetcode or original")
         if origin == "original" and ("title" in problem or "examples" in problem):
             raise RuntimeError(
                 f"{problem_id}: an original problem has no published title or examples"

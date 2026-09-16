@@ -1447,7 +1447,7 @@ async function runTests() {
   nodes.run.textContent = "Running...";
   nodes.resultsBody.hidden = false;
   setTestStatus(firstRunnerStatus(state.language));
-  if (state.candidateCases.length < CANDIDATE_CASE_LIMIT && nodes.candidateCaseInput.value.trim()) {
+  if (nodes.candidateCaseInput.value.trim()) {
     try {
       await addCandidateCase();
       if (nodes.candidateCaseInput.value.trim()) throw new Error(nodes.candidateCaseStatus.textContent);
