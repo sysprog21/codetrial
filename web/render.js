@@ -153,6 +153,11 @@ export function reportSaveStatus(result) {
 export function reportMarkup({ report, problemTitle, language, code, saveResult }) {
   const hire = report.decision === "HIRE";
   const heading = report.incomplete ? "No evaluation" : "Your performance packet";
+  const practiceLevel = report.incomplete
+    ? ""
+    : report.practiceLevel
+      ? `Judged against a mid-level bar; practiced for: ${escapeHtml(report.practiceLevel)}`
+      : "Judged against a mid-level bar";
   const badge = report.incomplete
     ? `<strong class="muted">INCOMPLETE</strong>`
     : `<strong class="${hire ? "good" : "critical"}">${hire ? "HIRE" : "NO HIRE"}</strong>`;
@@ -202,7 +207,7 @@ export function reportMarkup({ report, problemTitle, language, code, saveResult 
   return `
     <div class="report-card">
       <div class="report-header">
-        <div><p>${report.mode ? `${modeLabel(report.mode)} ` : ""}interview report${loop} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p><h2>${heading}</h2></div>
+        <div><p>${report.mode ? `${modeLabel(report.mode)} ` : ""}interview report${loop} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p>${practiceLevel ? `<p class="muted small">${practiceLevel}</p>` : ""}<h2>${heading}</h2></div>
         ${badge}
       </div>${scores}
       <section><h3>${report.incomplete ? "What happened" : "Committee summary"}</h3><p>${escapeHtml(report.summary)}</p></section>
@@ -341,6 +346,10 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
     ]
     : [
       `## Verdict: ${report.decision === "HIRE" ? "HIRE" : "NO HIRE"}`,
+      "",
+      report.practiceLevel
+        ? `Judged against a mid-level bar; practiced for: ${mdText(report.practiceLevel)}`
+        : "Judged against a mid-level bar",
       "",
       "| Metric | Score |",
       "|---|---|",

@@ -114,9 +114,9 @@ const ROUND_TRANSITION_SKEW: std::time::Duration = std::time::Duration::from_sec
 /// `the_time_warning_threshold_is_the_same_number_on_both_sides`.
 pub const TIME_WARNING_S: u64 = 300;
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 7;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 8;
 pub const LIVE_PROMPT_VERSION: u32 = 3;
-pub const REPORT_PROMPT_VERSION: u32 = 7;
+pub const REPORT_PROMPT_VERSION: u32 = 8;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 2;
 

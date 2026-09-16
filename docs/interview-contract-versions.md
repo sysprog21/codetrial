@@ -8,10 +8,11 @@ can select it.
 
 ## The active bundle
 
-Bundle 7: live prompt 3, report prompt 6, rubric 1, report schema 2.
+Bundle 8: live prompt 3, report prompt 8, rubric 1, report schema 2.
 
 | Bundle | Introduced |
 |---|---|
+| 8 | Reports keep the fixed mid-level hiring bar and state the optional level the candidate practiced for beside it. |
 | 7 | Candidate-authored test cases reach the live interviewer and report brief, while judge pass totals remain separate. |
 | 6 | The post-interview server stamp adds optional debrief, topics, and practice level fields. `tests/golden/report-schema.json` remains the model output shape only; server-stamped fields are versioned at the browser sanitizer. |
 | 5 | Each problem posed as an interview scenario rather than the published problem: the live prompt holds the scenario, its private contract and the clarifications to answer when asked, the follow-ups arrive with the evidence that completes the coding round, and the prompt never holds the source title, the hint ladder or a solution walkthrough; `log_hint` serves the authored hints one rung per request and holds the last until the candidate has stated an approach, meaning Algorithm evidence observed from what they said or Coding evidence, which needs code they wrote; a request answered with a withheld rung gives no clue and is not counted as a hint; Coding, Test and Optimizations evidence is refused until the editor holds code the candidate wrote beyond the starter; the report prompt gives the reviewer both the published problem and the scenario, with the reference notes, and forbids naming the published problem in anything written to the candidate. PR #38 covers `8eaaef0`, `26410f7`, `4e316f2`, `0dc521f`, `b72984a`, and `3027bb8`. |

@@ -437,6 +437,27 @@ test("the report shows the hint rung reached", () => {
   assert.match(reportMarkup({ report, problemTitle: "Two Sum", language: "python", code: "" }), /Reached hint 2 of 3/);
 });
 
+test("the report shows the level practiced for", () => {
+  const report = {
+    codingScore: 70, communicationScore: 70, decision: "HIRE", summary: "Grounded",
+    codingFeedback: { strengths: [], improvements: [] },
+    communicationFeedback: { strengths: [], improvements: [] }, hintsUsed: 0,
+    practiceLevel: "intern",
+  };
+  assert.match(
+    reportMarkup({ report, problemTitle: "Two Sum", language: "python", code: "" }),
+    /Judged against a mid-level bar; practiced for: intern/,
+  );
+  assert.doesNotMatch(
+    reportMarkup({ report: { ...report, practiceLevel: null }, problemTitle: "Two Sum", language: "python", code: "" }),
+    /practiced for:/,
+  );
+  assert.doesNotMatch(
+    reportMarkup({ report: { incomplete: true, summary: "Unavailable", practiceLevel: "intern" }, problemTitle: "Two Sum", language: "python", code: "" }),
+    /Judged against/,
+  );
+});
+
 test("the markdown report carries the debrief", () => {
   const markdown = reportMarkdown({
     report: {
@@ -465,6 +486,19 @@ test("the markdown report carries the debrief", () => {
 test("the markdown report states the hint rung", () => {
   const report = { incomplete: true, summary: "Unavailable", debrief: { hints: [{ text: "First", given: true }, { text: "Second", given: false }, { text: "Third", given: false }] } };
   assert.match(reportMarkdown({ report, problemTitle: "Two Sum", language: "python", code: "", transcript: [], at: "now" }), /Reached hint 1 of 3/);
+});
+
+test("the markdown report shows the level practiced for", () => {
+  const report = {
+    codingScore: 70, communicationScore: 70, decision: "HIRE", summary: "Grounded",
+    codingFeedback: { strengths: [], improvements: [] },
+    communicationFeedback: { strengths: [], improvements: [] }, hintsUsed: 0,
+    practiceLevel: "intern",
+  };
+  assert.match(
+    reportMarkdown({ report, problemTitle: "Two Sum", language: "python", code: "", transcript: [], at: "now" }),
+    /Judged against a mid-level bar; practiced for: intern/,
+  );
 });
 
 test("framework phase scores are labeled formative in HTML and Markdown", () => {

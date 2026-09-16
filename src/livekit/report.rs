@@ -247,6 +247,7 @@ fn report_prompt_text(
         duration_min: boot.duration_min,
         elapsed_min,
         test_summary: &test_summary,
+        practice_level: boot.profile.seniority.map(crate::agent::Seniority::as_str),
     })
 }
 
