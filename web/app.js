@@ -52,6 +52,7 @@ const nodes = {
   attemptHistory: document.querySelector("#attempt-history"),
   progressTrends: document.querySelector("#progress-trends"),
   progressWeaknesses: document.querySelector("#progress-weaknesses"),
+  progressTopics: document.querySelector("#progress-topics"),
   progressDifficulty: document.querySelector("#progress-difficulty"),
   progressLanguage: document.querySelector("#progress-language"),
   progressDuration: document.querySelector("#progress-duration"),
@@ -737,6 +738,7 @@ function showProgressError(message) {
   nodes.progressSummary.textContent = message;
   nodes.progressTrends.replaceChildren();
   nodes.progressWeaknesses.replaceChildren();
+  nodes.progressTopics.replaceChildren();
 }
 
 function showProgress(entries, suffix) {
@@ -861,6 +863,17 @@ function renderProgress() {
       const item = document.createElement("li");
       item.textContent = `${weakness.tag} · ${weakness.count} attempt${weakness.count === 1 ? "" : "s"}`;
       nodes.progressWeaknesses.append(item);
+    }
+  }
+  if (model.topics.length === 0) {
+    const item = document.createElement("li");
+    item.textContent = "No topic labels are available for these attempts.";
+    nodes.progressTopics.append(item);
+  } else {
+    for (const topic of model.topics) {
+      const item = document.createElement("li");
+      item.textContent = `${topic.topic}: ${topic.attempts} attempt${topic.attempts === 1 ? "" : "s"}, ${topic.passes} pass${topic.passes === 1 ? "" : "es"}; last attempt ${new Date(topic.lastAttempt).toLocaleDateString()}`;
+      nodes.progressTopics.append(item);
     }
   }
 }

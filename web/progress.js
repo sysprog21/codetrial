@@ -103,7 +103,19 @@ export function buildProgressModel(rawEntries, filters = {}) {
   const weaknesses = [...weaknessCounts]
     .map(([tag, count]) => ({ tag, count }))
     .sort((left, right) => right.count - left.count || left.tag.localeCompare(right.tag));
-  return { total: normalized.length, attempts, series, weaknesses, options: progressOptions(normalized) };
+  const topics = new Map();
+  for (const attempt of attempts) {
+    for (const topic of new Set(attempt.report.topics || [])) {
+      const row = topics.get(topic) || { topic, attempts: 0, passes: 0, lastAttempt: null };
+      row.attempts += 1;
+      row.passes += Number(!attempt.report.incomplete && attempt.report.decision === "HIRE");
+      row.lastAttempt = attempt.at;
+      topics.set(topic, row);
+    }
+  }
+  const topicProgress = [...topics.values()]
+    .sort((left, right) => left.topic.localeCompare(right.topic));
+  return { total: normalized.length, attempts, series, weaknesses, topics: topicProgress, options: progressOptions(normalized) };
 }
 
 function progressOptions(entries) {
