@@ -116,7 +116,7 @@ pub const TIME_WARNING_S: u64 = 300;
 
 pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 7;
 pub const LIVE_PROMPT_VERSION: u32 = 3;
-pub const REPORT_PROMPT_VERSION: u32 = 6;
+pub const REPORT_PROMPT_VERSION: u32 = 7;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 2;
 
@@ -686,6 +686,7 @@ pub struct RuntimeState {
     pub last_test_run: Option<serde_json::Value>,
     pub test_runs: u32,
     pub hints_used: u32,
+    pub volunteered_hints: u32,
     /// The authored rungs for this problem, handed out one at a time by
     /// `record_hint` rather than held in the live prompt. A model holding all
     /// three answers the first request with the third, and nothing downstream
@@ -784,6 +785,7 @@ impl Default for RuntimeState {
             last_test_run: None,
             test_runs: 0,
             hints_used: 0,
+            volunteered_hints: 0,
             hint_ladder: &[],
             hint_rungs_given: 0,
             follow_ups: &[],
@@ -1319,6 +1321,9 @@ pub fn record_hint(state: &mut RuntimeState, requested: bool) -> String {
         if last && !approach_stated {
             return hint_rung_withheld_text(state.hints_used);
         }
+    }
+    if !requested {
+        state.volunteered_hints = state.volunteered_hints.saturating_add(1);
     }
     state.hints_used = state.hints_used.saturating_add(1);
     match clue {

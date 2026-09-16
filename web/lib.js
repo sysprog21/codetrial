@@ -413,7 +413,7 @@ const textEncoder = new TextEncoder();
 export const ACTIVE_CONTRACT = {
   bundleVersion: 7,
   livePromptVersion: 3,
-  reportPromptVersion: 6,
+  reportPromptVersion: 7,
   reportSchemaVersion: 2,
   rubricVersion: 1,
 };

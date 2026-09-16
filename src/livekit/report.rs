@@ -242,6 +242,8 @@ fn report_prompt_text(
         final_code: &state.code,
         language: &state.language,
         hints_used: state.hints_used,
+        hint_rung: state.hint_rungs_given,
+        volunteered_hints: state.volunteered_hints,
         duration_min: boot.duration_min,
         elapsed_min,
         test_summary: &test_summary,

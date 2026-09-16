@@ -718,6 +718,8 @@ pub struct ReportPromptInput<'a> {
     pub final_code: &'a str,
     pub language: &'a str,
     pub hints_used: u32,
+    pub hint_rung: usize,
+    pub volunteered_hints: u32,
     pub duration_min: u32,
     pub elapsed_min: f64,
     pub test_summary: &'a str,
@@ -764,6 +766,11 @@ fn report_brief(input: &ReportPromptInput<'_>) -> String {
     } else {
         input.test_summary
     };
+    let volunteered_hints = match input.volunteered_hints {
+        0 => "No hints were volunteered rather than requested.".to_string(),
+        1 => "1 hint was volunteered rather than requested.".to_string(),
+        count => format!("{count} hints were volunteered rather than requested."),
+    };
     format!(
         r#"You are the hiring-committee reviewer for a {}-minute technical
 interview (the candidate used about {:.0} minutes). Evaluate the
@@ -789,7 +796,10 @@ FINAL CODE ({}):
 FULL SPOKEN TRANSCRIPT (Interviewer = the AI, Candidate = the human):
 {}
 
-HINTS THE INTERVIEWER GAVE: {}
+HINTS THE INTERVIEWER GAVE: {} total; the candidate reached hint rung {} of 3.
+{} A volunteered hint is evidence
+the interviewer helped, but weaker evidence than a requested hint that the
+candidate depended on; treat both as context, never as a numeric deduction.
 
 TEST-CASE EXECUTION — the candidate's own account, not a server-side run. The
 tests execute in their browser and this is what that browser reported, so treat
@@ -828,6 +838,8 @@ Score two independent dimensions from 0 to 100:
         final_code,
         transcript,
         input.hints_used,
+        input.hint_rung,
+        volunteered_hints,
         test_summary,
         input.hints_used
     )

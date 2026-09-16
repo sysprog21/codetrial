@@ -166,7 +166,7 @@ export function reportMarkup({ report, problemTitle, language, code, saveResult 
       ${report.debrief.scenarioContract ? `<p><strong>Scenario contract:</strong> ${escapeHtml(report.debrief.scenarioContract)}</p>` : ""}
       ${report.debrief.approach ? `<p><strong>Approach and complexity:</strong> ${escapeHtml(report.debrief.approach)}</p>` : ""}
       ${report.debrief.pitfalls ? `<p><strong>Common pitfalls:</strong> ${escapeHtml(report.debrief.pitfalls)}</p>` : ""}
-      ${report.debrief.hints?.length ? `<h3>Hint ladder</h3><ol>${report.debrief.hints.map((hint) => `<li><strong>${hint.given ? "Given" : "Held back"}:</strong> ${escapeHtml(hint.text)}</li>`).join("")}</ol>` : ""}
+      ${report.debrief.hints?.length ? `<h3>Hint ladder</h3><p>Reached hint ${report.debrief.hints.filter((hint) => hint.given).length} of ${report.debrief.hints.length}.</p><ol>${report.debrief.hints.map((hint) => `<li><strong>${hint.given ? "Given" : "Held back"}:</strong> ${escapeHtml(hint.text)}</li>`).join("")}</ol>` : ""}
       ${report.debrief.followUps?.length ? `<h3>Follow-ups this problem offers</h3><ul>${report.debrief.followUps.map((followUp) => `<li>${escapeHtml(followUp)}</li>`).join("")}</ul>` : ""}
     </details>`
     : "";
@@ -276,7 +276,7 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
       ...(report.debrief.scenarioContract ? [`**Scenario contract:** ${mdText(report.debrief.scenarioContract)}`] : []),
       ...(report.debrief.approach ? [`**Approach and complexity:** ${mdText(report.debrief.approach)}`] : []),
       ...(report.debrief.pitfalls ? [`**Common pitfalls:** ${mdText(report.debrief.pitfalls)}`] : []),
-      ...(report.debrief.hints?.length ? ["", "### Hint ladder", "", ...report.debrief.hints.map((hint) => `- **${hint.given ? "Given" : "Held back"}:** ${mdText(hint.text)}`)] : []),
+      ...(report.debrief.hints?.length ? ["", "### Hint ladder", "", `Reached hint ${report.debrief.hints.filter((hint) => hint.given).length} of ${report.debrief.hints.length}.`, "", ...report.debrief.hints.map((hint) => `- **${hint.given ? "Given" : "Held back"}:** ${mdText(hint.text)}`)] : []),
       ...(report.debrief.followUps?.length ? ["", "### Follow-ups this problem offers", "", ...report.debrief.followUps.map((followUp) => `- ${mdText(followUp)}`)] : []),
       "",
     ]

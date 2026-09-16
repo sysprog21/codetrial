@@ -415,6 +415,11 @@ test("the report shows the debrief collapsed", () => {
   assert.match(body, /Follow-ups this problem offers/);
 });
 
+test("the report shows the hint rung reached", () => {
+  const report = { incomplete: true, summary: "Unavailable", debrief: { hints: [{ text: "First", given: true }, { text: "Second", given: true }, { text: "Third", given: false }] } };
+  assert.match(reportMarkup({ report, problemTitle: "Two Sum", language: "python", code: "" }), /Reached hint 2 of 3/);
+});
+
 test("the markdown report carries the debrief", () => {
   const markdown = reportMarkdown({
     report: {
@@ -438,6 +443,11 @@ test("the markdown report carries the debrief", () => {
   assert.match(markdown, /Spaced review will bring this problem back/);
   assert.match(markdown, /\*\*Given:\*\* What should the map remember\?/);
   assert.match(markdown, /### Follow-ups this problem offers/);
+});
+
+test("the markdown report states the hint rung", () => {
+  const report = { incomplete: true, summary: "Unavailable", debrief: { hints: [{ text: "First", given: true }, { text: "Second", given: false }, { text: "Third", given: false }] } };
+  assert.match(reportMarkdown({ report, problemTitle: "Two Sum", language: "python", code: "", transcript: [], at: "now" }), /Reached hint 1 of 3/);
 });
 
 test("framework phase scores are labeled formative in HTML and Markdown", () => {

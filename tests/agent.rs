@@ -280,6 +280,8 @@ fn prompt_samples() -> Value {
             final_code: "def two_sum(nums, target): return []",
             language: "python",
             hints_used: 2,
+            hint_rung: 2,
+            volunteered_hints: 0,
             duration_min: 45,
             elapsed_min: 12.4,
             test_summary: "Latest test run: 2/3 cases passed.\n- CANDIDATE CASE empty input: got []",
@@ -291,6 +293,8 @@ fn prompt_samples() -> Value {
             final_code: "",
             language: "python",
             hints_used: 0,
+            hint_rung: 0,
+            volunteered_hints: 0,
             duration_min: 45,
             elapsed_min: 0.0,
             test_summary: "",
@@ -302,6 +306,8 @@ fn prompt_samples() -> Value {
             final_code: "",
             language: "python",
             hints_used: 0,
+            hint_rung: 0,
+            volunteered_hints: 0,
             duration_min: 45,
             elapsed_min: 12.5,
             test_summary: "",
@@ -333,6 +339,8 @@ fn prompt_samples() -> Value {
             final_code: "def two_sum(nums, target): return []",
             language: "python",
             hints_used: 2,
+            hint_rung: 2,
+            volunteered_hints: 0,
             duration_min: 45,
             elapsed_min: 12.4,
             test_summary: "Latest test run: 2/3 cases passed.",
@@ -344,6 +352,8 @@ fn prompt_samples() -> Value {
             final_code: "def two_sum(nums, target):\n    return [0, 1]",
             language: "python",
             hints_used: 1,
+            hint_rung: 1,
+            volunteered_hints: 0,
             duration_min: 45,
             elapsed_min: 12.0,
             test_summary: "Latest test run (run #1, python): 2/3 cases passed.",
@@ -635,10 +645,16 @@ fn prompt_golden_digest_matches_versions() {
         )
     );
     let versions = (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION);
-    let expected_digest = [(
-        (3, 6),
-        "1ce00ef082086e6b4184a343fefc694fc34cbbfdb620191f76e8c4417ec03744",
-    )]
+    let expected_digest = [
+        (
+            (3, 6),
+            "1ce00ef082086e6b4184a343fefc694fc34cbbfdb620191f76e8c4417ec03744",
+        ),
+        (
+            (3, 7),
+            "4e1267c8d2532f7108c67d5cd171c0852733793f5e2235134285fc3a9fcd8fcb",
+        ),
+    ]
     .into_iter()
     .find_map(|(candidate, digest)| (candidate == versions).then_some(digest));
 
@@ -1241,6 +1257,7 @@ fn log_hint_hands_out_one_rung_per_request_and_holds_the_last_for_an_approach() 
         state.hint_rungs_given, 0,
         "an unrequested hint spends no rung"
     );
+    assert_eq!(state.volunteered_hints, 1);
 
     let one = record_hint(&mut state, true);
     assert!(one.contains(first) && !one.contains(second), "{one}");
@@ -1328,6 +1345,25 @@ fn log_hint_hands_out_one_rung_per_request_and_holds_the_last_for_an_approach() 
     let three = record_hint(&mut state, true);
     assert!(three.contains(third), "{three}");
     assert!(record_hint(&mut state, true).contains("Every rung is used"));
+}
+
+#[test]
+fn report_brief_states_the_hint_rung() {
+    let prompt = report_prompt(ReportPromptInput {
+        problem: get_problem(Some("two-sum")),
+        transcript: "",
+        rolling_assessment: "",
+        final_code: "",
+        language: "python",
+        hints_used: 3,
+        hint_rung: 2,
+        volunteered_hints: 1,
+        duration_min: 45,
+        elapsed_min: 12.0,
+        test_summary: "",
+    });
+    assert!(prompt.contains("candidate reached hint rung 2 of 3"));
+    assert!(prompt.contains("1 hint was volunteered rather than requested"));
 }
 
 #[test]
@@ -1458,6 +1494,8 @@ fn live_instructions_pose_the_variant_and_hold_no_source_or_walkthrough() {
         final_code: "",
         language: "python",
         hints_used: 0,
+        hint_rung: 0,
+        volunteered_hints: 0,
         duration_min: 45,
         elapsed_min: 30.0,
         test_summary: "",
@@ -1591,6 +1629,8 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
             final_code,
             language: "python",
             hints_used: 0,
+            hint_rung: 0,
+            volunteered_hints: 0,
             duration_min: 15,
             elapsed_min: 15.0,
             test_summary,
@@ -1737,6 +1777,8 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
             final_code: code,
             language: "python",
             hints_used: case["hintsUsed"].as_u64().expect("hint count is integer") as u32,
+            hint_rung: 0,
+            volunteered_hints: 0,
             duration_min: 45,
             elapsed_min: 20.0,
             test_summary: "No trusted server-side test was available.",
@@ -4996,7 +5038,7 @@ fn generated_problem_metadata_exposes_no_private_rubric() {
 fn interview_contract_versions_are_one_closed_bundle() {
     assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 7);
     assert_eq!(LIVE_PROMPT_VERSION, 3);
-    assert_eq!(REPORT_PROMPT_VERSION, 6);
+    assert_eq!(REPORT_PROMPT_VERSION, 7);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 2);
     assert_eq!(
@@ -5004,7 +5046,7 @@ fn interview_contract_versions_are_one_closed_bundle() {
         json!({
             "bundleVersion": 7,
             "livePromptVersion": 3,
-            "reportPromptVersion": 6,
+            "reportPromptVersion": 7,
             "rubricVersion": 1,
             "reportSchemaVersion": 2,
         })
