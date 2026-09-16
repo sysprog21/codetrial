@@ -130,7 +130,7 @@ export function pickProblem(problems, difficulties, reports, random = Math.rando
   const passed = new Set(
     reportList.filter((entry) => entry?.report?.decision === "HIRE").map((entry) => entry.problemId),
   );
-  const due = eligible.filter((problem) => reviews.get(problem.id)?.due);
+  const due = problems.filter((problem) => reviews.get(problem.id)?.due);
   const fresh = eligible.filter((problem) => !passed.has(problem.id));
   const choices = due.length ? due : fresh.length ? fresh : eligible;
   const picked = choices[Math.floor(random() * choices.length)];
@@ -140,14 +140,21 @@ export function pickProblem(problems, difficulties, reports, random = Math.rando
 }
 
 function reviewStatus(reports, now) {
-  const successes = new Map();
+  const outcomes = new Map();
   for (const entry of reports) {
-    if (entry?.report?.decision !== "HIRE" || !Number.isFinite(entry.at)) continue;
-    const seen = successes.get(entry.problemId);
-    successes.set(entry.problemId, { count: (seen?.count ?? 0) + 1, last: Math.max(seen?.last ?? -Infinity, entry.at) });
+    const decision = entry?.report?.decision;
+    if ((decision !== "HIRE" && decision !== "NO_HIRE") || !Number.isFinite(entry.at)) continue;
+    const seen = outcomes.get(entry.problemId) ?? { successes: 0, latest: null };
+    const successes = seen.successes + Number(decision === "HIRE");
+    const latest = !seen.latest || entry.at > seen.latest.at
+      ? { at: entry.at, decision }
+      : seen.latest;
+    outcomes.set(entry.problemId, { successes, latest });
   }
-  return new Map([...successes].map(([problemId, { count, last }]) => {
-    const intervalDays = REVIEW_INTERVAL_DAYS[Math.min(count, REVIEW_INTERVAL_DAYS.length) - 1];
-    return [problemId, { due: last + intervalDays * DAY_MS <= now, intervalDays }];
+  return new Map([...outcomes].map(([problemId, { successes, latest }]) => {
+    const intervalDays = latest.decision === "NO_HIRE"
+      ? REVIEW_INTERVAL_DAYS[0]
+      : REVIEW_INTERVAL_DAYS[Math.min(successes, REVIEW_INTERVAL_DAYS.length) - 1];
+    return [problemId, { due: latest.at + intervalDays * DAY_MS <= now, intervalDays }];
   }));
 }

@@ -683,6 +683,16 @@ lobbyTest("a completed problem returns with a due-review explanation", async (pa
   assert.match(state.note, /Review due after 1 day/);
 });
 
+lobbyTest("a due review below the suggested level is shown and recommended", async (page) => {
+  reports = [savedAttempt(EASY[0]), hired(EASY[1])];
+  const state = await lobby(page);
+
+  assert.deepEqual(state.levels, ["Medium"]);
+  assert.equal(state.card, EASY[0]);
+  assert.match(state.note, /Review due after 1 day \(Easy\)/);
+  assert.equal((await cardInfo(page, EASY[0])).hidden, false);
+});
+
 lobbyTest("two passes move the candidate up a level, and the lobby says why", async (page) => {
   reports = [hired(EASY[0]), hired(EASY[1])];
   const state = await lobby(page);

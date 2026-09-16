@@ -570,8 +570,12 @@ function recommend(note = "") {
     return;
   }
   setProblem(choice.picked);
+  const reviewLevel = choice.review && !selectedDifficulties().has(choice.picked.difficulty)
+    ? ` (${choice.picked.difficulty})`
+    : "";
+  if (choice.review) choice.picked.button.hidden = false;
   nodes.recommendation.textContent = choice.review
-    ? `${note}Review due after ${choice.review.intervalDays} day${choice.review.intervalDays === 1 ? "" : "s"}: ${title(choice.picked)}.`
+    ? `${note}Review due after ${choice.review.intervalDays} day${choice.review.intervalDays === 1 ? "" : "s"}${reviewLevel}: ${title(choice.picked)}.`
     : choice.repeat
       ? `${note}You have passed every problem at this level. Recommended again: ${title(choice.picked)}.`
       : `${note}Recommended: ${title(choice.picked)}.`;
