@@ -451,7 +451,12 @@ test("the report card this page renders names no finding either", () => {
   // section, whose two arms are named in the sentence list below, and the two
   // feedback sections, whose titles are the words "Coding" and "Communication"
   // in the vocabulary set instead.
-  const headings = [...read("web/render.js").matchAll(/<h3[^>]*>([^<{]+)<\/h3>/g)].map(
+  const renderer = read("web/render.js");
+  const reportRenderer = renderer.slice(
+    renderer.indexOf("export function feedbackMarkup"),
+    renderer.indexOf("/// The downloadable report"),
+  );
+  const headings = [...reportRenderer.matchAll(/<h3[^>]*>([^<{]+)<\/h3>/g)].map(
     (match) => match[1],
   );
   assert.ok(headings.length >= 4, `only ${headings.length} headings found in web/render.js`);
@@ -513,7 +518,7 @@ test("the report card this page renders names no finding either", () => {
     said,
     new Set([
       "(.md)", "(Sxlang)", "(editor", "(none", "-", "/", "0", "01:05", "1", "10",
-      "100", "2", "2;", "3", "37", "6", "7", "70", "8", "95%", "Approach",
+      "100", "2", "2;", "3", "37", "7", "70", "8", "95%", "Approach",
       "Chain", "CodeTrial.", "Coding", "Committee", "Common", "Communication", "Contract",
       "Done", "Download", "Evidence", "FACE_MISSING", "Follow-ups", "Framework", "Given:",
       "HIRE", "Held", "Hint", "INCOMPLETE", "Improve", "Integrity", "Interview", "Interviewer",

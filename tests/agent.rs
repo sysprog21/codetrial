@@ -280,7 +280,7 @@ fn prompt_samples() -> Value {
             hints_used: 2,
             duration_min: 45,
             elapsed_min: 12.4,
-            test_summary: "Latest test run: 2/3 cases passed.",
+            test_summary: "Latest test run: 2/3 cases passed.\n- CANDIDATE CASE empty input: got []",
         }),
         "reportEmpty": report_prompt(ReportPromptInput {
             problem,
@@ -634,8 +634,8 @@ fn prompt_golden_digest_matches_versions() {
     );
     let versions = (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION);
     let expected_digest = [(
-        (2, 5),
-        "02e634f1b2a104bddc5ad9fd5b806822fc50ea5569e5412af19435973a51088b",
+        (3, 6),
+        "1ce00ef082086e6b4184a343fefc694fc34cbbfdb620191f76e8c4417ec03744",
     )]
     .into_iter()
     .find_map(|(candidate, digest)| (candidate == versions).then_some(digest));
@@ -2109,6 +2109,29 @@ fn runtime_helpers_match_frozen_fixture() {
         ]),
         expected["transcript"].as_str().unwrap()
     );
+}
+
+#[test]
+fn test_summary_lists_the_candidates_cases() {
+    let run = sanitize_test_run(&json!({
+        "language": "python",
+        "passed": 2,
+        "total": 2,
+        "failures": [],
+        "candidateCases": [
+            {"label": "Your case 1", "got": "[0, 1]", "expected": null},
+            {"label": "Your case 2", "error": "ValueError"},
+            {"label": "Your case 3", "got": "[0, 1]", "expected": "[1, 2]"}
+        ]
+    }));
+    let summary = format_test_run(Some(&run), 1);
+    assert!(summary.contains("2/2 cases passed."));
+
+    // A case with no expectation says only what it printed, so the reviewer
+    // cannot read a contradiction into it.
+    assert!(summary.contains("CANDIDATE CASE Your case 1: got [0, 1]\n"));
+    assert!(summary.contains("CANDIDATE CASE Your case 2: raised ValueError"));
+    assert!(summary.contains("CANDIDATE CASE Your case 3: got [0, 1], candidate expected [1, 2]"));
 }
 
 #[test]
@@ -4973,17 +4996,17 @@ fn generated_problem_metadata_exposes_no_private_rubric() {
 
 #[test]
 fn interview_contract_versions_are_one_closed_bundle() {
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 6);
-    assert_eq!(LIVE_PROMPT_VERSION, 2);
-    assert_eq!(REPORT_PROMPT_VERSION, 5);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 7);
+    assert_eq!(LIVE_PROMPT_VERSION, 3);
+    assert_eq!(REPORT_PROMPT_VERSION, 6);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 2);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 6,
-            "livePromptVersion": 2,
-            "reportPromptVersion": 5,
+            "bundleVersion": 7,
+            "livePromptVersion": 3,
+            "reportPromptVersion": 6,
             "rubricVersion": 1,
             "reportSchemaVersion": 2,
         })

@@ -9,6 +9,7 @@
         "language": "python",
         "setupError": null,
         "failures": [],
+        "candidateCases": [],
         "at": 1770000000000
       }
     },
@@ -33,6 +34,7 @@
             "error": "TypeError: nums is not iterable"
           }
         ],
+        "candidateCases": [],
         "at": 1770000000000
       }
     },
@@ -69,6 +71,7 @@
             "error": null
           }
         ],
+        "candidateCases": [],
         "at": 1770000000000
       }
     },
@@ -80,6 +83,7 @@
         "language": "cpp",
         "setupError": "Compiler Explorer returned 503",
         "failures": [],
+        "candidateCases": [],
         "at": 1770000000000
       }
     }

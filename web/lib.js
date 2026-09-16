@@ -223,7 +223,8 @@ export function testPayload(summary) {
     total: summary.total,
     language: summary.language,
     setupError: summary.setupError || null,
-    failures: summary.cases.filter((item) => !item.pass).slice(0, 4).map((item) => ({ label: item.label, expected: item.expected, got: item.got, error: item.error || null })),
+    failures: summary.cases.filter((item) => !item.candidate && !item.pass).slice(0, 4).map((item) => ({ label: item.label, expected: item.expected, got: item.got, error: item.error || null })),
+    candidateCases: summary.cases.filter((item) => item.candidate).slice(0, 4).map((item) => ({ label: item.label, expected: item.expected ?? null, got: item.got, error: item.error || null })),
     at: Date.now(),
   };
 }
@@ -410,9 +411,9 @@ const textEncoder = new TextEncoder();
 /// function-local, moving it left the whole suite green with the supported-card
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
-  bundleVersion: 6,
-  livePromptVersion: 2,
-  reportPromptVersion: 5,
+  bundleVersion: 7,
+  livePromptVersion: 3,
+  reportPromptVersion: 6,
   reportSchemaVersion: 2,
   rubricVersion: 1,
 };

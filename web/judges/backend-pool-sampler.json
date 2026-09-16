@@ -114,5 +114,10 @@
         2
       ]
     }
-  ]
+  ],
+  "methodReturnTypes": {
+    "insert": "value",
+    "remove": "value",
+    "getRandom": "value"
+  }
 }

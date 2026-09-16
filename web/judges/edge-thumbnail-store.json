@@ -155,5 +155,9 @@
         2
       ]
     }
-  ]
+  ],
+  "methodReturnTypes": {
+    "put": "void",
+    "get": "value"
+  }
 }

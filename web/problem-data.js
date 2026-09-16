@@ -18,6 +18,8 @@
 // after the scenario-name lookup misses.
 let pageMap;
 
+const judges = new Map();
+
 /// Absent and unreachable are different answers, and the callers act on them
 /// differently: a 404 means the bank does not have this one, anything else
 /// means we could not find out. Bundling these into a single `null` is how a
@@ -92,6 +94,19 @@ export function loadPageMap() {
 /// Null when the bank has no judge for this problem, which the runner reports
 /// as "no test cases are defined". Rejects when the judge exists but could not
 /// be fetched, which is a different sentence for the candidate.
-export async function loadJudge(id) {
-  return id ? fetchJson(`/judges/${encodeURIComponent(id)}.json`) : null;
+///
+/// Cached per id for the page's lifetime, the same way `loadPageMap` caches,
+/// and for the same reason: the interview page, the candidate-case editor and
+/// every test run ask for the one judge the candidate is working against. A
+/// failed fetch is forgotten so a dropped connection costs one lookup rather
+/// than every later one, and the rejection still reaches each caller.
+export function loadJudge(id) {
+  if (!id) return Promise.resolve(null);
+  if (!judges.has(id)) {
+    judges.set(id, fetchJson(`/judges/${encodeURIComponent(id)}.json`).catch((error) => {
+      judges.delete(id);
+      throw error;
+    }));
+  }
+  return judges.get(id);
 }

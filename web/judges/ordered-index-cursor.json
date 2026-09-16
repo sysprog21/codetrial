@@ -117,5 +117,9 @@
         false
       ]
     }
-  ]
+  ],
+  "methodReturnTypes": {
+    "next": "value",
+    "hasNext": "value"
+  }
 }

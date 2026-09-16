@@ -143,6 +143,18 @@ test("harness generator covers every class problem without network access", () =
   }
 });
 
+test("a candidate case without an expected value builds the C++ and Java class harnesses", () => {
+  const spec = judges["min-stack"];
+  const candidate = {
+    label: "Your case 1",
+    input: [[spec.className, "push", "getMin"], [[], [3], []]],
+  };
+  for (const language of ["cpp", "java"]) {
+    const harness = generateHarness(language, { ...spec, cases: [...spec.cases, candidate] }, `class ${spec.className} {}`);
+    assert.doesNotMatch(harness, /expected\?\./, `${language} reads the return type from the judge contract`);
+  }
+});
+
 // A promisified execFile, and one cached probe per tool.
 //
 // Do not "simplify" the seven tests below back to `execFileSync`. They compile

@@ -154,5 +154,9 @@
         false
       ]
     }
-  ]
+  ],
+  "methodReturnTypes": {
+    "addWord": "void",
+    "search": "value"
+  }
 }

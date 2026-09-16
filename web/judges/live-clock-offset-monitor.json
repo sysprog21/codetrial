@@ -177,5 +177,9 @@
         2
       ]
     }
-  ]
+  ],
+  "methodReturnTypes": {
+    "addNum": "void",
+    "findMedian": "value"
+  }
 }

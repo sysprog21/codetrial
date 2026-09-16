@@ -298,6 +298,20 @@ def posed(problem: dict, judge: dict, variant: dict) -> tuple[dict, dict]:
             }
             for case in judge["cases"]
         ]
+        # Class methods do not carry a return type in the source bank. The
+        # harness must still know which calls are void when a candidate adds a
+        # case without an expected result, so publish that stable property once
+        # in the judge rather than infer it from the candidate's case.
+        returns = {}
+        for case in judge["cases"]:
+            for operation, expected in zip(case["input"][0], case["expected"]):
+                if operation != judge["className"]:
+                    returns[operation] = (
+                        "value"
+                        if expected is not None
+                        else returns.get(operation, "void")
+                    )
+        judge["methodReturnTypes"] = returns
     if "paramNames" in judge:
         judge["paramNames"] = [renames.get(name, name) for name in judge["paramNames"]]
     problem = {

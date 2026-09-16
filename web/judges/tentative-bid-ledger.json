@@ -162,5 +162,11 @@
         -1
       ]
     }
-  ]
+  ],
+  "methodReturnTypes": {
+    "push": "void",
+    "getMin": "value",
+    "pop": "void",
+    "top": "value"
+  }
 }

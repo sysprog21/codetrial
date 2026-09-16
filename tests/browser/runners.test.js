@@ -11,8 +11,44 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { functionBody, read } from "./source.js";
+import { parseCandidateCase, runBrowserTests } from "../../web/runners.js";
 
 const runners = read("web/runners.js");
+
+test("a malformed candidate case is refused", () => {
+  const spec = { kind: "function", paramNames: ["count"], paramTypes: ["integer"] };
+  assert.throws(() => parseCandidateCase(spec, "{ nope"), /JSON argument array/);
+  assert.throws(() => parseCandidateCase(spec, "[1.5]"), /Parameter 1 \(count\) must match integer/);
+});
+
+test("a candidate case is typed by paramTypes", () => {
+  const spec = { kind: "function", paramNames: ["grid", "name"], paramTypes: ["character[][]", "string"] };
+  assert.deepEqual(parseCandidateCase(spec, '[[["a", "b"]], "edge"]'), [[['a', 'b']], "edge"]);
+  assert.throws(() => parseCandidateCase(spec, '[[["ab"]], "edge"]'), /Parameter 1 \(grid\)/);
+});
+
+test("runBrowserTests reports the output of a candidate case", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).startsWith("/judges/")) {
+      return new Response(JSON.stringify({
+        kind: "function", entry: "sum", paramNames: ["value"], paramTypes: ["integer"],
+        returnType: "integer", checker: "exact", cases: [{ label: "judge", input: [1], expected: 1 }],
+      }));
+    }
+    return new Response(JSON.stringify({ stdout: [{ text: '{"results":[{"actual":1,"timeMs":1},{"actual":7,"timeMs":2}]}' }] }));
+  };
+  try {
+    const summary = await runBrowserTests("candidate-case-runner", "", "cpp", null, [{ input: [7] }]);
+    assert.equal(summary.passed, 1);
+    assert.equal(summary.total, 1);
+    assert.deepEqual(summary.cases.at(-1), {
+      label: "Your case 1", pass: null, got: "7", expected: undefined, timeMs: 2, candidate: true,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("each worker is built from its own source", () => {
   const blobs = [...runners.matchAll(/new Blob\(\[(\w+)\]/g)].map((match) => match[1]);

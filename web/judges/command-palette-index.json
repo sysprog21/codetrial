@@ -154,5 +154,10 @@
         false
       ]
     }
-  ]
+  ],
+  "methodReturnTypes": {
+    "insert": "void",
+    "search": "value",
+    "startsWith": "value"
+  }
 }

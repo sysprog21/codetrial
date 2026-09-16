@@ -27,18 +27,21 @@ export function resultsMarkup(summary, status = null) {
       body: `${statusMarkup}<p class="critical small"><strong>Couldn't run your code</strong></p><pre>${escapeHtml(summary.setupError)}</pre>`,
     };
   }
-  const cases = summary.cases.map((item) => `
+  const caseMarkup = (item) => `
       <li>
-        <div><span class="${item.pass ? "good" : "critical"}">${item.pass ? "OK" : "FAIL"}</span> ${escapeHtml(item.label)} <span>${escapeHtml(item.timeMs)}ms</span></div>
-        ${item.pass ? "" : `<pre>${item.error ? escapeHtml(item.error) : `expected ${escapeHtml(item.expected)}\ngot ${escapeHtml(item.got)}`}</pre>`}
+        <div><span class="${item.pass === null || item.pass ? "good" : "critical"}">${item.pass === null ? "OUTPUT" : item.pass ? "OK" : "FAIL"}</span> ${escapeHtml(item.label)} <span>${escapeHtml(item.timeMs)}ms</span></div>
+        ${item.pass ? "" : `<pre>${item.error ? escapeHtml(item.error) : item.pass === null ? `got ${escapeHtml(item.got)}` : `expected ${escapeHtml(item.expected)}\ngot ${escapeHtml(item.got)}`}</pre>`}
       </li>
-    `).join("");
+    `;
+  const judgeCases = summary.cases.filter((item) => !item.candidate).map(caseMarkup).join("");
+  const candidateCases = summary.cases.filter((item) => item.candidate).map(caseMarkup).join("");
   return {
     label: `Test results · ${summary.passed}/${summary.total}`,
     body: `
     ${statusMarkup}
     <p class="${summary.passed === summary.total ? "good" : "critical"} small"><strong>${summary.passed}/${summary.total} test cases passed</strong></p>
-    <ul class="result-list">${cases}</ul>
+    <ul class="result-list">${judgeCases}</ul>
+    ${candidateCases ? `<h3>Your cases</h3><ul class="result-list">${candidateCases}</ul>` : ""}
   `,
   };
 }

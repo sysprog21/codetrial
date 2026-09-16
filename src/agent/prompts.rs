@@ -1037,6 +1037,31 @@ pub fn format_test_run(run: Option<&serde_json::Value>, total_runs: u32) -> Stri
             }
         }
     }
+    if let Some(cases) = run
+        .get("candidateCases")
+        .and_then(serde_json::Value::as_array)
+    {
+        for case in cases
+            .iter()
+            .filter_map(serde_json::Value::as_object)
+            .take(MAX_TEST_FAILURES)
+        {
+            let label = value_string(case.get("label")).unwrap_or_else(|| "?".to_string());
+            if let Some(error) = truthy_string(case.get("error")) {
+                lines.push(format!("- CANDIDATE CASE {label}: raised {error}"));
+            } else {
+                let got = value_string(case.get("got")).unwrap_or_else(|| "None".to_string());
+
+                // The candidate's own expectation, where they wrote one:
+                // without it a case that contradicts them reads the same as one
+                // that only printed output.
+                let expected = value_string(case.get("expected").filter(|value| !value.is_null()))
+                    .map(|expected| format!(", candidate expected {expected}"))
+                    .unwrap_or_default();
+                lines.push(format!("- CANDIDATE CASE {label}: got {got}{expected}"));
+            }
+        }
+    }
 
     lines.join("\n")
 }

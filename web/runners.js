@@ -51,7 +51,51 @@ const compilerExplorer = {
 const pyodideBaseUrl = () => new URL("/vendor/pyodide/", globalThis.location?.href ?? "http://localhost/").href;
 let pythonWorkerPromise = null;
 
-export async function runBrowserTests(problemId, code, language, onStatus = null) {
+export function parseCandidateCase(spec, input) {
+  let args;
+  try {
+    args = JSON.parse(input);
+  } catch {
+    throw new Error("Input must be a JSON argument array.");
+  }
+  if (!Array.isArray(args)) throw new Error("Input must be a JSON argument array.");
+  if (spec.kind === "class") return parseClassCandidateCase(args);
+  const types = spec.paramTypes || [];
+  const names = spec.paramNames || [];
+  if (args.length !== types.length) throw new Error(`Expected ${types.length} arguments, received ${args.length}.`);
+  for (const [index, type] of types.entries()) {
+    if (!candidateTypeMatches(args[index], type)) {
+      const name = names[index] ? ` (${names[index]})` : "";
+      throw new Error(`Parameter ${index + 1}${name} must match ${type}.`);
+    }
+  }
+  return args;
+}
+
+function candidateTypeMatches(value, type) {
+  if (type.endsWith("[]")) return Array.isArray(value) && value.every((item) => candidateTypeMatches(item, type.slice(0, -2)));
+  const list = /^list<(.*)>$/.exec(type);
+  if (list) return Array.isArray(value) && value.every((item) => candidateTypeMatches(item, list[1]));
+  if (type === "integer") return Number.isInteger(value);
+  if (type === "double" || type === "number") return Number.isFinite(value);
+  if (type === "string") return typeof value === "string";
+  if (type === "boolean") return typeof value === "boolean";
+  if (type === "character") return typeof value === "string" && [...value].length === 1;
+  if (["ListNode", "TreeNode", "Node"].includes(type)) return Array.isArray(value);
+  return false;
+}
+
+function parseClassCandidateCase(input) {
+  if (input.length !== 2 || !Array.isArray(input[0]) || !Array.isArray(input[1]) || input[0].length !== input[1].length) {
+    throw new Error("A class case needs matching operation and argument arrays.");
+  }
+  if (!input[0].every((operation) => typeof operation === "string") || !input[1].every(Array.isArray)) {
+    throw new Error("Class operations must be strings with JSON argument arrays.");
+  }
+  return input;
+}
+
+export async function runBrowserTests(problemId, code, language, onStatus = null, candidateCases = []) {
   const empty = { problemId, language, passed: 0, total: 0, cases: [], at: Date.now() };
   // A judge that cannot be fetched is not a problem without tests. Reporting
   // both the same way told a candidate on a flaky connection that their problem
@@ -63,6 +107,8 @@ export async function runBrowserTests(problemId, code, language, onStatus = null
     return { ...empty, setupError: "The test cases could not be loaded. Check your connection and run again." };
   }
   if (!spec) return { ...empty, setupError: "No test cases are defined for this problem." };
+  const candidates = candidateCases.map((testCase, index) => ({ ...testCase, label: testCase.label || `Your case ${index + 1}` }));
+  const runnable = { ...spec, cases: [...spec.cases, ...candidates] };
   const base = { ...empty, total: spec.cases.length };
   if (pendingTestLanguages.has(language)) {
     return { ...base, setupError: `${languageLabel(language)} tests are not wired up yet. Keep using the editor; Jim can still review this code.` };
@@ -70,20 +116,22 @@ export async function runBrowserTests(problemId, code, language, onStatus = null
   const reportStatus = (status) => onStatus?.(status);
   try {
     const raw = language === "python"
-      ? await runPython(code, spec, reportStatus)
+      ? await runPython(code, runnable, reportStatus)
       : compilerExplorer[language]
-        ? await runCompilerExplorer(language, code, spec, reportStatus)
-        : (reportStatus("running"), await runWorker(code, spec));
+        ? await runCompilerExplorer(language, code, runnable, reportStatus)
+        : (reportStatus("running"), await runWorker(code, runnable));
     if (raw.setupError || !raw.results) return { ...base, setupError: raw.setupError || "The run produced no results." };
-    const cases = spec.cases.map((testCase, index) => {
+    const cases = runnable.cases.map((testCase, index) => {
+      const candidate = index >= spec.cases.length;
       const result = raw.results[index];
       if (!result || result.error) {
-        return { label: testCase.label, pass: false, got: "-", expected: renderValue(testCase.expected), error: result?.error || "No result produced.", timeMs: Math.round(result?.timeMs || 0) };
+        return { label: testCase.label, pass: false, got: "-", expected: renderValue(testCase.expected), error: result?.error || "No result produced.", timeMs: Math.round(result?.timeMs || 0), candidate };
       }
-      const pass = checkAnswer(spec, testCase, result.actual);
-      return { label: testCase.label, pass, got: renderValue(result.actual), expected: renderValue(testCase.expected), timeMs: Math.round(result.timeMs) };
+      const observed = candidate && !Object.hasOwn(testCase, "expected");
+      const pass = observed ? null : checkAnswer(spec, testCase, result.actual);
+      return { label: testCase.label, pass, got: renderValue(result.actual), expected: observed ? undefined : renderValue(testCase.expected), timeMs: Math.round(result.timeMs), candidate };
     });
-    return { ...base, cases, passed: cases.filter((item) => item.pass).length };
+    return { ...base, cases, passed: cases.filter((item) => !item.candidate && item.pass === true).length };
   } catch (error) {
     return { ...base, setupError: String(error.message || error).slice(0, 400) };
   }
