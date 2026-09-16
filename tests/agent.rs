@@ -3263,6 +3263,32 @@ fn browser_generated_integrity_events_all_verify_in_the_agent() {
     );
 }
 
+#[test]
+fn camera_not_used_is_accepted_as_evidence() {
+    let mut state = RuntimeState::default();
+    let event = integrity_event(IntegrityEventInput {
+        seq: 1,
+        prev_hash: "",
+        event_type: "CAMERA_NOT_USED",
+        at: "2026-09-16T00:00:00.000Z",
+        severity: "info",
+        source: "camera",
+        duration_ms: 0,
+        detail: Some("denied"),
+    });
+
+    apply_data_event(
+        &mut state,
+        TOPIC_INTEGRITY,
+        &event,
+        TEST_REACTION_COOLDOWN_S,
+    );
+
+    assert_eq!(state.integrity_events.len(), 1);
+    assert_eq!(state.integrity_events[0]["type"], "CAMERA_NOT_USED");
+    assert_eq!(state.integrity_events[0]["detail"], "denied");
+}
+
 /// The greeting asks the candidate to pick a language, and a click is silent:
 /// it swaps the editor buffer and publishes the same code topic as a keystroke.
 /// Without a spoken confirmation the interviewer looks like they missed the one

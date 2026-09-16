@@ -332,6 +332,23 @@ test("report markup renders scores, verdict, and escaped feedback", () => {
   assert.match(body, /id="done"/);
 });
 
+test("report names a skipped camera and its reason neutrally", () => {
+  const session = {
+    report: {
+      incomplete: true,
+      summary: "Session complete.",
+      integrityEvents: [{ type: "CAMERA_NOT_USED", at: "now", severity: "info", detail: "denied" }],
+    },
+    problemTitle: "Two Sum",
+    language: "python",
+    code: "",
+    transcript: [],
+  };
+
+  assert.match(reportMarkup(session), /Camera not used \(denied\)/);
+  assert.match(reportMarkdown({ ...session, at: "2026-09-16" }), /Camera not used \(denied\)/);
+});
+
 test("report markup states every save outcome without hiding Download", () => {
   const session = {
     report: { incomplete: true, summary: "Done", hintsUsed: 0 },

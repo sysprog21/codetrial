@@ -235,6 +235,7 @@ pub fn sanitize_integrity_event(payload: &serde_json::Value) -> Option<serde_jso
         // rather than silence: a report with no face events must not be
         // mistaken for a report where the camera was watched and saw nothing.
         "CAMERA_RELEASED_TO_PRESENTER" => "CAMERA_RELEASED_TO_PRESENTER",
+        "CAMERA_NOT_USED" => "CAMERA_NOT_USED",
         "MICROPHONE_STATE_CHANGED" => "MICROPHONE_STATE_CHANGED",
         _ => return None,
     };

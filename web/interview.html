@@ -140,7 +140,7 @@
       <section id="audio-check" class="overlay">
         <div class="audio-check-card">
           <h2>Media preflight</h2>
-          <p>Confirm output, microphone, and camera before the interview starts.</p>
+          <p>Confirm output and microphone before the interview starts. Camera is optional unless this interview is recorded.</p>
           <p id="round-plan-summary" class="muted small"></p>
 
           <div class="audio-check-step" id="audio-step-output">
@@ -167,6 +167,9 @@
               default, so change that default in your browser or system settings before
               starting if you would rather it did not.
             </p>
+            <div class="audio-check-actions">
+              <button id="camera-skip" class="pill-button" type="button" hidden>Continue without camera</button>
+            </div>
           </div>
 
           <!-- Decided here, not in the sidebar: it changes which tracks the

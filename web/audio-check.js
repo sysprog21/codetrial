@@ -3,8 +3,9 @@
 // A voice interview is worthless if the candidate cannot hear the interviewer
 // or the interviewer cannot hear them, and both failures are silent: browsers
 // suspend audio output until a user gesture, and a muted or missing microphone
-// still yields a live track that carries nothing. Integrity mode also requires
-// an active camera before the room starts.
+// still yields a live track that carries nothing. A camera additionally proves
+// face presence unless the unrecorded candidate explicitly continues without
+// one.
 //
 // The logic here is deliberately free of Web Audio and DOM types so it can be
 // tested under `node --test`; interview.js supplies the real nodes.
@@ -52,13 +53,14 @@ export function mediaReadiness({
   micError = null,
   cameraReady = false,
   cameraError = null,
+  cameraSkipped = false,
   faceReady = true,
   faceError = null,
 } = {}) {
   const steps = {
     output: Boolean(outputConfirmed),
     mic: !micError && micPeak >= MIC_SILENT_PEAK,
-    camera: !cameraError && !faceError && Boolean(cameraReady) && Boolean(faceReady),
+    camera: cameraSkipped || (!cameraError && !faceError && Boolean(cameraReady) && Boolean(faceReady)),
   };
 
   if (!browserSupported) {
@@ -77,7 +79,7 @@ export function mediaReadiness({
       message: `Microphone unavailable: ${micError}. Grant access, then test again.`,
     };
   }
-  if (cameraError) {
+  if (cameraError && !cameraSkipped) {
     return {
       steps,
       ready: false,
@@ -85,7 +87,7 @@ export function mediaReadiness({
       message: `Camera unavailable: ${cameraError}. Grant access, then test again.`,
     };
   }
-  if (faceError) {
+  if (faceError && !cameraSkipped) {
     return {
       steps,
       ready: false,
@@ -155,6 +157,7 @@ export function preflightReadiness({
   outputConfirmed,
   micPeak,
   faceCheck,
+  cameraSkipped = false,
 }) {
   // Keyed on the track, not on the pool's stream. The stream exists from the
   // moment the preflight asks for a device, so testing it here would overwrite
@@ -188,5 +191,6 @@ export function preflightReadiness({
     cameraError: pool.errorOf("video"),
     faceReady: faceCheck.ready,
     faceError: faceCheck.error,
+    cameraSkipped,
   });
 }

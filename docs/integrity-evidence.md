@@ -8,6 +8,16 @@ it, and what CodeTrial declines to look for at all.
 Integrity features produce evidence for a person to review. Nothing here scores
 a candidate, and nothing here is a claim that anybody cheated.
 
+## Optional camera preflight
+
+Output confirmation and a working microphone are always required. On a server
+that does not record interviews, a candidate can continue without a camera
+when no camera is available, permission is denied, or they decline to use it.
+The browser records a signed `CAMERA_NOT_USED` event with one of `no_device`,
+`denied`, or `declined`; the report presents it as a neutral session condition.
+No face-presence worker runs in that case. Recording consent keeps the camera
+required, because the recording notice describes a video recording.
+
 ## Response windows
 
 The replay page lists a *response window* for each turn the interviewer took:

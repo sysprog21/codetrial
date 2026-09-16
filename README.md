@@ -33,8 +33,10 @@ the agent receives structured code rather than editor screenshots. Python and
 JavaScript run locally; C, C++, and Java run through Compiler Explorer, so
 source code leaves the browser for those three.
 
-Camera and microphone are required to start. Audio and code snapshots stay in
-memory unless [recording](#recording) is enabled, which is off by default.
+Output confirmation and a microphone are required to start. A camera is also
+required when [recording](#recording) is enabled; otherwise a candidate can
+continue without one and the report records that condition. Audio and code
+snapshots stay in memory unless recording is enabled, which is off by default.
 Candidate video reaches Gemini only with
 `CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED=true`. Face-presence analysis runs in
 the browser and reports itself unavailable rather than guessing.
@@ -117,6 +119,12 @@ Jim asks short, targeted questions between logical blocks, offers progressive
 conceptual hints, and uses the latest test run in the final assessment. Voice
 responses stop when the candidate interrupts. Say "can I get a hint?" when
 needed; hints affect the communication score.
+
+The media preflight always requires confirmed output and a working microphone.
+For an interview that is not recorded, a candidate may continue without a
+camera when it is unavailable or declined; the signed integrity trail and the
+report record that neutral condition and why. A recorded interview still
+requires its camera before it can start.
 
 Candidates can present the interview in Google Meet by sharing the CodeTrial tab
 with tab audio enabled. Meet owns the shared tab after that, and face-presence

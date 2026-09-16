@@ -333,6 +333,21 @@ test("a replacement preflight camera gets a fresh face check", () => {
     "a stale detector must not publish a verdict for the replacement camera");
 });
 
+test("an unrecorded preflight can continue without a camera", () => {
+  const page = read("interview.html");
+  const script = interviewSource();
+
+  assert.match(page, /id="camera-skip"/, "the optional path needs a reachable control");
+  assert.match(script, /recordingEnabled \|\| cameraSkipped/,
+    "recorded interviews must not offer the bypass a second time");
+  assert.match(script, /pool\.disable\("video"\)/,
+    "declining the camera must stop only its retry path");
+  assert.match(script, /type: "CAMERA_NOT_USED"/,
+    "the session must name the condition in its evidence trail");
+  assert.match(script, /else if \(!preflight\.cameraSkipped\)/,
+    "a skipped camera must not start the face-presence worker");
+});
+
 // The camera's liveness is judged on every preflight frame. The microphone's
 // is not: a level meter over a device that went away reports silence rather
 // than an error, so nothing asked the pool to look again and the media gate,

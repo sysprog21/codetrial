@@ -51,10 +51,25 @@ export function feedbackMarkup(title, section) {
   return `<section><h3>${escapeHtml(title)}</h3><h4>Strengths</h4><ul>${list(section.strengths)}</ul><h4>Improve</h4><ul>${list(section.improvements)}</ul></section>`;
 }
 
+/// How one integrity event reads: its label, and the detail line under it.
+///
+/// Both together, because an event whose reason is already in the label must
+/// not repeat it underneath. Deciding that here rather than in each renderer is
+/// what keeps the page and the exported markdown saying the same thing.
+function integrityEventText(event) {
+  if (event.type === "CAMERA_NOT_USED") {
+    return { label: `Camera not used (${event.detail || "declined"})`, detail: null };
+  }
+  return { label: event.type, detail: event.detail || null };
+}
+
 function integrityEvidenceMarkup(report = {}) {
-  const rows = (report.integrityEvents || []).map((event, index) => `
-    <li data-integrity-index="${index}"><strong>${escapeHtml(event.severity)}</strong> ${escapeHtml(event.type)} <span>${escapeHtml(event.at)}</span>${event.detail ? `<p>${escapeHtml(event.detail)}</p>` : ""}${sourceEventMarkup(event)}</li>
-  `).join("") || "<li>(none captured)</li>";
+  const rows = (report.integrityEvents || []).map((event, index) => {
+    const { label, detail } = integrityEventText(event);
+    return `
+    <li data-integrity-index="${index}"><strong>${escapeHtml(event.severity)}</strong> ${escapeHtml(label)} <span>${escapeHtml(event.at)}</span>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}${sourceEventMarkup(event)}</li>
+  `;
+  }).join("") || "<li>(none captured)</li>";
   return `<section><h3>Integrity Evidence</h3><ul>${rows}</ul><p class="muted small">${escapeHtml(chainSentence(report))}</p></section>`;
 }
 
@@ -253,7 +268,8 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
   const section = (title, feedbackSection) => `### ${title}\n\n**Strengths**\n${bullets(feedbackSection.strengths)}\n\n**Improvements**\n${bullets(feedbackSection.improvements)}\n`;
   const evidence = (report.integrityEvents || []).map((event) => {
     const sources = event.sourceEventIds?.length ? ` - sources: ${event.sourceEventIds.map(mdText).join(", ")}` : "";
-    return `- ${mdText(event.at)} [${mdText(event.severity)}] ${mdText(event.type)}${event.detail ? ` - ${mdText(event.detail)}` : ""}${sources}`;
+    const { label, detail } = integrityEventText(event);
+    return `- ${mdText(event.at)} [${mdText(event.severity)}] ${mdText(label)}${detail ? ` - ${mdText(detail)}` : ""}${sources}`;
   }).join("\n") || "(none captured)";
   const practiceNext = report.incomplete || !report.improvementPlan?.length
     ? []

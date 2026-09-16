@@ -301,6 +301,8 @@ const nodes = {
   audioStepMic: document.querySelector("#audio-step-mic"),
   audioStepCamera: document.querySelector("#audio-step-camera"),
   cameraState: document.querySelector("#camera-state"),
+  cameraNameDisclosure: document.querySelector("#camera-name-disclosure"),
+  cameraSkip: document.querySelector("#camera-skip"),
   cameraIntegrityVideo: document.querySelector("#camera-integrity-video"),
   audioJoin: document.querySelector("#audio-check-join"),
   meetPresentation: document.querySelector("#meet-presentation"),
@@ -366,7 +368,7 @@ async function init() {
   // Before the room, so nothing downstream ever sees the camera: the publisher,
   // the watchers and the heartbeat all read the stream, and handing them a
   // track that is about to vanish is what made this a special case everywhere.
-  const presenting = nodes.meetPresentation.checked;
+  const presenting = nodes.meetPresentation.checked && !preflight.cameraSkipped;
   if (presenting) releaseCameraToPresenter(preflight.userStream);
   // Now that the preflight holds a grant, the browser reports real device ids
   // and labels. Before this point the list is empty or a blank placeholder.
@@ -521,7 +523,9 @@ async function signInRequired() {
 function paintPreflight(state, hint) {
   nodes.audioStatus.textContent = hint || state.message;
   nodes.audioOutputState.textContent = state.steps.output ? "Confirmed" : "play a short tone.";
-  nodes.cameraState.textContent = state.steps.camera ? "Ready" : "grant access and keep video on.";
+  nodes.cameraState.textContent = state.cameraSkipped
+    ? `Not used (${state.cameraSkipReason}).`
+    : state.steps.camera ? "Ready" : "grant access and keep video on.";
   nodes.audioStatus.classList.toggle("critical", ["mic-error", "camera-error", "face-error", "browser"].includes(state.blocker));
   nodes.audioStepOutput.classList.toggle("done", state.steps.output);
   nodes.audioStepMic.classList.toggle("done", state.steps.mic);
@@ -539,6 +543,8 @@ function runAudioCheck() {
     const browserSupported = Boolean(mediaDevices?.getUserMedia);
     let outputConfirmed = false;
     let advanced = false;
+    let cameraSkipped = false;
+    let cameraSkipReason = null;
 
     // Built before anything reads it: `refresh` runs on the first frame and
     // asks the pool what the devices are doing.
@@ -602,12 +608,17 @@ function runAudioCheck() {
         outputConfirmed,
         micPeak: meter.peak,
         faceCheck,
+        cameraSkipped,
       });
 
     const refresh = () => {
       const state = sampleReadiness();
       if (hint && Date.now() >= hintUntil) hint = null;
+      state.cameraSkipped = cameraSkipped;
+      state.cameraSkipReason = cameraSkipReason;
       paintPreflight(state, hint);
+      nodes.cameraSkip.hidden = recordingEnabled || cameraSkipped;
+      nodes.cameraNameDisclosure.hidden = cameraSkipped;
       // Consent is a separate gate from media readiness on purpose. It is not
       // a device that can be proven, it is an answer, and folding it into
       // `mediaReadiness` would put a legal question inside the function that
@@ -638,7 +649,7 @@ function runAudioCheck() {
       pool.cancelRetry();
       faceCheck.close();
       void context?.close().catch(() => {});
-      resolve({ userStream: pool.stream });
+      resolve({ userStream: pool.stream, cameraSkipped, cameraSkipReason });
     };
 
     // Browsers keep audio blocked until a user gesture, and the tone is the
@@ -689,6 +700,16 @@ function runAudioCheck() {
     nodes.audioHeard.addEventListener("click", confirmOutput);
 
     nodes.audioJoin.addEventListener("click", finish);
+
+    nodes.cameraSkip.addEventListener("click", () => {
+      if (recordingEnabled || cameraSkipped) return;
+      cameraSkipReason = cameraSkipReasonFor(pool.errorOf("video"));
+      cameraSkipped = true;
+      pool.disable("video");
+      nodes.meetPresentation.checked = false;
+      faceCheck.close();
+      refresh();
+    });
 
     // Shown only where the server records. A consent step on a server that
     // records nothing asks for permission nobody needs and teaches candidates
@@ -905,8 +926,17 @@ async function connectLiveKit(connection, preflight, presenting = false) {
     type: "MEDIA_PREFLIGHT_PASSED",
     source: "preflight",
     severity: "info",
-    detail: `camera=${preflight.userStream?.getVideoTracks?.()[0]?.label || "none"}`,
+    detail: `camera=${preflight.cameraSkipped ? "not_used" : preflight.userStream?.getVideoTracks?.()[0]?.label || "none"}`,
   });
+  if (preflight.cameraSkipped) {
+    state.integrityAnalysisDetail = "camera_not_used";
+    await publishIntegrityEvent({
+      type: "CAMERA_NOT_USED",
+      source: "camera",
+      severity: "info",
+      detail: preflight.cameraSkipReason,
+    });
+  }
   startIntegrityHeartbeat();
   // Keyed on what the candidate chose, not on whether a camera happens to be
   // in the stream. A camera that died between the preflight and here leaves an
@@ -922,12 +952,19 @@ async function connectLiveKit(connection, preflight, presenting = false) {
       severity: "warning",
       detail: "meet_presentation",
     });
-  } else {
+  } else if (!preflight.cameraSkipped) {
     // Unchanged for every other interview, including one whose camera failed:
     // the worker starts, the sampler finds no track, and the analyser detail
     // says so instead of claiming a release.
     startIntegrityWorker();
   }
+}
+
+function cameraSkipReasonFor(error) {
+  const words = String(error || "").toLowerCase();
+  if (words.includes("not found") || words.includes("notfound") || words.includes("no camera")) return "no_device";
+  if (words.includes("permission") || words.includes("denied") || words.includes("not allowed") || words.includes("notallowed")) return "denied";
+  return "declined";
 }
 
 /// Meet cannot open a camera CodeTrial is holding, and the preflight has
