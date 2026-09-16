@@ -140,21 +140,25 @@ export function pickProblem(problems, difficulties, reports, random = Math.rando
 }
 
 function reviewStatus(reports, now) {
-  const outcomes = new Map();
-  for (const entry of reports) {
-    const decision = entry?.report?.decision;
-    if ((decision !== "HIRE" && decision !== "NO_HIRE") || !Number.isFinite(entry.at)) continue;
-    const seen = outcomes.get(entry.problemId) ?? { successes: 0, latest: null };
-    const successes = decision === "NO_HIRE" ? 0 : seen.successes + 1;
-    const latest = !seen.latest || entry.at > seen.latest.at
-      ? { at: entry.at, decision }
-      : seen.latest;
-    outcomes.set(entry.problemId, { successes, latest });
-  }
-  return new Map([...outcomes].map(([problemId, { successes, latest }]) => {
-    const intervalDays = latest.decision === "NO_HIRE"
-      ? REVIEW_INTERVAL_DAYS[0]
-      : REVIEW_INTERVAL_DAYS[Math.min(successes, REVIEW_INTERVAL_DAYS.length) - 1];
+    const outcomes = new Map();
+    for (const entry of reports) {
+        const decision = entry?.report?.decision;
+        if ((decision !== "HIRE" && decision !== "NO_HIRE") || !Number.isFinite(entry.at)) continue;
+        const entries = outcomes.get(entry.problemId) ?? [];
+        entries.push({ at: entry.at, decision });
+        outcomes.set(entry.problemId, entries);
+    }
+    return new Map([...outcomes].map(([problemId, entries]) => {
+        // History is persisted newest first, while a failed result resets only
+        // the streak that follows it. Ordering explicitly keeps an older miss
+        // from erasing newer successful reviews and leaving no interval.
+        const ordered = [...entries].sort((left, right) => left.at - right.at);
+        let successes = 0;
+        for (const entry of ordered) successes = entry.decision === "HIRE" ? successes + 1 : 0;
+        const latest = ordered.at(-1);
+        const intervalDays = latest.decision === "NO_HIRE"
+            ? REVIEW_INTERVAL_DAYS[0]
+            : REVIEW_INTERVAL_DAYS[Math.min(successes, REVIEW_INTERVAL_DAYS.length) - 1];
     return [problemId, { due: latest.at + intervalDays * DAY_MS <= now, intervalDays }];
   }));
 }

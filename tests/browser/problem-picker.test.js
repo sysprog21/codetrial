@@ -89,6 +89,23 @@ test("a failed review resets the interval", () => {
   assert.equal(choice.review.intervalDays, 1);
 });
 
+test("an older failed review does not erase newer successes", () => {
+  const now = 10 * day;
+  const choice = pickProblem(
+    bank,
+    new Set(["Easy"]),
+    [
+      completed("passed", now - 3 * day),
+      completed("passed", now - 4 * day),
+      { problemId: "passed", at: now - 5 * day, report: { decision: "NO_HIRE" } },
+    ],
+    first,
+    now,
+  );
+  assert.equal(choice.picked.id, "passed");
+  assert.equal(choice.review.intervalDays, 3);
+});
+
 test("selecting several difficulties draws from all of them", () => {
   const last = () => 1 - Number.EPSILON;
   assert.equal(pickProblem(bank, new Set(["Medium", "Hard"]), [], last).picked.id, "hard");
