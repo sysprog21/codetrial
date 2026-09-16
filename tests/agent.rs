@@ -219,12 +219,25 @@ fn near_time_up(state: RuntimeState) -> RuntimeState {
 /// regeneration path cannot drift apart.
 fn prompt_samples() -> Value {
     let problem = get_problem(Some("two-sum"));
+    let full_profile = InterviewProfile {
+        role: "backend engineer".to_string(),
+        seniority: Some(Seniority::Staff),
+        target_company: "Example Co".to_string(),
+        practice_focus: "Test boundaries".to_string(),
+    };
     let cold_state = RuntimeState {
         code: "def two_sum(nums, target):".to_string(),
         ..RuntimeState::default()
     };
     json!({
         "instructions": instructions(problem, 45),
+        "instructionsProfile": build_instructions_for_plan(
+            problem,
+            45,
+            &full_profile,
+            &InterviewGrounding::default(),
+            InterviewLoop::CodingBehavioral,
+        ),
         "greeting": greeting(problem),
         "languageChoice": language_choice("C++", LanguageChoiceContext::Start),
         "languageSwitch": language_choice("Java", LanguageChoiceContext::SwitchWithCode),
@@ -255,6 +268,9 @@ fn prompt_samples() -> Value {
         "testsPass": test_results_reaction("3/3 passed", true),
         "testsFail": test_results_reaction("2/3 passed", false),
         "testsSetupError": test_setup_error_reaction("The runner could not start."),
+        "logHint": log_hint_text(2),
+        "hintRung": hint_rung_text(2, 2, "Compare the current value with what you recorded."),
+        "hintRungWithheld": hint_rung_withheld_text(2),
         "report": report_prompt(ReportPromptInput {
             problem,
             transcript: "Candidate: I will use a hash map.",
@@ -549,6 +565,36 @@ fn prompts_match_frozen_fixture() {
         expected.as_object().expect("fixture is an object").len(),
         "{path} has keys no prompt builder produces"
     );
+}
+
+#[test]
+fn prompt_golden_digest_matches_versions() {
+    let expected: Value = serde_json::from_str(include_str!("golden/prompts.json"))
+        .expect("prompt fixture should parse");
+    let digest = format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&expected).expect("parsed prompt fixture should serialize")
+        )
+    );
+    let versions = (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION);
+    let expected_digest = [(
+        (2, 5),
+        "02e634f1b2a104bddc5ad9fd5b806822fc50ea5569e5412af19435973a51088b",
+    )]
+    .into_iter()
+    .find_map(|(candidate, digest)| (candidate == versions).then_some(digest));
+
+    match expected_digest {
+        Some(expected_digest) => assert_eq!(
+            digest, expected_digest,
+            "prompt golden digest changed to {digest}; bump the prompt version it changed and record the new digest"
+        ),
+        None => panic!(
+            "prompt versions {:?} have no golden digest; the new digest is {digest}. Bump the prompt version it changed and record it here",
+            versions
+        ),
+    }
 }
 
 #[test]

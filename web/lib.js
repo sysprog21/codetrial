@@ -403,8 +403,8 @@ export function loopLabel(value) {
 
 const textEncoder = new TextEncoder();
 
-/// The five versions this build produces. See `SCORABLE_CONTRACTS` for what it
-/// will score.
+/// The five versions this build produces. See `SCORABLE_SCHEMAS` for which
+/// report shapes it can score.
 ///
 /// Here rather than inside `sanitizeReport` so a test can read it. While it was
 /// function-local, moving it left the whole suite green with the supported-card
@@ -417,24 +417,18 @@ export const ACTIVE_CONTRACT = {
   rubricVersion: 1,
 };
 
-/// The bundles this build scores: the active one, and earlier ones whose rubric
-/// and report schema are the active ones. Bundle 4 differs from 5 only in the
-/// prompts that produced the report, so what its scores mean is unchanged, and
-/// refusing it would blank the scores on every report saved before bundle 5.
-/// The report keeps the bundle it claims, so its card still says which prompts
-/// wrote it.
-export const SCORABLE_CONTRACTS = [
-  ACTIVE_CONTRACT,
-  { ...ACTIVE_CONTRACT, bundleVersion: 4, livePromptVersion: 1, reportPromptVersion: 4 },
-];
+/// Report schemas this build can compare with the active rubric. Prompt-only
+/// bundle bumps retain the same score meaning, so compatibility is a predicate
+/// over provenance rather than a list that every prompt edit can forget.
+export const SCORABLE_SCHEMAS = [1];
 
 /// The report's contract bundle, and whether this build can score against it.
 ///
 /// Two answers rather than one, because they are not the same question. The
 /// bundle is what the report claims and is kept whenever it is well formed, so
-/// a reader is told which rubric produced it. Supported is whether the bundle is
-/// one of `SCORABLE_CONTRACTS`, and only that decides whether the scores below
-/// are shown.
+/// a reader is told which rubric produced it. Supported is whether the
+/// provenance is compatible with this rubric and schema, and only that decides
+/// whether the scores below are shown.
 /// A report with no bundle at all predates the contract and is neither.
 function reportContract(raw) {
   const keys = Object.keys(ACTIVE_CONTRACT);
@@ -445,9 +439,14 @@ function reportContract(raw) {
   const interviewContract = claimed === undefined
     ? null
     : wellFormed ? Object.fromEntries(keys.map((key) => [key, claimed[key]])) : null;
-  const unsupported = claimed !== undefined
-    && (interviewContract === null
-      || !SCORABLE_CONTRACTS.some((contract) => keys.every((key) => interviewContract[key] === contract[key])));
+  const supported = interviewContract !== null
+    && interviewContract.rubricVersion === ACTIVE_CONTRACT.rubricVersion
+    && SCORABLE_SCHEMAS.includes(interviewContract.reportSchemaVersion)
+    && interviewContract.bundleVersion >= 4
+    && interviewContract.bundleVersion <= ACTIVE_CONTRACT.bundleVersion
+    && interviewContract.livePromptVersion <= ACTIVE_CONTRACT.livePromptVersion
+    && interviewContract.reportPromptVersion <= ACTIVE_CONTRACT.reportPromptVersion;
+  const unsupported = claimed !== undefined && !supported;
   return { interviewContract, unsupported };
 }
 

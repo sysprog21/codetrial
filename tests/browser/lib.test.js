@@ -592,6 +592,40 @@ test("report contract migration preserves legacy and rejects unknown provenance"
   }
 });
 
+test("a prompt-only bump is still scored", () => {
+  const previousPrompts = {
+    ...ACTIVE_CONTRACT,
+    livePromptVersion: ACTIVE_CONTRACT.livePromptVersion - 1,
+    reportPromptVersion: ACTIVE_CONTRACT.reportPromptVersion - 1,
+  };
+  const report = sanitizeReport({ codingScore: 70, interviewContract: previousPrompts });
+  assert.equal(report.codingScore, 70);
+});
+
+test("a rubric bump is not scored under the old rubric", () => {
+  const report = sanitizeReport({
+    codingScore: 70,
+    interviewContract: { ...ACTIVE_CONTRACT, rubricVersion: ACTIVE_CONTRACT.rubricVersion + 1 },
+  });
+  assert.equal(report.incomplete, true);
+});
+
+test("a future bundle is not scored", () => {
+  const report = sanitizeReport({
+    codingScore: 70,
+    interviewContract: { ...ACTIVE_CONTRACT, bundleVersion: ACTIVE_CONTRACT.bundleVersion + 1 },
+  });
+  assert.equal(report.incomplete, true);
+});
+
+test("a bundle below the floor is not scored", () => {
+  const report = sanitizeReport({
+    codingScore: 70,
+    interviewContract: { ...ACTIVE_CONTRACT, bundleVersion: 3 },
+  });
+  assert.equal(report.incomplete, true);
+});
+
 test("round summaries require plan-consistent kinds budgets and statuses", () => {
   const coding = sanitizeReport({ interviewLoop: "coding_only", rounds: [
     { kind: "coding", budgetMin: 45, status: "complete" },
