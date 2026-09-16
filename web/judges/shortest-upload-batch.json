@@ -74,6 +74,16 @@
         ]
       ],
       "expected": 1
+    },
+    {
+      "label": "one required value",
+      "input": [
+        1,
+        [
+          1
+        ]
+      ],
+      "expected": 1
     }
   ],
   "paramNames": [

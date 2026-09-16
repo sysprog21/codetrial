@@ -61,6 +61,18 @@
         "sy",
         "sz"
       ]
+    },
+    {
+      "label": "one four choice digit",
+      "input": [
+        "7"
+      ],
+      "expected": [
+        "p",
+        "q",
+        "r",
+        "s"
+      ]
     }
   ],
   "paramNames": [

@@ -1,0 +1,3 @@
+# GAPS: 0
+# Every line names a judge that still needs five cases and a domain-valid
+# boundary case. Remove a line when its authored cases pass the validator.

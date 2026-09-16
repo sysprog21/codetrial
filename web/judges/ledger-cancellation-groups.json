@@ -74,6 +74,23 @@
           2
         ]
       ]
+    },
+    {
+      "label": "one balanced triplet",
+      "input": [
+        [
+          -1,
+          0,
+          1
+        ]
+      ],
+      "expected": [
+        [
+          -1,
+          0,
+          1
+        ]
+      ]
     }
   ],
   "paramNames": [

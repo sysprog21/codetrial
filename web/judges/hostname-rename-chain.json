@@ -63,6 +63,17 @@
         ]
       ],
       "expected": 4
+    },
+    {
+      "label": "one step vocabulary",
+      "input": [
+        "a",
+        "b",
+        [
+          "b"
+        ]
+      ],
+      "expected": 2
     }
   ],
   "paramNames": [

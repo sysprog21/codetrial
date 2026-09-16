@@ -61,6 +61,13 @@
         ]
       ],
       "expected": 3
+    },
+    {
+      "label": "no papers",
+      "input": [
+        []
+      ],
+      "expected": 0
     }
   ],
   "paramNames": [

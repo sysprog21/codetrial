@@ -58,6 +58,17 @@
         ]
       ],
       "expected": 1
+    },
+    {
+      "label": "balanced three nodes",
+      "input": [
+        [
+          5,
+          3,
+          7
+        ]
+      ],
+      "expected": 2
     }
   ],
   "paramNames": [

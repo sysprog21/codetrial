@@ -126,6 +126,41 @@
         -3,
         1
       ]
+    },
+    {
+      "label": "empty buffer",
+      "input": [
+        [
+          "EventQueue"
+        ],
+        [
+          [
+            2
+          ]
+        ]
+      ],
+      "expected": [
+        null
+      ]
+    },
+    {
+      "label": "empty buffer size",
+      "input": [
+        [
+          "EventQueue",
+          "size"
+        ],
+        [
+          [
+            2
+          ],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        0
+      ]
     }
   ],
   "methodReturnTypes": {

@@ -79,6 +79,14 @@
         3,
         4
       ]
+    },
+    {
+      "label": "empty list",
+      "input": [
+        [],
+        1
+      ],
+      "expected": []
     }
   ],
   "paramNames": [

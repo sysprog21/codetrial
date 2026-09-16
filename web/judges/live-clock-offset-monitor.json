@@ -176,6 +176,20 @@
         null,
         2
       ]
+    },
+    {
+      "label": "no readings",
+      "input": [
+        [
+          "OffsetMonitor"
+        ],
+        [
+          []
+        ]
+      ],
+      "expected": [
+        null
+      ]
     }
   ],
   "methodReturnTypes": {

@@ -153,6 +153,20 @@
         true,
         false
       ]
+    },
+    {
+      "label": "no stored words",
+      "input": [
+        [
+          "PatternLexicon"
+        ],
+        [
+          []
+        ]
+      ],
+      "expected": [
+        null
+      ]
     }
   ],
   "methodReturnTypes": {

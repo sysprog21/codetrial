@@ -81,6 +81,23 @@
           7
         ]
       ]
+    },
+    {
+      "label": "one child",
+      "input": [
+        [
+          1,
+          2
+        ]
+      ],
+      "expected": [
+        [
+          1
+        ],
+        [
+          2
+        ]
+      ]
     }
   ],
   "paramNames": [

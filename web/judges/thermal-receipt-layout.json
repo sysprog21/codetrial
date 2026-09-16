@@ -71,6 +71,18 @@
       "expected": [
         "Longword"
       ]
+    },
+    {
+      "label": "one character line",
+      "input": [
+        [
+          "a"
+        ],
+        1
+      ],
+      "expected": [
+        "a"
+      ]
     }
   ],
   "paramNames": [

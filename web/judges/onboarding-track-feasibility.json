@@ -78,6 +78,14 @@
         ]
       ],
       "expected": false
+    },
+    {
+      "label": "one module",
+      "input": [
+        1,
+        []
+      ],
+      "expected": true
     }
   ],
   "paramNames": [

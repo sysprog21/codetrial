@@ -30,6 +30,13 @@
         5
       ],
       "expected": 10
+    },
+    {
+      "label": "six towers",
+      "input": [
+        6
+      ],
+      "expected": 4
     }
   ],
   "paramNames": [

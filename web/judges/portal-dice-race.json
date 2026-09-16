@@ -129,6 +129,22 @@
         ]
       ],
       "expected": 2
+    },
+    {
+      "label": "plain two by two",
+      "input": [
+        [
+          [
+            -1,
+            -1
+          ],
+          [
+            -1,
+            -1
+          ]
+        ]
+      ],
+      "expected": 1
     }
   ],
   "paramNames": [

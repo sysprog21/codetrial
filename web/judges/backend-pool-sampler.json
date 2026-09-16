@@ -113,6 +113,42 @@
         true,
         2
       ]
+    },
+    {
+      "label": "new set",
+      "input": [
+        [
+          "BackendPool"
+        ],
+        [
+          []
+        ]
+      ],
+      "expected": [
+        null
+      ]
+    },
+    {
+      "label": "negative member",
+      "input": [
+        [
+          "BackendPool",
+          "insert",
+          "getRandom"
+        ],
+        [
+          [],
+          [
+            -3
+          ],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        true,
+        -3
+      ]
     }
   ],
   "methodReturnTypes": {

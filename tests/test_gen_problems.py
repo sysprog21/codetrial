@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -157,6 +158,100 @@ class VariantValidationTests(unittest.TestCase):
         self.assertEqual(
             posed["examples"], [{"input": "tokens = [5,7], amount = 1", "output": "-1"}]
         )
+
+    def test_a_judge_needs_five_cases_and_a_boundary_case(self):
+        with self.assertRaisesRegex(RuntimeError, "at least five cases"):
+            GEN.check_judge_case_coverage("coin-change", self.judge)
+
+        cases = [
+            {
+                "label": f"case {number}",
+                "input": [[number, number + 1], number],
+                "expected": number,
+            }
+            for number in range(1, 5)
+        ]
+        accepted = {
+            **self.judge,
+            "paramTypes": ["integer[]", "integer"],
+            "cases": [
+                *cases,
+                {"label": "zero amount", "input": [[1], 0], "expected": 0},
+            ],
+        }
+        GEN.check_judge_case_coverage("coin-change", accepted)
+
+        zero_in_numeric_array = {
+            **accepted,
+            "cases": cases
+            + [
+                {
+                    "label": "zero denomination",
+                    "input": [[0, 5], 3],
+                    "expected": 1,
+                }
+            ],
+        }
+        GEN.check_judge_case_coverage("coin-change", zero_in_numeric_array)
+
+        one_in_positive_scalar = {
+            **accepted,
+            "cases": cases
+            + [
+                {
+                    "label": "one amount",
+                    "input": [[2, 3], 1],
+                    "expected": 0,
+                }
+            ],
+        }
+        GEN.check_judge_case_coverage("coin-change", one_in_positive_scalar)
+
+        non_boundary_cases = [
+            {
+                "label": f"larger case {number}",
+                "input": [[number, number + 1], number + 1],
+                "expected": number,
+            }
+            for number in range(2, 6)
+        ]
+        without_boundary = {
+            **accepted,
+            "cases": non_boundary_cases
+            + [{"label": "another", "input": [[2, 3], 2], "expected": 1}],
+        }
+        with self.assertRaisesRegex(RuntimeError, "boundary case"):
+            GEN.check_judge_case_coverage("coin-change", without_boundary)
+
+    def test_case_gap_list_rejects_new_and_stale_exceptions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            gaps = Path(temporary) / "judge-case-gaps.txt"
+            gaps.write_text("# GAPS: 0\n")
+            with patch.dict(
+                GEN.check_judge_case_gaps.__globals__, {"JUDGE_CASE_GAPS_SOURCE": gaps}
+            ):
+                with self.assertRaisesRegex(RuntimeError, "at least five cases"):
+                    GEN.check_judge_case_gaps({"coin-change": self.judge})
+
+            gaps.write_text("# GAPS: 1\ncoin-change\n")
+            accepted = {
+                **self.judge,
+                "paramTypes": ["integer[]", "integer"],
+                "cases": [
+                    {
+                        "label": f"case {number}",
+                        "input": [[number, number + 1], number],
+                        "expected": number,
+                    }
+                    for number in range(1, 5)
+                ]
+                + [{"label": "zero amount", "input": [[1], 0], "expected": 0}],
+            }
+            with patch.dict(
+                GEN.check_judge_case_gaps.__globals__, {"JUDGE_CASE_GAPS_SOURCE": gaps}
+            ):
+                with self.assertRaisesRegex(RuntimeError, "now passes"):
+                    GEN.check_judge_case_gaps({"coin-change": accepted})
 
     def test_the_source_title_and_site_stay_out_of_what_the_candidate_reads(self):
         self.rejects("names the source title", title="Coin Change Kiosk")
@@ -534,15 +629,21 @@ class RuleStepTests(unittest.TestCase):
     def test_validated_variants_needs_every_problem_once_in_bank_order(self):
         problems = [self.problem]
         judges = {"coin-change": self.judge}
-        validated = GEN.validated_variants(
-            problems, judges, {"coin-change": self.variant}
-        )
-        self.assertEqual(list(validated), ["coin-change"])
-        self.assertIs(validated["coin-change"]["variant"], self.variant)
-        with self.assertRaisesRegex(RuntimeError, "every problem once, in bank order"):
-            GEN.validated_variants(problems, judges, {})
-        with self.assertRaisesRegex(RuntimeError, "keyed by problem id"):
-            GEN.validated_variants(problems, judges, [self.variant])
+        with patch.dict(
+            GEN.validated_variants.__globals__,
+            {"check_judge_case_gaps": lambda unused: None},
+        ):
+            validated = GEN.validated_variants(
+                problems, judges, {"coin-change": self.variant}
+            )
+            self.assertEqual(list(validated), ["coin-change"])
+            self.assertIs(validated["coin-change"]["variant"], self.variant)
+            with self.assertRaisesRegex(
+                RuntimeError, "every problem once, in bank order"
+            ):
+                GEN.validated_variants(problems, judges, {})
+            with self.assertRaisesRegex(RuntimeError, "keyed by problem id"):
+                GEN.validated_variants(problems, judges, [self.variant])
 
     def test_rust_variants_writes_every_field_the_server_reads(self):
         entry = GEN.validated_variant(self.problem, self.judge, self.variant)

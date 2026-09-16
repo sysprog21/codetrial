@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import json
 import re
+from pathlib import Path
 
 from .bank import (
     GUIDE_SOURCE,
@@ -230,6 +231,107 @@ def check_labels(problem_id: str, judge: dict) -> None:
             spells(name, label) for name in published
         ):
             raise RuntimeError(f"{problem_id}: case label {label!r} gives it away")
+
+
+def boundary_value(value: object, type_name: str) -> bool:
+    """Whether a value is small at the domain its declared type admits.
+
+    An empty list or zero element is a boundary for a numeric array; zero and
+    one cover inclusive and positive numeric lower bounds. The types are the
+    judge contract, so this predicate reads them instead of treating one JSON
+    shape as a boundary everywhere.
+    """
+    if type_name == "character[][]":
+        return isinstance(value, list) and (
+            len(value) <= 2
+            or all(
+                isinstance(row, list) and all(cell == "." for cell in row)
+                for row in value
+            )
+        )
+    if type_name.endswith("[][]"):
+        return isinstance(value, list) and (
+            len(value) <= 2
+            or any(isinstance(row, list) and len(row) <= 2 for row in value)
+        )
+    if type_name in {"integer[]", "number[]", "double[]"}:
+        return isinstance(value, list) and (len(value) <= 1 or 0 in value)
+    if type_name.endswith("[]") or type_name.startswith("list<"):
+        return isinstance(value, list) and len(value) <= 1
+    if type_name in {"integer", "number", "double"}:
+        return value in {0, 1}
+    if type_name in {"string", "character"}:
+        return isinstance(value, str) and len(value) <= 1
+    if type_name.lower() in {
+        "linkedlist",
+        "tree",
+        "listnode",
+        "treenode",
+        "node",
+    }:
+        return value is None or (isinstance(value, list) and len(value) <= 2)
+    return False
+
+
+def has_boundary_case(judge: dict) -> bool:
+    """Whether one case reaches a boundary valid for this judge's domain."""
+    if judge["kind"] == "class":
+        return any(len(case["input"][0]) <= 2 for case in judge["cases"])
+    return any(
+        any(
+            boundary_value(value, type_name)
+            for value, type_name in zip(case["input"], judge["paramTypes"])
+        )
+        for case in judge["cases"]
+    )
+
+
+def check_judge_case_coverage(problem_id: str, judge: dict) -> None:
+    """Every judge needs five cases and one domain-valid boundary case."""
+    if len(judge["cases"]) < 5:
+        raise RuntimeError(f"{problem_id}: judge needs at least five cases")
+    if not has_boundary_case(judge):
+        raise RuntimeError(f"{problem_id}: judge needs a boundary case")
+
+
+JUDGE_CASE_GAPS_SOURCE = (
+    Path(__file__).resolve().parents[2] / "problem-bank" / "judge-case-gaps.txt"
+)
+
+
+def judge_case_gaps() -> set[str]:
+    """The temporary, counted list of judges still awaiting authored cases."""
+    lines = JUDGE_CASE_GAPS_SOURCE.read_text().splitlines()
+    header = next((line for line in lines if line.startswith("# GAPS: ")), None)
+    if header is None or not header[8:].isdigit():
+        raise RuntimeError("judge-case-gaps.txt starts with '# GAPS: N'")
+    gaps = {line for line in lines if line and not line.startswith("#")}
+    if len(gaps) != int(header[8:]):
+        raise RuntimeError(
+            f"judge-case-gaps.txt declares {header[8:]} gaps and lists {len(gaps)}"
+        )
+    return gaps
+
+
+def check_judge_case_gaps(judges: dict) -> None:
+    """Every exception is still needed, and every missing case is listed."""
+    gaps = judge_case_gaps()
+    unknown = gaps - set(judges)
+    if unknown:
+        raise RuntimeError(
+            f"judge-case-gaps.txt names unknown judges: {sorted(unknown)}"
+        )
+    for problem_id, judge in judges.items():
+        try:
+            check_judge_case_coverage(problem_id, judge)
+        except RuntimeError:
+            if problem_id not in gaps:
+                raise
+        else:
+            if problem_id in gaps:
+                raise RuntimeError(
+                    f"{problem_id}: judge now passes; remove it from judge-case-gaps.txt"
+                )
 
 
 def posed(problem: dict, judge: dict, variant: dict) -> tuple[dict, dict]:
@@ -622,6 +724,7 @@ def validated_variants(problems: list[dict], judges: dict, variants: object) -> 
     """
     if not isinstance(variants, dict):
         raise RuntimeError("variants must be a JSON object keyed by problem id")
+    check_judge_case_gaps(judges)
     ids = [problem["id"] for problem in problems]
     if list(variants) != ids:
         raise RuntimeError(

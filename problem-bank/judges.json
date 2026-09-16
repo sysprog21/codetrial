@@ -151,6 +151,24 @@
           -1,
           2
         ]
+      },
+      {
+        "label": "one value in each side",
+        "input": [
+          [
+            2,
+            0
+          ],
+          1,
+          [
+            1
+          ],
+          1
+        ],
+        "expected": [
+          1,
+          2
+        ]
       }
     ],
     "paramNames": [
@@ -257,6 +275,14 @@
           1,
           2
         ]
+      },
+      {
+        "label": "empty collection",
+        "input": [
+          [],
+          1
+        ],
+        "expected": []
       }
     ],
     "paramNames": [
@@ -348,6 +374,17 @@
           2,
           3,
           5
+        ]
+      },
+      {
+        "label": "single value",
+        "input": [
+          [
+            6
+          ]
+        ],
+        "expected": [
+          6
         ]
       }
     ],
@@ -448,6 +485,17 @@
           2,
           3
         ]
+      },
+      {
+        "label": "single value",
+        "input": [
+          [
+            9
+          ]
+        ],
+        "expected": [
+          9
+        ]
       }
     ],
     "paramNames": [
@@ -508,6 +556,19 @@
           ]
         ],
         "expected": 5
+      },
+      {
+        "label": "steady winner",
+        "input": [
+          [
+            4,
+            1,
+            4,
+            2,
+            4
+          ]
+        ],
+        "expected": 4
       }
     ],
     "paramNames": [
@@ -683,6 +744,15 @@
           ]
         ],
         "expected": 4
+      },
+      {
+        "label": "one price",
+        "input": [
+          [
+            5
+          ]
+        ],
+        "expected": 0
       }
     ],
     "paramNames": [
@@ -751,6 +821,15 @@
           ]
         ],
         "expected": 3
+      },
+      {
+        "label": "one price",
+        "input": [
+          [
+            8
+          ]
+        ],
+        "expected": 0
       }
     ],
     "paramNames": [
@@ -973,6 +1052,13 @@
           ]
         ],
         "expected": 3
+      },
+      {
+        "label": "no papers",
+        "input": [
+          []
+        ],
+        "expected": 0
       }
     ],
     "paramNames": [
@@ -1098,6 +1184,42 @@
           true,
           2
         ]
+      },
+      {
+        "label": "new set",
+        "input": [
+          [
+            "RandomizedSet"
+          ],
+          [
+            []
+          ]
+        ],
+        "expected": [
+          null
+        ]
+      },
+      {
+        "label": "negative member",
+        "input": [
+          [
+            "RandomizedSet",
+            "insert",
+            "getRandom"
+          ],
+          [
+            [],
+            [
+              -3
+            ],
+            []
+          ]
+        ],
+        "expected": [
+          null,
+          true,
+          -3
+        ]
       }
     ]
   },
@@ -1172,6 +1294,19 @@
           12,
           -8,
           6
+        ]
+      },
+      {
+        "label": "two factors",
+        "input": [
+          [
+            2,
+            3
+          ]
+        ],
+        "expected": [
+          3,
+          2
         ]
       }
     ],
@@ -1252,6 +1387,20 @@
           ],
           [
             1
+          ]
+        ],
+        "expected": 0
+      },
+      {
+        "label": "two-stop circuit",
+        "input": [
+          [
+            2,
+            2
+          ],
+          [
+            1,
+            3
           ]
         ],
         "expected": 0
@@ -1461,6 +1610,13 @@
           "XLIX"
         ],
         "expected": 49
+      },
+      {
+        "label": "single symbol",
+        "input": [
+          "I"
+        ],
+        "expected": 1
       }
     ],
     "paramNames": [
@@ -1510,6 +1666,13 @@
           944
         ],
         "expected": "CMXLIV"
+      },
+      {
+        "label": "smallest value",
+        "input": [
+          1
+        ],
+        "expected": "I"
       }
     ],
     "paramNames": [
@@ -1674,6 +1837,13 @@
           "one 2 three"
         ],
         "expected": "three 2 one"
+      },
+      {
+        "label": "one word",
+        "input": [
+          "x"
+        ],
+        "expected": "x"
       }
     ],
     "paramNames": [
@@ -1784,6 +1954,14 @@
           "abc"
         ],
         "expected": 0
+      },
+      {
+        "label": "one character match",
+        "input": [
+          "a",
+          "a"
+        ],
+        "expected": 0
       }
     ],
     "paramNames": [
@@ -1868,6 +2046,18 @@
         ],
         "expected": [
           "Longword"
+        ]
+      },
+      {
+        "label": "one character line",
+        "input": [
+          [
+            "a"
+          ],
+          1
+        ],
+        "expected": [
+          "a"
         ]
       }
     ],
@@ -2241,6 +2431,23 @@
             2
           ]
         ]
+      },
+      {
+        "label": "one balanced triplet",
+        "input": [
+          [
+            -1,
+            0,
+            1
+          ]
+        ],
+        "expected": [
+          [
+            -1,
+            0,
+            1
+          ]
+        ]
       }
     ],
     "paramNames": [
@@ -2489,6 +2696,18 @@
           0,
           6
         ]
+      },
+      {
+        "label": "one word match",
+        "input": [
+          "a",
+          [
+            "a"
+          ]
+        ],
+        "expected": [
+          0
+        ]
       }
     ],
     "paramNames": [
@@ -2574,6 +2793,16 @@
             1,
             1,
             8
+          ]
+        ],
+        "expected": 1
+      },
+      {
+        "label": "one required value",
+        "input": [
+          1,
+          [
+            1
           ]
         ],
         "expected": 1
@@ -3021,6 +3250,23 @@
           ]
         ],
         "expected": false
+      },
+      {
+        "label": "blank board",
+        "input": [
+          [
+            [".", ".", ".", ".", ".", ".", ".", ".", "."],
+            [".", ".", ".", ".", ".", ".", ".", ".", "."],
+            [".", ".", ".", ".", ".", ".", ".", ".", "."],
+            [".", ".", ".", ".", ".", ".", ".", ".", "."],
+            [".", ".", ".", ".", ".", ".", ".", ".", "."],
+            [".", ".", ".", ".", ".", ".", ".", ".", "."],
+            [".", ".", ".", ".", ".", ".", ".", ".", "."],
+            [".", ".", ".", ".", ".", ".", ".", ".", "."],
+            [".", ".", ".", ".", ".", ".", ".", ".", ".", "."]
+          ]
+        ],
+        "expected": true
       }
     ],
     "paramNames": [
@@ -3931,6 +4177,14 @@
           "zyxz"
         ],
         "expected": true
+      },
+      {
+        "label": "one character pair",
+        "input": [
+          "a",
+          "b"
+        ],
+        "expected": true
       }
     ],
     "paramNames": [
@@ -3993,6 +4247,14 @@
         "input": [
           "abcab",
           "sun moon star sun moon"
+        ],
+        "expected": true
+      },
+      {
+        "label": "one word pair",
+        "input": [
+          "a",
+          "x"
         ],
         "expected": true
       }
@@ -4735,6 +4997,18 @@
           ]
         ],
         "expected": 2
+      },
+      {
+        "label": "one interval",
+        "input": [
+          [
+            [
+              1,
+              2
+            ]
+          ]
+        ],
+        "expected": 1
       }
     ],
     "paramNames": [
@@ -4784,6 +5058,13 @@
           "/a/./b/../../c/"
         ],
         "expected": "/c"
+      },
+      {
+        "label": "root only",
+        "input": [
+          "/"
+        ],
+        "expected": "/"
       }
     ],
     "paramNames": [
@@ -4958,6 +5239,20 @@
           -1,
           -1
         ]
+      },
+      {
+        "label": "new stack",
+        "input": [
+          [
+            "MinStack"
+          ],
+          [
+            []
+          ]
+        ],
+        "expected": [
+          null
+        ]
       }
     ]
   },
@@ -5034,6 +5329,15 @@
           ]
         ],
         "expected": 2
+      },
+      {
+        "label": "one operand",
+        "input": [
+          [
+            "7"
+          ]
+        ],
+        "expected": 7
       }
     ],
     "paramNames": [
@@ -5090,6 +5394,13 @@
           "10-(2+(3-4))"
         ],
         "expected": 9
+      },
+      {
+        "label": "one number",
+        "input": [
+          "1"
+        ],
+        "expected": 1
       }
     ],
     "paramNames": [
@@ -5379,6 +5690,21 @@
           -1,
           2,
           4
+        ]
+      },
+      {
+        "label": "one value on each side",
+        "input": [
+          [
+            1
+          ],
+          [
+            2
+          ]
+        ],
+        "expected": [
+          1,
+          2
         ]
       }
     ],
@@ -5971,6 +6297,13 @@
           -1,
           1
         ]
+      },
+      {
+        "label": "empty list",
+        "input": [
+          []
+        ],
+        "expected": []
       }
     ],
     "paramNames": [
@@ -6161,6 +6494,14 @@
           3,
           4
         ]
+      },
+      {
+        "label": "empty list",
+        "input": [
+          [],
+          1
+        ],
+        "expected": []
       }
     ],
     "paramNames": [
@@ -6227,6 +6568,15 @@
           ]
         ],
         "expected": 4
+      },
+      {
+        "label": "one node",
+        "input": [
+          [
+            1
+          ]
+        ],
+        "expected": 1
       }
     ],
     "paramNames": [
@@ -6420,6 +6770,17 @@
           null,
           3
         ]
+      },
+      {
+        "label": "one node",
+        "input": [
+          [
+            1
+          ]
+        ],
+        "expected": [
+          1
+        ]
       }
     ],
     "paramNames": [
@@ -6488,6 +6849,13 @@
             3,
             3
           ]
+        ],
+        "expected": true
+      },
+      {
+        "label": "empty tree",
+        "input": [
+          []
         ],
         "expected": true
       }
@@ -6600,6 +6968,23 @@
           4,
           5,
           6
+        ]
+      },
+      {
+        "label": "two nodes on the left",
+        "input": [
+          [
+            1,
+            2
+          ],
+          [
+            2,
+            1
+          ]
+        ],
+        "expected": [
+          1,
+          2
         ]
       }
     ],
@@ -6715,6 +7100,23 @@
           5,
           6
         ]
+      },
+      {
+        "label": "two nodes on the left",
+        "input": [
+          [
+            2,
+            1
+          ],
+          [
+            2,
+            1
+          ]
+        ],
+        "expected": [
+          1,
+          2
+        ]
       }
     ],
     "paramNames": [
@@ -6808,6 +7210,23 @@
           [
             5,
             7
+          ]
+        ]
+      },
+      {
+        "label": "one child",
+        "input": [
+          [
+            1,
+            2
+          ]
+        ],
+        "expected": [
+          [
+            1
+          ],
+          [
+            2
           ]
         ]
       }
@@ -7155,6 +7574,15 @@
           ]
         ],
         "expected": 6
+      },
+      {
+        "label": "one node",
+        "input": [
+          [
+            5
+          ]
+        ],
+        "expected": 5
       }
     ],
     "paramNames": [
@@ -7281,6 +7709,51 @@
           1,
           2,
           3,
+          false
+        ]
+      },
+      {
+        "label": "empty tree",
+        "input": [
+          [
+            "BSTIterator"
+          ],
+          [
+            [
+              []
+            ]
+          ]
+        ],
+        "expected": [
+          null
+        ]
+      },
+      {
+        "label": "right skew bst",
+        "input": [
+          [
+            "BSTIterator",
+            "next",
+            "next",
+            "hasNext"
+          ],
+          [
+            [
+              [
+                1,
+                null,
+                2
+              ]
+            ],
+            [],
+            [],
+            []
+          ]
+        ],
+        "expected": [
+          null,
+          1,
+          2,
           false
         ]
       }
@@ -8038,6 +8511,17 @@
           ]
         ],
         "expected": 1
+      },
+      {
+        "label": "balanced three nodes",
+        "input": [
+          [
+            5,
+            3,
+            7
+          ]
+        ],
+        "expected": 2
       }
     ],
     "paramNames": [
@@ -8216,6 +8700,13 @@
             12,
             20
           ]
+        ],
+        "expected": true
+      },
+      {
+        "label": "empty tree",
+        "input": [
+          []
         ],
         "expected": true
       }
@@ -8432,6 +8923,22 @@
           0,
           2
         ]
+      },
+      {
+        "label": "zero pair: nums=[0,5,-5,0], target=0",
+        "input": [
+          [
+            0,
+            5,
+            -5,
+            0
+          ],
+          0
+        ],
+        "expected": [
+          0,
+          3
+        ]
       }
     ],
     "paramNames": [
@@ -8600,6 +9107,43 @@
           null,
           10,
           2
+        ]
+      },
+      {
+        "label": "new cache",
+        "input": [
+          [
+            "LRUCache"
+          ],
+          [
+            [
+              1
+            ]
+          ]
+        ],
+        "expected": [
+          null
+        ]
+      },
+      {
+        "label": "missing key",
+        "input": [
+          [
+            "LRUCache",
+            "get"
+          ],
+          [
+            [
+              2
+            ],
+            [
+              1
+            ]
+          ]
+        ],
+        "expected": [
+          null,
+          -1
         ]
       }
     ]
@@ -9277,6 +9821,29 @@
           4,
           0.25
         ]
+      },
+      {
+        "label": "one reciprocal query",
+        "input": [
+          [
+            [
+              "a",
+              "b"
+            ]
+          ],
+          [
+            2
+          ],
+          [
+            [
+              "b",
+              "a"
+            ]
+          ]
+        ],
+        "expected": [
+          0.5
+        ]
       }
     ],
     "paramNames": [
@@ -9371,6 +9938,14 @@
           ]
         ],
         "expected": false
+      },
+      {
+        "label": "one module",
+        "input": [
+          1,
+          []
+        ],
+        "expected": true
       }
     ],
     "paramNames": [
@@ -9628,6 +10203,22 @@
           ]
         ],
         "expected": 2
+      },
+      {
+        "label": "plain two by two",
+        "input": [
+          [
+            [
+              -1,
+              -1
+            ],
+            [
+              -1,
+              -1
+            ]
+          ]
+        ],
+        "expected": 1
       }
     ],
     "paramNames": [
@@ -9688,6 +10279,15 @@
           ]
         ],
         "expected": 3
+      },
+      {
+        "label": "already matching",
+        "input": [
+          "AACCGGTT",
+          "AACCGGTT",
+          []
+        ],
+        "expected": 0
       }
     ],
     "paramNames": [
@@ -9767,6 +10367,17 @@
           ]
         ],
         "expected": 4
+      },
+      {
+        "label": "one step vocabulary",
+        "input": [
+          "a",
+          "b",
+          [
+            "b"
+          ]
+        ],
+        "expected": 2
       }
     ],
     "paramNames": [
@@ -9936,6 +10547,20 @@
           true,
           false
         ]
+      },
+      {
+        "label": "no stored words",
+        "input": [
+          [
+            "Trie"
+          ],
+          [
+            []
+          ]
+        ],
+        "expected": [
+          null
+        ]
       }
     ]
   },
@@ -10093,6 +10718,20 @@
           null,
           true,
           false
+        ]
+      },
+      {
+        "label": "no stored words",
+        "input": [
+          [
+            "WordDictionary"
+          ],
+          [
+            []
+          ]
+        ],
+        "expected": [
+          null
         ]
       }
     ]
@@ -10320,6 +10959,18 @@
           "sx",
           "sy",
           "sz"
+        ]
+      },
+      {
+        "label": "one four choice digit",
+        "input": [
+          "7"
+        ],
+        "expected": [
+          "p",
+          "q",
+          "r",
+          "s"
         ]
       }
     ],
@@ -10550,6 +11201,25 @@
             -1
           ]
         ]
+      },
+      {
+        "label": "two positive values",
+        "input": [
+          [
+            2,
+            3
+          ]
+        ],
+        "expected": [
+          [
+            2,
+            3
+          ],
+          [
+            3,
+            2
+          ]
+        ]
       }
     ],
     "paramNames": [
@@ -10711,6 +11381,13 @@
           5
         ],
         "expected": 10
+      },
+      {
+        "label": "six towers",
+        "input": [
+          6
+        ],
+        "expected": 4
       }
     ],
     "paramNames": [
@@ -10778,6 +11455,15 @@
           "()(())()",
           "()()(())",
           "()()()()"
+        ]
+      },
+      {
+        "label": "zero pairs",
+        "input": [
+          0
+        ],
+        "expected": [
+          ""
         ]
       }
     ],
@@ -10986,6 +11672,21 @@
           null,
           null,
           8
+        ]
+      },
+      {
+        "label": "three centered values",
+        "input": [
+          [
+            -1,
+            0,
+            1
+          ]
+        ],
+        "expected": [
+          0,
+          -1,
+          1
         ]
       }
     ],
@@ -14525,6 +15226,20 @@
           null,
           2
         ]
+      },
+      {
+        "label": "no readings",
+        "input": [
+          [
+            "MedianFinder"
+          ],
+          [
+            []
+          ]
+        ],
+        "expected": [
+          null
+        ]
       }
     ]
   },
@@ -14730,6 +15445,22 @@
           [[1], [12], [], [-3], [], []]
         ],
         "expected": [null, true, 12, true, -3, 1]
+      },
+      {
+        "label": "empty buffer",
+        "input": [
+          ["RingBuffer"],
+          [[2]]
+        ],
+        "expected": [null]
+      },
+      {
+        "label": "empty buffer size",
+        "input": [
+          ["RingBuffer", "size"],
+          [[2], []]
+        ],
+        "expected": [null, 0]
       }
     ]
   }

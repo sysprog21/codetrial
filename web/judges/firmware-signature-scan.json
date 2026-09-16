@@ -42,6 +42,14 @@
         "abc"
       ],
       "expected": 0
+    },
+    {
+      "label": "one character match",
+      "input": [
+        "a",
+        "a"
+      ],
+      "expected": 0
     }
   ],
   "paramNames": [

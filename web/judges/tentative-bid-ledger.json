@@ -161,6 +161,20 @@
         -1,
         -1
       ]
+    },
+    {
+      "label": "new stack",
+      "input": [
+        [
+          "BidLedger"
+        ],
+        [
+          []
+        ]
+      ],
+      "expected": [
+        null
+      ]
     }
   ],
   "methodReturnTypes": {

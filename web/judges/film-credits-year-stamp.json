@@ -37,6 +37,13 @@
         944
       ],
       "expected": "CMXLIV"
+    },
+    {
+      "label": "smallest value",
+      "input": [
+        1
+      ],
+      "expected": "I"
     }
   ],
   "paramNames": [

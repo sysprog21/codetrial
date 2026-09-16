@@ -154,6 +154,43 @@
         10,
         2
       ]
+    },
+    {
+      "label": "new cache",
+      "input": [
+        [
+          "ThumbnailStore"
+        ],
+        [
+          [
+            1
+          ]
+        ]
+      ],
+      "expected": [
+        null
+      ]
+    },
+    {
+      "label": "missing key",
+      "input": [
+        [
+          "ThumbnailStore",
+          "get"
+        ],
+        [
+          [
+            2
+          ],
+          [
+            1
+          ]
+        ]
+      ],
+      "expected": [
+        null,
+        -1
+      ]
     }
   ],
   "methodReturnTypes": {

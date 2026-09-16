@@ -37,6 +37,13 @@
         "XLIX"
       ],
       "expected": 49
+    },
+    {
+      "label": "single symbol",
+      "input": [
+        "I"
+      ],
+      "expected": 1
     }
   ],
   "paramNames": [

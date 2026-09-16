@@ -87,6 +87,17 @@
         2,
         3
       ]
+    },
+    {
+      "label": "single value",
+      "input": [
+        [
+          9
+        ]
+      ],
+      "expected": [
+        9
+      ]
     }
   ],
   "paramNames": [

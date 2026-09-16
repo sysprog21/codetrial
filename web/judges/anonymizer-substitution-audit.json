@@ -50,6 +50,14 @@
         "zyxz"
       ],
       "expected": true
+    },
+    {
+      "label": "one character pair",
+      "input": [
+        "a",
+        "b"
+      ],
+      "expected": true
     }
   ],
   "paramNames": [

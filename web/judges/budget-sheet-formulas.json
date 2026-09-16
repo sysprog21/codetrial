@@ -44,6 +44,13 @@
         "10-(2+(3-4))"
       ],
       "expected": 9
+    },
+    {
+      "label": "one number",
+      "input": [
+        "1"
+      ],
+      "expected": 1
     }
   ],
   "paramNames": [

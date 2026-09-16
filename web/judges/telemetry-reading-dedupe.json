@@ -78,6 +78,17 @@
         3,
         5
       ]
+    },
+    {
+      "label": "single value",
+      "input": [
+        [
+          6
+        ]
+      ],
+      "expected": [
+        6
+      ]
     }
   ],
   "paramNames": [
