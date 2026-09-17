@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import json
 import re
+from pathlib import Path
 
 from .bank import (
     GUIDE_SOURCE,
@@ -232,6 +233,140 @@ def check_labels(problem_id: str, judge: dict) -> None:
             raise RuntimeError(f"{problem_id}: case label {label!r} gives it away")
 
 
+def boundary_value(value: object, type_name: str) -> bool:
+    """Whether a value is small at the domain its declared type admits.
+
+    An empty list or zero element is a boundary for a numeric array; zero and
+    one cover inclusive and positive numeric lower bounds. The types are the
+    judge contract, so this predicate reads them instead of treating one JSON
+    shape as a boundary everywhere.
+    """
+    if type_name == "character[][]":
+        return isinstance(value, list) and (
+            len(value) <= 2
+            or all(
+                isinstance(row, list) and all(cell == "." for cell in row)
+                for row in value
+            )
+        )
+    if type_name.endswith("[][]"):
+        return isinstance(value, list) and (
+            len(value) <= 2
+            or any(isinstance(row, list) and len(row) <= 2 for row in value)
+        )
+    if type_name in {"integer[]", "number[]", "double[]"}:
+        return isinstance(value, list) and (len(value) <= 1 or 0 in value)
+    if type_name.endswith("[]") or type_name.startswith("list<"):
+        return isinstance(value, list) and len(value) <= 1
+    if type_name in {"integer", "number", "double"}:
+        return value in {0, 1}
+    if type_name in {"string", "character"}:
+        return isinstance(value, str) and len(value) <= 1
+    if type_name.lower() in {
+        "linkedlist",
+        "tree",
+        "binarytree",
+        "listnode",
+        "treenode",
+        "node",
+    }:
+        return value is None or (isinstance(value, list) and len(value) <= 2)
+    return False
+
+
+def has_boundary_case(judge: dict) -> bool:
+    """Whether one case reaches a boundary valid for this judge's domain."""
+    if judge["kind"] == "class":
+        constructor_types = judge.get("constructorArgTypes", [])
+        for case in judge["cases"]:
+            operations, arguments = case["input"]
+            if not operations or not arguments:
+                continue
+            constructor = arguments[0]
+            if any(
+                boundary_value(value, type_name)
+                for value, type_name in zip(constructor, constructor_types)
+            ):
+                return True
+            # Zero-argument constructors have no value to inspect. Their first
+            # method call still needs an actual small or empty value, rather
+            # than treating a constructor-plus-one-method sequence as proof.
+            if not constructor_types and any(
+                class_boundary_value(value) for args in arguments for value in args
+            ):
+                return True
+        return False
+    return any(
+        any(
+            boundary_value(value, type_name)
+            for value, type_name in zip(case["input"], judge["paramTypes"])
+        )
+        for case in judge["cases"]
+    )
+
+
+def class_boundary_value(value: object) -> bool:
+    """Whether an untyped class-operation argument carries a boundary value."""
+    if (
+        value is None
+        or value == 0
+        or value == 1
+        or (isinstance(value, str) and len(value) <= 1)
+    ):
+        return True
+    return isinstance(value, list) and (
+        not value or any(class_boundary_value(item) for item in value)
+    )
+
+
+def check_judge_case_coverage(problem_id: str, judge: dict) -> None:
+    """Every judge needs five cases and one domain-valid boundary case."""
+    if len(judge["cases"]) < 5:
+        raise RuntimeError(f"{problem_id}: judge needs at least five cases")
+    if not has_boundary_case(judge):
+        raise RuntimeError(f"{problem_id}: judge needs a boundary case")
+
+
+JUDGE_CASE_GAPS_SOURCE = (
+    Path(__file__).resolve().parents[2] / "problem-bank" / "judge-case-gaps.txt"
+)
+
+
+def judge_case_gaps() -> set[str]:
+    """The temporary, counted list of judges still awaiting authored cases."""
+    lines = JUDGE_CASE_GAPS_SOURCE.read_text().splitlines()
+    header = next((line for line in lines if line.startswith("# GAPS: ")), None)
+    if header is None or not header[8:].isdigit():
+        raise RuntimeError("judge-case-gaps.txt starts with '# GAPS: N'")
+    gaps = {line for line in lines if line and not line.startswith("#")}
+    if len(gaps) != int(header[8:]):
+        raise RuntimeError(
+            f"judge-case-gaps.txt declares {header[8:]} gaps and lists {len(gaps)}"
+        )
+    return gaps
+
+
+def check_judge_case_gaps(judges: dict) -> None:
+    """Every exception is still needed, and every missing case is listed."""
+    gaps = judge_case_gaps()
+    unknown = gaps - set(judges)
+    if unknown:
+        raise RuntimeError(
+            f"judge-case-gaps.txt names unknown judges: {sorted(unknown)}"
+        )
+    for problem_id, judge in judges.items():
+        try:
+            check_judge_case_coverage(problem_id, judge)
+        except RuntimeError:
+            if problem_id not in gaps:
+                raise
+        else:
+            if problem_id in gaps:
+                raise RuntimeError(
+                    f"{problem_id}: judge now passes; remove it from judge-case-gaps.txt"
+                )
+
+
 def posed(problem: dict, judge: dict, variant: dict) -> tuple[dict, dict]:
     """The bank entry and judge with the variant's names in place of the published ones.
 
@@ -298,6 +433,20 @@ def posed(problem: dict, judge: dict, variant: dict) -> tuple[dict, dict]:
             }
             for case in judge["cases"]
         ]
+        # Class methods do not carry a return type in the source bank. The
+        # harness must still know which calls are void when a candidate adds a
+        # case without an expected result, so publish that stable property once
+        # in the judge rather than infer it from the candidate's case.
+        returns = {}
+        for case in judge["cases"]:
+            for operation, expected in zip(case["input"][0], case["expected"]):
+                if operation != judge["className"]:
+                    returns[operation] = (
+                        "value"
+                        if expected is not None
+                        else returns.get(operation, "void")
+                    )
+        judge["methodReturnTypes"] = returns
     if "paramNames" in judge:
         judge["paramNames"] = [renames.get(name, name) for name in judge["paramNames"]]
     problem = {
@@ -355,7 +504,7 @@ def check_new_names(problem: dict, judge: dict, variant: dict) -> None:
     # held to the same list of names it may not bring back.
     published_names = {
         camel_words(name)
-        for name in (problem["title"], judge.get("entry"), judge.get("className"))
+        for name in (problem.get("title"), judge.get("entry"), judge.get("className"))
         if name
     }
     pattern = r"[a-z][A-Za-z0-9]+" if declared == "entry" else r"[A-Z][A-Za-z0-9]+"
@@ -453,6 +602,21 @@ def check_entry_named(
             )
 
 
+def check_c_return_size_ownership(problem_id: str, shipped: dict) -> None:
+    """A C array returned through returnSize states who frees its storage."""
+    code = shipped["starterCode"].get("c")
+    if code is None or not re.search(r"\breturnSize\b", code):
+        return
+    comments = "\n".join(re.findall(r"/\*.*?\*/|//[^\n]*", code, re.DOTALL))
+    note = re.search(
+        r"malloced.*caller calls free", comments, re.IGNORECASE | re.DOTALL
+    )
+    if note is None:
+        raise RuntimeError(
+            f"{problem_id}: C starter with returnSize needs the malloc/free note"
+        )
+
+
 def published_cases(problem: dict, judge: dict) -> tuple[set, set]:
     """What the published examples give away, and which judge cases repeat it.
 
@@ -536,7 +700,9 @@ def rendered_examples(problem: dict, variant: dict, graded: dict) -> tuple[list,
                 )
         # Judge data is on the page too, and a published sample sentence can
         # carry the title: "This is an example of text justification."
-        if names_source(problem["title"], " ".join(rendered.values())):
+        if problem.get("title") and names_source(
+            problem["title"], " ".join(rendered.values())
+        ):
             raise RuntimeError(f"{problem_id}: examples[{at}] names the source title")
         examples.append(rendered)
     return examples, shown
@@ -579,11 +745,17 @@ def validated_variant(problem: dict, judge: dict, variant: object) -> dict:
     check_new_names(problem, judge, variant)
     shipped, graded = posed(problem, judge, variant)
     check_labels(problem_id, {**judge, "cases": graded["cases"]})
-    check_source_absent(problem, variant, text, shipped, graded)
+    original = problem.get("origin") == "original"
+    if not original:
+        check_source_absent(problem, variant, text, shipped, graded)
     check_entry_named(problem_id, text["brief"], shipped, graded)
-    quotable, published = published_cases(problem, judge)
+    check_c_return_size_ownership(problem_id, shipped)
+    quotable, published = (
+        published_cases(problem, judge) if not original else (set(), set())
+    )
     examples, shown = rendered_examples(problem, variant, graded)
-    check_prose_quotes_nothing(problem_id, variant, text, quotable)
+    if not original:
+        check_prose_quotes_nothing(problem_id, variant, text, quotable)
     # The published examples are the most recognisable thing about a problem:
     # "pwwkew" or "paper" and "title" name it as surely as the title does. None
     # of them is shown, so a judge built only from them needs a case of its own.
@@ -601,6 +773,7 @@ def validated_variants(problems: list[dict], judges: dict, variants: object) -> 
     """
     if not isinstance(variants, dict):
         raise RuntimeError("variants must be a JSON object keyed by problem id")
+    check_judge_case_gaps(judges)
     ids = [problem["id"] for problem in problems]
     if list(variants) != ids:
         raise RuntimeError(

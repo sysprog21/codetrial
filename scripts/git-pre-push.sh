@@ -9,7 +9,7 @@ set -u
 
 remote=${1:-}
 
-# From the repository, not from $0: git invokes the hook through the symlink in
+# From the repository, not from $0: git invokes the hook through the wrapper in
 # .git/hooks, so dirname of $0 names that directory and not scripts/. Hooks run
 # with the working tree root as the working directory.
 script_dir=$(git rev-parse --show-toplevel)/scripts

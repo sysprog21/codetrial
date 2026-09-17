@@ -12,6 +12,9 @@
 
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+use crate::config::DEFAULT_MAX_INTERIM_REVIEWS;
+
 use crate::agent::{
     RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput, candidate_lines, numbered,
     proactive_review, significant_change, silence_nudge, timing_decision, unreviewed_from,
@@ -75,6 +78,10 @@ pub(super) struct RuntimeActivity {
     pub(super) discarding_output: bool,
     /// When a pause was last read into. Sized against `INTERIM_COOLDOWN`.
     pub(super) last_interim: Instant,
+    /// The quota is fixed when the interview starts. A later config reload
+    /// must not change how much of this interview may spend the report model.
+    pub(super) max_interim_reviews: usize,
+    pub(super) interim_reviews: usize,
     /// A tool response went out on this socket and its generation has not come
     /// back. Distinct from `awaiting_reply_since`, which a barge-in also stamps
     /// while Gemini owes nothing: this is generation already paid for, and
@@ -106,7 +113,12 @@ pub(super) enum Floor {
 }
 
 impl RuntimeActivity {
+    #[cfg(test)]
     pub(super) fn new(now: Instant) -> Self {
+        Self::with_interim_review_cap(now, DEFAULT_MAX_INTERIM_REVIEWS)
+    }
+
+    pub(super) fn with_interim_review_cap(now: Instant, max_interim_reviews: usize) -> Self {
         Self {
             last_code_change: now,
             last_user_speech: now,
@@ -130,6 +142,8 @@ impl RuntimeActivity {
             // interview are the greeting and the problem statement, and there
             // is nothing to assess in them.
             last_interim: now,
+            max_interim_reviews,
+            interim_reviews: 0,
         }
     }
 
@@ -199,9 +213,13 @@ impl RuntimeActivity {
     /// a select arm already guarded on it, and `watch_prompt` does not re-ask
     /// it either.
     pub(super) fn claim_interim_review(&mut self, state: &RuntimeState, now: Instant) -> bool {
+        if self.interim_reviews >= self.max_interim_reviews {
+            return false;
+        }
         let due = self.interim_review_due(state, now);
         if due {
             self.last_interim = now;
+            self.interim_reviews += 1;
         }
         due
     }

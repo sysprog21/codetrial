@@ -2,6 +2,7 @@
 name = "codetrial"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.98"
 
 # The gate already runs `cargo clippy -- -D warnings`, and an editor running a
 # bare `cargo clippy` used to disagree with it: warnings there, a red gate here,

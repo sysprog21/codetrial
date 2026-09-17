@@ -99,6 +99,23 @@
         5,
         6
       ]
+    },
+    {
+      "label": "two nodes on the left",
+      "input": [
+        [
+          1,
+          2
+        ],
+        [
+          2,
+          1
+        ]
+      ],
+      "expected": [
+        1,
+        2
+      ]
     }
   ],
   "paramNames": [

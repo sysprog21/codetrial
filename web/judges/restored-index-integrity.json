@@ -72,6 +72,22 @@
         ]
       ],
       "expected": true
+    },
+    {
+      "label": "single key",
+      "input": [
+        [
+          0
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "label": "empty tree",
+      "input": [
+        []
+      ],
+      "expected": true
     }
   ],
   "paramNames": [

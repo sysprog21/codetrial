@@ -15,7 +15,10 @@ test("top interview manifest records 150 unique slugs grouped by topic", async (
   assert.equal(new Set(slugs).size, 150);
   assert.equal(manifest.sections.length, 23);
   assert.ok(manifest.sections.every((section) => section.topic && section.slugs.length > 0));
-  assert.deepEqual([...new Set(slugs)].sort(), bank.map((problem) => problem.id).sort());
+  assert.deepEqual(
+    [...new Set(slugs)].sort(),
+    bank.filter((problem) => problem.origin !== "original").map((problem) => problem.id).sort(),
+  );
 });
 
 test("leetcode fetcher never asks GraphQL for statement prose", async () => {
@@ -50,7 +53,8 @@ test("all browser problems pose a scenario and expose only neutral interview met
 
   for (const source of bank) {
     const entry = pageMap[source.id];
-    assert.deepEqual([entry.source, entry.title], [source.title, entry.title]);
+    if (source.origin === "original") assert.equal(entry.source, undefined);
+    else assert.deepEqual([entry.source, entry.title], [source.title, entry.title]);
     const problem = JSON.parse(await readFile(repoFile(`web/problems/${entry.page}.json`), "utf8"));
     assert.ok(!entry.page.includes(source.id), `${source.id} is served under its published slug`);
     assert.equal(problem.page, entry.page, `${source.id} does not know the page it is served as`);
@@ -59,7 +63,7 @@ test("all browser problems pose a scenario and expose only neutral interview met
     // one-word id is exempt, as one-word titles are: `triangle` is also the
     // name of that judge's parameter.
     // The published title is shown small beside the scenario; the id is not.
-    assert.equal(problem.source, source.title);
+    assert.equal(problem.source, source.origin === "original" ? undefined : source.title);
     if (!/^[a-z]+$/.test(source.id)) {
       const judge = await readFile(repoFile(`web/judges/${entry.page}.json`), "utf8");
       for (const text of [JSON.stringify(problem), judge]) {
@@ -75,7 +79,7 @@ test("all browser problems pose a scenario and expose only neutral interview met
       direction.startsWith("Ask ") && !/hash|stack|tree|sort|pointer|dynamic programming/i.test(direction)));
     assert.deepEqual(
       Object.keys(problem).sort(),
-      ["brief", "difficulty", "examples", "interviewMetadata", "page", "source", "starterCode", "title"],
+      ["brief", "difficulty", "examples", "interviewMetadata", "page", "starterCode", "title", ...(source.origin === "original" ? [] : ["source"])].sort(),
       source.id,
     );
     assert.notEqual(problem.title, source.title);

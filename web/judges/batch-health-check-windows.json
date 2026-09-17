@@ -114,6 +114,18 @@
         ]
       ],
       "expected": 2
+    },
+    {
+      "label": "one interval",
+      "input": [
+        [
+          [
+            1,
+            2
+          ]
+        ]
+      ],
+      "expected": 1
     }
   ],
   "paramNames": [

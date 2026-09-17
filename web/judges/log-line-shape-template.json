@@ -50,6 +50,14 @@
         "sun moon star sun moon"
       ],
       "expected": true
+    },
+    {
+      "label": "one word pair",
+      "input": [
+        "a",
+        "x"
+      ],
+      "expected": true
     }
   ],
   "paramNames": [

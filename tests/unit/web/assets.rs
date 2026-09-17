@@ -31,30 +31,11 @@ fn repeated_separators_collapse_to_one_key() {
     }
 }
 
-/// The 10.9 MB model is the largest single thing that could land in the
-/// binary, and the `#[exclude]` on `EmbeddedWeb` is the only thing keeping
-/// it out. That cannot be shown over HTTP any more: `static_candidates`
-/// refuses the retired URL outright, so a 404 there is the refusal talking
-/// and says nothing about what was embedded. Ask the store directly.
-///
-/// Silent on a machine that has no leftover copy, which is most of them.
-/// It earns its place on the one that does, and on the day someone drops a
-/// replacement model into `web/` without reading why the exclusion exists.
-///
-/// What it checks in a debug build is the filter, not the bytes. Without
-/// `debug-embed`, `rust-embed` resolves from disk here, and its dynamic
-/// implementation applies the same `#[exclude]`, so an excluded path is
-/// absent either way. The filter is what can actually break: a glob that
-/// stops matching puts 10.9 MB back into release with nothing else failing.
-/// Confirmed by deleting the exclusion with the model present, which fails
-/// this. Gating it to release would leave the glob untested in the build
-/// everybody runs.
+/// Avatar models come from their pinned upstream URL rather than the embedded
+/// web tree. Assert the filter directly, because the browser fetch path cannot
+/// prove which files a release binary carries.
 #[test]
 fn no_model_is_embedded_in_the_binary() {
-    assert!(
-        EmbeddedWeb::get("vendor/avatar/jim.vrm").is_none(),
-        "the release binary must not carry the avatar model"
-    );
     let embedded: Vec<String> = EmbeddedWeb::iter()
         .filter(|path| path.ends_with(".vrm"))
         .map(|path| path.to_string())
@@ -63,26 +44,6 @@ fn no_model_is_embedded_in_the_binary() {
         embedded.is_empty(),
         "the browser fetches the model from its pinned source, so none belongs here: {embedded:?}"
     );
-}
-
-#[test]
-fn retired_avatar_model_is_never_served_from_disk() {
-    for path in [
-        "/vendor/avatar/jim.vrm",
-        "/vendor//avatar/jim.vrm",
-        "//vendor/avatar/jim.vrm",
-        // Each of these served the whole 10.9 MB on macOS and Windows before
-        // the comparison was made case-insensitive: the filesystem resolved
-        // what the string compare had just declined to match.
-        "/vendor/avatar/JIM.VRM",
-        "/vendor/avatar/Jim.Vrm",
-        "/VENDOR/AVATAR/JIM.VRM",
-    ] {
-        assert!(
-            static_candidates(path).is_none(),
-            "{path} should be refused"
-        );
-    }
 }
 
 /// Asserts the refusal itself rather than a served request, because a

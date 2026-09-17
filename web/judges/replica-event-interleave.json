@@ -71,6 +71,21 @@
         2,
         4
       ]
+    },
+    {
+      "label": "one value on each side",
+      "input": [
+        [
+          1
+        ],
+        [
+          2
+        ]
+      ],
+      "expected": [
+        1,
+        2
+      ]
     }
   ],
   "paramNames": [

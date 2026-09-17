@@ -125,6 +125,37 @@ fn a_pause_is_read_only_when_the_room_is_actually_idle() {
     assert!(!activity.claim_interim_review(&quiet(), idle));
 }
 
+#[test]
+fn interim_review_stops_at_the_cap() {
+    let start = Instant::now();
+    let state = RuntimeState {
+        transcript: (0..INTERIM_MIN_NEW_TURNS)
+            .map(|index| format!("Candidate: line {index}"))
+            .collect(),
+        ..RuntimeState::default()
+    };
+    let mut activity = RuntimeActivity::with_interim_review_cap(start, 2);
+    let first = start + INTERIM_COOLDOWN + INTERIM_IDLE;
+
+    assert!(activity.claim_interim_review(&state, first));
+    assert!(activity.claim_interim_review(&state, first + INTERIM_COOLDOWN));
+    assert!(!activity.claim_interim_review(&state, first + INTERIM_COOLDOWN * 2));
+}
+
+#[test]
+fn interim_review_cap_of_zero_claims_none() {
+    let start = Instant::now();
+    let state = RuntimeState {
+        transcript: (0..INTERIM_MIN_NEW_TURNS)
+            .map(|index| format!("Candidate: line {index}"))
+            .collect(),
+        ..RuntimeState::default()
+    };
+    let mut activity = RuntimeActivity::with_interim_review_cap(start, 0);
+
+    assert!(!activity.claim_interim_review(&state, start + INTERIM_COOLDOWN + INTERIM_IDLE));
+}
+
 /// The idle-window review's constants are eleven numbers in three modules, and
 /// three pairs of them are load-bearing on each other. Written down here in the
 /// shape `report_network_budget_covers_every_repair_and_retry_per_generation`
@@ -138,6 +169,7 @@ fn a_pause_is_read_only_when_the_room_is_actually_idle() {
 #[test]
 fn one_review_at_a_time_is_arithmetic_and_not_a_hope() {
     use crate::agent::{INTERIM_CONTEXT_NOTES, MAX_INTERIM_LINES_PER_REVIEW, MAX_INTERIM_NOTES};
+    use crate::config::DEFAULT_MAX_INTERIM_REVIEWS;
     use crate::gemini::INTERIM_ATTEMPT_TIMEOUT;
 
     // A call cannot outlive the wait for the next chance to start one. This is
@@ -149,6 +181,10 @@ fn one_review_at_a_time_is_arithmetic_and_not_a_hope() {
     // What a later review is shown has to leave room for what it may add, or
     // every review is handed a context it cannot help repeating.
     const { assert!(INTERIM_CONTEXT_NOTES + MAX_INTERIM_LINES_PER_REVIEW < MAX_INTERIM_NOTES) };
+
+    // The default quota fills the retained note budget without evicting a
+    // previous review before the interview ends.
+    const { assert!(DEFAULT_MAX_INTERIM_REVIEWS * MAX_INTERIM_LINES_PER_REVIEW == MAX_INTERIM_NOTES) };
 
     // A pause has to be long enough to be worth reading and short enough to
     // happen; a threshold at or above the cooldown would mean the cooldown

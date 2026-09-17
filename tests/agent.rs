@@ -24,7 +24,9 @@ fn instructions(problem: &Problem, duration_min: u32) -> String {
 /// was written from, by the rule `words::names_title` shares with the
 /// generator.
 fn names_source(problem: &Problem, text: &str) -> bool {
-    words::names_title(problem.title, text)
+    problem
+        .source_title()
+        .is_some_and(|title| words::names_title(title, text))
 }
 
 struct IntegrityEventInput<'a> {
@@ -219,12 +221,25 @@ fn near_time_up(state: RuntimeState) -> RuntimeState {
 /// regeneration path cannot drift apart.
 fn prompt_samples() -> Value {
     let problem = get_problem(Some("two-sum"));
+    let full_profile = InterviewProfile {
+        role: "backend engineer".to_string(),
+        seniority: Some(Seniority::Staff),
+        target_company: "Example Co".to_string(),
+        practice_focus: "Test boundaries".to_string(),
+    };
     let cold_state = RuntimeState {
         code: "def two_sum(nums, target):".to_string(),
         ..RuntimeState::default()
     };
     json!({
         "instructions": instructions(problem, 45),
+        "instructionsProfile": build_instructions_for_plan(
+            problem,
+            45,
+            &full_profile,
+            &InterviewGrounding::default(),
+            InterviewLoop::CodingBehavioral,
+        ),
         "greeting": greeting(problem),
         "languageChoice": language_choice("C++", LanguageChoiceContext::Start),
         "languageSwitch": language_choice("Java", LanguageChoiceContext::SwitchWithCode),
@@ -255,6 +270,9 @@ fn prompt_samples() -> Value {
         "testsPass": test_results_reaction("3/3 passed", true),
         "testsFail": test_results_reaction("2/3 passed", false),
         "testsSetupError": test_setup_error_reaction("The runner could not start."),
+        "logHint": log_hint_text(2),
+        "hintRung": hint_rung_text(2, 2, "Compare the current value with what you recorded."),
+        "hintRungWithheld": hint_rung_withheld_text(2),
         "report": report_prompt(ReportPromptInput {
             problem,
             transcript: "Candidate: I will use a hash map.",
@@ -262,9 +280,12 @@ fn prompt_samples() -> Value {
             final_code: "def two_sum(nums, target): return []",
             language: "python",
             hints_used: 2,
+            hint_rung: 2,
+            volunteered_hints: 0,
             duration_min: 45,
             elapsed_min: 12.4,
-            test_summary: "Latest test run: 2/3 cases passed.",
+            test_summary: "Latest test run: 2/3 cases passed.\n- CANDIDATE CASE empty input: got []",
+            practice_level: None,
         }),
         "reportEmpty": report_prompt(ReportPromptInput {
             problem,
@@ -273,9 +294,12 @@ fn prompt_samples() -> Value {
             final_code: "",
             language: "python",
             hints_used: 0,
+            hint_rung: 0,
+            volunteered_hints: 0,
             duration_min: 45,
             elapsed_min: 0.0,
             test_summary: "",
+            practice_level: None,
         }),
         "reportHalfElapsed": report_prompt(ReportPromptInput {
             problem,
@@ -284,9 +308,12 @@ fn prompt_samples() -> Value {
             final_code: "",
             language: "python",
             hints_used: 0,
+            hint_rung: 0,
+            volunteered_hints: 0,
             duration_min: 45,
             elapsed_min: 12.5,
             test_summary: "",
+            practice_level: None,
         }),
 
         // Assembled by the real builder rather than written out here. A
@@ -315,9 +342,12 @@ fn prompt_samples() -> Value {
             final_code: "def two_sum(nums, target): return []",
             language: "python",
             hints_used: 2,
+            hint_rung: 2,
+            volunteered_hints: 0,
             duration_min: 45,
             elapsed_min: 12.4,
             test_summary: "Latest test run: 2/3 cases passed.",
+            practice_level: None,
         }),
         "reportMultiline": report_prompt(ReportPromptInput {
             problem,
@@ -326,9 +356,12 @@ fn prompt_samples() -> Value {
             final_code: "def two_sum(nums, target):\n    return [0, 1]",
             language: "python",
             hints_used: 1,
+            hint_rung: 1,
+            volunteered_hints: 0,
             duration_min: 45,
             elapsed_min: 12.0,
             test_summary: "Latest test run (run #1, python): 2/3 cases passed.",
+            practice_level: None,
         }),
     })
 }
@@ -374,7 +407,8 @@ fn valid_strict_report() -> Value {
 #[test]
 fn strict_report_validation_is_atomic_and_server_owns_hints() {
     let valid = valid_strict_report();
-    let report = validate_report(&valid, 3).expect("fixture is valid");
+    let report =
+        validate_report(&valid, 3, get_problem(Some("two-sum"))).expect("fixture is valid");
     assert_eq!(report["hintsUsed"], 3);
 
     let mut hostile = valid.clone();
@@ -384,15 +418,89 @@ fn strict_report_validation_is_atomic_and_server_owns_hints() {
         .as_object_mut()
         .unwrap()
         .insert("extra".into(), json!(true));
-    let errors = validate_report_candidate(&hostile).unwrap_err().join("\n");
+    let errors = validate_report_candidate(&hostile, get_problem(Some("two-sum")))
+        .unwrap_err()
+        .join("\n");
     assert!(errors.contains("$.codingScore"));
     assert!(errors.contains("$.decision"));
     assert!(errors.contains("$.extra"));
 
-    let incomplete = final_report(Some(&hostile), 3, None);
+    let incomplete = final_report(Some(&hostile), 3, None, get_problem(Some("two-sum")));
     assert_eq!(incomplete["incomplete"], true);
     assert!(incomplete.get("codingScore").is_none());
     assert!(incomplete.get("decision").is_none());
+}
+
+#[test]
+fn published_problem_word_splitting_preserves_every_boundary() {
+    assert_eq!(
+        spelled_words("-camelCase 3Sum LRUCache"),
+        ["camel", "case", "3", "sum", "lru", "cache"],
+        "punctuation, lower-to-upper, digit-to-upper, and acronym boundaries all split words"
+    );
+}
+
+#[test]
+fn report_naming_the_published_problem_is_refused() {
+    let problem = get_problem(Some("3sum"));
+    for (path, mutate) in [
+        (
+            "$.summary",
+            Box::new(|report: &mut Value| report["summary"] = json!("This is 3 Sum."))
+                as Box<dyn Fn(&mut Value)>,
+        ),
+        (
+            "$.codingFeedback.strengths[0]",
+            Box::new(|report: &mut Value| {
+                report["codingFeedback"]["strengths"][0] = json!("Found this on LeetCode.")
+            }),
+        ),
+        (
+            "$.communicationFeedback.improvements[0]",
+            Box::new(|report: &mut Value| {
+                report["communicationFeedback"]["improvements"][0] =
+                    json!("Explain the Leet Code solution.")
+            }),
+        ),
+        (
+            "$.improvementPlan[0].drill",
+            Box::new(|report: &mut Value| {
+                report["improvementPlan"][0]["drill"] = json!("Practice 3Sum.")
+            }),
+        ),
+    ] {
+        let mut report = valid_strict_report();
+        mutate(&mut report);
+        let errors = validate_report_candidate(&report, problem).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error == &format!("{path}: names the published problem")),
+            "{path} was not refused: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn an_original_problem_report_cannot_name_a_practice_site() {
+    let problem = get_problem(Some("fixed-capacity-ring-buffer"));
+    let mut report = valid_strict_report();
+    report["summary"] = json!("You found this on LeetCode.");
+    let errors = validate_report_candidate(&report, problem).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "$.summary: names the published problem")
+    );
+}
+
+#[test]
+fn report_naming_only_the_scenario_is_accepted() {
+    let problem = get_problem(Some("triangle"));
+    let mut report = valid_strict_report();
+    report["summary"] = json!("You explained the Triangle scenario with a grounded trace.");
+    validate_report_candidate(&report, problem)
+        .unwrap_or_else(|errors| panic!("scenario wording was refused: {errors:?}"));
 }
 
 #[test]
@@ -427,14 +535,14 @@ fn unsupported_delivery_and_personality_judgments_are_rejected_atomically() {
     ] {
         let mut report = valid_strict_report();
         report["summary"] = json!(claim);
-        let errors = validate_report_candidate(&report).unwrap_err();
+        let errors = validate_report_candidate(&report, get_problem(Some("two-sum"))).unwrap_err();
         assert!(
             errors
                 .iter()
                 .any(|error| error == "$.summary: unsupported delivery or personality judgment"),
             "claim escaped delivery policy: {claim:?}: {errors:?}"
         );
-        let incomplete = final_report(Some(&report), 0, None);
+        let incomplete = final_report(Some(&report), 0, None, get_problem(Some("two-sum")));
         assert_eq!(incomplete["incomplete"], true);
         assert!(incomplete.get("codingScore").is_none());
     }
@@ -442,7 +550,9 @@ fn unsupported_delivery_and_personality_judgments_are_rejected_atomically() {
     let mut nested = valid_strict_report();
     nested["communicationFeedback"]["strengths"][0] = json!("Maintained strong eye-contact.");
     nested["improvementPlan"][0]["selfReview"][0] = json!("Check whether you appeared nervous.");
-    let errors = validate_report_candidate(&nested).unwrap_err().join("\n");
+    let errors = validate_report_candidate(&nested, get_problem(Some("two-sum")))
+        .unwrap_err()
+        .join("\n");
     assert!(errors.contains("$.communicationFeedback.strengths[0]"));
     assert!(errors.contains("$.improvementPlan[0].selfReview[0]"));
 }
@@ -456,7 +566,7 @@ fn technical_confidence_language_remains_valid() {
     ] {
         let mut report = valid_strict_report();
         report["summary"] = json!(allowed);
-        validate_report_candidate(&report)
+        validate_report_candidate(&report, get_problem(Some("two-sum")))
             .unwrap_or_else(|errors| panic!("technical statement was rejected: {errors:?}"));
     }
 }
@@ -515,7 +625,7 @@ fn strict_report_validation_rejects_each_semantic_drift_class() {
         let mut report = valid_strict_report();
         mutate(&mut report);
         assert!(
-            validate_report_candidate(&report).is_err(),
+            validate_report_candidate(&report, get_problem(Some("two-sum"))).is_err(),
             "accepted {name}"
         );
     }
@@ -549,6 +659,46 @@ fn prompts_match_frozen_fixture() {
         expected.as_object().expect("fixture is an object").len(),
         "{path} has keys no prompt builder produces"
     );
+}
+
+#[test]
+fn prompt_golden_digest_matches_versions() {
+    let expected: Value = serde_json::from_str(include_str!("golden/prompts.json"))
+        .expect("prompt fixture should parse");
+    let digest = format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&expected).expect("parsed prompt fixture should serialize")
+        )
+    );
+    let versions = (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION);
+    let expected_digest = [
+        (
+            (3, 6),
+            "1ce00ef082086e6b4184a343fefc694fc34cbbfdb620191f76e8c4417ec03744",
+        ),
+        (
+            (3, 7),
+            "4e1267c8d2532f7108c67d5cd171c0852733793f5e2235134285fc3a9fcd8fcb",
+        ),
+        (
+            (3, 8),
+            "3e71e0ad80607e5ab79b4d28306cedfa0697493d32a51b8aaa356671b320de10",
+        ),
+    ]
+    .into_iter()
+    .find_map(|(candidate, digest)| (candidate == versions).then_some(digest));
+
+    match expected_digest {
+        Some(expected_digest) => assert_eq!(
+            digest, expected_digest,
+            "prompt golden digest changed to {digest}; bump the prompt version it changed and record the new digest"
+        ),
+        None => panic!(
+            "prompt versions {:?} have no golden digest; the new digest is {digest}. Bump the prompt version it changed and record it here",
+            versions
+        ),
+    }
 }
 
 #[test]
@@ -1138,6 +1288,7 @@ fn log_hint_hands_out_one_rung_per_request_and_holds_the_last_for_an_approach() 
         state.hint_rungs_given, 0,
         "an unrequested hint spends no rung"
     );
+    assert_eq!(state.volunteered_hints, 1);
 
     let one = record_hint(&mut state, true);
     assert!(one.contains(first) && !one.contains(second), "{one}");
@@ -1225,6 +1376,54 @@ fn log_hint_hands_out_one_rung_per_request_and_holds_the_last_for_an_approach() 
     let three = record_hint(&mut state, true);
     assert!(three.contains(third), "{three}");
     assert!(record_hint(&mut state, true).contains("Every rung is used"));
+}
+
+#[test]
+fn report_brief_states_the_hint_rung() {
+    let prompt = report_prompt(ReportPromptInput {
+        problem: get_problem(Some("two-sum")),
+        transcript: "",
+        rolling_assessment: "",
+        final_code: "",
+        language: "python",
+        hints_used: 3,
+        hint_rung: 2,
+        volunteered_hints: 1,
+        duration_min: 45,
+        elapsed_min: 12.0,
+        test_summary: "",
+        practice_level: Some("intern"),
+    });
+    assert!(prompt.contains("candidate reached hint rung 2 of 3"));
+    assert!(prompt.contains("1 hint was volunteered rather than requested"));
+}
+
+#[test]
+fn report_prompt_names_the_practice_level() {
+    let base = ReportPromptInput {
+        problem: get_problem(Some("two-sum")),
+        transcript: "",
+        rolling_assessment: "",
+        final_code: "",
+        language: "python",
+        hints_used: 0,
+        hint_rung: 0,
+        volunteered_hints: 0,
+        duration_min: 45,
+        elapsed_min: 12.0,
+        test_summary: "",
+        practice_level: Some("intern"),
+    };
+    let selected = report_prompt(base);
+    assert!(selected.contains("candidate practiced for intern"));
+    assert!(selected.contains("fixed mid-level bar"));
+
+    let absent = report_prompt(ReportPromptInput {
+        practice_level: None,
+        ..base
+    });
+    assert!(absent.contains("PRACTICE LEVEL: Not specified"));
+    assert!(absent.contains("Do not invent or mention a practice level"));
 }
 
 #[test]
@@ -1355,9 +1554,12 @@ fn live_instructions_pose_the_variant_and_hold_no_source_or_walkthrough() {
         final_code: "",
         language: "python",
         hints_used: 0,
+        hint_rung: 0,
+        volunteered_hints: 0,
         duration_min: 45,
         elapsed_min: 30.0,
         test_summary: "",
+        practice_level: None,
     });
     assert!(report.contains("Reference notes on approaches"));
     assert!(report.contains("never name the published problem, its title, LeetCode"));
@@ -1488,9 +1690,12 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
             final_code,
             language: "python",
             hints_used: 0,
+            hint_rung: 0,
+            volunteered_hints: 0,
             duration_min: 15,
             elapsed_min: 15.0,
             test_summary,
+            practice_level: None,
         });
 
         assert!(prompt.contains(transcript), "{name}: transcript was lost");
@@ -1634,9 +1839,12 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
             final_code: code,
             language: "python",
             hints_used: case["hintsUsed"].as_u64().expect("hint count is integer") as u32,
+            hint_rung: 0,
+            volunteered_hints: 0,
             duration_min: 45,
             elapsed_min: 20.0,
             test_summary: "No trusted server-side test was available.",
+            practice_level: None,
         }),
         other => panic!("unknown reaction kind {other}"),
     }
@@ -1838,7 +2046,12 @@ fn framework_evaluation_scenarios_exercise_reactions_evidence_and_reports() {
             );
         }
         assert_eq!(state.hints_used, hints, "{id}: hint accounting drift");
-        let report = final_report(Some(&candidate_report), hints, None);
+        let report = final_report(
+            Some(&candidate_report),
+            hints,
+            None,
+            get_problem(Some("two-sum")),
+        );
         assert_ne!(
             report["incomplete"], true,
             "{id}: valid scenario report degraded"
@@ -2006,6 +2219,32 @@ fn runtime_helpers_match_frozen_fixture() {
 }
 
 #[test]
+fn test_summary_lists_the_candidates_cases() {
+    let run = sanitize_test_run(&json!({
+        "language": "python",
+        "passed": 2,
+        "total": 2,
+        "failures": [],
+        "candidateCases": [
+            {"label": "Your case 1", "got": "[0, 1]", "expected": null},
+            {"label": "Your case 2", "error": "ValueError"},
+            {"label": "Your case 3", "got": "[0, 1]", "expected": "[1, 2]"},
+            {"label": "Your case 4", "got": "4"},
+            {"label": "Your case 5", "got": "5"}
+        ]
+    }));
+    let summary = format_test_run(Some(&run), 1);
+    assert!(summary.contains("2/2 cases passed."));
+
+    // A case with no expectation says only what it printed, so the reviewer
+    // cannot read a contradiction into it.
+    assert!(summary.contains("CANDIDATE CASE Your case 1: got [0, 1]\n"));
+    assert!(summary.contains("CANDIDATE CASE Your case 2: raised ValueError"));
+    assert!(summary.contains("CANDIDATE CASE Your case 3: got [0, 1], candidate expected [1, 2]"));
+    assert!(summary.contains("CANDIDATE CASE Your case 5: got 5"));
+}
+
+#[test]
 fn report_schema_matches_frozen_fixture() {
     let path = "tests/golden/report-schema.json";
     let schema = report_response_schema();
@@ -2137,7 +2376,8 @@ fn improvement_plans_are_linked_bounded_deduplicated_and_ranked() {
     raw["improvementPlan"].as_array_mut().unwrap().swap(0, 3);
     raw["improvementPlan"][0]["impact"] = json!("low");
     raw["improvementPlan"][1]["impact"] = json!("high");
-    let ranked = validate_report_candidate(&raw).expect("order is fixed, not refused");
+    let ranked = validate_report_candidate(&raw, get_problem(Some("two-sum")))
+        .expect("order is fixed, not refused");
     assert_eq!(
         ranked["improvementPlan"][0]["weakness"], raw["improvementPlan"][1]["weakness"],
         "the high-impact item leads the plan the candidate reads"
@@ -2150,7 +2390,7 @@ fn improvement_plans_are_linked_bounded_deduplicated_and_ranked() {
 
     let mut unrelated = valid_strict_report();
     unrelated["improvementPlan"][0]["weakness"] = json!("unrelated advice");
-    let errors = validate_report_candidate(&unrelated)
+    let errors = validate_report_candidate(&unrelated, get_problem(Some("two-sum")))
         .unwrap_err()
         .join("\n");
     assert!(errors.contains("exactly reference"));
@@ -2164,21 +2404,22 @@ fn framework_assessments_require_all_phases_and_preserve_unassessed_gaps() {
         raw["frameworkAssessment"]["phases"][index]["score"] = Value::Null;
     }
     assert!(
-        validate_report_candidate(&raw).is_ok(),
+        validate_report_candidate(&raw, get_problem(Some("two-sum"))).is_ok(),
         "null STAR gaps must remain valid"
     );
     let mut duplicate = raw.clone();
     duplicate["frameworkAssessment"]["phases"][9]["phase"] = json!("Action");
-    assert!(validate_report_candidate(&duplicate).is_err());
+    assert!(validate_report_candidate(&duplicate, get_problem(Some("two-sum"))).is_err());
     let mut malformed = raw.clone();
     malformed["frameworkAssessment"]["phases"][2]["score"] = json!(101);
-    assert!(validate_report_candidate(&malformed).is_err());
+    assert!(validate_report_candidate(&malformed, get_problem(Some("two-sum"))).is_err());
 
     // Tags are a projection of the plan, so a row that names another phase's
     // weakness is corrected rather than refused: Algorithm carries the
     // Algorithm plan item and nothing else, whatever the model wrote here.
     raw["frameworkAssessment"]["phases"][2]["weaknessTags"] = json!(["State the result"]);
-    let derived = validate_report_candidate(&raw).expect("a stray tag is overwritten, not fatal");
+    let derived = validate_report_candidate(&raw, get_problem(Some("two-sum")))
+        .expect("a stray tag is overwritten, not fatal");
     assert_eq!(
         derived["frameworkAssessment"]["phases"][2]["weaknessTags"],
         json!(["Explain complexity"])
@@ -2215,7 +2456,8 @@ fn framework_assessments_require_all_phases_and_preserve_unassessed_gaps() {
             })
             .collect::<Vec<_>>()
     );
-    let capped = validate_report_candidate(&crowded).expect("five items on one phase are valid");
+    let capped = validate_report_candidate(&crowded, get_problem(Some("two-sum")))
+        .expect("five items on one phase are valid");
     assert_eq!(
         capped["frameworkAssessment"]["phases"][3]["weaknessTags"],
         json!(["e", "d", "c", "b"]),
@@ -3087,6 +3329,32 @@ fn browser_generated_integrity_events_all_verify_in_the_agent() {
     );
 }
 
+#[test]
+fn camera_not_used_is_accepted_as_evidence() {
+    let mut state = RuntimeState::default();
+    let event = integrity_event(IntegrityEventInput {
+        seq: 1,
+        prev_hash: "",
+        event_type: "CAMERA_NOT_USED",
+        at: "2026-09-16T00:00:00.000Z",
+        severity: "info",
+        source: "camera",
+        duration_ms: 0,
+        detail: Some("denied"),
+    });
+
+    apply_data_event(
+        &mut state,
+        TOPIC_INTEGRITY,
+        &event,
+        TEST_REACTION_COOLDOWN_S,
+    );
+
+    assert_eq!(state.integrity_events.len(), 1);
+    assert_eq!(state.integrity_events[0]["type"], "CAMERA_NOT_USED");
+    assert_eq!(state.integrity_events[0]["detail"], "denied");
+}
+
 /// The greeting asks the candidate to pick a language, and a click is silent:
 /// it swaps the editor buffer and publishes the same code topic as a keystroke.
 /// Without a spoken confirmation the interviewer looks like they missed the one
@@ -3482,8 +3750,13 @@ fn final_report_matches_frontend_publish_contract() {
         },
         "communicationFeedback": "bad",
     });
-    let sanitized = final_report(Some(&raw), 2, None);
-    let fallback = final_report(None, 1, Some("model unavailable"));
+    let sanitized = final_report(Some(&raw), 2, None, get_problem(Some("two-sum")));
+    let fallback = final_report(
+        None,
+        1,
+        Some("model unavailable"),
+        get_problem(Some("two-sum")),
+    );
 
     assert_eq!(sanitized["incomplete"], true);
     assert_eq!(fallback, fallback_report(1, "model unavailable"));
@@ -4724,7 +4997,7 @@ fn a_detail_that_reorders_or_hides_text_is_dropped_but_localized_text_survives()
 
 #[test]
 fn every_problem_has_bounded_ordered_question_metadata() {
-    assert_eq!(PROBLEMS.len(), 150);
+    assert_eq!(PROBLEMS.len(), 151);
     for problem in PROBLEMS {
         let metadata = problem.question_metadata();
         assert_eq!(metadata.difficulty, problem.difficulty, "{}", problem.id);
@@ -4773,7 +5046,7 @@ fn generated_problem_metadata_exposes_no_private_rubric() {
         // purpose, shown small beside the scenario; nothing else is exempt.
         assert_eq!(
             public["source"].as_str(),
-            Some(problem.title),
+            problem.source_title(),
             "{}",
             problem.id
         );
@@ -4816,23 +5089,19 @@ fn generated_problem_metadata_exposes_no_private_rubric() {
             .keys()
             .map(String::as_str)
             .collect::<std::collections::HashSet<_>>();
-        assert_eq!(
-            shipped,
-            [
-                "page",
-                "title",
-                "source",
-                "difficulty",
-                "brief",
-                "examples",
-                "starterCode",
-                "interviewMetadata"
-            ]
-            .into_iter()
-            .collect(),
-            "{}",
-            problem.id
-        );
+        let expected = [
+            "page",
+            "title",
+            "difficulty",
+            "brief",
+            "examples",
+            "starterCode",
+            "interviewMetadata",
+        ]
+        .into_iter()
+        .chain(problem.source_title().map(|_| "source"))
+        .collect::<std::collections::HashSet<_>>();
+        assert_eq!(shipped, expected, "{}", problem.id);
         assert_eq!(public["title"].as_str(), Some(variant.title));
 
         // The server's starters are the page's, language for language: written
@@ -4859,21 +5128,42 @@ fn generated_problem_metadata_exposes_no_private_rubric() {
 
 #[test]
 fn interview_contract_versions_are_one_closed_bundle() {
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 5);
-    assert_eq!(LIVE_PROMPT_VERSION, 2);
-    assert_eq!(REPORT_PROMPT_VERSION, 5);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 8);
+    assert_eq!(LIVE_PROMPT_VERSION, 3);
+    assert_eq!(REPORT_PROMPT_VERSION, 8);
     assert_eq!(RUBRIC_VERSION, 1);
-    assert_eq!(REPORT_SCHEMA_VERSION, 1);
+    assert_eq!(REPORT_SCHEMA_VERSION, 2);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 5,
-            "livePromptVersion": 2,
-            "reportPromptVersion": 5,
+            "bundleVersion": 8,
+            "livePromptVersion": 3,
+            "reportPromptVersion": 8,
             "rubricVersion": 1,
-            "reportSchemaVersion": 1,
+            "reportSchemaVersion": 2,
         })
     );
+}
+
+#[test]
+fn no_debrief_field_names_the_published_problem() {
+    for problem in PROBLEMS {
+        let variant = problem.variant();
+        for (field, text) in std::iter::once(("scenario contract", variant.contract))
+            .chain(std::iter::once(("approach", problem.optimal)))
+            .chain(std::iter::once(("pitfalls", problem.pitfalls)))
+            .chain(variant.hints.iter().map(|text| ("hint", *text)))
+            .chain(variant.follow_ups.iter().map(|text| ("follow-up", *text)))
+        {
+            assert!(
+                !problem
+                    .source_title()
+                    .is_some_and(|title| names_published_problem(title, text)),
+                "{} {field} names its published problem: {text}",
+                problem.id
+            );
+        }
+    }
 }
 
 /// What the candidate sees of their own progress, and what they must not.
@@ -4994,7 +5284,7 @@ fn a_weakness_tag_matches_its_plan_item_across_stray_whitespace() {
     item["weakness"] = json!(padded);
 
     assert!(
-        validate_report_candidate(&raw).is_ok(),
+        validate_report_candidate(&raw, get_problem(Some("two-sum"))).is_ok(),
         "a tag and its plan weakness that differ only in surrounding whitespace \
          must not cost the candidate their report"
     );
@@ -5272,7 +5562,7 @@ fn report_validation_holds_its_bounds_and_its_ordering() {
     for strengths in [json!(["only one"]), json!(["a", "b", "c", "d", "e"])] {
         let mut report = valid_strict_report();
         report["codingFeedback"]["strengths"] = strengths;
-        let errors = validate_report_candidate(&report)
+        let errors = validate_report_candidate(&report, get_problem(Some("two-sum")))
             .expect_err("an out-of-range array is not a report")
             .join("\n");
         assert!(errors.contains("$.codingFeedback.strengths"), "{errors}");
@@ -5283,7 +5573,7 @@ fn report_validation_holds_its_bounds_and_its_ordering() {
     let mut repeated = valid_strict_report();
     repeated["codingFeedback"]["strengths"] = json!(["Same point", "Same point"]);
     assert!(
-        validate_report_candidate(&repeated)
+        validate_report_candidate(&repeated, get_problem(Some("two-sum")))
             .expect_err("a duplicate is not a second strength")
             .join("\n")
             .contains("duplicate")
@@ -5323,7 +5613,10 @@ fn report_validation_holds_its_bounds_and_its_ordering() {
     // this order inverts.
     let buried = impacts([("medium", 9), ("high", 1), ("medium", 2), ("medium", 1)]);
     assert_eq!(
-        ranks(&validate_report_candidate(&buried).expect("a burying order is sorted, not refused")),
+        ranks(
+            &validate_report_candidate(&buried, get_problem(Some("two-sum")))
+                .expect("a burying order is sorted, not refused")
+        ),
         [("high", 1), ("medium", 9), ("medium", 2), ("medium", 1)],
     );
 
@@ -5333,7 +5626,8 @@ fn report_validation_holds_its_bounds_and_its_ordering() {
     let over_low = impacts([("low", 9), ("medium", 1), ("low", 2), ("low", 1)]);
     assert_eq!(
         ranks(
-            &validate_report_candidate(&over_low).expect("a medium item leads a frequent low one")
+            &validate_report_candidate(&over_low, get_problem(Some("two-sum")))
+                .expect("a medium item leads a frequent low one")
         ),
         [("medium", 1), ("low", 9), ("low", 2), ("low", 1)],
     );
@@ -5341,7 +5635,10 @@ fn report_validation_holds_its_bounds_and_its_ordering() {
     // And within one rank it is the frequency that orders them.
     let by_frequency = impacts([("medium", 1), ("medium", 9), ("medium", 2), ("medium", 1)]);
     assert_eq!(
-        ranks(&validate_report_candidate(&by_frequency).expect("frequency order is applied")),
+        ranks(
+            &validate_report_candidate(&by_frequency, get_problem(Some("two-sum")))
+                .expect("frequency order is applied")
+        ),
         [("medium", 9), ("medium", 2), ("medium", 1), ("medium", 1)],
     );
 }
@@ -5504,9 +5801,9 @@ fn an_improvement_plan_may_carry_eight_entries() {
     });
 
     assert!(
-        validate_report_candidate(&report).is_ok(),
+        validate_report_candidate(&report, get_problem(Some("two-sum"))).is_ok(),
         "eight is inside the limit: {:?}",
-        validate_report_candidate(&report).err()
+        validate_report_candidate(&report, get_problem(Some("two-sum"))).err()
     );
 }
 

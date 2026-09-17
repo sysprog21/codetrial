@@ -1,0 +1,62 @@
+{
+  "page": "bounded-event-queue",
+  "title": "Bounded Event Queue",
+  "difficulty": "Medium",
+  "brief": [
+    "A telemetry collector keeps the most recent events waiting to be processed in a fixed amount of memory. It must accept events in arrival order, hand them to the worker in that same order, and never allocate more space once configured.",
+    "Implement EventQueue. EventQueue(capacity) creates an empty queue. push(value) appends value and returns false when the queue is full. pop() removes and returns the oldest value, or -1 when empty. front() reads that value without removing it, also returning -1 when empty. size() returns the number of queued events."
+  ],
+  "examples": [
+    {
+      "input": "[\"EventQueue\",\"push\",\"push\",\"pop\",\"push\",\"front\",\"pop\",\"pop\",\"size\"]\n[[3],[4],[5],[],[6],[],[],[],[]]",
+      "output": "[null,true,true,4,true,5,5,6,0]"
+    },
+    {
+      "input": "[\"EventQueue\",\"push\",\"pop\",\"push\",\"front\",\"size\"]\n[[1],[12],[],[-3],[],[]]",
+      "output": "[null,true,12,true,-3,1]"
+    }
+  ],
+  "starterCode": {
+    "python": "class EventQueue:\n    def __init__(self, capacity: int):\n        pass\n\n    def push(self, value: int) -> bool:\n        pass\n\n    def pop(self) -> int:\n        pass\n\n    def front(self) -> int:\n        pass\n\n    def size(self) -> int:\n        pass\n",
+    "javascript": "class EventQueue {\n  constructor(capacity) {\n  }\n\n  push(value) {\n  }\n\n  pop() {\n  }\n\n  front() {\n  }\n\n  size() {\n  }\n}\n",
+    "cpp": "class EventQueue {\npublic:\n    EventQueue(int capacity) {\n    }\n\n    bool push(int value) {\n        return false;\n    }\n\n    int pop() {\n        return -1;\n    }\n\n    int front() {\n        return -1;\n    }\n\n    int size() {\n        return 0;\n    }\n};\n",
+    "java": "class EventQueue {\n    public EventQueue(int capacity) {\n    }\n\n    public boolean push(int value) {\n        return false;\n    }\n\n    public int pop() {\n        return -1;\n    }\n\n    public int front() {\n        return -1;\n    }\n\n    public int size() {\n        return 0;\n    }\n}\n"
+  },
+  "interviewMetadata": {
+    "difficulty": "Medium",
+    "reactoStages": [
+      "repeat",
+      "example",
+      "algorithm",
+      "coding",
+      "test",
+      "optimizations"
+    ],
+    "followUpDirections": [
+      {
+        "stage": "repeat",
+        "direction": "Ask the candidate to restate the inputs, outputs, constraints, and ambiguities."
+      },
+      {
+        "stage": "example",
+        "direction": "Ask the candidate to choose and trace an ordinary example and a boundary case."
+      },
+      {
+        "stage": "algorithm",
+        "direction": "Ask for the candidate's approach, correctness argument, and complexity."
+      },
+      {
+        "stage": "coding",
+        "direction": "Ask the candidate to implement their stated approach and explain major decisions."
+      },
+      {
+        "stage": "test",
+        "direction": "Ask the candidate to predict useful cases and expected results before running them."
+      },
+      {
+        "stage": "optimizations",
+        "direction": "Ask for complexity, an uncovered edge case, and a justified optimization or cleanup."
+      }
+    ]
+  }
+}

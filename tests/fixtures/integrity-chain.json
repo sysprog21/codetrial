@@ -62,6 +62,18 @@
   {
     "seq": 6,
     "prevHash": "87190e39a6cae50e5c3fe5f303fbdb85cd9a3bfd8cf1871577f325511810186f",
+    "type": "CAMERA_NOT_USED",
+    "at": "2026-08-18T06:37:42.330Z",
+    "severity": "info",
+    "source": "camera",
+    "durationMs": 0,
+    "detail": "declined",
+    "sourceEventIds": [],
+    "hash": "ff31c3953247b7c69c11db20fabacab78507be3f030d98bcbc54731095a9800d"
+  },
+  {
+    "seq": 7,
+    "prevHash": "ff31c3953247b7c69c11db20fabacab78507be3f030d98bcbc54731095a9800d",
     "type": "INTEGRITY_HEARTBEAT",
     "at": "2026-08-18T06:38:26.901Z",
     "severity": "info",
@@ -69,11 +81,11 @@
     "durationMs": 0,
     "detail": "analyzer=source=camera;analysis=tracking;frames=1;transport=ImageBitmap",
     "sourceEventIds": [],
-    "hash": "2d1f72c49822195b8798fe380076b8604845f22551df016087641820cd94149b"
+    "hash": "6b72576a52621f9bfa46aa25cb9e8995df65174f9aa25162126e1412c4a6eb95"
   },
   {
-    "seq": 7,
-    "prevHash": "2d1f72c49822195b8798fe380076b8604845f22551df016087641820cd94149b",
+    "seq": 8,
+    "prevHash": "6b72576a52621f9bfa46aa25cb9e8995df65174f9aa25162126e1412c4a6eb95",
     "type": "FACE_DETECTOR_UNAVAILABLE",
     "at": "2026-08-18T06:39:02.114Z",
     "severity": "warning",
@@ -81,11 +93,11 @@
     "durationMs": 0,
     "detail": "face detection unavailable: Cannot read properties of undefined (reading 'a')",
     "sourceEventIds": [],
-    "hash": "834040f7408ec077f540c5af5e8eedaff7c254ab266388ecd1d2709b4f20036b"
+    "hash": "661518792b234b835594e3c2aba1d42d24fa0bb4fb92bd19c8cda3ad20b65238"
   },
   {
-    "seq": 8,
-    "prevHash": "834040f7408ec077f540c5af5e8eedaff7c254ab266388ecd1d2709b4f20036b",
+    "seq": 9,
+    "prevHash": "661518792b234b835594e3c2aba1d42d24fa0bb4fb92bd19c8cda3ad20b65238",
     "type": "INTEGRITY_HEARTBEAT",
     "at": "2026-08-18T06:39:44.702Z",
     "severity": "info",
@@ -93,11 +105,11 @@
     "durationMs": 0,
     "detail": "az AZ 09 _-=/;:,.",
     "sourceEventIds": [],
-    "hash": "82ce6734eeb29a48d8b362c9a3cbe5b6f59178b85b96aad7f86dbb84aab77cd1"
+    "hash": "0802f1e3d673fa34850da8add8775459c4ec90a2b88190ff7d73b03ea265cab8"
   },
   {
-    "seq": 9,
-    "prevHash": "82ce6734eeb29a48d8b362c9a3cbe5b6f59178b85b96aad7f86dbb84aab77cd1",
+    "seq": 10,
+    "prevHash": "0802f1e3d673fa34850da8add8775459c4ec90a2b88190ff7d73b03ea265cab8",
     "type": "MEDIA_PREFLIGHT_PASSED",
     "at": "2026-08-18T06:39:52.400Z",
     "severity": "info",
@@ -105,11 +117,11 @@
     "durationMs": 0,
     "detail": "camera=FaceTime HD Κάμερα می‌ر gnitautis (05AC:8514)",
     "sourceEventIds": [],
-    "hash": "43b36ddbd9e6dff14cc737d4a23d771792c7324fa6c067335e0fd4fe9848acc9"
+    "hash": "6fc3de5f3c991d5dfc384f9d8b442de4cd03d12a03489c0cce9ddd242202cc74"
   },
   {
-    "seq": 10,
-    "prevHash": "43b36ddbd9e6dff14cc737d4a23d771792c7324fa6c067335e0fd4fe9848acc9",
+    "seq": 11,
+    "prevHash": "6fc3de5f3c991d5dfc384f9d8b442de4cd03d12a03489c0cce9ddd242202cc74",
     "type": "MULTIPLE_FACES",
     "at": "2026-08-18T06:40:11.006Z",
     "severity": "critical",
@@ -122,6 +134,6 @@
       "333333333333",
       "444444444444"
     ],
-    "hash": "1217fdb32fa0f2f7874a2bfcccc2b6140d4175846348185a21f2c80a67503270"
+    "hash": "a1fefca650b641ce4370bf98be71c940b1f3e79b0bce53b1f3f1fedc194a74fa"
   }
 ]

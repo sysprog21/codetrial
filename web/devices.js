@@ -44,6 +44,7 @@ export function createDevicePool({
     kind,
     constraints: { [kind]: CONSTRAINTS[kind] },
     pending: false,
+    disabled: false,
     error: null,
     accept: () => true,
     onTrack: () => {},
@@ -93,9 +94,13 @@ export function createDevicePool({
       device.onLost();
     }
 
-    if (device.pending || trackOf(device.kind)) return;
+    if (device.disabled || device.pending || trackOf(device.kind)) return;
     device.pending = true;
     void mediaDevices.getUserMedia(device.constraints).then((granted) => {
+      if (device.disabled) {
+        granted.getTracks().forEach((track) => track.stop());
+        return;
+      }
       const track = claimTrack(granted, device.kind);
       if (!device.accept(track)) {
         track?.stop();
@@ -107,7 +112,11 @@ export function createDevicePool({
       stream.addTrack(track);
       device.onTrack();
     }).catch((error) => {
-      device.error = String(error?.message || error);
+      // Some browsers leave a DOMException's message empty and name the
+      // failure instead. Keep both: the preflight words are the candidate's
+      // only explanation, and the optional-camera path distinguishes denied
+      // permission from no device.
+      device.error = [error?.name, error?.message].filter(Boolean).join(": ") || String(error);
       retry();
     }).finally(() => {
       device.pending = false;
@@ -139,6 +148,15 @@ export function createDevicePool({
     },
     start,
     retry,
+    disable(kind) {
+      const device = devices[kind];
+      device.disabled = true;
+      const held = trackOf(kind);
+      if (!held) return;
+      stream.removeTrack(held);
+      held.stop();
+      device.onLost();
+    },
     trackOf,
     errorOf: (kind) => devices[kind].error,
     setError(kind, error) {

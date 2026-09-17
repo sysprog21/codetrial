@@ -151,6 +151,10 @@ const INTEGRITY_INPUTS = [
     at: "2026-08-18T06:37:41.330Z", detail: "analyzer=camera_released",
   },
   {
+    type: "CAMERA_NOT_USED", source: "camera", severity: "info",
+    at: "2026-08-18T06:37:42.330Z", detail: "declined",
+  },
+  {
     type: "INTEGRITY_HEARTBEAT", source: "media", severity: "info", at: "2026-08-18T06:38:26.901Z",
     detail: "analyzer=source=camera;analysis=tracking;frames=1;transport=ImageBitmap",
   },

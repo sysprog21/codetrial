@@ -63,6 +63,22 @@
         0,
         2
       ]
+    },
+    {
+      "label": "zero pair: nums=[0,5,-5,1], target=0",
+      "input": [
+        [
+          0,
+          5,
+          -5,
+          1
+        ],
+        0
+      ],
+      "expected": [
+        1,
+        2
+      ]
     }
   ],
   "paramNames": [

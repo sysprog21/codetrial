@@ -1,7 +1,8 @@
 import { FRAMEWORKS, codingLoop } from "./lib.js";
-import { clearReportHistory, readLocalHistory, renameLocalHistory } from "./history.js";
+import { clearReportHistory, readLocalHistory, readReviewHistory, renameLocalHistory } from "./history.js";
 import { pickProblem, practiceFocus, storeSharedFocus, suggestDifficulty } from "./problem-picker.js";
 import { buildProgressModel, pickerEntry } from "./progress.js";
+import { reportMarkup } from "./render.js";
 import { loadPageMap } from "./problem-data.js";
 import { parseGroundingFile, retainedSelection, selectedGroundingPacket, storeGroundingPacket } from "./document-grounding.js";
 
@@ -48,8 +49,10 @@ const nodes = {
   practiceFocusShare: document.querySelector("#practice-focus-share"),
   practiceFocusShareInput: document.querySelector("#practice-focus-share-input"),
   progressSummary: document.querySelector("#progress-summary"),
+  attemptHistory: document.querySelector("#attempt-history"),
   progressTrends: document.querySelector("#progress-trends"),
   progressWeaknesses: document.querySelector("#progress-weaknesses"),
+  progressTopics: document.querySelector("#progress-topics"),
   progressDifficulty: document.querySelector("#progress-difficulty"),
   progressLanguage: document.querySelector("#progress-language"),
   progressDuration: document.querySelector("#progress-duration"),
@@ -91,7 +94,9 @@ try {
 const applySources = async () => {
   if (showSources.checked) {
     const pages = await loadPageMap().catch(() => null);
-    const sourceOf = new Map(Object.values(pages ?? {}).map((entry) => [entry.page, entry.source]));
+    const sourceOf = new Map(Object.values(pages ?? {})
+      .filter((entry) => entry.source)
+      .map((entry) => [entry.page, entry.source]));
     for (const card of cards) {
       const source = card.button.querySelector(".problem-source");
       if (sourceOf.has(card.id)) source.textContent = `LeetCode: ${sourceOf.get(card.id)}`;
@@ -485,12 +490,20 @@ async function renderServerHistory() {
 async function renderLocalHistory() {
   try {
     let entries = readLocalHistory();
-    if (!entries.every((entry) => cardIds.has(pickerEntry(entry).problemId))) {
+    let reviews = readReviewHistory();
+    // Both stores: the review list keeps attempts long after the 20-row
+    // history has dropped them, so it can hold a published id the history no
+    // longer shows.
+    if ([...entries, ...reviews].some((entry) =>
+      !cardIds.has(pickerEntry(entry).problemId) && entry?.pageMapChecked !== true)) {
       const pages = await loadPageMap().catch(() => null);
-      if (pages) entries = renameLocalHistory(pages);
+      if (pages) {
+        entries = renameLocalHistory(pages, undefined, true);
+        reviews = readReviewHistory();
+      }
     }
-    reports = entries.map(pickerEntry);
-    showProgress(entries, "saved on this device");
+    reports = reviews.map(pickerEntry);
+    showProgress(reviews, "saved on this device");
   } catch {
     showProgressError("Could not load progress saved on this device.");
   }
@@ -570,8 +583,12 @@ function recommend(note = "") {
     return;
   }
   setProblem(choice.picked);
+  const reviewLevel = choice.review && !selectedDifficulties().has(choice.picked.difficulty)
+    ? ` (${choice.picked.difficulty})`
+    : "";
+  if (choice.review) choice.picked.button.hidden = false;
   nodes.recommendation.textContent = choice.review
-    ? `${note}Review due after ${choice.review.intervalDays} day${choice.review.intervalDays === 1 ? "" : "s"}: ${title(choice.picked)}.`
+    ? `${note}Review due after ${choice.review.intervalDays} day${choice.review.intervalDays === 1 ? "" : "s"}${reviewLevel}: ${title(choice.picked)}.`
     : choice.repeat
       ? `${note}You have passed every problem at this level. Recommended again: ${title(choice.picked)}.`
       : `${note}Recommended: ${title(choice.picked)}.`;
@@ -721,6 +738,8 @@ function showProgressError(message) {
   nodes.progressSummary.textContent = message;
   nodes.progressTrends.replaceChildren();
   nodes.progressWeaknesses.replaceChildren();
+  nodes.progressTopics.replaceChildren();
+  nodes.attemptHistory.replaceChildren();
 }
 
 function showProgress(entries, suffix) {
@@ -737,6 +756,51 @@ function showProgress(entries, suffix) {
   renderProgress();
 }
 
+/// `attempts` is what `buildProgressModel` already normalized, oldest first.
+///
+/// Taken rather than re-derived: normalizing again here is what let the trends
+/// panel and this list disagree about which stored rows count as an attempt,
+/// and it cost one more sanitizing pass over every stored report.
+function renderAttemptHistory(attempts) {
+  nodes.attemptHistory.replaceChildren();
+  for (const attempt of [...attempts].reverse()) {
+    const item = document.createElement("li");
+    const date = new Date(attempt.at).toLocaleDateString();
+    const verdict = attempt.report.incomplete ? "INCOMPLETE" : attempt.report.decision ?? "UNSCORED";
+    const label = document.createElement("p");
+    label.textContent = `${date} · ${attempt.problemTitle} · ${languageLabel(attempt.language ?? "not recorded")} · ${verdict}`;
+    const open = document.createElement("button");
+    open.type = "button";
+    open.textContent = "Open report";
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.textContent = "Try again";
+    open.addEventListener("click", () => {
+      const report = document.createElement("div");
+      report.innerHTML = reportMarkup({
+        report: attempt.report,
+        problemTitle: attempt.problemTitle,
+        language: languageLabel(attempt.language ?? "not recorded"),
+        code: "(final code was not saved)",
+      });
+      report.querySelector(".report-actions")?.remove();
+      item.append(report);
+      open.disabled = true;
+    });
+    retry.addEventListener("click", () => {
+      const card = cards.find((candidate) => candidate.id === attempt.problemId);
+      if (!card) return;
+      manualProblem = true;
+      card.button.hidden = false;
+      setProblem(card);
+      setDuration(suggestedDuration(new Set([card.difficulty])));
+      nodes.recommendation.textContent = `Selected: ${title(card)}.`;
+    });
+    item.append(label, open, retry);
+    nodes.attemptHistory.append(item);
+  }
+}
+
 function renderProgress() {
   const filters = {
     difficulty: nodes.progressDifficulty.value,
@@ -746,6 +810,8 @@ function renderProgress() {
   const model = buildProgressModel(progressEntries, filters);
   nodes.progressTrends.replaceChildren();
   nodes.progressWeaknesses.replaceChildren();
+  nodes.progressTopics.replaceChildren();
+  renderAttemptHistory(model.attempts);
   if (model.total === 0) {
     nodes.history.hidden = true;
     return;
@@ -799,6 +865,17 @@ function renderProgress() {
       const item = document.createElement("li");
       item.textContent = `${weakness.tag} · ${weakness.count} attempt${weakness.count === 1 ? "" : "s"}`;
       nodes.progressWeaknesses.append(item);
+    }
+  }
+  if (model.topics.length === 0) {
+    const item = document.createElement("li");
+    item.textContent = "No topic labels are available for these attempts.";
+    nodes.progressTopics.append(item);
+  } else {
+    for (const topic of model.topics) {
+      const item = document.createElement("li");
+      item.textContent = `${topic.topic}: ${topic.attempts} attempt${topic.attempts === 1 ? "" : "s"}, ${topic.passes} pass${topic.passes === 1 ? "" : "es"}; last attempt ${new Date(topic.lastAttempt).toLocaleDateString()}`;
+      nodes.progressTopics.append(item);
     }
   }
 }

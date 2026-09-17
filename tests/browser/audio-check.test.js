@@ -2,8 +2,8 @@
 //
 // The gate decides whether a candidate is allowed to meet the interviewer, so
 // its rules are worth pinning: a muted microphone and a browser that never
-// unblocked audio must both keep the room closed. Camera is also required
-// before the room opens.
+// unblocked audio must both keep the room closed. A skipped camera does not
+// relax either requirement.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -91,6 +91,23 @@ test("all required media proven opens the room", () => {
 
   assert.equal(state.ready, true);
   assert.equal(state.blocker, null);
+});
+
+test("output and microphone are ready when the camera is skipped", () => {
+  const state = mediaReadiness({
+    outputConfirmed: true,
+    micPeak: MIC_SILENT_PEAK,
+    cameraError: "No camera device",
+    cameraSkipped: true,
+  });
+  assert.equal(state.ready, true);
+  assert.equal(state.steps.camera, true);
+});
+
+test("a skipped camera still requires the microphone", () => {
+  const state = mediaReadiness({ outputConfirmed: true, cameraSkipped: true });
+  assert.equal(state.ready, false);
+  assert.equal(state.blocker, "mic-silent");
 });
 
 test("the default state is closed, not open", () => {

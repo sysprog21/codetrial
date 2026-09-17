@@ -76,6 +76,12 @@ pub const DEFAULT_GEMINI_CANDIDATE_VIDEO_ENABLED: bool = false;
 /// and hardware rather than anything this code knows.
 pub const DEFAULT_MAX_CONCURRENT_INTERVIEWS: usize = 16;
 
+/// Interim reviews use the report model's quota before the final report does.
+/// Twelve four-line notes fill the final report's note budget exactly; zero is
+/// useful to an operator who must reserve a shared key for final reports.
+pub const DEFAULT_MAX_INTERIM_REVIEWS: usize = 12;
+pub const MAX_INTERIM_REVIEWS: usize = 72;
+
 const REQUIRED_KEYS: &[&str] = &[
     "LIVEKIT_URL",
     "LIVEKIT_API_KEY",
@@ -477,6 +483,7 @@ pub struct AgentConfig {
     pub room_prefix: String,
     pub default_duration_min: u32,
     pub gemini_candidate_video_enabled: bool,
+    pub max_interim_reviews: usize,
     pub pool: ProviderPool,
 }
 
@@ -649,6 +656,12 @@ pub fn load_from_pairs(
                 .get("CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED")
                 .map(String::as_str),
         ),
+        max_interim_reviews: optional_u32(
+            &values,
+            "CODETRIAL_MAX_INTERIM_REVIEWS",
+            DEFAULT_MAX_INTERIM_REVIEWS as u32,
+        )
+        .min(MAX_INTERIM_REVIEWS as u32) as usize,
         pool,
     })
 }

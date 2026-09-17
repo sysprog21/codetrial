@@ -71,6 +71,15 @@
         ]
       ],
       "expected": 2
+    },
+    {
+      "label": "one operand",
+      "input": [
+        [
+          "7"
+        ]
+      ],
+      "expected": 7
     }
   ],
   "paramNames": [

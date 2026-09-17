@@ -54,6 +54,15 @@
         ]
       ],
       "expected": 4
+    },
+    {
+      "label": "one price",
+      "input": [
+        [
+          5
+        ]
+      ],
+      "expected": 0
     }
   ],
   "paramNames": [

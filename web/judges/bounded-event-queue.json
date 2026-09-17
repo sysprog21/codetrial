@@ -1,0 +1,172 @@
+{
+  "kind": "class",
+  "className": "EventQueue",
+  "checker": "exact",
+  "cases": [
+    {
+      "label": "empty reads and rejected overflow",
+      "input": [
+        [
+          "EventQueue",
+          "pop",
+          "front",
+          "push",
+          "push",
+          "push",
+          "size",
+          "front"
+        ],
+        [
+          [
+            2
+          ],
+          [],
+          [],
+          [
+            7
+          ],
+          [
+            9
+          ],
+          [
+            11
+          ],
+          [],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        -1,
+        -1,
+        true,
+        true,
+        false,
+        2,
+        7
+      ]
+    },
+    {
+      "label": "wrap after removing the oldest",
+      "input": [
+        [
+          "EventQueue",
+          "push",
+          "push",
+          "pop",
+          "push",
+          "front",
+          "pop",
+          "pop",
+          "size"
+        ],
+        [
+          [
+            3
+          ],
+          [
+            4
+          ],
+          [
+            5
+          ],
+          [],
+          [
+            6
+          ],
+          [],
+          [],
+          [],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        true,
+        true,
+        4,
+        true,
+        5,
+        5,
+        6,
+        0
+      ]
+    },
+    {
+      "label": "one slot can be reused repeatedly",
+      "input": [
+        [
+          "EventQueue",
+          "push",
+          "pop",
+          "push",
+          "front",
+          "size"
+        ],
+        [
+          [
+            1
+          ],
+          [
+            12
+          ],
+          [],
+          [
+            -3
+          ],
+          [],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        true,
+        12,
+        true,
+        -3,
+        1
+      ]
+    },
+    {
+      "label": "empty buffer",
+      "input": [
+        [
+          "EventQueue"
+        ],
+        [
+          [
+            2
+          ]
+        ]
+      ],
+      "expected": [
+        null
+      ]
+    },
+    {
+      "label": "empty buffer size",
+      "input": [
+        [
+          "EventQueue",
+          "size"
+        ],
+        [
+          [
+            2
+          ],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        0
+      ]
+    }
+  ],
+  "methodReturnTypes": {
+    "pop": "value",
+    "front": "value",
+    "push": "value",
+    "size": "value"
+  }
+}

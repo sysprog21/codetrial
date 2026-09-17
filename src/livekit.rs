@@ -681,7 +681,7 @@ async fn open_session<'a>(
     let mut turn = TurnState {
         state: initial_runtime_state(&boot, started_at),
         agent_state: std::mem::take(&mut agent_state),
-        activity: RuntimeActivity::new(started_at),
+        activity: RuntimeActivity::with_interim_review_cap(started_at, config.max_interim_reviews),
         turns: SpeakerTurns::default(),
     };
     let mut media = CandidateMedia::new();

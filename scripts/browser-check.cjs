@@ -34,6 +34,7 @@ function interviewUrl(problemId) {
 }
 
 const soakSeconds = Number(process.env.BROWSER_CHECK_SOAK_SECONDS || "0");
+const requireModel = process.env.BROWSER_CHECK_REQUIRE_MODEL === "1";
 if (!Number.isSafeInteger(soakSeconds) || soakSeconds < 0) {
   throw new Error("BROWSER_CHECK_SOAK_SECONDS must be a whole number of seconds");
 }
@@ -489,6 +490,7 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
           .waitForFunction((from) => (window.__codetrialAvatarFrames?.() ?? 0) > from, first, { timeout: 5000 })
           .catch(() => { throw new Error(`the avatar render loop is not running: stuck at ${first} frames`); });
       } else if (avatarState === "unavailable") {
+        if (requireModel && !modelDelivered) throw new Error("the pinned avatar model was never delivered");
         if (canvases !== 0) throw new Error("an unavailable avatar must not leave a canvas behind");
         if (!fallbackVisible) throw new Error("the neutral panel must be visible when the avatar is unavailable");
         if (!/avatar is unavailable/.test(note)) throw new Error(`the neutral panel must say why, got: ${note}`);
@@ -563,7 +565,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
     return out;
 }
 `);
-        await runAndExpectPassing(4, 120000);
+        await runAndExpectPassing(5, 120000);
         await page.goto(interviewUrl("min-stack"), { waitUntil: "domcontentloaded" });
         await clearMediaGate(page);
         await page.getByRole("heading", { name: scenarioTitle("min-stack"), level: 1 }).waitFor();
@@ -588,7 +590,7 @@ public:
     int getMin() { return minimums.back(); }
 };
 `);
-        await runAndExpectPassing(4, 120000);
+        await runAndExpectPassing(5, 120000);
         await page.goto(interviewUrl("binary-search-tree-iterator"), { waitUntil: "domcontentloaded" });
         await clearMediaGate(page);
         await page.getByRole("heading", { name: scenarioTitle("binary-search-tree-iterator"), level: 1 }).waitFor();
@@ -611,7 +613,7 @@ public:
     public boolean hasNext() { return !stack.isEmpty(); }
 }
 `);
-        await runAndExpectPassing(3, 120000);
+        await runAndExpectPassing(5, 120000);
         return;
       }
       if (compilerExplorerBaseUrl !== "__default__") {
@@ -637,7 +639,7 @@ function matchDisputedCharge() {
 `);
       await page.getByRole("button", { name: /Run tests/ }).click();
       await page.getByRole("button", { name: "Run tests" }).waitFor();
-      await page.getByText("Test results · 0/4").waitFor();
+      await page.getByText("Test results · 0/5").waitFor();
       await page.getByLabel("Code editor").fill(`function matchDisputedCharge(nums, target) {
   const seen = new Map();
   for (let i = 0; i < nums.length; i++) {
@@ -648,7 +650,7 @@ function matchDisputedCharge() {
   return [];
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
       await page.getByRole("button", { name: "C++" }).click();
       await page.getByLabel("Code editor").fill(`class Solution {
 public:
@@ -663,7 +665,7 @@ public:
     }
 };
 `);
-      await runAndExpectPassing(4, 120000);
+      await runAndExpectPassing(5, 120000);
       await page.getByLabel("Code editor").fill(`class Solution {
 public:
     vector<int> matchDisputedCharge(vector<int>& nums, int target) {
@@ -693,7 +695,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
     return out;
 }
 `);
-      await runAndExpectPassing(4, 120000);
+      await runAndExpectPassing(5, 120000);
       await page.getByRole("button", { name: "Python" }).click();
       await page.getByLabel("Code editor").fill(`class Solution:
     def matchDisputedCharge(self, nums, target):
@@ -705,7 +707,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
             seen[value] = i
         return []
 `);
-      await runAndExpectPassing(4, 120000);
+      await runAndExpectPassing(5, 120000);
       await page.getByRole("button", { name: "Transcript" }).click();
       await page.locator("p").filter({ hasText: /^Jim$/ }).first().waitFor();
       await page.locator("p").filter({ hasText: /^You$/ }).first().waitFor();
@@ -728,7 +730,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
   }
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("remove-duplicates-from-sorted-array-ii"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -747,7 +749,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
 `);
       await page.getByRole("button", { name: /Run tests/ }).click();
       await page.getByRole("button", { name: "Run tests" }).waitFor();
-      await page.getByText("Test results · 0/3").waitFor();
+      await page.getByText("Test results · 0/5").waitFor();
       await page.getByLabel("Code editor").fill(`function capRepeatsAtTwo(nums) {
   let write = 0;
   for (const value of nums) {
@@ -758,7 +760,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
   return write;
 }
 `);
-      await runAndExpectPassing(3);
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("merge-two-sorted-lists"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -1472,7 +1474,7 @@ function startCompilerExplorerMock() {
         && source.includes("int* matchDisputedCharge")
         && source.includes("int main(void)")
       ) {
-        stdout = "{\"results\":[{\"actual\":[0,1],\"timeMs\":1},{\"actual\":[1,2],\"timeMs\":1},{\"actual\":[0,1],\"timeMs\":1},{\"actual\":[0,2],\"timeMs\":1}]}";
+        stdout = "{\"results\":[{\"actual\":[0,1],\"timeMs\":1},{\"actual\":[1,2],\"timeMs\":1},{\"actual\":[0,1],\"timeMs\":1},{\"actual\":[0,2],\"timeMs\":1},{\"actual\":[1,2],\"timeMs\":1}]}";
       } else if (
         executes
         && payload.options?.userArguments === "-O2 -std=c++20"
@@ -1487,7 +1489,7 @@ function startCompilerExplorerMock() {
           "instance.top()",
         ].every((pattern) => source.includes(pattern))
       ) {
-        stdout = "{\"results\":[{\"actual\":[null,null,null,null,-3,null,0,-2],\"timeMs\":1},{\"actual\":[null,null,null,null,1,null,1,null,2],\"timeMs\":1},{\"actual\":[null,null,null,3,3,null,5,5],\"timeMs\":1},{\"actual\":[null,null,null,null,-1,-1],\"timeMs\":1}]}";
+        stdout = "{\"results\":[{\"actual\":[null,null,null,null,-3,null,0,-2],\"timeMs\":1},{\"actual\":[null,null,null,null,1,null,1,null,2],\"timeMs\":1},{\"actual\":[null,null,null,3,3,null,5,5],\"timeMs\":1},{\"actual\":[null,null,null,null,-1,-1],\"timeMs\":1},{\"actual\":[null],\"timeMs\":1}]}";
       } else if (
         executes
         && payload.options?.userArguments === ""
@@ -1499,7 +1501,7 @@ function startCompilerExplorerMock() {
           "actual.add(jsonAny(instance.hasNext()))",
         ].every((pattern) => source.includes(pattern))
       ) {
-        stdout = "{\"results\":[{\"actual\":[null,3,7,true,9,true,15,true,20,false],\"timeMs\":1},{\"actual\":[null,true,1,false],\"timeMs\":1},{\"actual\":[null,1,2,3,false],\"timeMs\":1}]}";
+        stdout = "{\"results\":[{\"actual\":[null,3,7,true,9,true,15,true,20,false],\"timeMs\":1},{\"actual\":[null,true,1,false],\"timeMs\":1},{\"actual\":[null,1,2,3,false],\"timeMs\":1},{\"actual\":[null],\"timeMs\":1},{\"actual\":[null,1,2,false],\"timeMs\":1}]}";
       } else {
         response.writeHead(400, headers);
         response.end(JSON.stringify({ code: 1, stderr: "unexpected mock Compiler Explorer request" }));

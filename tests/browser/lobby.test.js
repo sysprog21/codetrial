@@ -503,20 +503,27 @@ lobbyTest("published problem names stay hidden until the candidate asks, and the
   const visibleSources = () => page.evaluate(() =>
     [...document.querySelectorAll(".problem-source")].filter((source) => !source.hidden).length);
   assert.equal(await visibleSources(), 0, "a published name is on screen by default");
-  assert.equal(await page.evaluate(() => document.querySelectorAll(".problem-source").length), 150);
+  const sourceCount = await page.evaluate(() => document.querySelectorAll(".problem-source").length);
+  assert.equal(
+    sourceCount,
+    await page.evaluate(() => document.querySelectorAll(".problem-card").length),
+    "every picker card has one source slot",
+  );
+  const namedSourceCount = Object.values(JSON.parse(read("web/problem-pages.json")))
+    .filter((entry) => entry.source).length;
 
   await page.evaluate(() => { document.querySelector(".problem-picker").open = true; });
   await page.check("#show-sources");
   // The names arrive with the map, fetched on the first request for them.
-  await page.waitForFunction(() =>
-    [...document.querySelectorAll(".problem-source")].filter((source) => !source.hidden).length === 150);
+  await page.waitForFunction((count) =>
+    [...document.querySelectorAll(".problem-source")].filter((source) => !source.hidden).length === count, namedSourceCount);
   assert.match(await page.locator(`[data-problem="${pageOf("two-sum")}"] .problem-source`).textContent(), /LeetCode: Two Sum/);
   // The recommendation still names the scenario only.
   assert.doesNotMatch(await page.locator("#recommendation").textContent(), /LeetCode:/);
 
   await lobby(page);
-  await page.waitForFunction(() =>
-    [...document.querySelectorAll(".problem-source")].filter((source) => !source.hidden).length === 150);
+  await page.waitForFunction((count) =>
+    [...document.querySelectorAll(".problem-source")].filter((source) => !source.hidden).length === count, namedSourceCount);
 });
 
 lobbyTest("the lobby never suggests a length past its own default", async (page) => {
@@ -681,6 +688,47 @@ lobbyTest("a completed problem returns with a due-review explanation", async (pa
   const state = await snapshot(page);
   assert.equal(state.card, EASY[0]);
   assert.match(state.note, /Review due after 1 day/);
+});
+
+lobbyTest("a saved report reopens from the lobby", async (page) => {
+  reports = [savedAttempt(EASY[0])];
+  await lobby(page);
+  await page.getByRole("button", { name: "Open report" }).click();
+  assert.equal(await page.locator("#attempt-history .report-card").count(), 1);
+  assert.equal(await page.locator("#attempt-history #download-report").count(), 0);
+  assert.equal(await page.locator("#attempt-history #done").count(), 0);
+});
+
+lobbyTest("try again selects the problem", async (page) => {
+  reports = [savedAttempt(EASY[0])];
+  await lobby(page);
+  await page.getByRole("button", { name: "Try again" }).click();
+  assert.equal((await snapshot(page)).card, EASY[0]);
+  assert.match(await page.locator("#recommendation").textContent(), /Selected:/);
+});
+
+lobbyTest("an unmappable history entry fetches the page map at most once", async (page) => {
+  session = { signedIn: false };
+  const requests = [];
+  page.on("request", (request) => requests.push(new URL(request.url()).pathname));
+  await page.addInitScript(() => {
+    if (!localStorage.getItem("codetrial_history")) localStorage.setItem("codetrial_history", JSON.stringify([
+      { problemId: "retired-problem", date: "2026-01-01T00:00:00Z", report: { decision: "HIRE" } },
+    ]));
+  });
+  await lobby(page);
+  await lobby(page);
+  assert.equal(requests.filter((path) => path === "/problem-pages.json").length, 1);
+});
+
+lobbyTest("a due review below the suggested level is shown and recommended", async (page) => {
+  reports = [savedAttempt(EASY[0]), hired(EASY[1])];
+  const state = await lobby(page);
+
+  assert.deepEqual(state.levels, ["Medium"]);
+  assert.equal(state.card, EASY[0]);
+  assert.match(state.note, /Review due after 1 day \(Easy\)/);
+  assert.equal((await cardInfo(page, EASY[0])).hidden, false);
 });
 
 lobbyTest("two passes move the candidate up a level, and the lobby says why", async (page) => {

@@ -14,6 +14,7 @@
 mod events;
 mod integrity;
 mod problem_guides;
+mod problem_rubrics;
 mod problem_topics;
 mod problem_variants;
 mod problems;
@@ -35,8 +36,8 @@ pub use prompts::{
     test_setup_error_reaction, time_warning, wrap_up,
 };
 pub use report::{
-    MAX_SUMMARY_TEXT, fallback_report, final_report, report_response_schema, validate_report,
-    validate_report_candidate,
+    MAX_SUMMARY_TEXT, fallback_report, final_report, names_published_problem,
+    report_response_schema, spelled_words, validate_report, validate_report_candidate,
 };
 pub use value::json_number;
 pub(crate) use value::{bounded_model_text, json_int, python_truthy, truthy_string, value_string};
@@ -74,6 +75,7 @@ const MAX_TEST_CASES: i64 = 99;
 /// than a contract. Nothing hashes this list, so a browser that sends more
 /// simply has the extra dropped here, and no same-number test is owed.
 const MAX_TEST_FAILURES: usize = 4;
+pub const MAX_CANDIDATE_CASES: usize = 5;
 pub const WATCH_TICK_S: f64 = 2.0;
 /// How long the candidate has to be both silent and not typing before the
 /// interviewer steps in with a question.
@@ -113,11 +115,11 @@ const ROUND_TRANSITION_SKEW: std::time::Duration = std::time::Duration::from_sec
 /// `the_time_warning_threshold_is_the_same_number_on_both_sides`.
 pub const TIME_WARNING_S: u64 = 300;
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 5;
-pub const LIVE_PROMPT_VERSION: u32 = 2;
-pub const REPORT_PROMPT_VERSION: u32 = 5;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 8;
+pub const LIVE_PROMPT_VERSION: u32 = 3;
+pub const REPORT_PROMPT_VERSION: u32 = 8;
 pub const RUBRIC_VERSION: u32 = 1;
-pub const REPORT_SCHEMA_VERSION: u32 = 1;
+pub const REPORT_SCHEMA_VERSION: u32 = 2;
 
 pub fn interview_contract_json() -> serde_json::Value {
     serde_json::json!({
@@ -257,6 +259,12 @@ impl Problem {
     /// to `PROBLEMS`.
     pub fn variant(&self) -> &'static ProblemVariant {
         variant_for(self.id).expect("every problem has a variant")
+    }
+
+    /// The published title for an imported exercise. Original exercises use
+    /// their scenario title as `title`, so there is no source name to filter.
+    pub fn source_title(&self) -> Option<&'static str> {
+        (self.title != self.variant().title).then_some(self.title)
     }
 
     pub fn question_metadata(&self) -> QuestionMetadata<'_> {
@@ -679,6 +687,7 @@ pub struct RuntimeState {
     pub last_test_run: Option<serde_json::Value>,
     pub test_runs: u32,
     pub hints_used: u32,
+    pub volunteered_hints: u32,
     /// The authored rungs for this problem, handed out one at a time by
     /// `record_hint` rather than held in the live prompt. A model holding all
     /// three answers the first request with the third, and nothing downstream
@@ -777,6 +786,7 @@ impl Default for RuntimeState {
             last_test_run: None,
             test_runs: 0,
             hints_used: 0,
+            volunteered_hints: 0,
             hint_ladder: &[],
             hint_rungs_given: 0,
             follow_ups: &[],
@@ -1312,6 +1322,9 @@ pub fn record_hint(state: &mut RuntimeState, requested: bool) -> String {
         if last && !approach_stated {
             return hint_rung_withheld_text(state.hints_used);
         }
+    }
+    if !requested {
+        state.volunteered_hints = state.volunteered_hints.saturating_add(1);
     }
     state.hints_used = state.hints_used.saturating_add(1);
     match clue {

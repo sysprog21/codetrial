@@ -795,6 +795,11 @@
             <span class="problem-source" hidden></span>
             <span class="problem-meta">Medium</span>
           </button>
+          <button class="problem-card" type="button" data-problem="bounded-event-queue" data-difficulty="Medium">
+            <span class="problem-title">Bounded Event Queue</span>
+            <span class="problem-source" hidden></span>
+            <span class="problem-meta">Medium</span>
+          </button>
         </section>
       </details>
 
@@ -864,7 +869,15 @@
           <label>Duration <select id="progress-duration"><option value="all">All</option></select></label>
         </fieldset>
         <p id="progress-summary" aria-live="polite"></p>
+        <section aria-labelledby="attempt-history-title">
+          <h3 id="attempt-history-title">Past attempts</h3>
+          <ol id="attempt-history"></ol>
+        </section>
         <div id="progress-trends" class="progress-trends"></div>
+        <section aria-labelledby="progress-topics-title">
+          <h3 id="progress-topics-title">Progress by topic</h3>
+          <ol id="progress-topics"></ol>
+        </section>
         <section aria-labelledby="progress-weakness-title">
           <h3 id="progress-weakness-title">Recurring weaknesses</h3>
           <ol id="progress-weaknesses"></ol>

@@ -69,6 +69,17 @@
         null,
         3
       ]
+    },
+    {
+      "label": "one node",
+      "input": [
+        [
+          1
+        ]
+      ],
+      "expected": [
+        1
+      ]
     }
   ],
   "paramNames": [

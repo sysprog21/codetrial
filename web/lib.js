@@ -223,7 +223,8 @@ export function testPayload(summary) {
     total: summary.total,
     language: summary.language,
     setupError: summary.setupError || null,
-    failures: summary.cases.filter((item) => !item.pass).slice(0, 4).map((item) => ({ label: item.label, expected: item.expected, got: item.got, error: item.error || null })),
+    failures: summary.cases.filter((item) => !item.candidate && !item.pass).slice(0, 4).map((item) => ({ label: item.label, expected: item.expected, got: item.got, error: item.error || null })),
+    candidateCases: summary.cases.filter((item) => item.candidate).slice(0, 5).map((item) => ({ label: item.label, expected: item.expected ?? null, got: item.got, error: item.error || null })),
     at: Date.now(),
   };
 }
@@ -403,38 +404,32 @@ export function loopLabel(value) {
 
 const textEncoder = new TextEncoder();
 
-/// The five versions this build produces. See `SCORABLE_CONTRACTS` for what it
-/// will score.
+/// The five versions this build produces. See `SCORABLE_SCHEMAS` for which
+/// report shapes it can score.
 ///
 /// Here rather than inside `sanitizeReport` so a test can read it. While it was
 /// function-local, moving it left the whole suite green with the supported-card
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
-  bundleVersion: 5,
-  livePromptVersion: 2,
-  reportPromptVersion: 5,
-  reportSchemaVersion: 1,
+  bundleVersion: 8,
+  livePromptVersion: 3,
+  reportPromptVersion: 8,
+  reportSchemaVersion: 2,
   rubricVersion: 1,
 };
 
-/// The bundles this build scores: the active one, and earlier ones whose rubric
-/// and report schema are the active ones. Bundle 4 differs from 5 only in the
-/// prompts that produced the report, so what its scores mean is unchanged, and
-/// refusing it would blank the scores on every report saved before bundle 5.
-/// The report keeps the bundle it claims, so its card still says which prompts
-/// wrote it.
-export const SCORABLE_CONTRACTS = [
-  ACTIVE_CONTRACT,
-  { ...ACTIVE_CONTRACT, bundleVersion: 4, livePromptVersion: 1, reportPromptVersion: 4 },
-];
+/// Report schemas this build can compare with the active rubric. Prompt-only
+/// bundle bumps retain the same score meaning, so compatibility is a predicate
+/// over provenance rather than a list that every prompt edit can forget.
+export const SCORABLE_SCHEMAS = [1, 2];
 
 /// The report's contract bundle, and whether this build can score against it.
 ///
 /// Two answers rather than one, because they are not the same question. The
 /// bundle is what the report claims and is kept whenever it is well formed, so
-/// a reader is told which rubric produced it. Supported is whether the bundle is
-/// one of `SCORABLE_CONTRACTS`, and only that decides whether the scores below
-/// are shown.
+/// a reader is told which rubric produced it. Supported is whether the
+/// provenance is compatible with this rubric and schema, and only that decides
+/// whether the scores below are shown.
 /// A report with no bundle at all predates the contract and is neither.
 function reportContract(raw) {
   const keys = Object.keys(ACTIVE_CONTRACT);
@@ -445,9 +440,14 @@ function reportContract(raw) {
   const interviewContract = claimed === undefined
     ? null
     : wellFormed ? Object.fromEntries(keys.map((key) => [key, claimed[key]])) : null;
-  const unsupported = claimed !== undefined
-    && (interviewContract === null
-      || !SCORABLE_CONTRACTS.some((contract) => keys.every((key) => interviewContract[key] === contract[key])));
+  const supported = interviewContract !== null
+    && interviewContract.rubricVersion === ACTIVE_CONTRACT.rubricVersion
+    && SCORABLE_SCHEMAS.includes(interviewContract.reportSchemaVersion)
+    && interviewContract.bundleVersion >= 4
+    && interviewContract.bundleVersion <= ACTIVE_CONTRACT.bundleVersion
+    && interviewContract.livePromptVersion <= ACTIVE_CONTRACT.livePromptVersion
+    && interviewContract.reportPromptVersion <= ACTIVE_CONTRACT.reportPromptVersion;
+  const unsupported = claimed !== undefined && !supported;
   return { interviewContract, unsupported };
 }
 
@@ -558,6 +558,38 @@ const END_REASONS = ["time_up", "candidate_ended", "interview_complete"];
 
 export function endReason(raw) {
   return END_REASONS.includes(raw) ? raw : null;
+}
+
+function reportDebrief(raw) {
+  if (raw?.debrief === undefined) return undefined;
+  const debrief = raw?.debrief;
+  if (!debrief || typeof debrief !== "object" || Array.isArray(debrief)) return null;
+  const text = (value) => typeof value === "string" ? boundedText(value, MAX_SUMMARY_TEXT) : null;
+  return {
+    scenarioContract: text(debrief.scenarioContract),
+    approach: text(debrief.approach),
+    pitfalls: text(debrief.pitfalls),
+    hints: Array.isArray(debrief.hints) ? debrief.hints.slice(0, 3).map((hint) => ({
+      text: typeof hint?.text === "string" ? boundedText(hint.text, 400) : "",
+      given: hint?.given === true,
+    })).filter((hint) => hint.text) : [],
+    followUps: Array.isArray(debrief.followUps)
+      ? debrief.followUps.slice(0, 3).filter((item) => typeof item === "string").map((item) => boundedText(item, 400)).filter(Boolean)
+      : [],
+  };
+}
+
+function reportTopics(raw) {
+  if (raw?.topics === undefined) return undefined;
+  return Array.isArray(raw?.topics)
+    ? raw.topics.slice(0, 8).filter((topic) => typeof topic === "string").map((topic) => boundedText(topic, 80)).filter(Boolean)
+    : [];
+}
+
+function reportPracticeLevel(raw) {
+  if (raw?.practiceLevel === undefined) return undefined;
+  return ["intern", "junior", "mid", "senior", "staff", "manager"].includes(raw?.practiceLevel)
+    ? raw.practiceLevel : null;
 }
 
 export function sanitizeReport(raw) {
@@ -681,6 +713,9 @@ export function sanitizeReport(raw) {
     }
     : null;
   const frameworkEvidence = reportEvidence(raw);
+  const debrief = reportDebrief(raw);
+  const topics = reportTopics(raw);
+  const practiceLevel = reportPracticeLevel(raw);
 
   // A report with nothing in it must survive normalization as a report with
   // nothing in it. Falling through to the fields below would score the missing
@@ -701,6 +736,9 @@ export function sanitizeReport(raw) {
       integrityEvents: integrityEvents(raw?.integrityEvents),
       ...checkpoint(raw),
       hintsUsed: bounded(raw?.hintsUsed, 99),
+      debrief,
+      topics,
+      practiceLevel,
       improvementPlan: [],
       frameworkAssessment: null,
       frameworkEvidence,
@@ -726,6 +764,9 @@ export function sanitizeReport(raw) {
     // Bounded like the scores: `JSON.parse` turns 1e999 into Infinity, which
     // would otherwise render as "Infinity hints used" and land in history.
     hintsUsed: bounded(raw?.hintsUsed, 99),
+    debrief,
+    topics,
+    practiceLevel,
   };
 }
 

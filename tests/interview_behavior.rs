@@ -20,6 +20,7 @@
 use codetrial::agent::{
     InterviewGrounding, InterviewLoop, InterviewProfile, Problem, RuntimeState,
     build_instructions_for_plan, find_problem, get_problem, greeting, log_hint_text,
+    names_published_problem,
 };
 use codetrial::gemini::{GeminiFunctionCall, live_tool_declarations};
 use codetrial::livekit::execute_tool_call;
@@ -38,7 +39,9 @@ fn names_source(problem: &Problem, reply: &str) -> bool {
         || spoken
             .windows(2)
             .any(|pair| pair[0] == "leet" && pair[1] == "code")
-        || names_title(problem.title, reply)
+        || problem
+            .source_title()
+            .is_some_and(|title| names_published_problem(title, reply))
 }
 
 /// The limits a candidate has to ask for, as they could be said: `10^4` also
@@ -154,6 +157,7 @@ fn named_beyond(reply: &str, allowed: &str) -> Vec<&'static str> {
 fn the_rules_catch_a_named_source_and_a_volunteered_limit() {
     let problem = get_problem(Some("3sum"));
     assert!(names_source(problem, "Sure, this is basically 3 Sum."));
+    assert!(names_title(problem.title, "Sure, this is basically 3 Sum."));
     assert!(!names_source(problem, "Those 3 sums all cancel out."));
     assert!(names_source(
         get_problem(Some("lru-cache")),

@@ -32,23 +32,9 @@ ours()
     [ -f "$1" ] && wrapper "$2" | cmp -s - "$1"
 }
 
-# Before wrappers, this installer made absolute links into a worktree. Accept
-# only one that names a worktree Git says belongs to this repository, so an
-# unrelated local hook remains untouched while an upgrade fixes the old link.
-legacy_ours()
-{
-    [ -L "$1" ] || return 1
-    link=$(readlink "$1") || return 1
-    base=${link%/scripts/git-"$2".sh}
-    [ "$base" != "$link" ] && [ -d "$base" ] || return 1
-    worktree=$(git -C "$base" rev-parse --show-toplevel 2> /dev/null) || return 1
-    git worktree list --porcelain | grep -Fqx "worktree $worktree"
-}
-
 if [ "$mode" = uninstall ]; then
     for target in "$hooks"/*; do
-        ours "$target" "${target##*/}" \
-            || legacy_ours "$target" "${target##*/}" || continue
+        ours "$target" "${target##*/}" || continue
         rm -f "$target"
         printf '  RM      %s\n' "${target##*/}"
     done
@@ -70,11 +56,6 @@ for hook in "$ROOT"/scripts/git-*.sh; do
         # nothing runs.
         chmod +x "$target" || failed=1
         printf '  OK      %s\n' "$name"
-    elif legacy_ours "$target" "$name" \
-        && rm -f "$target" \
-        && wrapper "$name" > "$target" \
-        && chmod +x "$target"; then
-        printf '  HOOK    %s\n' "$name"
     elif [ -e "$target" ] || [ -L "$target" ]; then
         printf '  KEEP    %s already exists; remove it to install ours\n' "$target"
     elif wrapper "$name" > "$target" && chmod +x "$target"; then

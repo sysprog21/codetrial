@@ -357,7 +357,7 @@ function cppClassCase(spec, testCase) {
     ${spec.className} instance{${cppClassArgs(argsList[0], spec.constructorArgTypes).join(", ")}};
     vector<string> actual;
     actual.push_back("null");
-${methods.slice(1).map((method, index) => cppClassMethodCall(method, argsList[index + 1], testCase.expected[index + 1])).join("\n")}
+${methods.slice(1).map((method, index) => cppClassMethodCall(method, argsList[index + 1], classReturnType(spec, testCase, method, index + 1))).join("\n")}
     auto elapsed = chrono::duration<double, milli>(chrono::steady_clock::now() - start).count();
     results.push_back("{\\"actual\\":" + jsonFragments(actual) + ",\\"timeMs\\":" + toJson(elapsed) + "}");
   } catch (const exception& error) {
@@ -365,11 +365,20 @@ ${methods.slice(1).map((method, index) => cppClassMethodCall(method, argsList[in
   }`;
 }
 
-function cppClassMethodCall(method, args, expected) {
+function cppClassMethodCall(method, args, returnType) {
   const call = `instance.${method}(${(args || []).map((value) => cppClassLiteral(value)).join(", ")})`;
-  return expected === null
+  return returnType === "void"
     ? `    ${call};\n    actual.push_back("null");`
     : `    actual.push_back(toJson(${call}));`;
+}
+
+function classReturnType(spec, testCase, method, index) {
+  // Keyed by method name, which is the one shape `posed` in
+  // scripts/problem_bank/rules.py emits. The fallback reads the expected value
+  // instead, and is wrong for a candidate-authored case that has none, so it
+  // stays only for a judge generated before the field existed.
+  if (spec.methodReturnTypes && typeof spec.methodReturnTypes === "object") return spec.methodReturnTypes[method] || "value";
+  return testCase.expected?.[index] === null ? "void" : "value";
 }
 
 function cppClassConstructorDeclarations(spec, args) {
@@ -513,7 +522,7 @@ function javaClassCase(spec, testCase) {
       ${spec.className} instance = new ${spec.className}(${javaClassArgs(argsList[0], spec.constructorArgTypes).join(", ")});
       ArrayList<String> actual = new ArrayList<>();
       actual.add("null");
-${methods.slice(1).map((method, index) => javaClassMethodCall(method, argsList[index + 1], testCase.expected[index + 1])).join("\n")}
+${methods.slice(1).map((method, index) => javaClassMethodCall(method, argsList[index + 1], classReturnType(spec, testCase, method, index + 1))).join("\n")}
       double elapsed = (System.nanoTime() - start) / 1000000.0;
       results.add("{\\"actual\\":[" + String.join(",", actual) + "],\\"timeMs\\":" + json(elapsed) + "}");
     } catch (Throwable error) {
@@ -521,9 +530,9 @@ ${methods.slice(1).map((method, index) => javaClassMethodCall(method, argsList[i
     }`;
 }
 
-function javaClassMethodCall(method, args, expected) {
+function javaClassMethodCall(method, args, returnType) {
   const call = `instance.${method}(${(args || []).map((value) => javaClassLiteral(value)).join(", ")})`;
-  return expected === null
+  return returnType === "void"
     ? `      ${call};\n      actual.add("null");`
     : `      actual.add(jsonAny(${call}));`;
 }

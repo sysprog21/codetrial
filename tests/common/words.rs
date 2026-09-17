@@ -24,38 +24,15 @@ pub fn shared_run(left: &str, right: &str) -> usize {
     longest
 }
 
-/// Lowercase ASCII words, split on anything that is not a letter or a digit
-/// and inside identifiers where their case changes, the way `spelled_words` in
+/// Lowercase ASCII words, the way `spelled_words` in
 /// scripts/problem_bank/rules.py splits them: `minStackCreate` is min, stack,
 /// create, and `LRUCache` is lru, cache.
+///
+/// Delegates so the tests split words the same way the report validator does.
+/// Two copies of the rule is how the generator, the prompt tests and the
+/// server stop agreeing about what a word is.
 pub fn words(text: &str) -> Vec<String> {
-    let characters = text.chars().collect::<Vec<_>>();
-    let mut words = Vec::new();
-    let mut current = String::new();
-    for (at, &character) in characters.iter().enumerate() {
-        if !character.is_ascii_alphanumeric() {
-            if !current.is_empty() {
-                words.push(std::mem::take(&mut current));
-            }
-            continue;
-        }
-        let previous = at.checked_sub(1).map(|before| characters[before]);
-        let next = characters.get(at + 1);
-        let lower_then_upper = character.is_ascii_uppercase()
-            && previous
-                .is_some_and(|before| before.is_ascii_lowercase() || before.is_ascii_digit());
-        let acronym_ends = character.is_ascii_uppercase()
-            && previous.is_some_and(|before| before.is_ascii_uppercase())
-            && next.is_some_and(char::is_ascii_lowercase);
-        if (lower_then_upper || acronym_ends) && !current.is_empty() {
-            words.push(std::mem::take(&mut current));
-        }
-        current.push(character.to_ascii_lowercase());
-    }
-    if !current.is_empty() {
-        words.push(current);
-    }
-    words
+    codetrial::agent::spelled_words(text)
 }
 
 /// Whether `text` names a published problem by its title: the rule
@@ -67,25 +44,5 @@ pub fn words(text: &str) -> Vec<String> {
 /// consecutive words spells it with the spaces gone: "LRUCache", "lru cache"
 /// and "3 Sum" all name their problems, and "those 3 sums" does not.
 pub fn names_title(title: &str, text: &str) -> bool {
-    if title
-        .chars()
-        .all(|character| character.is_ascii_alphabetic())
-    {
-        return false;
-    }
-    let target = words(title).concat();
-    let text = words(text);
-    (0..text.len()).any(|start| {
-        let mut joined = String::new();
-        for word in &text[start..] {
-            joined.push_str(word);
-            if joined == target {
-                return true;
-            }
-            if joined.len() >= target.len() {
-                return false;
-            }
-        }
-        false
-    })
+    codetrial::agent::names_published_problem(title, text)
 }

@@ -153,6 +153,29 @@
         true,
         false
       ]
+    },
+    {
+      "label": "no stored words",
+      "input": [
+        [
+          "PatternLexicon",
+          "search"
+        ],
+        [
+          [],
+          [
+            "a"
+          ]
+        ]
+      ],
+      "expected": [
+        null,
+        false
+      ]
     }
-  ]
+  ],
+  "methodReturnTypes": {
+    "addWord": "void",
+    "search": "value"
+  }
 }

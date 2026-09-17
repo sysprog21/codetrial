@@ -101,35 +101,45 @@ pub fn sanitize_test_run(payload: &serde_json::Value) -> serde_json::Value {
         // `claimed_total` is at least one and `total - 1` cannot go negative.
         claimed_passed.min(total - 1)
     };
-    let failures = payload
-        .get("failures")
-        .and_then(serde_json::Value::as_array)
-        .map(|failures| {
-            failures
-                .iter()
-                // Bounded before the filter, not after: filtering first walks
-                // the whole array to decide it has nothing, so an array of
-                // non-objects costs its full length to yield zero failures.
-                .take(MAX_TEST_FAILURES)
-                .filter_map(serde_json::Value::as_object)
-                .map(|failure| {
-                    serde_json::json!({
-                        // "?" rather than null: the renderer prints `label`
-                        // unconditionally, and a null reads as a test named
-                        // None.
-                        "label": text(failure.get("label")).unwrap_or_else(|| "?".to_string()),
-                        "expected": text(failure.get("expected")),
-                        "got": text(failure.get("got")),
-                        "error": text(failure.get("error")),
+
+    // One reader for both lists: they are the same record shape from the same
+    // untrusted payload, and a bound or a stripped field applied to only one of
+    // them is how candidate-controlled text reaches the report prompt.
+    let reported_cases = |key: &str, limit: usize| {
+        payload
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .map(|cases| {
+                cases
+                    .iter()
+                    // Bounded before the filter, not after: filtering first
+                    // walks the whole array to decide it has nothing, so an
+                    // array of non-objects costs its full length to yield zero
+                    // cases.
+                    .take(limit)
+                    .filter_map(serde_json::Value::as_object)
+                    .map(|case| {
+                        serde_json::json!({
+                            // "?" rather than null: the renderer prints `label`
+                            // unconditionally, and a null reads as a test named
+                            // None.
+                            "label": text(case.get("label")).unwrap_or_else(|| "?".to_string()),
+                            "expected": text(case.get("expected")),
+                            "got": text(case.get("got")),
+                            "error": text(case.get("error")),
+                        })
                     })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    let failures = reported_cases("failures", MAX_TEST_FAILURES);
+    let candidate_cases = reported_cases("candidateCases", crate::agent::MAX_CANDIDATE_CASES);
 
     serde_json::json!({
         "passed": passed,
         "total": total,
+        "candidateCases": candidate_cases,
 
         // The same allowlist the spoken acknowledgement uses, so a run cannot
         // claim a language the product does not offer. Note this stores the
@@ -225,6 +235,7 @@ pub fn sanitize_integrity_event(payload: &serde_json::Value) -> Option<serde_jso
         // rather than silence: a report with no face events must not be
         // mistaken for a report where the camera was watched and saw nothing.
         "CAMERA_RELEASED_TO_PRESENTER" => "CAMERA_RELEASED_TO_PRESENTER",
+        "CAMERA_NOT_USED" => "CAMERA_NOT_USED",
         "MICROPHONE_STATE_CHANGED" => "MICROPHONE_STATE_CHANGED",
         _ => return None,
     };

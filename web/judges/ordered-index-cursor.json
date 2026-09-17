@@ -116,6 +116,55 @@
         3,
         false
       ]
+    },
+    {
+      "label": "empty tree",
+      "input": [
+        [
+          "OrderedCursor"
+        ],
+        [
+          [
+            []
+          ]
+        ]
+      ],
+      "expected": [
+        null
+      ]
+    },
+    {
+      "label": "right skew bst",
+      "input": [
+        [
+          "OrderedCursor",
+          "next",
+          "next",
+          "hasNext"
+        ],
+        [
+          [
+            [
+              1,
+              null,
+              2
+            ]
+          ],
+          [],
+          [],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        1,
+        2,
+        false
+      ]
     }
-  ]
+  ],
+  "methodReturnTypes": {
+    "next": "value",
+    "hasNext": "value"
+  }
 }

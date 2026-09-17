@@ -88,6 +88,14 @@
         1,
         2
       ]
+    },
+    {
+      "label": "empty collection",
+      "input": [
+        [],
+        1
+      ],
+      "expected": []
     }
   ],
   "paramNames": [

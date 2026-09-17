@@ -117,6 +117,14 @@
           <textarea id="editor" spellcheck="false" aria-label="Code editor"></textarea>
         </div>
         <section class="test-drawer">
+          <details id="candidate-case">
+            <summary>Add a case</summary>
+            <label>Input JSON <textarea id="candidate-case-input" rows="2" aria-label="Candidate test input"></textarea></label>
+            <label>Expected JSON (optional) <input id="candidate-case-expected" aria-label="Candidate expected output"></label>
+            <button id="candidate-case-add" type="button">Add case</button>
+            <p id="candidate-case-status" class="muted small" role="status"></p>
+            <ol id="candidate-case-list" class="small"></ol>
+          </details>
           <button id="results-toggle" type="button">
             <span id="results-label">Test results</span>
             <span id="results-chevron">v</span>
@@ -132,7 +140,7 @@
       <section id="audio-check" class="overlay">
         <div class="audio-check-card">
           <h2>Media preflight</h2>
-          <p>Confirm output, microphone, and camera before the interview starts.</p>
+          <p>Confirm output and microphone before the interview starts. Camera is optional unless this interview is recorded.</p>
           <p id="round-plan-summary" class="muted small"></p>
 
           <div class="audio-check-step" id="audio-step-output">
@@ -159,6 +167,9 @@
               default, so change that default in your browser or system settings before
               starting if you would rather it did not.
             </p>
+            <div class="audio-check-actions">
+              <button id="camera-skip" class="pill-button" type="button" hidden>Continue without camera</button>
+            </div>
           </div>
 
           <!-- Decided here, not in the sidebar: it changes which tracks the

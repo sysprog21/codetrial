@@ -749,5 +749,9 @@
     "page": "terrain-mask-tiling",
     "title": "Terrain Mask Tiling",
     "source": "Construct Quad Tree"
+  },
+  "fixed-capacity-ring-buffer": {
+    "page": "bounded-event-queue",
+    "title": "Bounded Event Queue"
   }
 }

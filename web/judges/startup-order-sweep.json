@@ -95,6 +95,25 @@
           -1
         ]
       ]
+    },
+    {
+      "label": "two positive values",
+      "input": [
+        [
+          2,
+          3
+        ]
+      ],
+      "expected": [
+        [
+          2,
+          3
+        ],
+        [
+          3,
+          2
+        ]
+      ]
     }
   ],
   "paramNames": [

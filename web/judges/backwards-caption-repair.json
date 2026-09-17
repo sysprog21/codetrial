@@ -37,6 +37,13 @@
         "one 2 three"
       ],
       "expected": "three 2 one"
+    },
+    {
+      "label": "one word",
+      "input": [
+        "x"
+      ],
+      "expected": "x"
     }
   ],
   "paramNames": [

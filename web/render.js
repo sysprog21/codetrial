@@ -27,18 +27,21 @@ export function resultsMarkup(summary, status = null) {
       body: `${statusMarkup}<p class="critical small"><strong>Couldn't run your code</strong></p><pre>${escapeHtml(summary.setupError)}</pre>`,
     };
   }
-  const cases = summary.cases.map((item) => `
+  const caseMarkup = (item) => `
       <li>
-        <div><span class="${item.pass ? "good" : "critical"}">${item.pass ? "OK" : "FAIL"}</span> ${escapeHtml(item.label)} <span>${escapeHtml(item.timeMs)}ms</span></div>
-        ${item.pass ? "" : `<pre>${item.error ? escapeHtml(item.error) : `expected ${escapeHtml(item.expected)}\ngot ${escapeHtml(item.got)}`}</pre>`}
+        <div><span class="${item.pass === null || item.pass ? "good" : "critical"}">${item.pass === null ? "OUTPUT" : item.pass ? "OK" : "FAIL"}</span> ${escapeHtml(item.label)} <span>${escapeHtml(item.timeMs)}ms</span></div>
+        ${item.pass ? "" : `<pre>${item.error ? escapeHtml(item.error) : item.pass === null ? `got ${escapeHtml(item.got)}` : `expected ${escapeHtml(item.expected)}\ngot ${escapeHtml(item.got)}`}</pre>`}
       </li>
-    `).join("");
+    `;
+  const judgeCases = summary.cases.filter((item) => !item.candidate).map(caseMarkup).join("");
+  const candidateCases = summary.cases.filter((item) => item.candidate).map(caseMarkup).join("");
   return {
     label: `Test results · ${summary.passed}/${summary.total}`,
     body: `
     ${statusMarkup}
     <p class="${summary.passed === summary.total ? "good" : "critical"} small"><strong>${summary.passed}/${summary.total} test cases passed</strong></p>
-    <ul class="result-list">${cases}</ul>
+    <ul class="result-list">${judgeCases}</ul>
+    ${candidateCases ? `<h3>Your cases</h3><ul class="result-list">${candidateCases}</ul>` : ""}
   `,
   };
 }
@@ -48,10 +51,25 @@ export function feedbackMarkup(title, section) {
   return `<section><h3>${escapeHtml(title)}</h3><h4>Strengths</h4><ul>${list(section.strengths)}</ul><h4>Improve</h4><ul>${list(section.improvements)}</ul></section>`;
 }
 
+/// How one integrity event reads: its label, and the detail line under it.
+///
+/// Both together, because an event whose reason is already in the label must
+/// not repeat it underneath. Deciding that here rather than in each renderer is
+/// what keeps the page and the exported markdown saying the same thing.
+function integrityEventText(event) {
+  if (event.type === "CAMERA_NOT_USED") {
+    return { label: `Camera not used (${event.detail || "declined"})`, detail: null };
+  }
+  return { label: event.type, detail: event.detail || null };
+}
+
 function integrityEvidenceMarkup(report = {}) {
-  const rows = (report.integrityEvents || []).map((event, index) => `
-    <li data-integrity-index="${index}"><strong>${escapeHtml(event.severity)}</strong> ${escapeHtml(event.type)} <span>${escapeHtml(event.at)}</span>${event.detail ? `<p>${escapeHtml(event.detail)}</p>` : ""}${sourceEventMarkup(event)}</li>
-  `).join("") || "<li>(none captured)</li>";
+  const rows = (report.integrityEvents || []).map((event, index) => {
+    const { label, detail } = integrityEventText(event);
+    return `
+    <li data-integrity-index="${index}"><strong>${escapeHtml(event.severity)}</strong> ${escapeHtml(label)} <span>${escapeHtml(event.at)}</span>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}${sourceEventMarkup(event)}</li>
+  `;
+  }).join("") || "<li>(none captured)</li>";
   return `<section><h3>Integrity Evidence</h3><ul>${rows}</ul><p class="muted small">${escapeHtml(chainSentence(report))}</p></section>`;
 }
 
@@ -135,6 +153,11 @@ export function reportSaveStatus(result) {
 export function reportMarkup({ report, problemTitle, language, code, saveResult }) {
   const hire = report.decision === "HIRE";
   const heading = report.incomplete ? "No evaluation" : "Your performance packet";
+  const practiceLevel = report.incomplete
+    ? ""
+    : report.practiceLevel
+      ? `Judged against a mid-level bar; practiced for: ${escapeHtml(report.practiceLevel)}`
+      : "Judged against a mid-level bar";
   const badge = report.incomplete
     ? `<strong class="muted">INCOMPLETE</strong>`
     : `<strong class="${hire ? "good" : "critical"}">${hire ? "HIRE" : "NO HIRE"}</strong>`;
@@ -157,6 +180,16 @@ export function reportMarkup({ report, problemTitle, language, code, saveResult 
         <p><strong>Success:</strong> ${escapeHtml(item.successCriterion)}</p>
         <ul>${item.selfReview.map((check) => `<li>${escapeHtml(check)}</li>`).join("")}</ul>
       </li>`).join("")}</ol></section>`;
+  const debrief = report.debrief
+    ? `<details class="report-debrief"><summary>What the interviewer held back</summary>
+      <p>Spaced review will bring this problem back, so your next attempt tests recall.</p>
+      ${report.debrief.scenarioContract ? `<p><strong>Scenario contract:</strong> ${escapeHtml(report.debrief.scenarioContract)}</p>` : ""}
+      ${report.debrief.approach ? `<p><strong>Approach and complexity:</strong> ${escapeHtml(report.debrief.approach)}</p>` : ""}
+      ${report.debrief.pitfalls ? `<p><strong>Common pitfalls:</strong> ${escapeHtml(report.debrief.pitfalls)}</p>` : ""}
+      ${report.debrief.hints?.length ? `<h3>Hint ladder</h3><p>Reached hint ${report.debrief.hints.filter((hint) => hint.given).length} of ${report.debrief.hints.length}.</p><ol>${report.debrief.hints.map((hint) => `<li><strong>${hint.given ? "Given" : "Held back"}:</strong> ${escapeHtml(hint.text)}</li>`).join("")}</ol>` : ""}
+      ${report.debrief.followUps?.length ? `<h3>Follow-ups this problem offers</h3><ul>${report.debrief.followUps.map((followUp) => `<li>${escapeHtml(followUp)}</li>`).join("")}</ul>` : ""}
+    </details>`
+    : "";
   const frameworkTimeline = frameworkEvidenceMarkup(report.frameworkEvidence);
   const frameworkCalibration = report.frameworkAssessment
     ? `<p class="muted small">REACTO/STAR phase scores are formative coaching signals, not calibrated hiring evidence.</p>`
@@ -174,12 +207,13 @@ export function reportMarkup({ report, problemTitle, language, code, saveResult 
   return `
     <div class="report-card">
       <div class="report-header">
-        <div><p>${report.mode ? `${modeLabel(report.mode)} ` : ""}interview report${loop} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p><h2>${heading}</h2></div>
+        <div><p>${report.mode ? `${modeLabel(report.mode)} ` : ""}interview report${loop} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p>${practiceLevel ? `<p class="muted small">${practiceLevel}</p>` : ""}<h2>${heading}</h2></div>
         ${badge}
       </div>${scores}
       <section><h3>${report.incomplete ? "What happened" : "Committee summary"}</h3><p>${escapeHtml(report.summary)}</p></section>
       ${feedback}
       ${practiceNext}
+      ${debrief}
       ${rounds}
       ${frameworkCalibration}
       ${frameworkTimeline}
@@ -239,7 +273,8 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
   const section = (title, feedbackSection) => `### ${title}\n\n**Strengths**\n${bullets(feedbackSection.strengths)}\n\n**Improvements**\n${bullets(feedbackSection.improvements)}\n`;
   const evidence = (report.integrityEvents || []).map((event) => {
     const sources = event.sourceEventIds?.length ? ` - sources: ${event.sourceEventIds.map(mdText).join(", ")}` : "";
-    return `- ${mdText(event.at)} [${mdText(event.severity)}] ${mdText(event.type)}${event.detail ? ` - ${mdText(event.detail)}` : ""}${sources}`;
+    const { label, detail } = integrityEventText(event);
+    return `- ${mdText(event.at)} [${mdText(event.severity)}] ${mdText(label)}${detail ? ` - ${mdText(detail)}` : ""}${sources}`;
   }).join("\n") || "(none captured)";
   const practiceNext = report.incomplete || !report.improvementPlan?.length
     ? []
@@ -254,6 +289,19 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
       ]),
       "",
     ];
+  const debrief = report.debrief
+    ? [
+      "## What the interviewer held back",
+      "",
+      "Spaced review will bring this problem back, so your next attempt tests recall.",
+      ...(report.debrief.scenarioContract ? [`**Scenario contract:** ${mdText(report.debrief.scenarioContract)}`] : []),
+      ...(report.debrief.approach ? [`**Approach and complexity:** ${mdText(report.debrief.approach)}`] : []),
+      ...(report.debrief.pitfalls ? [`**Common pitfalls:** ${mdText(report.debrief.pitfalls)}`] : []),
+      ...(report.debrief.hints?.length ? ["", "### Hint ladder", "", `Reached hint ${report.debrief.hints.filter((hint) => hint.given).length} of ${report.debrief.hints.length}.`, "", ...report.debrief.hints.map((hint) => `- **${hint.given ? "Given" : "Held back"}:** ${mdText(hint.text)}`)] : []),
+      ...(report.debrief.followUps?.length ? ["", "### Follow-ups this problem offers", "", ...report.debrief.followUps.map((followUp) => `- ${mdText(followUp)}`)] : []),
+      "",
+    ]
+    : [];
   const frameworkTimeline = report.frameworkEvidence?.length
     ? [
       "## Framework evidence",
@@ -299,6 +347,10 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
     : [
       `## Verdict: ${report.decision === "HIRE" ? "HIRE" : "NO HIRE"}`,
       "",
+      report.practiceLevel
+        ? `Judged against a mid-level bar; practiced for: ${mdText(report.practiceLevel)}`
+        : "Judged against a mid-level bar",
+      "",
       "| Metric | Score |",
       "|---|---|",
       `| Coding | ${mdText(report.codingScore)} / 100 |`,
@@ -326,6 +378,7 @@ export function reportMarkdown({ report, problemTitle, language, code, transcrip
     ...head,
     "",
     ...practiceNext,
+    ...debrief,
     ...frameworkTimeline,
     // A session with no evaluation can still be one that ended because the
     // camera saw something. Refusing to score it is not a reason to drop the

@@ -11,12 +11,9 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 VENDOR="$ROOT/web/vendor"
+rm -f "$VENDOR/avatar/jim.vrm"
 
 [ -d "$VENDOR" ] || exit 0
-
-# Releases no longer embed or serve this model; browser Cache API owns it now.
-# Remove the ignored file left by pre-migration checkouts on their next build.
-rm -f "$VENDOR/avatar/jim.vrm"
 
 download()
 {

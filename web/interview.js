@@ -87,7 +87,7 @@ import {
 import { saveReportHistory } from "./history.js";
 import { createFacePresenceDetector, facePresenceVerdict } from "./face-presence.js";
 import { harnessGap, languagesFor } from "./compiler-explorer.js";
-import { runBrowserTests } from "./runners.js";
+import { parseCandidateCase, runBrowserTests } from "./runners.js";
 import { mountBehavioralReview } from "./behavioral-review.js";
 import { consumeGroundingPacket } from "./document-grounding.js";
 
@@ -144,6 +144,13 @@ const problem = await loadProblem(params.get("problem")).catch((error) => {
 // before this and what it keeps doing if the judge never loads; the run path
 // reports that failure itself.
 const judgePromise = loadJudge(problem.page).catch(() => null);
+// Up here rather than beside the functions that read them: `init()` runs
+// during module evaluation and reaches `initializeCandidateCases` before its
+// first await, so declarations further down are still uninitialized then. The
+// read threw, the catch took it for an empty list, and every reload lost the
+// candidate's saved cases.
+const CANDIDATE_CASE_LIMIT = 5;
+const candidateCaseStorageKey = `codetrial.candidateCases.${problem.page}`;
 let languages = languagesFor(null);
 /// What the lobby asked for, until `/api/token` says what it got. The range
 /// here mirrors the server's own and is the fallback for a URL that arrives
@@ -213,6 +220,7 @@ const state = {
   latestSummary: null,
   testStatus: "done",
   runningTests: false,
+  candidateCases: [],
   report: null,
   room: null,
   connected: false,
@@ -268,6 +276,11 @@ const nodes = {
   editorLines: document.querySelector("#editor-lines"),
   compileDisclosure: document.querySelector(".compile-disclosure"),
   run: document.querySelector("#run-tests"),
+  candidateCaseInput: document.querySelector("#candidate-case-input"),
+  candidateCaseExpected: document.querySelector("#candidate-case-expected"),
+  candidateCaseAdd: document.querySelector("#candidate-case-add"),
+  candidateCaseStatus: document.querySelector("#candidate-case-status"),
+  candidateCaseList: document.querySelector("#candidate-case-list"),
   resultsLabel: document.querySelector("#results-label"),
   resultsBody: document.querySelector("#results-body"),
   resultsToggle: document.querySelector("#results-toggle"),
@@ -288,6 +301,8 @@ const nodes = {
   audioStepMic: document.querySelector("#audio-step-mic"),
   audioStepCamera: document.querySelector("#audio-step-camera"),
   cameraState: document.querySelector("#camera-state"),
+  cameraNameDisclosure: document.querySelector("#camera-name-disclosure"),
+  cameraSkip: document.querySelector("#camera-skip"),
   cameraIntegrityVideo: document.querySelector("#camera-integrity-video"),
   audioJoin: document.querySelector("#audio-check-join"),
   meetPresentation: document.querySelector("#meet-presentation"),
@@ -353,7 +368,7 @@ async function init() {
   // Before the room, so nothing downstream ever sees the camera: the publisher,
   // the watchers and the heartbeat all read the stream, and handing them a
   // track that is about to vanish is what made this a special case everywhere.
-  const presenting = nodes.meetPresentation.checked;
+  const presenting = nodes.meetPresentation.checked && !preflight.cameraSkipped;
   if (presenting) releaseCameraToPresenter(preflight.userStream);
   // Now that the preflight holds a grant, the browser reports real device ids
   // and labels. Before this point the list is empty or a blank placeholder.
@@ -421,6 +436,8 @@ function bindEvents() {
   nodes.forceReport.addEventListener("click", showReport);
   nodes.leaveRoom.addEventListener("click", leaveRoom);
   nodes.run.addEventListener("click", runTests);
+  nodes.candidateCaseAdd.addEventListener("click", () => void addCandidateCase());
+  void initializeCandidateCases();
   nodes.meetOutputSelect.addEventListener("change", () => {
     void applyAudioOutput(nodes.meetOutputSelect.value);
   });
@@ -506,7 +523,9 @@ async function signInRequired() {
 function paintPreflight(state, hint) {
   nodes.audioStatus.textContent = hint || state.message;
   nodes.audioOutputState.textContent = state.steps.output ? "Confirmed" : "play a short tone.";
-  nodes.cameraState.textContent = state.steps.camera ? "Ready" : "grant access and keep video on.";
+  nodes.cameraState.textContent = state.cameraSkipped
+    ? `Not used (${state.cameraSkipReason}).`
+    : state.steps.camera ? "Ready" : "grant access and keep video on.";
   nodes.audioStatus.classList.toggle("critical", ["mic-error", "camera-error", "face-error", "browser"].includes(state.blocker));
   nodes.audioStepOutput.classList.toggle("done", state.steps.output);
   nodes.audioStepMic.classList.toggle("done", state.steps.mic);
@@ -524,6 +543,8 @@ function runAudioCheck() {
     const browserSupported = Boolean(mediaDevices?.getUserMedia);
     let outputConfirmed = false;
     let advanced = false;
+    let cameraSkipped = false;
+    let cameraSkipReason = null;
 
     // Built before anything reads it: `refresh` runs on the first frame and
     // asks the pool what the devices are doing.
@@ -587,12 +608,17 @@ function runAudioCheck() {
         outputConfirmed,
         micPeak: meter.peak,
         faceCheck,
+        cameraSkipped,
       });
 
     const refresh = () => {
       const state = sampleReadiness();
       if (hint && Date.now() >= hintUntil) hint = null;
+      state.cameraSkipped = cameraSkipped;
+      state.cameraSkipReason = cameraSkipReason;
       paintPreflight(state, hint);
+      nodes.cameraSkip.hidden = recordingEnabled || cameraSkipped;
+      nodes.cameraNameDisclosure.hidden = cameraSkipped;
       // Consent is a separate gate from media readiness on purpose. It is not
       // a device that can be proven, it is an answer, and folding it into
       // `mediaReadiness` would put a legal question inside the function that
@@ -623,7 +649,7 @@ function runAudioCheck() {
       pool.cancelRetry();
       faceCheck.close();
       void context?.close().catch(() => {});
-      resolve({ userStream: pool.stream });
+      resolve({ userStream: pool.stream, cameraSkipped, cameraSkipReason });
     };
 
     // Browsers keep audio blocked until a user gesture, and the tone is the
@@ -674,6 +700,16 @@ function runAudioCheck() {
     nodes.audioHeard.addEventListener("click", confirmOutput);
 
     nodes.audioJoin.addEventListener("click", finish);
+
+    nodes.cameraSkip.addEventListener("click", () => {
+      if (recordingEnabled || cameraSkipped) return;
+      cameraSkipReason = cameraSkipReasonFor(pool.errorOf("video"));
+      cameraSkipped = true;
+      pool.disable("video");
+      nodes.meetPresentation.checked = false;
+      faceCheck.close();
+      refresh();
+    });
 
     // Shown only where the server records. A consent step on a server that
     // records nothing asks for permission nobody needs and teaches candidates
@@ -890,8 +926,17 @@ async function connectLiveKit(connection, preflight, presenting = false) {
     type: "MEDIA_PREFLIGHT_PASSED",
     source: "preflight",
     severity: "info",
-    detail: `camera=${preflight.userStream?.getVideoTracks?.()[0]?.label || "none"}`,
+    detail: `camera=${preflight.cameraSkipped ? "not_used" : preflight.userStream?.getVideoTracks?.()[0]?.label || "none"}`,
   });
+  if (preflight.cameraSkipped) {
+    state.integrityAnalysisDetail = "camera_not_used";
+    await publishIntegrityEvent({
+      type: "CAMERA_NOT_USED",
+      source: "camera",
+      severity: "info",
+      detail: preflight.cameraSkipReason,
+    });
+  }
   startIntegrityHeartbeat();
   // Keyed on what the candidate chose, not on whether a camera happens to be
   // in the stream. A camera that died between the preflight and here leaves an
@@ -907,12 +952,19 @@ async function connectLiveKit(connection, preflight, presenting = false) {
       severity: "warning",
       detail: "meet_presentation",
     });
-  } else {
+  } else if (!preflight.cameraSkipped) {
     // Unchanged for every other interview, including one whose camera failed:
     // the worker starts, the sampler finds no track, and the analyser detail
     // says so instead of claiming a release.
     startIntegrityWorker();
   }
+}
+
+function cameraSkipReasonFor(error) {
+  const words = String(error || "").toLowerCase();
+  if (words.includes("not found") || words.includes("notfound") || words.includes("no camera")) return "no_device";
+  if (words.includes("permission") || words.includes("denied") || words.includes("not allowed") || words.includes("notallowed")) return "denied";
+  return "declined";
 }
 
 /// Meet cannot open a camera CodeTrial is holding, and the preflight has
@@ -1395,7 +1447,20 @@ async function runTests() {
   nodes.run.textContent = "Running...";
   nodes.resultsBody.hidden = false;
   setTestStatus(firstRunnerStatus(state.language));
-  const summary = await runBrowserTests(problem.page, currentCode(), state.language, setTestStatus);
+  if (nodes.candidateCaseInput.value.trim()) {
+    try {
+      await addCandidateCase();
+      if (nodes.candidateCaseInput.value.trim()) throw new Error(nodes.candidateCaseStatus.textContent);
+    } catch (error) {
+      state.runningTests = false;
+      updateRunAvailability();
+      nodes.run.textContent = "Run tests";
+      nodes.resultsBody.hidden = false;
+      nodes.resultsBody.textContent = String(error.message || error);
+      return;
+    }
+  }
+  const summary = await runBrowserTests(problem.page, currentCode(), state.language, setTestStatus, state.candidateCases);
   state.latestSummary = summary;
   state.testStatus = finalRunnerStatus(summary, state.testStatus);
   renderResults(summary);
@@ -1412,6 +1477,54 @@ async function runTests() {
   state.runningTests = false;
   updateRunAvailability();
   nodes.run.textContent = "Run tests";
+}
+
+
+async function initializeCandidateCases() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(candidateCaseStorageKey) || "[]");
+    state.candidateCases = Array.isArray(saved) ? saved.slice(0, CANDIDATE_CASE_LIMIT) : [];
+  } catch {
+    state.candidateCases = [];
+  }
+  renderCandidateCases();
+  if (state.candidateCases.length) return;
+  // A placeholder rather than a value: `runTests` adds whatever the input
+  // holds, so a prefilled value became a case the candidate never wrote.
+  const spec = await judgePromise;
+  if (spec?.cases?.[0]?.input) nodes.candidateCaseInput.placeholder = JSON.stringify(spec.cases[0].input);
+}
+
+async function addCandidateCase() {
+  if (state.candidateCases.length >= CANDIDATE_CASE_LIMIT) {
+    nodes.candidateCaseStatus.textContent = `You can add up to ${CANDIDATE_CASE_LIMIT} cases.`;
+    return;
+  }
+  try {
+    const spec = await loadJudge(problem.page);
+    const input = parseCandidateCase(spec, nodes.candidateCaseInput.value);
+    const expectedText = nodes.candidateCaseExpected.value.trim();
+    const expected = expectedText ? JSON.parse(expectedText) : undefined;
+    if (expected === null && spec.checker === "palindrome") {
+      throw new Error("A palindrome expectation must be a string, or leave it blank to observe the result.");
+    }
+    const testCase = { input, ...(expectedText ? { expected } : {}) };
+    state.candidateCases.push(testCase);
+    sessionStorage.setItem(candidateCaseStorageKey, JSON.stringify(state.candidateCases));
+    nodes.candidateCaseInput.value = "";
+    nodes.candidateCaseExpected.value = "";
+    nodes.candidateCaseStatus.textContent = "Case added.";
+    renderCandidateCases();
+  } catch (error) {
+    nodes.candidateCaseStatus.textContent = String(error.message || error);
+  }
+}
+
+function renderCandidateCases() {
+  nodes.candidateCaseList.innerHTML = state.candidateCases
+    .map((testCase, index) => `<li>Your case ${index + 1}: ${escapeHtml(JSON.stringify(testCase.input))}</li>`)
+    .join("");
+  if (state.candidateCases.length) nodes.candidateCaseStatus.textContent = `${state.candidateCases.length}/${CANDIDATE_CASE_LIMIT} cases ready.`;
 }
 
 function updateRunAvailability() {

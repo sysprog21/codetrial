@@ -371,6 +371,15 @@ test("the report card this page renders names no finding either", () => {
       ],
     },
     {
+      debrief: {
+        scenarioContract: "Sxnote",
+        approach: "Sxplan",
+        pitfalls: "Sxwhy",
+        hints: [{ text: "Sxstr", given: true }, { text: "Sximp", given: false }],
+        followUps: ["Sxev"],
+      },
+    },
+    {
       frameworkEvidence: [
         {
           atMs: 65_000,
@@ -442,7 +451,12 @@ test("the report card this page renders names no finding either", () => {
   // section, whose two arms are named in the sentence list below, and the two
   // feedback sections, whose titles are the words "Coding" and "Communication"
   // in the vocabulary set instead.
-  const headings = [...read("web/render.js").matchAll(/<h3[^>]*>([^<{]+)<\/h3>/g)].map(
+  const renderer = read("web/render.js");
+  const reportRenderer = renderer.slice(
+    renderer.indexOf("export function feedbackMarkup"),
+    renderer.indexOf("/// The downloadable report"),
+  );
+  const headings = [...reportRenderer.matchAll(/<h3[^>]*>([^<{]+)<\/h3>/g)].map(
     (match) => match[1],
   );
   assert.ok(headings.length >= 4, `only ${headings.length} headings found in web/render.js`);
@@ -465,6 +479,7 @@ test("the report card this page renders names no finding either", () => {
     "Committee summary",
     "What happened",
     "No evaluation",
+    "Judged against a mid-level bar",
     "formative coaching signals",
     "Contract bundle",
     "Legacy/unversioned contract",
@@ -504,24 +519,24 @@ test("the report card this page renders names no finding either", () => {
     said,
     new Set([
       "(.md)", "(Sxlang)", "(editor", "(none", "-", "/", "0", "01:05", "1", "10",
-      "100", "2", "2;", "3", "37", "5", "7", "70", "8", "95%", "Chain",
-      "CodeTrial.", "Coding", "Committee", "Communication", "Contract", "Done",
-      "Download", "Evidence", "FACE_MISSING", "Framework", "HIRE", "INCOMPLETE",
-      "Improve", "Integrity", "Interview", "Interviewer", "Legacy/unversioned",
-      "NO", "No", "Practice", "REACTO/STAR", "Strengths", "Success:", "Test",
-      "This", "What", "Your", "above.", "algorithm", "an", "and", "are", "back",
-      "be", "behavioral", "bundle", "by", "calibrated", "candidate_speech",
-      "cannot", "captured)", "chain", "coaching", "code", "coding",
-      "communication", "complete", "confidence", "contract", "dropped", "during",
-      "empty)", "evaluation", "event", "every", "evidence", "evidence.", "final",
-      "for", "formative", "happened", "high", "hints", "hiring", "how", "impact",
-      "interview", "is", "it", "kept,", "listed", "lobby", "malformed", "min",
-      "more", "much", "next", "not", "observed", "of", "only", "or", "packet",
-      "performance", "phase", "predates", "report", "reporting:", "rounds",
-      "rubric", "schema", "scored", "scores", "session", "signals,", "source",
-      "space", "space.", "started", "summary", "the", "this", "through", "to",
-      "unknown.", "unsupported", "used", "uses", "v1", "verified", "version",
-      "warning", "was", "were", "\u00b7",
+      "100", "2", "2.", "2;", "3", "37", "7", "70", "8", "95%", "Approach",
+      "Chain", "CodeTrial.", "Coding", "Committee", "Common", "Communication", "Contract",
+      "Done", "Download", "Evidence", "FACE_MISSING", "Follow-ups", "Framework", "Given:",
+      "HIRE", "Held", "Hint", "INCOMPLETE", "Improve", "Integrity", "Interview", "Interviewer", "Judged",
+      "Legacy/unversioned", "NO", "No", "Practice", "REACTO/STAR", "Reached", "Scenario", "Spaced",
+      "Strengths", "Success:", "Test", "This", "What", "Your", "a", "above.", "against", "algorithm", "an",
+      "and", "are", "attempt", "back", "back,", "back:", "bar", "be", "behavioral", "bring", "bundle",
+      "by", "calibrated", "candidate_speech", "cannot", "captured)", "chain", "coaching", "code",
+      "coding", "communication", "complete", "complexity:", "confidence", "contract", "contract:",
+      "dropped", "during", "empty)", "evaluation", "event", "every", "evidence", "evidence.",
+      "final", "for", "formative", "happened", "held", "high", "hint", "hints", "hiring", "how", "impact",
+      "interview", "interviewer", "is", "it", "kept,", "ladder", "listed", "lobby", "malformed",
+      "mid-level", "min", "more", "much", "next", "not", "observed", "of", "offers", "only", "or", "packet",
+      "performance", "phase", "pitfalls:", "predates", "problem", "recall.", "report", "reporting:",
+      "review", "rounds", "rubric", "schema", "scored", "scores", "session", "signals,", "so",
+      "source", "space", "space.", "started", "summary", "tests", "the", "this", "through", "to",
+      "unknown.", "unsupported", "used", "uses", "v1", "verified", "version", "warning", "was",
+      "were", "will", "your", "\u00b7",
     ]),
     "a word on the report card is a word somebody chose",
   );

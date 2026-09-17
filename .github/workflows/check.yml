@@ -541,6 +541,7 @@ jobs:
           - name: Linux x86_64
             os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+            # Keep this major.minor aligned with Cargo.toml's rust-version.
             image: rust:1.98.0-bullseye
             glibc: '2.31'
             glibcxx: '3.4.28'

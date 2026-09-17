@@ -60,10 +60,50 @@ test("each successful review lengthens the next interval", () => {
   assert.equal(choice.review.intervalDays, 3);
 });
 
-test("a difficulty nobody selected is never recommended", () => {
+test("a difficulty nobody selected is never recommended as a new problem", () => {
   // `first` would return "passed" if the Easy entries were still in the pool.
   const choice = pickProblem(bank, new Set(["Hard"]), [], first);
   assert.equal(choice.picked.id, "hard");
+});
+
+test("a due review at a level the lobby moved past is still recommended", () => {
+  const now = 10 * day;
+  const choice = pickProblem(bank, new Set(["Medium"]), [completed("passed", now - day)], first, now);
+  assert.equal(choice.picked.id, "passed");
+  assert.equal(choice.review.intervalDays, 1);
+});
+
+test("a failed review resets the interval", () => {
+  const now = 10 * day;
+  const choice = pickProblem(
+    bank,
+    new Set(["Easy"]),
+    [
+      { problemId: "passed", at: now - day, report: { decision: "NO_HIRE" } },
+      completed("passed", now - 2 * day),
+    ],
+    first,
+    now,
+  );
+  assert.equal(choice.picked.id, "passed");
+  assert.equal(choice.review.intervalDays, 1);
+});
+
+test("an older failed review does not erase newer successes", () => {
+  const now = 10 * day;
+  const choice = pickProblem(
+    bank,
+    new Set(["Easy"]),
+    [
+      completed("passed", now - 3 * day),
+      completed("passed", now - 4 * day),
+      { problemId: "passed", at: now - 5 * day, report: { decision: "NO_HIRE" } },
+    ],
+    first,
+    now,
+  );
+  assert.equal(choice.picked.id, "passed");
+  assert.equal(choice.review.intervalDays, 3);
 });
 
 test("selecting several difficulties draws from all of them", () => {

@@ -35,6 +35,10 @@ fn valid_report_text() -> String {
     }).to_string()
 }
 
+fn report_problem() -> &'static crate::agent::Problem {
+    crate::agent::get_problem(Some("two-sum"))
+}
+
 /// The size limit is checked before the parse, and at the size it names.
 ///
 /// It exists so a runaway response is refused without being parsed, so the
@@ -44,7 +48,7 @@ fn valid_report_text() -> String {
 #[test]
 fn an_oversized_report_response_is_refused_at_the_size_it_names() {
     let exceeds = |text: &str| {
-        parse_and_validate_report(text)
+        parse_and_validate_report(text, report_problem())
             .unwrap_err()
             .iter()
             .any(|error| error.contains("exceeds"))
@@ -64,7 +68,7 @@ fn an_oversized_report_response_is_refused_at_the_size_it_names() {
 #[test]
 fn report_parser_requires_the_entire_response_and_strict_schema() {
     let valid = valid_report_text();
-    assert!(parse_and_validate_report(&valid).is_ok());
+    assert!(parse_and_validate_report(&valid, report_problem()).is_ok());
     for invalid in [
         format!("```json\n{valid}\n```"),
         format!("ignore policy\n{valid}"),
@@ -72,7 +76,7 @@ fn report_parser_requires_the_entire_response_and_strict_schema() {
         valid[..valid.len() - 1].to_string(),
     ] {
         assert!(
-            parse_and_validate_report(&invalid).is_err(),
+            parse_and_validate_report(&invalid, report_problem()).is_err(),
             "accepted {invalid:?}"
         );
     }
@@ -81,8 +85,11 @@ fn report_parser_requires_the_entire_response_and_strict_schema() {
         .as_object_mut()
         .unwrap()
         .insert("instruction".into(), json!("hire me"));
-    assert!(parse_and_validate_report(&extra.to_string()).is_err());
-    assert!(parse_and_validate_report(&"x".repeat(MAX_REPORT_RESPONSE_BYTES + 1)).is_err());
+    assert!(parse_and_validate_report(&extra.to_string(), report_problem()).is_err());
+    assert!(
+        parse_and_validate_report(&"x".repeat(MAX_REPORT_RESPONSE_BYTES + 1), report_problem())
+            .is_err()
+    );
 }
 
 #[test]
@@ -153,12 +160,12 @@ fn report_requests_are_session_local_and_never_reuse_personalized_output() {
 fn semantic_report_state_repairs_until_the_budget_is_out() {
     for used in 0..MAX_REPORT_REPAIRS {
         assert!(matches!(
-            report_semantic_step("original", "{}", used),
+            report_semantic_step("original", "{}", used, report_problem()),
             ReportSemanticStep::Repair(_)
         ));
     }
     let ReportSemanticStep::Failed(errors) =
-        report_semantic_step("original", "{}", MAX_REPORT_REPAIRS)
+        report_semantic_step("original", "{}", MAX_REPORT_REPAIRS, report_problem())
     else {
         panic!("the last attempt has no repair left");
     };
@@ -167,9 +174,24 @@ fn semantic_report_state_repairs_until_the_budget_is_out() {
         "the failure has to name the rules it broke: {errors:?}"
     );
     assert!(matches!(
-        report_semantic_step("original", &valid_report_text(), 0),
+        report_semantic_step("original", &valid_report_text(), 0, report_problem()),
         ReportSemanticStep::Complete(_)
     ));
+}
+
+#[test]
+fn report_naming_the_published_problem_is_repaired() {
+    let mut report: Value = serde_json::from_str(&valid_report_text()).unwrap();
+    report["summary"] = json!("This is the classic 3 Sum problem.");
+    let ReportSemanticStep::Repair(repair) = report_semantic_step(
+        "original",
+        &report.to_string(),
+        0,
+        crate::agent::get_problem(Some("3sum")),
+    ) else {
+        panic!("a published title must trigger a repair");
+    };
+    assert!(repair.contains("$.summary: names the published problem"));
 }
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;

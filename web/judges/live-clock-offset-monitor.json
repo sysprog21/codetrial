@@ -176,6 +176,32 @@
         null,
         2
       ]
+    },
+    {
+      "label": "one reading",
+      "input": [
+        [
+          "OffsetMonitor",
+          "addNum",
+          "findMedian"
+        ],
+        [
+          [],
+          [
+            0
+          ],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        null,
+        0
+      ]
     }
-  ]
+  ],
+  "methodReturnTypes": {
+    "addNum": "void",
+    "findMedian": "value"
+  }
 }

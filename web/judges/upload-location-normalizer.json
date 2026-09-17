@@ -37,6 +37,13 @@
         "/a/./b/../../c/"
       ],
       "expected": "/c"
+    },
+    {
+      "label": "root only",
+      "input": [
+        "/"
+      ],
+      "expected": "/"
     }
   ],
   "paramNames": [

@@ -194,6 +194,7 @@ test("testPayload keeps the agent wire contract and caps failures at four", () =
     setupError: "",
     cases: [
       { label: "ok", pass: true },
+      ...Array.from({ length: 6 }, (_, index) => ({ label: `mine-${index}`, candidate: true, pass: null, got: `[${index}]` })),
       ...Array.from({ length: 6 }, (_, index) => ({
         label: `bad-${index}`,
         pass: false,
@@ -208,6 +209,7 @@ test("testPayload keeps the agent wire contract and caps failures at four", () =
 
   assert.deepEqual(Object.keys(payload).sort(), [
     "at",
+    "candidateCases",
     "failures",
     "language",
     "passed",
@@ -218,6 +220,12 @@ test("testPayload keeps the agent wire contract and caps failures at four", () =
   assert.equal(payload.failures.length, 4);
   assert.deepEqual(Object.keys(payload.failures[0]).sort(), ["error", "expected", "got", "label"]);
   assert.equal(payload.failures[0].error, null);
+  assert.deepEqual(payload.candidateCases, Array.from({ length: 5 }, (_, index) => ({
+    label: `mine-${index}`,
+    expected: null,
+    got: `[${index}]`,
+    error: null,
+  })));
 });
 
 test("data-channel payloads keep the keys the Rust agent decodes", () => {
@@ -537,6 +545,9 @@ test("sanitizeReport preserves a well-formed agent report", () => {
     integrityChainSeq: 412,
     integrityDropped: 380,
     hintsUsed: 2,
+    debrief: undefined,
+    topics: undefined,
+    practiceLevel: undefined,
     improvementPlan: [],
     frameworkAssessment: null,
     frameworkEvidence: [],
@@ -560,18 +571,20 @@ test("report contract migration preserves legacy and rejects unknown provenance"
   assert.equal(legacy.interviewContract, null);
   assert.equal(legacy.summary, "old report");
 
-  const active = {
-    bundleVersion: 5,
-    livePromptVersion: 2,
-    reportPromptVersion: 5,
-    rubricVersion: 1,
-    reportSchemaVersion: 1,
-  };
+  const active = ACTIVE_CONTRACT;
   assert.deepEqual(sanitizeReport({ incomplete: true, interviewContract: active }).interviewContract, active);
+  const activeScored = sanitizeReport({
+    codingScore: 71,
+    communicationScore: 61,
+    decision: "NO_HIRE",
+    interviewContract: active,
+  });
+  assert.equal(activeScored.codingScore, 71);
+  assert.equal(activeScored.communicationScore, 61);
 
-  // Bundle 4 shares the rubric and the schema, so its scores survive the bump
+  // Bundle 5 shares the rubric and the schema, so its scores survive the bump
   // and the report still names the bundle that produced it.
-  const previous = { ...active, bundleVersion: 4, livePromptVersion: 1, reportPromptVersion: 4 };
+  const previous = { ...active, bundleVersion: 5, livePromptVersion: 1, reportPromptVersion: 4, reportSchemaVersion: 1 };
   const kept = sanitizeReport({ codingScore: 70, communicationScore: 60, decision: "NO_HIRE", interviewContract: previous });
   assert.deepEqual(kept.interviewContract, previous);
   assert.equal(kept.codingScore, 70);
@@ -580,7 +593,7 @@ test("report contract migration preserves legacy and rejects unknown provenance"
   for (const interviewContract of [
     { ...active, bundleVersion: 3, livePromptVersion: 1, reportPromptVersion: 3 },
     { ...previous, rubricVersion: 2 },
-    { ...active, reportSchemaVersion: 2 },
+    { ...active, reportSchemaVersion: 3 },
     { ...active, rubricVersion: "1" },
     { ...active, extra: 1 },
     null,
@@ -590,6 +603,90 @@ test("report contract migration preserves legacy and rejects unknown provenance"
     assert.match(report.summary, /unsupported or malformed interview contract/);
     assert.equal("codingScore" in report, false);
   }
+});
+
+test("sanitizeReport keeps the stamped fields on a normal report", () => {
+  const report = sanitizeReport({
+    codingScore: 82,
+    communicationScore: 74,
+    decision: "HIRE",
+    debrief: {
+      scenarioContract: "Return one matching pair.",
+      approach: "Scan once with a map in O(n) time.",
+      pitfalls: "Do not reuse one position.",
+      hints: [{ text: "What would you remember?", given: true }],
+      followUps: ["How would the design change with many queries?"],
+    },
+    topics: ["Array", "Hash Table"],
+    practiceLevel: "staff",
+  });
+  assert.deepEqual(report.debrief.hints, [{ text: "What would you remember?", given: true }]);
+  assert.deepEqual(report.topics, ["Array", "Hash Table"]);
+  assert.equal(report.practiceLevel, "staff");
+});
+
+test("sanitizeReport keeps the stamped fields on an incomplete report", () => {
+  const report = sanitizeReport({
+    incomplete: true,
+    debrief: { scenarioContract: "Return one matching pair.", hints: [], followUps: [] },
+    topics: ["Array"],
+    practiceLevel: null,
+  });
+  assert.equal(report.incomplete, true);
+  assert.equal(report.debrief.scenarioContract, "Return one matching pair.");
+  assert.deepEqual(report.topics, ["Array"]);
+  assert.equal(report.practiceLevel, null);
+});
+
+test("a schema 1 report keeps its scores", () => {
+  const report = sanitizeReport({
+    codingScore: 70,
+    communicationScore: 60,
+    decision: "NO_HIRE",
+    interviewContract: {
+      bundleVersion: 5,
+      livePromptVersion: 1,
+      reportPromptVersion: 4,
+      rubricVersion: 1,
+      reportSchemaVersion: 1,
+    },
+  });
+  assert.equal(report.codingScore, 70);
+  assert.equal(report.communicationScore, 60);
+});
+
+test("a prompt-only bump is still scored", () => {
+  const previousPrompts = {
+    ...ACTIVE_CONTRACT,
+    livePromptVersion: ACTIVE_CONTRACT.livePromptVersion - 1,
+    reportPromptVersion: ACTIVE_CONTRACT.reportPromptVersion - 1,
+  };
+  const report = sanitizeReport({ codingScore: 70, interviewContract: previousPrompts });
+  assert.equal(report.codingScore, 70);
+});
+
+test("a rubric bump is not scored under the old rubric", () => {
+  const report = sanitizeReport({
+    codingScore: 70,
+    interviewContract: { ...ACTIVE_CONTRACT, rubricVersion: ACTIVE_CONTRACT.rubricVersion + 1 },
+  });
+  assert.equal(report.incomplete, true);
+});
+
+test("a future bundle is not scored", () => {
+  const report = sanitizeReport({
+    codingScore: 70,
+    interviewContract: { ...ACTIVE_CONTRACT, bundleVersion: ACTIVE_CONTRACT.bundleVersion + 1 },
+  });
+  assert.equal(report.incomplete, true);
+});
+
+test("a bundle below the floor is not scored", () => {
+  const report = sanitizeReport({
+    codingScore: 70,
+    interviewContract: { ...ACTIVE_CONTRACT, bundleVersion: 3 },
+  });
+  assert.equal(report.incomplete, true);
 });
 
 test("round summaries require plan-consistent kinds budgets and statuses", () => {

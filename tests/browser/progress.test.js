@@ -62,6 +62,26 @@ test("progress filters metadata, orders attempts, ranks tags, and keeps null as 
   assert.deepEqual(model.weaknesses, [{ tag: "Explain complexity", count: 2 }]);
 });
 
+test("progress groups attempts by topic", () => {
+  const first = entry("first", "2026-01-01", 70);
+  first.report = { ...first.report, topics: ["arrays", "hash tables"], decision: "HIRE" };
+  const second = entry("second", "2026-01-03", 70);
+  second.report = { ...second.report, topics: ["arrays", "arrays"], decision: "NO_HIRE" };
+  const incomplete = entry("incomplete", "2026-01-04", 70);
+  incomplete.report = { ...incomplete.report, topics: ["hash tables"], decision: "HIRE", incomplete: true };
+  const model = buildProgressModel([incomplete, second, first]);
+  assert.deepEqual(model.topics, [
+    { topic: "arrays", attempts: 2, passes: 1, lastAttempt: at(3) },
+    { topic: "hash tables", attempts: 2, passes: 1, lastAttempt: at(4) },
+  ]);
+});
+
+test("history without topics still builds", () => {
+  const model = buildProgressModel([entry("old", "2026-01-01", 70)]);
+  assert.deepEqual(model.topics, []);
+  assert.equal(model.attempts.length, 1);
+});
+
 test("rubric changes and legacy attempts split otherwise comparable series", () => {
   const one = entry("one", "2026-01-01", 50);
   const legacy = { id: "legacy", date: "2026-02-01", report: {} };
@@ -82,7 +102,7 @@ test("rubric changes and legacy attempts split otherwise comparable series", () 
 test("lobby progress surface is accessible and separates the two frameworks", () => {
   const page = readFileSync(join(web, "index.html"), "utf8");
   const app = readFileSync(join(web, "app.js"), "utf8");
-  for (const id of ["progress-difficulty", "progress-language", "progress-duration", "progress-summary", "progress-trends", "progress-weaknesses"]) {
+  for (const id of ["progress-difficulty", "progress-language", "progress-duration", "progress-summary", "progress-trends", "progress-weaknesses", "progress-topics"]) {
     assert.match(page, new RegExp(`id="${id}"`));
   }
   assert.match(page, /aria-labelledby="progress-title"/);
@@ -91,6 +111,8 @@ test("lobby progress surface is accessible and separates the two frameworks", ()
   assert.match(app, /Not assessed in these attempts/);
   assert.match(app, /no zeroes are plotted/);
   assert.match(app, /formative phase scores, not calibrated hiring evidence/);
+  assert.match(app, /No topic labels are available for these attempts/);
+  assert.match(app, /nodes\.progressTopics\.append\(item\)/);
   // A table each, with its own caption naming the exercise it scores. One
   // table with the two as groups inside it still read as a single ten-step
   // scale, and neither half is evidence about the other.

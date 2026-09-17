@@ -33,8 +33,10 @@ the agent receives structured code rather than editor screenshots. Python and
 JavaScript run locally; C, C++, and Java run through Compiler Explorer, so
 source code leaves the browser for those three.
 
-Camera and microphone are required to start. Audio and code snapshots stay in
-memory unless [recording](#recording) is enabled, which is off by default.
+Output confirmation and a microphone are required to start. A camera is also
+required when [recording](#recording) is enabled; otherwise a candidate can
+continue without one and the report records that condition. Audio and code
+snapshots stay in memory unless recording is enabled, which is off by default.
 Candidate video reaches Gemini only with
 `CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED=true`. Face-presence analysis runs in
 the browser and reports itself unavailable rather than guessing.
@@ -118,6 +120,12 @@ conceptual hints, and uses the latest test run in the final assessment. Voice
 responses stop when the candidate interrupts. Say "can I get a hint?" when
 needed; hints affect the communication score.
 
+The media preflight always requires confirmed output and a working microphone.
+For an interview that is not recorded, a candidate may continue without a
+camera when it is unavailable or declined; the signed integrity trail and the
+report record that neutral condition and why. A recorded interview still
+requires its camera before it can start.
+
 Candidates can present the interview in Google Meet by sharing the CodeTrial tab
 with tab audio enabled. Meet owns the shared tab after that, and face-presence
 analysis is disabled for the session. See the
@@ -160,6 +168,7 @@ The common ones:
 | `CODETRIAL_DURATION_MIN` | `45` | Interview length preselected in the lobby (10–90); see [interview length](docs/interview-length.md) |
 | `GEMINI_LIVE_MODEL` | `gemini-3.1-flash-live-preview` | Realtime interviewer model |
 | `GEMINI_REPORT_MODEL` | `gemini-3.1-flash-lite` | Report model |
+| `CODETRIAL_MAX_INTERIM_REVIEWS` | `12` | Quiet-pause report-model reviews per interview; `0` disables them and `72` is the maximum |
 | `CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED` | `false` | Forward candidate video to Gemini |
 | `CODETRIAL_COMPILER_EXPLORER_ENABLED` | `true` | Enable remote C, C++, and Java runs |
 | `CODETRIAL_MAX_CONCURRENT_INTERVIEWS` | `16` | Interviews one `web` process hosts agents for |
@@ -228,6 +237,7 @@ recorded rather than left implicit. See
 | [LiveKit troubleshooting](docs/livekit-connection-troubleshooting.md) | Telling four connection failures apart |
 | [Observable delivery policy](docs/observable-delivery-policy.md) | What a report may and may not assess |
 | [Interview contract versions](docs/interview-contract-versions.md) | The five versions every report carries |
+| [Adding a problem](docs/adding-a-problem.md) | Add an imported or original interview exercise |
 | [Rubric calibration](docs/rubric-calibration.md) | Calibration status of the framework scores |
 | [Provider cost and degradation](docs/provider-cost-and-degradation.md) | Gemini budgets, restarts, concurrency |
 

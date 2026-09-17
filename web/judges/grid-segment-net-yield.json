@@ -66,6 +66,15 @@
         ]
       ],
       "expected": 6
+    },
+    {
+      "label": "one node",
+      "input": [
+        [
+          5
+        ]
+      ],
+      "expected": 5
     }
   ],
   "paramNames": [

@@ -332,6 +332,23 @@ test("report markup renders scores, verdict, and escaped feedback", () => {
   assert.match(body, /id="done"/);
 });
 
+test("report names a skipped camera and its reason neutrally", () => {
+  const session = {
+    report: {
+      incomplete: true,
+      summary: "Session complete.",
+      integrityEvents: [{ type: "CAMERA_NOT_USED", at: "now", severity: "info", detail: "denied" }],
+    },
+    problemTitle: "Two Sum",
+    language: "python",
+    code: "",
+    transcript: [],
+  };
+
+  assert.match(reportMarkup(session), /Camera not used \(denied\)/);
+  assert.match(reportMarkdown({ ...session, at: "2026-09-16" }), /Camera not used \(denied\)/);
+});
+
 test("report markup states every save outcome without hiding Download", () => {
   const session = {
     report: { incomplete: true, summary: "Done", hintsUsed: 0 },
@@ -388,6 +405,100 @@ test("practice-next drills render accessibly in HTML and Markdown", () => {
   assert.match(html, /Test · 10 min · high impact/);
   assert.match(markdown, /## Practice next/);
   assert.match(markdown, /Success: Cover four case classes/);
+});
+
+test("the report shows the debrief collapsed", () => {
+  const body = reportMarkup({
+    report: {
+      incomplete: true,
+      summary: "The evaluator was unavailable.",
+      debrief: {
+        scenarioContract: "Return the matching positions.",
+        approach: "Use one pass and a map in O(n) time.",
+        pitfalls: "Do not reuse a position.",
+        hints: [{ text: "What should the map remember?", given: true }, { text: "Check before inserting.", given: false }],
+        followUps: ["How would repeated queries change the design?"],
+      },
+    },
+    problemTitle: "Scenario",
+    language: "python",
+    code: "pass",
+  });
+  assert.match(body, /<details class="report-debrief"><summary>What the interviewer held back<\/summary>/);
+  assert.doesNotMatch(body, /<details class="report-debrief" open>/);
+  assert.match(body, /Spaced review will bring this problem back/);
+  assert.match(body, /Given:<\/strong> What should the map remember\?/);
+  assert.match(body, /Held back:<\/strong> Check before inserting\./);
+  assert.match(body, /Follow-ups this problem offers/);
+});
+
+test("the report shows the hint rung reached", () => {
+  const report = { incomplete: true, summary: "Unavailable", debrief: { hints: [{ text: "First", given: true }, { text: "Second", given: true }, { text: "Third", given: false }] } };
+  assert.match(reportMarkup({ report, problemTitle: "Two Sum", language: "python", code: "" }), /Reached hint 2 of 3/);
+});
+
+test("the report shows the level practiced for", () => {
+  const report = {
+    codingScore: 70, communicationScore: 70, decision: "HIRE", summary: "Grounded",
+    codingFeedback: { strengths: [], improvements: [] },
+    communicationFeedback: { strengths: [], improvements: [] }, hintsUsed: 0,
+    practiceLevel: "intern",
+  };
+  assert.match(
+    reportMarkup({ report, problemTitle: "Two Sum", language: "python", code: "" }),
+    /Judged against a mid-level bar; practiced for: intern/,
+  );
+  assert.doesNotMatch(
+    reportMarkup({ report: { ...report, practiceLevel: null }, problemTitle: "Two Sum", language: "python", code: "" }),
+    /practiced for:/,
+  );
+  assert.doesNotMatch(
+    reportMarkup({ report: { incomplete: true, summary: "Unavailable", practiceLevel: "intern" }, problemTitle: "Two Sum", language: "python", code: "" }),
+    /Judged against/,
+  );
+});
+
+test("the markdown report carries the debrief", () => {
+  const markdown = reportMarkdown({
+    report: {
+      incomplete: true,
+      summary: "The evaluator was unavailable.",
+      debrief: {
+        scenarioContract: "Return the matching positions.",
+        approach: "Use one pass and a map in O(n) time.",
+        pitfalls: "Do not reuse a position.",
+        hints: [{ text: "What should the map remember?", given: true }],
+        followUps: ["How would repeated queries change the design?"],
+      },
+    },
+    problemTitle: "Scenario",
+    language: "python",
+    code: "pass",
+    transcript: [],
+    at: "now",
+  });
+  assert.match(markdown, /## What the interviewer held back/);
+  assert.match(markdown, /Spaced review will bring this problem back/);
+  assert.match(markdown, /\*\*Given:\*\* What should the map remember\?/);
+  assert.match(markdown, /### Follow-ups this problem offers/);
+});
+
+test("the markdown report states the hint rung", () => {
+  const report = { incomplete: true, summary: "Unavailable", debrief: { hints: [{ text: "First", given: true }, { text: "Second", given: false }, { text: "Third", given: false }] } };
+  assert.match(reportMarkdown({ report, problemTitle: "Two Sum", language: "python", code: "", transcript: [], at: "now" }), /Reached hint 1 of 3/);
+});
+
+test("the markdown report shows the level practiced for", () => {
+  const report = {
+    codingScore: 70, communicationScore: 70, decision: "HIRE", summary: "Grounded",
+    codingFeedback: { strengths: [], improvements: [] },
+    communicationFeedback: { strengths: [], improvements: [] }, hintsUsed: 0,
+    practiceLevel: "intern",
+  };
+  assert.match(
+    reportMarkdown({ report, problemTitle: "Two Sum", language: "python", code: "", transcript: [], at: "now" }),
+    /Judged against a mid-level bar; practiced for: intern/,
+  );
 });
 
 test("framework phase scores are labeled formative in HTML and Markdown", () => {

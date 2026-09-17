@@ -74,6 +74,18 @@
         0,
         6
       ]
+    },
+    {
+      "label": "one word match",
+      "input": [
+        "a",
+        [
+          "a"
+        ]
+      ],
+      "expected": [
+        0
+      ]
     }
   ],
   "paramNames": [

@@ -42,6 +42,10 @@ function poolWith(getUserMedia, options = {}) {
       changes.count += 1;
     },
     retryMs: options.retryMs ?? 20,
+    // For a test that drives the retry by hand. Left undefined, the pool's
+    // own defaults take over, so every other test keeps the real timer.
+    schedule: options.schedule,
+    unschedule: options.unschedule,
   });
   pool.configure("audio", { accept: (track) => Boolean(track), onTrack: () => {} });
   pool.configure("video", { accept: (track) => Boolean(track), onTrack: () => {} });
@@ -69,23 +73,19 @@ test("a granted track of each kind lands in one stream", async () => {
 test("two denied devices share one retry, so requests do not multiply", async () => {
   let asked = 0;
   const pending = [];
-  const pool = createDevicePool({
-    mediaDevices: {
-      getUserMedia: async () => {
-        asked += 1;
-        throw new Error("NotAllowedError");
+  const { pool } = poolWith(
+    async () => {
+      asked += 1;
+      throw new Error("NotAllowedError");
+    },
+    {
+      schedule: (fn) => {
+        pending.push(fn);
+        return pending.length;
       },
+      unschedule: () => {},
     },
-    isFinished: () => false,
-    onChange: () => {},
-    schedule: (fn) => {
-      pending.push(fn);
-      return pending.length;
-    },
-    unschedule: () => {},
-  });
-  pool.configure("audio", { accept: (track) => Boolean(track), onTrack: () => {} });
-  pool.configure("video", { accept: (track) => Boolean(track), onTrack: () => {} });
+  );
 
   pool.start();
   await settle();
@@ -97,6 +97,45 @@ test("two denied devices share one retry, so requests do not multiply", async ()
   pending.pop()();
   await settle();
   assert.equal(asked, 4, "the retry asked once per device");
+});
+
+test("disabling the camera leaves microphone retry enabled", async () => {
+  const asked = [];
+  let retry = null;
+  const { pool } = poolWith(
+    async (constraints) => {
+      asked.push(constraints.audio ? "audio" : "video");
+      throw new Error("denied");
+    },
+    {
+      schedule: (callback) => {
+        retry = callback;
+        return 1;
+      },
+      unschedule: () => {},
+    },
+  );
+
+  pool.start();
+  await settle();
+  pool.disable("video");
+  retry();
+  await settle();
+
+  assert.deepEqual(asked, ["audio", "video", "audio"]);
+});
+
+test("disabling a held camera releases it from the interview stream", async () => {
+  const { pool } = poolWith(async (constraints) =>
+    new FakeStream([new FakeTrack(constraints.audio ? "audio" : "video")]));
+
+  pool.start();
+  await settle();
+  const camera = pool.trackOf("video");
+  pool.disable("video");
+
+  assert.ok(camera.stopped);
+  assert.equal(pool.trackOf("video"), null);
 });
 
 test("a request already on screen is not opened a second time", async () => {

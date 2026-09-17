@@ -60,7 +60,7 @@ fn is_fresh(age: Duration) -> bool {
 ///
 /// Derived from the TTL rather than written beside it, because the relation is
 /// the design: a verdict has to be replaced before it can expire or
-/// `not_known_exhausted` starts paying for an HTTP probe on the request path
+/// `verdict_for` starts paying for an HTTP probe on the request path
 /// again, which is the cost the refresher exists to remove. Two independent
 /// constants held in step by a comment would let someone halve the TTL for a
 /// faster recovery and silently put that probe back, with no test failing.
@@ -71,32 +71,66 @@ const PROVIDER_QUOTA_REFRESH: Duration = Duration::from_secs(PROVIDER_QUOTA_TTL.
 ///
 /// Keyed by provider id rather than URL, because the id is what the room name
 /// carries and therefore what the agent resolves the same project from.
-#[derive(Clone, Default)]
-pub(crate) struct ProviderQuota(Arc<Mutex<HashMap<String, (bool, Instant)>>>);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProviderVerdict {
+    Available,
+    OutOfMinutes,
+    CredentialRefused(StatusCode),
+}
+
+impl ProviderVerdict {
+    fn is_available(self) -> bool {
+        self == Self::Available
+    }
+
+    pub(crate) fn description(self) -> String {
+        match self {
+            Self::Available => "available".to_string(),
+            Self::OutOfMinutes => "out of connection minutes".to_string(),
+            Self::CredentialRefused(status) => {
+                format!("credential refused ({})", status.as_u16())
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ProviderQuota {
+    cache: Arc<Mutex<HashMap<String, (ProviderVerdict, Instant)>>>,
+    /// Whether a verdict is worth an HTTP probe at all.
+    ///
+    /// Held here rather than checked by each caller: a deployment that does not
+    /// probe still asks for verdicts, and a caller that forgot the check would
+    /// pay a timeout per request and refuse a project the probe cannot reach.
+    /// One place decides, so a later reader of a verdict inherits the answer.
+    probe: bool,
+}
 
 impl ProviderQuota {
-    /// Whether nothing has said this project is out of connection minutes.
-    ///
-    /// Not "is available": the probe answers false only for an explicit 429,
-    /// and a malformed origin, a signing failure or a timeout all come back
-    /// true. That is deliberate, and the name has to carry it, or a caller
-    /// reads a positive quota assertion into what is really the absence of a
-    /// refusal.
-    ///
+    pub(crate) fn new(probe: bool) -> Self {
+        Self {
+            cache: Arc::default(),
+            probe,
+        }
+    }
+
     /// From cache where the last answer is recent enough, from the project
-    /// itself otherwise.
-    pub(crate) async fn not_known_exhausted(&self, provider: &Provider) -> bool {
+    /// itself otherwise. `Available` without asking where probing is off.
+    pub(crate) async fn verdict_for(&self, provider: &Provider) -> ProviderVerdict {
+        if !self.probe {
+            return ProviderVerdict::Available;
+        }
         let now = Instant::now();
         {
-            let cache = self.0.lock().unwrap_or_else(|error| error.into_inner());
+            let cache = self.cache.lock().unwrap_or_else(|error| error.into_inner());
             if let Some((verdict, at)) = cache.get(&provider.id)
                 && is_fresh(now.duration_since(*at))
             {
                 return *verdict;
             }
         }
-        let verdict = probe_not_exhausted(provider).await;
-        self.0
+        let verdict = probe_verdict(provider).await;
+        self.cache
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .insert(provider.id.clone(), (verdict, Instant::now()));
@@ -107,24 +141,21 @@ impl ProviderQuota {
     ///
     /// Concurrent rather than sequential: the probes are independent, and a
     /// nine-project pool run in series would take nine timeouts to finish where
-    /// one is enough. Returns the ids that came back exhausted, in pool order,
-    /// for the caller to report.
-    pub(crate) async fn refresh_all(&self, pool: &ProviderPool) -> Vec<String> {
-        let verdicts = join_all(pool.providers.iter().map(|provider| async move {
-            (provider.id.clone(), probe_not_exhausted(provider).await)
-        }))
-        .await;
+    /// one is enough. Returns every verdict in pool order for the caller to
+    /// report.
+    pub(crate) async fn refresh_all(&self, pool: &ProviderPool) -> Vec<(String, ProviderVerdict)> {
+        let verdicts =
+            join_all(pool.providers.iter().map(|provider| async move {
+                (provider.id.clone(), probe_verdict(provider).await)
+            }))
+            .await;
 
         let now = Instant::now();
-        let mut cache = self.0.lock().unwrap_or_else(|error| error.into_inner());
-        let mut exhausted = Vec::new();
-        for (id, verdict) in verdicts {
-            if !verdict {
-                exhausted.push(id.clone());
-            }
-            cache.insert(id, (verdict, now));
+        let mut cache = self.cache.lock().unwrap_or_else(|error| error.into_inner());
+        for (id, verdict) in &verdicts {
+            cache.insert(id.clone(), (*verdict, now));
         }
-        exhausted
+        verdicts
     }
 }
 
@@ -136,13 +167,12 @@ impl ProviderQuota {
 /// it answers 200 on an exhausted project, because the limit is on media
 /// connections rather than on the Twirp surface.
 ///
-/// Only an explicit 429 takes a project out. A probe that cannot be sent at all
-/// says nothing about quota, and refusing every interview because this server
-/// briefly lost the network would be a worse failure than the one being
-/// avoided: the candidate would be turned away from a project that works.
-async fn probe_not_exhausted(provider: &Provider) -> bool {
+/// A 401 or 403 takes a project out as well: the credential cannot mint a room
+/// token either. Other probe failures say nothing about availability, so a
+/// brief network outage does not refuse an interview that could still work.
+async fn probe_verdict(provider: &Provider) -> ProviderVerdict {
     let Some(origin) = super::policy::livekit_http_origin(&provider.url) else {
-        return true;
+        return ProviderVerdict::Available;
     };
     let Ok(token) = livekit_token(LivekitTokenInput {
         api_key: &provider.api_key,
@@ -154,7 +184,7 @@ async fn probe_not_exhausted(provider: &Provider) -> bool {
         now_seconds: crate::current_epoch_seconds(),
         agent: false,
     }) else {
-        return true;
+        return ProviderVerdict::Available;
     };
     let response = crate::http_client()
         .get(format!("{origin}/rtc/validate"))
@@ -162,18 +192,31 @@ async fn probe_not_exhausted(provider: &Provider) -> bool {
         .timeout(PROVIDER_QUOTA_PROBE_TIMEOUT)
         .send()
         .await;
-    !matches!(response, Ok(response) if response.status() == StatusCode::TOO_MANY_REQUESTS)
+    match response {
+        Ok(response) if response.status() == StatusCode::TOO_MANY_REQUESTS => {
+            ProviderVerdict::OutOfMinutes
+        }
+        Ok(response)
+            if matches!(
+                response.status(),
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+            ) =>
+        {
+            ProviderVerdict::CredentialRefused(response.status())
+        }
+        _ => ProviderVerdict::Available,
+    }
 }
 
-/// Which project this interview runs on, skipping any that has run out.
+/// Which project this interview runs on, skipping any unavailable project.
 pub(crate) enum ProviderChoice<'a> {
     Ready(String, &'a crate::config::Provider),
     NoneConfigured,
-    AllExhausted,
+    AllUnavailable(Vec<(String, ProviderVerdict)>),
 }
 
-/// Round-robin as before, but a project that answers "out of minutes" is passed
-/// over rather than handed to the candidate.
+/// Round-robin as before, but an unavailable project is passed over rather than
+/// handed to the candidate.
 ///
 /// The counter advances per attempt, not per request, so a dead project does
 /// not pin every later interview to the one after it.
@@ -203,18 +246,21 @@ pub(crate) async fn room_and_available_provider(state: &AppState) -> ProviderCho
         else {
             return ProviderChoice::NoneConfigured;
         };
-        if state.provider_quota.not_known_exhausted(provider).await {
+        let verdict = state.provider_quota.verdict_for(provider).await;
+        if verdict.is_available() {
             return ProviderChoice::Ready(room_name.to_string(), provider);
         }
         eprintln!(
-            "livekit provider {} owns pinned room {room_name} but is out of connection minutes; falling back to the pool",
-            provider.id
+            "livekit provider {} owns pinned room {room_name} but is {}; falling back to the pool",
+            provider.id,
+            verdict.description(),
         );
     }
 
     if state.config.pool.providers.is_empty() {
         return ProviderChoice::NoneConfigured;
     }
+    let mut unavailable = Vec::new();
     for _ in 0..state.config.pool.providers.len() {
         // Bumped per attempt rather than once per request: adding the attempt
         // number to one shared value locally would leave the next request
@@ -232,18 +278,18 @@ pub(crate) async fn room_and_available_provider(state: &AppState) -> ProviderCho
         let Some(provider) = provider else {
             return ProviderChoice::NoneConfigured;
         };
-        if state.provider_quota.not_known_exhausted(provider).await {
+        let verdict = state.provider_quota.verdict_for(provider).await;
+        if verdict.is_available() {
             return ProviderChoice::Ready(room_name, provider);
         }
+        unavailable.push((provider.id.clone(), verdict));
 
-        // Deliberately silent. This fires exactly when the quota already knows
-        // the project is spent, so it reported a fact the refresher's own
-        // `livekit quota:` line already carries, once per interview, for as
-        // long as a project stays exhausted. A rotation that finds a provider
-        // is not news; running out of all of them is, and that is answered
-        // below.
+        // Deliberately silent. This fires exactly when the pool already knows
+        // the project is unavailable, so the refresher's `livekit quota:` line
+        // has reported its cause already. Repeating it per interview would bury
+        // the operator's one useful transition: every project unavailable.
     }
-    ProviderChoice::AllExhausted
+    ProviderChoice::AllUnavailable(unavailable)
 }
 
 /// Picks the provider first and writes its id into the room name, because the
@@ -286,20 +332,28 @@ pub(crate) fn room_and_provider(
 /// reach. The caller prints it.
 ///
 /// Projects are named individually rather than counted. "8 of 9 available"
-/// tells an operator to go looking; naming the one that is spent tells them
-/// which account to top up, and whether it is the one their pinned room
-/// depends on.
-fn pool_health_line(exhausted: &[String], total: usize) -> String {
-    match exhausted.len() {
+/// tells an operator to go looking; naming each unavailable project and why
+/// tells them whether to top an account up or replace its credential.
+pub(crate) fn unavailable_projects(verdicts: &[(String, ProviderVerdict)]) -> Vec<String> {
+    verdicts
+        .iter()
+        .filter(|(_, verdict)| !verdict.is_available())
+        .map(|(id, verdict)| format!("{id}: {}", verdict.description()))
+        .collect()
+}
+
+fn pool_health_line(verdicts: &[(String, ProviderVerdict)], total: usize) -> String {
+    let unavailable = unavailable_projects(verdicts);
+    match unavailable.len() {
         0 => format!("livekit quota: all {total} project(s) can take connections"),
-        spent if spent == total => format!(
-            "livekit quota: every project is out of connection minutes ({}); interviews will be refused until one is topped up",
-            exhausted.join(", ")
+        count if count == total => format!(
+            "livekit quota: every project is unavailable ({}); interviews will be refused until one recovers",
+            unavailable.join(", ")
         ),
         _ => format!(
-            "livekit quota: {} of {total} project(s) available; out of minutes: {}",
-            total - exhausted.len(),
-            exhausted.join(", ")
+            "livekit quota: {} of {total} project(s) available; unavailable: {}",
+            total - unavailable.len(),
+            unavailable.join(", ")
         ),
     }
 }
@@ -309,13 +363,18 @@ fn pool_health_line(exhausted: &[String], total: usize) -> String {
 /// Only the change is worth printing. Repeating the same verdict every thirty
 /// seconds is how a log stops being read, and the startup line already said
 /// what the steady state is.
-fn quota_change_line(previous: &[String], current: &[String]) -> Option<String> {
+fn quota_change_line(
+    previous: &[(String, ProviderVerdict)],
+    current: &[(String, ProviderVerdict)],
+) -> Option<String> {
     if previous == current {
         return None;
     }
-    Some(match current {
-        [] => "livekit quota: every project can take connections again".to_string(),
-        spent => format!("livekit quota: now out of minutes: {}", spent.join(", ")),
+    let unavailable = unavailable_projects(current);
+    Some(if unavailable.is_empty() {
+        "livekit quota: every project can take connections again".to_string()
+    } else {
+        format!("livekit quota: now unavailable: {}", unavailable.join(", "))
     })
 }
 
@@ -325,10 +384,13 @@ fn quota_change_line(previous: &[String], current: &[String]) -> Option<String> 
 /// an operator learns the same thing either way, and blocking startup on one
 /// probe per project would make a slow network delay the server rather than
 /// just the answer.
-async fn report_pool_health(quota: &ProviderQuota, pool: &ProviderPool) -> Vec<String> {
-    let exhausted = quota.refresh_all(pool).await;
-    eprintln!("{}", pool_health_line(&exhausted, pool.providers.len()));
-    exhausted
+async fn report_pool_health(
+    quota: &ProviderQuota,
+    pool: &ProviderPool,
+) -> Vec<(String, ProviderVerdict)> {
+    let verdicts = quota.refresh_all(pool).await;
+    eprintln!("{}", pool_health_line(&verdicts, pool.providers.len()));
+    verdicts
 }
 
 /// Stops the refresher when the server it belongs to goes away.
@@ -359,7 +421,9 @@ pub(crate) fn spawn_provider_quota_refresher(
     quota: ProviderQuota,
     pool: ProviderPool,
 ) -> QuotaRefresher {
-    if pool.providers.is_empty() {
+    // The same switch `verdict_for` reads, so a server that does not probe
+    // starts no timer either, and no caller has to check it first.
+    if !quota.probe || pool.providers.is_empty() {
         return QuotaRefresher::default();
     }
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
@@ -375,10 +439,10 @@ pub(crate) fn spawn_provider_quota_refresher(
         loop {
             tokio::time::sleep(PROVIDER_QUOTA_REFRESH).await;
 
-            let exhausted = quota.refresh_all(&pool).await;
-            if let Some(line) = quota_change_line(&previous, &exhausted) {
+            let verdicts = quota.refresh_all(&pool).await;
+            if let Some(line) = quota_change_line(&previous, &verdicts) {
                 eprintln!("{line}");
-                previous = exhausted;
+                previous = verdicts;
             }
         }
     })))

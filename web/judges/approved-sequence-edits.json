@@ -48,6 +48,15 @@
         ]
       ],
       "expected": 3
+    },
+    {
+      "label": "already matching",
+      "input": [
+        "AACCGGTT",
+        "AACCGGTT",
+        []
+      ],
+      "expected": 0
     }
   ],
   "paramNames": [

@@ -70,6 +70,19 @@
         -8,
         6
       ]
+    },
+    {
+      "label": "two factors",
+      "input": [
+        [
+          2,
+          3
+        ]
+      ],
+      "expected": [
+        3,
+        2
+      ]
     }
   ],
   "paramNames": [
