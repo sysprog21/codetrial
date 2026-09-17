@@ -27,6 +27,26 @@ test("a candidate case is typed by paramTypes", () => {
   assert.throws(() => parseCandidateCase(spec, '[[["ab"]], "edge"]'), /Parameter 1 \(grid\)/);
 });
 
+test("a class candidate case matches the judge operation arities", () => {
+  const spec = {
+    kind: "class", className: "EventQueue", cases: [{
+      input: [["EventQueue", "push", "pop", "size"], [[2], [7], [], []]],
+    }],
+  };
+  assert.deepEqual(
+    parseCandidateCase(spec, '[["EventQueue", "push", "size"], [[2], [7], []]]'),
+    [["EventQueue", "push", "size"], [[2], [7], []]],
+  );
+  assert.throws(
+    () => parseCandidateCase(spec, '[["EventQueue", "push"], [[2], []]]'),
+    /Operation push does not accept 0 arguments/,
+  );
+  assert.throws(
+    () => parseCandidateCase(spec, '[["EventQueue", "EventQueue"], [[2], [2]]]'),
+    /Only the first operation may be EventQueue/,
+  );
+});
+
 test("runBrowserTests reports the output of a candidate case", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {

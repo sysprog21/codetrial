@@ -93,9 +93,25 @@ function parseClassCandidateCase(spec, input) {
     throw new Error("Class operations must be strings with JSON argument arrays.");
   }
   if (input[0][0] !== spec.className) throw new Error(`The first operation must be ${spec.className}.`);
-  const operations = new Set(spec.cases.flatMap((testCase) => testCase.input?.[0] || []));
-  if (!input[0].every((operation) => operations.has(operation))) {
-    throw new Error("Class case names an operation this exercise does not provide.");
+  const arities = new Map();
+  for (const testCase of spec.cases) {
+    const [operations, argumentsList] = testCase.input || [];
+    if (!Array.isArray(operations) || !Array.isArray(argumentsList)) continue;
+    for (const [index, operation] of operations.entries()) {
+      const allowed = arities.get(operation) || new Set();
+      allowed.add(argumentsList[index]?.length);
+      arities.set(operation, allowed);
+    }
+  }
+  for (const [index, operation] of input[0].entries()) {
+    if (index > 0 && operation === spec.className) {
+      throw new Error(`Only the first operation may be ${spec.className}.`);
+    }
+    const allowed = arities.get(operation);
+    if (!allowed) throw new Error("Class case names an operation this exercise does not provide.");
+    if (!allowed.has(input[1][index].length)) {
+      throw new Error(`Operation ${operation} does not accept ${input[1][index].length} arguments.`);
+    }
   }
   return input;
 }
