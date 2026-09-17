@@ -431,6 +431,22 @@ async fn dropping_the_refresher_aborts_the_task_it_owns() {
     panic!("the task outlived the QuotaRefresher that owned it");
 }
 
+/// A disabled probe and an empty pool are separate reasons not to spawn the
+/// refresher. Combining them with `&&` starts a task for either disabled
+/// configuration, even though there is no useful work for that task to do.
+#[tokio::test]
+async fn a_refresher_starts_only_for_an_enabled_nonempty_pool() {
+    let disabled =
+        spawn_provider_quota_refresher(ProviderQuota::new(false), config_with(&["a"]).pool);
+    assert!(
+        disabled.0.is_none(),
+        "disabled quota probing starts no task"
+    );
+
+    let empty = spawn_provider_quota_refresher(ProviderQuota::new(true), config_with(&[]).pool);
+    assert!(empty.0.is_none(), "an empty pool starts no task");
+}
+
 /// The room name is a contract between two modules that never call each
 /// other: this one mints it, and `config::provider_id_from_room` reads it
 /// back in a process that was handed nothing else. Until now nothing tied

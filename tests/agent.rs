@@ -432,6 +432,15 @@ fn strict_report_validation_is_atomic_and_server_owns_hints() {
 }
 
 #[test]
+fn published_problem_word_splitting_preserves_every_boundary() {
+    assert_eq!(
+        spelled_words("-camelCase 3Sum LRUCache"),
+        ["camel", "case", "3", "sum", "lru", "cache"],
+        "punctuation, lower-to-upper, digit-to-upper, and acronym boundaries all split words"
+    );
+}
+
+#[test]
 fn report_naming_the_published_problem_is_refused() {
     let problem = get_problem(Some("3sum"));
     for (path, mutate) in [
