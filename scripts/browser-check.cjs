@@ -565,7 +565,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
     return out;
 }
 `);
-        await runAndExpectPassing(4, 120000);
+        await runAndExpectPassing(5, 120000);
         await page.goto(interviewUrl("min-stack"), { waitUntil: "domcontentloaded" });
         await clearMediaGate(page);
         await page.getByRole("heading", { name: scenarioTitle("min-stack"), level: 1 }).waitFor();
@@ -639,7 +639,7 @@ function matchDisputedCharge() {
 `);
       await page.getByRole("button", { name: /Run tests/ }).click();
       await page.getByRole("button", { name: "Run tests" }).waitFor();
-      await page.getByText("Test results · 0/4").waitFor();
+      await page.getByText("Test results · 0/5").waitFor();
       await page.getByLabel("Code editor").fill(`function matchDisputedCharge(nums, target) {
   const seen = new Map();
   for (let i = 0; i < nums.length; i++) {
@@ -650,7 +650,7 @@ function matchDisputedCharge() {
   return [];
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
       await page.getByRole("button", { name: "C++" }).click();
       await page.getByLabel("Code editor").fill(`class Solution {
 public:
@@ -665,7 +665,7 @@ public:
     }
 };
 `);
-      await runAndExpectPassing(4, 120000);
+      await runAndExpectPassing(5, 120000);
       await page.getByLabel("Code editor").fill(`class Solution {
 public:
     vector<int> matchDisputedCharge(vector<int>& nums, int target) {
@@ -695,7 +695,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
     return out;
 }
 `);
-      await runAndExpectPassing(4, 120000);
+      await runAndExpectPassing(5, 120000);
       await page.getByRole("button", { name: "Python" }).click();
       await page.getByLabel("Code editor").fill(`class Solution:
     def matchDisputedCharge(self, nums, target):
@@ -707,7 +707,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
             seen[value] = i
         return []
 `);
-      await runAndExpectPassing(4, 120000);
+      await runAndExpectPassing(5, 120000);
       await page.getByRole("button", { name: "Transcript" }).click();
       await page.locator("p").filter({ hasText: /^Jim$/ }).first().waitFor();
       await page.locator("p").filter({ hasText: /^You$/ }).first().waitFor();
