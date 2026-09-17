@@ -77,3 +77,32 @@ test("replay-feed waits out Retry-After", async () => {
     delete globalThis.fetch;
   }
 });
+
+test("replay-feed keeps a batch alive past the page unless it is over the keepalive budget", async () => {
+  const feed = await import("../../web/replay-feed.js?keepalive");
+  const posts = [];
+  globalThis.fetch = async (_url, init) => {
+    posts.push({ events: JSON.parse(init.body).events.length, keepalive: init.keepalive });
+    return { status: 204, headers: { get: () => null } };
+  };
+  try {
+    feed.initReplay({
+      state: { interviewId: "i1" },
+      nodes: {},
+      recordingEnabled: true,
+      consentVersion: "v1",
+      replayVersion: 1,
+    });
+    feed.recordReplay("lifecycle", { state: "ended", reason: "time_up" });
+    await feed.flushReplay();
+    feed.recordReplay("code", { text: "é".repeat(40_000) });
+    await feed.flushReplay();
+    assert.deepEqual(posts, [
+      { events: 1, keepalive: true },
+      { events: 1, keepalive: false },
+    ]);
+  } finally {
+    feed.closeReplay();
+    delete globalThis.fetch;
+  }
+});

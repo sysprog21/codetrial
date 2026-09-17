@@ -25,6 +25,7 @@ const REPLAY_FLUSH_MS = 1000;
 const REPLAY_MAX_BATCH = 32;
 const REPLAY_RETRY_MS = 60_000;
 const REPLAY_RETRY_MAX_MS = 120_000;
+const REPLAY_KEEPALIVE_MAX_BYTES = 64 * 1024;
 
 /// How often the clock and the problem heading are restated.
 ///
@@ -121,11 +122,19 @@ async function sendQueuedBatch() {
     return;
   }
   const batch = replayQueue.splice(0, REPLAY_MAX_BATCH);
+  const body = JSON.stringify({ events: batch });
   try {
+    // Kept alive so a batch already on its way survives the tab closing. The
+    // interview's last events are flushed as the candidate reaches the report,
+    // which is the moment a candidate is most likely to leave, and a plain
+    // fetch is cancelled with the page. Every batch rather than only the last,
+    // because the end may be the one inside a Retry-After window and so go
+    // out on the timer rather than from the call that asked for it.
     const response = await fetch(`/api/interviews/${encodeURIComponent(state.interviewId)}/events`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ events: batch }),
+      body,
+      keepalive: new TextEncoder().encode(body).length <= REPLAY_KEEPALIVE_MAX_BYTES,
     });
     // 404 is an interview whose consent has been withdrawn, and quota is an
     // interview that has recorded all it may. Both mean the server will refuse
