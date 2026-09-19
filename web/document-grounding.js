@@ -115,12 +115,51 @@ function normalizeLines(text) {
     .split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
 }
 
+// A bullet glyph is stripped on its own, because it is a list glyph and not
+// part of any name, so it needs no space after it to say so. A run of dashes
+// or asterisks stripped that freely would eat into real content, so those
+// still only count as a marker once whitespace after them confirms it. A
+// run, not one character: "-- " and "** " are what pasted markdown leaves.
+//
+// A numbered marker is stripped without a following space, because "1.Must"
+// and "1.) Must" are common paste shapes and the "1." should not reach the
+// interviewer. Its digits must be followed by "." or ")", which keeps "5G"
+// and "3D" whole, and then by whitespace or two letters. A "." alone is not
+// enough, since it follows a digit inside real tokens: "9.x Java" has one
+// letter after it and stays whole, while "1.Must" and "1.Go" lose their
+// marker. That is a heuristic, not a rule: "1.C experience" keeps its
+// marker and "3.js experience" loses its "3.".
+// \p{Nd} rather than \d, so a full-width digit is a marker digit like an
+// ASCII one.
 function clean(line) {
-  return line.replace(/^[-*•\d.)\s]+/, "").slice(0, textLimit).trim();
+  return line.trimStart()
+    .replace(/^(?:(?:-+|\*+)\s+|\p{Nd}+[.)]+(?=\s|\p{L}{2})\s*|•\s*)+/u, "")
+    .slice(0, textLimit).trim();
 }
 
+// A token with no letter is digits and symbols only, wearing a list item's
+// clothes, and that is not a skill on its own.
+//
+// A letter is what makes a token legible as a named thing: "ISO 27001" and
+// "IEEE 754" keep the org name that scopes their number, "5G" and "3D" carry
+// their own label, and a plain "5" or "27001" or "2015" carries no such
+// scope, whether it arrived alone -- "Skills: 2025" -- or split off a shared
+// prefix by parseResume's "," / ";" / "|" split -- "Skills: ISO 27001,
+// 124141, 2015". Either way, there is nothing left to tell whether it is
+// still part of a standard, a separate one, or an unrelated year. Rather
+// than guess, every letterless token is dropped, with no exception: "24/7"
+// and "100%" are the same digit-plus-symbol shape as "-50", "1-2", and
+// "2020-2024", and none of them carry a letter to claim a meaning others
+// would have to guess at.
+//
+// That costs bare part numbers -- 6502, 8051, 68000 -- which are real skills
+// on a systems resume and have no letter either. The loss is accepted, not
+// overlooked: "8051" and "2025" are the same shape, four bare digits, and
+// nothing in the token says which is a part number and which is a year, so
+// a filter that goes by shape and keeps one keeps the other. Both are
+// dropped. A part number that names itself, "MOS 6502" or "Z80", is kept.
 function unique(values, max) {
-  return [...new Set(values.map(clean).filter((value) => value.length >= 2))].slice(0, max);
+  return [...new Set(values.map(clean).filter((value) => /\p{L}/u.test(value)))].slice(0, max);
 }
 
 function parseJd(lines) {
