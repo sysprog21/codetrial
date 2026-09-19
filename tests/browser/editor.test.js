@@ -1,7 +1,155 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { indentSelection } from "../../web/editor.js";
+import { indentNewline, indentSelection } from "../../web/editor.js";
+
+test("Enter preserves the current line's spaces and tabs", () => {
+  for (const indentation of ["", "  ", "    ", "\t", "\t  "]) {
+    const value = `previous\n${indentation}call();`;
+    const expected = `${value}\n${indentation}`;
+    assert.deepEqual(
+      indentNewline(value, value.length, value.length, "javascript"),
+      { value: expected, start: expected.length, end: expected.length }
+    );
+  }
+});
+
+test("Enter adds a level after opening delimiters and Python colons", () => {
+  for (const [value, language] of [
+    ["    if (ready) {", "javascript"],
+    ["    items = [", "python"],
+    ["    call(", "java"],
+    ["    if ready:", "python"],
+    ["    if (ready) {  ", "cpp"],
+  ]) {
+    const expected = `${value}\n        `;
+    assert.deepEqual(
+      indentNewline(value, value.length, value.length, language),
+      { value: expected, start: expected.length, end: expected.length }
+    );
+  }
+  assert.deepEqual(
+    indentNewline("    case 1:", 11, 11, "javascript"),
+    { value: "    case 1:\n    ", start: 16, end: 16 }
+  );
+});
+
+test("Enter does not add a level after comment-only lines", () => {
+  for (const [value, language] of [
+    ["    # Steps:", "python"],
+    ["    // setup {", "javascript"],
+    ["    /* setup {", "cpp"],
+  ]) {
+    const expected = `${value}\n    `;
+    assert.deepEqual(
+      indentNewline(value, value.length, value.length, language),
+      { value: expected, start: expected.length, end: expected.length }
+    );
+  }
+});
+
+test("Enter does not treat C++ preprocessor directives as comments", () => {
+  const value = "    #define BLOCK {";
+  const expected = `${value}\n        `;
+
+  assert.deepEqual(
+    indentNewline(value, value.length, value.length, "cpp"),
+    { value: expected, start: expected.length, end: expected.length }
+  );
+});
+
+test("Enter ignores comment delimiters but keeps the code before and after comments", () => {
+  for (const [line, language, nested] of [
+    ["work(); // {", "javascript", false],
+    ["value = 1 # note:", "python", false],
+    ["if ready: # explanation", "python", true],
+    ["if total // count: # integer division", "python", true],
+    ["if (ready) { // explanation", "javascript", true],
+    ["/* seed */ if (ready) {", "cpp", true],
+    ["if (ready) { /* explanation */", "java", true],
+    ["call(); /* { */", "c", false],
+    ["/* first */ /* second */", "cpp", false],
+    ["/* first */ // {", "cpp", false],
+    ["/* first */ /* second {", "cpp", false],
+    ['text = "# :"', "python", false],
+    ['const text = "// {"', "javascript", false],
+    ["const text = `/* {`", "javascript", false],
+  ]) {
+    const value = `    ${line}`;
+    const expected = `${value}\n${nested ? "        " : "    "}`;
+    assert.deepEqual(
+      indentNewline(value, value.length, value.length, language),
+      { value: expected, start: expected.length, end: expected.length }, line
+    );
+  }
+});
+
+test("Enter keeps comment markers inside quoted strings", () => {
+  for (const [line, language] of [
+    ['if url == "https://example.com": # note', "python"],
+    ["if tag == '#': # note", "python"],
+    ['if (url === "https://example.com") { // note', "javascript"],
+    ["if (tag === '/*') { /* note */", "javascript"],
+    ['if (tag === `//`) { // note', "javascript"],
+    [String.raw`if tag == 'can\'t #': # note`, "python"],
+    [String.raw`if (tag === "\"//") { // note`, "javascript"],
+    [String.raw`if path == "C:\\": # note`, "python"],
+  ]) {
+    const value = `    ${line}`;
+    const expected = `${value}\n        `;
+    assert.deepEqual(
+      indentNewline(value, value.length, value.length, language),
+      { value: expected, start: expected.length, end: expected.length }, line
+    );
+  }
+});
+
+test("Enter ignores a matching delimiter inside a trailing comment", () => {
+  const value = "    work(); // {}";
+  const start = value.length - 1;
+  assert.deepEqual(indentNewline(value, start, start, "javascript"),
+    { value: "    work(); // {\n    }", start: start + 5, end: start + 5 });
+});
+
+test("Enter between matching delimiters leaves the caret on the inner line", () => {
+  for (const [open, close] of [["{", "}"], ["[", "]"], ["(", ")"]]) {
+    assert.deepEqual(
+      indentNewline(`    ${open}  ${close}`, 5, 5, "javascript"),
+      { value: `    ${open}\n        \n    ${close}`, start: 14, end: 14 }
+    );
+  }
+  assert.deepEqual(
+    indentNewline("{\n}", 1, 1, "javascript"),
+    { value: "{\n    \n}", start: 6, end: 6 }
+  );
+  assert.deepEqual(
+    indentNewline("{]", 1, 1, "javascript"),
+    { value: "{\n    ]", start: 6, end: 6 }
+  );
+});
+
+test("Enter replaces a selection and preserves text on both sides", () => {
+  assert.deepEqual(
+    indentNewline("    beforeREMOVEafter", 10, 16, "javascript"),
+    { value: "    before\n    after", start: 15, end: 15 }
+  );
+  assert.deepEqual(
+    indentNewline("    a\n  b", 5, 9, "javascript"),
+    { value: "    a\n    ", start: 10, end: 10 }
+  );
+  assert.deepEqual(
+    indentNewline("    abc", 2, 2, "javascript"),
+    { value: "  \n    abc", start: 5, end: 5 }
+  );
+  assert.deepEqual(
+    indentNewline("\n    abc", 0, 0, "javascript"),
+    { value: "\n\n    abc", start: 1, end: 1 }
+  );
+  assert.deepEqual(
+    indentNewline("", 0, 0, "python"),
+    { value: "\n", start: 1, end: 1 }
+  );
+});
 
 test("Tab inserts four spaces on the current line or selected block", () => {
   assert.deepEqual(indentSelection("abc", 0, 0), { value: "    abc", start: 4, end: 4 });

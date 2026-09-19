@@ -6,7 +6,7 @@ import {
   videoTrackReady,
 } from "./audio-check.js";
 import { highlight } from "./highlight.js";
-import { indentSelection } from "./editor.js";
+import { indentNewline, indentSelection } from "./editor.js";
 import { createDevicePool } from "./devices.js";
 import { createFaceCheck } from "./face-check.js";
 import { createMicMeter, startMediaMeter } from "./mic-meter.js";
@@ -468,6 +468,11 @@ function bindEvents() {
     if (!indents) return;
     event.preventDefault();
     applyIndent(indentSelection(nodes.editor.value, nodes.editor.selectionStart, nodes.editor.selectionEnd, event.shiftKey));
+  });
+  nodes.editor.addEventListener("beforeinput", (event) => {
+    if (event.inputType !== "insertLineBreak" || event.isComposing || !event.cancelable) return;
+    event.preventDefault();
+    applyIndent(indentNewline(nodes.editor.value, nodes.editor.selectionStart, nodes.editor.selectionEnd, state.language));
   });
   nodes.editor.addEventListener("input", () => {
     state.codeByLanguage[state.language] = nodes.editor.value;

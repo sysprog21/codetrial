@@ -8,6 +8,7 @@
 // cares about. Those wait for the thing being tested; `networkidle` waited for
 // the whole page and cost the offline flow about fifty seconds of it.
 const { chromium } = require(process.env.PLAYWRIGHT_PATH);
+const assert = require("node:assert/strict");
 const fs = require("fs");
 const http = require("http");
 const { spawn } = require("child_process");
@@ -31,6 +32,54 @@ function scenarioTitle(problemId) {
 
 function interviewUrl(problemId) {
   return `${process.env.BASE_URL}/interview?problem=${scenario(problemId).page}&duration=20`;
+}
+
+async function checkEditorNewlines(page) {
+  const editor = page.getByLabel("Code editor");
+  const cases = [
+    { name: "existing indentation", language: "JavaScript", value: "\t  call();", expected: "\t  call();\n\t  " },
+    { name: "matching delimiters", language: "JavaScript", value: "    {}", start: 5, expected: "    {\n        \n    }", caret: 14 },
+    { name: "selection replacement", language: "JavaScript", value: "    beforeREMOVEafter", start: 10, end: 16, expected: "    before\n    after", caret: 15 },
+    { name: "Python block", language: "Python 3", value: "    if ready:", expected: "    if ready:\n        " },
+    { name: "Python comment", language: "Python 3", value: "    # Steps:", expected: "    # Steps:\n    " },
+    { name: "non-Python colon", language: "JavaScript", value: "    case 1:", expected: "    case 1:\n    " },
+    { name: "line comment", language: "JavaScript", value: "    // setup {", expected: "    // setup {\n    " },
+    { name: "block comment", language: "C++", value: "    /* setup {", expected: "    /* setup {\n    " },
+    { name: "preprocessor directive", language: "C++", value: "    #define BLOCK {", expected: "    #define BLOCK {\n        " },
+    { name: "trailing line comment", language: "JavaScript", value: "    work(); // {", expected: "    work(); // {\n    " },
+    { name: "trailing Python comment", language: "Python 3", value: "    value = 1 # note:", expected: "    value = 1 # note:\n    " },
+    { name: "Python opener before comment", language: "Python 3", value: "    if ready: # note", expected: "    if ready: # note\n        " },
+    { name: "brace before comment", language: "JavaScript", value: "    if (ready) { // note", expected: "    if (ready) { // note\n        " },
+    { name: "code after block comment", language: "C++", value: "    /* seed */ if (ready) {", expected: "    /* seed */ if (ready) {\n        " },
+    { name: "trailing block comment", language: "C++", value: "    if (ready) { /* note */", expected: "    if (ready) { /* note */\n        " },
+    { name: "quoted comment marker", language: "JavaScript", value: '    if (url === "https://example.com") { // note', expected: '    if (url === "https://example.com") { // note\n        ' },
+    { name: "quoted Python comment marker", language: "Python 3", value: "    if tag == '#': # note", expected: "    if tag == '#': # note\n        " },
+    { name: "escaped quote before comment marker", language: "Python 3", value: String.raw`    if tag == 'can\'t #': # note`, expected: String.raw`    if tag == 'can\'t #': # note` + "\n        " },
+    { name: "delimiters in trailing comment", language: "JavaScript", value: "    work(); // {}", start: 16, expected: "    work(); // {\n    }", caret: 21 },
+  ];
+  for (const { name, language, value, start = value.length, end = start, expected, caret = expected.length } of cases) {
+    await page.getByRole("button", { name: language, exact: true }).click();
+    await editor.fill(value);
+    await editor.evaluate((node, range) => node.setSelectionRange(...range), [start, end]);
+    await editor.press("Enter");
+    assert.deepEqual(await editor.evaluate((node) => ({
+      value: node.value, start: node.selectionStart, end: node.selectionEnd,
+    })), { value: expected, start: caret, end: caret }, name);
+    assert.equal(await page.locator("#editor-highlight code").textContent(), expected, `${name}: highlight`);
+    assert.equal(await page.locator("#editor-lines").textContent(),
+      expected.split("\n").map((_, index) => index + 1).join("\n"), `${name}: line numbers`);
+
+    await editor.press("ControlOrMeta+z");
+    assert.equal(await editor.inputValue(), value, `${name}: undo`);
+    await editor.press("ControlOrMeta+Shift+z");
+    assert.equal(await editor.inputValue(), expected, `${name}: redo`);
+
+    const otherLanguage = language === "Python 3" ? "JavaScript" : "Python 3";
+    await page.getByRole("button", { name: otherLanguage, exact: true }).click();
+    await page.getByRole("button", { name: language, exact: true }).click();
+    assert.equal(await editor.inputValue(), expected, `${name}: retained after switching languages`);
+  }
+  console.log(`editor: ${cases.length} Enter cases passed, including undo, redo and language switching`);
 }
 
 const soakSeconds = Number(process.env.BROWSER_CHECK_SOAK_SECONDS || "0");
@@ -533,6 +582,7 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
       await clearMediaGate(page);
       await page.getByRole("heading", { name: scenarioTitle("two-sum"), level: 1 }).waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
+      await checkEditorNewlines(page);
       // The `""` branch that used to be here is gone. It set the global from an
       // init script and expected "not wired up yet", which cannot work: the
       // page also loads /runtime-config.js, which assigns the same global, so
