@@ -227,7 +227,7 @@ export async function runBrowserTests(problemId, code, language, onStatus = null
       const observed = candidate && !Object.hasOwn(testCase, "expected");
       const result = raw.results[index];
       if (!result || result.error) {
-        return { label: testCase.label, pass: false, got: "-", expected: observed ? undefined : renderValue(testCase.expected), ...(candidate ? { input: renderValue(testCase.input) } : {}), error: result?.error || "No result produced.", timeMs: Math.round(result?.timeMs || 0), candidate };
+        return { label: testCase.label, pass: false, displayInput: renderValue(testCase.input), got: "-", expected: observed ? undefined : renderValue(testCase.expected), ...(candidate ? { input: renderValue(testCase.input) } : {}), error: result?.error || "No result produced.", timeMs: Math.round(result?.timeMs || 0), candidate };
       }
       let pass = null;
       let error = null;
@@ -239,7 +239,7 @@ export async function runBrowserTests(problemId, code, language, onStatus = null
           error = String(caught.message || caught);
         }
       }
-      return { label: testCase.label, pass, got: renderValue(result.actual), expected: observed ? undefined : renderValue(testCase.expected), ...(candidate ? { input: renderValue(testCase.input) } : {}), ...(error ? { error } : {}), timeMs: Math.round(result.timeMs), candidate };
+      return { label: testCase.label, pass, ...(pass === false ? { displayInput: renderValue(testCase.input) } : {}), got: renderValue(result.actual), expected: observed ? undefined : renderValue(testCase.expected), ...(candidate ? { input: renderValue(testCase.input) } : {}), ...(error ? { error } : {}), timeMs: Math.round(result.timeMs), candidate };
     });
     return { ...base, cases, passed: cases.filter((item) => !item.candidate && item.pass === true).length };
   } catch (error) {

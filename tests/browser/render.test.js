@@ -166,7 +166,7 @@ test("results markup reports counts and marks each case", () => {
     total: 2,
     cases: [
       { label: "ok case", pass: true, timeMs: 3 },
-      { label: "bad case", pass: false, expected: "[0,1]", got: "[1,0]", error: "", timeMs: 4 },
+      { label: "bad case", pass: false, displayInput: "[[2,7,11,15],9]", expected: "[0,1]", got: "[1,0]", error: "", timeMs: 4 },
     ],
   });
 
@@ -175,7 +175,27 @@ test("results markup reports counts and marks each case", () => {
   assert.match(body, /class="critical small"/, "a partial pass is not styled as good");
   assert.match(body, />OK</);
   assert.match(body, />FAIL</);
+  assert.match(body, /input \[\[2,7,11,15\],9\]\nexpected/, "the failing input precedes the comparison");
   assert.match(body, /expected \[0,1\]\ngot \[1,0\]/, "expected and got sit on separate lines");
+});
+
+test("failed candidate cases show escaped input before comparisons and errors", () => {
+  const { body } = resultsMarkup({
+    passed: 1,
+    total: 1,
+    cases: [
+      { label: "judge", pass: true, timeMs: 1 },
+      { label: "candidate pass", pass: true, input: "<pass>", displayInput: "<pass>", expected: "1", got: "1", candidate: true, timeMs: 2 },
+      { label: "candidate mismatch", pass: false, input: "<mismatch>", displayInput: "<mismatch>", expected: "2", got: "0", error: "", candidate: true, timeMs: 3 },
+      { label: "candidate error", pass: false, input: "<error>", displayInput: "<error>", expected: "3", got: "-", error: "Timeout <late>", candidate: true, timeMs: 4 },
+    ],
+  });
+
+  assert.match(body, /<h3>Your cases<\/h3>/);
+  assert.doesNotMatch(body, /&lt;pass&gt;/, "a passing candidate case does not display its input");
+  assert.match(body, /input &lt;mismatch&gt;\nexpected 2\ngot 0/);
+  assert.match(body, /input &lt;error&gt;\nTimeout &lt;late&gt;/);
+  assert.doesNotMatch(body, /<(?:mismatch|error|late)>/, "candidate inputs and errors stay inert");
 });
 
 test("results markup can include runner status without changing counts", () => {
@@ -231,6 +251,7 @@ test("results markup escapes everything a candidate's code can produce", () => {
       {
         label: "<script>l</script>",
         pass: false,
+        displayInput: "<script>i</script>",
         expected: "<script>e</script>",
         got: "<script>g</script>",
         error: "",
@@ -240,7 +261,7 @@ test("results markup escapes everything a candidate's code can produce", () => {
   });
 
   assert.doesNotMatch(body, /<script>/, "candidate output must not reach the page as markup");
-  assert.match(body, /&lt;script&gt;/);
+  assert.match(body, /input &lt;script&gt;i&lt;\/script&gt;/, "the failed input is escaped as text");
 });
 
 // A candidate who never spoke, whose interviewer died after the greeting, was
@@ -1034,6 +1055,15 @@ test("a case that threw shows the exception instead of an expected/got pair", ()
   assert.match(body, /<pre>TypeError: x is not a function<\/pre>/);
   assert.doesNotMatch(body, /expected/, "the exception replaces the comparison, it does not join it");
   assert.doesNotMatch(body, /\bgot\b/);
+});
+
+test("a failed input is escaped and shown before its error", () => {
+  const { body } = resultsMarkup({
+    passed: 0,
+    total: 1,
+    cases: [{ label: "throws", pass: false, displayInput: "<input>", expected: "", got: "", error: "Timeout", timeMs: 2 }],
+  });
+  assert.match(body, /input &lt;input&gt;\nTimeout/, "the escaped input precedes the error");
 });
 
 // The runner's message is candidate-controlled: it is whatever their code threw.

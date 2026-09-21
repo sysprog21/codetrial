@@ -215,8 +215,57 @@ test("an observed candidate error keeps its expectation absent", async () => {
   try {
     const summary = await runBrowserTests("candidate-case-error", "", "cpp", null, [{ input: [7] }]);
     assert.equal(summary.cases.at(-1).input, "[7]");
+    assert.equal(summary.cases.at(-1).displayInput, "[7]");
     assert.equal(summary.cases.at(-1).expected, undefined);
     assert.equal(summary.cases.at(-1).error, "boom");
+  } finally {
+    restoreFetch();
+  }
+});
+
+test("runBrowserTests retains display input for failures only", async () => {
+  const restoreFetch = failFetchWith(async (url) => {
+    if (String(url).startsWith("/judges/")) {
+      return new Response(JSON.stringify({
+        kind: "function", entry: "sum", paramNames: ["value"], paramTypes: ["integer"],
+        returnType: "integer", checker: "exact", cases: [
+          { label: "passing", input: [1], expected: 1 },
+          { label: "failing", input: [2], expected: 2 },
+          { label: "throws", input: [3], expected: 3 },
+        ],
+      }));
+    }
+    return new Response(JSON.stringify({ stdout: [{ text: JSON.stringify({ results: [
+      { actual: 1, timeMs: 1 },
+      { actual: 0, timeMs: 2 },
+      { error: "boom", timeMs: 3 },
+      { actual: 4, timeMs: 4 },
+      { actual: 0, timeMs: 5 },
+      { error: "timeout", timeMs: 6 },
+    ] }) }] }));
+  });
+  try {
+    const summary = await runBrowserTests("display-inputs", "", "cpp", null, [
+      { input: [4], expected: 4 },
+      { input: [5], expected: 5 },
+      { input: [6], expected: 6 },
+    ]);
+    const { cases } = summary;
+
+    assert.equal(summary.passed, 1);
+    assert.equal(summary.total, 3);
+    assert.equal(Object.hasOwn(cases[0], "displayInput"), false, "passing cases carry no display input");
+    assert.equal(cases[1].displayInput, "[2]");
+    assert.equal(cases[2].displayInput, "[3]");
+    assert.equal(cases[3].label, "Your case 1");
+    assert.equal(cases[3].input, "[4]", "the candidate payload keeps its input");
+    assert.equal(Object.hasOwn(cases[3], "displayInput"), false, "passing candidate cases carry no display input");
+    assert.equal(cases[4].label, "Your case 2");
+    assert.equal(cases[4].input, "[5]");
+    assert.equal(cases[4].displayInput, "[5]");
+    assert.equal(cases[5].label, "Your case 3");
+    assert.equal(cases[5].input, "[6]");
+    assert.equal(cases[5].displayInput, "[6]");
   } finally {
     restoreFetch();
   }
