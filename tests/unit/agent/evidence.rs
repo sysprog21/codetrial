@@ -2,9 +2,9 @@
 
 use super::evidence::parser_unavailable;
 use super::{
-    CodeChangeClass, CodeObservation, EvidenceLedger, LifecycleTransition, ObservationFamily,
-    Provenance, RuntimeState, analyze_code, apply_data_event, apply_data_event_at,
-    apply_server_event_at, record_framework_evidence, record_hint,
+    CodeChangeClass, CodeObservation, EvidenceLedger, LifecycleTransition, ModelInputKind,
+    ObservationFamily, Provenance, RuntimeState, analyze_code, apply_data_event,
+    apply_data_event_at, apply_server_event_at, record_framework_evidence, record_hint,
 };
 
 /// A buffer recorded with no parse behind it, which is all a caller that never
@@ -418,6 +418,52 @@ fn evidence_ledger_counts_received_packets_separately_from_evidence() {
 }
 
 #[test]
+fn evidence_ledger_counts_model_bytes_without_claiming_tokens() {
+    let mut ledger = EvidenceLedger::default();
+    ledger.record_model_input(ModelInputKind::Watch, "watch");
+    ledger.record_model_input(ModelInputKind::Turn, "greeting");
+    ledger.record_model_input(ModelInputKind::Turn, "wrap");
+    ledger.record_model_input(ModelInputKind::Interim, "interim");
+    ledger.record_model_input(ModelInputKind::FinalReport, "report");
+    ledger.record_model_input(ModelInputKind::ReadEditor, "editor");
+    ledger.record_model_input(ModelInputKind::ToolResponse, "hint");
+    assert_eq!(ledger.metrics.watch_prompt_count, 1);
+    assert_eq!(ledger.metrics.watch_prompt_bytes, 5);
+    assert_eq!(ledger.metrics.interim_prompt_bytes, 7);
+    assert_eq!(ledger.metrics.final_report_prompt_bytes, 6);
+
+    // One counter for the four conversational sends, and it accumulates rather
+    // than replacing: `Turn` is the only kind a session reaches more than once
+    // through more than one call site.
+    assert_eq!(ledger.metrics.turn_prompt_count, 2);
+    assert_eq!(ledger.metrics.turn_prompt_bytes, 12);
+
+    // The counts as well as the bytes. Asserting only the bytes left every
+    // count free to stop incrementing without a test noticing.
+    assert_eq!(ledger.metrics.interim_prompt_count, 1);
+    assert_eq!(ledger.metrics.final_report_prompt_count, 1);
+    assert_eq!(ledger.metrics.read_editor_calls, 1);
+    assert_eq!(ledger.metrics.read_editor_bytes, 6);
+    assert_eq!(ledger.metrics.tool_response_count, 1);
+    assert_eq!(ledger.metrics.tool_response_bytes, 4);
+
+    // Every one of them, not just the first. This is the projection a model is
+    // handed, and a counter that reached it would be telling the interviewer
+    // what its own advice costs.
+    let slice = ledger.prompt_slice();
+    for field in [
+        "watch_prompt_bytes",
+        "turn_prompt_bytes",
+        "interim_prompt_bytes",
+        "final_report_prompt_bytes",
+        "read_editor_bytes",
+        "tool_response_bytes",
+    ] {
+        assert!(!slice.contains(field), "{field} reached the projection");
+    }
+}
+
+#[test]
 fn evidence_ledger_counts_setup_failures_without_a_candidate_judgment() {
     let mut ledger = EvidenceLedger::default();
     ledger.record_test(
@@ -570,6 +616,14 @@ fn evidence_ledger_prompt_slice_is_bounded_and_raw_free() {
     assert!(!slice.contains("candidate_code_must_not_reach_the_prompt_projection"));
     assert!(!slice.contains("raw diagnostic"));
     assert!(slice.contains("\"version\":1"));
+
+    // The operational counters are the session's, never the model's. Every
+    // prompt that carries the ledger takes it from this slice, and each field
+    // is checked by name, so one added later is covered too.
+    let metrics = serde_json::to_value(&ledger.metrics).unwrap();
+    for field in metrics.as_object().unwrap().keys() {
+        assert!(!slice.contains(field.as_str()), "{field} reached the slice");
+    }
 }
 
 #[test]
@@ -2406,6 +2460,34 @@ fn a_fix_with_a_baseline_is_still_classified_against_it() {
     let analysis = state.evidence_ledger.code.last_analysis.clone().unwrap();
     assert_eq!(analysis.observation, CodeObservation::Parsed);
     assert_eq!(analysis.classification, Some(CodeChangeClass::ControlFlow));
+}
+
+/// The one line the counters ever reach a person through, and the only part of
+/// it nothing else can check: the format string and the order of the twelve
+/// fields in it.
+#[test]
+fn the_session_cost_is_written_somewhere_a_person_can_read_it() {
+    let mut ledger = EvidenceLedger::default();
+
+    // A distinct, nonzero size for every counter. A counter left at zero hides
+    // its own term in the total, since adding nought and subtracting it agree:
+    // the mutation lane found exactly that, two `+` it could flip unseen.
+    // Distinct sizes also mean two fields swapped in the line cannot read the
+    // same.
+    ledger.record_model_input(ModelInputKind::Watch, "watch");
+    ledger.record_model_input(ModelInputKind::Turn, "greeting");
+    ledger.record_model_input(ModelInputKind::Interim, "interim");
+    ledger.record_model_input(ModelInputKind::FinalReport, "finalrept");
+    ledger.record_model_input(ModelInputKind::ReadEditor, "editor");
+    ledger.record_model_input(ModelInputKind::ToolResponse, "hint");
+    ledger.record_received_event();
+
+    let line = ledger.metrics.cost_line();
+    assert_eq!(
+        line,
+        "codetrial model_input_bytes total=39 watch=5/1 turn=8/1 interim=7/1 \
+         report=9/1 read_editor=6/1 tool=4/1 events_received=1 code_events=0"
+    );
 }
 
 /// The ledger projections the prompt samples carry, checked against what

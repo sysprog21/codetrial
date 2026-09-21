@@ -397,6 +397,18 @@
   },
   "metrics": {
     "raw_events_received": 15,
-    "code_events_emitted": 10
+    "code_events_emitted": 10,
+    "watch_prompt_count": 0,
+    "watch_prompt_bytes": 0,
+    "turn_prompt_count": 0,
+    "turn_prompt_bytes": 0,
+    "interim_prompt_count": 0,
+    "interim_prompt_bytes": 0,
+    "final_report_prompt_count": 0,
+    "final_report_prompt_bytes": 0,
+    "read_editor_calls": 0,
+    "read_editor_bytes": 0,
+    "tool_response_count": 0,
+    "tool_response_bytes": 0
   }
 }

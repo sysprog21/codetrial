@@ -30,6 +30,7 @@ mod evidence_tests;
 pub use events::apply_data_event;
 pub(crate) use events::apply_data_event_at;
 pub(crate) use events::apply_server_event_at;
+pub(crate) use evidence::ModelInputKind;
 pub use evidence::{
     CodeAnalysis, CodeChangeClass, CodeObservation, EvidenceLedger, LifecycleTransition,
     ObservationFamily, Provenance,

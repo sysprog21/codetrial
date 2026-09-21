@@ -233,10 +233,106 @@ pub struct StuckSignals {
     pub test_progress_latency_ms: Option<u64>,
 }
 
+/// Operational measurements retained with the session, never evidence sent
+/// back to a model. They measure logical input construction, not provider
+/// billing tokens or transport retries.
+///
+/// Every text this server hands a model is counted in exactly one of these. A
+/// set that covered the watch loop and left the greeting, the cold restart,
+/// the replies a data event produces and the wrap-up uncounted was not a
+/// measurement of what the session costs, it was a measurement of the one send
+/// site that happened to be instrumented, and it read low by whatever the
+/// interviewer actually said.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct EvidenceMetrics {
     pub raw_events_received: u64,
     pub code_events_emitted: u64,
+    pub watch_prompt_count: u32,
+    pub watch_prompt_bytes: u64,
+    /// The conversational sends that are not the watch loop: the greeting, a
+    /// cold restart, the reply a data event asks for, and the wrap-up. One
+    /// counter rather than four, because they are one channel and the split
+    /// nobody would use is a split nobody can keep right.
+    pub turn_prompt_count: u32,
+    pub turn_prompt_bytes: u64,
+    pub interim_prompt_count: u32,
+    pub interim_prompt_bytes: u64,
+    pub final_report_prompt_count: u32,
+    pub final_report_prompt_bytes: u64,
+    pub read_editor_calls: u32,
+    pub read_editor_bytes: u64,
+    /// Every other tool answer: the hint, the recorded evidence, the
+    /// end-of-interview reply and a refusal of any of them. Kept apart from
+    /// `read_editor`, which carries the candidate's whole buffer and is the one
+    /// worth watching on its own.
+    pub tool_response_count: u32,
+    pub tool_response_bytes: u64,
+}
+
+impl EvidenceMetrics {
+    /// What the session spent, for an operator, in the `codetrial <event>
+    /// key=value` shape the rest of the runtime writes its machine-readable
+    /// lines in.
+    ///
+    /// A counter nothing reads is not a measurement. Every model-bound byte was
+    /// counted, carried through the session and then dropped with the state
+    /// that held it, so the numbers existed for the tests that asserted on them
+    /// and for nothing else.
+    ///
+    /// Built as a value rather than printed, so a test can read it: the one
+    /// part of a line written with `eprintln!` alone that nothing can check is
+    /// the format string, which is the whole of what this is. Destructured
+    /// rather than passed positionally for the same reason -- twelve `{}` in
+    /// bytes/count pairs put the correctness of the line in the argument order,
+    /// where swapping two adjacent ones compiles and reads wrong.
+    ///
+    /// Stderr and never the report or the projection, for the reason the
+    /// counters exist under: a model handed its own byte count is being told
+    /// something no interview should turn on.
+    pub(crate) fn cost_line(&self) -> String {
+        let Self {
+            raw_events_received,
+            code_events_emitted,
+            watch_prompt_count,
+            watch_prompt_bytes,
+            turn_prompt_count,
+            turn_prompt_bytes,
+            interim_prompt_count,
+            interim_prompt_bytes,
+            final_report_prompt_count,
+            final_report_prompt_bytes,
+            read_editor_calls,
+            read_editor_bytes,
+            tool_response_count,
+            tool_response_bytes,
+        } = self;
+        let total = watch_prompt_bytes
+            + turn_prompt_bytes
+            + interim_prompt_bytes
+            + final_report_prompt_bytes
+            + read_editor_bytes
+            + tool_response_bytes;
+        format!(
+            "codetrial model_input_bytes total={total} \
+             watch={watch_prompt_bytes}/{watch_prompt_count} \
+             turn={turn_prompt_bytes}/{turn_prompt_count} \
+             interim={interim_prompt_bytes}/{interim_prompt_count} \
+             report={final_report_prompt_bytes}/{final_report_prompt_count} \
+             read_editor={read_editor_bytes}/{read_editor_calls} \
+             tool={tool_response_bytes}/{tool_response_count} \
+             events_received={raw_events_received} code_events={code_events_emitted}"
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModelInputKind {
+    Watch,
+    Turn,
+    Interim,
+    FinalReport,
+    ReadEditor,
+    ToolResponse,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -394,6 +490,36 @@ impl EvidenceLedger {
     /// malformed or paused packet is still received, but is not evidence.
     pub(crate) fn record_received_event(&mut self) {
         self.metrics.raw_events_received += 1;
+    }
+
+    pub(crate) fn record_model_input(&mut self, kind: ModelInputKind, text: &str) {
+        let bytes = text.len() as u64;
+        match kind {
+            ModelInputKind::Watch => {
+                self.metrics.watch_prompt_count += 1;
+                self.metrics.watch_prompt_bytes += bytes;
+            }
+            ModelInputKind::Turn => {
+                self.metrics.turn_prompt_count += 1;
+                self.metrics.turn_prompt_bytes += bytes;
+            }
+            ModelInputKind::Interim => {
+                self.metrics.interim_prompt_count += 1;
+                self.metrics.interim_prompt_bytes += bytes;
+            }
+            ModelInputKind::FinalReport => {
+                self.metrics.final_report_prompt_count += 1;
+                self.metrics.final_report_prompt_bytes += bytes;
+            }
+            ModelInputKind::ReadEditor => {
+                self.metrics.read_editor_calls += 1;
+                self.metrics.read_editor_bytes += bytes;
+            }
+            ModelInputKind::ToolResponse => {
+                self.metrics.tool_response_count += 1;
+                self.metrics.tool_response_bytes += bytes;
+            }
+        }
     }
 
     /// Records a code observation whose structural classification was produced

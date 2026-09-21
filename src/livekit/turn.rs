@@ -298,6 +298,17 @@ impl RuntimeActivity {
         if decision.sync_code_at_last_review {
             self.semantic_revision_at_last_review = state.evidence_ledger.code.semantic_revision;
         }
+
+        // Returned uncounted. Anything that goes out over the live socket is
+        // counted at the door, by `send_model_text`, and counting it here as
+        // well would have been two answers to one question: a prompt this
+        // returns is not always sent, because the caller gives up on a socket
+        // Gemini has already closed.
+        //
+        // The interim review and the final report are the two that are counted
+        // where they are built instead, because neither touches the socket --
+        // both are one-shot HTTP calls, and the interim prompt is handed to a
+        // spawned task that never sees the ledger.
         let text = if decision.silence_nudge && behavioral {
             behavioral_silence_nudge()
         } else if decision.silence_nudge {

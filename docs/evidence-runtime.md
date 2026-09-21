@@ -70,13 +70,14 @@ The reducer also measures raw packets received separately from accepted code
 events, and measures what the session handed the models: bytes and a count for
 the watch prompts, the conversational turns (greeting, cold restart, the reply
 a data event asks for, and the wrap-up), the interim reviews, the final report
-prompt and the `read_editor` responses. Every model-bound text falls into
-exactly one of them. They are bytes rather than tokens because the tokenizer
-belongs to the provider, they are written to stderr once at the end of a
-session, and they are deliberately absent from the projection: a model handed
-its own byte count is being told something no interview should turn on. A
-bounded digest history makes an edit that revisits an earlier state observable
-as an undo/redo cycle; it retains hashes only, each a digest of the language
-and the buffer together, so the same text in another tab is not a way back.
-Meaningful-change and test-progress receipt timestamps, plus their latency, are
-measurements rather than claims about candidate intent.
+prompt, the `read_editor` responses and every other tool answer, refusals
+included. Every model-bound text falls into exactly one of them. They are bytes
+rather than tokens because the tokenizer belongs to the provider, they are
+written to stderr once at the end of a session, and they are deliberately
+absent from the projection: a model handed its own byte count is being told
+something no interview should turn on. A bounded digest history makes an edit
+that revisits an earlier state observable as an undo/redo cycle; it retains
+hashes only, each a digest of the language and the buffer together, so the same
+text in another tab is not a way back. Meaningful-change and test-progress
+receipt timestamps, plus their latency, are measurements rather than claims
+about candidate intent.
