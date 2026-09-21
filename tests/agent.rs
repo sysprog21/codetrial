@@ -259,6 +259,7 @@ fn prompt_samples() -> Value {
             elapsed_min: 12.4,
             test_summary: "Latest test run: 2/3 cases passed.\n- CANDIDATE CASE empty input with input [[]]: got []",
             practice_level: None,
+            evidence: &working,
         }),
         "reportEmpty": report_prompt(ReportPromptInput {
             problem,
@@ -273,6 +274,7 @@ fn prompt_samples() -> Value {
             elapsed_min: 0.0,
             test_summary: "",
             practice_level: None,
+            evidence: "",
         }),
         "reportHalfElapsed": report_prompt(ReportPromptInput {
             problem,
@@ -287,6 +289,7 @@ fn prompt_samples() -> Value {
             elapsed_min: 12.5,
             test_summary: "",
             practice_level: None,
+            evidence: "",
         }),
 
         // Assembled by the real builder rather than written out here. A
@@ -321,6 +324,7 @@ fn prompt_samples() -> Value {
             elapsed_min: 12.4,
             test_summary: "Latest test run: 2/3 cases passed.",
             practice_level: None,
+            evidence: "",
         }),
         "reportMultiline": report_prompt(ReportPromptInput {
             problem,
@@ -335,6 +339,7 @@ fn prompt_samples() -> Value {
             elapsed_min: 12.0,
             test_summary: "Latest test run (run #1, python): 2/3 cases passed.",
             practice_level: None,
+            evidence: "",
         }),
     })
 }
@@ -485,6 +490,7 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
             elapsed_min: 20.0,
             test_summary: "No trusted server-side test was available.",
             practice_level: None,
+            evidence: "",
         }),
         other => panic!("unknown reaction kind {other}"),
     }

@@ -625,6 +625,7 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
             elapsed_min: 15.0,
             test_summary,
             practice_level: None,
+            evidence: "",
         });
 
         assert!(prompt.contains(transcript), "{name}: transcript was lost");

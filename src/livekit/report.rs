@@ -236,24 +236,16 @@ fn report_prompt_text(
     state: &RuntimeState,
     elapsed_min: f64,
 ) -> String {
-    let assessment = rolling_assessment(&state.framework_evidence, &state.interim_notes);
+    let rolling = rolling_assessment(&state.framework_evidence, &state.interim_notes);
 
-    // Heading spelled once. Two branches each carried their own copy of it, one
-    // with the assessment in front and one without, so an edit to one left the
-    // other saying something else.
+    // Passed apart from the rolling assessment, which the report prompt wraps
+    // as untrusted material; the prompt owns the ledger's heading and its
+    // place.
     let evidence = if state.evidence_ledger.entries.is_empty() {
         String::new()
     } else {
-        format!(
-            "DETERMINISTIC SESSION EVIDENCE (server-derived metadata, not candidate prose):\n{}",
-            state.evidence_ledger.prompt_slice(),
-        )
+        state.evidence_ledger.prompt_slice()
     };
-    let rolling = [assessment, evidence]
-        .into_iter()
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
     let transcript = transcript_for_report(&state.transcript);
     let test_summary = format_test_run(state.last_test_run.as_ref(), state.test_runs);
     report_prompt(ReportPromptInput {
@@ -269,6 +261,7 @@ fn report_prompt_text(
         elapsed_min,
         test_summary: &test_summary,
         practice_level: boot.profile.seniority.map(crate::agent::Seniority::as_str),
+        evidence: &evidence,
     })
 }
 
