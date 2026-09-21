@@ -8,10 +8,11 @@ can select it.
 
 ## The active bundle
 
-Bundle 14: live prompt 6, report prompt 11, rubric 1, report schema 2.
+Bundle 15: live prompt 7, report prompt 12, rubric 1, report schema 2.
 
 | Bundle | Introduced |
 |---|---|
+| 15 | The interviewer's watch prompts and the interim review carry a projection of the deterministic evidence ledger, holding digests, counts and closed enumerations, in place of the raw editor, and the interviewer calls `read_editor` when it needs the code itself. |
 | 14 | Behavioral silence past the existing idle threshold gets one nudge per round. It asks the round's question if it has not been asked, invites nothing further on a declined probe or a complete answer, and otherwise offers one neutral invitation to continue, without adding a STAR follow-up or returning to coding; silence alone never ends the interview. Editor reviews remain suppressed in the behavioral round. A behavioral question declined in candidate lines that recovery pulls into the round's block counts as the round's question, so that round asks none. |
 | 13 | No behavioral question is asked before the behavioral round opens, and a behavioral probe the candidate cannot recall, declines, or cannot share is abandoned in either round: editor reviews, silence nudges, the round transition, resume, timer and recovery prompts must not reopen it, and the report leaves its unsupported STAR parts unassessed rather than recording a timing skip. Recovery places the round's start at an interviewer turn still speaking when the round opened; it asks the question when nothing has been said in the round, recovers the round in a transcript block of its own so a question declined inside it counts as asked while one declined before it only closes its theme, and asks nothing further when the opening is lost. Coding watcher prompts are suppressed during the behavioral round, and resuming preserves the active round. |
 | 12 | The interviewer records the step the candidate just finished before moving to the next, and the evidence reply that first ticks a later step names the earlier steps of the same framework still without evidence, so the candidate's step list fills in order rather than all at once. |

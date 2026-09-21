@@ -20,6 +20,20 @@ pub fn current_epoch_seconds() -> u64 {
         .as_secs()
 }
 
+/// The receipt clock the evidence ledger is stamped with. One reading is taken
+/// per packet at the boundary and passed down, so every entry a single event
+/// produces shares it and the reducers themselves stay pure enough to replay.
+/// Saturates rather than wrapping, because a clock behind the epoch is a broken
+/// clock and not a reason to record a negative time.
+pub fn current_epoch_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
 /// The folder the executable itself sits in, which is where anything
 /// `codetrial` writes or looks for without being told a path belongs. A
 /// released binary is unpacked into a folder of its own and everything it

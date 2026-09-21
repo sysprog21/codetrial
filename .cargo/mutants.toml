@@ -1,7 +1,7 @@
 # Functions the mutation gate cannot judge, because `cargo test` cannot reach
 # them. Matched against the mutant names that `cargo mutants --list` prints.
 #
-# EXCLUSIONS: 48
+# EXCLUSIONS: 49
 #
 # That number is checked by `scripts/test.sh`, so adding an entry means editing
 # this line too. The point is not the count, it is that the list only ever grows
@@ -78,6 +78,16 @@
 # which is how code nothing can test came to be scored. The decisions they make
 # before they publish are tested: `apply_data_event` in tests/agent.rs, and
 # `checklist_changed` beside it in livekit.rs.
+#
+# `handle_room_event` is the arm above those two: it takes the same `&Room`,
+# matches a `RoomEvent`, and hands each one to a helper that publishes. Deleting
+# the `DataReceived` arm stops the browser's packets reaching the state, which
+# no test can see for the reason the two below cannot be seen either, because
+# nothing in `cargo test` joins a room to send one. What the arm decides before
+# it delegates is tested: `apply_data_event_at` in tests/unit/agent/evidence.rs
+# covers the packet path, including the distinction between a packet that
+# arrived and an end the agent decided on. It entered the diff by gaining an
+# argument at a call site, not by being written.
 #
 # `publish_output_audio` and `output_audio_worker` are the two ends of playout.
 # The first publishes a track to a room. The second hands frames to a
@@ -235,6 +245,7 @@ exclude_re = [
     "replace web_router",
     "handle_data_packet",
     "handle_gemini_event",
+    "handle_room_event",
     "publish_output_audio",
     "output_audio_worker",
     "publish_framework_progress",

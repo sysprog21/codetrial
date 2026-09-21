@@ -7,20 +7,88 @@
 
 use super::{
     DataEventResult, INTERVIEWER_SPEAKER, InterviewLoop, LanguageChoiceContext,
-    MAX_INTEGRITY_EVENTS, ROUND_TRANSITION_SKEW, RuntimeState, TIME_WARNING_S,
-    behavioral_time_warning, cold_restart, format_test_run, integrity_hash, language_choice,
-    python_truthy, resume, round_skipped, round_started, sanitize_integrity_event,
-    sanitize_test_run, spoken_language, test_reaction_decision, test_results_reaction,
-    test_setup_error_reaction, time_warning,
+    LifecycleTransition, MAX_INTEGRITY_EVENTS, ROUND_TRANSITION_SKEW, RuntimeState, TIME_WARNING_S,
+    analyze_code, analyze_code_sides, behavioral_time_warning, cold_restart, format_test_run,
+    integrity_hash, language_choice, observe_code, python_truthy, resume, round_skipped,
+    round_started, sanitize_integrity_event, sanitize_test_run, spoken_language,
+    test_reaction_decision, test_results_reaction, test_setup_error_reaction, time_warning,
 };
 use crate::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
 
+/// Applies an event, stamping it with the server's clock.
+///
+/// The receipt is read here and never taken from the packet. `at` is the
+/// browser's claim about when something happened, and letting it in through
+/// this door made the candidate's machine the authority on when the server
+/// received their work: the one timestamp in the ledger that is not a claim
+/// would have been supplied by the party the ledger exists to observe. The old
+/// fallback was worse in a quieter way, substituting the ledger's sequence
+/// counter when `at` was absent, so a session mixed epoch milliseconds with
+/// small integers and every latency computed across the two was nonsense.
 pub fn apply_data_event(
     state: &mut RuntimeState,
     topic: &str,
     payload: &serde_json::Value,
     since_last_test_reaction_seconds: f64,
 ) -> DataEventResult {
+    apply_data_event_at(
+        state,
+        topic,
+        payload,
+        since_last_test_reaction_seconds,
+        crate::current_epoch_millis(),
+    )
+}
+
+/// Applies an event with a receipt timestamp the caller already has. LiveKit
+/// reads its clock once per packet so everything one packet produces shares a
+/// reading, and a replay passes the recorded receipts to get the recorded
+/// ledger back.
+pub(crate) fn apply_data_event_at(
+    state: &mut RuntimeState,
+    topic: &str,
+    payload: &serde_json::Value,
+    since_last_test_reaction_seconds: f64,
+    receipt_timestamp_ms: u64,
+) -> DataEventResult {
+    apply_data_event_at_with_received(
+        state,
+        topic,
+        payload,
+        since_last_test_reaction_seconds,
+        receipt_timestamp_ms,
+        true,
+    )
+}
+
+pub(crate) fn apply_server_event_at(
+    state: &mut RuntimeState,
+    topic: &str,
+    payload: &serde_json::Value,
+    since_last_test_reaction_seconds: f64,
+    receipt_timestamp_ms: u64,
+) -> DataEventResult {
+    apply_data_event_at_with_received(
+        state,
+        topic,
+        payload,
+        since_last_test_reaction_seconds,
+        receipt_timestamp_ms,
+        false,
+    )
+}
+
+fn apply_data_event_at_with_received(
+    state: &mut RuntimeState,
+    topic: &str,
+    payload: &serde_json::Value,
+    since_last_test_reaction_seconds: f64,
+    receipt_timestamp_ms: u64,
+    received: bool,
+) -> DataEventResult {
+    if received {
+        state.evidence_ledger.record_received_event();
+    }
     if state.behavioral_round_started && matches!(topic, TOPIC_CODE_UPDATE | TOPIC_TEST_RESULTS) {
         return DataEventResult::default();
     }
@@ -28,9 +96,14 @@ pub fn apply_data_event(
         return DataEventResult::default();
     }
     let mut result = match topic {
-        TOPIC_CODE_UPDATE => apply_code_update(state, payload),
-        TOPIC_TEST_RESULTS => apply_test_results(state, payload, since_last_test_reaction_seconds),
-        TOPIC_CONTROL => apply_control(state, payload),
+        TOPIC_CODE_UPDATE => apply_code_update(state, payload, receipt_timestamp_ms),
+        TOPIC_TEST_RESULTS => apply_test_results(
+            state,
+            payload,
+            since_last_test_reaction_seconds,
+            receipt_timestamp_ms,
+        ),
+        TOPIC_CONTROL => apply_control(state, payload, receipt_timestamp_ms),
         TOPIC_INTEGRITY => apply_integrity(state, payload),
         _ => DataEventResult::default(),
     };
@@ -50,7 +123,11 @@ fn offered_language(language: &str) -> Option<(&str, &'static str)> {
     spoken_language(language).map(|spoken| (language, spoken))
 }
 
-fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> DataEventResult {
+fn apply_code_update(
+    state: &mut RuntimeState,
+    payload: &serde_json::Value,
+    receipt_timestamp_ms: u64,
+) -> DataEventResult {
     // A packet with no string `code` is a malformed packet, not an empty
     // editor, and it changes nothing. Defaulting to "" meant one of those wiped
     // the authoritative buffer, and the buffer is what the report is written
@@ -65,10 +142,8 @@ fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> D
     // the last one, so only touch the buffer when the text actually moved.
     let first_code_packet = state.code.is_empty();
     let update_last_code_change = new_code != state.code;
-    if update_last_code_change {
-        state.code.clear();
-        state.code.push_str(new_code);
-    }
+    let prior_code =
+        update_last_code_change.then(|| std::mem::replace(&mut state.code, new_code.to_string()));
 
     // A language switch is silent from the interviewer's side: the click swaps
     // the editor buffer and publishes the same code topic as any keystroke. The
@@ -93,7 +168,26 @@ fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> D
     // switch, so the buffer is a template from the first second of the
     // interview onward. What separates work from a template is a change that
     // arrived without a language switch, which is a keystroke.
-    if update_last_code_change && !first_code_packet && switching.is_none() {
+    //
+    // `first_code_packet` asks whether the buffer was empty, which is the same
+    // question only until the candidate clears the editor and starts over: that
+    // leaves an empty buffer for one packet, and the keystroke after it is not
+    // a template. Once the candidate has edited at all, an empty buffer is
+    // their doing and what follows it is theirs too.
+    //
+    // A packet that carries a switch carries the new tab's buffer, and that
+    // buffer belongs to the tab, not to the keystroke that would have been the
+    // alternative reason to send it. Which of the two a packet is has to be
+    // decided in the browser, because only the browser knows whether the text
+    // it is holding is the starter it just loaded or that starter with typing
+    // on top: the server sees a buffer that differs from the starter either
+    // way, and would read a candidate returning to a tab they worked in earlier
+    // as editing it again on every visit. `flushPendingLanguagePublish` in
+    // web/interview.js is what keeps the two apart, by sending the switch
+    // before the typing that followed it.
+    let candidate_edit =
+        update_last_code_change && switching.is_none() && (!first_code_packet || state.code_edited);
+    if candidate_edit {
         state.code_edited = true;
     }
 
@@ -123,6 +217,49 @@ fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> D
             .insert(state.language.clone(), new_code.to_string());
     }
 
+    // This follows the accepted language switch above: one packet can swap a
+    // tab and its editor buffer, and the ledger must attach that buffer to the
+    // new tab rather than to the language that happened to be active first.
+    //
+    // A switch counts even when it carried no new text. Two tabs can hold the
+    // same buffer, and gating on the digest alone left the ledger describing
+    // the tab the candidate had just left, with a parse read under the other
+    // tab's grammar beside it. The reducer still coalesces the case where
+    // neither the text nor the language moved.
+    if update_last_code_change || language_changed.is_some() {
+        let analysis = if language_changed.is_some() {
+            // The buffer before this packet belongs to the tab the candidate
+            // just left, so there is nothing here to diff against and no
+            // classification to make. What there is to record is whether the
+            // new tab's buffer parses, and recording it is not optional: the
+            // recovery baseline below is only kept when the buffer before an
+            // invalid draft was seen to parse, so calling the parser
+            // unavailable for a language this server parses fine switched the
+            // recovery off for the rest of the invalid streak.
+            //
+            // `last_parseable_code` survives the switch. It is keyed by
+            // language and only consulted for a matching one, so a trip to
+            // another tab and back is exactly the case it should recover from.
+            observe_code(&state.language, new_code)
+        } else {
+            analyze_code_update(
+                state,
+                prior_code
+                    .as_deref()
+                    .expect("changed code has a prior buffer"),
+                new_code,
+            )
+        };
+        state.evidence_ledger.record_code_with_analysis(
+            payload.get("at").and_then(serde_json::Value::as_u64),
+            receipt_timestamp_ms,
+            state.language.as_str(),
+            new_code,
+            candidate_edit,
+            analysis,
+        );
+    }
+
     DataEventResult {
         update_last_code_change,
 
@@ -133,6 +270,82 @@ fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> D
         generate_reply: language_changed,
         ..DataEventResult::default()
     }
+}
+
+/// Compare a completed edit with the buffer that preceded an invalid draft.
+/// The ledger deliberately retains no source, so this short-lived baseline
+/// belongs to the runtime state and is discarded as soon as parsing recovers.
+fn analyze_code_update(
+    state: &mut RuntimeState,
+    previous: &str,
+    current: &str,
+) -> super::CodeAnalysis {
+    let language = state.language.clone();
+    let previous_was_parsed =
+        state.evidence_ledger.code.parser_observation == Some(super::CodeObservation::Parsed);
+    let (analysis, current_alone) = analyze_code_sides(&language, previous, current);
+    if analysis.observation != super::CodeObservation::SyntaxInvalid {
+        // Only this language's baseline is spent. Another tab's is still the
+        // buffer that tab was last known to parse, and dropping it here is what
+        // made a candidate who consulted a second tab mid-error unrecoverable.
+        state.last_parseable_code.remove(&language);
+        return analysis;
+    }
+
+    // Only a buffer that parses on its own can recover against the baseline,
+    // and most of an invalid streak is typing that does not, so asking first
+    // saves two parses per keystroke of it.
+    if current_alone == super::CodeObservation::Parsed
+        && let Some(baseline) = state.last_parseable_code.get(&language)
+    {
+        let recovered = analyze_code(&language, baseline, current);
+        if recovered.observation == super::CodeObservation::Parsed {
+            state.last_parseable_code.remove(&language);
+            return recovered;
+        }
+    }
+
+    // The pairwise analysis says `syntax_invalid` when either side fails to
+    // parse, so the edit that repairs a broken draft is reported invalid along
+    // with the draft it repaired. The baseline above recovers that whenever the
+    // streak began from a buffer this server saw parse; when it did not -- an
+    // invalid first packet, or a buffer restored into the editor -- there is
+    // nothing to diff against, and the candidate's fix was recorded as another
+    // invalid one. It never moved `semantic_revision`, so the watch loop's
+    // significant-change gate never saw the moment the code started parsing.
+    //
+    // No classification is invented here. What is available without a baseline
+    // is the observation a language switch records for the same reason, and for
+    // the same reason it carries no classification: nothing was diffed.
+    //
+    // Semantic all the same, unlike that switch. A switch records a buffer that
+    // did not move under a tab that did; this records a buffer that moved from
+    // not being a program to being one, which is the change the watch loop is
+    // waiting on. `record_code_with_analysis` is only reached when the digest
+    // moved, so there is no text-unchanged case for this to overstate.
+    //
+    // Spelled out rather than `..observe_code(&language, current)`, which reads
+    // better and re-parses the buffer `analyze_code_sides` parsed to produce
+    // `current_alone`. That parse is the one this pair exists to remove.
+    if current_alone == super::CodeObservation::Parsed {
+        return super::CodeAnalysis {
+            observation: super::CodeObservation::Parsed,
+            classification: None,
+            semantic_change: true,
+            changed_nodes: Vec::new(),
+        };
+    }
+
+    // Only once the buffer in hand is known not to parse either, so that the
+    // baseline a streak is measured from is spent by the same rule the two
+    // recoveries above spend it: a path that reports a parse leaves none
+    // behind.
+    if previous_was_parsed {
+        state
+            .last_parseable_code
+            .insert(language, previous.to_string());
+    }
+    analysis
 }
 
 /// # What a passing run means
@@ -153,7 +366,13 @@ fn apply_test_results(
     state: &mut RuntimeState,
     payload: &serde_json::Value,
     since_last_test_reaction_seconds: f64,
+    receipt_timestamp_ms: u64,
 ) -> DataEventResult {
+    // The browser timestamp is a claim stored only as evidence metadata. Read
+    // it before sanitizing, because the prompt-facing test payload deliberately
+    // drops fields it does not render.
+    let source_timestamp_ms = payload.get("at").and_then(serde_json::Value::as_u64);
+
     // Bounded before it is stored, not before it is rendered. Both readers of
     // `last_test_run` put it in front of a model, so the sanitized value has to
     // be the only one that exists past this line.
@@ -168,6 +387,9 @@ fn apply_test_results(
     }
     state.last_test_run = Some(payload.clone());
     state.test_runs += 1;
+    state
+        .evidence_ledger
+        .record_test(source_timestamp_ms, receipt_timestamp_ms, payload);
 
     let decision = test_reaction_decision(state.ended, since_last_test_reaction_seconds);
     if !decision.react {
@@ -195,9 +417,15 @@ fn apply_test_results(
     }
 }
 
-fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataEventResult {
+fn apply_control(
+    state: &mut RuntimeState,
+    payload: &serde_json::Value,
+    receipt_timestamp_ms: u64,
+) -> DataEventResult {
     match payload.get("type").and_then(serde_json::Value::as_str) {
-        Some("pause_interview") if !state.ended => control_pause(state, payload),
+        Some("pause_interview") if !state.ended => {
+            control_pause(state, payload, receipt_timestamp_ms)
+        }
         Some("round_transition")
             if !state.ended
                 && !state.paused
@@ -208,7 +436,7 @@ fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
                 && state.started_at.elapsed() + ROUND_TRANSITION_SKEW
                     >= std::time::Duration::from_secs(u64::from(state.coding_minutes) * 60) =>
         {
-            control_round_transition(state)
+            control_round_transition(state, receipt_timestamp_ms)
         }
         Some("time_warning")
             if !state.ended
@@ -218,7 +446,9 @@ fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
         {
             control_time_warning(state)
         }
-        Some("end_interview") if !state.ended => control_end_interview(state, payload),
+        Some("end_interview") if !state.ended => {
+            control_end_interview(state, payload, receipt_timestamp_ms)
+        }
         _ => DataEventResult::default(),
     }
 }
@@ -229,7 +459,11 @@ fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
 /// interviewer talking into an empty room. It stops the conversation, not the
 /// deadline, which runs on wall clock either way. It is recorded, so a paused
 /// stretch is visible in the report.
-fn control_pause(state: &mut RuntimeState, payload: &serde_json::Value) -> DataEventResult {
+fn control_pause(
+    state: &mut RuntimeState,
+    payload: &serde_json::Value,
+    receipt_timestamp_ms: u64,
+) -> DataEventResult {
     let paused = payload
         .get("paused")
         .and_then(serde_json::Value::as_bool)
@@ -238,6 +472,14 @@ fn control_pause(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
         return DataEventResult::default();
     }
     state.paused = paused;
+    state.evidence_ledger.record_lifecycle(
+        receipt_timestamp_ms,
+        if paused {
+            LifecycleTransition::Paused
+        } else {
+            LifecycleTransition::Resumed
+        },
+    );
 
     // A resumed interview whose interviewer was replaced mid-pause has to be
     // re-grounded before it is told to carry on: the fixed line below assumes a
@@ -264,7 +506,10 @@ fn control_pause(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
 }
 
 /// The reserved behavioral round, opened or refused, once.
-fn control_round_transition(state: &mut RuntimeState) -> DataEventResult {
+fn control_round_transition(
+    state: &mut RuntimeState,
+    receipt_timestamp_ms: u64,
+) -> DataEventResult {
     state.round_transition_seen = true;
     if super::coding_round_complete(state) {
         state.behavioral_round_started = true;
@@ -272,6 +517,9 @@ fn control_round_transition(state: &mut RuntimeState) -> DataEventResult {
         state.behavioral_round_prior_turn =
             super::last_speaker_line(&state.transcript, INTERVIEWER_SPEAKER)
                 .map(|(index, line)| (index, line.clone()));
+        state
+            .evidence_ledger
+            .record_lifecycle(receipt_timestamp_ms, LifecycleTransition::BehavioralStarted);
         DataEventResult {
             round_changed: Some("started"),
             generate_reply: Some(round_started()),
@@ -320,11 +568,21 @@ fn control_time_warning(state: &mut RuntimeState) -> DataEventResult {
 }
 
 /// The candidate leaving, however they left.
-fn control_end_interview(state: &mut RuntimeState, payload: &serde_json::Value) -> DataEventResult {
-    if !state.behavioral_round_started
-        && !payload.get("code").is_some_and(serde_json::Value::is_null)
-        && let Some(code) = payload.get("code").and_then(serde_json::Value::as_str)
-    {
+fn control_end_interview(
+    state: &mut RuntimeState,
+    payload: &serde_json::Value,
+    receipt_timestamp_ms: u64,
+) -> DataEventResult {
+    let prior_code = state.code.clone();
+    let prior_language = state.language.clone();
+
+    // Bound once, and read twice: here to take the buffer, and below to decide
+    // whether the ledger has anything to record. `as_str` is already `None` for
+    // a null, so a missing code and a null one are the same absence.
+    let carried_code = (!state.behavioral_round_started)
+        .then(|| payload.get("code").and_then(serde_json::Value::as_str))
+        .flatten();
+    if let Some(code) = carried_code {
         state.code = code.to_string();
     }
 
@@ -341,7 +599,68 @@ fn control_end_interview(state: &mut RuntimeState, payload: &serde_json::Value) 
     {
         state.language = id.to_string();
     }
+
+    // Recorded only when the payload carried the buffer it ends on. The code
+    // topic records a switch that brought no new text, but it never records one
+    // that brought no buffer at all: a code packet without one is refused
+    // outright. An end payload that names a language and carries no code has
+    // said nothing about that tab's buffer, and filing the previous tab's code
+    // under it would parse one language's buffer with another's grammar and
+    // call the result an observation. `state.language` still moves, since the
+    // report is written in the language the interview ended in; the ledger
+    // keeps describing the last buffer it was actually given.
+    if carried_code.is_some() && (state.code != prior_code || state.language != prior_language) {
+        let current_code = state.code.clone();
+
+        // A baseline exists only in the branch that reads it. It was computed
+        // above the branch once, for both, and a term that could only matter on
+        // the language-change path sat in it unread: that path never compares
+        // against a baseline, so nothing could notice the term.
+        let (candidate_edit, analysis) = if state.language != prior_language {
+            // Same rule as the code topic: the final buffer arrived with a tab
+            // switch, so it is observed on its own rather than diffed against
+            // the language it replaced, and it is not the candidate's edit.
+            (false, observe_code(&state.language, &current_code))
+        } else {
+            // Measured against the starter, not against the runtime's own
+            // buffer. An interview can end before the first editor packet
+            // lands, and the end payload then carries the template as the first
+            // code this server has seen: comparing it with an empty buffer
+            // reads the browser's starter as the candidate's work. A final edit
+            // that never got its own packet still differs from the template, so
+            // it still counts.
+            let baseline = if state.code_edited {
+                prior_code.clone()
+            } else {
+                state
+                    .code_templates
+                    .get(&state.language)
+                    .cloned()
+                    .unwrap_or_else(|| prior_code.clone())
+            };
+
+            // Diffed against the same baseline the attribution used. Handing
+            // the empty runtime buffer to the parser instead reported every
+            // token of the starter as added, so a one line edit that never got
+            // its own packet arrived as a rewrite of the whole file.
+            (
+                current_code != baseline,
+                analyze_code_update(state, &baseline, &current_code),
+            )
+        };
+        state.evidence_ledger.record_code_with_analysis(
+            payload.get("at").and_then(serde_json::Value::as_u64),
+            receipt_timestamp_ms,
+            state.language.as_str(),
+            state.code.as_str(),
+            candidate_edit,
+            analysis,
+        );
+    }
     state.ended = true;
+    state
+        .evidence_ledger
+        .record_lifecycle(receipt_timestamp_ms, LifecycleTransition::Ended);
     DataEventResult {
         finish_interview: Some(
             payload

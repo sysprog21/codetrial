@@ -1,0 +1,20 @@
+{
+  "events": [
+    { "receiptMs": 100, "topic": "code_update", "payload": { "code": "def solve(items):\n    return []\n", "language": "python", "at": 10 } },
+    { "receiptMs": 200, "topic": "code_update", "payload": { "code": "def solve(items):\n    seen = {}\n    return []\n", "language": "python", "at": 20 } },
+    { "receiptMs": 300, "topic": "code_update", "payload": { "code": "def solve(items):\n    seen = {}\n    if items:\n        return [0, 1]\n    return []\n", "language": "python", "at": 30 } },
+    { "receiptMs": 400, "topic": "code_update", "payload": { "code": "def solve(items):\n    seen = {}\n    return []\n", "language": "python", "at": 40 } },
+    { "receiptMs": 500, "topic": "test_results", "payload": { "passed": 0, "total": 2, "language": "python", "setupError": null, "failures": [{ "label": "edge", "expected": "[0,1]", "got": "[]", "error": null }], "at": 50 } },
+    { "receiptMs": 600, "topic": "code_update", "payload": { "code": "def solve(items):\n    seen = {}\n    if len(items) < 2:\n        return []\n    return [0, 1]\n", "language": "python", "at": 60 } },
+    { "receiptMs": 700, "topic": "code_update", "payload": { "code": "def solve(items):\n    seen = {}\n    if len(items) <= 2:\n        return []\n    return [0, 1]\n", "language": "python", "at": 70 } },
+    { "receiptMs": 800, "topic": "code_update", "payload": { "code": "def solve(items)\n    seen = {}\n", "language": "python", "at": 80 } },
+    { "receiptMs": 900, "topic": "code_update", "payload": { "code": "int main() { return 0; }", "language": "cpp", "at": 90 } },
+    { "receiptMs": 1000, "topic": "code_update", "payload": { "code": "def solve(items)\n    seen = {}\n", "language": "python", "at": 100 } },
+    { "receiptMs": 1100, "topic": "code_update", "payload": { "code": "def solve(items):\n    seen = {}\n    if len(items) <= 2:\n        return []\n    return [1, 0]\n", "language": "python", "at": 110 } },
+    { "receiptMs": 1200, "topic": "test_results", "payload": { "passed": 0, "total": 0, "language": "python", "setupError": "The runner did not start.", "at": 120 } },
+    { "receiptMs": 1300, "topic": "test_results", "payload": { "passed": 1, "total": 2, "language": "python", "setupError": null, "failures": [{ "label": "edge", "expected": "[0,1]", "got": "[]", "error": null }], "at": 130 } },
+    { "receiptMs": 1400, "topic": "control", "payload": { "type": "pause_interview", "paused": true } },
+    { "receiptMs": 1500, "topic": "control", "payload": { "type": "pause_interview", "paused": false } },
+    { "serverDecided": true, "receiptMs": 1600, "topic": "control", "payload": { "type": "end_interview", "reason": "candidate_ended" } }
+  ]
+}

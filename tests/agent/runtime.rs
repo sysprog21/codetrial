@@ -434,32 +434,6 @@ fn helpers_match_frozen_fixture() {
         numbered(""),
         expected["numbered"]["empty"].as_str().unwrap()
     );
-    assert!(!significant_change("a\nb", "a\nb\nc"));
-
-    // Tab types four spaces, so reindenting a block moves characters without
-    // changing any code. Counting content rather than layout keeps that from
-    // spending a proactive-review turn on a question with no answer in it.
-    let flat = "if a:\nreturn 1\n".repeat(10);
-    let indented = flat.replace('\n', "\n    ");
-    assert!(!significant_change(&flat, &indented));
-    assert_eq!(
-        significant_change("", &"x".repeat(81)),
-        expected["significantChange"]["emptyToLong"]
-            .as_bool()
-            .unwrap()
-    );
-    assert_eq!(
-        significant_change("a", "a\nb\nc\nd"),
-        expected["significantChange"]["oneToFourLines"]
-            .as_bool()
-            .unwrap()
-    );
-    assert_eq!(
-        significant_change("é", &"é".repeat(81)),
-        expected["significantChange"]["unicodeLong"]
-            .as_bool()
-            .unwrap()
-    );
 }
 
 #[test]
@@ -1271,6 +1245,32 @@ fn interleaved_speakers_keep_their_own_transcript_lines() {
         interviewer.segment_id("interviewer"),
         candidate.segment_id("candidate")
     );
+}
+
+/// The line a turn owns is when it started speaking, and `close_turns` orders
+/// the two speakers by it. A turn that has said nothing owns no line, so a
+/// speaker with nothing to record cannot claim to have spoken first.
+#[test]
+fn a_turn_owns_the_transcript_line_it_opened() {
+    let mut transcript = Vec::new();
+    let mut interviewer = SpeakerTurn::default();
+    let mut candidate = SpeakerTurn::default();
+    assert_eq!(candidate.transcript_line(), None);
+
+    // The candidate answers while the interviewer is still mid-question, which
+    // is the order these two get closed in.
+    candidate.record(&mut transcript, "Candidate", "A hash map, I think.");
+    interviewer.record(&mut transcript, "Interviewer", "What would you reach for?");
+    assert_eq!(candidate.transcript_line(), Some(0));
+    assert_eq!(interviewer.transcript_line(), Some(1));
+
+    // A turn holding nothing but an artifact published no segment and owes no
+    // line, and a finished turn gives its line back.
+    let mut artifact = SpeakerTurn::default();
+    artifact.record(&mut transcript, "Candidate", "  ");
+    assert_eq!(artifact.transcript_line(), None);
+    candidate.finish();
+    assert_eq!(candidate.transcript_line(), None);
 }
 
 /// The opening sync must stay silent, and that requires two files to agree on

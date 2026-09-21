@@ -569,9 +569,11 @@ test("compiler output helpers parse results and map failures to setupError", () 
   });
   assert.deepEqual(mapCompilerResponse({ timedOut: true }), {
     setupError: "Compiler Explorer timed out before the run completed.",
+    diagnostic: { category: "timeout" },
   });
   assert.deepEqual(mapCompilerResponse({ didExecute: false, buildResult: { stderr: [{ text: "\u001b[31mbuild failed\u001b[0m" }] } }), {
     setupError: "build failed",
+    diagnostic: { category: "other" },
   });
   assert.deepEqual(mapCompilerResponse({ stdout: "not json" }), {
     setupError: "The run produced no JSON results.",

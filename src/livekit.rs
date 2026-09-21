@@ -43,10 +43,11 @@ use ::livekit::prelude::{DataPacket, RemoteParticipant, Room, RoomEvent, RoomOpt
 
 use crate::agent::{
     CANDIDATE_SPEAKER, INTERIM_CONTEXT_NOTES, INTERVIEWER_SPEAKER, InterimReviewInput,
-    RuntimeState, SpeakerTurn, WATCH_TICK_S, apply_data_event, code_head, framework_evidence_json,
-    framework_progress, interim_review_prompt, parse_participant_metadata, phase_id,
-    read_editor_text, record_framework_evidence, record_interim_notes, released_follow_ups,
-    transcript_tail, unrecorded_earlier_phases, unreviewed_from, with_timer, wrap_up,
+    RuntimeState, SpeakerTurn, WATCH_TICK_S, apply_data_event_at, code_head,
+    framework_evidence_json, framework_progress, interim_review_prompt, parse_participant_metadata,
+    phase_id, read_editor_text, record_framework_evidence, record_interim_notes,
+    released_follow_ups, transcript_tail, unrecorded_earlier_phases, unreviewed_from, with_timer,
+    wrap_up,
 };
 use crate::config::AgentConfig;
 use crate::runtime::TOPIC_CONTROL;
@@ -624,12 +625,14 @@ fn take_interim_review_window(state: &mut RuntimeState, boot: &RuntimeBootstrap<
         .interim_notes
         .len()
         .saturating_sub(INTERIM_CONTEXT_NOTES);
+    let evidence = state.evidence_ledger.prompt_slice();
     interim_review_prompt(&InterimReviewInput {
         problem: boot.problem,
         transcript_window: &window,
         code: &code_head(&state.code, INTERIM_CODE_BYTES),
         language: &state.language,
         already_recorded: &state.interim_notes[recent..].join("\n"),
+        evidence: &evidence,
     })
 }
 
@@ -1242,7 +1245,7 @@ async fn handle_room_event(
             ) else {
                 return Ok(ControlFlow::Continue(()));
             };
-            if handle_data_packet(room, context, interview, topic, &payload)
+            if handle_data_packet(room, context, interview, topic, &payload, true)
                 .await?
                 .is_break()
             {
@@ -1500,13 +1503,21 @@ struct InterviewContext<'a> {
 /// against, the loop that decides whether a behavioral round exists at all,
 /// and the two budgets the report divides the session into.
 fn initial_runtime_state(boot: &RuntimeBootstrap<'_>, started_at: Instant) -> RuntimeState {
-    RuntimeState {
+    let mut state = RuntimeState {
         started_at,
         interview_loop: boot.interview_loop,
         coding_minutes: boot.coding_minutes,
         behavioral_minutes: boot.behavioral_minutes,
         ..RuntimeState::for_problem(boot.problem)
+    };
+    if boot.interview_loop == crate::agent::InterviewLoop::CodingBehavioral {
+        state.evidence_ledger.set_uncovered_coverage(
+            crate::agent::REACTO_PHASE_IDS
+                .into_iter()
+                .chain(crate::agent::STAR_PHASE_IDS),
+        );
     }
+    state
 }
 
 /// A packet for the browser, on the topic it is listening to.
@@ -1576,6 +1587,7 @@ async fn end_through_control(
         interview,
         TOPIC_CONTROL,
         &serde_json::json!({ "type": "end_interview", "reason": reason }),
+        false,
     )
     .await?;
     Ok(())
@@ -1589,13 +1601,27 @@ async fn handle_data_packet(
     interview: InterviewContext<'_>,
     topic: &str,
     payload: &serde_json::Value,
+    received: bool,
 ) -> Result<ControlFlow<()>, Box<dyn std::error::Error + Send + Sync>> {
-    let result = apply_data_event(
-        context.state,
-        topic,
-        payload,
-        context.activity.last_test_reaction.elapsed().as_secs_f64(),
-    );
+    // One reading per packet, shared by every entry the packet produces.
+    let receipt_timestamp_ms = crate::current_epoch_millis();
+    let result = if received {
+        apply_data_event_at(
+            context.state,
+            topic,
+            payload,
+            context.activity.last_test_reaction.elapsed().as_secs_f64(),
+            receipt_timestamp_ms,
+        )
+    } else {
+        crate::agent::apply_server_event_at(
+            context.state,
+            topic,
+            payload,
+            context.activity.last_test_reaction.elapsed().as_secs_f64(),
+            receipt_timestamp_ms,
+        )
+    };
     if result.update_last_code_change {
         context.activity.last_code_change = Instant::now();
     }
@@ -2280,18 +2306,38 @@ async fn close_turns(
     context: &mut GeminiEventContext<'_>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let candidate_identity = context.candidate_identity.map(str::to_string);
-    let closing = [
-        close_turn(&mut context.turns.interviewer, "interviewer"),
-        close_turn(&mut context.turns.candidate, "candidate"),
+
+    let order = closing_order(
+        context.turns.interviewer.transcript_line(),
+        context.turns.candidate.transcript_line(),
+    );
+    let mut closing = [
+        (
+            "interviewer",
+            close_turn(&mut context.turns.interviewer, "interviewer"),
+        ),
+        (
+            "candidate",
+            close_turn(&mut context.turns.candidate, "candidate"),
+        ),
     ];
-    for (index, closed) in closing.into_iter().enumerate() {
-        let Some((whole, segment_id)) = closed else {
+    let receipt_timestamp_ms = crate::current_epoch_millis();
+    for speaker in order {
+        let Some((whole, segment_id)) = closing
+            .iter_mut()
+            .find(|(name, _)| *name == speaker)
+            .and_then(|(_, closed)| closed.take())
+        else {
             continue;
         };
+        context
+            .state
+            .evidence_ledger
+            .record_conversation_turn(receipt_timestamp_ms, speaker);
 
         // Only the candidate's own speech is attributed to them; the
         // interviewer publishes as the agent participant.
-        let identity = (index == 1)
+        let identity = (speaker == "candidate")
             .then_some(candidate_identity.as_deref())
             .flatten();
         publish_transcript(room, &whole, segment_id, true, identity).await?;

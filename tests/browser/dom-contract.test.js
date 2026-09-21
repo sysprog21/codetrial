@@ -288,6 +288,129 @@ test("a late judge response does not replace the active editor buffer", () => {
   assert.match(updateRunAvailability, /!languages\.includes\(state\.language\)/);
 });
 
+test("rapid language selections publish only the final tab", () => {
+  const script = read("interview.js");
+  const setLanguage = functionBody(script, "setLanguage");
+  const flushEditor = functionBody(script, "flushPendingEditorPublish");
+  assert.match(setLanguage, /flushPendingEditorPublish\(\)/);
+  assert.doesNotMatch(setLanguage, /flushPendingCodePublish\(\)/);
+  // "An edit is queued" is the absence of a queued switch, which is the whole
+  // reason a switch is held as a payload rather than a flag.
+  assert.match(flushEditor, /if \(!codePublishTimer \|\| pendingLanguagePublish\) return/);
+
+  // Where it flushes, not just that it does. publishCode reads the live editor
+  // and state.language, so a flush moved below either assignment would publish
+  // the tab being switched to and drop the edit nobody has reported yet, which
+  // is the regression this test exists for.
+  const flushAt = setLanguage.indexOf("flushPendingEditorPublish()");
+  const languageAt = setLanguage.indexOf("state.language = language;");
+  const bufferAt = setLanguage.indexOf("nodes.editor.value = state.codeByLanguage[language];");
+  assert.ok(flushAt >= 0, "setLanguage flushes a pending editor publish");
+  assert.ok(languageAt > flushAt, "the flush runs before the language is switched");
+  assert.ok(bufferAt > flushAt, "the flush runs before the editor buffer is swapped");
+});
+
+test("typing into a freshly picked tab sends the switch before the keystroke", () => {
+  const script = read("interview.js");
+  const setLanguage = functionBody(script, "setLanguage");
+  const flushLanguage = functionBody(script, "flushPendingLanguagePublish");
+
+  // The switch is held as the buffer it was made with, not as a flag. By the
+  // time a keystroke can ask for it the editor already holds what was typed, so
+  // a flag would have republished the typing under the switch and changed
+  // nothing. The publish has to spend that captured copy, not read the editor.
+  assert.match(setLanguage, /pendingLanguagePublish = \{ code: nodes\.editor\.value/);
+  assert.match(flushLanguage, /publishCode\(.*pending\.code, pending\.language\)/);
+
+  // Where it flushes, not just that it does. The handler overwrites
+  // codeByLanguage with the live editor on its first line, so a flush below
+  // that reads the buffer the keystroke produced rather than the one the tab
+  // arrived with.
+  const handler = script.slice(script.indexOf('nodes.editor.addEventListener("input"'));
+  const flushAt = handler.indexOf("flushPendingLanguagePublish()");
+  const captureAt = handler.indexOf("state.codeByLanguage[state.language] = nodes.editor.value;");
+  assert.ok(flushAt >= 0, "the input handler flushes a pending language publish");
+  assert.ok(captureAt > flushAt, "the flush runs before the keystroke is captured");
+
+  // Clicking through tabs without typing still coalesces, which is what keeps
+  // the interviewer from confirming three languages out loud.
+  assert.doesNotMatch(setLanguage, /flushPendingLanguagePublish\(\)/);
+
+  // A cancelled timer is nulled, not just cleared. `flushPendingEditorPublish`
+  // reads the handle to mean "an edit is queued", so an id left behind by the
+  // end of the interview would publish a buffer after it.
+  const endInterview = functionBody(script, "endInterview");
+  assert.match(endInterview, /clearTimeout\(codePublishTimer\);\s*\n\s*codePublishTimer = null;/);
+});
+
+test("a queued switch leaves as a switch whoever asks for the flush", () => {
+  const script = read("interview.js");
+  const flush = functionBody(script, "flushPendingCodePublish");
+  const edit = functionBody(script, "flushPendingEditorPublish");
+
+  // Running the tests flushes whatever is queued. The switch goes first, down
+  // its own path, which sends no `at` and writes nothing to the editor replay;
+  // the edit path runs after it and refuses anything with a switch behind it.
+  const switchFirst = flush.indexOf("flushPendingLanguagePublish()");
+  const editAfter = flush.indexOf("flushPendingEditorPublish()");
+  assert.ok(switchFirst >= 0 && editAfter > switchFirst, "the switch is flushed before the edit");
+  assert.match(edit, /if \(!codePublishTimer \|\| pendingLanguagePublish\) return;/);
+  assert.ok(edit.indexOf("pendingLanguagePublish") < edit.indexOf("recordReplay("),
+    "the edit path refuses a switch before it records anything");
+  assert.match(functionBody(script, "runTests"), /flushPendingCodePublish\(\)/);
+});
+
+test("the gutter is rebuilt only when the line count moves", () => {
+  const paint = functionBody(read("interview.js"), "paintEditor");
+
+  // One read of the buffer, not two: the highlight pass and the line count both
+  // work from it.
+  assert.equal((paint.match(/currentCode\(\)/g) || []).length, 1);
+
+  // And the numbers down the side are only rewritten when they would differ.
+  // Typing inside a line is most of what a candidate does and none of it moves
+  // them, so the common keystroke costs one highlight and nothing else.
+  assert.match(paint, /if \(lines !== paintedLineCount\)/);
+  assert.match(paint, /paintedLineCount = lines/);
+});
+
+test("the module state the first paint reads exists before init paints", () => {
+  // A module's top-level code runs in order, and `init()` is called near the
+  // top of it: everything before its first `await` runs while the rest of the
+  // file is still unevaluated. That prefix calls `setLanguage`, which paints
+  // the editor, so any `let` or `const` the paint reads has to be declared
+  // above the call. One declared beside `paintEditor` instead was still in
+  // its temporal dead zone on the first paint, and since `init` is async the
+  // throw became a rejected promise nothing reported: `bindEvents` never ran,
+  // and the preflight sat on a disabled button until the browser test timed
+  // out. No source-text assertion on `paintEditor` itself could see that; its
+  // body was correct and only its neighbour's position was wrong.
+  const script = read("interview.js");
+  const lines = script.split("\n");
+  const initCall = lines.findIndex((line) => line === "init();");
+  assert.ok(initCall > 0, "init() is called at the top level of the module");
+
+  const init = functionBody(script, "init");
+  const prefix = init.slice(0, init.indexOf("await"));
+  assert.match(prefix, /setLanguage\(/, "init paints before its first await");
+
+  const topLevel = new Map();
+  lines.forEach((line, index) => {
+    const match = /^(?:let|const) ([A-Za-z_$][\w$]*)/.exec(line);
+    if (match) topLevel.set(match[1], index);
+  });
+  const reads = [...functionBody(script, "paintEditor").matchAll(/\b[A-Za-z_$][\w$]*\b/g)]
+    .map(([name]) => name)
+    .filter((name) => topLevel.has(name));
+  assert.ok(reads.includes("paintedLineCount"), "the check sees what paintEditor reads");
+  for (const name of new Set(reads)) {
+    assert.ok(
+      topLevel.get(name) < initCall,
+      `${name} is declared on line ${topLevel.get(name) + 1}, after init() on line ${initCall + 1}`,
+    );
+  }
+});
+
 test("output confirmation is required but not blocked by tone timing", () => {
   const script = interviewSource();
   const heardHandler = script.slice(

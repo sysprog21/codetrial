@@ -109,6 +109,57 @@ fn the_interview_begins_from_the_plan_it_was_booked_with() {
         boot.problem.variant().starters.len(),
         "every language's starter is seeded from the problem"
     );
+
+    // A coding-only interview has no behavioral round, so seeding its phases as
+    // uncovered would ask the report to account for one that was never
+    // configured.
+    assert_eq!(
+        state.evidence_ledger.coverage.uncovered.len(),
+        crate::agent::REACTO_PHASE_IDS.len()
+    );
+    assert!(
+        !state
+            .evidence_ledger
+            .coverage
+            .uncovered
+            .iter()
+            .any(|phase| phase == "situation")
+    );
+}
+
+/// The other loop, which is the one that owes STAR phases as well.
+#[test]
+fn a_two_round_interview_leaves_both_frameworks_uncovered() {
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google-key"),
+    ])
+    .unwrap();
+    let boot = crate::runtime::bootstrap_with_rounds(
+        &config,
+        "interview-fixed",
+        Some("two-sum"),
+        45,
+        crate::runtime::RuntimeOptions {
+            interview_loop: crate::agent::InterviewLoop::CodingBehavioral,
+            ..crate::runtime::RuntimeOptions::default()
+        },
+    );
+    let state = initial_runtime_state(&boot, Instant::now());
+    assert_eq!(
+        state.evidence_ledger.coverage.uncovered.len(),
+        crate::agent::REACTO_PHASE_IDS.len() + crate::agent::STAR_PHASE_IDS.len()
+    );
+    assert!(
+        state
+            .evidence_ledger
+            .coverage
+            .uncovered
+            .iter()
+            .any(|phase| phase == "situation")
+    );
 }
 
 /// Closing a turn yields what to publish, once, and only for an open one.
@@ -978,6 +1029,7 @@ fn runtime_activity_emits_periodic_prompts_and_updates_gates() {
     let prompt = activity.watch_prompt(&state, now).unwrap();
 
     assert!(prompt.text.contains("silent AND has not typed"));
+    assert!(!prompt.text.contains("def two_sum"));
     assert!(!prompt.behavioral_nudge);
     assert!(activity.watch_prompt(&state, now).is_none());
 
@@ -986,18 +1038,17 @@ fn runtime_activity_emits_periodic_prompts_and_updates_gates() {
     activity.last_agent_speech = now - Duration::from_secs(5);
     activity.last_review = now - Duration::from_secs(31);
     activity.last_interjection = now - Duration::from_secs(46);
-    state
-        .code
-        .push_str("\nseen = {}\nfor i, n in enumerate(nums):\n    pass");
+    state.evidence_ledger.code.semantic_revision = 1;
 
     state.behavioral_round_started = true;
     assert!(activity.watch_prompt(&state, now).is_none());
     state.behavioral_round_started = false;
     let prompt = activity.watch_prompt(&state, now).unwrap();
 
-    assert!(prompt.text.contains("Periodic editor snapshot"));
+    assert!(prompt.text.contains("semantic editor change has settled"));
+    assert!(!prompt.text.contains("def two_sum"));
+    assert_eq!(activity.semantic_revision_at_last_review, 1);
     assert!(!prompt.behavioral_nudge);
-    assert_eq!(activity.code_at_last_review, state.code);
     assert!(activity.watch_prompt(&state, now).is_none());
 }
 
@@ -1057,7 +1108,7 @@ fn behavioral_silence_nudge_waits_for_quiet_and_leaves_the_editor_out() {
     assert_eq!(activity.last_nudge, now);
     assert_eq!(activity.last_interjection, now);
     assert_eq!(activity.last_review, last_review);
-    assert!(activity.code_at_last_review.is_empty());
+    assert_eq!(activity.semantic_revision_at_last_review, 0);
     assert!(
         activity
             .watch_prompt(&state, now + cooldown - Duration::from_millis(1))
@@ -1142,6 +1193,7 @@ fn recent_typing_holds_off_the_periodic_review() {
     state
         .code
         .push_str("\nseen = {}\nfor i, n in enumerate(nums):\n    pass");
+    state.evidence_ledger.code.semantic_revision = 1;
 
     activity.last_code_change = now - CODE_SETTLE + Duration::from_secs(1);
     assert!(
@@ -1155,7 +1207,7 @@ fn recent_typing_holds_off_the_periodic_review() {
     let prompt = activity
         .watch_prompt(&state, now)
         .expect("an edit exactly CODE_SETTLE old has settled; the review may take the floor");
-    assert!(prompt.text.contains("Periodic editor snapshot"));
+    assert!(prompt.text.contains("semantic editor change has settled"));
 }
 
 #[test]
@@ -2042,4 +2094,92 @@ async fn an_exhausted_rotation_waits_only_for_a_key_out_on_quota() {
             );
         }
     }
+}
+
+/// Who is written down first when both speakers close at once.
+#[test]
+fn a_closed_turn_is_recorded_in_the_order_it_opened() {
+    // The usual case: the interviewer asked, the candidate answered.
+    assert_eq!(
+        closing_order(Some(4), Some(5)),
+        ["interviewer", "candidate"]
+    );
+
+    // The case that was being reported backwards. The candidate's answer opened
+    // first and a late interviewer fragment closed with it, so a fixed speaker
+    // order filed the question ahead of the answer it followed.
+    assert_eq!(
+        closing_order(Some(9), Some(8)),
+        ["candidate", "interviewer"]
+    );
+
+    // A speaker with no line has nothing to record and sorts last either way.
+    assert_eq!(closing_order(None, Some(3)), ["candidate", "interviewer"]);
+    assert_eq!(closing_order(Some(3), None), ["interviewer", "candidate"]);
+    assert_eq!(closing_order(None, None), ["interviewer", "candidate"]);
+
+    // Two turns cannot own one line, so the tie is unreachable from the room.
+    // It is pinned anyway: the comparison is the whole function, and a tie that
+    // silently changes hands is how a strict rule becomes a loose one.
+    assert_eq!(
+        closing_order(Some(3), Some(3)),
+        ["interviewer", "candidate"]
+    );
+}
+
+/// The proactive-review gate driven by an edit instead of a hand-set counter.
+///
+/// Every other test of this gate assigns `semantic_revision` directly, so what
+/// the candidate types and what the interviewer interjects about were never
+/// joined up in one test: an analyzer that reported an operator fix as
+/// formatting left all of them passing and the interviewer silent.
+#[test]
+fn a_real_operator_fix_arms_the_proactive_review() {
+    let now = Instant::now();
+    let mut activity = RuntimeActivity::new(now);
+    let mut state = RuntimeState::default();
+    let ready = |activity: &mut RuntimeActivity| {
+        activity.last_code_change = now - CODE_SETTLE - Duration::from_secs(1);
+        activity.last_user_speech = now - Duration::from_secs(5);
+        activity.last_agent_speech = now - Duration::from_secs(5);
+        activity.last_review = now - Duration::from_secs(31);
+        activity.last_interjection = now - Duration::from_secs(46);
+    };
+    let edit = |state: &mut RuntimeState, receipt: u64, code: &str| {
+        crate::agent::apply_data_event_at(
+            state,
+            crate::runtime::TOPIC_CODE_UPDATE,
+            &serde_json::json!({ "code": code }),
+            99.0,
+            receipt,
+        );
+    };
+
+    edit(
+        &mut state,
+        100,
+        "def search(low, high):\n    while low < high:\n        low += 1\n    return low\n",
+    );
+    edit(
+        &mut state,
+        200,
+        "def search(low, high):\n    while low < high:\n        low += 1\n\n    return low\n",
+    );
+    ready(&mut activity);
+    assert!(
+        activity.watch_prompt(&state, now).is_none(),
+        "a blank line is not something to interject about"
+    );
+
+    edit(
+        &mut state,
+        300,
+        "def search(low, high):\n    while low <= high:\n        low += 1\n\n    return low\n",
+    );
+    ready(&mut activity);
+    let prompt = activity
+        .watch_prompt(&state, now)
+        .expect("an off-by-one fix is a semantic edit");
+    assert!(prompt.text.contains("semantic editor change has settled"));
+    assert!(!prompt.text.contains("def search"));
 }

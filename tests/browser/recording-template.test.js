@@ -373,15 +373,38 @@ test("replay-producer transcript", () => {
 });
 
 test("replay-producer editor", () => {
-  const body = withoutComments(functionBody(interview, "flushPendingCodePublish"));
+  // Where the debounced edit is sent. A queued language switch is flushed on its
+  // own path, which records nothing to the editor stream: a tab arriving with
+  // its starter is not something the candidate typed.
+  const body = withoutComments(functionBody(interview, "flushPendingEditorPublish"));
   assert.ok(
     body.includes('recordReplay("editor", { code: currentCode(), language: state.language });'),
     "the editor is recorded where the debounced publish already happens",
   );
+  // And that is where the debounce ends when nothing overtakes it. A timer with
+  // its own publish sent the edit to the agent and left it out of the replay.
+  assert.match(
+    withoutComments(interview),
+    /codePublishTimer = setTimeout\(flushPendingEditorPublish, CODE_PUBLISH_DEBOUNCE_MS\);/,
+    "an edit that outlives its debounce leaves through the recording flush",
+  );
+  // And where the end cancels it: the end payload carries that edit to the
+  // agent, and nothing but this carries it to the replay.
+  const ending = withoutComments(functionBody(interview, "endInterview"));
+  const saved = ending.indexOf('recordReplay("editor", { code: currentCode(), language: state.language });');
+  assert.ok(saved >= 0, "an edit the end cancels is still recorded");
+  assert.ok(
+    ending.slice(0, saved).includes("if (codePublishTimer && !pendingLanguagePublish) {"),
+    "only when an edit, not a switch, was queued",
+  );
+  assert.ok(
+    saved < ending.indexOf('recordReplay("lifecycle"') && saved < ending.indexOf("clearTimeout(codePublishTimer);"),
+    "before the end is recorded and before the timer that says an edit was queued is gone",
+  );
   assert.equal(
     (interview.match(/recordReplay\("editor"/g) || []).length,
-    2,
-    "exactly two: the starter snapshot at the start and the debounced one, and nothing per keystroke",
+    3,
+    "exactly three: the starter snapshot, the debounced one, and the one the end would otherwise drop, and nothing per keystroke",
   );
 });
 

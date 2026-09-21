@@ -132,9 +132,31 @@ fn overflowing_turn() -> String {
     format!("Candidate: {}", "so ".repeat(4_000))
 }
 
+/// What `EvidenceLedger::prompt_slice` renders for a session nobody has typed
+/// in yet (`early`), and for one a few minutes in (`working`).
+///
+/// Real output, and held to it. `prompt_slice` is crate-internal, so this file
+/// cannot call it. The projections live in the fixture named below, and the
+/// unit test `the_prompt_samples_carry_what_prompt_slice_renders` builds the
+/// two ledgers and fails when the fixture stops matching.
+/// Frozen strings here used to be checked against nothing, so a change to the
+/// projection's shape would have been regenerated straight into the prompt
+/// golden while the samples described a ledger production no longer sends.
+fn evidence_projection(which: &str) -> String {
+    let projections: Value =
+        serde_json::from_str(include_str!("fixtures/evidence-projections.json"))
+            .expect("the projection fixture parses");
+    projections[which]
+        .as_str()
+        .expect("the projection fixture holds this sample")
+        .to_string()
+}
+
 /// Every prompt the agent sends, in one place, so the frozen fixture and the
 /// regeneration path cannot drift apart.
 fn prompt_samples() -> Value {
+    let early = evidence_projection("early");
+    let working = evidence_projection("working");
     let problem = get_problem(Some("two-sum"));
     let full_profile = InterviewProfile {
         role: "backend engineer".to_string(),
@@ -192,12 +214,12 @@ fn prompt_samples() -> Value {
         "languageChoice": language_choice("C++", LanguageChoiceContext::Start),
         "languageSwitch": language_choice("Java", LanguageChoiceContext::SwitchWithCode),
         "silenceBehavioral": behavioral_silence_nudge(),
-        "silenceEmpty": silence_nudge("(the editor is currently empty)"),
-        "silencePlan": silence_nudge("  1| # scan once with a map"),
-        "silenceCode": silence_nudge("  1| def two_sum(nums, target):"),
+        "silenceEmpty": silence_nudge("{}"),
+        "silenceEarly": silence_nudge(&early),
+        "silenceWorking": silence_nudge(&working),
         "coldRestart": cold_restart(&cold_state),
         "coldRestartEmpty": cold_restart(&RuntimeState::default()),
-        "review": proactive_review("  1| seen = {}"),
+        "review": proactive_review(&working),
         "time": time_warning(),
         "wrapCandidate": wrap_up("candidate_ended"),
         "wrapTimer": wrap_up("time_up"),
@@ -208,6 +230,7 @@ fn prompt_samples() -> Value {
             code: "seen = {}",
             language: "python",
             already_recorded: "Candidate restated the inputs and the return shape.",
+            evidence: &working,
         }),
         "interimEmpty": interim_review_prompt(&InterimReviewInput {
             problem,
@@ -215,6 +238,7 @@ fn prompt_samples() -> Value {
             code: "",
             language: "python",
             already_recorded: "",
+            evidence: "{}",
         }),
         "testsPass": test_results_reaction("3/3 passed", true),
         "testsFail": test_results_reaction("2/3 passed", false),

@@ -8,6 +8,7 @@
         "total": 5,
         "language": "python",
         "setupError": null,
+        "diagnostic": null,
         "failures": [],
         "candidateCases": [],
         "at": 1770000000000
@@ -20,6 +21,7 @@
         "total": 5,
         "language": "python",
         "setupError": null,
+        "diagnostic": null,
         "failures": [
           {
             "label": "example 2",
@@ -45,6 +47,7 @@
         "total": 5,
         "language": "python",
         "setupError": null,
+        "diagnostic": null,
         "failures": [
           {
             "label": "example 1",
@@ -82,6 +85,7 @@
         "total": 1,
         "language": "python",
         "setupError": null,
+        "diagnostic": null,
         "failures": [],
         "candidateCases": [
           {
@@ -130,6 +134,52 @@
         "total": 0,
         "language": "cpp",
         "setupError": "Compiler Explorer returned 503",
+        "diagnostic": null,
+        "failures": [],
+        "candidateCases": [],
+        "at": 1770000000000
+      }
+    },
+    {
+      "name": "diagnostic timeout",
+      "payload": {
+        "passed": 0,
+        "total": 0,
+        "language": "python",
+        "setupError": "The run stopped with a timeout diagnostic.",
+        "diagnostic": {
+          "category": "timeout"
+        },
+        "failures": [],
+        "candidateCases": [],
+        "at": 1770000000000
+      }
+    },
+    {
+      "name": "diagnostic other",
+      "payload": {
+        "passed": 0,
+        "total": 0,
+        "language": "python",
+        "setupError": "The run stopped with a other diagnostic.",
+        "diagnostic": {
+          "category": "other"
+        },
+        "failures": [],
+        "candidateCases": [],
+        "at": 1770000000000
+      }
+    },
+    {
+      "name": "diagnostic runtime_signal",
+      "payload": {
+        "passed": 0,
+        "total": 0,
+        "language": "python",
+        "setupError": "The run stopped with a runtime_signal diagnostic.",
+        "diagnostic": {
+          "category": "runtime_signal"
+        },
         "failures": [],
         "candidateCases": [],
         "at": 1770000000000

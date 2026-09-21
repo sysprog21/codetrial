@@ -17,8 +17,7 @@ use crate::config::DEFAULT_MAX_INTERIM_REVIEWS;
 
 use crate::agent::{
     RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput, behavioral_silence_nudge,
-    candidate_lines, numbered, proactive_review, significant_change, silence_nudge,
-    timing_decision, unreviewed_from, with_timer,
+    candidate_lines, proactive_review, silence_nudge, timing_decision, unreviewed_from, with_timer,
 };
 
 /// How long the room has to be quiet before a pause is worth reading into.
@@ -72,7 +71,7 @@ pub(super) struct RuntimeActivity {
     pub(super) last_review: Instant,
     pub(super) last_interjection: Instant,
     pub(super) last_test_reaction: Instant,
-    pub(super) code_at_last_review: String,
+    pub(super) semantic_revision_at_last_review: u64,
     pub(super) floor: Floor,
     /// A pause can arrive between Gemini producing a reply and this loop
     /// receiving its final event. Drop that old turn after resume too.
@@ -145,7 +144,7 @@ impl RuntimeActivity {
             last_test_reaction: now
                 .checked_sub(Duration::from_secs_f64(TEST_REACTION_COOLDOWN_S))
                 .unwrap_or(now),
-            code_at_last_review: String::new(),
+            semantic_revision_at_last_review: 0,
             floor: Floor::Listening,
             discarding_output: false,
             tool_response_outstanding: false,
@@ -284,7 +283,8 @@ impl RuntimeActivity {
                 .as_secs_f64(),
             // Editor changes cannot reopen coding during the behavioral round.
             significant_change: !behavioral
-                && significant_change(&self.code_at_last_review, &state.code),
+                && state.evidence_ledger.code.semantic_revision
+                    > self.semantic_revision_at_last_review,
         });
         if decision.update_last_nudge {
             self.last_nudge = now;
@@ -296,14 +296,14 @@ impl RuntimeActivity {
             self.last_interjection = now;
         }
         if decision.sync_code_at_last_review {
-            self.code_at_last_review = state.code.clone();
+            self.semantic_revision_at_last_review = state.evidence_ledger.code.semantic_revision;
         }
         let text = if decision.silence_nudge && behavioral {
             behavioral_silence_nudge()
         } else if decision.silence_nudge {
-            silence_nudge(&numbered(&state.code))
+            silence_nudge(&state.evidence_ledger.prompt_slice())
         } else if decision.proactive_review {
-            proactive_review(&numbered(&state.code))
+            proactive_review(&state.evidence_ledger.prompt_slice())
         } else {
             return None;
         };
@@ -357,6 +357,28 @@ pub(super) enum Interruptible {
 pub(super) struct SpeakerTurns {
     pub(super) interviewer: SpeakerTurn,
     pub(super) candidate: SpeakerTurn,
+}
+
+/// The two speakers in the order their turns opened.
+///
+/// Both can be open at once, and whichever is written to the ledger first is a
+/// claim about who spoke first. Closing them in a fixed speaker order made that
+/// claim out of the source: a candidate answer that finished while a late
+/// interviewer fragment was still arriving was recorded after the question it
+/// had already answered, and a reader of the ledger saw an answer that preceded
+/// nothing. A turn's transcript line is where it opened, so the lower line
+/// spoke first. A speaker with no line has nothing to record and sorts last.
+pub(super) fn closing_order(
+    interviewer_line: Option<usize>,
+    candidate_line: Option<usize>,
+) -> [&'static str; 2] {
+    match (interviewer_line, candidate_line) {
+        (Some(interviewer), Some(candidate)) if candidate < interviewer => {
+            ["candidate", "interviewer"]
+        }
+        (None, Some(_)) => ["candidate", "interviewer"],
+        _ => ["interviewer", "candidate"],
+    }
 }
 
 pub(super) fn should_send_wrap_up(reason: &str) -> bool {
