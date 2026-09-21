@@ -1107,7 +1107,7 @@ async fn each_webhook_kind_moves_the_row_and_answers_for_itself() {
         recorded_server_with_provider("webhook-kinds", provider.clone()).await;
 
     // Fresh, so the sweeper that started with the server leaves this alone.
-    let now = codetrial::current_epoch_seconds() as i64;
+    let now = codetrial::current_epoch_seconds_i64();
     let room = "interview-abc12345";
     let connection = rusqlite::Connection::open(&path).unwrap();
     connection
@@ -1317,7 +1317,7 @@ async fn a_webhook_from_another_project_does_not_touch_the_room() {
     // Fresh, because the sweeper starts with the server and fails an active row
     // that has gone quiet. A recording reaped for being stale would look
     // exactly like one the intruder ended.
-    let now = codetrial::current_epoch_seconds() as i64;
+    let now = codetrial::current_epoch_seconds_i64();
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute(
@@ -1423,7 +1423,7 @@ async fn an_unsigned_webhook_cannot_move_a_recording() {
     // Fresh, because the sweeper starts with the server and fails an active row
     // that has gone quiet. A recording reaped for being stale would look
     // exactly like one an unsigned webhook ended.
-    let now = codetrial::current_epoch_seconds() as i64;
+    let now = codetrial::current_epoch_seconds_i64();
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute_batch(&format!(

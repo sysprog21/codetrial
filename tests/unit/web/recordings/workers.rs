@@ -102,10 +102,13 @@ fn a_worker_pass_reports_only_when_it_moved_something() {
 
 /// The guard exists so a sweeper cannot outlive the server that wanted it.
 /// Nothing would prove that: `drop` could be empty and every other test
-/// still passes, which is exactly the leak this type was added to stop.
+/// still passes, which is exactly the leak `BackgroundTasks` was added to
+/// stop. It is the only test of that `Drop`: the quota refresher and the
+/// session sweeper hold the same type and used to carry a copy of this test
+/// each.
 #[tokio::test]
 async fn dropping_the_workers_aborts_the_tasks_they_own() {
-    let mut workers = RecordingWorkers::default();
+    let mut workers = crate::web::BackgroundTasks::default();
     let watches: Vec<_> = (0..2)
         .map(|_| {
             // Never finishes on its own, so anything that ends it is the abort.
@@ -134,5 +137,5 @@ async fn dropping_the_workers_aborts_the_tasks_they_own() {
         }
         tokio::task::yield_now().await;
     }
-    panic!("a task outlived the RecordingWorkers that owned it");
+    panic!("a task outlived the BackgroundTasks that owned it");
 }

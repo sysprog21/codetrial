@@ -30,7 +30,7 @@ pub(crate) fn create_session(
     profile: &GitHubProfile,
 ) -> rusqlite::Result<String> {
     accounts.with(|connection| {
-        let now = current_epoch_seconds() as i64;
+        let now = crate::current_epoch_seconds_i64();
 
         // A positive id came from GitHub and names a returning person, so it
         // updates the row it already owns. A negative one is a freshly minted
@@ -108,7 +108,7 @@ pub fn session_user(
     session_id: &str,
 ) -> rusqlite::Result<Option<SignedInUser>> {
     accounts.with(|connection| {
-        let now = current_epoch_seconds() as i64;
+        let now = crate::current_epoch_seconds_i64();
         let mut statement = connection.prepare(
             "
         SELECT users.id, users.login, users.avatar_url, users.email, users.email_verified

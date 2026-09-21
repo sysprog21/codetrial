@@ -209,7 +209,7 @@ pub struct SystemClock;
 
 impl Clock for SystemClock {
     fn now(&self) -> i64 {
-        crate::current_epoch_seconds() as i64
+        crate::current_epoch_seconds_i64()
     }
 }
 

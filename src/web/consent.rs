@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use crate::accounts::{
     Accounts, SignedInUser, blocking, claim_interview_room, interview_for_account, withdraw_consent,
 };
-use crate::current_epoch_seconds;
+use crate::current_epoch_seconds_i64;
 
 use super::auth::Owner;
 use super::{AppState, json_response};
@@ -31,7 +31,7 @@ pub(crate) async fn withdraw_consent_handler(
     UriPath(interview_id): UriPath<String>,
     Owner { accounts, user }: Owner,
 ) -> Response {
-    let now = current_epoch_seconds() as i64;
+    let now = current_epoch_seconds_i64();
     let withdrawn = {
         let accounts = accounts.clone();
         let interview_id = interview_id.clone();

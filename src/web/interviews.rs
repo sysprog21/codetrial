@@ -14,7 +14,7 @@ use crate::accounts::{
     MAX_INTERVIEWS_PER_USER, MAX_REPORTS_PER_USER, ReportSave, blocking, create_interview,
     delete_reports, list_reports, random_token, save_report,
 };
-use crate::current_epoch_seconds;
+use crate::current_epoch_seconds_i64;
 
 use super::auth::Owner;
 use super::recordings::finish_recording;
@@ -158,7 +158,7 @@ pub(crate) async fn create_interview_handler(
             json!({ "error": "Could not start an interview." }),
         );
     };
-    let now = current_epoch_seconds() as i64;
+    let now = current_epoch_seconds_i64();
     let recorded = {
         let interview_id = interview_id.clone();
         blocking(move || {
@@ -322,7 +322,7 @@ pub(crate) async fn replay_events_handler(
         }
     }
 
-    let now = current_epoch_seconds() as i64;
+    let now = current_epoch_seconds_i64();
     let stored = blocking(move || {
         crate::recording::append_replay_events(&accounts, &interview_id, user.id, &parsed, now)
     })
@@ -380,7 +380,7 @@ pub(crate) async fn replay_snapshot_handler(
     if state.recorder.is_none() {
         return missing();
     }
-    let now = current_epoch_seconds() as i64;
+    let now = current_epoch_seconds_i64();
     let view =
         blocking(move || crate::recording::replay_snapshot(&accounts, &interview_id, user.id, now))
             .await;
