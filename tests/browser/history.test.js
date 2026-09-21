@@ -366,13 +366,13 @@ test("the response window panel says what the number is worth, in words a test c
     new Set([
       // Wiring: selectors, module paths, tags, classes, dataset and event names.
       "", "/lib.js", "/render.js", "/api/reports", "button", "div", "li", "click", "current",
-      "[data-moment]", "replay-item", "replay-line",
-      "replay-moment", "replay-window", "#replay-code", "#replay-empty", "#replay-list",
+      "[data-moment]", "replay-item", "replay-line", "2d", "image/jpeg", "/whiteboard.js",
+      "replay-moment", "replay-window", "#replay-board", "#replay-code", "#replay-empty", "#replay-list",
       "#replay-media", "#replay-moment-label", "#replay-more", "#replay-report",
       "#replay-status", "#replay-tests", "#replay-timeline", "#replay-title",
       "#replay-transcript", "#replay-window-note",
       // Replay event kinds and the speaker a missing one reads as.
-      "stage", "transcript", "editor", "tests", "candidate",
+      "stage", "transcript", "editor", "board", "tests", "candidate",
       // What the page says about the media, per state.
       "The video was shared with your verified email address. It is deleted 24 hours after the interview.",
       "This interview is still being recorded.", "The recording is being finished.",
@@ -386,7 +386,7 @@ test("the response window panel says what the number is worth, in words a test c
       "Could not load the replay for this interview.", "Could not load the report.",
       "Could not read your recordings.", "No report was saved for this interview.",
       "Sign in to see your recordings.", "No test run before this point.",
-      "Recording", "Deleted", "Not available", "Code",
+      "Recording", "Deleted", "Not available", "Code", "Whiteboard",
       // And the window panel, spread from the set pinned above rather than
       // retyped: the narrower assertion catches a word relocated out of
       // `WINDOW_WORDS`, and this one catches a word added anywhere, so they are

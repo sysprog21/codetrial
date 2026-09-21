@@ -89,6 +89,14 @@
         <section>
           <h3 id="replay-moment-label">Code</h3>
           <pre id="replay-code" class="replay-code"></pre>
+          <!-- Shown in place of the code for a whiteboard interview, and drawn
+               from the same strokes the candidate made rather than from an
+               image of them: the replay keeps the drawing as operations, so
+               any moment of it can be redrawn. Named by the heading above it
+               rather than by an `aria-label`, because this page says nothing
+               through an attribute; tests/browser/history.test.js holds the
+               whole of what it may say. -->
+          <canvas id="replay-board" class="replay-board" width="1600" height="1000" hidden></canvas>
           <p id="replay-tests" class="muted small"></p>
         </section>
 

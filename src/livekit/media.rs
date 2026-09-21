@@ -32,8 +32,6 @@ pub(super) const GEMINI_AUDIO_CHANNELS: i32 = 1;
 
 pub(super) const GEMINI_AUDIO_BUFFER_BYTES: usize = 3_200;
 
-pub(super) const GEMINI_VIDEO_MIME_TYPE: &str = "image/jpeg";
-
 pub(super) const GEMINI_VIDEO_FRAME_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(super) const GEMINI_VIDEO_JPEG_QUALITY: u8 = 75;
@@ -124,7 +122,7 @@ pub(super) async fn pump_video(
     match encode_video_frame_jpeg_off_thread(&frame, GEMINI_VIDEO_JPEG_QUALITY).await {
         Ok(bytes) => {
             gemini
-                .send_video_frame(&bytes, GEMINI_VIDEO_MIME_TYPE)
+                .send_video_frame(&bytes, crate::gemini::GEMINI_IMAGE_MIME_TYPE)
                 .await?
         }
         Err(error) => eprintln!("skipping unencodable video frame: {error}"),

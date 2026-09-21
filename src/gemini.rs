@@ -12,10 +12,17 @@ use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async, tungstenite::protocol::Message,
 };
 
+use crate::agent::InterviewMode;
 use crate::runtime::{
-    RuntimeBootstrap, TOOL_END_INTERVIEW, TOOL_LOG_HINT, TOOL_READ_EDITOR,
+    RuntimeBootstrap, TOOL_END_INTERVIEW, TOOL_LOG_HINT, TOOL_READ_BOARD, TOOL_READ_EDITOR,
     TOOL_RECORD_FRAMEWORK_EVIDENCE,
 };
+
+/// What every image this process sends Gemini is encoded as: a camera frame, a
+/// whiteboard on the live socket, and the board attached to a report request.
+/// One spelling, because the three are read by one API and a fourth caller
+/// that guessed a different one would be refused at the wire rather than here.
+pub const GEMINI_IMAGE_MIME_TYPE: &str = "image/jpeg";
 
 const LIVE_WEBSOCKET_ENDPOINT: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 const SETUP_TIMEOUT: Duration = Duration::from_secs(15);
@@ -221,16 +228,21 @@ pub async fn resume_live_session(
 /// this one hands the model back its own invalid output, and the transport
 /// inside it retries a call that never produced any. The candidate is waiting,
 /// so both stay small and `REPORT_TIMEOUT` bounds them together.
+/// `board` is the whiteboard image the report is graded from, and it rides
+/// every call this makes: the repairs below resend the prompt, and a repair
+/// that dropped the picture would ask the reviewer to fix a report it can no
+/// longer see the evidence for.
 pub async fn generate_report(
     api_key: &str,
     model: &str,
     prompt: &str,
+    board: Option<&[u8]>,
 ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
     let mut request_prompt = prompt.to_string();
     let mut budget = ReportCallBudget::new();
     for semantic_attempt in 0..=MAX_REPORT_REPAIRS {
         let output =
-            generate_report_transport(api_key, model, &request_prompt, &mut budget).await?;
+            generate_report_transport(api_key, model, &request_prompt, board, &mut budget).await?;
         match report_semantic_step(prompt, &output, semantic_attempt) {
             ReportSemanticStep::Complete(report) => return Ok(report),
             ReportSemanticStep::Repair(repair) => request_prompt = repair,
@@ -302,11 +314,12 @@ async fn generate_report_transport(
     api_key: &str,
     model: &str,
     prompt: &str,
+    board: Option<&[u8]>,
     budget: &mut ReportCallBudget,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     loop {
         let call = budget.spend()?;
-        let error = match generate_report_once(api_key, model, prompt).await {
+        let error = match generate_report_once(api_key, model, prompt, board).await {
             Ok(report) => return Ok(report),
             Err(error) => error,
         };
@@ -392,7 +405,7 @@ pub async fn generate_interim_review(
     generate_content_once(
         api_key,
         model,
-        &content_request(prompt, interim_generation_config()),
+        &content_request(prompt, None, interim_generation_config()),
         INTERIM_ATTEMPT_TIMEOUT,
         "interim review",
     )
@@ -418,9 +431,22 @@ fn interim_generation_config() -> Value {
 /// wants generated from it -- the two callers here differ only in the config,
 /// and the envelope is the wire contract, which is not a thing to assert in two
 /// places.
-fn content_request(prompt: &str, generation_config: Value) -> Value {
+/// One turn of content, with the image before the words when there is one.
+///
+/// The order is the documented one for a single image and a prompt about it,
+/// and it is also the order the prompt is written in: the board is what the
+/// reviewer is told to read before scoring, so it is what the model meets
+/// first.
+fn content_request(prompt: &str, image: Option<&[u8]>, generation_config: Value) -> Value {
+    let mut parts = Vec::new();
+    if let Some(image) = image {
+        parts.push(json!({
+            "inlineData": { "mimeType": GEMINI_IMAGE_MIME_TYPE, "data": STANDARD.encode(image) }
+        }));
+    }
+    parts.push(json!({ "text": prompt }));
     json!({
-        "contents": [ { "parts": [ { "text": prompt } ] } ],
+        "contents": [ { "parts": parts } ],
         "generationConfig": generation_config
     })
 }
@@ -461,11 +487,12 @@ async fn generate_report_once(
     api_key: &str,
     model: &str,
     prompt: &str,
+    board: Option<&[u8]>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     generate_content_once(
         api_key,
         model,
-        &generate_report_request(prompt),
+        &generate_report_request(prompt, board),
         REPORT_ATTEMPT_TIMEOUT,
         "report",
     )
@@ -595,11 +622,38 @@ pub fn redact_api_key(text: &str, api_key: &str) -> String {
 
 /// The tools the live interviewer is offered, public so the behaviour check in
 /// `tests/interview_behavior.rs` offers a text model exactly the same ones.
-pub fn live_tool_declarations() -> Value {
+///
+/// The reading tool and the evidence sources follow the mode, and they follow
+/// it here rather than being offered together and refused later. A model that
+/// is shown `read_editor` in a whiteboard interview calls it, and the only
+/// honest answer is that there is no editor, which costs a turn of the
+/// candidate's time to say.
+pub fn live_tool_declarations(mode: InterviewMode) -> Value {
+    let (read_tool, read_description) = if mode.is_whiteboard() {
+        (
+            TOOL_READ_BOARD,
+            "Put the candidate's latest whiteboard image in front of you again, and report how much of it there is, when it was drawn, and how many minutes remain on the candidate's countdown.",
+        )
+    } else {
+        (
+            TOOL_READ_EDITOR,
+            "Return the current editor language, numbered code, latest test run summary, and how many minutes remain on the candidate's countdown.",
+        )
+    };
+    let evidence_sources = if mode.is_whiteboard() {
+        json!(["candidate_speech", "board_snapshot", "session_timing"])
+    } else {
+        json!([
+            "candidate_speech",
+            "editor_snapshot",
+            "test_event",
+            "session_timing"
+        ])
+    };
     json!([
         {
-            "name": TOOL_READ_EDITOR,
-            "description": "Return the current editor language, numbered code, latest test run summary, and how many minutes remain on the candidate's countdown."
+            "name": read_tool,
+            "description": read_description
         },
         {
             "name": TOOL_LOG_HINT,
@@ -614,7 +668,7 @@ pub fn live_tool_declarations() -> Value {
         },
         {
             "name": TOOL_RECORD_FRAMEWORK_EVIDENCE,
-            "description": "Record trusted REACTO or STAR evidence only after it is present in candidate speech, an editor snapshot, or a test event.",
+            "description": "Record trusted REACTO or STAR evidence only after it is present in candidate speech or in what the candidate's working surface shows.",
 
             // Schema.Type is an enum, so these are its value names, not free
             // text. Lowercase happens to be accepted here and is rejected on
@@ -624,7 +678,7 @@ pub fn live_tool_declarations() -> Value {
                 "type": "OBJECT",
                 "properties": {
                     "phase": { "type": "STRING", "enum": ["repeat", "example", "algorithm", "coding", "test", "optimizations", "situation", "task", "action", "result"] },
-                    "source": { "type": "STRING", "enum": ["candidate_speech", "editor_snapshot", "test_event", "session_timing"] },
+                    "source": { "type": "STRING", "enum": evidence_sources },
                     "kind": { "type": "STRING", "enum": ["observed", "inferred", "skipped"] },
                     "confidence": { "type": "INTEGER", "minimum": 0, "maximum": 100 },
                     "summary": { "type": "STRING", "description": "Short evidence-grounded summary without scores or private rubric text." }
@@ -664,7 +718,7 @@ fn live_setup_message(boot: &RuntimeBootstrap<'_>, resume: Option<&str>) -> Valu
                     { "text": boot.instructions }
                 ]
             },
-            "tools": [{ "functionDeclarations": live_tool_declarations() }],
+            "tools": [{ "functionDeclarations": live_tool_declarations(boot.interview_mode) }],
             "inputAudioTranscription": {},
             "outputAudioTranscription": {},
             "realtimeInputConfig": {
@@ -737,9 +791,10 @@ fn tool_response_message(call: &GeminiFunctionCall, response: Value) -> Value {
     })
 }
 
-fn generate_report_request(prompt: &str) -> Value {
+fn generate_report_request(prompt: &str, board: Option<&[u8]>) -> Value {
     content_request(
         prompt,
+        board,
         json!({
             "responseMimeType": "application/json",
             "responseSchema": crate::agent::report_response_schema(),

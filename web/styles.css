@@ -405,6 +405,7 @@ p {
 }
 
 .interview-sidebar,
+.board-panel,
 .editor-panel {
   min-width: 0;
   overflow: hidden;
@@ -432,6 +433,7 @@ p {
 .control-row,
 .tab-row,
 .difficulty-row,
+.board-toolbar,
 .editor-toolbar,
 .language-tabs,
 .report-header,
@@ -1086,6 +1088,106 @@ p {
   }
 }
 
+/* Keeps the round plan and the surface apart inside one row. */
+.row-divider {
+  width: 1px;
+  height: 1.25rem;
+  margin: 0 0.25rem;
+  background: var(--hairline);
+}
+
+/* The whiteboard, in place of the editor. The surface scrolls inside the
+   panel rather than fitting itself to the window: the board is a fixed size in
+   its own coordinates, so what the candidate draws is where the interviewer
+   sees it whatever the two screens are. */
+.board-panel {
+  display: flex;
+  min-height: 34rem;
+  flex-direction: column;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.board-toolbar {
+  justify-content: flex-start;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+  padding: 0.5rem 0.75rem;
+}
+
+.board-toolbar .sync-state {
+  margin-left: auto;
+}
+
+.board-pens {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.board-color {
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.board-color.selected {
+  border-color: var(--accent);
+}
+
+.board-tool {
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--surface);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.7rem;
+}
+
+.board-tool[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.board-tool:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.board-surface {
+  flex: 1;
+  overflow: auto;
+  background: var(--surface);
+  padding: 0.5rem;
+}
+
+/* Sized in CSS pixels at the board's own aspect ratio, and never stretched:
+   the canvas element's width and height attributes are the board's coordinate
+   space, and a mismatch between the two is ink that lands away from the
+   pointer. */
+#board {
+  display: block;
+  width: 100%;
+  min-width: 40rem;
+  aspect-ratio: 1600 / 1000;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  background: #ffffff;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.board-note {
+  margin: 0;
+  border-top: 1px solid var(--hairline);
+  padding: 0.5rem 0.75rem;
+}
+
 /* Pre-flight media gate. Sits above the shell until required local media
    passes, so the candidate never meets the interviewer through dead devices. */
 .audio-check-card {
@@ -1281,6 +1383,29 @@ p {
   border: 1px solid var(--hairline);
   border-radius: 8px;
   white-space: pre;
+}
+
+/* The board on the report card, under the same disclosure the code block uses.
+   Bounded by the panel rather than drawn at the board's own size, which is
+   wider than the card. */
+.report-board {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+/* The board in a replay, where the code would be. Scaled to the panel rather
+   than scrollable like the live one: this is a picture of finished work being
+   read, not a surface anybody is drawing on. */
+.replay-board {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1600 / 1000;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: #ffffff;
 }
 
 /* One framework's steps, top left under the problem heading. Small on purpose:

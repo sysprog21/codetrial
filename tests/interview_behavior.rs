@@ -18,7 +18,7 @@
 //! reads a correct prompt differently.
 
 use codetrial::agent::{
-    InterviewGrounding, InterviewLoop, InterviewProfile, Problem, RuntimeState,
+    InterviewGrounding, InterviewLoop, InterviewMode, InterviewProfile, Problem, RuntimeState,
     build_instructions_for_plan, find_problem, get_problem, greeting, log_hint_text,
 };
 use codetrial::gemini::{GeminiFunctionCall, live_tool_declarations};
@@ -265,7 +265,7 @@ impl Conversation {
                 .json(&json!({
                     "systemInstruction": { "parts": [{ "text": self.instructions }] },
                     "contents": self.contents,
-                    "tools": [{ "functionDeclarations": live_tool_declarations() }],
+                    "tools": [{ "functionDeclarations": live_tool_declarations(InterviewMode::Coding) }],
                     "generationConfig": { "temperature": 0.7 },
                 }))
                 .send()
@@ -418,6 +418,7 @@ async fn live_interviewer_poses_the_variant_and_serves_hints_in_order() {
                 &InterviewProfile::default(),
                 &InterviewGrounding::default(),
                 InterviewLoop::CodingBehavioral,
+                InterviewMode::Coding,
             ),
             contents: Vec::new(),
             state: RuntimeState::for_problem(problem),
@@ -428,7 +429,9 @@ async fn live_interviewer_poses_the_variant_and_serves_hints_in_order() {
             panic!("three rungs");
         };
 
-        let opening = conversation.say(&greeting(problem)).await;
+        let opening = conversation
+            .say(&greeting(problem, InterviewMode::Coding))
+            .await;
         println!("[{}] Jim: {}", problem.id, opening.reply);
         if names_source(problem, &opening.reply) {
             fail(format!("the greeting names the source: {}", opening.reply));

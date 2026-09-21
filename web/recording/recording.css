@@ -49,6 +49,15 @@ body {
   font-size: 14px;
 }
 
+.board {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1600 / 1000;
+  background: #ffffff;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+}
+
 .code {
   margin: 0;
   padding: 12px;

@@ -3585,7 +3585,7 @@ mod replay {
 
     #[test]
     fn replay_schema_envelope() {
-        // One shape for six producers. A renderer reads `kind` to decide what
+        // One shape for seven producers. A renderer reads `kind` to decide what
         // to draw, and an envelope it cannot read is an event it cannot place.
         // Written out, not iterated from `ALL`: `parse` reads `ALL` too, so a
         // loop over it would agree with itself whatever the list said.
@@ -3594,6 +3594,7 @@ mod replay {
             [
                 "transcript",
                 "editor",
+                "board",
                 "tests",
                 "stage",
                 "avatar",

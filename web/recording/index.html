@@ -21,6 +21,12 @@
           <p id="problem-meta"></p>
         </header>
         <pre id="code" class="code" aria-label="Candidate code"></pre>
+        <!-- The other surface an interview can be held on, in the same slot.
+             One of the two is hidden for the whole recording: a whiteboard
+             interview sends no editor snapshot and an editor interview draws
+             nothing, so a layout with both would record an empty panel beside
+             the full one. -->
+        <canvas id="board" class="board" width="1600" height="1000" aria-label="Candidate whiteboard" hidden></canvas>
         <section id="tests" class="tests" aria-label="Test results"></section>
       </section>
 

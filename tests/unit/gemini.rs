@@ -140,8 +140,8 @@ fn report_network_budget_covers_every_repair_and_retry_per_generation() {
 
 #[test]
 fn report_requests_are_session_local_and_never_reuse_personalized_output() {
-    let first = generate_report_request("session-a private evidence");
-    let second = generate_report_request("session-b private evidence");
+    let first = generate_report_request("session-a private evidence", None);
+    let second = generate_report_request("session-b private evidence", None);
     assert_ne!(first, second);
     assert!(first.to_string().contains("session-a private evidence"));
     assert!(!first.to_string().contains("session-b private evidence"));
@@ -302,6 +302,57 @@ fn live_setup_uses_native_audio_voice_tools_and_transcription() {
         json!({})
     );
     assert_eq!(setup["sessionResumption"], json!({}));
+}
+
+/// A whiteboard session is offered a different first tool and a different set
+/// of evidence sources, and neither is a matter of wording: a model shown
+/// `read_editor` in an interview that has no editor calls it, and the only
+/// answer costs a turn of the candidate's time.
+#[test]
+fn a_whiteboard_session_is_offered_the_board_and_not_the_editor() {
+    let config = live_config(&[]);
+    let boot = crate::runtime::bootstrap_with_rounds(
+        &config,
+        "interview-board",
+        Some("two-sum"),
+        45,
+        crate::runtime::RuntimeOptions {
+            interview_mode: InterviewMode::Whiteboard,
+            ..Default::default()
+        },
+    );
+
+    let setup = &live_setup_message(&boot, None)["setup"];
+    let tools = setup["tools"][0]["functionDeclarations"]
+        .as_array()
+        .expect("the declarations are a list");
+    let names = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("a tool has a name"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        vec![
+            TOOL_READ_BOARD,
+            TOOL_LOG_HINT,
+            TOOL_RECORD_FRAMEWORK_EVIDENCE,
+            TOOL_END_INTERVIEW
+        ]
+    );
+
+    // The editor's two sources are gone rather than merely unused. Left in the
+    // enum they are an invitation to record an observation from a test run
+    // that cannot have happened.
+    assert_eq!(
+        tools[2]["parameters"]["properties"]["source"]["enum"],
+        json!(["candidate_speech", "board_snapshot", "session_timing"])
+    );
+    assert!(
+        setup["systemInstruction"]["parts"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("shared whiteboard")
+    );
 }
 
 /// The empty object above asks for handles; this is what spends one. A
@@ -486,8 +537,28 @@ fn report_generation_request_matches_python_report_model_config() {
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-report:generateContent"
     );
 
-    let request = generate_report_request("score this");
+    let request = generate_report_request("score this", None);
     assert_eq!(request["contents"][0]["parts"][0]["text"], "score this");
+    assert_eq!(
+        request["contents"][0]["parts"].as_array().map(Vec::len),
+        Some(1),
+        "an editor interview attaches nothing"
+    );
+
+    // The board rides the same request as an inline image, because a report is
+    // one `generateContent` call and there is nowhere else for a picture to
+    // go. Before the prompt, which is the order the prompt is written in: it
+    // tells the reviewer to read the board before scoring.
+    let with_board = generate_report_request("score this", Some(&[0xff, 0xd8, 0xff]));
+    assert_eq!(
+        with_board["contents"][0]["parts"][0]["inlineData"],
+        json!({ "mimeType": "image/jpeg", "data": "/9j/" })
+    );
+    assert_eq!(with_board["contents"][0]["parts"][1]["text"], "score this");
+    assert_eq!(
+        with_board["generationConfig"], request["generationConfig"],
+        "the attachment changes nothing about how the report is generated"
+    );
     assert_eq!(
         request["generationConfig"]["responseMimeType"],
         "application/json"
@@ -892,7 +963,7 @@ async fn a_resumed_session_keeps_its_handle_until_a_new_one_arrives() {
 /// length it likes, arriving at a twelve-second deadline.
 #[test]
 fn the_interim_review_asks_for_bounded_prose_and_no_thinking() {
-    let request = content_request("read this stretch", interim_generation_config());
+    let request = content_request("read this stretch", None, interim_generation_config());
     let config = &request["generationConfig"];
 
     assert_eq!(
@@ -908,7 +979,7 @@ fn the_interim_review_asks_for_bounded_prose_and_no_thinking() {
     );
 
     // The report's own config still goes through the shared envelope unchanged.
-    let report = generate_report_request("write the debrief");
+    let report = generate_report_request("write the debrief", None);
     assert_eq!(
         report["generationConfig"]["responseMimeType"],
         "application/json"

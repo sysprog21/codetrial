@@ -504,7 +504,7 @@ test("the report card this page renders names no finding either", () => {
     said,
     new Set([
       "(.md)", "(Sxlang)", "(editor", "(none", "-", "/", "0", "01:05", "1", "10",
-      "100", "2", "2;", "3", "37", "6", "7", "70", "8", "95%", "Chain",
+      "100", "2", "2;", "3", "37", "7", "70", "8", "95%", "Chain",
       "CodeTrial.", "Coding", "Committee", "Communication", "Contract", "Done",
       "Download", "Evidence", "FACE_MISSING", "Framework", "HIRE", "INCOMPLETE",
       "Improve", "Integrity", "Interview", "Interviewer", "Legacy/unversioned",
@@ -608,4 +608,52 @@ test("a response window does not replace the final editor with missing history",
   const code = dom.node("replay-code").textContent;
   dom.node("replay-timeline").querySelectorAll("[data-window]")[0].click();
   assert.equal(dom.node("replay-code").textContent, code);
+});
+
+test("a whiteboard recording replays the drawing, not an empty code panel", () => {
+  // The two surfaces are exclusive: a whiteboard interview publishes no editor
+  // snapshot, so the panel that would hold code holds nothing, and the one
+  // thing worse than no board on this page is a heading saying Code above an
+  // empty box.
+  const ops = (at, ...operations) => ({ kind: "board", at, payload: { ops: operations } });
+  const stroke = (points) => ({ op: "stroke", color: "#101418", width: 3, points });
+  const events = [
+    stage(BASE, 0),
+    ops(BASE + 1000, stroke([0, 0, 100, 100])),
+    ops(BASE + 5000, stroke([200, 200, 300, 200]), { op: "undo" }),
+    ops(BASE + 9000, stroke([400, 10, 400, 900])),
+  ];
+  // Cleared first, the way `clearDetail` does between recordings: `render`
+  // appends, so a timeline left over from an earlier test is counted below.
+  dom.node("replay-timeline").replaceChildren();
+  render(events);
+
+  assert.equal(dom.node("replay-board").hidden, false);
+  assert.equal(dom.node("replay-code").hidden, true);
+
+  const buttons = dom.node("replay-timeline").querySelectorAll("[data-moment]");
+  assert.equal(buttons.length, 3, "every board event is a moment to open");
+
+  // The board at a moment is the whole journal up to it, replayed. The second
+  // moment undoes the stroke it drew, so opening it shows the first stroke
+  // alone and opening the third shows two: a page that accumulated the strokes
+  // instead of replaying the operations would show two and three.
+  // Cleared before each click, because `render` draws the last moment itself
+  // and the calls would otherwise be every paint since the page loaded.
+  const opened = (index) => {
+    const context = dom.node("replay-board").getContext("2d");
+    context.calls.length = 0;
+    buttons[index].click();
+    return context.calls.filter(([name]) => name === "moveTo").map(([, x, y]) => [x, y]);
+  };
+  assert.deepEqual(opened(0), [[0, 0]]);
+  assert.equal(dom.node("replay-moment-label").textContent, "Whiteboard");
+  assert.deepEqual(opened(1), [[0, 0]], "the undone stroke is not on the board");
+  assert.deepEqual(opened(2), [[0, 0], [400, 10]]);
+
+  // And an editor recording is untouched by any of it.
+  dom.node("replay-timeline").replaceChildren();
+  render([stage(BASE, 0), editor(BASE + 1000)]);
+  assert.equal(dom.node("replay-board").hidden, true);
+  assert.equal(dom.node("replay-code").hidden, false);
 });

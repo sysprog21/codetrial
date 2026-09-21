@@ -117,6 +117,35 @@ class Element {
     return this.children.length ? "" : this.#text;
   }
 
+  /// A canvas's drawing context, as the calls made on it.
+  ///
+  /// The stub has no pixels and does not want any: what a test can check about
+  /// a drawing is the sequence of operations the page asked for, which is what
+  /// `tests/browser/whiteboard.test.js` checks about the same renderer. A
+  /// browser answers this only for a canvas, and so does this: a page calling
+  /// `getContext` on a `pre` is a page reaching for a surface that is not
+  /// there, and it should fail here as it would there.
+  getContext(kind) {
+    if (this.tag !== "canvas" || kind !== "2d") return null;
+    if (!this.context) {
+      const calls = [];
+      const record = (name) => (...args) => calls.push([name, ...args]);
+      this.context = {
+        calls,
+        save: record("save"),
+        restore: record("restore"),
+        beginPath: record("beginPath"),
+        moveTo: record("moveTo"),
+        lineTo: record("lineTo"),
+        stroke: record("stroke"),
+        fill: record("fill"),
+        arc: record("arc"),
+        fillRect: record("fillRect"),
+      };
+    }
+    return this.context;
+  }
+
   append(...children) {
     for (const child of children) {
       if (typeof child === "string") {

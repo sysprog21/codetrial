@@ -649,6 +649,7 @@ server, is the ordering.
 |---|---|---|
 | `transcript` | what was said | no |
 | `editor` | the code and its language | yes |
+| `board` | what was drawn since the last one | no |
 | `tests` | a run's results | no |
 | `stage` | the clock and the interview phase | yes |
 | `avatar` | what Jim is doing | yes |
@@ -839,6 +840,7 @@ so a producer from a later deploy does not stop a recording.
 |---|---|---|
 | `stage` | `{title, meta, remainingSeconds}` | the problem heading and the clock |
 | `editor` | `{code, language}` | the code panel, as text |
+| `board` | `{ops}`, each `{op: "stroke", color, width, points}` or `{op: "undo" \| "redo" \| "clear"}` | the whiteboard, redrawn from every op so far |
 | `tests` | `{passed, failed, total}` | one line, red if anything failed |
 | `avatar` | `{state}`, one of `speaking`, `thinking`, `listening` | Jim's expression and label |
 | `transcript` | `{speaker, text}` | nothing here; the replay page renders it |
@@ -854,9 +856,20 @@ already arrived. A `413` or a `404` stops the producers for the rest of the
 interview: over quota and withdrawn consent both mean everything after this is
 refused.
 
+The board is the one kind that does not restate itself, and that is what makes
+a whiteboard interview replayable at all. One board exported as an image is
+over a hundred kilobytes, which is past the per-payload ceiling on its own and
+would spend the whole per-interview budget on a handful of frames; the same
+board as the strokes that drew it is a few kilobytes and arrives as operations,
+so any moment of the interview can be redrawn rather than the few that could be
+photographed. `web/whiteboard.js` is the one model: the candidate draws on it,
+the replay page and this template rebuild from it, and a stroke it refuses
+while drawing is a stroke it refuses coming back off the wire.
+
 Cadence is where the per-interview budget goes. The editor rides the debounce
-the agent's `code_update` already uses; the transcript is one event per spoken
-turn rather than per chunk; the clock is restated every fifteen seconds, because
+the agent's `code_update` already uses; the board rides the same settle that
+sends the interviewer their image, batched so no event outgrows the per-payload
+ceiling; the transcript is one event per spoken turn rather than per chunk; the clock is restated every fifteen seconds, because
 every second would be twenty-seven hundred events for a number the viewer can
 read off the video; and the interviewer's state is sent on the change rather
 than on the participant event that happened to carry it.

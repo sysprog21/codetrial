@@ -841,10 +841,22 @@
            this deployment cannot record is disabled with the reason beside it
            rather than silently shortened after the candidate presses start. -->
       <p id="duration-note" class="duration-note" aria-live="polite" hidden></p>
-      <section class="duration-row" aria-label="Interview loop">
+      <!-- The round plan and the surface, in one row rather than two. The
+           lobby is held to a single screen by
+           tests/browser/lobby.test.js, and a row of its own for the second
+           pair was seventeen pixels past it.
+
+           A whiteboard interview takes the same problem and the same steps,
+           and swaps the editor and the test runner for a board: nothing runs,
+           and the candidate explains by drawing. -->
+      <section class="duration-row" aria-label="Interview loop and format">
         <button class="duration-button" type="button" data-loop="coding_only">Coding only</button>
         <button class="duration-button selected" type="button" data-loop="coding_behavioral">Coding + behavioral</button>
+        <span class="row-divider" aria-hidden="true"></span>
+        <button class="duration-button selected" type="button" data-mode="coding">Editor</button>
+        <button class="duration-button" type="button" data-mode="whiteboard">Whiteboard</button>
       </section>
+      <p class="duration-note" id="mode-note" hidden></p>
 
       <section class="start-row">
         <!-- Enabled by app.js once a problem is chosen, so the button cannot

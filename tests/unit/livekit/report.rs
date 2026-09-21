@@ -203,7 +203,7 @@ fn report_helpers_use_report_topic_prompt_state_and_error_note() {
         },
         "time_up",
     );
-    let prompt = report_prompt_text(&boot, &state, 12.4);
+    let prompt = report_prompt_text(&boot, &state, 12.4, false);
 
     assert!(prompt.contains("Candidate: I will use a hash map."));
     assert!(prompt.contains("Latest test run (run #1, python): 1/2 cases passed."));
@@ -263,7 +263,7 @@ fn the_report_prompt_carries_both_the_rolling_assessment_and_the_whole_transcrip
         "- Candidate enumerated the empty-input case before writing any code.",
     );
 
-    let prompt = report_prompt_text(&boot, &state, 45.0);
+    let prompt = report_prompt_text(&boot, &state, 45.0, false);
 
     // Delimited, like the transcript and the editor are wherever candidate
     // material reaches a model: the notes are a reading of that material, so an
@@ -301,6 +301,7 @@ fn a_session_with_no_recorded_assessment_keeps_the_plain_report_prompt() {
             ..RuntimeState::default()
         },
         1.0,
+        false,
     );
     assert!(prompt.contains("FULL SPOKEN TRANSCRIPT"));
     assert!(prompt.contains("Candidate: only evidence"));
@@ -356,7 +357,7 @@ fn an_interview_past_the_evidence_cap_still_reports_every_phase_it_reached() {
         .unwrap();
     }
 
-    let prompt = report_prompt_text(&boot, &state, 45.0);
+    let prompt = report_prompt_text(&boot, &state, 45.0, false);
     for phase in ["repeat", "example", "algorithm", "test", "optimizations"] {
         assert!(
             prompt.contains(&format!("Candidate completed {phase}.")),
@@ -475,4 +476,58 @@ fn complete_and_incomplete_reports_carry_agent_owned_framework_evidence() {
             crate::agent::FRAMEWORK_VERSION
         );
     }
+}
+
+/// A whiteboard interview is reported from the board, and says so even when
+/// the report could not be written at all.
+#[test]
+fn a_whiteboard_report_is_built_from_the_board_and_not_the_editor() {
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google"),
+    ])
+    .unwrap();
+    let boot = crate::runtime::bootstrap_with_rounds(
+        &config,
+        "interview-board",
+        Some("two-sum"),
+        45,
+        crate::runtime::RuntimeOptions {
+            interview_mode: crate::agent::InterviewMode::Whiteboard,
+            ..Default::default()
+        },
+    );
+    let state = RuntimeState {
+        interview_mode: crate::agent::InterviewMode::Whiteboard,
+        board_snapshots: 9,
+        board_strokes: 64,
+        transcript: vec!["Candidate: here is the trace.".to_string()],
+        ..RuntimeState::default()
+    };
+
+    // `board.latest()` decides this, so the prompt follows the attachment
+    // rather than the mode: a whiteboard interview whose board never arrived
+    // is reported without one.
+    assert!(
+        report_prompt_text(&boot, &state, 20.0, true)
+            .contains("The image attached to this message")
+    );
+    let unattached = report_prompt_text(&boot, &state, 20.0, false);
+    assert!(unattached.contains("no board reached this review"));
+    assert!(!unattached.contains("FINAL CODE"));
+
+    // The note the candidate is shown when the report is lost. It described
+    // the editor, which at a whiteboard is always zero bytes of a language
+    // nobody chose.
+    let note = report_error_note(
+        &boot,
+        &state,
+        "time_up",
+        &std::io::Error::other("upstream refused"),
+        "google",
+    );
+    assert!(note.contains("Final board state: 64 strokes over 9 snapshots"));
+    assert!(!note.contains("Final editor state"));
 }

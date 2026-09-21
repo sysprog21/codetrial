@@ -6,6 +6,7 @@
 // their lifetime: the token is minted by Egress, not by CodeTrial.
 
 import { isAgent } from "/lib.js";
+import { BOARD_HEIGHT, BOARD_WIDTH, applyOp, createBoard, drawBoard } from "/whiteboard.js";
 import {
   ANALYSER_FFT_SIZE,
   ANALYSER_WINDOW,
@@ -20,6 +21,7 @@ const nodes = {
   problemTitle: document.querySelector("#problem-title"),
   problemMeta: document.querySelector("#problem-meta"),
   code: document.querySelector("#code"),
+  board: document.querySelector("#board"),
   tests: document.querySelector("#tests"),
   timer: document.querySelector("#timer"),
   candidateVideo: document.querySelector("#candidate-video"),
@@ -152,6 +154,14 @@ function attachCandidate(track) {
   markReady();
 }
 
+/// The drawing, rebuilt from the replay as it plays.
+///
+/// Held across events because the operations accumulate: a `board` row is what
+/// changed, and the board is every row so far applied in order. It is built
+/// with the same module the candidate drew on, so a stroke that was refused
+/// there is refused here.
+const board = createBoard();
+
 /// One replay event onto the page.
 ///
 /// An unknown kind is ignored rather than refused: a producer from a later
@@ -171,6 +181,17 @@ export function applyReplayEvent(event) {
       // rendered into a page a recorder screenshots sixty times a second, and
       // markup in it would be markup in the recording.
       if (typeof payload.code === "string") nodes.code.textContent = payload.code;
+      break;
+    case "board":
+      // The drawing arrives as the operations that made it, so the panel is
+      // redrawn rather than replaced. The first one swaps the panels: the two
+      // surfaces are exclusive and nothing else says which interview this is.
+      if (nodes.board.hidden) {
+        nodes.board.hidden = false;
+        nodes.code.hidden = true;
+      }
+      for (const op of Array.isArray(payload.ops) ? payload.ops : []) applyOp(board, op);
+      drawBoard(nodes.board.getContext("2d"), board.strokes(), BOARD_WIDTH, BOARD_HEIGHT);
       break;
     case "tests":
       nodes.tests.replaceChildren(testsLine(payload));

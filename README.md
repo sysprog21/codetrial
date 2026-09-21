@@ -15,7 +15,8 @@ LiveKit tokens, and runs the interviewer agent.
 │  · editor + syntax colors  ├─────────────────────▶│ (SFU)               │
 │  · problem panel, timer    │  data channel        └─────┬───────────────┘
 │  · test runners            │  code_update, control,     │
-│  · report + history        │  test_results, report      │
+│  · whiteboard              │  test_results, report,     │
+│  · report + history        │  board_image               │
 └────────────┬───────────────┘                            ▼
              │                            ┌──────────────────────────────────┐
              │ /api/*                     │ Rust agent (LiveKit runner)      │
@@ -32,6 +33,17 @@ The browser sends code updates and test outcomes over LiveKit's data channel, so
 the agent receives structured code rather than editor screenshots. Python and
 JavaScript run locally; C, C++, and Java run through Compiler Explorer, so
 source code leaves the browser for those three.
+
+The lobby also offers a whiteboard interview, which takes the same problem bank
+and the same six steps and swaps the editor and the test runner for a board.
+Nothing runs: the candidate draws their examples, traces one by hand, and
+writes the pseudo-code out at the end. The board is exported as an image a
+moment after each stroke settles and reaches the interviewer over its own byte
+stream on the same data channel, and `read_board` puts the latest one back in
+front of it on request. The final board is attached to the report request, so
+the reviewer grades the drawing rather than an empty editor, and the recording
+keeps the drawing as the strokes that made it, which is what lets the replay
+redraw any moment of it.
 
 Camera and microphone are required to start. Audio and code snapshots stay in
 memory unless [recording](#recording) is enabled, which is off by default.

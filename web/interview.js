@@ -6,6 +6,14 @@ import {
   videoTrackReady,
 } from "./audio-check.js";
 import { highlight } from "./highlight.js";
+import {
+  BOARD_HEIGHT,
+  BOARD_WIDTH,
+  PEN_COLORS,
+  boardPoint,
+  createBoard,
+  drawBoard,
+} from "./whiteboard.js";
 import { indentNewline, indentSelection } from "./editor.js";
 import { createDevicePool } from "./devices.js";
 import { createFaceCheck } from "./face-check.js";
@@ -22,6 +30,8 @@ import {
 } from "./render.js";
 import {
   acceptsReport,
+  boardOpBatches,
+  boardStreamOptions,
   clamp,
   codeUpdatePayload,
   codingLoop,
@@ -33,6 +43,7 @@ import {
   formatTime,
   integrityEventPayload,
   isAgent,
+  modeIsWhiteboard,
   providerUiState,
   sanitizeReport,
   sessionReport,
@@ -151,6 +162,42 @@ let languages = languagesFor(null);
 /// actually runs on.
 let durationMin = clamp(Number.parseInt(params.get("duration") || "45", 10) || 45, 10, 90);
 const interviewLoop = codingLoop(params.get("loop"));
+/// Whether this interview is held at a whiteboard rather than in the editor.
+///
+/// Read once, from the URL the lobby built, and never from the page: half the
+/// setup below runs before `/api/token` answers, and a mode that arrived with
+/// the answer would leave the editor bound and the starter code published in
+/// an interview that has neither.
+const whiteboard = modeIsWhiteboard(params.get("mode"));
+/// The same answer as the wire spelling, which the token request and the
+/// checklist both need. Derived from the boolean rather than from the URL a
+/// second time, so an unrecognized value cannot reach the server as itself.
+const mode = whiteboard ? "whiteboard" : "coding";
+/// The board, and what is in flight for it.
+///
+/// Declared with the other module state rather than beside the functions that
+/// read it, for the reason `durationCeiling` in web/app.js is: `init()` runs
+/// at the top of this module and calls `initWhiteboard`, so a `const` further
+/// down the file is still in its temporal dead zone when that call reaches it.
+/// Reading one there throws, `init()` stops where it stood, and the media
+/// preflight it was on its way to start never runs: the candidate is left on
+/// "Starting camera and microphone..." with the browser never having asked for
+/// either.
+const board = {
+  model: null,
+  context: null,
+  color: PEN_COLORS[0],
+  tool: "pen",
+  settle: null,
+  /// One board at a time on the wire, chained the way integrity events are: a
+  /// settle that fires while the previous export is still uploading would open
+  /// a second stream, and the agent would show whichever finished last.
+  publishing: Promise.resolve(),
+  /// Numbers the boards so a log can tell one from the next. The agent reads
+  /// the name for nothing, and that is deliberate: it holds the newest board
+  /// it finished reading, not the highest number it has seen.
+  sequence: 0,
+};
 let behavioralMinutes = interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
 let codingMinutes = durationMin - behavioralMinutes;
 
@@ -297,6 +344,14 @@ const nodes = {
   meetOutputRow: document.querySelector("#meet-output-row"),
   meetOutputSelect: document.querySelector("#meet-output-select"),
   meetOutputNote: document.querySelector("#meet-output-note"),
+  editorPanel: document.querySelector(".editor-panel"),
+  boardPanel: document.querySelector("#board-panel"),
+  board: document.querySelector("#board"),
+  boardPens: document.querySelector("#board-pens"),
+  boardEraser: document.querySelector("#board-eraser"),
+  boardUndo: document.querySelector("#board-undo"),
+  boardRedo: document.querySelector("#board-redo"),
+  boardClear: document.querySelector("#board-clear"),
   jimAvatar: document.querySelector("#jim-avatar"),
   jimAvatarNote: document.querySelector("#jim-avatar-note"),
 };
@@ -330,6 +385,7 @@ async function init() {
   renderProblem();
   setLanguage("python");
   bindEvents();
+  if (whiteboard) initWhiteboard();
   // After bindEvents, so the callback cannot beat the row it edits: everything
   // above here is synchronous, and a `then` runs no earlier than the next
   // microtask.
@@ -730,7 +786,7 @@ async function connect(preflight, presenting = false) {
     const response = await fetch("/api/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ problemId: problem.page, durationMin, interviewId, interviewLoop, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) }),
+      body: JSON.stringify({ problemId: problem.page, durationMin, interviewId, interviewLoop, interviewMode: mode, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) }),
     });
     if (!response.ok) throw new Error((await response.json()).error || "Failed to create a session.");
     const connection = await response.json();
@@ -1286,7 +1342,7 @@ let endingClock = 0;
 /// would need its own record of what is already ticked, which is the second
 /// copy of the truth that these packets exist to avoid.
 function renderFrameworkProgress() {
-  const { name, steps } = frameworkChecklist(frameworkRound, frameworkPhases);
+  const { name, steps } = frameworkChecklist(frameworkRound, frameworkPhases, mode);
   nodes.frameworkProgress.hidden = false;
   nodes.frameworkProgress.innerHTML = steps
     .map((step) => `<li class="${step.done ? "done" : ""}"><span aria-hidden="true">${step.done ? "&#10003;" : "&#183;"}</span>${escapeHtml(step.label)}</li>`)
@@ -1301,7 +1357,12 @@ function renderFrameworkProgress() {
 /// two-framework list beside the timer already was.
 function showFrameworkHint() {
   nodes.frameworkHintTitle.textContent = "Jim is listening.";
-  nodes.frameworkHintBody.innerHTML = Object.values(FRAMEWORKS)
+  // Through the checklist rather than from `FRAMEWORKS` directly, so the card
+  // and the list beside the timer name the steps the same way: at a board this
+  // said "write what you just described" and "predict what should happen, then
+  // run it" to a candidate holding a marker.
+  nodes.frameworkHintBody.innerHTML = Object.keys(FRAMEWORKS)
+    .map((round) => frameworkChecklist(round, [], mode))
     .map((framework) => `
       <table>
         <caption>${escapeHtml(framework.name)}<span>${escapeHtml(framework.scenario)}</span></caption>
@@ -1483,6 +1544,14 @@ function endInterview(reason) {
   // "ended" nobody sent leaves a replay that just stops. Inside a Retry-After
   // window the flush sends nothing and the event still waits on that timer,
   // so a tab closed before the window passes loses it.
+  // Before the lifecycle row, so the drawing a candidate was still working on
+  // when they pressed End is in the replay ahead of the event that says the
+  // interview stopped. The settle timer is about to be irrelevant: this page
+  // stops being one that runs timers a moment from now.
+  if (whiteboard) {
+    clearTimeout(board.settle);
+    recordBoardOps();
+  }
   recordReplay("lifecycle", { state: "ended", reason });
   void flushReplay();
   // The end_interview payload carries the final buffer, so drop any debounced
@@ -1608,6 +1677,7 @@ function renderReport() {
     problemTitle: problem.title,
     language: state.language,
     code: currentCode(),
+    board: finalBoardImage(),
     saveResult: null,
   });
   mountBehavioralReview(nodes.report, state.transcript.values());
@@ -1625,7 +1695,10 @@ function saveHistory() {
   // The interview id travels with the report so the replay page can put the
   // two beside each other. Reports are keyed by their own id and recordings by
   // theirs, and without this the only thing relating them is the clock.
-  const entry = { id: randomId(), date: new Date().toISOString(), interviewId: state.interviewId, problemId: problem.page, problemTitle: problem.title, difficulty: problem.difficulty, language: state.language, durationMin, interviewLoop, report: state.report };
+  // No language at a whiteboard: nothing is compiled, the tabs are not on
+  // screen, and `state.language` is the default nobody chose. Recorded as one,
+  // it would filter the candidate's own history by a choice they never made.
+  const entry = { id: randomId(), date: new Date().toISOString(), interviewId: state.interviewId, problemId: problem.page, problemTitle: problem.title, difficulty: problem.difficulty, language: whiteboard ? "" : state.language, durationMin, interviewLoop, report: state.report };
   return saveReportHistory(entry);
 }
 
@@ -1648,6 +1721,7 @@ function buildMarkdown() {
     problemTitle: problem.title,
     language: state.language,
     code: currentCode(),
+    board: finalBoardImage(),
     transcript: state.transcript.values(),
     at: new Date().toLocaleString(),
   });
@@ -1799,12 +1873,200 @@ function paintEditor() {
   nodes.editorLines.textContent = Array.from({ length: currentCode().split("\n").length }, (_, index) => index + 1).join("\n");
 }
 
+/// How long the board has to be still before the interviewer is sent it.
+///
+/// One second after the last stroke ends, which is roughly the pause a person
+/// leaves between finishing a shape and starting the next one. Shorter sends a
+/// half-drawn diagram; much longer and the interviewer is asking about a board
+/// the candidate has already moved on from.
+const BOARD_SETTLE_MS = 1000;
+
+/// What a board is exported at. Below this the handwriting in a dense diagram
+/// stops being legible to the model; above it the image outgrows what a
+/// realtime frame is worth for what it adds.
+const BOARD_JPEG_QUALITY = 0.72;
+
+/// Builds the board panel and puts it where the editor was.
+function initWhiteboard() {
+  nodes.editorPanel.remove();
+  nodes.boardPanel.hidden = false;
+  board.model = createBoard();
+  board.context = nodes.board.getContext("2d");
+  for (const color of PEN_COLORS) {
+    const swatch = document.createElement("button");
+    swatch.type = "button";
+    swatch.className = color === board.color ? "board-color selected" : "board-color";
+    swatch.style.background = color;
+    swatch.dataset.color = color;
+    swatch.setAttribute("aria-label", `Pen ${color}`);
+    swatch.addEventListener("click", () => selectPen(color));
+    nodes.boardPens.append(swatch);
+  }
+  nodes.boardEraser.addEventListener("click", () => selectTool(board.tool === "eraser" ? "pen" : "eraser"));
+  nodes.boardUndo.addEventListener("click", () => applyBoardEdit(board.model.undo()));
+  nodes.boardRedo.addEventListener("click", () => applyBoardEdit(board.model.redo()));
+  nodes.boardClear.addEventListener("click", () => applyBoardEdit(board.model.clear()));
+  bindBoardPointer();
+  paintBoard();
+}
+
+/// Mouse only, for this first version: a stylus and a finger both report
+/// through the same events, but neither has been tried against a board this
+/// size, and palm rejection is not something the page can do for them.
+///
+/// The pointer is captured on the way down, which is what keeps a stroke
+/// attached to the canvas when the candidate draws off the edge of it -- the
+/// alternative is a line that stops at the border and a stroke that never
+/// ends.
+function bindBoardPointer() {
+  nodes.board.addEventListener("pointerdown", (event) => {
+    if (event.pointerType !== "mouse" || event.button !== 0) return;
+    const point = boardPoint(nodes.board, event);
+    if (!board.model.begin(board.tool, board.color, point.x, point.y)) return;
+    nodes.board.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    paintBoard();
+  });
+  nodes.board.addEventListener("pointermove", (event) => {
+    if (!board.model.isDrawing()) return;
+    const point = boardPoint(nodes.board, event);
+    if (board.model.extend(point.x, point.y)) paintBoard();
+  });
+  for (const ending of ["pointerup", "pointercancel"]) {
+    nodes.board.addEventListener(ending, (event) => {
+      if (!board.model.end()) return;
+      if (nodes.board.hasPointerCapture?.(event.pointerId)) {
+        nodes.board.releasePointerCapture(event.pointerId);
+      }
+      paintBoard();
+      scheduleBoardPublish();
+    });
+  }
+}
+
+function selectPen(color) {
+  board.color = color;
+  board.tool = "pen";
+  for (const swatch of nodes.boardPens.children) {
+    swatch.classList.toggle("selected", swatch.dataset.color === color);
+  }
+  nodes.boardEraser.setAttribute("aria-pressed", "false");
+}
+
+function selectTool(tool) {
+  board.tool = tool;
+  nodes.boardEraser.setAttribute("aria-pressed", tool === "eraser" ? "true" : "false");
+}
+
+/// Repaints after an edit that changed something, and sends the board on.
+///
+/// Undo, redo and clear all go through here because all three change what the
+/// interviewer should be looking at. A clear that was not published leaves
+/// them asking about a diagram that is no longer on the board.
+function applyBoardEdit(changed) {
+  if (!changed) return;
+  paintBoard();
+  scheduleBoardPublish();
+}
+
+function paintBoard() {
+  drawBoard(board.context, board.model.strokes(), BOARD_WIDTH, BOARD_HEIGHT);
+  nodes.boardUndo.disabled = !board.model.canUndo();
+  nodes.boardRedo.disabled = !board.model.canRedo();
+  nodes.boardClear.disabled = !board.model.canUndo();
+}
+
+/// Restarts the settle timer. A candidate drawing steadily therefore sends
+/// nothing until they stop, which is the point: the interviewer is meant to
+/// see finished thoughts, not every stroke of them.
+function scheduleBoardPublish() {
+  clearTimeout(board.settle);
+  board.settle = setTimeout(() => {
+    board.settle = null;
+    recordBoardOps();
+    board.publishing = board.publishing.then(publishBoard).catch((error) => {
+      console.warn("codetrial board_publish_failed", error);
+    });
+  }, BOARD_SETTLE_MS);
+}
+
+/// The board as the candidate left it, for their own report card.
+///
+/// Read off the page's own canvas rather than from anything that came back
+/// from a server, and `undefined` for an editor interview, which is what tells
+/// the card to show the code block instead. Not saved with the report: the
+/// data URL is a hundred kilobytes and the saved report has a quota, and the
+/// recording is where a board is kept.
+function finalBoardImage() {
+  if (!whiteboard) return undefined;
+  try {
+    return nodes.board.toDataURL("image/jpeg", BOARD_JPEG_QUALITY);
+  } catch (error) {
+    // A canvas that will not export is not a reason to lose the report. The
+    // card says the board could not be read rather than showing an empty code
+    // block under a language nobody chose.
+    console.warn("codetrial board_export_failed", error);
+    return "";
+  }
+}
+
+/// The drawing since the last settle, onto the replay.
+///
+/// Operations, not the image the interviewer is sent: a replay event is
+/// bounded in kilobytes and a board is a hundred of them, so what a recording
+/// keeps is what drew the board rather than a photograph of it every second.
+/// The replay page and the recording template rebuild it with the same module
+/// the candidate drew on.
+///
+/// The journal is drained whether or not this interview is being recorded. It
+/// is the board's own record of what has happened to it since somebody asked,
+/// and left unasked for an hour it is every stroke of the interview held in
+/// memory twice.
+function recordBoardOps() {
+  for (const ops of boardOpBatches(board.model.takeOps())) {
+    recordReplay("board", { ops });
+  }
+}
+
+/// Sends the board as one JPEG over its own byte stream.
+///
+/// Dropped rather than queued while the room is down. A board is the whole
+/// state of the drawing, so the next settle after the reconnect carries
+/// everything this one would have, where the publish queue would deliver a
+/// stale board first.
+async function publishBoard() {
+  if (!state.room || !state.connected) return;
+  const strokes = board.model.strokeCount();
+  const blob = await new Promise((resolve) => {
+    nodes.board.toBlob(resolve, "image/jpeg", BOARD_JPEG_QUALITY);
+  });
+  if (!blob) return;
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  board.sequence += 1;
+  const writer = await state.room.localParticipant.streamBytes(
+    boardStreamOptions(board.sequence, strokes, bytes.byteLength),
+  );
+  await writer.write(bytes);
+  await writer.close();
+}
+
 function currentCode() {
-  return nodes.editor.value;
+  // Empty at a whiteboard, where the textarea is still a page element holding
+  // the starter the language row seeded until `initWhiteboard` takes its panel
+  // out. Anything reading it -- the report, the ending packet -- would be
+  // reporting that starter as the candidate's own work.
+  return whiteboard ? "" : nodes.editor.value;
 }
 
 /// The one way the editor reaches the agent: the buffer and its language. The
 /// agent holds its own copy of the starters it measures written code against.
+///
+/// Silent in a whiteboard interview, and silenced here rather than at the four
+/// call sites. Connecting, reconnecting, a keystroke and a test run all
+/// publish; missing one of them would seed an interview that has no editor
+/// with a starter the candidate never saw, and the agent would hold it as the
+/// candidate's work.
 function publishCode(at) {
+  if (whiteboard) return;
   publish(topics.code, codeUpdatePayload(currentCode(), state.language, at));
 }

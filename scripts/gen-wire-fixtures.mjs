@@ -207,6 +207,20 @@ async function integrityChain() {
   return events;
 }
 
+// The board's stream header, which is the one message the browser sends that
+// is not a data packet: LiveKit chunks the JPEG itself, and what the two sides
+// have to agree on is the topic it arrives under and the attributes the agent
+// reads off it. The sizes are the ones a real board produces.
+function boardCases() {
+  return [
+    { name: "first board", options: lib.boardStreamOptions(1, 3, 21_504) },
+    { name: "a dense diagram", options: lib.boardStreamOptions(17, 214, 96_318) },
+    // A board that was cleared: no strokes, and still a board, because the
+    // interviewer has to see that what they were asked about is gone.
+    { name: "cleared board", options: lib.boardStreamOptions(18, 0, 4_096) },
+  ];
+}
+
 // Imported rather than restated: a hardcoded list here would be a third place
 // to disagree with. The constant, not `languagesFor`, because which tabs a
 // given judge offers is a UX choice and this is the whole set src/agent.rs has
@@ -217,6 +231,7 @@ const files = {
   "control.json": { topic: lib.topics.control, cases: controlCases() },
   "test-results.json": { topic: lib.topics.tests, cases: testResultsCases() },
   "integrity-chain.json": await integrityChain(),
+  "board-stream.json": { topic: lib.topics.board, cases: boardCases() },
 };
 
 const check = process.argv.includes("--check");

@@ -48,6 +48,16 @@ pub const MAX_REPLAY_STRING: usize = 16 * 1024;
 pub enum ReplayKind {
     Transcript,
     Editor,
+    /// What the candidate drew, as the strokes that drew it.
+    ///
+    /// Strokes rather than images, and that is what makes a whiteboard
+    /// replayable at all: one board exported as a JPEG is over a hundred
+    /// kilobytes, which is past `MAX_REPLAY_EVENT_BYTES` on its own and would
+    /// spend the whole per-interview budget on a handful of frames. The same
+    /// board as vectors is a few kilobytes, and it arrives as the operations
+    /// that produced it, so the review page can redraw any moment of the
+    /// interview rather than the few it could afford to photograph.
+    Board,
     Tests,
     Stage,
     Avatar,
@@ -59,6 +69,7 @@ impl ReplayKind {
         match self {
             Self::Transcript => "transcript",
             Self::Editor => "editor",
+            Self::Board => "board",
             Self::Tests => "tests",
             Self::Stage => "stage",
             Self::Avatar => "avatar",
@@ -66,9 +77,10 @@ impl ReplayKind {
         }
     }
 
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Transcript,
         Self::Editor,
+        Self::Board,
         Self::Tests,
         Self::Stage,
         Self::Avatar,
@@ -88,9 +100,13 @@ impl ReplayKind {
     /// somebody says which of the three a new kind is.
     fn class(self) -> ReplayClass {
         match self {
-            // A transcript line is a line and a test run is a result; neither
-            // replaces what came before it.
-            Self::Transcript | Self::Tests => ReplayClass::Accumulates,
+            // A transcript line is a line, a test run is a result, and a
+            // stretch of drawing is more drawing; none of the three replaces
+            // what came before it. The board is the one that had a choice: a
+            // whole-board snapshot would have been a `Restates` kind, and it
+            // is strokes instead because a board that restates itself every
+            // second is the same board sent a thousand times.
+            Self::Transcript | Self::Tests | Self::Board => ReplayClass::Accumulates,
 
             // A whole value, restated: a code buffer and a heading plus a
             // clock.

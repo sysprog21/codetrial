@@ -35,6 +35,7 @@ test("recording-template dom ids", () => {
     "problem-title",
     "problem-meta",
     "code",
+    "board",
     "tests",
     "timer",
     "candidate-video",
@@ -268,7 +269,7 @@ test("recording-bootstrap ordering", () => {
   );
 
   const apply = withoutComments(functionBody(script, "applyReplayEvent"));
-  for (const kind of ["stage", "editor", "tests", "avatar"]) {
+  for (const kind of ["stage", "editor", "board", "tests", "avatar"]) {
     assert.ok(apply.includes(`case "${kind}":`), `the layout renders ${kind} events`);
   }
   assert.ok(
@@ -283,15 +284,27 @@ test("recording-bootstrap ordering", () => {
     apply.includes("nodes.code.textContent = payload.code"),
     "and the editor panel is written as text",
   );
+
+  // The two surfaces are exclusive, and the first board event is what says
+  // which interview this is: a recording that showed both would have an empty
+  // panel in every frame of it.
+  assert.ok(
+    apply.includes("nodes.board.hidden = false") && apply.includes("nodes.code.hidden = true"),
+    "the first board event swaps the panels",
+  );
+  assert.ok(
+    apply.includes("applyOp(board, op)") && apply.includes("drawBoard("),
+    "the drawing is rebuilt from the operations with the module the candidate drew on",
+  );
 });
 
-// The producers. Six kinds, six call sites, all of them in `web/interview.js`:
+// The producers. Seven kinds, seven call sites, all of them in `web/interview.js`:
 // the candidate's page is the only one that knows what the candidate is looking
 // at, and the recording template renders what it sends.
 //
 // One assertion these all rest on: every producer goes through `recordReplay`,
 // so "is this server recording" and "has the server heard enough" are answered
-// once rather than at six call sites.
+// once rather than at seven call sites.
 test("replay-producer envelope", () => {
   const record = withoutComments(functionBody(interview, "recordReplay"));
   assert.ok(

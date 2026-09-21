@@ -18,6 +18,9 @@ use crate::runtime::{RuntimeBootstrap, TOPIC_REPORT};
 
 use super::{REPORT_TIMEOUT, browser_packet};
 
+/// `board` is the whiteboard as the candidate left it, and it is the reviewer's
+/// only record of their written work: an editor interview passes `None` and a
+/// whiteboard interview passes it whenever one arrived at all.
 pub(super) async fn publish_report(
     room: &Room,
     boot: &RuntimeBootstrap<'_>,
@@ -25,9 +28,10 @@ pub(super) async fn publish_report(
     reason: &str,
     elapsed_min: f64,
     api_key: &str,
+    board: Option<&[u8]>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     room.local_participant()
-        .publish_data(report_packet(boot, state, reason, elapsed_min, api_key).await?)
+        .publish_data(report_packet(boot, state, reason, elapsed_min, api_key, board).await?)
         .await?;
     Ok(())
 }
@@ -38,13 +42,15 @@ async fn report_packet(
     reason: &str,
     elapsed_min: f64,
     api_key: &str,
+    board: Option<&[u8]>,
 ) -> Result<DataPacket, Box<dyn std::error::Error + Send + Sync>> {
     let mut report = match tokio::time::timeout(
         REPORT_TIMEOUT,
         generate_report(
             api_key,
             boot.report_model,
-            &report_prompt_text(boot, state, elapsed_min),
+            &report_prompt_text(boot, state, elapsed_min, board.is_some()),
+            board,
         ),
     )
     .await
@@ -133,6 +139,16 @@ fn report_with_integrity_events(
             serde_json::json!(state.interview_loop.as_str()),
         );
 
+        // Which surface it was held on, beside the loop it was held in. The
+        // card and the export both say it, and the saved report is the only
+        // record of it once the room is gone: a whiteboard session otherwise
+        // reads afterwards as an editor interview whose candidate typed
+        // nothing.
+        object.insert(
+            "interviewMode".to_string(),
+            serde_json::json!(state.interview_mode.as_str()),
+        );
+
         // Why the interview ended, from the side that ended it. The page can
         // see that a report arrived unasked but not which clock produced it,
         // and it was deriving the answer from its own countdown: an interview
@@ -161,12 +177,15 @@ fn report_prompt_text(
     boot: &RuntimeBootstrap<'_>,
     state: &RuntimeState,
     elapsed_min: f64,
+    board_attached: bool,
 ) -> String {
     let rolling = rolling_assessment(&state.framework_evidence, &state.interim_notes);
     let transcript = transcript_for_report(&state.transcript);
     let test_summary = format_test_run(state.last_test_run.as_ref(), state.test_runs);
     report_prompt(ReportPromptInput {
         problem: boot.problem,
+        interview_mode: boot.interview_mode,
+        board_attached,
         transcript: &transcript,
         rolling_assessment: &rolling,
         final_code: &state.code,
@@ -190,12 +209,24 @@ fn report_error_note(
     api_key: &str,
 ) -> String {
     let detail = redact_api_key(&error.to_string(), api_key);
+    // The surface the interview was held on, because this note is the only
+    // thing the candidate is given when the report is lost and "0 bytes of
+    // python" describes an editor a whiteboard interview never had.
+    let final_state = if boot.interview_mode.is_whiteboard() {
+        format!(
+            "Final board state: {} strokes over {} snapshots",
+            state.board_strokes, state.board_snapshots
+        )
+    } else {
+        format!(
+            "Final editor state: {} bytes of {}",
+            state.code.len(),
+            state.language
+        )
+    };
     format!(
-        "Rust LiveKit runner ended ({reason}) but Gemini report generation failed for model {} on {}. Final editor state: {} bytes of {}. Error: {detail}",
-        boot.report_model,
-        boot.problem.id,
-        state.code.len(),
-        state.language
+        "Rust LiveKit runner ended ({reason}) but Gemini report generation failed for model {} on {}. {final_state}. Error: {detail}",
+        boot.report_model, boot.problem.id,
     )
 }
 

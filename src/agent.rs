@@ -27,12 +27,12 @@ pub use integrity::{sanitize_integrity_event, sanitize_test_run};
 use problems::variant_for;
 pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, find_problem, get_problem, topics_for};
 pub use prompts::{
-    InterimReviewInput, LanguageChoiceContext, ReportPromptInput, build_instructions_for_plan,
-    cold_restart, format_test_run, greeting, hint_ladder_used_text, hint_rung_text,
-    hint_rung_withheld_text, interim_review_prompt, language_choice, log_hint_text, numbered,
-    proactive_review, read_editor_text, released_follow_ups, report_prompt, rolling_assessment,
-    significant_change, silence_nudge, spoken_language, test_results_reaction,
-    test_setup_error_reaction, time_warning, wrap_up,
+    InterimReviewInput, LanguageChoiceContext, ReportPromptInput, board_silence_nudge,
+    build_instructions_for_plan, cold_restart, format_test_run, greeting, hint_ladder_used_text,
+    hint_rung_text, hint_rung_withheld_text, interim_review_prompt, language_choice, log_hint_text,
+    numbered, proactive_review, read_board_text, read_editor_text, released_follow_ups,
+    report_prompt, rolling_assessment, significant_change, silence_nudge, spoken_language,
+    test_results_reaction, test_setup_error_reaction, time_warning, wrap_up,
 };
 pub use report::{
     MAX_SUMMARY_TEXT, fallback_report, final_report, report_response_schema, validate_report,
@@ -113,9 +113,9 @@ const ROUND_TRANSITION_SKEW: std::time::Duration = std::time::Duration::from_sec
 /// `the_time_warning_threshold_is_the_same_number_on_both_sides`.
 pub const TIME_WARNING_S: u64 = 300;
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 6;
-pub const LIVE_PROMPT_VERSION: u32 = 3;
-pub const REPORT_PROMPT_VERSION: u32 = 5;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 7;
+pub const LIVE_PROMPT_VERSION: u32 = 4;
+pub const REPORT_PROMPT_VERSION: u32 = 6;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 1;
 
@@ -297,6 +297,39 @@ impl InterviewLoop {
             Self::CodingOnly => 0,
             Self::CodingBehavioral => 8,
         }
+    }
+}
+
+/// Which surface the candidate works on, and so what the interviewer can read.
+///
+/// A whiteboard interview takes the same problem bank and the same six REACTO
+/// steps; what it does not have is an editor, a starter, or a test runner, so
+/// every rule written against one of those needs the mode beside it rather
+/// than a second copy of the prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InterviewMode {
+    #[default]
+    Coding,
+    Whiteboard,
+}
+
+impl InterviewMode {
+    pub fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("whiteboard") => Self::Whiteboard,
+            _ => Self::Coding,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Coding => "coding",
+            Self::Whiteboard => "whiteboard",
+        }
+    }
+
+    pub const fn is_whiteboard(self) -> bool {
+        matches!(self, Self::Whiteboard)
     }
 }
 
@@ -647,6 +680,11 @@ impl SpeakerTurn {
 pub struct RuntimeState {
     pub started_at: std::time::Instant,
     pub interview_loop: InterviewLoop,
+    /// Which surface the candidate works on. A whiteboard interview never
+    /// publishes a code update or a test run, so `code`, `code_templates`,
+    /// `last_test_run` and `test_runs` below stay at their defaults for its
+    /// whole life, and every gate that reads them has to ask this first.
+    pub interview_mode: InterviewMode,
     pub coding_minutes: u32,
     pub behavioral_minutes: u32,
     pub round_transition_seen: bool,
@@ -675,6 +713,24 @@ pub struct RuntimeState {
     /// choice tells a candidate who wanted C++ that they picked Python and is
     /// forbidden from asking again.
     pub language_chosen: bool,
+    /// How many board snapshots have reached the interviewer, and when the
+    /// last one did in milliseconds since the interview started.
+    ///
+    /// The image itself is not here. It lives beside the Gemini socket in
+    /// `livekit::board`, because nothing that can read this state is able to
+    /// send one, and a copy here would be a megabyte of JPEG on a struct the
+    /// report path clones.
+    pub board_snapshots: u32,
+    /// Strokes on the board the interviewer last saw, as the browser counted
+    /// them. The candidate's own claim about their own work, exactly like the
+    /// editor contents: it gates nothing that a lie about it would win.
+    pub board_strokes: u32,
+    pub last_board_at_ms: Option<u64>,
+    /// `read_board` asking the room loop to put the latest board in front of
+    /// the model again. A tool response carries JSON and cannot carry an
+    /// image, so what the tool can do is ask, the same way `end_requested`
+    /// asks for the interview to be closed.
+    pub board_resend_requested: bool,
     pub transcript: Vec<String>,
     pub last_test_run: Option<serde_json::Value>,
     pub test_runs: u32,
@@ -761,6 +817,7 @@ impl Default for RuntimeState {
         Self {
             started_at: std::time::Instant::now(),
             interview_loop: InterviewLoop::CodingBehavioral,
+            interview_mode: InterviewMode::Coding,
             coding_minutes: 37,
             behavioral_minutes: 8,
             round_transition_seen: false,
@@ -773,6 +830,10 @@ impl Default for RuntimeState {
             code_templates: std::collections::BTreeMap::new(),
             language: "python".to_string(),
             language_chosen: false,
+            board_snapshots: 0,
+            board_strokes: 0,
+            last_board_at_ms: None,
+            board_resend_requested: false,
             transcript: Vec::new(),
             last_test_run: None,
             test_runs: 0,
@@ -901,6 +962,11 @@ pub enum FrameworkPhase {
 pub enum EvidenceSource {
     CandidateSpeech,
     EditorSnapshot,
+    /// A whiteboard interview's counterpart to an editor snapshot: the board
+    /// image the interviewer was shown. Spelled apart from the editor because
+    /// a reviewer reading the report has to be able to tell which surface an
+    /// observation was made on.
+    BoardSnapshot,
     TestEvent,
     SessionTiming,
 }
@@ -1023,6 +1089,48 @@ pub fn code_written(state: &RuntimeState) -> bool {
         || added_characters(&template, &code) >= MIN_WRITTEN_CHARS
 }
 
+/// Strokes a board must carry before the phases about written work are
+/// reachable, the board's answer to `MIN_WRITTEN_CHARS`.
+///
+/// A floor against nothing at all, not a measure of quality: three strokes is
+/// a line and two marks, which is less than any real diagram and more than the
+/// stray dot a candidate leaves while finding the pen.
+pub const MIN_BOARD_STROKES: u32 = 3;
+
+/// How far into the interview it is now, in milliseconds.
+///
+/// One clock for everything that stamps itself against the session: the phase
+/// evidence, the boards, and the age `read_board` reports. They were three
+/// copies of the same saturating cast, and the cast is the part worth writing
+/// once -- an interview cannot run for 585 million years, but the type says it
+/// could and the conversion has to answer for it.
+pub fn elapsed_ms(state: &RuntimeState) -> u64 {
+    state
+        .started_at
+        .elapsed()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
+
+/// How long ago the interviewer was last shown a board, in whole seconds, or
+/// `None` before the first one.
+pub fn board_age_seconds(state: &RuntimeState) -> Option<u64> {
+    Some(elapsed_ms(state).saturating_sub(state.last_board_at_ms?) / 1000)
+}
+
+/// Whether the candidate has produced the written work that Coding, Test and
+/// Optimizations are about: code in the editor, or a drawing on the board.
+///
+/// One question with two surfaces under it. Asking `code_written` directly in
+/// a whiteboard interview answers about an editor nobody has, which is always
+/// no, and that refuses the second half of the interview outright.
+pub fn written_work(state: &RuntimeState) -> bool {
+    match state.interview_mode {
+        InterviewMode::Coding => code_written(state),
+        InterviewMode::Whiteboard => state.board_strokes >= MIN_BOARD_STROKES,
+    }
+}
+
 /// The characters of a piece of code that are content rather than layout.
 pub(crate) fn content_chars(code: &str) -> impl Iterator<Item = char> + '_ {
     code.chars().filter(|character| !character.is_whitespace())
@@ -1097,6 +1205,7 @@ pub fn record_framework_evidence(
     let source = match args.get("source").and_then(serde_json::Value::as_str) {
         Some("candidate_speech") => EvidenceSource::CandidateSpeech,
         Some("editor_snapshot") => EvidenceSource::EditorSnapshot,
+        Some("board_snapshot") => EvidenceSource::BoardSnapshot,
         Some("test_event") => EvidenceSource::TestEvent,
         Some("session_timing") => EvidenceSource::SessionTiming,
         _ => return Err("invalid source"),
@@ -1111,6 +1220,28 @@ pub fn record_framework_evidence(
         return Err("session_timing is only valid for skipped evidence");
     }
 
+    // A source this interview has no surface for. The declaration offers only
+    // the one it runs on, so reaching here is the model recording what it read
+    // in an editor nobody opened, or on a board nobody drew on, and a report
+    // that carries such a row tells a reviewer the observation was made
+    // somewhere it cannot have been.
+    match state.interview_mode {
+        InterviewMode::Coding if source == EvidenceSource::BoardSnapshot => {
+            return Err("this interview has no whiteboard; board_snapshot is not a source here");
+        }
+        InterviewMode::Whiteboard
+            if matches!(
+                source,
+                EvidenceSource::EditorSnapshot | EvidenceSource::TestEvent
+            ) =>
+        {
+            return Err(
+                "this interview has no editor and no test runner; record what you saw on the board as board_snapshot",
+            );
+        }
+        _ => {}
+    }
+
     // Coding, Test and Optimizations are all about code, so none of them is
     // reached while the editor holds nothing the candidate wrote: a plan spoken
     // aloud is the Algorithm phase, and testing or improving it comes after
@@ -1119,10 +1250,15 @@ pub fn record_framework_evidence(
         phase,
         FrameworkPhase::Coding | FrameworkPhase::Test | FrameworkPhase::Optimizations
     );
-    if about_code && kind != EvidenceKind::Skipped && !code_written(state) {
-        return Err(
-            "coding, test and optimizations need code the candidate has written in the editor; read_editor shows none yet",
-        );
+    if about_code && kind != EvidenceKind::Skipped && !written_work(state) {
+        return Err(match state.interview_mode {
+            InterviewMode::Coding => {
+                "coding, test and optimizations need code the candidate has written in the editor; read_editor shows none yet"
+            }
+            InterviewMode::Whiteboard => {
+                "coding, test and optimizations need work the candidate has drawn on the board; read_board shows none yet"
+            }
+        });
     }
     let confidence = args
         .get("confidence")
@@ -1147,11 +1283,7 @@ pub fn record_framework_evidence(
         evict_one_observation(&mut state.framework_evidence);
     }
     state.framework_evidence.push(FrameworkEvidence {
-        at_ms: state
-            .started_at
-            .elapsed()
-            .as_millis()
-            .min(u128::from(u64::MAX)) as u64,
+        at_ms: elapsed_ms(state),
         phase,
         source,
         kind,
@@ -1263,6 +1395,7 @@ pub(crate) const fn evidence_source_id(source: EvidenceSource) -> &'static str {
     match source {
         EvidenceSource::CandidateSpeech => "candidate_speech",
         EvidenceSource::EditorSnapshot => "editor_snapshot",
+        EvidenceSource::BoardSnapshot => "board_snapshot",
         EvidenceSource::TestEvent => "test_event",
         EvidenceSource::SessionTiming => "session_timing",
     }
@@ -1329,6 +1462,7 @@ pub struct MetadataConfig {
     pub problem: &'static Problem,
     pub duration_min: u32,
     pub interview_loop: InterviewLoop,
+    pub interview_mode: InterviewMode,
     pub profile: InterviewProfile,
     pub grounding: InterviewGrounding,
 }
@@ -1524,6 +1658,11 @@ pub fn parse_participant_metadata(metadata: Option<&str>) -> MetadataConfig {
             .get("interviewLoop")
             .and_then(serde_json::Value::as_str),
     );
+    let interview_mode = InterviewMode::parse(
+        value
+            .get("interviewMode")
+            .and_then(serde_json::Value::as_str),
+    );
     let profile = sanitize_interview_profile(value.get("interviewProfile"));
     let grounding = sanitize_interview_grounding(value.get("interviewGrounding"));
 
@@ -1531,6 +1670,7 @@ pub fn parse_participant_metadata(metadata: Option<&str>) -> MetadataConfig {
         problem,
         duration_min,
         interview_loop,
+        interview_mode,
         profile,
         grounding,
     }

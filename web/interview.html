@@ -127,6 +127,32 @@
         </section>
       </section>
 
+      <!-- The other half of the shell, in place of the editor when the lobby
+           asked for a whiteboard interview. Both are in the page and one is
+           hidden, rather than built at runtime: the panel is laid out by the
+           same grid either way, and a canvas whose element was created after
+           the shell had been measured came up at the wrong size.
+
+           The pen row is filled by whiteboard.js from the colours it draws
+           with, so the board and the swatches cannot come to disagree. -->
+      <section id="board-panel" class="board-panel" hidden>
+        <div class="board-toolbar" role="toolbar" aria-label="Whiteboard tools">
+          <div id="board-pens" class="board-pens" role="group" aria-label="Pen colour"></div>
+          <button id="board-eraser" class="board-tool" type="button" aria-pressed="false">Eraser</button>
+          <button id="board-undo" class="board-tool" type="button">Undo</button>
+          <button id="board-redo" class="board-tool" type="button">Redo</button>
+          <button id="board-clear" class="board-tool" type="button">Clear</button>
+          <div class="sync-state"><span></span>Live-synced to Jim</div>
+        </div>
+        <div class="board-surface">
+          <canvas id="board" width="1600" height="1000" aria-label="Whiteboard"></canvas>
+        </div>
+        <p class="board-note muted small">
+          Jim sees the board a moment after you stop drawing. Nothing here runs:
+          trace your examples by hand and write the pseudo-code out at the end.
+        </p>
+      </section>
+
       <!-- Shown before the room is joined: the interview starts only after
            required local media is proven. -->
       <section id="audio-check" class="overlay">

@@ -152,7 +152,7 @@ fn token_response_matches_frontend_contract() {
     assert_eq!(claims["video"]["room"], response.room_name);
     assert_eq!(
         claims["metadata"],
-        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90,"interviewLoop":"coding_behavioral","interviewProfile":{"role":"","seniority":null,"targetCompany":"","practiceFocus":""},"candidateIdentity":"candidate-fixed"})).unwrap()
+        serde_json::to_string(&json!({"problemId":"merge-intervals","durationMin":90,"interviewLoop":"coding_behavioral","interviewMode":"coding","interviewProfile":{"role":"","seniority":null,"targetCompany":"","practiceFocus":""},"candidateIdentity":"candidate-fixed"})).unwrap()
     );
 }
 
@@ -182,6 +182,38 @@ fn token_ignores_a_mode_a_stale_client_still_sends() {
         assert!(
             metadata.get("mode").is_none(),
             "a mode reached the metadata for {body:?}"
+        );
+    }
+}
+
+/// The mode decides which tools the interviewer is offered and which prompt it
+/// is given, so an unrecognized spelling has to land on the editor interview
+/// rather than on something in between.
+#[test]
+fn token_interview_mode_is_allowlisted_and_defaults_to_the_editor() {
+    let config = TokenConfig {
+        api_key: "key",
+        api_secret: "secret",
+        server_url: "wss://example.test",
+        recording_max_min: None,
+    };
+    for (body, expected) in [
+        (
+            br#"{"interviewMode":"whiteboard"}"#.as_slice(),
+            "whiteboard",
+        ),
+        (br#"{"interviewMode":"coding"}"#.as_slice(), "coding"),
+        (br#"{"interviewMode":"WHITEBOARD"}"#.as_slice(), "coding"),
+        (br#"{"interviewMode":"board"}"#.as_slice(), "coding"),
+        (br#"{"interviewMode":42}"#.as_slice(), "coding"),
+        (br#"{}"#.as_slice(), "coding"),
+    ] {
+        let response = token_response(&config, body, "room", "candidate", 2_000).unwrap();
+        let claims = claims(&response.token);
+        let metadata: Value = serde_json::from_str(claims["metadata"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            metadata["interviewMode"], expected,
+            "interview mode for {body:?}"
         );
     }
 }
@@ -1435,7 +1467,7 @@ fn static_interview_script_leaves_candidate_identity_to_the_server() {
 
     assert!(
         source
-            .contains("JSON.stringify({ problemId: problem.page, durationMin, interviewId, interviewLoop, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) })")
+            .contains("JSON.stringify({ problemId: problem.page, durationMin, interviewId, interviewLoop, interviewMode: mode, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) })")
     );
     assert!(!source.contains("candidateIdentity"));
 }

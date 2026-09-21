@@ -89,12 +89,16 @@ test("the lobby offers one interview and carries no mode to the room", () => {
   const page = read("interview.html");
   const interview = read("interview.js");
 
-  // One interview, so the lobby offers no mode to pick and nothing carries one
-  // to the room. Asserted as absence because the confusion this removed was a
-  // choice on screen, and a stray button is exactly how it would come back.
-  assert.doesNotMatch(lobby, /data-mode=/);
-  assert.doesNotMatch(app, /searchParams\.set\("mode"/);
-  assert.doesNotMatch(interview, /params\.get\("mode"\)/);
+  // The mode the lobby offers is which surface the interview is held on, and
+  // that is the only thing it may be. The practice/scored split this replaced
+  // was a choice on screen about how hard the interview counted, and a stray
+  // button is exactly how it would come back, so the values are asserted
+  // rather than the attribute's absence.
+  assert.deepEqual(
+    [...lobby.matchAll(/data-mode="([^"]*)"/g)].map((match) => match[1]),
+    ["coding", "whiteboard"],
+  );
+  assert.doesNotMatch(app + lobby + interview, /"(practice|scored)"/);
   // Pause stayed; the two coaching controls went with the mode that gated them.
   assert.match(page, /id="pause"/);
   assert.doesNotMatch(interview, /retryPractice/);
@@ -129,7 +133,7 @@ test("the lobby offers one interview and carries no mode to the room", () => {
   assert.match(interview, /message\.type === "framework_state" && Array\.isArray\(message\.phases\)/);
   assert.match(interview, /frameworkRound = "behavioral"/);
   assert.match(interview, /globalThis\.setTimeout\(\(\) => \{\s*nodes\.frameworkHint\.hidden = true;/);
-  assert.match(interview, /JSON\.stringify\(\{ problemId: problem\.page, durationMin, interviewId, interviewLoop, interviewProfile, \.\.\.\(interviewGrounding/);
+  assert.match(interview, /JSON\.stringify\(\{ problemId: problem\.page, durationMin, interviewId, interviewLoop, interviewMode: mode, interviewProfile, \.\.\.\(interviewGrounding/);
   assert.match(interview, /interviewLoop, report: state\.report/);
 });
 

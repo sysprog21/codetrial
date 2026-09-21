@@ -1013,3 +1013,46 @@ test("each transcript row is classed by who is speaking", () => {
   assert.equal(panel.children[2].className, "transcript-row you");
   assert.equal(rowLabel(panel, 2), "You");
 });
+
+test("a whiteboard report shows the board where the code block would be", () => {
+  const session = {
+    report: { codingScore: 70, communicationScore: 70, decision: "NO_HIRE", summary: "Solid trace.", hintsUsed: 0, codingFeedback: { strengths: [], improvements: [] }, communicationFeedback: { strengths: [], improvements: [] } },
+    problemTitle: "Two Sum",
+    language: "python",
+    code: "",
+    transcript: [],
+    at: "2026-08-17",
+  };
+  const image = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
+
+  // Without a board this is the editor interview it has always been, and the
+  // empty editor says so rather than claiming a board nobody drew on.
+  const editor = reportMarkup(session);
+  assert.match(editor, /Your final code \(python\)/);
+  assert.match(editor, /\(editor was empty\)/);
+  assert.doesNotMatch(editor, /final board/);
+
+  const board = reportMarkup({ ...session, board: image });
+  assert.match(board, /Your final board/);
+  assert.match(board, new RegExp(`src="${image.replace(/[/+]/g, "\\$&")}"`));
+  assert.doesNotMatch(board, /Your final code/);
+  assert.doesNotMatch(board, /\(editor was empty\)/);
+
+  // The one `src` this card emits, so what may go in it is a shape rather than
+  // whatever the caller had. A page that handed it a URL of its own, or a
+  // canvas that would not export, gets a sentence instead of an image.
+  for (const refused of ["https://example.test/board.jpg", "javascript:alert(1)", "data:text/html;base64,PHA+", "", null, 7]) {
+    const bad = reportMarkup({ ...session, board: refused });
+    assert.match(bad, /The board could not be read back\./, `${String(refused)} was rendered`);
+    assert.doesNotMatch(bad, /<img/);
+  }
+
+  // The export says where the board is rather than carrying a hundred
+  // kilobytes of base64 that no markdown reader will render.
+  const markdown = reportMarkdown({ ...session, board: image });
+  assert.match(markdown, /## Final board/);
+  assert.match(markdown, /the recording replays it stroke by stroke/);
+  assert.doesNotMatch(markdown, /## Final code/);
+  assert.doesNotMatch(markdown, /base64/);
+  assert.match(reportMarkdown(session), /## Final code \(python\)/);
+});

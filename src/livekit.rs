@@ -43,9 +43,9 @@ use ::livekit::prelude::{DataPacket, RemoteParticipant, Room, RoomEvent, RoomOpt
 use crate::agent::{
     CANDIDATE_SPEAKER, INTERIM_CONTEXT_NOTES, InterimReviewInput, RuntimeState, SpeakerTurn,
     WATCH_TICK_S, apply_data_event, code_head, framework_evidence_json, framework_progress,
-    interim_review_prompt, parse_participant_metadata, read_editor_text, record_framework_evidence,
-    record_interim_notes, released_follow_ups, transcript_tail, unreviewed_from, with_timer,
-    wrap_up,
+    interim_review_prompt, parse_participant_metadata, read_board_text, read_editor_text,
+    record_framework_evidence, record_interim_notes, released_follow_ups, transcript_tail,
+    unreviewed_from, with_timer, wrap_up,
 };
 use crate::config::AgentConfig;
 use crate::runtime::TOPIC_CONTROL;
@@ -83,16 +83,18 @@ use crate::gemini::{
     redact_api_key, resume_live_session,
 };
 use crate::runtime::{
-    AGENT_NAME, RuntimeBootstrap, TOOL_END_INTERVIEW, TOOL_LOG_HINT, TOOL_READ_EDITOR,
-    TOOL_RECORD_FRAMEWORK_EVIDENCE, TOPIC_TRANSCRIPTION, agent_identity,
+    AGENT_NAME, RuntimeBootstrap, TOOL_END_INTERVIEW, TOOL_LOG_HINT, TOOL_READ_BOARD,
+    TOOL_READ_EDITOR, TOOL_RECORD_FRAMEWORK_EVIDENCE, TOPIC_TRANSCRIPTION, agent_identity,
 };
 use crate::token::{LivekitTokenInput, livekit_token};
 
+mod board;
 mod media;
 mod report;
 mod rooms;
 mod turn;
 
+use board::{Board, MAX_BOARD_BYTES, handle_board_event, pump_board};
 use report::publish_report;
 use rooms::{evict_duplicate_agent, isolate_local_agent};
 
@@ -462,6 +464,17 @@ async fn replace_gemini_session(
     {
         eprintln!("cold-restart briefing failed ({error}); waiting for the close to be reported");
         return Ok(ControlFlow::Continue(()));
+    }
+
+    // The briefing tells a whiteboard interviewer that the board's image comes
+    // with it, because the text cannot carry the drawing and a replacement
+    // session remembers none of it. A restart that left this out handed the
+    // interview back to a model that knew a board existed and had never seen
+    // one.
+    if context.state.interview_mode.is_whiteboard()
+        && let Err(error) = board::resend(context.board, context.gemini).await
+    {
+        eprintln!("cold-restart board failed ({error}); waiting for the close to be reported");
     }
     context.activity.mark_speaking();
     Ok(ControlFlow::Continue(()))
@@ -1013,6 +1026,11 @@ pub async fn run_room(
         presence: CandidatePresence::default(),
     };
 
+    // Held by the loop rather than by `media`, which is the candidate's
+    // inbound tracks: a board is not a track, it arrives on the data channel,
+    // and the one thing it shares with the camera is where it ends up.
+    let (mut board, mut board_rx) = Board::new();
+
     let mut watch = tokio::time::interval(Duration::from_secs_f64(WATCH_TICK_S));
 
     // The interview's own deadline, held by the process that owns the room
@@ -1033,12 +1051,22 @@ pub async fn run_room(
         let step = tokio::select! {
             () = &mut hard_deadline, if !turn.state.ended => {
                 let mut context =
-                    turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
+                    turn.context(
+                        &mut output_audio,
+                        &mut gemini,
+                        &mut board,
+                        media.identity.as_deref(),
+                    );
                 on_hard_deadline(&room, &mut context, &mut loops, interview).await?
             }
             _ = watch.tick(), if !turn.state.ended => {
                 let mut context =
-                    turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
+                    turn.context(
+                        &mut output_audio,
+                        &mut gemini,
+                        &mut board,
+                        media.identity.as_deref(),
+                    );
                 on_watch_tick(&room, &mut context, &mut loops, interview).await?
             }
             event = events.recv() => {
@@ -1051,50 +1079,74 @@ pub async fn run_room(
                     return Ok(());
                 };
 
-                // Media first, because most events are, and because attaching a
-                // track needs the stream and the socket apart -- which is the
-                // one thing a context, which borrows both together, cannot
-                // give.
-                match handle_media_event(
-                    &mut media,
-                    &mut gemini,
+                // The board first, because taking the reader off the event is
+                // all this does with it: the stream is drained on its own
+                // task, and the loop hears about the board when there is a
+                // whole one.
+                if handle_board_event(
+                    turn.state.interview_mode,
                     &candidate_identity,
-                    config.gemini_candidate_video_enabled,
+                    &board,
                     &event,
-                )
-                .await
-                {
-                    Ok(true) => ControlFlow::Continue(()),
-                    Ok(false) => {
-                        let mut context = turn.context(
-                            &mut output_audio,
-                            &mut gemini,
-                            media.identity.as_deref(),
-                        );
-                        handle_room_event(
-                            &room,
-                            &mut context,
-                            &mut loops.presence,
-                            interview,
-                            &ids,
-                            event,
-                        )
-                        .await?
-                    }
-                    Err(error) => {
-                        eprintln!("Gemini media attach failed ({error}); waiting for the close to be reported");
-                        ControlFlow::Continue(())
+                ) {
+                    ControlFlow::Continue(())
+                } else {
+                    // Media next, because most events are, and because
+                    // attaching a track needs the stream and the socket apart
+                    // -- which is the one thing a context, which borrows both
+                    // together, cannot give.
+                    match handle_media_event(
+                        &mut media,
+                        &mut gemini,
+                        &candidate_identity,
+                        config.gemini_candidate_video_enabled,
+                        &event,
+                    )
+                    .await
+                    {
+                        Ok(true) => ControlFlow::Continue(()),
+                        Ok(false) => {
+                            let mut context = turn.context(
+                                &mut output_audio,
+                                &mut gemini,
+                                &mut board,
+                                media.identity.as_deref(),
+                            );
+                            handle_room_event(
+                                &room,
+                                &mut context,
+                                &mut loops.presence,
+                                interview,
+                                &ids,
+                                event,
+                            )
+                            .await?
+                        }
+                        Err(error) => {
+                            eprintln!("Gemini media attach failed ({error}); waiting for the close to be reported");
+                            ControlFlow::Continue(())
+                        }
                     }
                 }
             }
             event = gemini.next_event() => {
                 let mut context =
-                    turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
+                    turn.context(
+                        &mut output_audio,
+                        &mut gemini,
+                        &mut board,
+                        media.identity.as_deref(),
+                    );
                 on_gemini_event(&room, &mut context, event, &mut loops, interview).await?
             }
             _ = tokio::time::sleep_until(output_audio.playout_deadline.into()), if turn.activity.floor == Floor::AwaitingPlayout && output_audio.is_playing() => {
                 let mut context =
-                    turn.context(&mut output_audio, &mut gemini, media.identity.as_deref());
+                    turn.context(
+                        &mut output_audio,
+                        &mut gemini,
+                        &mut board,
+                        media.identity.as_deref(),
+                    );
                 on_playout_settled(&room, &mut context, &mut loops, interview).await?
             }
             frame = next_audio_frame(&mut media.audio), if media.audio.is_some() => {
@@ -1115,6 +1167,27 @@ pub async fn run_room(
                 // ended stream, and there is no path through here that wants to
                 // hold on to one.
                 release_if_ended(&mut media.audio, ended);
+                ControlFlow::Continue(())
+            }
+            Some(snapshot) = board_rx.recv(), if !turn.state.ended => {
+                if turn.state.paused {
+                    // Dropped for the reason paused audio is: a paused
+                    // interview is not collecting evidence, and the drawing
+                    // done inside the pause reaches the interviewer on the
+                    // first snapshot after it.
+                } else {
+                    // The candidate is working, even while silent. Without
+                    // this the silence nudge counts a candidate who is drawing
+                    // a diagram as idle and interrupts them mid-stroke, which
+                    // is what `last_code_change` stops a typing candidate
+                    // being asked.
+                    turn.activity.last_code_change = Instant::now();
+                    if let Err(error) =
+                        pump_board(&mut board, &mut gemini, &mut turn.state, snapshot).await
+                    {
+                        eprintln!("Gemini board write failed ({error}); waiting for the close to be reported");
+                    }
+                }
                 ControlFlow::Continue(())
             }
             frame = next_video_frame(&mut media.video), if media.video.is_some() => {
@@ -1245,7 +1318,15 @@ async fn join_room(
         now_seconds,
         agent: true,
     })?;
-    let (room, events) = Room::connect(&config.livekit_url, &token, RoomOptions::default()).await?;
+    // The board is the only stream this agent is sent, so the room's ceiling
+    // on one is the board's. Left at the SDK default it is five gigabytes,
+    // which is a header away from a client that is not the browser buffering
+    // this process to death before a single chunk is judged.
+    let mut options = RoomOptions::default();
+    options.data_stream = options
+        .data_stream
+        .with_max_payload_byte_length(MAX_BOARD_BYTES);
+    let (room, events) = Room::connect(&config.livekit_url, &token, options).await?;
     eprintln!(
         "joined room={} identity={}",
         room_name,
@@ -1393,6 +1474,7 @@ fn candidate_bootstrap<'a>(
             profile: candidate.profile,
             grounding: candidate.grounding,
             interview_loop: candidate.interview_loop,
+            interview_mode: candidate.interview_mode,
         },
     )
 }
@@ -1429,6 +1511,7 @@ fn initial_runtime_state(boot: &RuntimeBootstrap<'_>, started_at: Instant) -> Ru
     RuntimeState {
         started_at,
         interview_loop: boot.interview_loop,
+        interview_mode: boot.interview_mode,
         coding_minutes: boot.coding_minutes,
         behavioral_minutes: boot.behavioral_minutes,
         ..RuntimeState::for_problem(boot.problem)
@@ -1579,6 +1662,7 @@ async fn handle_data_packet(
         &reason,
         interview.started_at.elapsed().as_secs_f64() / 60.0,
         &interview.config.google_api_key,
+        context.board.latest(),
     )
     .await?;
     context.gemini.shutdown().await?;
@@ -1591,6 +1675,10 @@ async fn handle_data_packet(
 struct GeminiEventContext<'a> {
     output_audio: &'a mut OutputAudio,
     gemini: &'a mut GeminiLiveSession,
+    /// The latest board, for the two paths that have to put it back in front
+    /// of the model: `read_board`, and a session that came up remembering
+    /// nothing.
+    board: &'a mut Board,
     state: &'a mut RuntimeState,
     agent_state: &'a mut String,
     activity: &'a mut RuntimeActivity,
@@ -1701,6 +1789,20 @@ async fn on_tool_calls(
         if checklist_changed(&shown_before, context.state) {
             publish_framework_progress(room, context.state).await?;
         }
+    }
+
+    // What `read_board` could not put in its own response. After the
+    // responses rather than between them, so a batch that asked twice puts the
+    // board up once, and after the text so the model reads what it is looking
+    // at before it looks.
+    //
+    // Not `?`: an image the socket would not take is worth a line and a turn
+    // that answers from the board it already had, not an interview ended on
+    // the write.
+    if std::mem::take(&mut context.state.board_resend_requested)
+        && let Err(error) = board::resend(context.board, context.gemini).await
+    {
+        eprintln!("board resend failed ({error}); waiting for the close to be reported");
     }
     Ok(())
 }
@@ -1922,6 +2024,22 @@ fn agent_state_attributes(
 /// text model's tool calls with this dispatch rather than a copy of it.
 pub fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) -> serde_json::Value {
     match call.name.as_str() {
+        // The image cannot travel in this response, so the tool records the
+        // ask and the room loop answers it with a realtime image; see
+        // `board::resend`. The text is what a picture cannot say: how much is
+        // on the board, and how long ago it was drawn.
+        TOOL_READ_BOARD => {
+            state.board_resend_requested = true;
+            serde_json::json!({
+                "result": read_board_text(
+                    state.board_strokes,
+                    state.board_snapshots,
+                    crate::agent::board_age_seconds(state),
+                    crate::agent::minutes_left(state),
+                )
+            })
+        }
+
         TOOL_READ_EDITOR => serde_json::json!({
             "result": read_editor_text(
                 &state.language,
@@ -2232,11 +2350,13 @@ impl TurnState {
         &'a mut self,
         output_audio: &'a mut OutputAudio,
         gemini: &'a mut GeminiLiveSession,
+        board: &'a mut Board,
         candidate_identity: Option<&'a str>,
     ) -> GeminiEventContext<'a> {
         GeminiEventContext {
             output_audio,
             gemini,
+            board,
             state: &mut self.state,
             agent_state: &mut self.agent_state,
             activity: &mut self.activity,

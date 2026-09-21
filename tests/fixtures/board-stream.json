@@ -1,0 +1,41 @@
+{
+  "topic": "board_image",
+  "cases": [
+    {
+      "name": "first board",
+      "options": {
+        "topic": "board_image",
+        "name": "board-1.jpg",
+        "mimeType": "image/jpeg",
+        "totalSize": 21504,
+        "attributes": {
+          "strokes": "3"
+        }
+      }
+    },
+    {
+      "name": "a dense diagram",
+      "options": {
+        "topic": "board_image",
+        "name": "board-17.jpg",
+        "mimeType": "image/jpeg",
+        "totalSize": 96318,
+        "attributes": {
+          "strokes": "214"
+        }
+      }
+    },
+    {
+      "name": "cleared board",
+      "options": {
+        "topic": "board_image",
+        "name": "board-18.jpg",
+        "mimeType": "image/jpeg",
+        "totalSize": 4096,
+        "attributes": {
+          "strokes": "0"
+        }
+      }
+    }
+  ]
+}

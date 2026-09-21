@@ -1,4 +1,6 @@
-use codetrial::agent::{InterviewGrounding, InterviewLoop, InterviewProfile, Seniority};
+use codetrial::agent::{
+    InterviewGrounding, InterviewLoop, InterviewMode, InterviewProfile, Seniority,
+};
 use codetrial::config::{
     DEFAULT_GEMINI_LIVE_MODEL, DEFAULT_GEMINI_REPORT_MODEL, DEFAULT_GEMINI_SILENCE_MS,
     DEFAULT_GEMINI_START_SENSITIVITY, DEFAULT_GEMINI_VOICE, load_from_pairs,
@@ -107,6 +109,7 @@ fn bootstrap_owns_validated_round_plan_and_budgets() {
             profile: InterviewProfile::default(),
             grounding: InterviewGrounding::default(),
             interview_loop: InterviewLoop::CodingOnly,
+            interview_mode: InterviewMode::Coding,
         },
     );
     assert_eq!((coding.coding_minutes, coding.behavioral_minutes), (45, 0));
@@ -124,6 +127,7 @@ fn bootstrap_owns_validated_round_plan_and_budgets() {
             profile: InterviewProfile::default(),
             grounding: InterviewGrounding::default(),
             interview_loop: InterviewLoop::CodingBehavioral,
+            interview_mode: InterviewMode::Coding,
         },
     );
     assert_eq!(

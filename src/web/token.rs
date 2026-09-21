@@ -230,12 +230,15 @@ pub fn token_response(
     let duration_min = token_duration_min(request.get("durationMin"), config.recording_max_min);
     let interview_loop =
         crate::agent::InterviewLoop::parse(request.get("interviewLoop").and_then(Value::as_str));
+    let interview_mode =
+        crate::agent::InterviewMode::parse(request.get("interviewMode").and_then(Value::as_str));
     let profile = crate::agent::sanitize_interview_profile(request.get("interviewProfile"));
     let grounding = crate::agent::sanitize_interview_grounding(request.get("interviewGrounding"));
     let mut metadata = json!({
         "problemId": problem_id,
         "durationMin": duration_min.clone(),
         "interviewLoop": interview_loop.as_str(),
+        "interviewMode": interview_mode.as_str(),
         "interviewProfile": crate::agent::interview_profile_json(&profile),
         "candidateIdentity": default_identity,
     });
