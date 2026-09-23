@@ -885,15 +885,44 @@ fn code_analysis_separates_a_rename_from_an_argument_swap() {
     assert_eq!(swapped.classification, Some(CodeChangeClass::Expression));
     assert!(swapped.semantic_change);
 
-    let renamed = analyze_code("python", "merge(left, right)\n", "merge(first, right)\n");
+    let renamed = analyze_code(
+        "python",
+        "left = 1\nmerge(left, right)\n",
+        "first = 1\nmerge(first, right)\n",
+    );
     assert_eq!(
         renamed.classification,
         Some(CodeChangeClass::IdentifierOnly)
     );
 
+    // Pointing a reference at another name already in scope is not a rename
+    // either: the function now returns something else.
+    for (before, after) in [
+        (
+            "def f(x, y):\n    return x\n",
+            "def f(x, y):\n    return y\n",
+        ),
+        (
+            "total = 0\ncount = 1\nprint(total)\n",
+            "total = 0\ncount = 1\nprint(count)\n",
+        ),
+    ] {
+        let repointed = analyze_code("python", before, after);
+        assert_eq!(
+            repointed.classification,
+            Some(CodeChangeClass::Expression),
+            "{before:?} -> {after:?}"
+        );
+    }
+
     // A rename that also changes a literal is no longer only a rename: the tree
-    // is the same shape, but the value the call gets is not.
-    let retuned = analyze_code("python", "merge(left, 1)\n", "merge(first, 2)\n");
+    // is the same shape, but the value the call gets is not. `left` is bound,
+    // so the names alone would be a rename.
+    let retuned = analyze_code(
+        "python",
+        "left = 0\nmerge(left, 1)\n",
+        "first = 0\nmerge(first, 2)\n",
+    );
     assert_eq!(retuned.classification, Some(CodeChangeClass::Expression));
 }
 
@@ -3282,4 +3311,204 @@ fn a_rename_is_a_program_change_but_not_a_substantive_one() {
     }
     assert_eq!(ledger.code.semantic_revision, 3);
     assert_eq!(ledger.code.substantive_revision, 2);
+}
+
+#[test]
+fn changed_external_references_arm_a_review() {
+    for (language, before, after) in [
+        (
+            "python",
+            "def solve(xs): return min(xs)\n",
+            "def solve(xs): return max(xs)\n",
+        ),
+        (
+            "javascript",
+            "function solve(xs) { return min(xs); }",
+            "function solve(xs) { return max(xs); }",
+        ),
+        (
+            "c",
+            "int solve(int x) { return min(x); }",
+            "int solve(int x) { return max(x); }",
+        ),
+        (
+            "cpp",
+            "int solve(int x) { return min(x); }",
+            "int solve(int x) { return max(x); }",
+        ),
+        (
+            "java",
+            "class S { int solve(int x) { return min(x); } }",
+            "class S { int solve(int x) { return max(x); } }",
+        ),
+        ("python", "merge(left, right)\n", "merge(first, right)\n"),
+        (
+            "python",
+            "def f(min): return min\ndef g(xs): return min(xs)\n",
+            "def f(max): return max\ndef g(xs): return max(xs)\n",
+        ),
+        (
+            "python",
+            "min = 1\nresult = obj.min(xs)\n",
+            "max = 1\nresult = obj.max(xs)\n",
+        ),
+        ("python", "min = 1\nf(min=min)\n", "max = 1\nf(max=max)\n"),
+    ] {
+        let analysis = analyze_code(language, before, after);
+        assert_eq!(
+            analysis.classification,
+            Some(CodeChangeClass::Expression),
+            "{language}: {before}"
+        );
+        let mut ledger = EvidenceLedger::default();
+        ledger.record_code_with_analysis(
+            None,
+            100,
+            language,
+            before,
+            true,
+            analyze_code(language, "", before),
+        );
+        let revision = ledger.code.substantive_revision;
+        ledger.record_code_with_analysis(None, 200, language, after, true, analysis);
+        assert_eq!(
+            ledger.code.substantive_revision,
+            revision + 1,
+            "{language}: {before}"
+        );
+    }
+}
+
+#[test]
+fn a_binding_elsewhere_does_not_justify_a_reference_change() {
+    for (language, before, after) in [
+        (
+            "python",
+            "def f(min=min(xs)): return min\n",
+            "def f(max=max(xs)): return max\n",
+        ),
+        (
+            "javascript",
+            "function f(xs) { { let min = 1; } return min(xs); }",
+            "function f(xs) { { let max = 1; } return max(xs); }",
+        ),
+        (
+            "python",
+            "def f(fs, xs): return [min(xs) for min in min(fs)]\n",
+            "def f(fs, xs): return [max(xs) for max in max(fs)]\n",
+        ),
+        (
+            "javascript",
+            "function f(xs) { for (let min = 0; min < 1; min++) {} return min(xs); }",
+            "function f(xs) { for (let max = 0; max < 1; max++) {} return max(xs); }",
+        ),
+    ] {
+        assert_eq!(
+            analyze_code(language, before, after).classification,
+            Some(CodeChangeClass::Expression),
+            "{language}"
+        );
+    }
+}
+
+#[test]
+fn corresponding_local_bindings_still_allow_renames() {
+    for (language, before, after) in [
+        (
+            "python",
+            "def f(xs):\n    value = min(xs)\n    return value\n",
+            "def f(xs):\n    result = min(xs)\n    return result\n",
+        ),
+        (
+            "javascript",
+            "function f(xs) { let value = min(xs); return value; }",
+            "function f(xs) { let result = min(xs); return result; }",
+        ),
+        (
+            "c",
+            "int f(int x) { int value = x; return value; }",
+            "int f(int x) { int result = x; return result; }",
+        ),
+        (
+            "cpp",
+            "int f(int x) { int value = x; return value; }",
+            "int f(int x) { int result = x; return result; }",
+        ),
+        (
+            "java",
+            "class S { int f(int x) { int value = x; return value; } }",
+            "class S { int f(int x) { int result = x; return result; } }",
+        ),
+        // A local used inside a loop or a branch reads the enclosing binding.
+        (
+            "c",
+            "int f(int n) { int total = 0; for (int i = 0; i < n; i++) { total += i; } return total; }",
+            "int f(int n) { int sum = 0; for (int i = 0; i < n; i++) { sum += i; } return sum; }",
+        ),
+        (
+            "javascript",
+            "function f(xs) { let value = 0; for (const x of xs) { value += x; } return value; }",
+            "function f(xs) { let total = 0; for (const x of xs) { total += x; } return total; }",
+        ),
+        (
+            "java",
+            "class S { int f(int x) { int value = x; if (x > 0) { value = 1; } return value; } }",
+            "class S { int f(int x) { int result = x; if (x > 0) { result = 1; } return result; } }",
+        ),
+        (
+            "python",
+            "def f(xs):\n    total = 0\n    for x in xs:\n        total += x\n    return total\n",
+            "def f(xs):\n    acc = 0\n    for x in xs:\n        acc += x\n    return acc\n",
+        ),
+        // A nested function reads the enclosing function's local.
+        (
+            "python",
+            "def f(xs):\n    total = 0\n    def g():\n        return total\n    return g\n",
+            "def f(xs):\n    acc = 0\n    def g():\n        return acc\n    return g\n",
+        ),
+        // A class body reads its own names.
+        (
+            "python",
+            "class C:\n    x = 1\n    y = x + 1\n",
+            "class C:\n    z = 1\n    y = z + 1\n",
+        ),
+        // Parameters with a default, a type, or both bind their names.
+        (
+            "python",
+            "def f(n=1):\n    return n\n",
+            "def f(k=1):\n    return k\n",
+        ),
+        (
+            "python",
+            "def f(n: int):\n    return n\n",
+            "def f(k: int):\n    return k\n",
+        ),
+        (
+            "python",
+            "def f(n: int = 1):\n    return n\n",
+            "def f(k: int = 1):\n    return k\n",
+        ),
+    ] {
+        assert_eq!(
+            analyze_code(language, before, after).classification,
+            Some(CodeChangeClass::IdentifierOnly),
+            "{language}: {before}"
+        );
+    }
+}
+
+/// A method cannot see its class body's names, so renaming a class attribute
+/// together with a bare reference in a method is not a rename: the method was
+/// reading some other `x` all along.
+#[test]
+fn a_class_body_binding_does_not_reach_its_methods() {
+    assert_eq!(
+        analyze_code(
+            "python",
+            "class C:\n    x = 1\n    def m(self):\n        return x\n",
+            "class C:\n    y = 1\n    def m(self):\n        return y\n",
+        )
+        .classification,
+        Some(CodeChangeClass::Expression)
+    );
 }

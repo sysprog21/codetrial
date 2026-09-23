@@ -1218,8 +1218,8 @@ fn analyze_sides(
             current_alone,
         );
     }
-    let before = syntax_facts(previous_tree.root_node(), previous);
-    let after = syntax_facts(current_tree.root_node(), current);
+    let before = syntax_facts(previous_tree.root_node(), previous, grammar);
+    let after = syntax_facts(current_tree.root_node(), current, grammar);
     let changed_nodes = changed_node_facts(&before.node_counts, &after.node_counts);
 
     // Read once, and read whole. The predicates below disagree on purpose about
@@ -1255,9 +1255,17 @@ fn analyze_sides(
         // argument swap, and calling it `identifier_only` told the report the
         // candidate had renamed something while the call they actually changed
         // went unmentioned. The multiset separates the two.
+        //
+        // Nor is pointing one reference at another name that already exists.
+        // `return x` becoming `return y` changes what the function returns, and
+        // read as a rename it never armed a review. A rename maps every
+        // occurrence of one name to one new name and no two names to the same
+        // one, and each changed reference has to resolve, old name and new, to
+        // the same local binding.
         if before.shape == after.shape
             && before.identifiers != after.identifiers
             && sorted(&before.identifiers) != sorted(&after.identifiers)
+            && consistent_rename(&before, &after)
         {
             CodeChangeClass::IdentifierOnly
         } else {
@@ -1465,6 +1473,82 @@ fn bounded_node_facts(mut facts: Vec<String>) -> Vec<String> {
     facts
 }
 
+/// A spelling substitution needs a binding in the same scope. Otherwise
+/// `min(xs)` becoming `max(xs)` would suppress review of a changed computation.
+/// Unrecognized bindings and references across scopes stay substantive; this
+/// is deliberately not a name resolver for all five languages.
+fn consistent_rename(before: &SyntaxFacts<'_>, after: &SyntaxFacts<'_>) -> bool {
+    let mut forward = std::collections::HashMap::new();
+    let mut backward = std::collections::HashMap::new();
+    before.identifiers.len() == after.identifiers.len()
+        && before
+            .identifiers
+            .iter()
+            .zip(&after.identifiers)
+            .enumerate()
+            .all(|(index, (old, new))| {
+                *forward.entry(*old).or_insert(*new) == *new
+                    && *backward.entry(*new).or_insert(*old) == *old
+                    && (old == new || {
+                        let old_scope = before.identifier_scopes[index];
+                        old_scope == after.identifier_scopes[index]
+                            && old_scope.is_some_and(|scope| {
+                                let bound = before.resolve(scope, old);
+                                bound.is_some() && bound == after.resolve(scope, new)
+                            })
+                    })
+            })
+}
+
+impl SyntaxFacts<'_> {
+    /// The scope whose binding a reference to `name` in `scope` reads: the
+    /// nearest enclosing one that binds it. A reference inside a loop or a
+    /// branch reads the function's local, so requiring the binding in the
+    /// reference's own scope called every rename of a variable used in a
+    /// block a change of program. A Python class body is skipped from the
+    /// methods inside it, which cannot see its names.
+    fn resolve(&self, scope: usize, name: &str) -> Option<usize> {
+        std::iter::successors(Some(scope), |&current| self.scope_parents[current]).find(
+            |&current| {
+                (current == scope || !self.class_scopes.contains(&current))
+                    && self.local_bindings.contains(&(current, name))
+            },
+        )
+    }
+}
+
+fn local_binding(node: tree_sitter::Node<'_>) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    let field = |name| parent.child_by_field_name(name) == Some(node);
+    match parent.kind() {
+        "parameters" | "formal_parameters" | "lambda_parameters" => true,
+        "assignment" | "for_statement" | "for_in_clause" => field("left"),
+        "variable_declarator" | "formal_parameter" | "catch_formal_parameter" => field("name"),
+        "init_declarator" | "parameter_declaration" => field("declarator"),
+        "default_parameter" | "typed_default_parameter" => field("name"),
+
+        // Python's typed parameter names its identifier with no field.
+        "typed_parameter" => parent.named_child(0) == Some(node),
+        _ => false,
+    }
+}
+
+fn local_reference(node: tree_sitter::Node<'_>) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    // Member names and keyword labels do not refer to a local of that spelling.
+    !["attribute", "field", "name", "alias"]
+        .into_iter()
+        .any(|field| parent.child_by_field_name(field) == Some(node))
+        && !matches!(
+            parent.kind(),
+            "dotted_name" | "global_statement" | "nonlocal_statement" | "method_reference"
+        )
+}
+
 fn sorted<'a>(identifiers: &[&'a str]) -> Vec<&'a str> {
     let mut sorted = identifiers.to_vec();
     sorted.sort_unstable();
@@ -1493,6 +1577,12 @@ pub(crate) fn parser_unavailable() -> CodeAnalysis {
 struct SyntaxFacts<'a> {
     node_counts: std::collections::BTreeMap<String, u32>,
     identifiers: Vec<&'a str>,
+    identifier_scopes: Vec<Option<usize>>,
+    local_bindings: std::collections::HashSet<(usize, &'a str)>,
+    /// Each scope's enclosing scope, by scope number; the root has none.
+    scope_parents: Vec<Option<usize>>,
+    /// Python class bodies, whose names the methods inside cannot see.
+    class_scopes: std::collections::HashSet<usize>,
     /// Kind and text, since `+` and a string holding "+" are different leaves.
     leaves: Vec<(&'static str, &'a str)>,
     comments: Vec<&'a str>,
@@ -1544,7 +1634,11 @@ struct SyntaxFacts<'a> {
 /// beside it. The closure's own node keeps its kind, because gaining a lambda
 /// is a fact about the code the candidate wrote; only what is nested inside it
 /// is qualified.
-fn syntax_facts<'a>(root: tree_sitter::Node<'_>, source: &'a str) -> SyntaxFacts<'a> {
+fn syntax_facts<'a>(
+    root: tree_sitter::Node<'_>,
+    source: &'a str,
+    grammar: &str,
+) -> SyntaxFacts<'a> {
     struct Frame<'tree> {
         node: tree_sitter::Node<'tree>,
         in_parameters: bool,
@@ -1553,6 +1647,9 @@ fn syntax_facts<'a>(root: tree_sitter::Node<'_>, source: &'a str) -> SyntaxFacts
         opaque_parameters: bool,
         in_binding: bool,
         depth: u32,
+        scope: usize,
+        // Defaults and comprehension iterables can resolve outside this scope.
+        ambiguous_references: bool,
     }
     let mut stack = vec![Frame {
         node: root,
@@ -1561,9 +1658,16 @@ fn syntax_facts<'a>(root: tree_sitter::Node<'_>, source: &'a str) -> SyntaxFacts
         opaque_parameters: false,
         in_binding: false,
         depth: 0,
+        scope: 0,
+        ambiguous_references: false,
     }];
     let mut node_counts = std::collections::BTreeMap::new();
     let mut identifiers = Vec::new();
+    let mut identifier_scopes = Vec::new();
+    let mut local_bindings = std::collections::HashSet::new();
+    let mut scope_parents = vec![None];
+    let mut class_scopes = std::collections::HashSet::new();
+    let mut next_scope = 0;
     let mut leaves = Vec::new();
     let mut comments = Vec::new();
     let mut interface_leaves = Vec::new();
@@ -1582,9 +1686,59 @@ fn syntax_facts<'a>(root: tree_sitter::Node<'_>, source: &'a str) -> SyntaxFacts
         opaque_parameters,
         in_binding,
         depth,
+        mut scope,
+        ambiguous_references,
     }) = stack.pop()
     {
         let kind = node.kind();
+        let nested_block = grammar != "python"
+            && matches!(kind, "block" | "statement_block" | "compound_statement")
+            && node.parent().is_some_and(|parent| {
+                !matches!(
+                    parent.kind(),
+                    "function_definition"
+                        | "function_declaration"
+                        | "method_declaration"
+                        | "lambda_expression"
+                        | "arrow_function"
+                        | "function_expression"
+                )
+            });
+        let scoped_statement = grammar != "python"
+            && matches!(
+                kind,
+                "for_statement"
+                    | "for_in_statement"
+                    | "for_range_loop"
+                    | "enhanced_for_statement"
+                    | "catch_clause"
+                    | "if_statement"
+                    | "switch_statement"
+                    | "while_statement"
+            );
+        if nested_block
+            || scoped_statement
+            || closure_kind(kind)
+            || matches!(
+                kind,
+                "function_definition"
+                    | "function_declaration"
+                    | "method_declaration"
+                    | "class_definition"
+                    | "class_declaration"
+                    | "list_comprehension"
+                    | "set_comprehension"
+                    | "dictionary_comprehension"
+                    | "generator_expression"
+            )
+        {
+            next_scope += 1;
+            scope_parents.push(Some(scope));
+            scope = next_scope;
+            if grammar == "python" && kind == "class_definition" {
+                class_scopes.insert(scope);
+            }
+        }
 
         // A Python `\` joins two lines into one, which is layout like the
         // newline it hides, but the grammar makes it a named token: breaking a
@@ -1655,6 +1809,13 @@ fn syntax_facts<'a>(root: tree_sitter::Node<'_>, source: &'a str) -> SyntaxFacts
             if in_parameters {
                 interface_leaves.push(None);
             }
+            let binding = local_binding(node);
+            if binding {
+                local_bindings.insert((scope, text));
+            }
+            identifier_scopes.push(
+                (binding || (!ambiguous_references && local_reference(node))).then_some(scope),
+            );
             identifiers.push(text);
         }
         if node.child_count() == 0
@@ -1697,6 +1858,19 @@ fn syntax_facts<'a>(root: tree_sitter::Node<'_>, source: &'a str) -> SyntaxFacts
                 opaque_parameters: opaque,
                 in_binding: in_binding || binding == Some(child.id()),
                 depth: depth + 1,
+                scope,
+                ambiguous_references: ambiguous_references
+                    || matches!(
+                        kind,
+                        "parameters"
+                            | "formal_parameters"
+                            | "parameter_list"
+                            | "lambda_parameters"
+                            | "list_comprehension"
+                            | "set_comprehension"
+                            | "dictionary_comprehension"
+                            | "generator_expression"
+                    ),
             }
         }));
         stack[pushed_from..].reverse();
@@ -1704,6 +1878,10 @@ fn syntax_facts<'a>(root: tree_sitter::Node<'_>, source: &'a str) -> SyntaxFacts
     SyntaxFacts {
         node_counts,
         identifiers,
+        identifier_scopes,
+        local_bindings,
+        scope_parents,
+        class_scopes,
         leaves,
         comments,
         interface_leaves,
