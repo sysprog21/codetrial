@@ -303,6 +303,7 @@
     "revision": 10,
     "candidate_edits": 7,
     "semantic_revision": 6,
+    "substantive_revision": 6,
     "parser_observation": "parsed",
     "latest_digest": "9ec7bfb3f944378bfcdd93de772660fe8693948571b860e97610cdabded1d767",
     "digest_history": [

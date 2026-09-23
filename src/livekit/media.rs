@@ -30,7 +30,11 @@ pub(super) const GEMINI_AUDIO_SAMPLE_RATE: i32 = 16_000;
 
 pub(super) const GEMINI_AUDIO_CHANNELS: i32 = 1;
 
-pub(super) const GEMINI_AUDIO_BUFFER_BYTES: usize = 3_200;
+/// Audio sent to Gemini in forty-millisecond batches of 16 kHz mono PCM16. At a
+/// hundred, the last words before the candidate stopped could wait that long
+/// for a full batch, and the endpointing clock does not start until Gemini has
+/// them; a smaller batch costs messages, not bytes.
+pub(super) const GEMINI_AUDIO_BUFFER_BYTES: usize = 1_280;
 
 pub(super) const GEMINI_VIDEO_MIME_TYPE: &str = "image/jpeg";
 

@@ -984,11 +984,11 @@ pub fn live_tool_declarations() -> Value {
     json!([
         {
             "name": TOOL_READ_EDITOR,
-            "description": "Return the current editor language, numbered code, latest test run summary, and how many minutes remain on the candidate's countdown."
+            "description": "The editor's language and numbered code, the latest test run and the minutes left."
         },
         {
             "name": TOOL_LOG_HINT,
-            "description": "Record a hint. Before a hint the candidate asked for, call with requested true and give the clue it returns; after any other hint, call with requested false.",
+            "description": "Record a hint: requested true before one they asked for, then give the clue it returns with their editor; requested false after any other.",
             "parameters": {
                 "type": "OBJECT",
                 "properties": {
@@ -999,7 +999,7 @@ pub fn live_tool_declarations() -> Value {
         },
         {
             "name": TOOL_RECORD_FRAMEWORK_EVIDENCE,
-            "description": "Record trusted REACTO or STAR evidence only after it is present in candidate speech, an editor snapshot, or a test event.",
+            "description": "Record REACTO or STAR evidence present in their speech, an editor snapshot or a test event.",
 
             // Schema.Type is an enum, so these are its value names, not free
             // text. Lowercase happens to be accepted here and is rejected on
@@ -1019,7 +1019,7 @@ pub fn live_tool_declarations() -> Value {
         },
         {
             "name": TOOL_END_INTERVIEW,
-            "description": "Close the interview because it is genuinely finished and there is nothing further to ask. The platform speaks the closing; do not say goodbye before calling this."
+            "description": "Close an interview with nothing left to ask. The platform speaks the closing, so say no goodbye first."
         }
     ])
 }

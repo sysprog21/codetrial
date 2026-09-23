@@ -3254,3 +3254,22 @@ fn a_hint_line_appears_for_any_hint() {
         );
     }
 }
+
+/// Every program change moves `semantic_revision`; only one that is not a
+/// rename alone moves `substantive_revision`, which is what arms a review.
+#[test]
+fn a_rename_is_a_program_change_but_not_a_substantive_one() {
+    let mut ledger = EvidenceLedger::default();
+    let mut previous = String::new();
+    for (receipt, code) in [
+        (100, "total = 0\n"),
+        (200, "count = 0\n"),
+        (300, "count = 1\n"),
+    ] {
+        let analysis = analyze_code("python", &previous, code);
+        ledger.record_code_with_analysis(None, receipt, "python", code, true, analysis);
+        previous = code.to_string();
+    }
+    assert_eq!(ledger.code.semantic_revision, 3);
+    assert_eq!(ledger.code.substantive_revision, 2);
+}

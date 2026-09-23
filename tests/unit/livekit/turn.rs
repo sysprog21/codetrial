@@ -182,9 +182,10 @@ fn one_review_at_a_time_is_arithmetic_and_not_a_hope() {
     // every review is handed a context it cannot help repeating.
     const { assert!(INTERIM_CONTEXT_NOTES + MAX_INTERIM_LINES_PER_REVIEW < MAX_INTERIM_NOTES) };
 
-    // The default quota fills the retained note budget without evicting a
-    // previous review before the interview ends.
-    const { assert!(DEFAULT_MAX_INTERIM_REVIEWS * MAX_INTERIM_LINES_PER_REVIEW == MAX_INTERIM_NOTES) };
+    // The default quota fits the retained note budget, so no review evicts a
+    // previous one before the interview ends. It uses half: the budget is sized
+    // for an operator who sets twelve.
+    const { assert!(DEFAULT_MAX_INTERIM_REVIEWS * MAX_INTERIM_LINES_PER_REVIEW <= MAX_INTERIM_NOTES) };
 
     // A pause has to be long enough to be worth reading and short enough to
     // happen; a threshold at or above the cooldown would mean the cooldown

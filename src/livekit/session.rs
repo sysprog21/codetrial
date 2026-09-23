@@ -433,7 +433,24 @@ fn tool_response(state: &mut RuntimeState, call: &GeminiFunctionCall) -> serde_j
                 .get("requested")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(true);
-            serde_json::json!({ "result": crate::agent::record_hint(state, requested) })
+            let mut result = crate::agent::record_hint(state, requested);
+
+            // The editor comes with the clue, so a requested hint is one tool
+            // call rather than `read_editor` and then this: the model is told
+            // to fit the clue to their code, and asking for the code first was
+            // a whole round trip before it could say anything. The fences are
+            // the ones `read_editor` answers with.
+            if requested {
+                result.push_str("\n\n");
+                result.push_str(&read_editor_text(
+                    &state.language,
+                    &state.code,
+                    state.last_test_run.as_ref(),
+                    state.test_runs,
+                    crate::agent::minutes_left(state),
+                ));
+            }
+            serde_json::json!({ "result": result })
         }
 
         // The call that completes the coding round also hands over the

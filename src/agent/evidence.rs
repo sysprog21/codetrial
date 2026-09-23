@@ -136,6 +136,12 @@ pub struct CodeState {
     /// publishes on connect and on every tab switch.
     pub candidate_edits: u64,
     pub semantic_revision: u64,
+    /// The program changes that were not renames alone, which is what arms a
+    /// proactive review. A rename moves `semantic_revision`, since the program
+    /// did change, but a review of one is an "mm-hm" at best: the interviewer
+    /// has nothing to ask about a variable called something else.
+    #[serde(default)]
+    pub substantive_revision: u64,
     pub parser_observation: Option<CodeObservation>,
     pub latest_digest: String,
     /// Bounded raw-free history used only to make revisiting an earlier editor
@@ -763,6 +769,9 @@ impl EvidenceLedger {
         }
         if candidate_edit && analysis.semantic_change {
             self.code.semantic_revision += 1;
+            if analysis.classification != Some(CodeChangeClass::IdentifierOnly) {
+                self.code.substantive_revision += 1;
+            }
             self.stuck.last_meaningful_change_ms = Some(receipt_timestamp_ms);
         }
 

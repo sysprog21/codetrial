@@ -58,7 +58,7 @@ fn prompt_golden_digest_matches_versions() {
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
     let recorded_versions = (8, 13);
-    let recorded_digest = "e64a77fcdcbdb9bc78baa39f2b6a441ba901d97a580510ddca936624f0aab688";
+    let recorded_digest = "afdb5a0308ce139a4efdf0dc2fa82ffcef66e9a5e85912e13323a9ab37f98203";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -353,7 +353,7 @@ fn live_instructions_pose_the_variant_and_hold_no_source_or_walkthrough() {
         "never answer a question they did not ask",
         "held back until the coding round is complete",
         "returns the one clue to give now",
-        "from a ladder\n   you do not otherwise hold",
+        "from a ladder you do not otherwise hold",
     ] {
         assert!(prompt.contains(rule), "missing rule: {rule}");
     }

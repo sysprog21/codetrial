@@ -20,10 +20,14 @@ pub const DEFAULT_GEMINI_LIVE_MODEL: &str = "gemini-3.1-flash-live-preview";
 /// composing an answer in a second language. 700ms was measured against a
 /// fluent speaker and is inside the pause such a candidate takes to find the
 /// next word: Gemini called the turn over, Jim answered, and the candidate was
-/// still mid-sentence. The cost of the other mistake is that every reply now
-/// starts about eight tenths of a second later, which nobody reports as a
-/// broken interview.
-pub const DEFAULT_GEMINI_SILENCE_MS: u32 = 1_500;
+/// still mid-sentence. The cost of the other mistake is that every reply
+/// starts later, which nobody reports as a broken interview, but every reply
+/// pays: at 1,500ms the window was about seven tenths of what the candidate
+/// waited between finishing and hearing the reply start. 1,000ms keeps most of
+/// the room the second-language pause needed and gives half a second back on
+/// every turn. A room that still sees candidates cut off sets
+/// `GEMINI_SILENCE_MS` higher.
+pub const DEFAULT_GEMINI_SILENCE_MS: u32 = 1_000;
 
 /// How readily Gemini decides the candidate has started speaking, and so how
 /// readily it abandons a reply it is part way through delivering.
@@ -77,9 +81,11 @@ pub const DEFAULT_GEMINI_CANDIDATE_VIDEO_ENABLED: bool = false;
 pub const DEFAULT_MAX_CONCURRENT_INTERVIEWS: usize = 16;
 
 /// Interim reviews use the report model's quota before the final report does.
-/// Twelve four-line notes fill the final report's note budget exactly; zero is
+/// Six four-line notes fill half the final report's note budget, which the
+/// report does not need full: it reads the whole transcript and the code
+/// itself, and each review is a call of about five hundred tokens. Zero is
 /// useful to an operator who must reserve a shared key for final reports.
-pub const DEFAULT_MAX_INTERIM_REVIEWS: usize = 12;
+pub const DEFAULT_MAX_INTERIM_REVIEWS: usize = 6;
 pub const MAX_INTERIM_REVIEWS: usize = 72;
 
 const REQUIRED_KEYS: &[&str] = &[

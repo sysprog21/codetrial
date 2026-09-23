@@ -374,11 +374,11 @@ fn a_stage_direction_carries_the_countdown_the_model_cannot_see() {
 fn leetcode_reactions_preserve_stage_transitions() {
     let empty = silence_nudge("(the editor is currently empty)", None);
     assert!(empty.contains("understanding, example, or planned algorithm"));
-    assert!(empty.contains("Do not reset them"));
+    assert!(empty.contains("Do not restart them"));
 
     let code = proactive_review("  1| answer = []", None);
-    assert!(code.contains("predicted test after implementation"));
-    assert!(code.contains("requires `log_hint`"));
+    assert!(code.contains("a predicted test"));
+    assert!(code.contains("`log_hint` with `requested` false"));
 
     let failed = test_results_reaction("1/3 passed", false);
     assert!(failed.contains("Return from Test to diagnosis/Coding"));
@@ -499,7 +499,7 @@ fn runtime_helpers_match_frozen_fixture() {
             18,
         ),
         format!(
-            "Editor language: python\n{}\n\n{}\n\n{}",
+            "BEGIN UNTRUSTED EDITOR (python)\n{}\nEND UNTRUSTED EDITOR\nBEGIN UNTRUSTED TEST RUN\n{}\nEND UNTRUSTED TEST RUN\n{}",
             numbered("def two_sum(nums, target):\n    return [0, 1]"),
             expected["testRuns"]["readEditorLatest"].as_str().unwrap(),
             timer_line(18)

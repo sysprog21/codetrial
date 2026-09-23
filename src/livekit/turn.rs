@@ -30,9 +30,10 @@ use crate::agent::{
 /// because the call it starts runs beside the room instead of inside it.
 pub(super) const INTERIM_IDLE: Duration = Duration::from_secs(8);
 /// Between two idle-window reviews. A pause every eight seconds would spend a
-/// call on every breath; this is roughly the interval at which an interview has
-/// produced a new stretch worth reading.
-pub(super) const INTERIM_COOLDOWN: Duration = Duration::from_secs(75);
+/// call on every breath. At seventy-five seconds a review read little more
+/// than the one before it, and the final report reads the whole transcript
+/// regardless, so the stretch between two is longer.
+pub(super) const INTERIM_COOLDOWN: Duration = Duration::from_secs(150);
 /// What one review may read, in bytes.
 ///
 /// The pause it runs in is the budget: `INTERIM_ATTEMPT_TIMEOUT` gives the call
@@ -45,8 +46,9 @@ pub(super) const INTERIM_WINDOW_BYTES: usize = 8 * 1024;
 /// the stretch since the last one.
 pub(super) const INTERIM_CODE_BYTES: usize = 4 * 1024;
 /// Candidate turns a pause has to have produced before one is read. Below this,
-/// the window is an "mm-hm" and the note would be about nothing.
-pub(super) const INTERIM_MIN_NEW_TURNS: usize = 4;
+/// the window is an "mm-hm" and the note would be about nothing; at four, a
+/// short exchange of acknowledgements still qualified.
+pub(super) const INTERIM_MIN_NEW_TURNS: usize = 6;
 
 /// A candidate who has just typed is still working, even if their speech has
 /// paused. Give them a beat before a periodic review tries to take the floor.
@@ -72,7 +74,7 @@ pub(super) struct RuntimeActivity {
     pub(super) last_review: Instant,
     pub(super) last_interjection: Instant,
     pub(super) last_test_reaction: Instant,
-    pub(super) semantic_revision_at_last_review: u64,
+    pub(super) substantive_revision_at_last_review: u64,
     /// The buffer the last review saw, which the next one's excerpt is the
     /// change from. Source, so it stays here and never reaches the ledger.
     pub(super) code_at_last_review: String,
@@ -156,7 +158,7 @@ impl RuntimeActivity {
             last_test_reaction: now
                 .checked_sub(Duration::from_secs_f64(TEST_REACTION_COOLDOWN_S))
                 .unwrap_or(now),
-            semantic_revision_at_last_review: 0,
+            substantive_revision_at_last_review: 0,
             code_at_last_review: String::new(),
             evidence_shown: None,
             unsent_watch: None,
@@ -296,10 +298,16 @@ impl RuntimeActivity {
             speech_gap_seconds: now
                 .duration_since(self.last_user_speech.max(self.last_agent_speech))
                 .as_secs_f64(),
-            // Editor changes cannot reopen coding during the behavioral round.
+
+            // A change worth a review, in code that parses now: a review of a
+            // half-typed line is an "mm-hm" about something still being
+            // written, and the next change that parses arms it again. Editor
+            // changes cannot reopen coding during the behavioral round.
             significant_change: !behavioral
-                && state.evidence_ledger.code.semantic_revision
-                    > self.semantic_revision_at_last_review,
+                && state.evidence_ledger.code.substantive_revision
+                    > self.substantive_revision_at_last_review
+                && state.evidence_ledger.code.parser_observation
+                    == Some(crate::agent::CodeObservation::Parsed),
         });
         if decision.update_last_nudge {
             self.last_nudge = now;
@@ -333,8 +341,8 @@ impl RuntimeActivity {
         if decision.sync_code_at_last_review {
             unsent.review = Some((
                 std::mem::replace(
-                    &mut self.semantic_revision_at_last_review,
-                    state.evidence_ledger.code.semantic_revision,
+                    &mut self.substantive_revision_at_last_review,
+                    state.evidence_ledger.code.substantive_revision,
                 ),
                 std::mem::replace(&mut self.code_at_last_review, state.code.clone()),
             ));
@@ -374,7 +382,7 @@ impl RuntimeActivity {
             return;
         };
         if let Some((revision, code)) = unsent.review {
-            self.semantic_revision_at_last_review = revision;
+            self.substantive_revision_at_last_review = revision;
             self.code_at_last_review = code;
         }
         self.evidence_shown = unsent.evidence_shown;

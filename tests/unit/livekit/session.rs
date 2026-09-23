@@ -311,6 +311,57 @@ fn nothing_is_dropped_once_the_queue_has_drained_or_while_the_agent_speaks() {
     }
 }
 
+/// A hint the candidate asked for comes back with their editor, so fitting
+/// the clue to their code needs no `read_editor` first; one the interviewer
+/// volunteered is only recorded, after it was given.
+#[test]
+fn a_requested_hint_returns_the_editor_with_its_clue() {
+    let mut state = RuntimeState {
+        code: "def two_sum(nums, target):\n    return []".to_string(),
+        language: "python".to_string(),
+        hint_ladder: &["first rung", "second rung"],
+        ..RuntimeState::default()
+    };
+    let call = |requested: bool| GeminiFunctionCall {
+        id: "1".to_string(),
+        name: TOOL_LOG_HINT.to_string(),
+        args: serde_json::json!({ "requested": requested }),
+    };
+    let asked = execute_tool_call(&mut state, &call(true));
+    let asked = asked["result"].as_str().unwrap();
+    assert!(asked.contains("first rung"), "{asked}");
+    assert!(asked.contains("  2|     return []"), "{asked}");
+    assert!(position_of(asked, "first rung") < position_of(asked, "BEGIN UNTRUSTED EDITOR"));
+
+    // The candidate's text is fenced: everything they wrote sits between the
+    // markers the instructions tell the model never to take orders from, and
+    // the platform's timer comes after both fences, as the last sentence.
+    let (open, close) = (
+        position_of(asked, "BEGIN UNTRUSTED EDITOR (python)\n"),
+        position_of(asked, "\nEND UNTRUSTED EDITOR"),
+    );
+    assert!(open < position_of(asked, "  2|     return []"));
+    assert!(position_of(asked, "  2|     return []") < close);
+    assert!(close < position_of(asked, "END UNTRUSTED TEST RUN"));
+    assert!(
+        asked.ends_with("minutes remain on the candidate's countdown."),
+        "{asked}"
+    );
+
+    let volunteered = execute_tool_call(&mut state, &call(false));
+    assert!(
+        !volunteered["result"]
+            .as_str()
+            .unwrap()
+            .contains("Editor language")
+    );
+}
+
+fn position_of(text: &str, needle: &str) -> usize {
+    text.find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} is not in:\n{text}"))
+}
+
 #[test]
 fn execute_tool_call_reads_editor_and_tracks_hints() {
     let mut state = RuntimeState {
@@ -358,7 +409,7 @@ fn execute_tool_call_reads_editor_and_tracks_hints() {
         editor["result"]
             .as_str()
             .unwrap()
-            .contains("Editor language: python")
+            .contains("BEGIN UNTRUSTED EDITOR (python)")
     );
     assert!(
         editor["result"]

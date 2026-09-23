@@ -635,14 +635,14 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
             "{name}: test history was lost"
         );
         for key in [
-            "\"codingScore\"",
-            "\"communicationScore\"",
-            "\"decision\"",
-            "\"summary\"",
-            "\"codingFeedback\"",
-            "\"communicationFeedback\"",
-            "\"improvementPlan\"",
-            "\"frameworkAssessment\"",
+            "codingScore",
+            "communicationScore",
+            "decision",
+            "summary",
+            "codingFeedback",
+            "communicationFeedback",
+            "improvementPlan",
+            "frameworkAssessment",
         ] {
             assert!(prompt.contains(key), "{name}: report contract lost {key}");
         }

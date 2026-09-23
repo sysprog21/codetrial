@@ -21,7 +21,7 @@
     {
       "id": "coding-before-explaining",
       "coverage": ["coding-before-explaining"],
-      "reaction": {"kind":"proactive", "code":"def two_sum(nums, target):\n    seen = {}\n    for i, n in enumerate(nums):\n        seen[n] = i", "required":["reasoning behind a major change", "Never reset"], "forbidden":["Start with", "optimal approach"]},
+      "reaction": {"kind":"proactive", "code":"def two_sum(nums, target):\n    seen = {}\n    for i, n in enumerate(nums):\n        seen[n] = i", "required":["reasoning behind a change", "never restart them"], "forbidden":["Start with", "optimal approach"]},
       "transcript": "Candidate began implementing before explaining and later narrated the map decision.",
       "evidence": [
         {"phase":"coding","source":"editor_snapshot","kind":"observed","confidence":100,"summary":"Substantial implementation appeared before narration."},
