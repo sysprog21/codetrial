@@ -673,12 +673,11 @@ fn a_report_carries_the_evidence_block_and_counts_what_it_cost() {
     let prompt = report_prompt_text(&boot, &state, 45.0);
     assert!(prompt.contains("DETERMINISTIC SESSION EVIDENCE"));
 
-    // The entry's own field, spelled the way the entry spells it. The snake
-    // case `semantic_revision` also appears, in the `code` state the projection
-    // carries beside the entries, so asserting on that one passed whether or
-    // not a single ledger entry reached the report.
-    assert!(prompt.contains("\"semanticRevision\":"));
-    assert!(prompt.contains("\"family\":\"CODE\""));
+    // The code line of the view, which only a code entry in the ledger writes.
+    assert!(
+        prompt.contains("code: python, 0 candidate edits"),
+        "{prompt}"
+    );
 
     // Server-derived, so it sits apart from every untrusted block and ahead of
     // the warning that covers them. It used to arrive inside the rolling
@@ -694,9 +693,9 @@ fn a_report_carries_the_evidence_block_and_counts_what_it_cost() {
     );
     assert!(prompt[open..close].contains("Candidate named the duplicates case."));
 
-    // Raw code stays out of it. The ledger carries digests, and the editor
-    // reaches the report through its own field.
-    assert!(!prompt.contains("\"code\":\"def two_sum"));
+    // Raw code stays out of the evidence section; the editor reaches the report
+    // through its own block, once.
+    assert_eq!(prompt.matches("seen = {}").count(), 1);
 
     state
         .evidence_ledger

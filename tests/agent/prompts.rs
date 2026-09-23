@@ -58,7 +58,7 @@ fn prompt_golden_digest_matches_versions() {
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
     let recorded_versions = (7, 12);
-    let recorded_digest = "8f9f2e85a7ee18fb2d8cee9c949a3d39b686884803fff4c0c4629f0dcf5cb552";
+    let recorded_digest = "016c3333d4b1d21f3a62fa7230f41fbfe8498b794d6ab8b7ea8d864389f8cf24";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -189,7 +189,10 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
 
     // Both coding watchers speak only during coding, which is exactly where a
     // stray behavioral question was being revived.
-    for watcher in [silence_nudge("  1| x = 1"), proactive_review("  1| x = 1")] {
+    for watcher in [
+        silence_nudge("  1| x = 1", None),
+        proactive_review("  1| x = 1", None),
+    ] {
         assert!(
             watcher
                 .to_lowercase()
@@ -211,8 +214,8 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
         greeting(problem),
         language_choice("C++", LanguageChoiceContext::Start),
         language_choice("Java", LanguageChoiceContext::SwitchWithCode),
-        silence_nudge("(the editor is currently empty)"),
-        proactive_review("  1| answer = []"),
+        silence_nudge("(the editor is currently empty)", None),
+        proactive_review("  1| answer = []", None),
         time_warning(),
         wrap_up("time_up"),
         test_results_reaction("2/3 passed", false),
@@ -985,4 +988,119 @@ fn a_paragraph_separator_cannot_forge_a_prompt_line() {
         "the rendered run must stay one line: {}",
         format_test_run(Some(&run), 1)
     );
+}
+
+/// A watch prompt shows the code, fenced as the candidate's, and points at
+/// `read_editor` only for what it leaves out.
+#[test]
+fn a_watch_prompt_carries_the_code_instead_of_a_read() {
+    let before =
+        "def f(nums):\n    total = 0\n    for n in nums:\n        total += n\n    return total\n";
+    let after =
+        "def f(nums):\n    total = 0\n    for n in nums:\n        total -= n\n    return total\n";
+    let excerpt = changed_excerpt("python", before, after).expect("a line changed");
+    assert!(excerpt.starts_with("BEGIN UNTRUSTED EDITOR (python, all 5 lines)"));
+    assert!(excerpt.ends_with("END UNTRUSTED EDITOR"));
+
+    // A short buffer goes whole, the changed line with its own number.
+    assert!(excerpt.contains("  4|         total -= n"));
+    assert!(excerpt.contains("  1| def f(nums):") && excerpt.contains("  5|     return total"));
+
+    let review = proactive_review("code: python", Some(&excerpt));
+    assert!(review.contains(&excerpt));
+    assert!(review.contains("Call `read_editor` only when you need code it leaves out"));
+    assert!(!review.contains("Call `read_editor` before evaluating code"));
+    let without = proactive_review("code: python", None);
+    assert!(without.contains("Call `read_editor` before evaluating code"));
+
+    // Nothing changed, nothing to show; a trailing newline is not a line.
+    assert_eq!(changed_excerpt("python", before, before), None);
+    assert_eq!(changed_excerpt("python", before, before.trim_end()), None);
+}
+
+#[test]
+fn whole_buffer_excerpts_keep_changes_past_line_forty() {
+    for count in [41, 60, 80] {
+        let before = (1..=count)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        let after = before.replace(&format!("line {count}\n"), "changed\n");
+        let excerpt = changed_excerpt("python", &before, &after).expect("a line changed");
+        assert!(excerpt.contains(&format!("all {count} lines")));
+        assert!(excerpt.contains(&format!("{count:>3}| changed")));
+        assert_eq!(
+            excerpt.lines().filter(|line| line.contains("| ")).count(),
+            count
+        );
+        assert!(!excerpt.contains("more lines"));
+    }
+}
+
+#[test]
+fn excerpts_switch_to_changed_regions_above_whole_buffer_budgets() {
+    for (count, width, whole) in [(80, 49, true), (80, 50, false), (81, 10, false)] {
+        let before = format!("{}\n", "x".repeat(width)).repeat(count);
+        let mut after = before.clone();
+        let last_line = (count - 1) * (width + 1);
+        after.replace_range(last_line..last_line + 1, "y");
+        let excerpt = changed_excerpt("python", &before, &after).expect("a line changed");
+        assert!(excerpt.contains(&format!("{count:>3}| y")));
+        assert_eq!(excerpt.contains(&format!("all {count} lines")), whole);
+        assert_eq!(
+            excerpt.lines().filter(|line| line.contains("| ")).count(),
+            if whole { count } else { 4 }
+        );
+    }
+}
+
+#[test]
+fn an_excerpt_is_bounded_and_shows_where_a_deletion_was() {
+    let long: String = (0..100)
+        .map(|index| format!("x{index} = {index}\n"))
+        .collect();
+    let excerpt = changed_excerpt("python", "", &long).expect("a paste changed lines");
+    assert_eq!(excerpt.matches("| x").count(), 40);
+    assert!(excerpt.contains("... 60 more lines; call `read_editor` for them"));
+
+    // Past the whole-buffer size, one changed line is shown with its context
+    // and the rest of the buffer is left to `read_editor`.
+    let edited = long.replace("x50 = 50\n", "x50 = 51\n");
+    let region = changed_excerpt("python", &long, &edited).expect("a line changed");
+    assert!(
+        region.starts_with(
+            "BEGIN UNTRUSTED EDITOR (python, lines 48-54 of 100, around the change since the last review)"
+        ),
+        "{region}"
+    );
+    assert!(region.contains(" 51| x50 = 51"));
+    assert_eq!(region.matches("| x").count(), 7);
+
+    let wide = format!("value = '{}'\n", "\u{3b1}".repeat(400));
+    let excerpt = changed_excerpt("python", "", &wide).expect("a line changed");
+    assert!(excerpt.contains(" ..."), "a long line is cut");
+    assert!(excerpt.len() < 600, "{} bytes", excerpt.len());
+
+    // A deleted line leaves no changed line behind, so the lines either side of
+    // where it was are what the excerpt shows.
+    let deleted =
+        changed_excerpt("python", "a = 1\nb = 2\nc = 3\n", "a = 1\nc = 3\n").expect("a deletion");
+    assert!(deleted.contains("  1| a = 1") && deleted.contains("  2| c = 3"));
+
+    // Past the whole-buffer size too, where the region is all there is: the
+    // lines either side of the gap, and no note of lines left out, since none
+    // were.
+    let removed = long.replace("x50 = 50\n", "");
+    let region = changed_excerpt("python", &long, &removed).expect("a deletion");
+    assert!(
+        region.starts_with(
+            "BEGIN UNTRUSTED EDITOR (python, lines 48-53 of 99, around the change since the last review)"
+        ),
+        "{region}"
+    );
+    assert!(
+        region.contains(" 50| x49 = 49") && region.contains(" 51| x51 = 51"),
+        "{region}"
+    );
+    assert_eq!(region.matches("| x").count(), 6, "{region}");
+    assert!(!region.contains("more lines"), "{region}");
 }

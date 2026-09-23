@@ -17,7 +17,8 @@ use crate::config::DEFAULT_MAX_INTERIM_REVIEWS;
 
 use crate::agent::{
     RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput, behavioral_silence_nudge,
-    candidate_lines, proactive_review, silence_nudge, timing_decision, unreviewed_from, with_timer,
+    candidate_lines, changed_excerpt, proactive_review, silence_nudge, timing_decision,
+    unreviewed_from, with_timer,
 };
 
 /// How long the room has to be quiet before a pause is worth reading into.
@@ -72,6 +73,15 @@ pub(super) struct RuntimeActivity {
     pub(super) last_interjection: Instant,
     pub(super) last_test_reaction: Instant,
     pub(super) semantic_revision_at_last_review: u64,
+    /// The buffer the last review saw, which the next one's excerpt is the
+    /// change from. Source, so it stays here and never reaches the ledger.
+    pub(super) code_at_last_review: String,
+    /// The last ledger sequence a watch prompt showed this Live session, so the
+    /// next one can say what arrived since. `None` on a session that has not
+    /// been shown one: a cold replacement has heard nothing before.
+    pub(super) evidence_shown_through: Option<u64>,
+    /// What the last watch prompt moved. See [`Self::unsend_watch_prompt`].
+    pub(super) unsent_watch: Option<UnsentWatch>,
     pub(super) floor: Floor,
     /// A pause can arrive between Gemini producing a reply and this loop
     /// receiving its final event. Drop that old turn after resume too.
@@ -145,6 +155,9 @@ impl RuntimeActivity {
                 .checked_sub(Duration::from_secs_f64(TEST_REACTION_COOLDOWN_S))
                 .unwrap_or(now),
             semantic_revision_at_last_review: 0,
+            code_at_last_review: String::new(),
+            evidence_shown_through: None,
+            unsent_watch: None,
             floor: Floor::Listening,
             discarding_output: false,
             tool_response_outstanding: false,
@@ -295,8 +308,22 @@ impl RuntimeActivity {
         if decision.update_last_interjection {
             self.last_interjection = now;
         }
+        if !(decision.silence_nudge || decision.proactive_review) {
+            return None;
+        }
+        let excerpt = changed_excerpt(&state.language, &self.code_at_last_review, &state.code);
+        let mut unsent = UnsentWatch {
+            review: None,
+            evidence_shown_through: self.evidence_shown_through,
+        };
         if decision.sync_code_at_last_review {
-            self.semantic_revision_at_last_review = state.evidence_ledger.code.semantic_revision;
+            unsent.review = Some((
+                std::mem::replace(
+                    &mut self.semantic_revision_at_last_review,
+                    state.evidence_ledger.code.semantic_revision,
+                ),
+                std::mem::replace(&mut self.code_at_last_review, state.code.clone()),
+            ));
         }
 
         // Returned uncounted. Anything that goes out over the live socket is
@@ -309,20 +336,53 @@ impl RuntimeActivity {
         // where they are built instead, because neither touches the socket --
         // both are one-shot HTTP calls, and the interim prompt is handed to a
         // spawned task that never sees the ledger.
+        self.unsent_watch = Some(unsent);
         let text = if decision.silence_nudge && behavioral {
+            // Carries no evidence and no code, so it moves nothing the model
+            // has been shown.
             behavioral_silence_nudge()
-        } else if decision.silence_nudge {
-            silence_nudge(&state.evidence_ledger.prompt_slice())
-        } else if decision.proactive_review {
-            proactive_review(&state.evidence_ledger.prompt_slice())
         } else {
-            return None;
+            let evidence = state
+                .evidence_ledger
+                .prompt_view(self.evidence_shown_through);
+            self.evidence_shown_through = Some(state.evidence_ledger.last_sequence());
+            if decision.silence_nudge {
+                silence_nudge(&evidence, excerpt.as_deref())
+            } else {
+                proactive_review(&evidence, excerpt.as_deref())
+            }
         };
         Some(WatchPrompt {
             text: with_timer(state, text),
             behavioral_nudge: decision.silence_nudge && behavioral,
         })
     }
+
+    /// Puts back what the last watch prompt moved, for one the socket refused.
+    /// Those markers say what the model has seen, and a prompt that died on a
+    /// closed socket showed it nothing: left moved, the next prompt on a
+    /// resumed session that kept its context skipped the change and the
+    /// evidence this one carried. The timing stamps stay moved, since the
+    /// socket is dead until the close is reported and restoring them would
+    /// build and fail a prompt on every tick until then.
+    pub(super) fn unsend_watch_prompt(&mut self) {
+        let Some(unsent) = self.unsent_watch.take() else {
+            return;
+        };
+        if let Some((revision, code)) = unsent.review {
+            self.semantic_revision_at_last_review = revision;
+            self.code_at_last_review = code;
+        }
+        self.evidence_shown_through = unsent.evidence_shown_through;
+    }
+}
+
+/// The review baselines and the evidence cursor as they were before a watch
+/// prompt moved them: the revision and code together, when it was a review.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct UnsentWatch {
+    review: Option<(u64, String)>,
+    evidence_shown_through: Option<u64>,
 }
 
 /// What one interview accumulates, minus the two things the select loop borrows

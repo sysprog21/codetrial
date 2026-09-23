@@ -521,7 +521,15 @@ fn runtime_activity_emits_periodic_prompts_and_updates_gates() {
     let prompt = activity.watch_prompt(&state, now).unwrap();
 
     assert!(prompt.text.contains("silent AND has not typed"));
-    assert!(!prompt.text.contains("def two_sum"));
+
+    // The code reaches the prompt only inside the fenced excerpt, as the change
+    // since the last review, which for the first one is the whole buffer.
+    let fence = position(&prompt.text, "BEGIN UNTRUSTED EDITOR (");
+    assert!(
+        position(&prompt.text, "def two_sum") > fence,
+        "{}",
+        prompt.text
+    );
     assert!(!prompt.behavioral_nudge);
     assert!(activity.watch_prompt(&state, now).is_none());
 
@@ -538,8 +546,17 @@ fn runtime_activity_emits_periodic_prompts_and_updates_gates() {
     let prompt = activity.watch_prompt(&state, now).unwrap();
 
     assert!(prompt.text.contains("semantic editor change has settled"));
-    assert!(!prompt.text.contains("def two_sum"));
+
+    // A silence nudge does not move the baseline, so the review still shows the
+    // buffer; the review does, so the next one shows only what changed after.
+    let fence = position(&prompt.text, "BEGIN UNTRUSTED EDITOR (");
+    assert!(
+        position(&prompt.text, "def two_sum") > fence,
+        "{}",
+        prompt.text
+    );
     assert_eq!(activity.semantic_revision_at_last_review, 1);
+    assert_eq!(activity.code_at_last_review, state.code);
     assert!(!prompt.behavioral_nudge);
     assert!(activity.watch_prompt(&state, now).is_none());
 
@@ -670,6 +687,34 @@ async fn only_a_delivered_behavioral_nudge_spends_the_round() {
     // One delivered nudge per round, including after a connection replacement.
     clear_abandoned_socket_work(&mut state, &mut activity);
     assert!(activity.watch_prompt(&state, now + cooldown * 2).is_none());
+}
+
+/// Every gate a periodic review waits on, opened as of `now`.
+fn ready_for_review(activity: &mut RuntimeActivity, now: Instant) {
+    activity.last_code_change = now - CODE_SETTLE - Duration::from_secs(1);
+    activity.last_user_speech = now - Duration::from_secs(5);
+    activity.last_agent_speech = now - Duration::from_secs(5);
+    activity.last_review = now - Duration::from_secs(31);
+    activity.last_interjection = now - Duration::from_secs(46);
+}
+
+/// An editor packet, received at `receipt`.
+fn edit(state: &mut RuntimeState, receipt: u64, code: &str) {
+    crate::agent::apply_data_event_at(
+        state,
+        crate::runtime::TOPIC_CODE_UPDATE,
+        &serde_json::json!({ "code": code }),
+        99.0,
+        receipt,
+    );
+}
+
+/// Where `needle` sits in a prompt. A layout change is what these checks exist
+/// to catch, so a missing marker fails with the prompt it is missing from.
+fn position(prompt: &str, needle: &str) -> usize {
+    prompt
+        .find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} is not in the prompt:\n{prompt}"))
 }
 
 /// The point of CODE_SETTLE. Without it the whole gate can be reverted to a
@@ -1496,22 +1541,7 @@ fn a_real_operator_fix_arms_the_proactive_review() {
     let now = Instant::now();
     let mut activity = RuntimeActivity::new(now);
     let mut state = RuntimeState::default();
-    let ready = |activity: &mut RuntimeActivity| {
-        activity.last_code_change = now - CODE_SETTLE - Duration::from_secs(1);
-        activity.last_user_speech = now - Duration::from_secs(5);
-        activity.last_agent_speech = now - Duration::from_secs(5);
-        activity.last_review = now - Duration::from_secs(31);
-        activity.last_interjection = now - Duration::from_secs(46);
-    };
-    let edit = |state: &mut RuntimeState, receipt: u64, code: &str| {
-        crate::agent::apply_data_event_at(
-            state,
-            crate::runtime::TOPIC_CODE_UPDATE,
-            &serde_json::json!({ "code": code }),
-            99.0,
-            receipt,
-        );
-    };
+    let ready = |activity: &mut RuntimeActivity| ready_for_review(activity, now);
 
     edit(
         &mut state,
@@ -1539,5 +1569,68 @@ fn a_real_operator_fix_arms_the_proactive_review() {
         .watch_prompt(&state, now)
         .expect("an off-by-one fix is a semantic edit");
     assert!(prompt.text.contains("semantic editor change has settled"));
-    assert!(!prompt.text.contains("def search"));
+
+    // The fixed line is inside the fenced excerpt, numbered as `read_editor`
+    // numbers it, so the review needs no read to see it.
+    let fence = position(&prompt.text, "BEGIN UNTRUSTED EDITOR (");
+    assert!(
+        position(&prompt.text, "  2|     while low <= high:") > fence,
+        "{}",
+        prompt.text
+    );
+}
+
+/// A watch prompt the socket refused showed the model nothing, so undoing it
+/// leaves the change and the evidence it carried for the next one.
+#[test]
+fn an_unsent_review_leaves_its_change_for_the_next_one() {
+    let now = Instant::now();
+    let mut activity = RuntimeActivity::new(now);
+    let mut state = RuntimeState::default();
+    let ready = |activity: &mut RuntimeActivity| ready_for_review(activity, now);
+
+    // Nothing to undo before any prompt.
+    activity.unsend_watch_prompt();
+    assert_eq!(activity.evidence_shown_through, None);
+
+    // The first packet is the starter, which is not the candidate's edit.
+    edit(&mut state, 50, "def f():\n    pass\n");
+    edit(&mut state, 100, "def f():\n    return 1\n");
+    ready(&mut activity);
+    activity
+        .watch_prompt(&state, now)
+        .expect("the first review");
+    let markers = |activity: &RuntimeActivity| {
+        (
+            activity.semantic_revision_at_last_review,
+            activity.code_at_last_review.clone(),
+            activity.evidence_shown_through,
+        )
+    };
+    let seen = markers(&activity);
+
+    edit(&mut state, 200, "def f():\n    return 2\n");
+    ready(&mut activity);
+    activity
+        .watch_prompt(&state, now)
+        .expect("the review that fails");
+    assert_ne!(activity.code_at_last_review, seen.1);
+    activity.unsend_watch_prompt();
+    assert_eq!(markers(&activity), seen);
+
+    // The retry carries the edit the failed prompt did, measured from what the
+    // model last saw.
+    ready(&mut activity);
+    let retried = activity.watch_prompt(&state, now).expect("the retry");
+    assert!(
+        position(&retried.text, "    return 2")
+            > position(&retried.text, "BEGIN UNTRUSTED EDITOR (")
+    );
+    assert!(
+        retried
+            .text
+            .contains("since the last event like this: 1 editor updates (1 changed the program)"),
+        "{}",
+        retried.text
+    );
 }

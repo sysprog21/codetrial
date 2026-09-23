@@ -450,10 +450,10 @@ fn evidence_ledger_counts_model_bytes_without_claiming_tokens() {
     assert_eq!(ledger.metrics.tool_response_count, 1);
     assert_eq!(ledger.metrics.tool_response_bytes, 4);
 
-    // Every one of them, not just the first. This is the projection a model is
+    // Every one of them, not just the first. This is the view a model is
     // handed, and a counter that reached it would be telling the interviewer
     // what its own advice costs.
-    let slice = ledger.prompt_slice();
+    let slice = ledger.prompt_view(None);
     for field in [
         "watch_prompt_bytes",
         "turn_prompt_bytes",
@@ -597,7 +597,7 @@ fn evidence_ledger_records_the_final_code_carried_by_end_interview() {
 }
 
 #[test]
-fn evidence_ledger_prompt_slice_is_bounded_and_raw_free() {
+fn evidence_ledger_prompt_view_is_bounded_and_raw_free() {
     let mut ledger = EvidenceLedger::default();
     record_unparsed(
         &mut ledger,
@@ -614,15 +614,24 @@ fn evidence_ledger_prompt_slice_is_bounded_and_raw_free() {
             &serde_json::json!({ "passed": 0, "total": 1, "setupError": "raw diagnostic" }),
         );
     }
-    let slice = ledger.prompt_slice();
-    assert!(slice.len() <= 6_000);
+    let slice = ledger.prompt_view(None);
+    assert!(slice.len() <= 1_000, "{} bytes", slice.len());
     assert!(!slice.contains("candidate_code_must_not_reach_the_prompt_projection"));
     assert!(!slice.contains("raw diagnostic"));
-    assert!(slice.contains("\"version\":1"));
+    assert!(slice.contains("40 runs failed to start"), "{slice}");
+
+    // No digest, which is most of what the JSON view spent its tokens on: the
+    // model can compare two 64-character hashes no better than it can read one.
+    let hex_run = slice
+        .split(|character: char| !character.is_ascii_hexdigit())
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    assert!(hex_run < 16, "a digest reached the view: {slice}");
 
     // The operational counters are the session's, never the model's. Every
-    // prompt that carries the ledger takes it from this slice, and each field
-    // is checked by name, so one added later is covered too.
+    // prompt that carries the ledger takes it from this view, and each field is
+    // checked by name, so one added later is covered too.
     let metrics = serde_json::to_value(&ledger.metrics).unwrap();
     for field in metrics.as_object().unwrap().keys() {
         assert!(!slice.contains(field.as_str()), "{field} reached the slice");
@@ -1055,14 +1064,14 @@ fn unobserved_diagnostic_categories_are_not_reported_as_zero() {
             "setupError": "compilation failed",
         }),
     );
-    let slice = ledger.prompt_slice();
-    assert!(slice.contains("\"other\":1"));
+    let slice = ledger.prompt_view(None);
+    assert!(slice.contains("diagnostics: other 1"), "{slice}");
 
     // The browser half never names these, so a written-out zero would be a
     // claim about something nothing measured.
-    assert!(!slice.contains("\"syntax\""));
-    assert!(!slice.contains("\"type_errors\""));
-    assert!(!slice.contains("\"linker\""));
+    assert!(!slice.contains("syntax"));
+    assert!(!slice.contains("type "));
+    assert!(!slice.contains("linker"));
 }
 
 #[test]
@@ -1094,13 +1103,17 @@ fn a_large_paste_does_not_evict_the_session_from_the_prompt() {
         true,
         analyze_code("python", "def f(values):\n    return []\n", &pasted),
     );
-    let slice = ledger.prompt_slice();
-    assert!(slice.len() <= 6_000, "{} bytes", slice.len());
+    let slice = ledger.prompt_view(None);
+    assert!(slice.len() <= 1_000, "{} bytes", slice.len());
 
-    let projection: serde_json::Value = serde_json::from_str(&slice).unwrap();
-    let entries = projection["entries"].as_array().unwrap().len();
-    assert!(entries >= 8, "{entries} entries survived the paste");
+    // The session before the paste is still what the view reports: it states
+    // aggregates, so there is no list of entries for one edit to push out.
+    assert!(slice.contains("tests: 1 of 2 passing"), "{slice}");
     assert!(!slice.contains("changed_nodes") && !slice.contains("changedNodes"));
+    assert!(
+        !slice.contains("identifier:"),
+        "node facts reached the view"
+    );
     let facts = &ledger.code.last_analysis.as_ref().unwrap().changed_nodes;
     assert_eq!(facts.len(), 13);
 
@@ -1278,14 +1291,14 @@ fn clearing_the_editor_and_typing_again_is_still_the_candidate_editing() {
     assert_eq!(state.evidence_ledger.code.semantic_revision, 3);
 }
 
-/// The claim `prompt_slice` makes: the loop drops entries until the projection
-/// fits, so the budget is only a bound if what is left when the entries run out
-/// is smaller than it. This builds the largest remainder the caps allow -- a
-/// full digest history, a capped changed-node list, every coverage phase, a
-/// full conversation sequence and both digests -- and measures it with the
-/// entries taken away.
+/// The claim `prompt_view` makes: bounded by construction. Every line it
+/// writes is a fixed sentence over counts, the coverage lists and the capped
+/// conversation sequence, so the largest ledger the caps allow -- every
+/// coverage phase, a full sequence, every diagnostic category, hints and a
+/// change line -- still renders small. Measured rather than argued, because a
+/// field added later could make the argument false.
 #[test]
-fn the_prompt_projection_fits_the_budget_with_no_entries_left_to_drop() {
+fn the_prompt_view_is_bounded_by_construction() {
     let mut ledger = EvidenceLedger::default();
     ledger.set_uncovered_coverage([
         "repeat",
@@ -1322,12 +1335,22 @@ fn the_prompt_projection_fits_the_budget_with_no_entries_left_to_drop() {
         );
         ledger.record_conversation_turn(index, "candidate");
     }
-    assert!(ledger.prompt_slice().len() <= 6_000);
-
-    let mut without_entries = ledger.clone();
-    without_entries.entries.clear();
-    let base = without_entries.prompt_slice().len();
-    assert!(base <= 6_000, "{base} bytes with nothing left to drop");
+    for category in [
+        "syntax",
+        "type",
+        "linker",
+        "runtime_signal",
+        "timeout",
+        "warning",
+        "other",
+    ] {
+        ledger.record_test(Some(99), 99, &setup_failure(category));
+    }
+    ledger.record_hint(100, true, true);
+    ledger.record_hint(101, false, true);
+    ledger.record_hint(102, true, false);
+    let view = ledger.prompt_view(Some(0));
+    assert!(view.len() <= 1_000, "{} bytes:\n{view}", view.len());
 }
 
 fn setup_failure(category: &str) -> serde_json::Value {
@@ -2672,9 +2695,9 @@ fn the_session_cost_is_written_somewhere_a_person_can_read_it() {
 }
 
 /// The ledger projections the prompt samples carry, checked against what
-/// `prompt_slice` renders for the ledgers they describe.
+/// `prompt_view` renders for the ledgers they describe.
 ///
-/// The samples live in an integration test, where `prompt_slice` is out of
+/// The samples live in an integration test, where `prompt_view` is out of
 /// reach, so they were frozen strings: regenerating the prompt golden rewrote
 /// it from the same strings, and a change to the projection's shape would have
 /// left them describing a ledger production no longer sends while every test
@@ -2682,7 +2705,7 @@ fn the_session_cost_is_written_somewhere_a_person_can_read_it() {
 /// moment it moves. Regenerate them with `UPDATE_EVIDENCE_GOLDEN=1`, the same
 /// switch as the replayed ledger they sit beside.
 #[test]
-fn the_prompt_samples_carry_what_prompt_slice_renders() {
+fn the_prompt_samples_carry_what_prompt_view_renders() {
     let fresh = || RuntimeState::for_problem(crate::agent::get_problem(Some("two-sum")));
 
     // Nobody has typed yet: two turns and the seeded phases.
@@ -2723,8 +2746,13 @@ fn the_prompt_samples_carry_what_prompt_slice_renders() {
     );
 
     let rendered = serde_json::json!({
-        "early": early.evidence_ledger.prompt_slice(),
-        "working": working.evidence_ledger.prompt_slice(),
+        "empty": fresh().evidence_ledger.prompt_view(None),
+        "early": early.evidence_ledger.prompt_view(None),
+        "working": working.evidence_ledger.prompt_view(None),
+
+        // What a watch prompt sends once an earlier one has shown the session
+        // up to the candidate's first turn.
+        "workingSince": working.evidence_ledger.prompt_view(Some(2)),
     });
     let path = "tests/fixtures/evidence-projections.json";
     if std::env::var_os("UPDATE_EVIDENCE_GOLDEN").is_some() {
@@ -2742,7 +2770,7 @@ fn the_prompt_samples_carry_what_prompt_slice_renders() {
     .expect("projection fixture should parse");
     assert_eq!(
         rendered, frozen,
-        "the prompt samples no longer carry what prompt_slice renders; regenerate {path}"
+        "the prompt samples no longer carry what prompt_view renders; regenerate {path}"
     );
 }
 
@@ -2991,4 +3019,126 @@ fn the_model_input_digest_tells_identical_sends_from_different_ones() {
         ])
     );
     assert_eq!(send(&[]), "");
+}
+
+/// A run that failed on the same label, with `passed` of three passing.
+fn failing_run(passed: u32) -> serde_json::Value {
+    serde_json::json!({
+        "passed": passed, "total": 3, "language": "python",
+        "failures": [{ "label": "dup", "expected": "[0,1]", "got": "[]", "error": null }],
+    })
+}
+
+/// An empty ledger says so in three lines and no more: every other line has
+/// nothing to say yet.
+#[test]
+fn an_empty_prompt_view_is_three_lines() {
+    let ledger = EvidenceLedger::default();
+    assert_eq!(ledger.last_sequence(), 0);
+    assert_eq!(
+        ledger.prompt_view(None),
+        "code: nothing received yet\ntests: not run\nturns: 0 interviewer, 0 candidate"
+    );
+}
+
+/// The count differences are signed and taken against a run that happened: the
+/// first run has none, a repeat has none, and either count moving alone is one.
+#[test]
+fn the_test_line_states_differences_only_against_an_earlier_run() {
+    let mut ledger = EvidenceLedger::default();
+    ledger.record_test(Some(1), 1_000, &failing_run(1));
+    let first = ledger.prompt_view(None);
+    assert!(
+        first.contains("tests: 1 of 3 passing, 0 edit-and-run"),
+        "{first}"
+    );
+    assert!(!first.contains("runs in a row"), "{first}");
+
+    ledger.record_test(Some(2), 2_000, &failing_run(1));
+    let repeated = ledger.prompt_view(None);
+    assert!(!repeated.contains("since the run before"), "{repeated}");
+    assert!(
+        repeated.contains("the same failure 2 runs in a row"),
+        "{repeated}"
+    );
+
+    ledger.record_test(Some(3), 3_000, &failing_run(2));
+    let better = ledger.prompt_view(None);
+    assert!(
+        better.contains("+1 passing and -1 failing since the run before"),
+        "{better}"
+    );
+    assert_eq!(ledger.last_sequence(), 3);
+
+    let mut grew = EvidenceLedger::default();
+    grew.record_test(Some(1), 1_000, &failing_run(1));
+    grew.record_test(
+        Some(2),
+        2_000,
+        &serde_json::json!({
+            "passed": 2, "total": 4, "language": "python",
+            "failures": [
+                { "label": "dup", "expected": "[0,1]", "got": "[]", "error": null },
+                { "label": "neg", "expected": "[]", "got": "[0]", "error": null },
+            ],
+        }),
+    );
+    let grown = grew.prompt_view(None);
+    assert!(
+        grown.contains("+1 passing and +0 failing since the run before"),
+        "{grown}"
+    );
+}
+
+/// The code line names a return to an earlier buffer once there is one.
+#[test]
+fn the_code_line_names_a_return_to_an_earlier_buffer() {
+    let mut ledger = EvidenceLedger::default();
+    let mut previous = String::new();
+    for (receipt, code) in [(4_000, "x = 1\n"), (5_000, "x = 2\n"), (6_000, "x = 1\n")] {
+        assert!(
+            !ledger
+                .prompt_view(None)
+                .contains("returned to an earlier buffer")
+        );
+        let analysis = analyze_code("python", &previous, code);
+        ledger.record_code_with_analysis(None, receipt, "python", code, true, analysis);
+        previous = code.to_string();
+    }
+    let undone = ledger.prompt_view(None);
+    assert!(
+        undone.contains("returned to an earlier buffer 1 times"),
+        "{undone}"
+    );
+}
+
+/// A hint line for any hint, whichever counter it moved, and a change line that
+/// counts what arrived after the cursor by kind.
+#[test]
+fn hints_and_what_arrived_since_are_counted() {
+    for (requested, delivered, line) in [
+        (false, true, "hints: 0 requested, 1 volunteered, 0 withheld"),
+        (true, false, "hints: 1 requested, 0 volunteered, 1 withheld"),
+    ] {
+        let mut hinted = EvidenceLedger::default();
+        hinted.record_hint(100, requested, delivered);
+        let view = hinted.prompt_view(None);
+        assert!(view.contains(line), "{view}");
+    }
+
+    let mut ledger = EvidenceLedger::default();
+    ledger.record_test(Some(1), 1_000, &failing_run(1));
+    let since = ledger.last_sequence();
+    ledger.record_hint(7_000, true, true);
+    ledger.record_hint(7_100, false, true);
+    ledger.record_conversation_turn(7_200, "candidate");
+    ledger.record_conversation_turn(7_300, "interviewer");
+    ledger.record_conversation_turn(7_400, "candidate");
+    let delta = ledger.prompt_view(Some(since));
+    assert!(
+        delta.ends_with(
+            "since the last event like this: 0 editor updates (0 changed the program), 0 test runs, 2 hints, 3 turns"
+        ),
+        "{delta}"
+    );
 }

@@ -372,11 +372,11 @@ fn a_stage_direction_carries_the_countdown_the_model_cannot_see() {
 
 #[test]
 fn leetcode_reactions_preserve_stage_transitions() {
-    let empty = silence_nudge("(the editor is currently empty)");
+    let empty = silence_nudge("(the editor is currently empty)", None);
     assert!(empty.contains("understanding, example, or planned algorithm"));
     assert!(empty.contains("Do not reset them"));
 
-    let code = proactive_review("  1| answer = []");
+    let code = proactive_review("  1| answer = []", None);
     assert!(code.contains("predicted test after implementation"));
     assert!(code.contains("requires `log_hint`"));
 
@@ -408,7 +408,7 @@ fn leetcode_reactions_preserve_stage_transitions() {
     for neutral in [
         greeting(get_problem(Some("two-sum"))),
         language_choice("Python", LanguageChoiceContext::Start),
-        silence_nudge("(the editor is currently empty)"),
+        silence_nudge("(the editor is currently empty)", None),
         time_warning(),
         wrap_up("time_up"),
         test_results_reaction("1/3 passed", false),

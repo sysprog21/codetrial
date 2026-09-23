@@ -9,14 +9,12 @@ use sha2::{Digest, Sha256};
 
 const LEDGER_VERSION: u32 = 1;
 const MAX_LEDGER_ENTRIES: usize = 256;
-const MAX_PROMPT_ENTRIES: usize = 24;
-const MAX_PROMPT_BYTES: usize = 6_000;
 const MAX_CONVERSATION_SEQUENCE: usize = 16;
 const MAX_CODE_DIGEST_HISTORY: usize = 16;
 /// How many changed node kinds one edit may record. A paste over the template
 /// changes dozens of kinds at once, and the list is kept twice, in
-/// `code.last_analysis` and in the entry. The projection no longer carries it,
-/// but the ledger and its replay still do.
+/// `code.last_analysis` and in the entry. No prompt carries it; the ledger and
+/// its replay do.
 const MAX_CHANGED_NODE_FACTS: usize = 12;
 /// Qualifies a node kind that was found inside a closure, so that the facts can
 /// tell a lambda's parameter list from the enclosing function's. Both are
@@ -94,20 +92,6 @@ impl CodeChangeClass {
     }
 }
 
-/// Replaces a serialized analysis's class with its coarse word and drops its
-/// node facts. A `null` analysis, or one that never classified, is left alone.
-fn coarsen(analysis: &mut serde_json::Value, nodes: &str) {
-    let Some(fields) = analysis.as_object_mut() else {
-        return;
-    };
-    fields.remove(nodes);
-    if let Some(class) = fields.get_mut("classification")
-        && let Ok(fine) = CodeChangeClass::deserialize(&*class)
-    {
-        *class = fine.coarse().into();
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodeAnalysis {
     pub observation: CodeObservation,
@@ -171,6 +155,9 @@ pub struct TestState {
     pub failed: u32,
     pub newly_passed: i32,
     pub newly_failed: i32,
+    /// Whether an executed run came before this one, without which the two
+    /// differences above are measured against nothing.
+    pub follows_executed_run: bool,
     pub regression: bool,
     pub consecutive_identical_failures: u32,
     pub failure_signature: Option<String>,
@@ -461,66 +448,211 @@ impl Default for EvidenceLedger {
 }
 
 impl EvidenceLedger {
-    /// A bounded, raw-free view for prompts. The raw editor and transcript stay
-    /// outside this projection and remain available only through their existing
-    /// purpose-specific paths.
-    ///
-    /// The loop drops entries oldest-first, so the bound holds only if what is
-    /// left once the entries run out is smaller than the budget. Everything in
-    /// that remainder is capped at a constant: the digest history, the recent
-    /// sequence, and the two digests.
-    ///
-    /// A code change reaches the model as [`CodeChangeClass::coarse`] and no
-    /// node facts. The fine class is a heuristic over grammar node kinds, and
-    /// it read an off-by-one as several edits and an `enumerate` rewrite as a
-    /// new data structure; the ledger keeps it for replay, but a wrong class
-    /// here is wrong evidence the interviewer reads, and nothing has shown the
-    /// finer one helps it.
-    pub(crate) fn prompt_slice(&self) -> String {
-        let oldest = self.entries.len().saturating_sub(MAX_PROMPT_ENTRIES);
-        let entries = self.entries[oldest..]
-            .iter()
-            .map(|entry| {
-                let mut value = serde_json::to_value(entry).expect("evidence entry serializes");
-                if entry.family == ObservationFamily::Code {
-                    coarsen(&mut value["observation"], "changedNodes");
-                }
-                value
-            })
-            .collect::<Vec<_>>();
-        let mut code = serde_json::to_value(&self.code).expect("code state serializes");
-        coarsen(&mut code["last_analysis"], "changed_nodes");
+    /// The sequence of the newest entry, which a caller keeps to ask
+    /// [`Self::prompt_view`] for what arrived after it.
+    pub(crate) fn last_sequence(&self) -> u64 {
+        self.next_sequence.saturating_sub(1)
+    }
 
-        for first in 0..entries.len() {
-            let rendered = self.render_prompt(&entries[first..], &code);
-            if rendered.len() <= MAX_PROMPT_BYTES {
-                return rendered;
+    /// What the model is told about the session: a few lines of plain text,
+    /// raw-free and bounded by construction rather than by truncation.
+    ///
+    /// It used to be the ledger itself as JSON, capped at 6,000 bytes. Measured
+    /// with Gemini's own tokenizer that was 1,000 to 2,700 tokens a prompt,
+    /// more than half of it SHA-256 digests the model can do nothing with, and
+    /// the rest per-entry bookkeeping that the aggregates below already state.
+    /// A watch prompt carried six times what pasting the code had. The ledger
+    /// keeps every entry, digest and timestamp for replay; the model gets the
+    /// facts those entries add up to, with elapsed time relative to the latest
+    /// event so the text depends on nothing but the ledger.
+    ///
+    /// `since` is the last sequence an earlier prompt of the same kind showed.
+    /// A Live session keeps its earlier turns, so what changed since then is a
+    /// line of its own; the state lines are always complete, because the
+    /// session compresses old context away and a view that leaned on an
+    /// evicted one would describe nothing.
+    ///
+    /// A code change is named by [`CodeChangeClass::coarse`] alone. The fine
+    /// class is a heuristic over grammar node kinds, and a wrong one here is
+    /// wrong evidence the interviewer reads.
+    pub(crate) fn prompt_view(&self, since: Option<u64>) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        let code = &self.code;
+        if code.revision == 0 {
+            out.push_str("code: nothing received yet");
+        } else {
+            let parse = match code.parser_observation {
+                Some(CodeObservation::Parsed) => "parses",
+                Some(CodeObservation::SyntaxInvalid) => "does not parse",
+                Some(CodeObservation::ParserUnavailable) | None => "not parsed",
+            };
+            let _ = write!(
+                out,
+                "code: {}, {} candidate edits, {} changed the program, {parse}",
+                code.language, code.candidate_edits, code.semantic_revision
+            );
+            if let Some(class) = code
+                .last_analysis
+                .as_ref()
+                .and_then(|analysis| analysis.classification.as_ref())
+            {
+                let _ = write!(out, ", last edit {}", class.coarse());
+            }
+            if self.stuck.undo_redo_cycles > 0 {
+                let _ = write!(
+                    out,
+                    ", returned to an earlier buffer {} times",
+                    self.stuck.undo_redo_cycles
+                );
             }
         }
 
-        // Every entry dropped and it still has to render, so the budget rests
-        // on what is left: the digest history, the recent sequence and the two
-        // digests, each capped at a constant. A walk that could only stop once
-        // it was under the budget would have nothing to stop on if that ever
-        // stopped being true.
-        self.render_prompt(&[], &code)
-    }
+        out.push_str("\ntests: ");
+        if !self.progress.runner_attempted {
+            out.push_str("not run");
+        } else {
+            let tests = &self.tests;
+            let _ = write!(out, "{} of {} passing", tests.passed, tests.total);
 
-    fn render_prompt(&self, entries: &[serde_json::Value], code: &serde_json::Value) -> String {
-        let value = serde_json::json!({
-            "version": self.version,
-            "entries": entries,
-            "code": code,
-            "tests": &self.tests,
-            "diagnostics": &self.diagnostics,
-            "progress": &self.progress,
-            "stuck": &self.stuck,
-            "hints": &self.hints,
-            "lifecycle": &self.lifecycle,
-            "coverage": &self.coverage,
-            "conversation": &self.conversation,
-        });
-        serde_json::to_string(&value).expect("evidence projection serializes")
+            // Differences in the counts, which can be negative, and only
+            // against a run that happened: the first run's differences are
+            // against nothing. Read as "newly passing" they said a run with one
+            // more pass and one fewer failure had -1 newly failing.
+            if tests.follows_executed_run && (tests.newly_passed != 0 || tests.newly_failed != 0) {
+                let _ = write!(
+                    out,
+                    ", {:+} passing and {:+} failing since the run before",
+                    tests.newly_passed, tests.newly_failed
+                );
+            }
+            if tests.regression {
+                out.push_str(", a regression");
+            }
+            if tests.consecutive_identical_failures > 1 {
+                let _ = write!(
+                    out,
+                    ", the same failure {} runs in a row",
+                    tests.consecutive_identical_failures
+                );
+            }
+            if self.progress.all_tests_passed_once {
+                out.push_str(", all passed at least once");
+            }
+            if self.stuck.compile_or_runner_failure_count > 0 {
+                let _ = write!(
+                    out,
+                    ", {} runs failed to start",
+                    self.stuck.compile_or_runner_failure_count
+                );
+            }
+            let _ = write!(out, ", {} edit-and-run cycles", self.stuck.edit_test_cycles);
+        }
+
+        let diagnostics = &self.diagnostics;
+        let counted = [
+            ("syntax", diagnostics.syntax),
+            ("type", diagnostics.type_errors),
+            ("linker", diagnostics.linker),
+            ("runtime signal", diagnostics.runtime_signal),
+            ("timeout", diagnostics.timeout),
+            ("warning", diagnostics.warnings),
+            ("other", diagnostics.other),
+        ]
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(name, count)| format!("{name} {count}"))
+        .collect::<Vec<_>>();
+        if !counted.is_empty() {
+            let _ = write!(out, "\ndiagnostics: {}", counted.join(", "));
+        }
+
+        if let (Some(meaningful), Some(latest)) = (
+            self.stuck.last_meaningful_change_ms,
+            self.entries.last().map(|entry| entry.receipt_timestamp_ms),
+        ) {
+            let _ = write!(
+                out,
+                "\nlast program change: {} s before the latest event",
+                latest.saturating_sub(meaningful) / 1000
+            );
+        }
+
+        let hints = &self.hints;
+        if hints.requested + hints.volunteered + hints.withheld > 0 {
+            let _ = write!(
+                out,
+                "\nhints: {} requested, {} volunteered, {} withheld, ladder at rung {}",
+                hints.requested, hints.volunteered, hints.withheld, hints.current_level
+            );
+        }
+
+        if !self.coverage.covered.is_empty() || !self.coverage.uncovered.is_empty() {
+            let list = |phases: &[String]| {
+                if phases.is_empty() {
+                    "none".to_string()
+                } else {
+                    phases.join(", ")
+                }
+            };
+            let _ = write!(
+                out,
+                "\nphases covered: {}; not yet: {}",
+                list(&self.coverage.covered),
+                list(&self.coverage.uncovered)
+            );
+        }
+
+        let conversation = &self.conversation;
+        let _ = write!(
+            out,
+            "\nturns: {} interviewer, {} candidate",
+            conversation.interviewer_turns, conversation.candidate_turns
+        );
+        if !conversation.recent_sequence.is_empty() {
+            let _ = write!(out, "; recent: {}", conversation.recent_sequence.join(" "));
+        }
+
+        let lifecycle = &self.lifecycle;
+        let flags = [
+            (lifecycle.paused, "paused"),
+            (lifecycle.ended, "ended"),
+            (
+                lifecycle.behavioral_round_started,
+                "behavioral round started",
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(set, name)| set.then_some(name))
+        .collect::<Vec<_>>();
+        if !flags.is_empty() {
+            let _ = write!(out, "\nsession: {}", flags.join(", "));
+        }
+
+        if let Some(since) = since {
+            let (mut updates, mut changes, mut runs, mut hints, mut turns) = (0, 0, 0, 0, 0);
+            for entry in self.entries.iter().filter(|entry| entry.sequence > since) {
+                match entry.family {
+                    ObservationFamily::Code => {
+                        updates += 1;
+                        if entry.observation["semanticChange"] == true {
+                            changes += 1;
+                        }
+                    }
+                    ObservationFamily::Test => runs += 1,
+                    ObservationFamily::Hint => hints += 1,
+                    ObservationFamily::InterviewerTurn | ObservationFamily::CandidateTurn => {
+                        turns += 1;
+                    }
+                    ObservationFamily::Diagnostic | ObservationFamily::Lifecycle => {}
+                }
+            }
+            let _ = write!(
+                out,
+                "\nsince the last event like this: {updates} editor updates ({changes} changed the program), {runs} test runs, {hints} hints, {turns} turns"
+            );
+        }
+        out
     }
 
     fn append(
@@ -728,6 +860,10 @@ impl EvidenceLedger {
                 // the caller's.
                 newly_passed,
                 newly_failed: delta(failed, previous.failed),
+
+                // Only executed runs overwrite this state, and an executed run
+                // has cases, so a total is what an earlier one leaves behind.
+                follows_executed_run: previous.total > 0,
                 regression: passed < previous.passed,
 
                 // A streak needs a signature on both sides. Two failing runs

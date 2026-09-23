@@ -330,6 +330,7 @@
     "failed": 1,
     "newly_passed": 1,
     "newly_failed": -1,
+    "follows_executed_run": true,
     "regression": false,
     "consecutive_identical_failures": 1,
     "failure_signature": "564ddbbd4b5af2e69f7d61000907ef08738dc62969edf54fc322b31be34d9693",

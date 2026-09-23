@@ -56,12 +56,34 @@ control-flow edit even though no loop was added: the binding is compared by node
 kind alone, so renaming the loop variable stays a rename. Kinds outside the
 three categories are an expression edit however many of them moved.
 
-The model is told less than the ledger records. A code change reaches the
-projection as a coarse class, `formatting`, `comment`, `identifier` or `code`,
-with no node facts. The finer class is a heuristic over grammar node kinds and
-the ledger keeps it for replay, but the review gate turns only on whether an
-edit was layout or a comment, and nothing yet shows the finer class helps the
-interviewer rather than misleading it when it is wrong.
+The model is told less than the ledger records. What a prompt carries is a few
+lines of plain text rendered from the ledger's aggregates: the code state with
+the last edit as a coarse class (`formatting`, `comment`, `identifier` or
+`code`), the test state, nonzero diagnostic categories, hints, phase coverage,
+turn counts and the recent sequence, with elapsed time measured to the latest
+event. No entry, digest, timestamp or node fact reaches it. The ledger itself was
+the prompt once, as JSON capped at 6,000 bytes; counted with Gemini's tokenizer
+that was 1,000 to 2,700 tokens a prompt, more than half of them SHA-256 digests,
+and a simulated forty-five line session spent 42,212 tokens on review evidence
+where pasting the code had spent 6,776. The text view is bounded by construction
+and costs about 100 to 200 tokens. The finer class stays in the ledger for
+replay: the review gate turns only on whether an edit was layout or a comment,
+and nothing yet shows the finer class helps the interviewer rather than
+misleading it when it is wrong.
+
+A watch prompt also names what arrived since the last one the same Live session
+was shown, as a line of counts, while every state line stays complete, because
+the session compresses old context away. A cold replacement session starts that
+count over. The code itself reaches a watch prompt fenced as the candidate's
+untrusted text and numbered as `read_editor` numbers it: the whole buffer up to
+eighty lines and 4,000 bytes, and past that the lines that changed since the
+last review with three lines of context, at most forty lines of 160 characters.
+The interviewer is told to call `read_editor` only for code it leaves out.
+Sending only the changed lines was tried first: in a small sample against the
+Live model the interviewer read the editor on every review anyway, reaching
+first audio in about 950 ms against 565 ms when the whole buffer came with the
+prompt, and the read returned the whole buffer regardless. The code is source,
+so it is taken from the runtime's buffer and never enters the ledger.
 
 An edit that repairs a buffer that did not parse is a semantic change even when
 there is nothing to diff it against. The pairwise analysis reports
@@ -78,7 +100,7 @@ trip to another tab.
 
 Diagnostic categories are counted only when the runner named one from structured
 execution state; free-form compiler prose is counted as `other` rather than
-classified. Categories nothing observed are left out of the projection instead
+classified. Categories nothing observed are left out of the prompt instead
 of being written down as zero, which would be a claim no measurement supports.
 
 Ledger entries are bounded and session-scoped. Raw code, raw runner output and
@@ -98,7 +120,7 @@ prompt, the `read_editor` responses and every other tool answer, refusals
 included. Every model-bound text falls into exactly one of them. They are bytes
 rather than tokens because the tokenizer belongs to the provider, they are
 written to stderr once at the end of a session, and they are deliberately
-absent from the projection: a model handed its own byte count is being told
+absent from the prompt: a model handed its own byte count is being told
 something no interview should turn on. Beside them, every model-bound text is
 folded in order into one SHA-256, so two runs of a session sent the same prompts
 exactly when that digest matches.

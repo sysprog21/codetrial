@@ -244,7 +244,7 @@ fn report_prompt_text(
     let evidence = if state.evidence_ledger.entries.is_empty() {
         String::new()
     } else {
-        state.evidence_ledger.prompt_slice()
+        state.evidence_ledger.prompt_view(None)
     };
     let transcript = transcript_for_report(&state.transcript);
     let test_summary = format_test_run(state.last_test_run.as_ref(), state.test_runs);

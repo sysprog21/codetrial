@@ -132,12 +132,12 @@ fn overflowing_turn() -> String {
     format!("Candidate: {}", "so ".repeat(4_000))
 }
 
-/// What `EvidenceLedger::prompt_slice` renders for a session nobody has typed
+/// What `EvidenceLedger::prompt_view` renders for a session nobody has typed
 /// in yet (`early`), and for one a few minutes in (`working`).
 ///
-/// Real output, and held to it. `prompt_slice` is crate-internal, so this file
+/// Real output, and held to it. `prompt_view` is crate-internal, so this file
 /// cannot call it. The projections live in the fixture named below, and the
-/// unit test `the_prompt_samples_carry_what_prompt_slice_renders` builds the
+/// unit test `the_prompt_samples_carry_what_prompt_view_renders` builds the
 /// two ledgers and fails when the fixture stops matching.
 /// Frozen strings here used to be checked against nothing, so a change to the
 /// projection's shape would have been regenerated straight into the prompt
@@ -155,8 +155,16 @@ fn evidence_projection(which: &str) -> String {
 /// Every prompt the agent sends, in one place, so the frozen fixture and the
 /// regeneration path cannot drift apart.
 fn prompt_samples() -> Value {
+    let empty = evidence_projection("empty");
     let early = evidence_projection("early");
     let working = evidence_projection("working");
+    let working_since = evidence_projection("workingSince");
+    let excerpt = changed_excerpt(
+        "python",
+        "def two_sum(nums, target):\n    return []\n",
+        "def two_sum(nums, target):\n    seen = {}\n    return []\n",
+    )
+    .expect("an edit has an excerpt");
     let problem = get_problem(Some("two-sum"));
     let full_profile = InterviewProfile {
         role: "backend engineer".to_string(),
@@ -214,12 +222,13 @@ fn prompt_samples() -> Value {
         "languageChoice": language_choice("C++", LanguageChoiceContext::Start),
         "languageSwitch": language_choice("Java", LanguageChoiceContext::SwitchWithCode),
         "silenceBehavioral": behavioral_silence_nudge(),
-        "silenceEmpty": silence_nudge("{}"),
-        "silenceEarly": silence_nudge(&early),
-        "silenceWorking": silence_nudge(&working),
+        "silenceEmpty": silence_nudge(&empty, None),
+        "silenceEarly": silence_nudge(&early, None),
+        "silenceWorking": silence_nudge(&working, Some(&excerpt)),
         "coldRestart": cold_restart(&cold_state),
         "coldRestartEmpty": cold_restart(&RuntimeState::default()),
-        "review": proactive_review(&working),
+        "review": proactive_review(&working_since, Some(&excerpt)),
+        "reviewWithoutExcerpt": proactive_review(&working, None),
         "time": time_warning(),
         "wrapCandidate": wrap_up("candidate_ended"),
         "wrapTimer": wrap_up("time_up"),
@@ -446,8 +455,8 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
         assert_eq!(state.code, code);
     }
     match reaction["kind"].as_str().expect("reaction kind is text") {
-        "silence" => silence_nudge(&numbered(code)),
-        "proactive" => proactive_review(&numbered(code)),
+        "silence" => silence_nudge("", changed_excerpt("python", "", code).as_deref()),
+        "proactive" => proactive_review("", changed_excerpt("python", "", code).as_deref()),
         "tests_failed" | "tests_passed" => {
             let all_passed = reaction["kind"] == "tests_passed";
             let before = state.test_runs;
