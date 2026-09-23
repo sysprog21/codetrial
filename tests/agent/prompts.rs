@@ -58,7 +58,7 @@ fn prompt_golden_digest_matches_versions() {
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
     let recorded_versions = (8, 13);
-    let recorded_digest = "49ac925ffb119cf1dfd64416038890cbc576f158a35e393e99d1daf9469bd2ef";
+    let recorded_digest = "b250d8d7824b45c49954903949980a38c9f7a08d713b4d252ec4b8c8780cb051";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -220,7 +220,7 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
         language_choice("C++", LanguageChoiceContext::Start),
         language_choice("Java", LanguageChoiceContext::SwitchWithCode),
         silence_nudge("(the editor is currently empty)", None),
-        proactive_review("  1| answer = []", None),
+        proactive_review("1| answer = []", None),
         time_warning(),
         wrap_up("time_up", false),
         test_results_reaction("2/3 passed", false, None),
@@ -1030,8 +1030,8 @@ fn a_watch_prompt_carries_the_code_instead_of_a_read() {
     assert!(excerpt.ends_with("END UNTRUSTED EDITOR"));
 
     // A short buffer goes whole, the changed line with its own number.
-    assert!(excerpt.contains("  4|         total -= n"));
-    assert!(excerpt.contains("  1| def f(nums):") && excerpt.contains("  5|     return total"));
+    assert!(excerpt.contains("4|         total -= n"));
+    assert!(excerpt.contains("1| def f(nums):") && excerpt.contains("5|     return total"));
 
     let review = proactive_review("code: python", Some(&excerpt));
     assert!(review.contains(&excerpt));
@@ -1057,7 +1057,7 @@ fn whole_buffer_excerpts_keep_changes_past_line_forty() {
         let after = before.replace(&format!("line {count}\n"), "changed\n");
         let excerpt = changed_excerpt("python", &before, &after).expect("a line changed");
         assert!(excerpt.contains(&format!("all {count} lines")));
-        assert!(excerpt.contains(&format!("{count:>3}| changed")));
+        assert!(excerpt.contains(&format!("{count}| changed")));
         assert_eq!(
             excerpt.lines().filter(|line| line.contains("| ")).count(),
             count
@@ -1074,7 +1074,7 @@ fn excerpts_switch_to_changed_regions_above_whole_buffer_budgets() {
         let last_line = (count - 1) * (width + 1);
         after.replace_range(last_line..last_line + 1, "y");
         let excerpt = changed_excerpt("python", &before, &after).expect("a line changed");
-        assert!(excerpt.contains(&format!("{count:>3}| y")));
+        assert!(excerpt.contains(&format!("{count}| y")));
         assert_eq!(excerpt.contains(&format!("all {count} lines")), whole);
         assert_eq!(
             excerpt.lines().filter(|line| line.contains("| ")).count(),
@@ -1092,6 +1092,9 @@ fn an_excerpt_is_bounded_and_shows_where_a_deletion_was() {
     assert_eq!(excerpt.matches("| x").count(), 40);
     assert!(excerpt.contains("... 60 more lines; call `read_editor` for them"));
 
+    // Labelled with the lines it shows, not the ones the change spans.
+    assert!(excerpt.contains("(python, lines 1-40 of 100,"), "{excerpt}");
+
     // Past the whole-buffer size, one changed line is shown with its context
     // and the rest of the buffer is left to `read_editor`.
     let edited = long.replace("x50 = 50\n", "x50 = 51\n");
@@ -1102,19 +1105,24 @@ fn an_excerpt_is_bounded_and_shows_where_a_deletion_was() {
         ),
         "{region}"
     );
-    assert!(region.contains(" 51| x50 = 51"));
+    assert!(region.contains("51| x50 = 51"));
     assert_eq!(region.matches("| x").count(), 7);
 
+    // A buffer sent whole is sent whole, a long line included: it is under the
+    // byte cap already, and cutting it made "all N lines" untrue. In a region,
+    // one long line still cannot stand in for the whole budget.
     let wide = format!("value = '{}'\n", "\u{3b1}".repeat(400));
-    let excerpt = changed_excerpt("python", "", &wide).expect("a line changed");
-    assert!(excerpt.contains(" ..."), "a long line is cut");
-    assert!(excerpt.len() < 600, "{} bytes", excerpt.len());
+    let whole = changed_excerpt("python", "", &wide).expect("a line changed");
+    assert!(whole.contains(&"\u{3b1}".repeat(400)), "{whole}");
+    let region = changed_excerpt("python", &long, &format!("{long}{wide}")).expect("a line added");
+    assert!(region.contains(" ..."), "a long line is cut: {region}");
+    assert!(region.len() < 1000, "{} bytes", region.len());
 
     // A deleted line leaves no changed line behind, so the lines either side of
     // where it was are what the excerpt shows.
     let deleted =
         changed_excerpt("python", "a = 1\nb = 2\nc = 3\n", "a = 1\nc = 3\n").expect("a deletion");
-    assert!(deleted.contains("  1| a = 1") && deleted.contains("  2| c = 3"));
+    assert!(deleted.contains("1| a = 1") && deleted.contains("2| c = 3"));
 
     // Past the whole-buffer size too, where the region is all there is: the
     // lines either side of the gap, and no note of lines left out, since none
@@ -1128,9 +1136,93 @@ fn an_excerpt_is_bounded_and_shows_where_a_deletion_was() {
         "{region}"
     );
     assert!(
-        region.contains(" 50| x49 = 49") && region.contains(" 51| x51 = 51"),
+        region.contains("50| x49 = 49") && region.contains("51| x51 = 51"),
         "{region}"
     );
     assert_eq!(region.matches("| x").count(), 6, "{region}");
     assert!(!region.contains("more lines"), "{region}");
+}
+
+/// Every carrier of the whole editor is bounded: a pasted file stays in the
+/// Live session for the rest of the interview.
+#[test]
+fn the_numbered_editor_is_bounded() {
+    let huge = "x = 1\n".repeat(20_000);
+    let shown = numbered(&huge);
+    assert!(shown.len() < 32_200, "{} bytes", shown.len());
+
+    // The cut names the line to ask for next, and that page starts there, so
+    // nothing past the cap is out of reach.
+    let tail = shown.lines().last().unwrap();
+    let next = tail
+        .split("fromLine ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|line| line.parse::<usize>().ok())
+        .unwrap_or_else(|| panic!("the cut names no line: {tail}"));
+    assert!(
+        tail.starts_with(&format!("... {} more lines;", 20_000 - next + 1)),
+        "{tail}"
+    );
+    assert!(numbered_from(&huge, next).starts_with(&format!("{next}| x = 1")));
+    assert!(numbered_from(&huge, 19_999).ends_with("20000| x = 1"));
+    assert_eq!(numbered_from(&huge, 20_001), "(the editor has 20000 lines)");
+
+    let line = format!("s = '{}'", "a".repeat(5_000));
+    let cut = numbered(&line);
+    assert!(cut.ends_with(" ..."));
+    assert!(cut.len() < 1_100, "{} bytes", cut.len());
+
+    // A short buffer is untouched.
+    assert_eq!(numbered("a\n\n"), "1| a");
+}
+
+/// The numbered editor's byte cap, at its edge: a buffer whose numbered form
+/// is exactly the cap is shown whole, and one byte more is cut.
+#[test]
+fn the_numbered_cap_holds_at_its_edge() {
+    // Lines of one width, then a last line sized to land on the cap.
+    let mut lines = Vec::new();
+    let mut length = 0;
+    while MAX_NUMBERED_BYTES - length > 900 {
+        let line = "x".repeat(400);
+        length += usize::from(length > 0) + format!("{}| {line}", lines.len() + 1).len();
+        lines.push(line);
+    }
+    let prefix = format!("{}| ", lines.len() + 1).len();
+    let last = MAX_NUMBERED_BYTES - length - 1 - prefix;
+    assert!(last < 1_000, "the last line must stay under the line cut");
+    lines.push("y".repeat(last));
+    let shown = numbered(&lines.join("\n"));
+    assert_eq!(shown.len(), MAX_NUMBERED_BYTES);
+    assert!(!shown.contains("more lines"), "cut at the cap itself");
+
+    lines.pop();
+    lines.push("y".repeat(last + 1));
+    let over = numbered(&lines.join("\n"));
+    assert!(
+        over.ends_with(&format!(
+            "... 1 more lines; call `read_editor` with fromLine {} for them",
+            lines.len()
+        )),
+        "{}",
+        &over[over.len() - 90..]
+    );
+}
+
+/// A line in a changed region exactly as long as the cut keeps is not cut.
+#[test]
+fn an_excerpt_line_at_the_cut_is_kept_whole() {
+    let long: String = (0..100)
+        .map(|index| format!("x{index} = {index}\n"))
+        .collect();
+    let edge = "z".repeat(MAX_EXCERPT_LINE_CHARS);
+    let over = "w".repeat(MAX_EXCERPT_LINE_CHARS + 1);
+    let edited = long.replace("x50 = 50\n", &format!("{edge}\n{over}\n"));
+    let region = changed_excerpt("python", &long, &edited).expect("lines changed");
+    assert!(region.contains(&format!("| {edge}\n")), "{region}");
+    assert!(
+        region.contains(&format!("| {} ...\n", "w".repeat(MAX_EXCERPT_LINE_CHARS))),
+        "{region}"
+    );
 }

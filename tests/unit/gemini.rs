@@ -1268,11 +1268,10 @@ fn live_setup_uses_native_audio_voice_tools_and_transcription() {
         setup["tools"][0]["functionDeclarations"][0]["name"],
         TOOL_READ_EDITOR
     );
-    assert!(
-        setup["tools"][0]["functionDeclarations"][0]
-            .get("parameters")
-            .is_none()
-    );
+    // One optional parameter, the page to start from, and nothing required.
+    let read = &setup["tools"][0]["functionDeclarations"][0]["parameters"];
+    assert_eq!(read["properties"]["fromLine"]["type"], "INTEGER");
+    assert!(read.get("required").is_none());
     assert_eq!(
         setup["tools"][0]["functionDeclarations"][1]["name"],
         TOOL_LOG_HINT

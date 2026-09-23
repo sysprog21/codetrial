@@ -92,15 +92,19 @@ were not renames alone, and only while the buffer parses: a review of a rename
 or of a half-typed line is an "mm-hm" at best, and the next change that parses
 arms it again. `semantic_revision` still counts every program change for the
 evidence it reports. The code itself reaches a watch prompt fenced as the candidate's
-untrusted text and numbered as `read_editor` numbers it: the whole buffer up to
-eighty lines and 4,000 bytes, and past that the lines that changed with three lines of context, at most forty
-lines of 160 characters. The change is measured from the code the model was
-last shown, by any carrier: a watch prompt, a test reaction, which carries the
-change as well, `read_editor`, a requested hint or a cold briefing. With no
-change the prompt says the editor is unchanged rather than sending it again or
-sending the model to read it, and the interviewer is told to call `read_editor`
-only for code nothing has shown it. A watch evidence line that was shown and
-has since gone is sent as its key with `none`.
+untrusted text and numbered as `read_editor` numbers it, without padding and
+without the blank lines at its end: the whole buffer up to eighty lines and
+4,000 bytes, and past that the lines that changed with three lines of context,
+at most forty lines of 160 characters. The change is measured from the code the
+model was last shown, by any carrier: a watch prompt, a test reaction, which
+carries the change as well, `read_editor`, a requested hint or a cold briefing.
+With no change the prompt says the editor is unchanged rather than sending it
+again or sending the model to read it, and the interviewer is told to call
+`read_editor` only for code nothing has shown it. `read_editor`, the hint reply
+and the cold briefing number the whole buffer up to 32,000 bytes, and a cut
+names the line `read_editor` takes as `fromLine` to show the rest. A watch
+evidence line that was shown and has since gone is sent as its key with
+`none`.
 Sending only the changed lines was tried first: in a small sample against the
 Live model the interviewer read the editor on every review anyway, reaching
 first audio in about 950 ms against 565 ms when the whole buffer came with the

@@ -1,7 +1,7 @@
 {
   "numbered": {
     "empty": "(the editor is currently empty)",
-    "twoLines": "  1| a\n  2| b"
+    "twoLines": "1| a\n2| b"
   },
   "testRuns": {
     "empty": "No test run was recorded; tests may not have been attempted or may not have been available for the selected language/problem yet.",

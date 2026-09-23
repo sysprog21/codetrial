@@ -346,6 +346,41 @@ fn a_tool_answer_that_shows_the_editor_marks_it_seen() {
     assert_eq!(state.code_shown, state.code);
 }
 
+/// A buffer past the cap is read in pages: the cut names the line to ask for,
+/// and `fromLine` starts the answer there.
+#[test]
+fn read_editor_pages_past_the_cap() {
+    let mut state = RuntimeState {
+        code: "x = 1\n".repeat(20_000),
+        language: "python".to_string(),
+        ..RuntimeState::default()
+    };
+    let read = |state: &mut RuntimeState, args: serde_json::Value| {
+        execute_tool_call(
+            state,
+            &GeminiFunctionCall {
+                id: "1".to_string(),
+                name: TOOL_READ_EDITOR.to_string(),
+                args,
+            },
+        )["result"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let first = read(&mut state, serde_json::json!({}));
+    assert!(
+        first.contains("call `read_editor` with fromLine"),
+        "cut unannounced"
+    );
+    let second = read(&mut state, serde_json::json!({ "fromLine": 19_990 }));
+    assert!(
+        second.contains("BEGIN UNTRUSTED EDITOR (python)\n19990| x = 1"),
+        "{second}"
+    );
+    assert!(second.contains("20000| x = 1"));
+}
+
 #[test]
 fn a_requested_hint_returns_the_editor_with_its_clue() {
     let mut state = RuntimeState {
@@ -362,7 +397,7 @@ fn a_requested_hint_returns_the_editor_with_its_clue() {
     let asked = execute_tool_call(&mut state, &call(true));
     let asked = asked["result"].as_str().unwrap();
     assert!(asked.contains("first rung"), "{asked}");
-    assert!(asked.contains("  2|     return []"), "{asked}");
+    assert!(asked.contains("2|     return []"), "{asked}");
     assert!(position_of(asked, "first rung") < position_of(asked, "BEGIN UNTRUSTED EDITOR"));
 
     // The candidate's text is fenced: everything they wrote sits between the
@@ -372,8 +407,8 @@ fn a_requested_hint_returns_the_editor_with_its_clue() {
         position_of(asked, "BEGIN UNTRUSTED EDITOR (python)\n"),
         position_of(asked, "\nEND UNTRUSTED EDITOR"),
     );
-    assert!(open < position_of(asked, "  2|     return []"));
-    assert!(position_of(asked, "  2|     return []") < close);
+    assert!(open < position_of(asked, "2|     return []"));
+    assert!(position_of(asked, "2|     return []") < close);
     assert!(close < position_of(asked, "END UNTRUSTED TEST RUN"));
     assert!(
         asked.ends_with("minutes remain on the candidate's countdown."),

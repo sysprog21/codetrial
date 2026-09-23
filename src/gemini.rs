@@ -990,7 +990,13 @@ pub fn live_tool_declarations() -> Value {
     json!([
         {
             "name": TOOL_READ_EDITOR,
-            "description": "The editor's language and numbered code, the latest test run and the minutes left."
+            "description": "The editor's language and numbered code, the latest test run and the minutes left.",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "fromLine": { "type": "INTEGER", "description": "The line to start from, when a cut answer names one." }
+                }
+            }
         },
         {
             "name": TOOL_LOG_HINT,

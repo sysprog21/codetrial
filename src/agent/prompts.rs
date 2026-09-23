@@ -13,7 +13,10 @@ use super::{
 };
 use crate::runtime::AGENT_NAME;
 
-const COLD_RESTART_TRANSCRIPT_BYTES: usize = 12_000;
+/// What a cold briefing recovers of the conversation. The round, the steps
+/// evidenced and the editor come with it, so the tail only has to carry the
+/// exchange in progress; at twelve thousand bytes it was most of the briefing.
+const COLD_RESTART_TRANSCRIPT_BYTES: usize = 6_000;
 
 fn reacto_policy() -> &'static str {
     r#"REACTO CODING FLOW — the spine of this interview, and the axis it is scored
@@ -1270,16 +1273,70 @@ pub fn test_setup_error_reaction(summary_text: &str, excerpt: Option<&str>) -> S
     )
 }
 
+/// The lines worth numbering: the buffer without the blank lines an editor
+/// leaves at its end, which were numbered and paid for on every snapshot.
+fn content_lines(code: &str) -> Vec<&str> {
+    let mut lines = code.lines().collect::<Vec<_>>();
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+    lines
+}
+
+/// One numbered line, `12| code`. Unpadded: right-aligning the numbers cost a
+/// space or two on every line of every snapshot and told the model nothing.
+fn numbered_line(number: usize, line: &str) -> String {
+    format!("{number}| {line}")
+}
+
+/// The most `numbered` writes. The editor arrives unbounded, and what this
+/// returns stays in the Live session for the rest of the interview, so a paste
+/// of a large file is held to about eight thousand tokens rather than all of
+/// it. Far above any solution to an interview problem, and far above the watch
+/// excerpt, whose promise is that `read_editor` shows what it leaves out.
+pub const MAX_NUMBERED_BYTES: usize = 32_000;
+/// Characters kept of one line in `numbered`, for the same reason
+/// `MAX_EXCERPT_LINE_CHARS` exists, and well above it for the same promise.
+const MAX_NUMBERED_LINE_CHARS: usize = 1_000;
+
 pub fn numbered(code: &str) -> String {
-    if code.trim().is_empty() {
+    numbered_from(code, 1)
+}
+
+/// `numbered` from line `from` on, which is how `read_editor` pages through a
+/// buffer past `MAX_NUMBERED_BYTES`: the note that ends a cut page names the
+/// line to ask for next, so nothing the excerpts leave out is out of reach.
+pub fn numbered_from(code: &str, from: usize) -> String {
+    let lines = content_lines(code);
+    if lines.is_empty() {
         return "(the editor is currently empty)".to_string();
     }
-
-    code.lines()
-        .enumerate()
-        .map(|(index, line)| format!("{:>3}| {line}", index + 1))
-        .collect::<Vec<_>>()
-        .join("\n")
+    let from = from.max(1);
+    if from > lines.len() {
+        return format!("(the editor has {} lines)", lines.len());
+    }
+    let mut out = String::new();
+    for (index, line) in lines.iter().enumerate().skip(from - 1) {
+        let kept = line
+            .chars()
+            .take(MAX_NUMBERED_LINE_CHARS)
+            .collect::<String>();
+        let cut = if kept.len() < line.len() { " ..." } else { "" };
+        let rendered = numbered_line(index + 1, &format!("{kept}{cut}"));
+        if !out.is_empty() && out.len() + rendered.len() + 1 > MAX_NUMBERED_BYTES {
+            out.push_str(&format!(
+                "\n... {} more lines; call `read_editor` with fromLine {} for them",
+                lines.len() - index,
+                index + 1
+            ));
+            break;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&rendered);
+    }
+    out
 }
 
 /// Lines of context kept either side of a changed region.
@@ -1290,7 +1347,7 @@ const EXCERPT_CONTEXT_LINES: usize = 3;
 const MAX_EXCERPT_LINES: usize = 40;
 /// Characters kept of one line, so one enormous line cannot stand in for the
 /// whole budget the line cap exists to hold.
-const MAX_EXCERPT_LINE_CHARS: usize = 160;
+pub const MAX_EXCERPT_LINE_CHARS: usize = 160;
 /// A buffer this short is shown whole rather than as its changed lines.
 const MAX_WHOLE_BUFFER_LINES: usize = 80;
 const MAX_WHOLE_BUFFER_BYTES: usize = 4_000;
@@ -1331,34 +1388,37 @@ pub fn changed_excerpt(language: &str, previous: &str, current: &str) -> Option<
         return None;
     }
 
-    let whole = after.len() <= MAX_WHOLE_BUFFER_LINES && current.len() <= MAX_WHOLE_BUFFER_BYTES;
+    // Measured and shown without the blank lines at the end, which a change can
+    // still be among: removing them is a change, and the excerpt of it is the
+    // lines above.
+    let total = content_lines(current).len();
+    let whole = total <= MAX_WHOLE_BUFFER_LINES && current.len() <= MAX_WHOLE_BUFFER_BYTES;
 
     // A deletion leaves no changed line in the new buffer, so the context
     // either side of where it was is all there is to show.
     let (first, last) = if whole {
-        (0, after.len())
+        (0, total)
     } else {
-        (
-            prefix.saturating_sub(EXCERPT_CONTEXT_LINES),
-            (changed_end + EXCERPT_CONTEXT_LINES).min(after.len()),
-        )
+        let last = (changed_end + EXCERPT_CONTEXT_LINES).min(total);
+        (prefix.saturating_sub(EXCERPT_CONTEXT_LINES).min(last), last)
     };
-    let cap = if whole {
-        after.len()
-    } else {
-        MAX_EXCERPT_LINES
-    };
+    let cap = if whole { total } else { MAX_EXCERPT_LINES };
     let shown = (last - first).min(cap);
     let mut body = after[first..first + shown]
         .iter()
         .enumerate()
         .map(|(offset, line)| {
+            // Cut only in an excerpt. A whole buffer is under the byte cap
+            // already, and a line cut there made "all N lines" untrue.
+            if whole {
+                return numbered_line(first + offset + 1, line);
+            }
             let kept = line
                 .chars()
                 .take(MAX_EXCERPT_LINE_CHARS)
                 .collect::<String>();
             let cut = if kept.len() < line.len() { " ..." } else { "" };
-            format!("{:>3}| {kept}{cut}", first + offset + 1)
+            numbered_line(first + offset + 1, &format!("{kept}{cut}"))
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -1371,14 +1431,16 @@ pub fn changed_excerpt(language: &str, previous: &str, current: &str) -> Option<
     if body.is_empty() {
         body.push_str("(the editor is currently empty)");
     }
+
+    // The range shown, not the range the change spans: a region past the line
+    // cap used to be labelled with lines the excerpt never reached.
     let scope = if whole {
-        format!("all {} lines", after.len())
+        format!("all {total} lines")
     } else {
         format!(
-            "lines {}-{} of {}, around the change since the last review",
+            "lines {}-{} of {total}, around the change since the last review",
             first + 1,
-            last,
-            after.len()
+            first + shown,
         )
     };
     Some(format!(
@@ -1478,13 +1540,14 @@ pub fn format_test_run(run: Option<&serde_json::Value>, total_runs: u32) -> Stri
 pub fn read_editor_text(
     language: &str,
     code: &str,
+    from_line: usize,
     last_test_run: Option<&serde_json::Value>,
     test_runs: u32,
     minutes_left: i64,
 ) -> String {
     format!(
         "BEGIN UNTRUSTED EDITOR ({language})\n{}\nEND UNTRUSTED EDITOR\nBEGIN UNTRUSTED TEST RUN\n{}\nEND UNTRUSTED TEST RUN\n{}",
-        numbered(code),
+        numbered_from(code, from_line),
         format_test_run(last_test_run, test_runs),
         crate::agent::timer_line(minutes_left)
     )

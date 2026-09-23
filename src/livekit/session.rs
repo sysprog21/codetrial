@@ -423,10 +423,16 @@ fn tool_response(state: &mut RuntimeState, call: &GeminiFunctionCall) -> serde_j
     match call.name.as_str() {
         TOOL_READ_EDITOR => {
             state.code_shown = state.code.clone();
+            let from_line = call
+                .args
+                .get("fromLine")
+                .and_then(serde_json::Value::as_u64)
+                .map_or(1, |line| usize::try_from(line).unwrap_or(usize::MAX));
             serde_json::json!({
                 "result": read_editor_text(
                     &state.language,
                     &state.code,
+                    from_line,
                     state.last_test_run.as_ref(),
                     state.test_runs,
                     crate::agent::minutes_left(state),
@@ -456,6 +462,7 @@ fn tool_response(state: &mut RuntimeState, call: &GeminiFunctionCall) -> serde_j
                 result.push_str(&read_editor_text(
                     &state.language,
                     &state.code,
+                    1,
                     state.last_test_run.as_ref(),
                     state.test_runs,
                     crate::agent::minutes_left(state),

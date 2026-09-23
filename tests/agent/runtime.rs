@@ -376,7 +376,7 @@ fn leetcode_reactions_preserve_stage_transitions() {
     assert!(empty.contains("understanding, example, or planned algorithm"));
     assert!(empty.contains("Do not restart them"));
 
-    let code = proactive_review("  1| answer = []", None);
+    let code = proactive_review("1| answer = []", None);
     assert!(code.contains("a predicted test"));
     assert!(code.contains("`log_hint` with `requested` false"));
 
@@ -497,6 +497,7 @@ fn runtime_helpers_match_frozen_fixture() {
         read_editor_text(
             "python",
             "def two_sum(nums, target):\n    return [0, 1]",
+            1,
             Some(&json!({"language":"python","passed":1,"total":2,"failures":[]})),
             1,
             18,
