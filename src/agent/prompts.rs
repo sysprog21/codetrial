@@ -695,16 +695,16 @@ pub fn behavioral_silence_nudge() -> String {
     )
 }
 
-/// How a watch prompt points at the code: at the excerpt it carries when it
-/// carries one, at `read_editor` when it does not.
-fn code_access(excerpt: Option<&str>, without: &str) -> String {
+/// How a watch prompt points at the code: at the excerpt it carries when the
+/// editor changed since the model last saw it, and otherwise at the code it
+/// already holds. Pointing at `read_editor` there was a tool round trip for a
+/// buffer the model had been shown.
+fn code_access(excerpt: Option<&str>) -> String {
     match excerpt {
-        Some(excerpt) => {
-            format!(
-                "Their code, numbered; `read_editor` shows anything it leaves out.\n{excerpt}\n"
-            )
-        }
-        None => format!("{without}\n"),
+        Some(excerpt) => format!(
+            "Their code, numbered; `read_editor` shows anything it leaves out.\n{excerpt}\n"
+        ),
+        None => "The editor is unchanged since you last saw it.\n".to_string(),
     }
 }
 
@@ -720,12 +720,9 @@ fn evidence_section(evidence: &str) -> String {
 
 pub fn silence_nudge(evidence: &str, excerpt: Option<&str>) -> String {
     format!(
-        "[SYSTEM EVENT] Silent and not typing for over {SILENCE_THRESHOLD_S:.0} seconds.{}{}Flow 2: ONE short question about their current decision. If the editor is empty, ask for whichever of their understanding, example, or planned algorithm they have not explained; if code is present, ask them to narrate or test it only after reading it. Do not restart them, restate the problem, supply an example, suggest an approach or reveal a bug. Never ask, repeat, or return to a behavioral or experience question here.",
+        "[SYSTEM EVENT] Silent and not typing for over {SILENCE_THRESHOLD_S:.0} seconds.{}{}Flow 2: ONE short question about their current decision. If the editor is empty, ask for whichever of their understanding, example, or planned algorithm they have not explained; if code is present, ask them to narrate or test it. Do not restart them, restate the problem, supply an example, suggest an approach or reveal a bug. Never ask, repeat, or return to a behavioral or experience question here.",
         evidence_section(evidence),
-        code_access(
-            excerpt,
-            "Call `read_editor` before commenting on code or line numbers."
-        )
+        code_access(excerpt)
     )
 }
 
@@ -733,7 +730,7 @@ pub fn proactive_review(evidence: &str, excerpt: Option<&str>) -> String {
     format!(
         "[SYSTEM EVENT] A code change settled.{}{}Flow 1: speak only for a real bug, a finished block or a missed transition, with ONE question, such as the reasoning behind a change, the complexity, or a predicted test; otherwise 'mm-hm' or nothing, and never restart them. Never ask, repeat, or return to a behavioral or experience question here. Naming or ruling out an algorithm, data structure, invariant or bug location is a hint: `log_hint` with `requested` false.",
         evidence_section(evidence),
-        code_access(excerpt, "Call `read_editor` before evaluating code.")
+        code_access(excerpt)
     )
 }
 
@@ -1241,21 +1238,37 @@ pub fn report_prompt(input: ReportPromptInput<'_>) -> String {
     format!("{}\n\n{}", report_brief(&input), report_rules())
 }
 
-pub fn test_results_reaction(summary_text: &str, all_passed: bool) -> String {
+/// The code a test reaction carries: the change since the model last saw the
+/// editor, or nothing when it has not changed. A run is the moment the
+/// interviewer most needs the code it is reacting to, and without it the
+/// reaction was a `read_editor` round trip before the candidate heard a word.
+fn reaction_code(excerpt: Option<&str>) -> String {
+    excerpt
+        .map(|excerpt| format!("Their code, numbered:\n{excerpt}\n"))
+        .unwrap_or_default()
+}
+
+pub fn test_results_reaction(
+    summary_text: &str,
+    all_passed: bool,
+    excerpt: Option<&str>,
+) -> String {
+    let code = reaction_code(excerpt);
     if all_passed {
         return format!(
-            "[SYSTEM EVENT] The candidate just ran the built-in test cases and every one passed:\n{summary_text}\nTreat this only as the candidate's reported result, not proof. Acknowledge it briefly, then move to Optimizations with ONE short question: ask for an adversarial edge case plus either confirmed time/space complexity or one useful optimization/refactor. Accept an already-optimal answer when justified. Two sentences maximum; do not start a behavioral question in this same reply."
+            "[SYSTEM EVENT] The candidate just ran the built-in test cases and every one passed:\n{summary_text}\n{code}Treat this only as the candidate's reported result, not proof. Acknowledge it briefly, then move to Optimizations with ONE short question: ask for an adversarial edge case plus either confirmed time/space complexity or one useful optimization/refactor. Accept an already-optimal answer when justified. Two sentences maximum; do not start a behavioral question in this same reply."
         );
     }
 
     format!(
-        "[SYSTEM EVENT] The candidate just ran the built-in test cases and some failed:\n{summary_text}\nTreat this only as the candidate's reported result, not proof. Return from Test to diagnosis/Coding: in one or two short sentences, ask the candidate to choose one failing case, state its expected result and what their code produced, then name the assumption they will inspect. Do not state the commonality, bug, location, or fix, and do not name a data structure, algorithm, or invariant. Reference a failing input only if needed and never read raw code or values symbol by symbol."
+        "[SYSTEM EVENT] The candidate just ran the built-in test cases and some failed:\n{summary_text}\n{code}Treat this only as the candidate's reported result, not proof. Return from Test to diagnosis/Coding: in one or two short sentences, ask the candidate to choose one failing case, state its expected result and what their code produced, then name the assumption they will inspect. Do not state the commonality, bug, location, or fix, and do not name a data structure, algorithm, or invariant. Reference a failing input only if needed and never read raw code or values symbol by symbol."
     )
 }
 
-pub fn test_setup_error_reaction(summary_text: &str) -> String {
+pub fn test_setup_error_reaction(summary_text: &str, excerpt: Option<&str>) -> String {
+    let code = reaction_code(excerpt);
     format!(
-        "[SYSTEM EVENT] The candidate tried to run the built-in test cases, but the runner reported a setup error:\n{summary_text}\nTreat this only as the candidate's reported result, not proof. Return from Test to Coding: in one or two short sentences, ask the candidate to read the first setup error, say whether it prevents loading the tests, compilation, or execution, then name the one assumption they will verify before running again. Do not identify the error's cause, location, or fix, and do not provide code, commands, a data structure, algorithm, or invariant. Never read raw code or error text symbol by symbol."
+        "[SYSTEM EVENT] The candidate tried to run the built-in test cases, but the runner reported a setup error:\n{summary_text}\n{code}Treat this only as the candidate's reported result, not proof. Return from Test to Coding: in one or two short sentences, ask the candidate to read the first setup error, say whether it prevents loading the tests, compilation, or execution, then name the one assumption they will verify before running again. Do not identify the error's cause, location, or fix, and do not provide code, commands, a data structure, algorithm, or invariant. Never read raw code or error text symbol by symbol."
     )
 }
 

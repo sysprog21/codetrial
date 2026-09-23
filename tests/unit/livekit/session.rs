@@ -314,6 +314,38 @@ fn nothing_is_dropped_once_the_queue_has_drained_or_while_the_agent_speaks() {
 /// A hint the candidate asked for comes back with their editor, so fitting
 /// the clue to their code needs no `read_editor` first; one the interviewer
 /// volunteered is only recorded, after it was given.
+/// Every tool answer that carries the whole editor marks it as seen, so the
+/// next watch prompt or test reaction says it is unchanged rather than
+/// sending it again. A volunteered hint carries no editor and marks nothing.
+#[test]
+fn a_tool_answer_that_shows_the_editor_marks_it_seen() {
+    let mut state = RuntimeState {
+        code: "def f():\n    return 1".to_string(),
+        language: "python".to_string(),
+        hint_ladder: &["first rung"],
+        ..RuntimeState::default()
+    };
+    let call = |name: &str, args: serde_json::Value| GeminiFunctionCall {
+        id: "1".to_string(),
+        name: name.to_string(),
+        args,
+    };
+    execute_tool_call(
+        &mut state,
+        &call(TOOL_LOG_HINT, serde_json::json!({ "requested": false })),
+    );
+    assert_eq!(state.code_shown, "");
+    execute_tool_call(&mut state, &call(TOOL_READ_EDITOR, serde_json::json!({})));
+    assert_eq!(state.code_shown, state.code);
+
+    state.code = "def f():\n    return 2".to_string();
+    execute_tool_call(
+        &mut state,
+        &call(TOOL_LOG_HINT, serde_json::json!({ "requested": true })),
+    );
+    assert_eq!(state.code_shown, state.code);
+}
+
 #[test]
 fn a_requested_hint_returns_the_editor_with_its_clue() {
     let mut state = RuntimeState {

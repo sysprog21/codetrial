@@ -8,10 +8,11 @@
 use super::{
     DataEventResult, INTERVIEWER_SPEAKER, InterviewLoop, LanguageChoiceContext,
     LifecycleTransition, MAX_INTEGRITY_EVENTS, ROUND_TRANSITION_SKEW, RuntimeState, TIME_WARNING_S,
-    analyze_code, analyze_code_cached, behavioral_time_warning, cold_restart, format_test_run,
-    integrity_hash, language_choice, observe_code, observe_code_cached, python_truthy, resume,
-    round_skipped, round_started, sanitize_integrity_event, sanitize_test_run, spoken_language,
-    test_reaction_decision, test_results_reaction, test_setup_error_reaction, time_warning,
+    analyze_code, analyze_code_cached, behavioral_time_warning, changed_excerpt, cold_restart,
+    format_test_run, integrity_hash, language_choice, observe_code, observe_code_cached,
+    python_truthy, resume, round_skipped, round_started, sanitize_integrity_event,
+    sanitize_test_run, spoken_language, test_reaction_decision, test_results_reaction,
+    test_setup_error_reaction, time_warning,
 };
 use crate::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
 
@@ -405,14 +406,18 @@ fn apply_test_results(
         && payload.get("passed").and_then(serde_json::Value::as_i64)
             == payload.get("total").and_then(serde_json::Value::as_i64);
     let summary = format_test_run(Some(payload), state.test_runs);
+    let excerpt = changed_excerpt(&state.language, &state.code_shown, &state.code);
+    if excerpt.is_some() {
+        state.code_shown = state.code.clone();
+    }
 
     DataEventResult {
         update_last_test_reaction: true,
         update_last_interjection: true,
         generate_reply: Some(if setup_error {
-            test_setup_error_reaction(&summary)
+            test_setup_error_reaction(&summary, excerpt.as_deref())
         } else {
-            test_results_reaction(&summary, all_passed)
+            test_results_reaction(&summary, all_passed, excerpt.as_deref())
         }),
         ..DataEventResult::default()
     }
@@ -491,6 +496,7 @@ fn control_pause(
         pause_changed: Some(paused),
         generate_reply: (!paused).then(|| {
             if cold_brief {
+                state.code_shown = state.code.clone();
                 cold_restart(state)
             } else {
                 resume(state.behavioral_round_started)

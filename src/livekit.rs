@@ -505,6 +505,7 @@ async fn replace_gemini_session(
     // the write most likely to meet a socket that is already gone.
     let briefing =
         crate::agent::with_timer(context.state, crate::agent::cold_restart(context.state));
+    context.state.code_shown = context.state.code.clone();
     if let Err(error) = send_model_text(
         context.gemini,
         context.state,
@@ -929,7 +930,7 @@ async fn on_watch_tick(
         .await
         {
             eprintln!("Gemini nudge failed ({error}); waiting for the close to be reported");
-            context.activity.unsend_watch_prompt();
+            context.activity.unsend_watch_prompt(context.state);
             return Ok(ControlFlow::Continue(()));
         }
     }

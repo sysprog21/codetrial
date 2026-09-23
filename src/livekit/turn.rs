@@ -75,9 +75,6 @@ pub(super) struct RuntimeActivity {
     pub(super) last_interjection: Instant,
     pub(super) last_test_reaction: Instant,
     pub(super) substantive_revision_at_last_review: u64,
-    /// The buffer the last review saw, which the next one's excerpt is the
-    /// change from. Source, so it stays here and never reaches the ledger.
-    pub(super) code_at_last_review: String,
     /// The evidence lines the last watch prompt of this Live session left the
     /// model holding, so the next sends only the lines that differ. The session
     /// keeps its earlier turns, and a line repeated unchanged every prompt was
@@ -159,7 +156,6 @@ impl RuntimeActivity {
                 .checked_sub(Duration::from_secs_f64(TEST_REACTION_COOLDOWN_S))
                 .unwrap_or(now),
             substantive_revision_at_last_review: 0,
-            code_at_last_review: String::new(),
             evidence_shown: None,
             unsent_watch: None,
             floor: Floor::Listening,
@@ -270,7 +266,7 @@ impl RuntimeActivity {
     /// a closed one behave identically to every test that can be written.
     pub(super) fn watch_prompt(
         &mut self,
-        state: &RuntimeState,
+        state: &mut RuntimeState,
         now: Instant,
     ) -> Option<WatchPrompt> {
         let behavioral = state.behavioral_round_started;
@@ -331,20 +327,21 @@ impl RuntimeActivity {
                 behavioral_nudge: true,
             });
         }
-        let excerpt = changed_excerpt(&state.language, &self.code_at_last_review, &state.code);
+        let excerpt = changed_excerpt(&state.language, &state.code_shown, &state.code);
         let lines = state.evidence_ledger.prompt_view(ViewFor::Watch);
         let evidence = evidence_delta(self.evidence_shown.as_deref(), &lines);
+
+        // A nudge shows the code as a review does, so both move what the model
+        // has seen; only a review consumes the change that armed it.
         let mut unsent = UnsentWatch {
-            review: None,
+            revision: None,
+            code_shown: std::mem::replace(&mut state.code_shown, state.code.clone()),
             evidence_shown: self.evidence_shown.replace(lines),
         };
-        if decision.sync_code_at_last_review {
-            unsent.review = Some((
-                std::mem::replace(
-                    &mut self.substantive_revision_at_last_review,
-                    state.evidence_ledger.code.substantive_revision,
-                ),
-                std::mem::replace(&mut self.code_at_last_review, state.code.clone()),
+        if decision.sync_revision_at_last_review {
+            unsent.revision = Some(std::mem::replace(
+                &mut self.substantive_revision_at_last_review,
+                state.evidence_ledger.code.substantive_revision,
             ));
         }
 
@@ -377,14 +374,14 @@ impl RuntimeActivity {
     /// evidence this one carried. The timing stamps stay moved, since the
     /// socket is dead until the close is reported and restoring them would
     /// build and fail a prompt on every tick until then.
-    pub(super) fn unsend_watch_prompt(&mut self) {
+    pub(super) fn unsend_watch_prompt(&mut self, state: &mut RuntimeState) {
         let Some(unsent) = self.unsent_watch.take() else {
             return;
         };
-        if let Some((revision, code)) = unsent.review {
+        if let Some(revision) = unsent.revision {
             self.substantive_revision_at_last_review = revision;
-            self.code_at_last_review = code;
         }
+        state.code_shown = unsent.code_shown;
         self.evidence_shown = unsent.evidence_shown;
     }
 }
@@ -413,11 +410,12 @@ fn evidence_delta(shown: Option<&[String]>, lines: &[String]) -> String {
     delta.join("\n")
 }
 
-/// The review baselines and the evidence shown as they were before a watch
-/// prompt moved them: the revision and code together, when it was a review.
+/// What a watch prompt moved, as it was before: the code and the evidence the
+/// model had been shown, and the review baseline when it was a review.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct UnsentWatch {
-    review: Option<(u64, String)>,
+    revision: Option<u64>,
+    code_shown: String,
     evidence_shown: Option<Vec<String>>,
 }
 

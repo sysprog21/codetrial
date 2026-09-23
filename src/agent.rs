@@ -792,6 +792,13 @@ pub struct RuntimeState {
     /// The earlier steps an evidence reply has already named as open, so each
     /// is named once; see `unrecorded_earlier_phases`.
     pub earlier_steps_named: Vec<&'static str>,
+    /// The buffer the Live model was last shown, whole or around a change: by a
+    /// watch prompt, a test reaction, `read_editor`, a requested hint or a
+    /// cold-restart briefing. The next watch prompt or test reaction shows the
+    /// change since this, and says the editor is unchanged when there is none,
+    /// rather than sending code the model holds or telling it to read the
+    /// editor again. Runtime-only, like the recovery baselines above.
+    pub code_shown: String,
     /// The interviewer said the session is over. Read by the room loop, which
     /// ends the interview through the same packet the browser sends, so this is
     /// a request and not the end itself; `ended` is the end itself.
@@ -862,6 +869,7 @@ impl Default for RuntimeState {
             interim_notes: Vec::new(),
             interim_transcript_lines: 0,
             earlier_steps_named: Vec::new(),
+            code_shown: String::new(),
             end_requested: false,
             ended: false,
         }
@@ -1526,7 +1534,7 @@ pub struct TimingDecision {
     pub update_last_nudge: bool,
     pub update_last_review: bool,
     pub update_last_interjection: bool,
-    pub sync_code_at_last_review: bool,
+    pub sync_revision_at_last_review: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1734,7 +1742,7 @@ pub fn timing_decision(input: &TimingInput) -> TimingDecision {
             update_last_nudge: true,
             update_last_review: false,
             update_last_interjection: true,
-            sync_code_at_last_review: false,
+            sync_revision_at_last_review: false,
         };
     }
 
@@ -1749,7 +1757,7 @@ pub fn timing_decision(input: &TimingInput) -> TimingDecision {
             update_last_nudge: false,
             update_last_review: true,
             update_last_interjection: true,
-            sync_code_at_last_review: true,
+            sync_revision_at_last_review: true,
         };
     }
 

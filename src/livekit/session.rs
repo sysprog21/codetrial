@@ -414,15 +414,18 @@ pub fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) ->
 
 fn tool_response(state: &mut RuntimeState, call: &GeminiFunctionCall) -> serde_json::Value {
     match call.name.as_str() {
-        TOOL_READ_EDITOR => serde_json::json!({
-            "result": read_editor_text(
-                &state.language,
-                &state.code,
-                state.last_test_run.as_ref(),
-                state.test_runs,
-                crate::agent::minutes_left(state),
-            )
-        }),
+        TOOL_READ_EDITOR => {
+            state.code_shown = state.code.clone();
+            serde_json::json!({
+                "result": read_editor_text(
+                    &state.language,
+                    &state.code,
+                    state.last_test_run.as_ref(),
+                    state.test_runs,
+                    crate::agent::minutes_left(state),
+                )
+            })
+        }
 
         // Missing reads as asked for: the declaration requires the flag, and
         // the cost of the other default is a hint the candidate asked for
@@ -441,6 +444,7 @@ fn tool_response(state: &mut RuntimeState, call: &GeminiFunctionCall) -> serde_j
             // a whole round trip before it could say anything. The fences are
             // the ones `read_editor` answers with.
             if requested {
+                state.code_shown = state.code.clone();
                 result.push_str("\n\n");
                 result.push_str(&read_editor_text(
                     &state.language,

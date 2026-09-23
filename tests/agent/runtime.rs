@@ -380,18 +380,18 @@ fn leetcode_reactions_preserve_stage_transitions() {
     assert!(code.contains("a predicted test"));
     assert!(code.contains("`log_hint` with `requested` false"));
 
-    let failed = test_results_reaction("1/3 passed", false);
+    let failed = test_results_reaction("1/3 passed", false, None);
     assert!(failed.contains("Return from Test to diagnosis/Coding"));
     assert!(failed.contains("choose one failing case"));
     assert!(failed.contains("expected result and what their code produced"));
     assert!(failed.contains("Do not state the commonality, bug, location, or fix"));
 
-    let setup = test_setup_error_reaction("Compiler Explorer returned 503");
+    let setup = test_setup_error_reaction("Compiler Explorer returned 503", None);
     assert!(setup.contains("first setup error"));
     assert!(setup.contains("prevents loading the tests, compilation, or execution"));
     assert!(setup.contains("Do not identify the error's cause, location, or fix"));
 
-    let passed = test_results_reaction("3/3 passed", true);
+    let passed = test_results_reaction("3/3 passed", true, None);
     assert!(passed.contains("move to Optimizations"));
     assert!(passed.contains("do not start a behavioral question"));
 
@@ -414,9 +414,9 @@ fn leetcode_reactions_preserve_stage_transitions() {
         silence_nudge("(the editor is currently empty)", None),
         time_warning(),
         wrap_up("time_up", false),
-        test_results_reaction("1/3 passed", false),
-        test_results_reaction("3/3 passed", true),
-        test_setup_error_reaction("The runner could not start."),
+        test_results_reaction("1/3 passed", false, None),
+        test_results_reaction("3/3 passed", true, None),
+        test_setup_error_reaction("The runner could not start.", None),
     ] {
         assert!(
             !neutral.contains("`log_hint`"),
@@ -851,7 +851,7 @@ fn timing_decision_applies_watch_loop_gates() {
         update_last_nudge: true,
         update_last_review: false,
         update_last_interjection: true,
-        sync_code_at_last_review: false,
+        sync_revision_at_last_review: false,
     };
     let review = TimingDecision {
         silence_nudge: false,
@@ -859,7 +859,7 @@ fn timing_decision_applies_watch_loop_gates() {
         update_last_nudge: false,
         update_last_review: true,
         update_last_interjection: true,
-        sync_code_at_last_review: true,
+        sync_revision_at_last_review: true,
     };
 
     // Both sides of the threshold, named by the constant. The numbers used to
@@ -2300,4 +2300,32 @@ fn the_renderer_caps_the_failure_list_even_on_a_run_it_was_handed_directly() {
         4,
         "the renderer must cap the list itself: {rendered}"
     );
+}
+
+/// A run is when the interviewer most needs the code it is reacting to, so the
+/// reaction carries what changed since the model last saw the editor, and
+/// nothing when nothing did: no second copy, and no `read_editor` first.
+#[test]
+fn a_test_reaction_carries_the_code_the_model_has_not_seen() {
+    let mut state = RuntimeState {
+        code: "def f(nums):\n    return sorted(nums)".to_string(),
+        ..RuntimeState::default()
+    };
+    let run =
+        json!({"passed": 1, "total": 2, "language": "python", "cases": [], "setupError": null});
+    let first = apply_data_event(&mut state, TOPIC_TEST_RESULTS, &run, 99.0)
+        .generate_reply
+        .expect("the first run is reacted to");
+    assert!(
+        first.contains("Their code, numbered:\nBEGIN UNTRUSTED EDITOR (python, all 2 lines)"),
+        "{first}"
+    );
+    assert!(first.contains("return sorted(nums)"), "{first}");
+    assert_eq!(state.code_shown, state.code);
+
+    let again = apply_data_event(&mut state, TOPIC_TEST_RESULTS, &run, 99.0)
+        .generate_reply
+        .expect("a second run past the cooldown is reacted to");
+    assert!(!again.contains("BEGIN UNTRUSTED EDITOR"), "{again}");
+    assert!(!again.contains("read_editor"), "{again}");
 }
