@@ -468,7 +468,7 @@ fn execute_tool_call_reads_editor_and_tracks_hints() {
     assert!(unflagged["result"].as_str().unwrap().contains("first rung"));
     assert_eq!(laddered.hint_rungs_given, 1);
     assert_eq!(state.hints_used, 1);
-    assert_eq!(evidence["result"]["phase"], "algorithm");
+    assert_eq!(evidence["result"], "Recorded algorithm.");
     assert_eq!(state.framework_evidence.len(), 1);
     assert_eq!(state.evidence_ledger.metrics.read_editor_calls, 1);
     assert!(state.evidence_ledger.metrics.read_editor_bytes > 0);
@@ -681,7 +681,7 @@ fn evidence_reply_names_the_earlier_steps_still_open() {
     };
 
     let first = record("repeat", "observed", "candidate_speech", "Restated it.");
-    assert!(first["result"].is_object());
+    assert_eq!(first["result"], "Recorded repeat.");
     assert!(
         first.get("earlierSteps").is_none(),
         "nothing comes before Repeat"

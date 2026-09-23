@@ -21,8 +21,8 @@ use ::livekit::prelude::Room;
 
 use crate::agent::{
     CANDIDATE_SPEAKER, INTERVIEWER_SPEAKER, ModelInputKind, RuntimeState, SpeakerTurn,
-    framework_evidence_json, framework_progress, phase_id, read_editor_text,
-    record_framework_evidence, released_follow_ups, unrecorded_earlier_phases, with_timer, wrap_up,
+    framework_progress, phase_id, read_editor_text, record_framework_evidence, released_follow_ups,
+    unrecorded_earlier_phases, with_timer, wrap_up,
 };
 use crate::gemini::{GeminiEvent, GeminiFunctionCall, GeminiLiveSession};
 use crate::runtime::{
@@ -154,24 +154,31 @@ pub(super) async fn handle_gemini_event(
     }
 }
 
-/// Answers every call in the batch, and republishes the checklist when one of
-/// them moved it.
+/// Answers every call in the batch in one message, and republishes the
+/// checklist once when any of them moved it.
 async fn on_tool_calls(
     room: &Room,
     context: &mut GeminiEventContext<'_>,
     calls: Vec<GeminiFunctionCall>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    for call in calls {
-        let shown_before = framework_progress(context.state);
-        let response = execute_tool_call(context.state, &call);
-        context.gemini.send_tool_response(&call, response).await?;
+    if calls.is_empty() {
+        return Ok(());
+    }
+    let shown_before = framework_progress(context.state);
+    let answers = calls
+        .into_iter()
+        .map(|call| {
+            let response = execute_tool_call(context.state, &call);
+            (call, response)
+        })
+        .collect::<Vec<_>>();
+    context.gemini.send_tool_responses(&answers).await?;
 
-        // Gemini now owes a generation for this, and will deliver it on this
-        // socket or not at all.
-        context.activity.tool_response_outstanding = true;
-        if checklist_changed(&shown_before, context.state) {
-            publish_framework_progress(room, context.state).await?;
-        }
+    // Gemini now owes a generation for this, and will deliver it on this socket
+    // or not at all.
+    context.activity.tool_response_outstanding = true;
+    if checklist_changed(&shown_before, context.state) {
+        publish_framework_progress(room, context.state).await?;
     }
     Ok(())
 }
@@ -464,9 +471,13 @@ fn tool_response(state: &mut RuntimeState, call: &GeminiFunctionCall) -> serde_j
             let was_complete = crate::agent::coding_round_complete(state);
             let shown_before = framework_progress(state);
             match record_framework_evidence(state, &call.args) {
+                // The phase alone. The row echoed back was the model's own
+                // arguments plus a timestamp and a version, held in the session
+                // for the rest of the interview on every call.
                 Ok(evidence) => {
-                    let mut response =
-                        serde_json::json!({ "result": framework_evidence_json(&evidence) });
+                    let mut response = serde_json::json!({
+                        "result": format!("Recorded {}.", phase_id(evidence.phase))
+                    });
                     if !was_complete && let Some(follow_ups) = released_follow_ups(state) {
                         response["followUps"] = follow_ups.into();
                     }

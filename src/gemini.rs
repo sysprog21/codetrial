@@ -140,12 +140,13 @@ impl GeminiLiveSession {
             .await
     }
 
-    pub async fn send_tool_response(
+    /// Every answer to one batch of calls in one message: the model resumes
+    /// once, on the whole batch, rather than once per answer.
+    pub async fn send_tool_responses(
         &mut self,
-        call: &GeminiFunctionCall,
-        response: Value,
+        answers: &[(GeminiFunctionCall, Value)],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.send_json(tool_response_message(call, response)).await
+        self.send_json(tool_response_message(answers)).await
     }
 
     pub async fn next_event(&mut self) -> Option<GeminiEvent> {
@@ -1108,16 +1109,17 @@ fn realtime_video_message(bytes: &[u8], mime_type: &str) -> Value {
     })
 }
 
-fn tool_response_message(call: &GeminiFunctionCall, response: Value) -> Value {
+fn tool_response_message(answers: &[(GeminiFunctionCall, Value)]) -> Value {
     json!({
         "toolResponse": {
-            "functionResponses": [
-                {
+            "functionResponses": answers
+                .iter()
+                .map(|(call, response)| json!({
                     "name": call.name,
                     "id": call.id,
                     "response": response
-                }
-            ]
+                }))
+                .collect::<Vec<_>>()
         }
     })
 }

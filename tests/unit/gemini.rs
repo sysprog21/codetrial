@@ -1604,8 +1604,18 @@ fn tool_response_message_matches_live_websocket_shape() {
         args: json!({}),
     };
 
+    let hint = GeminiFunctionCall {
+        id: "call-2".to_string(),
+        name: TOOL_LOG_HINT.to_string(),
+        args: json!({"requested": false}),
+    };
+
+    // One message for the whole batch, answers in the order of the calls.
     assert_eq!(
-        tool_response_message(&call, json!({"result":"code"})),
+        tool_response_message(&[
+            (call, json!({"result":"code"})),
+            (hint, json!({"result":"Recorded."})),
+        ]),
         json!({
             "toolResponse": {
                 "functionResponses": [
@@ -1613,6 +1623,11 @@ fn tool_response_message_matches_live_websocket_shape() {
                         "name": TOOL_READ_EDITOR,
                         "id": "call-1",
                         "response": {"result":"code"}
+                    },
+                    {
+                        "name": TOOL_LOG_HINT,
+                        "id": "call-2",
+                        "response": {"result":"Recorded."}
                     }
                 ]
             }
@@ -1952,4 +1967,57 @@ fn the_interim_review_asks_for_bounded_prose_and_no_thinking() {
         report["contents"][0]["parts"][0]["text"],
         "write the debrief"
     );
+}
+
+/// Every answer to a batch goes out, in one frame, over the socket.
+#[tokio::test]
+async fn tool_answers_leave_on_the_socket_in_one_frame() {
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(socket).await.unwrap();
+        socket.next().await.unwrap().unwrap();
+        socket
+            .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+            .await
+            .unwrap();
+
+        // Bounded, so a frame that never leaves fails here instead of hanging
+        // the test until the harness gives up on it.
+        tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .expect("the tool answers never reached the socket")
+            .unwrap()
+            .unwrap()
+            .into_text()
+            .unwrap()
+    });
+
+    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+        .await
+        .unwrap();
+    let call = |id: &str| GeminiFunctionCall {
+        id: id.to_string(),
+        name: TOOL_READ_EDITOR.to_string(),
+        args: json!({}),
+    };
+    session
+        .send_tool_responses(&[
+            (call("a"), json!({"result": "one"})),
+            (call("b"), json!({"result": "two"})),
+        ])
+        .await
+        .unwrap();
+    let frame: Value = serde_json::from_str(&server.await.unwrap()).unwrap();
+    let answers = frame["toolResponse"]["functionResponses"]
+        .as_array()
+        .unwrap();
+    assert_eq!(answers.len(), 2);
+    assert_eq!(answers[0]["id"], "a");
+    assert_eq!(answers[1]["id"], "b");
+    session.close().await.unwrap();
 }
