@@ -49,6 +49,10 @@ pub(super) const INTERIM_CODE_BYTES: usize = 4 * 1024;
 /// the window is an "mm-hm" and the note would be about nothing; at four, a
 /// short exchange of acknowledgements still qualified.
 pub(super) const INTERIM_MIN_NEW_TURNS: usize = 6;
+/// What an idle-window review is sent in place of an editor it was already
+/// sent.
+pub(super) const INTERIM_CODE_UNCHANGED: &str =
+    "(unchanged since the notes on record were written; judge this stretch's speech)";
 
 /// A candidate who has just typed is still working, even if their speech has
 /// paused. Give them a beat before a periodic review tries to take the floor.
@@ -249,8 +253,17 @@ impl RuntimeActivity {
         due
     }
 
+    /// Not once the end is due either: the interviewer has asked to close, or
+    /// the planned time runs out before the call could return, and the end
+    /// aborts a review still running.
     fn interim_review_due(&self, state: &RuntimeState, now: Instant) -> bool {
+        let planned =
+            Duration::from_secs(u64::from(state.coding_minutes + state.behavioral_minutes) * 60);
         !state.paused
+            && !state.end_requested
+            && now.saturating_duration_since(state.started_at)
+                + crate::gemini::INTERIM_ATTEMPT_TIMEOUT
+                < planned
             && self.floor == Floor::Listening
             && !self.reply_in_flight()
             && !self.tool_response_outstanding

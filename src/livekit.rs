@@ -648,10 +648,18 @@ fn take_interim_review_window(state: &mut RuntimeState, boot: &RuntimeBootstrap<
         .evidence_ledger
         .prompt_view(crate::agent::ViewFor::Interim)
         .join("\n");
+    let code = if state.code.trim().is_empty() {
+        String::new()
+    } else if state.code == state.interim_code {
+        INTERIM_CODE_UNCHANGED.to_string()
+    } else {
+        state.interim_code = state.code.clone();
+        code_head(&state.code, INTERIM_CODE_BYTES)
+    };
     let prompt = interim_review_prompt(&InterimReviewInput {
         problem: boot.problem,
         transcript_window: &window,
-        code: &code_head(&state.code, INTERIM_CODE_BYTES),
+        code: &code,
         language: &state.language,
         already_recorded: &state.interim_notes[recent..].join("\n"),
         evidence: &evidence,

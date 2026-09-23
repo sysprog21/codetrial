@@ -55,7 +55,7 @@ fn a_pause_is_read_only_when_the_room_is_actually_idle() {
     /// One way the room is busy: the thing to break, and why it disqualifies
     /// the pause.
     type Busy = (&'static str, fn(&mut RuntimeActivity, &mut RuntimeState));
-    let busy: [Busy; 6] = [
+    let busy: [Busy; 8] = [
         (
             "Jim is mid-sentence, so the stretch is not finished",
             |activity, _| {
@@ -94,6 +94,19 @@ fn a_pause_is_read_only_when_the_room_is_actually_idle() {
         ("a stretch already read is not read again", |_, state| {
             state.interim_transcript_lines = state.transcript.len();
         }),
+        (
+            "the interviewer asked to close, and the end aborts a running review",
+            |_, state| {
+                state.end_requested = true;
+            },
+        ),
+        (
+            "the planned time runs out before the call could return",
+            |_, state| {
+                let planned = u64::from(state.coding_minutes + state.behavioral_minutes) * 60;
+                state.started_at -= Duration::from_secs(planned - 5);
+            },
+        ),
     ];
     for (why, break_it) in busy {
         let mut activity = RuntimeActivity::new(start);
@@ -233,4 +246,22 @@ fn an_evidence_line_that_goes_away_is_retracted() {
         evidence_delta(None, &lines(&["tests: not run"])),
         "tests: not run"
     );
+}
+
+/// A review has to be able to return before the planned end: one whose call
+/// would run into it is not started, and one a second earlier is.
+#[test]
+fn no_interim_review_starts_that_the_end_would_abort() {
+    let state = RuntimeState {
+        transcript: (0..INTERIM_MIN_NEW_TURNS)
+            .map(|index| format!("Candidate: line {index}"))
+            .collect(),
+        ..RuntimeState::default()
+    };
+    let planned =
+        Duration::from_secs(u64::from(state.coding_minutes + state.behavioral_minutes) * 60);
+    let last_call = state.started_at + planned - crate::gemini::INTERIM_ATTEMPT_TIMEOUT;
+    let activity = RuntimeActivity::new(state.started_at);
+    assert!(!activity.interim_review_due(&state, last_call));
+    assert!(activity.interim_review_due(&state, last_call - Duration::from_secs(1)));
 }

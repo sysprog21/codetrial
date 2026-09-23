@@ -791,6 +791,11 @@ pub struct RuntimeState {
     /// shown. The window it gets is everything after this, so a pause that
     /// arrives with nothing new said costs no call at all.
     pub interim_transcript_lines: usize,
+    /// The editor the last idle-window review was sent. A review whose code
+    /// has not changed since says so instead of sending up to four kilobytes
+    /// a note on record already read; like the transcript cursor, it moves
+    /// when the call goes out.
+    pub interim_code: String,
     /// The earlier steps an evidence reply has already named as open, so each
     /// is named once; see `unrecorded_earlier_phases`.
     pub earlier_steps_named: Vec<&'static str>,
@@ -870,6 +875,7 @@ impl Default for RuntimeState {
             needs_cold_brief: false,
             interim_notes: Vec::new(),
             interim_transcript_lines: 0,
+            interim_code: String::new(),
             earlier_steps_named: Vec::new(),
             code_shown: String::new(),
             end_requested: false,

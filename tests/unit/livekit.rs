@@ -1126,6 +1126,11 @@ fn each_pause_reviews_the_speech_since_the_last_one() {
     );
     assert_eq!(state.interim_transcript_lines, 3);
 
+    // The code the first review read has not changed, so the second is told so
+    // rather than sent it again.
+    assert!(!second.contains("seen = {}"), "{second}");
+    assert!(second.contains(INTERIM_CODE_UNCHANGED), "{second}");
+
     // A transcript shorter than the cursor is not reachable today. It is one
     // future edit away, and the arithmetic that would panic on it is in here.
     state.transcript.clear();
