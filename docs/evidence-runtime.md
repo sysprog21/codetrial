@@ -57,28 +57,40 @@ kind alone, so renaming the loop variable stays a rename. Kinds outside the
 three categories are an expression edit however many of them moved.
 
 The model is told less than the ledger records. What a prompt carries is a few
-lines of plain text rendered from the ledger's aggregates: the code state with
-the last edit as a coarse class (`formatting`, `comment`, `identifier` or
-`code`), the test state, nonzero diagnostic categories, hints, phase coverage,
-turn counts and the recent sequence, with elapsed time measured to the latest
-event. No entry, digest, timestamp or node fact reaches it. The ledger itself was
+lines of plain text rendered from the ledger's aggregates, and of those only the
+lines the rest of that prompt does not already state: the code history with the
+last edit as a coarse class (`formatting`, `comment`, `identifier` or `code`),
+the test state and nonzero diagnostic categories, labeled as the browser's
+unverified claims, hints, phase coverage, the time since the last program
+change and the session state. A watch prompt carries the code and goes to a
+session that holds the conversation, so it gets the tests, diagnostics, hints,
+phases and session state; the interim review gets the code history, tests,
+diagnostics, last change, hints and session state; the report, whose own
+sections carry the last run, the hint counts, the framework evidence and the
+transcript, gets the code history, the test history and the session state. No
+entry, digest, timestamp or node fact reaches any of them. The ledger itself was
 the prompt once, as JSON capped at 6,000 bytes; counted with Gemini's tokenizer
 that was 1,000 to 2,700 tokens a prompt, more than half of them SHA-256 digests,
 and a simulated forty-five line session spent 42,212 tokens on review evidence
 where pasting the code had spent 6,776. The text view is bounded by construction
-and costs about 100 to 200 tokens. The finer class stays in the ledger for
+and costs tens of tokens. The finer class stays in the ledger for
 replay: the review gate turns only on whether an edit was layout or a comment,
 and nothing yet shows the finer class helps the interviewer rather than
 misleading it when it is wrong.
 
-A watch prompt also names what arrived since the last one the same Live session
-was shown, as a line of counts, while every state line stays complete, because
-the session compresses old context away. A cold replacement session starts that
-count over. The code itself reaches a watch prompt fenced as the candidate's
+A watch prompt sends only the lines that differ from the ones the last watch
+prompt left the same Live session holding, and no evidence heading at all when
+none do; a cold replacement session, which holds nothing, gets every line, and a
+prompt the socket refused leaves the lines it carried to be sent again. The
+simulated session above now spends 7,551 tokens on reviews against `main`'s
+6,776, with the code in every review and one review more, which the semantic
+gate fires. The code itself reaches a watch prompt fenced as the candidate's
 untrusted text and numbered as `read_editor` numbers it: the whole buffer up to
 eighty lines and 4,000 bytes, and past that the lines that changed since the
 last review with three lines of context, at most forty lines of 160 characters.
-The interviewer is told to call `read_editor` only for code it leaves out.
+The interviewer is told to call `read_editor` only for code it leaves out. A
+watch evidence line that was shown and has since gone is sent as its key with
+`none`.
 Sending only the changed lines was tried first: in a small sample against the
 Live model the interviewer read the editor on every review anyway, reaching
 first audio in about 950 ms against 565 ms when the whole buffer came with the

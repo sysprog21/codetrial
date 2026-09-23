@@ -709,6 +709,20 @@ fn edit(state: &mut RuntimeState, receipt: u64, code: &str) {
     );
 }
 
+/// A test run the browser reported, received at `receipt`.
+fn run_tests(state: &mut RuntimeState, receipt: u64, passed: u32, total: u32) {
+    crate::agent::apply_data_event_at(
+        state,
+        crate::runtime::TOPIC_TEST_RESULTS,
+        &serde_json::json!({
+            "passed": passed, "total": total, "language": "python", "cases": [],
+            "setupError": null,
+        }),
+        99.0,
+        receipt,
+    );
+}
+
 /// Where `needle` sits in a prompt. A layout change is what these checks exist
 /// to catch, so a missing marker fails with the prompt it is missing from.
 fn position(prompt: &str, needle: &str) -> usize {
@@ -1591,7 +1605,7 @@ fn an_unsent_review_leaves_its_change_for_the_next_one() {
 
     // Nothing to undo before any prompt.
     activity.unsend_watch_prompt();
-    assert_eq!(activity.evidence_shown_through, None);
+    assert_eq!(activity.evidence_shown, None);
 
     // The first packet is the starter, which is not the candidate's edit.
     edit(&mut state, 50, "def f():\n    pass\n");
@@ -1604,16 +1618,19 @@ fn an_unsent_review_leaves_its_change_for_the_next_one() {
         (
             activity.semantic_revision_at_last_review,
             activity.code_at_last_review.clone(),
-            activity.evidence_shown_through,
+            activity.evidence_shown.clone(),
         )
     };
     let seen = markers(&activity);
 
     edit(&mut state, 200, "def f():\n    return 2\n");
+    run_tests(&mut state, 250, 1, 2);
     ready(&mut activity);
-    activity
+    let failed = activity
         .watch_prompt(&state, now)
         .expect("the review that fails");
+    let ran = "tests: browser-reported claims (unverified): 1 of 2 passing";
+    assert!(failed.text.contains(ran), "{}", failed.text);
     assert_ne!(activity.code_at_last_review, seen.1);
     activity.unsend_watch_prompt();
     assert_eq!(markers(&activity), seen);
@@ -1626,11 +1643,63 @@ fn an_unsent_review_leaves_its_change_for_the_next_one() {
         position(&retried.text, "    return 2")
             > position(&retried.text, "BEGIN UNTRUSTED EDITOR (")
     );
+    assert!(retried.text.contains(ran), "{}", retried.text);
+}
+
+/// A Live session keeps what it was told, so a watch prompt sends only the
+/// evidence lines that differ from the last one's, none at all when nothing
+/// moved, and all of them to a session that has heard nothing.
+#[test]
+fn a_watch_prompt_sends_only_the_evidence_lines_that_changed() {
+    let now = Instant::now();
+    let mut activity = RuntimeActivity::new(now);
+    let mut state = RuntimeState::default();
+    edit(&mut state, 50, "def f():\n    pass\n");
+    edit(&mut state, 100, "def f():\n    return 1\n");
+    ready_for_review(&mut activity, now);
+    let first = activity
+        .watch_prompt(&state, now)
+        .expect("the first review");
     assert!(
-        retried
+        first
             .text
-            .contains("since the last event like this: 1 editor updates (1 changed the program)"),
+            .contains("Deterministic session evidence:\ntests: not run\n"),
         "{}",
-        retried.text
+        first.text
+    );
+
+    edit(&mut state, 200, "def f():\n    return 2\n");
+    ready_for_review(&mut activity, now);
+    let unchanged = activity.watch_prompt(&state, now).expect("a second review");
+    assert!(
+        !unchanged.text.contains("Deterministic session evidence"),
+        "{}",
+        unchanged.text
+    );
+    assert!(!unchanged.text.contains("tests:"), "{}", unchanged.text);
+
+    edit(&mut state, 300, "def f():\n    return 3\n");
+    run_tests(&mut state, 350, 1, 2);
+    ready_for_review(&mut activity, now);
+    let tested = activity.watch_prompt(&state, now).expect("a third review");
+    assert!(
+        tested.text.contains(
+            "Deterministic session evidence:\ntests: browser-reported claims (unverified): 1 of 2 passing"
+        ),
+        "{}", tested.text
+    );
+
+    // A cold replacement starts from nothing.
+    activity.evidence_shown = None;
+    edit(&mut state, 400, "def f():\n    return 4\n");
+    ready_for_review(&mut activity, now);
+    let cold = activity
+        .watch_prompt(&state, now)
+        .expect("a review on a new session");
+    assert!(
+        cold.text
+            .contains("tests: browser-reported claims (unverified): 1 of 2 passing"),
+        "{}",
+        cold.text
     );
 }

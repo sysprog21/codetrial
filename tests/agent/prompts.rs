@@ -58,7 +58,7 @@ fn prompt_golden_digest_matches_versions() {
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
     let recorded_versions = (8, 13);
-    let recorded_digest = "a14d28a93aa05fc33a768ba1a9d874dfa233eb260991642b6c64137c428a3c0c";
+    let recorded_digest = "e64a77fcdcbdb9bc78baa39f2b6a441ba901d97a580510ddca936624f0aab688";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -1008,7 +1008,7 @@ fn a_watch_prompt_carries_the_code_instead_of_a_read() {
 
     let review = proactive_review("code: python", Some(&excerpt));
     assert!(review.contains(&excerpt));
-    assert!(review.contains("Call `read_editor` only when you need code it leaves out"));
+    assert!(review.contains("`read_editor` shows anything it leaves out"));
     assert!(!review.contains("Call `read_editor` before evaluating code"));
     let without = proactive_review("code: python", None);
     assert!(without.contains("Call `read_editor` before evaluating code"));

@@ -477,9 +477,9 @@ async fn replace_gemini_session(
         return Ok(ControlFlow::Continue(()));
     }
 
-    // Nor any evidence view: the next watch prompt has nothing earlier to
-    // describe a change from, so it goes out whole.
-    context.activity.evidence_shown_through = None;
+    // Nor any evidence: the next watch prompt has shown this session nothing,
+    // so it sends every line.
+    context.activity.evidence_shown = None;
 
     // A cold session has never heard this candidate. Without this it waits for
     // someone to speak first, holding whatever they say against a rubric it
@@ -643,7 +643,10 @@ fn take_interim_review_window(state: &mut RuntimeState, boot: &RuntimeBootstrap<
         .interim_notes
         .len()
         .saturating_sub(INTERIM_CONTEXT_NOTES);
-    let evidence = state.evidence_ledger.prompt_view(None);
+    let evidence = state
+        .evidence_ledger
+        .prompt_view(crate::agent::ViewFor::Interim)
+        .join("\n");
     let prompt = interim_review_prompt(&InterimReviewInput {
         problem: boot.problem,
         transcript_window: &window,

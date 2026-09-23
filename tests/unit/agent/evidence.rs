@@ -8,7 +8,7 @@ use super::{
     ObservationFamily, Provenance, RuntimeState, analyze_code, apply_data_event,
     apply_data_event_at, apply_server_event_at, record_framework_evidence, record_hint,
 };
-use super::{ParseCache, analyze_code_cached, observe_code, observe_code_cached};
+use super::{ParseCache, ViewFor, analyze_code_cached, observe_code, observe_code_cached};
 
 /// A buffer recorded with no parse behind it, which is all a caller that never
 /// saw the prior text can honestly claim. It lived on the ledger until it had
@@ -450,10 +450,10 @@ fn evidence_ledger_counts_model_bytes_without_claiming_tokens() {
     assert_eq!(ledger.metrics.tool_response_count, 1);
     assert_eq!(ledger.metrics.tool_response_bytes, 4);
 
-    // Every one of them, not just the first. This is the view a model is
-    // handed, and a counter that reached it would be telling the interviewer
+    // Every one of them, not just the first. These are the views a model is
+    // handed, and a counter that reached one would be telling the interviewer
     // what its own advice costs.
-    let slice = ledger.prompt_view(None);
+    let slice = every_view(&ledger);
     for field in [
         "watch_prompt_bytes",
         "turn_prompt_bytes",
@@ -614,7 +614,7 @@ fn evidence_ledger_prompt_view_is_bounded_and_raw_free() {
             &serde_json::json!({ "passed": 0, "total": 1, "setupError": "raw diagnostic" }),
         );
     }
-    let slice = ledger.prompt_view(None);
+    let slice = every_view(&ledger);
     assert!(slice.len() <= 1_000, "{} bytes", slice.len());
     assert!(!slice.contains("candidate_code_must_not_reach_the_prompt_projection"));
     assert!(!slice.contains("raw diagnostic"));
@@ -1064,7 +1064,7 @@ fn unobserved_diagnostic_categories_are_not_reported_as_zero() {
             "setupError": "compilation failed",
         }),
     );
-    let slice = ledger.prompt_view(None);
+    let slice = every_view(&ledger);
     assert!(
         slice.contains("diagnostics: browser-reported claims (unverified): other 1"),
         "{slice}"
@@ -1106,7 +1106,7 @@ fn a_large_paste_does_not_evict_the_session_from_the_prompt() {
         true,
         analyze_code("python", "def f(values):\n    return []\n", &pasted),
     );
-    let slice = ledger.prompt_view(None);
+    let slice = every_view(&ledger);
     assert!(slice.len() <= 1_000, "{} bytes", slice.len());
 
     // The session before the paste is still what the view reports: it states
@@ -1355,8 +1355,14 @@ fn the_prompt_view_is_bounded_by_construction() {
     ledger.record_hint(100, true, true);
     ledger.record_hint(101, false, true);
     ledger.record_hint(102, true, false);
-    let view = ledger.prompt_view(Some(0));
-    assert!(view.len() <= 1_000, "{} bytes:\n{view}", view.len());
+    for purpose in [ViewFor::Watch, ViewFor::Interim, ViewFor::Report] {
+        let view = ledger.prompt_view(purpose).join("\n");
+        assert!(
+            view.len() <= 700,
+            "{purpose:?}, {} bytes:\n{view}",
+            view.len()
+        );
+    }
 }
 
 fn setup_failure(category: &str) -> serde_json::Value {
@@ -2751,14 +2757,21 @@ fn the_prompt_samples_carry_what_prompt_view_renders() {
         }),
     );
 
+    let watch = |state: &RuntimeState| state.evidence_ledger.prompt_view(ViewFor::Watch);
     let rendered = serde_json::json!({
-        "empty": fresh().evidence_ledger.prompt_view(None),
-        "early": early.evidence_ledger.prompt_view(None),
-        "working": working.evidence_ledger.prompt_view(None),
+        "empty": watch(&fresh()).join("\n"),
+        "early": watch(&early).join("\n"),
+        "working": watch(&working).join("\n"),
 
-        // What a watch prompt sends once an earlier one has shown the session
-        // up to the candidate's first turn.
-        "workingSince": working.evidence_ledger.prompt_view(Some(2)),
+        // What a watch prompt sends once an earlier one has shown `early`: the
+        // lines that differ from what the session already holds.
+        "workingChanged": watch(&working)
+            .into_iter()
+            .filter(|line| !watch(&early).contains(line))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        "workingInterim": working.evidence_ledger.prompt_view(ViewFor::Interim).join("\n"),
+        "workingReport": working.evidence_ledger.prompt_view(ViewFor::Report).join("\n"),
     });
     let path = "tests/fixtures/evidence-projections.json";
     if std::env::var_os("UPDATE_EVIDENCE_GOLDEN").is_some() {
@@ -3035,6 +3048,20 @@ fn failing_run(passed: u32) -> serde_json::Value {
     })
 }
 
+/// Every view a prompt can be given, one per line, for checks that hold for
+/// all of them.
+fn every_view(ledger: &EvidenceLedger) -> String {
+    [ViewFor::Watch, ViewFor::Interim, ViewFor::Report]
+        .into_iter()
+        .map(|purpose| ledger.prompt_view(purpose).join("\n"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Wherever a view states what the browser reported about its runs, it says
+/// the browser reported it: the counts, the differences and the diagnostics
+/// are claims, and the report's own test summary is what shows the counts
+/// there.
 #[test]
 fn test_claims_keep_browser_provenance_in_every_prompt_view() {
     let mut ledger = EvidenceLedger::default();
@@ -3047,43 +3074,99 @@ fn test_claims_keep_browser_provenance_in_every_prompt_view() {
                 "diagnostic": { "category": "syntax" }
             }),
         );
-        for since in [None, Some(0)] {
-            let view = ledger.prompt_view(since);
+        for purpose in [ViewFor::Watch, ViewFor::Interim, ViewFor::Report] {
+            let view = ledger.prompt_view(purpose).join("\n");
             let tests = view
                 .lines()
                 .find(|line| line.starts_with("tests:"))
-                .unwrap();
+                .unwrap_or_else(|| panic!("{purpose:?} has no tests line:\n{view}"));
             assert!(
                 tests.starts_with("tests: browser-reported claims (unverified): "),
                 "{view}"
             );
-            assert!(tests.contains(&format!("{passed} of 3 passing")), "{view}");
-            if index > 0 {
-                assert!(tests.contains("since the run before"), "{view}");
-            }
+            assert_eq!(
+                tests.contains(&format!("{passed} of 3 passing")),
+                purpose != ViewFor::Report,
+                "{purpose:?}: {view}"
+            );
+            assert_eq!(tests.contains("since the run before"), index > 0, "{view}");
             assert!(
                 view.contains("diagnostics: browser-reported claims (unverified): syntax"),
                 "{view}"
             );
-            if since.is_some() {
-                assert!(
-                    view.contains(&format!("{} browser-reported test runs", index + 1)),
-                    "{view}"
-                );
-            }
         }
     }
 }
 
-/// An empty ledger says so in three lines and no more: every other line has
-/// nothing to say yet.
+/// With nothing recorded, the watch and interim views say only that no test
+/// has run, and the report, whose test summary says so already, says nothing.
 #[test]
-fn an_empty_prompt_view_is_three_lines() {
+fn an_empty_ledger_is_one_line_or_none() {
     let ledger = EvidenceLedger::default();
-    assert_eq!(ledger.last_sequence(), 0);
+    assert_eq!(ledger.prompt_view(ViewFor::Watch), ["tests: not run"]);
+    assert_eq!(ledger.prompt_view(ViewFor::Interim), ["tests: not run"]);
+    assert!(ledger.prompt_view(ViewFor::Report).is_empty());
+}
+
+/// Each prompt gets the lines the rest of it does not state, and all of them
+/// whole: a watch prompt carries the code and goes to a session holding the
+/// conversation, the interim review carries the code and a transcript window,
+/// and the report carries the code, the transcript, the last run and the hints.
+#[test]
+fn each_prompt_gets_only_the_lines_it_does_not_already_state() {
+    let mut ledger = EvidenceLedger::default();
+    ledger.set_uncovered_coverage(["repeat", "example"]);
+    ledger.record_coverage(500, "repeat");
+    let mut previous = String::new();
+    for (receipt, code) in [(1_000, "x = 1\n"), (2_000, "x = 2\n"), (3_000, "x = 1\n")] {
+        let analysis = analyze_code("python", &previous, code);
+        ledger.record_code_with_analysis(None, receipt, "python", code, true, analysis);
+        previous = code.to_string();
+    }
+    ledger.record_test(Some(4), 4_000, &failing_run(1));
+    ledger.record_test(Some(5), 5_000, &failing_run(1));
+    ledger.record_test(Some(6), 6_000, &setup_failure("syntax"));
+    ledger.record_hint(7_000, true, true);
+    ledger.record_hint(7_100, false, true);
+    ledger.record_hint(7_200, true, false);
+    ledger.record_conversation_turn(8_000, "candidate");
+    ledger.record_lifecycle(9_000, LifecycleTransition::Paused);
+
+    let code = "code: python, 3 candidate edits, 3 changed the program, parses, last edit code, returned to an earlier buffer 1 times";
+    let history = "the same failure 2 runs in a row, 1 runs failed to start, 1 edit-and-run cycles";
+    let tests = format!("tests: browser-reported claims (unverified): 1 of 3 passing, {history}");
+    let diagnostics = "diagnostics: browser-reported claims (unverified): syntax 1";
+    let hints = "hints: 2 requested, 1 volunteered, 1 withheld, ladder at rung 1";
+    let session = "session: paused";
     assert_eq!(
-        ledger.prompt_view(None),
-        "code: nothing received yet\ntests: not run\nturns: 0 interviewer, 0 candidate"
+        ledger.prompt_view(ViewFor::Watch),
+        [
+            tests.as_str(),
+            diagnostics,
+            hints,
+            "phases covered: repeat; not yet: example",
+            session,
+        ]
+    );
+    assert_eq!(
+        ledger.prompt_view(ViewFor::Interim),
+        [
+            code,
+            tests.as_str(),
+            diagnostics,
+            "last program change: 6 s before the latest event",
+            hints,
+            session,
+        ]
+    );
+    assert_eq!(
+        ledger.prompt_view(ViewFor::Report),
+        [
+            code,
+            &format!("tests: browser-reported claims (unverified): {history}"),
+            diagnostics,
+            session,
+        ]
     );
 }
 
@@ -3091,19 +3174,16 @@ fn an_empty_prompt_view_is_three_lines() {
 /// first run has none, a repeat has none, and either count moving alone is one.
 #[test]
 fn the_test_line_states_differences_only_against_an_earlier_run() {
+    let tests_line = |ledger: &EvidenceLedger| ledger.prompt_view(ViewFor::Watch)[0].clone();
     let mut ledger = EvidenceLedger::default();
     ledger.record_test(Some(1), 1_000, &failing_run(1));
-    let first = ledger.prompt_view(None);
-    assert!(
-        first.contains(
-            "tests: browser-reported claims (unverified): 1 of 3 passing, 0 edit-and-run"
-        ),
-        "{first}"
+    assert_eq!(
+        tests_line(&ledger),
+        "tests: browser-reported claims (unverified): 1 of 3 passing, 0 edit-and-run cycles"
     );
-    assert!(!first.contains("runs in a row"), "{first}");
 
     ledger.record_test(Some(2), 2_000, &failing_run(1));
-    let repeated = ledger.prompt_view(None);
+    let repeated = tests_line(&ledger);
     assert!(!repeated.contains("since the run before"), "{repeated}");
     assert!(
         repeated.contains("the same failure 2 runs in a row"),
@@ -3111,12 +3191,11 @@ fn the_test_line_states_differences_only_against_an_earlier_run() {
     );
 
     ledger.record_test(Some(3), 3_000, &failing_run(2));
-    let better = ledger.prompt_view(None);
+    let better = tests_line(&ledger);
     assert!(
         better.contains("+1 passing and -1 failing since the run before"),
         "{better}"
     );
-    assert_eq!(ledger.last_sequence(), 3);
 
     let mut grew = EvidenceLedger::default();
     grew.record_test(Some(1), 1_000, &failing_run(1));
@@ -3131,62 +3210,47 @@ fn the_test_line_states_differences_only_against_an_earlier_run() {
             ],
         }),
     );
-    let grown = grew.prompt_view(None);
+    let grown = tests_line(&grew);
     assert!(
         grown.contains("+1 passing and +0 failing since the run before"),
         "{grown}"
     );
-}
 
-/// The code line names a return to an earlier buffer once there is one.
-#[test]
-fn the_code_line_names_a_return_to_an_earlier_buffer() {
+    // A regression, and a run where every case passed.
     let mut ledger = EvidenceLedger::default();
-    let mut previous = String::new();
-    for (receipt, code) in [(4_000, "x = 1\n"), (5_000, "x = 2\n"), (6_000, "x = 1\n")] {
-        assert!(
-            !ledger
-                .prompt_view(None)
-                .contains("returned to an earlier buffer")
-        );
-        let analysis = analyze_code("python", &previous, code);
-        ledger.record_code_with_analysis(None, receipt, "python", code, true, analysis);
-        previous = code.to_string();
-    }
-    let undone = ledger.prompt_view(None);
-    assert!(
-        undone.contains("returned to an earlier buffer 1 times"),
-        "{undone}"
+    ledger.record_test(
+        Some(1),
+        1_000,
+        &serde_json::json!({"passed": 3, "total": 3}),
     );
+    ledger.record_test(Some(2), 2_000, &failing_run(1));
+    let line = tests_line(&ledger);
+    assert!(line.contains("a regression"), "{line}");
+    assert!(line.contains("all passed at least once"), "{line}");
 }
 
-/// A hint line for any hint, whichever counter it moved, and a change line that
-/// counts what arrived after the cursor by kind.
+/// A hint line for any hint, whichever counter it moved.
 #[test]
-fn hints_and_what_arrived_since_are_counted() {
+fn a_hint_line_appears_for_any_hint() {
     for (requested, delivered, line) in [
-        (false, true, "hints: 0 requested, 1 volunteered, 0 withheld"),
-        (true, false, "hints: 1 requested, 0 volunteered, 1 withheld"),
+        (
+            false,
+            true,
+            "hints: 0 requested, 1 volunteered, 0 withheld, ladder at rung 0",
+        ),
+        (
+            true,
+            false,
+            "hints: 1 requested, 0 volunteered, 1 withheld, ladder at rung 0",
+        ),
     ] {
         let mut hinted = EvidenceLedger::default();
         hinted.record_hint(100, requested, delivered);
-        let view = hinted.prompt_view(None);
-        assert!(view.contains(line), "{view}");
+        assert!(
+            hinted
+                .prompt_view(ViewFor::Watch)
+                .iter()
+                .any(|shown| shown == line)
+        );
     }
-
-    let mut ledger = EvidenceLedger::default();
-    ledger.record_test(Some(1), 1_000, &failing_run(1));
-    let since = ledger.last_sequence();
-    ledger.record_hint(7_000, true, true);
-    ledger.record_hint(7_100, false, true);
-    ledger.record_conversation_turn(7_200, "candidate");
-    ledger.record_conversation_turn(7_300, "interviewer");
-    ledger.record_conversation_turn(7_400, "candidate");
-    let delta = ledger.prompt_view(Some(since));
-    assert!(
-        delta.ends_with(
-            "since the last event like this: 0 editor updates (0 changed the program), 0 browser-reported test runs, 2 hints, 3 turns"
-        ),
-        "{delta}"
-    );
 }

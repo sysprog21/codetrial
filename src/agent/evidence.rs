@@ -447,109 +447,149 @@ impl Default for EvidenceLedger {
     }
 }
 
-impl EvidenceLedger {
-    /// The sequence of the newest entry, which a caller keeps to ask
-    /// [`Self::prompt_view`] for what arrived after it.
-    pub(crate) fn last_sequence(&self) -> u64 {
-        self.next_sequence.saturating_sub(1)
-    }
+/// Which prompt a view is rendered for, and so which of its lines that prompt
+/// does not already state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ViewFor {
+    /// A watch prompt, which carries the code and goes to a session that holds
+    /// the conversation: tests, diagnostics, hints, phases and the session
+    /// state, and of those only what changed since the last one it showed.
+    Watch,
+    /// The interim review, which carries the code and a transcript window but
+    /// not the edit history, the tests or the hints.
+    Interim,
+    /// The final report, which carries the code, the transcript, the last test
+    /// run, the hint counts and the framework evidence: what is left is the
+    /// edit history, the test history and the session state.
+    Report,
+}
 
-    /// What the model is told about the session: a few lines of plain text,
-    /// raw-free and bounded by construction rather than by truncation.
+impl EvidenceLedger {
+    /// What a prompt is told about the session: plain text, raw-free and
+    /// bounded by construction, one fact to a line.
     ///
     /// It used to be the ledger itself as JSON, capped at 6,000 bytes. Measured
     /// with Gemini's own tokenizer that was 1,000 to 2,700 tokens a prompt,
     /// more than half of it SHA-256 digests the model can do nothing with, and
     /// the rest per-entry bookkeeping that the aggregates below already state.
-    /// A watch prompt carried six times what pasting the code had. The ledger
-    /// keeps every entry, digest and timestamp for replay; the model gets the
-    /// facts those entries add up to, with elapsed time relative to the latest
-    /// event so the text depends on nothing but the ledger.
-    ///
-    /// `since` is the last sequence an earlier prompt of the same kind showed.
-    /// A Live session keeps its earlier turns, so what changed since then is a
-    /// line of its own; the state lines are always complete, because the
-    /// session compresses old context away and a view that leaned on an
-    /// evicted one would describe nothing.
+    /// The ledger keeps every entry, digest and timestamp for replay; a prompt
+    /// gets the facts they add up to, and of those only what the rest of it
+    /// does not already say (see [`ViewFor`]): the same fact twice is paid
+    /// for twice, and a watch session pays for every prompt it keeps.
     ///
     /// A code change is named by [`CodeChangeClass::coarse`] alone. The fine
     /// class is a heuristic over grammar node kinds, and a wrong one here is
     /// wrong evidence the interviewer reads.
-    pub(crate) fn prompt_view(&self, since: Option<u64>) -> String {
-        use std::fmt::Write as _;
-        let mut out = String::new();
+    pub(crate) fn prompt_view(&self, purpose: ViewFor) -> Vec<String> {
+        let lines = match purpose {
+            ViewFor::Watch => vec![
+                self.tests_line(true),
+                self.diagnostics_line(),
+                self.hints_line(),
+                self.phases_line(),
+                self.session_line(),
+            ],
+            ViewFor::Interim => vec![
+                self.code_line(),
+                self.tests_line(true),
+                self.diagnostics_line(),
+                self.change_line(),
+                self.hints_line(),
+                self.session_line(),
+            ],
+            ViewFor::Report => vec![
+                self.code_line(),
+                self.tests_line(false),
+                self.diagnostics_line(),
+                self.session_line(),
+            ],
+        };
+        lines.into_iter().flatten().collect()
+    }
+
+    fn code_line(&self) -> Option<String> {
         let code = &self.code;
         if code.revision == 0 {
-            out.push_str("code: nothing received yet");
-        } else {
-            let parse = match code.parser_observation {
-                Some(CodeObservation::Parsed) => "parses",
-                Some(CodeObservation::SyntaxInvalid) => "does not parse",
-                Some(CodeObservation::ParserUnavailable) | None => "not parsed",
-            };
-            let _ = write!(
-                out,
-                "code: {}, {} candidate edits, {} changed the program, {parse}",
-                code.language, code.candidate_edits, code.semantic_revision
-            );
-            if let Some(class) = code
-                .last_analysis
-                .as_ref()
-                .and_then(|analysis| analysis.classification.as_ref())
-            {
-                let _ = write!(out, ", last edit {}", class.coarse());
-            }
-            if self.stuck.undo_redo_cycles > 0 {
-                let _ = write!(
-                    out,
-                    ", returned to an earlier buffer {} times",
-                    self.stuck.undo_redo_cycles
-                );
-            }
+            return None;
         }
+        let parse = match code.parser_observation {
+            Some(CodeObservation::Parsed) => "parses",
+            Some(CodeObservation::SyntaxInvalid) => "does not parse",
+            Some(CodeObservation::ParserUnavailable) | None => "not parsed",
+        };
+        let mut line = format!(
+            "code: {}, {} candidate edits, {} changed the program, {parse}",
+            code.language, code.candidate_edits, code.semantic_revision
+        );
+        if let Some(class) = code
+            .last_analysis
+            .as_ref()
+            .and_then(|analysis| analysis.classification.as_ref())
+        {
+            line.push_str(", last edit ");
+            line.push_str(class.coarse());
+        }
+        if self.stuck.undo_redo_cycles > 0 {
+            line.push_str(&format!(
+                ", returned to an earlier buffer {} times",
+                self.stuck.undo_redo_cycles
+            ));
+        }
+        Some(line)
+    }
 
-        out.push_str("\ntests: ");
+    /// The test state as the browser reported it. `counts` is the latest run's
+    /// passing count, which the report leaves to its own test summary; what
+    /// stays there is the history no single run states.
+    fn tests_line(&self, counts: bool) -> Option<String> {
         if !self.progress.runner_attempted {
-            out.push_str("not run");
-        } else {
-            let tests = &self.tests;
-            out.push_str("browser-reported claims (unverified): ");
-            let _ = write!(out, "{} of {} passing", tests.passed, tests.total);
-
-            // Differences in the counts, which can be negative, and only
-            // against a run that happened: the first run's differences are
-            // against nothing. Read as "newly passing" they said a run with one
-            // more pass and one fewer failure had -1 newly failing.
-            if tests.follows_executed_run && (tests.newly_passed != 0 || tests.newly_failed != 0) {
-                let _ = write!(
-                    out,
-                    ", {:+} passing and {:+} failing since the run before",
-                    tests.newly_passed, tests.newly_failed
-                );
-            }
-            if tests.regression {
-                out.push_str(", a regression");
-            }
-            if tests.consecutive_identical_failures > 1 {
-                let _ = write!(
-                    out,
-                    ", the same failure {} runs in a row",
-                    tests.consecutive_identical_failures
-                );
-            }
-            if self.progress.all_tests_passed_once {
-                out.push_str(", all passed at least once");
-            }
-            if self.stuck.compile_or_runner_failure_count > 0 {
-                let _ = write!(
-                    out,
-                    ", {} runs failed to start",
-                    self.stuck.compile_or_runner_failure_count
-                );
-            }
-            let _ = write!(out, ", {} edit-and-run cycles", self.stuck.edit_test_cycles);
+            return counts.then(|| "tests: not run".to_string());
+        }
+        let tests = &self.tests;
+        let mut parts = Vec::new();
+        if counts {
+            parts.push(format!("{} of {} passing", tests.passed, tests.total));
         }
 
+        // Differences in the counts, which can be negative, and only against a
+        // run that happened: the first run's differences are against nothing.
+        // Read as "newly passing" they said a run with one more pass and one
+        // fewer failure had -1 newly failing.
+        if tests.follows_executed_run && (tests.newly_passed != 0 || tests.newly_failed != 0) {
+            parts.push(format!(
+                "{:+} passing and {:+} failing since the run before",
+                tests.newly_passed, tests.newly_failed
+            ));
+        }
+        if tests.regression {
+            parts.push("a regression".to_string());
+        }
+        if tests.consecutive_identical_failures > 1 {
+            parts.push(format!(
+                "the same failure {} runs in a row",
+                tests.consecutive_identical_failures
+            ));
+        }
+        if self.progress.all_tests_passed_once {
+            parts.push("all passed at least once".to_string());
+        }
+        if self.stuck.compile_or_runner_failure_count > 0 {
+            parts.push(format!(
+                "{} runs failed to start",
+                self.stuck.compile_or_runner_failure_count
+            ));
+        }
+        parts.push(format!(
+            "{} edit-and-run cycles",
+            self.stuck.edit_test_cycles
+        ));
+        Some(format!(
+            "tests: browser-reported claims (unverified): {}",
+            parts.join(", ")
+        ))
+    }
+
+    fn diagnostics_line(&self) -> Option<String> {
         let diagnostics = &self.diagnostics;
         let counted = [
             ("syntax", diagnostics.syntax),
@@ -564,60 +604,55 @@ impl EvidenceLedger {
         .filter(|(_, count)| *count > 0)
         .map(|(name, count)| format!("{name} {count}"))
         .collect::<Vec<_>>();
-        if !counted.is_empty() {
-            let _ = write!(
-                out,
-                "\ndiagnostics: browser-reported claims (unverified): {}",
+        (!counted.is_empty()).then(|| {
+            format!(
+                "diagnostics: browser-reported claims (unverified): {}",
                 counted.join(", ")
-            );
-        }
+            )
+        })
+    }
 
-        if let (Some(meaningful), Some(latest)) = (
-            self.stuck.last_meaningful_change_ms,
-            self.entries.last().map(|entry| entry.receipt_timestamp_ms),
-        ) {
-            let _ = write!(
-                out,
-                "\nlast program change: {} s before the latest event",
-                latest.saturating_sub(meaningful) / 1000
-            );
-        }
+    /// Elapsed time measured to the latest event, so the text depends on
+    /// nothing but the ledger.
+    fn change_line(&self) -> Option<String> {
+        let meaningful = self.stuck.last_meaningful_change_ms?;
+        let latest = self.entries.last()?.receipt_timestamp_ms;
+        Some(format!(
+            "last program change: {} s before the latest event",
+            latest.saturating_sub(meaningful) / 1000
+        ))
+    }
 
+    fn hints_line(&self) -> Option<String> {
         let hints = &self.hints;
-        if hints.requested + hints.volunteered + hints.withheld > 0 {
-            let _ = write!(
-                out,
-                "\nhints: {} requested, {} volunteered, {} withheld, ladder at rung {}",
+        (hints.requested + hints.volunteered + hints.withheld > 0).then(|| {
+            format!(
+                "hints: {} requested, {} volunteered, {} withheld, ladder at rung {}",
                 hints.requested, hints.volunteered, hints.withheld, hints.current_level
-            );
-        }
+            )
+        })
+    }
 
-        if !self.coverage.covered.is_empty() || !self.coverage.uncovered.is_empty() {
-            let list = |phases: &[String]| {
-                if phases.is_empty() {
-                    "none".to_string()
-                } else {
-                    phases.join(", ")
-                }
-            };
-            let _ = write!(
-                out,
-                "\nphases covered: {}; not yet: {}",
-                list(&self.coverage.covered),
-                list(&self.coverage.uncovered)
-            );
+    fn phases_line(&self) -> Option<String> {
+        let coverage = &self.coverage;
+        if coverage.covered.is_empty() && coverage.uncovered.is_empty() {
+            return None;
         }
+        let list = |phases: &[String]| {
+            if phases.is_empty() {
+                "none".to_string()
+            } else {
+                phases.join(", ")
+            }
+        };
+        Some(format!(
+            "phases covered: {}; not yet: {}",
+            list(&coverage.covered),
+            list(&coverage.uncovered)
+        ))
+    }
 
-        let conversation = &self.conversation;
-        let _ = write!(
-            out,
-            "\nturns: {} interviewer, {} candidate",
-            conversation.interviewer_turns, conversation.candidate_turns
-        );
-        if !conversation.recent_sequence.is_empty() {
-            let _ = write!(out, "; recent: {}", conversation.recent_sequence.join(" "));
-        }
-
+    fn session_line(&self) -> Option<String> {
         let lifecycle = &self.lifecycle;
         let flags = [
             (lifecycle.paused, "paused"),
@@ -630,34 +665,7 @@ impl EvidenceLedger {
         .into_iter()
         .filter_map(|(set, name)| set.then_some(name))
         .collect::<Vec<_>>();
-        if !flags.is_empty() {
-            let _ = write!(out, "\nsession: {}", flags.join(", "));
-        }
-
-        if let Some(since) = since {
-            let (mut updates, mut changes, mut runs, mut hints, mut turns) = (0, 0, 0, 0, 0);
-            for entry in self.entries.iter().filter(|entry| entry.sequence > since) {
-                match entry.family {
-                    ObservationFamily::Code => {
-                        updates += 1;
-                        if entry.observation["semanticChange"] == true {
-                            changes += 1;
-                        }
-                    }
-                    ObservationFamily::Test => runs += 1,
-                    ObservationFamily::Hint => hints += 1,
-                    ObservationFamily::InterviewerTurn | ObservationFamily::CandidateTurn => {
-                        turns += 1;
-                    }
-                    ObservationFamily::Diagnostic | ObservationFamily::Lifecycle => {}
-                }
-            }
-            let _ = write!(
-                out,
-                "\nsince the last event like this: {updates} editor updates ({changes} changed the program), {runs} browser-reported test runs, {hints} hints, {turns} turns"
-            );
-        }
-        out
+        (!flags.is_empty()).then(|| format!("session: {}", flags.join(", ")))
     }
 
     fn append(

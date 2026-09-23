@@ -204,3 +204,32 @@ fn one_review_at_a_time_is_arithmetic_and_not_a_hope() {
     const { assert!(INTERIM_WINDOW_BYTES >= 4 * 1024) };
     const { assert!(INTERIM_CODE_BYTES >= 2 * 1024) };
 }
+
+/// A line the model was shown and that has since gone is retracted in so many
+/// words; left out, the model keeps holding the stale one.
+#[test]
+fn an_evidence_line_that_goes_away_is_retracted() {
+    let lines = |items: &[&str]| {
+        items
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+    };
+    let shown = lines(&["tests: not run", "session: paused"]);
+    assert_eq!(
+        evidence_delta(Some(&shown), &lines(&["tests: not run"])),
+        "session: none"
+    );
+    assert_eq!(
+        evidence_delta(
+            Some(&shown),
+            &lines(&["tests: 1 of 2 passing", "session: paused"])
+        ),
+        "tests: 1 of 2 passing"
+    );
+    assert_eq!(evidence_delta(Some(&shown), &shown), "");
+    assert_eq!(
+        evidence_delta(None, &lines(&["tests: not run"])),
+        "tests: not run"
+    );
+}

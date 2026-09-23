@@ -30,12 +30,12 @@ mod evidence_tests;
 pub use events::apply_data_event;
 pub(crate) use events::apply_data_event_at;
 pub(crate) use events::apply_server_event_at;
-pub(crate) use evidence::ModelInputKind;
 pub use evidence::ParseCache;
 pub use evidence::{
     CodeAnalysis, CodeChangeClass, CodeObservation, EvidenceLedger, LifecycleTransition,
     ObservationFamily, Provenance,
 };
+pub(crate) use evidence::{ModelInputKind, ViewFor};
 pub(crate) use evidence::{analyze_code, analyze_code_cached, observe_code, observe_code_cached};
 use integrity::integrity_hash;
 pub use integrity::{sanitize_integrity_event, sanitize_test_run};
