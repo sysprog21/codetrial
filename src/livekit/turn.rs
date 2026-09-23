@@ -106,6 +106,10 @@ pub(super) struct RuntimeActivity {
     /// The behavioral round gets one silence nudge. Repeating it every
     /// cooldown would keep inviting a candidate who has declined or finished.
     pub(super) behavioral_nudged: bool,
+    /// What the Live turns of this interview were billed, summed over every
+    /// socket it ran on. Operational, logged at the end; never model input.
+    pub(super) live_usage: crate::gemini::TokenUsage,
+    pub(super) live_turns: u64,
 }
 
 /// A prompt the watcher wants spoken, and whether delivering it spends the
@@ -166,6 +170,8 @@ impl RuntimeActivity {
             discarding_output: false,
             tool_response_outstanding: false,
             behavioral_nudged: false,
+            live_usage: crate::gemini::TokenUsage::default(),
+            live_turns: 0,
 
             // Seeded at `now` rather than in the past: the first minutes of an
             // interview are the greeting and the problem statement, and there

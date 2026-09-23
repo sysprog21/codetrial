@@ -1983,6 +1983,51 @@ fn the_interim_review_asks_for_bounded_prose_and_no_thinking() {
     );
 }
 
+/// Live reports each turn's billing once, on the frame that completes it, and
+/// the prompt count covers the whole context the turn ran in: summing the
+/// frames is what the session spent.
+#[test]
+fn a_turns_usage_is_read_off_the_frame_that_completes_it() {
+    let message = parse_server_message(
+        r#"{
+            "serverContent": { "turnComplete": true },
+            "usageMetadata": {
+                "promptTokenCount": 304, "responseTokenCount": 185,
+                "totalTokenCount": 489,
+                "promptTokensDetails": [{ "modality": "TEXT", "tokenCount": 281 }]
+            }
+        }"#,
+    );
+    assert_eq!(
+        message.events,
+        vec![
+            GeminiEvent::TurnComplete,
+            GeminiEvent::Usage(TokenUsage {
+                prompt: 304,
+                response: 185,
+                cached: 0,
+                thoughts: 0,
+            }),
+        ]
+    );
+
+    // The HTTP calls spell the response count differently.
+    let mut total = TokenUsage::from_metadata(&json!({
+        "promptTokenCount": 2430, "candidatesTokenCount": 900,
+        "cachedContentTokenCount": 1024, "thoughtsTokenCount": 3
+    }));
+    total.add(TokenUsage {
+        prompt: 1,
+        response: 1,
+        cached: 1,
+        thoughts: 1,
+    });
+    assert_eq!(
+        total.log_fields(),
+        "prompt_tokens=2431 response_tokens=901 cached_tokens=1025 thought_tokens=4"
+    );
+}
+
 /// Every answer to a batch goes out, in one frame, over the socket.
 #[tokio::test]
 async fn tool_answers_leave_on_the_socket_in_one_frame() {

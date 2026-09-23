@@ -1755,6 +1755,11 @@ async fn handle_data_packet(
     )
     .await?;
     eprintln!("{}", context.state.evidence_ledger.metrics.cost_line());
+    eprintln!(
+        "codetrial live_usage turns={} {}",
+        context.activity.live_turns,
+        context.activity.live_usage.log_fields()
+    );
     context.gemini.shutdown().await?;
     // Give the report packet a moment to leave before the agent goes.
     tokio::time::sleep(Duration::from_millis(250)).await;

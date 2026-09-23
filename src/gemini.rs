@@ -202,8 +202,52 @@ impl GeminiLiveSession {
     }
 }
 
+/// What one model turn or one HTTP call was billed, as the provider reports
+/// it. The Live model answers no `countTokens` call, so this is the only
+/// measure of what a session actually spends: every turn is billed on the
+/// whole context it runs in, which a count of the text this server sends
+/// cannot see.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TokenUsage {
+    pub prompt: u64,
+    pub response: u64,
+    pub cached: u64,
+    pub thoughts: u64,
+}
+
+impl TokenUsage {
+    fn from_metadata(metadata: &Value) -> Self {
+        let count = |key: &str| metadata.get(key).and_then(Value::as_u64).unwrap_or(0);
+        Self {
+            prompt: count("promptTokenCount"),
+            response: count("responseTokenCount") + count("candidatesTokenCount"),
+            cached: count("cachedContentTokenCount"),
+            thoughts: count("thoughtsTokenCount"),
+        }
+    }
+
+    pub fn add(&mut self, other: Self) {
+        self.prompt += other.prompt;
+        self.response += other.response;
+        self.cached += other.cached;
+        self.thoughts += other.thoughts;
+    }
+
+    /// The fields of a log line, in one spelling for the Live session's total
+    /// and each HTTP call.
+    pub fn log_fields(&self) -> String {
+        format!(
+            "prompt_tokens={} response_tokens={} cached_tokens={} thought_tokens={}",
+            self.prompt, self.response, self.cached, self.thoughts
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GeminiEvent {
+    /// One turn's billing, which Live reports once, on the frame that completes
+    /// the turn.
+    Usage(TokenUsage),
     Audio {
         bytes: Vec<u8>,
         mime_type: String,
@@ -793,6 +837,12 @@ async fn generate_content_once(
         return Err(ApiFailure::from_response(status.as_u16(), &body).into());
     }
     let response = response.json::<Value>().await?;
+    if let Some(metadata) = response.get("usageMetadata") {
+        eprintln!(
+            "gemini {what} usage {}",
+            TokenUsage::from_metadata(metadata).log_fields()
+        );
+    }
     gemini_text(&response).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -1338,6 +1388,10 @@ fn parse_server_message(text: &str) -> ServerMessage {
         if !calls.is_empty() {
             events.push(GeminiEvent::ToolCall(calls));
         }
+    }
+
+    if let Some(metadata) = message.get("usageMetadata") {
+        events.push(GeminiEvent::Usage(TokenUsage::from_metadata(metadata)));
     }
 
     // How long this socket has left. Advisory, and carried as an event rather

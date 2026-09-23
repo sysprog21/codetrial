@@ -143,6 +143,11 @@ pub(super) async fn handle_gemini_event(
             on_generated_audio(room, context, &bytes, &mime_type, interruptible).await
         }
         GeminiEvent::TurnComplete => on_turn_complete(room, context).await,
+        GeminiEvent::Usage(usage) => {
+            context.activity.live_usage.add(usage);
+            context.activity.live_turns += 1;
+            Ok(())
+        }
         GeminiEvent::Interrupted => on_interruption(room, context).await,
 
         // Named rather than left to the catch-all: the room loop intercepts
