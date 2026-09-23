@@ -1449,6 +1449,22 @@ pub fn changed_excerpt(language: &str, previous: &str, current: &str) -> Option<
 }
 
 pub fn format_test_run(run: Option<&serde_json::Value>, total_runs: u32) -> String {
+    render_test_run(run, total_runs, MAX_TEST_FAILURES)
+}
+
+/// The run as a live reaction reads it: one failing case and a count of the
+/// rest. The reaction asks the candidate to pick one failure and reason about
+/// it, so the others were only material for the interviewer to say too much
+/// with; `read_editor` and the report still read every one.
+pub fn format_test_run_for_reaction(run: &serde_json::Value, total_runs: u32) -> String {
+    render_test_run(Some(run), total_runs, 1)
+}
+
+fn render_test_run(
+    run: Option<&serde_json::Value>,
+    total_runs: u32,
+    max_failures: usize,
+) -> String {
     let Some(run) = run else {
         return "No test run was recorded; tests may not have been attempted or may not have been available for the selected language/problem yet.".to_string();
     };
@@ -1475,11 +1491,21 @@ pub fn format_test_run(run: Option<&serde_json::Value>, total_runs: u32) -> Stri
     )];
 
     if let Some(failures) = run.get("failures").and_then(serde_json::Value::as_array) {
-        for failure in failures
+        let failures = failures
             .iter()
             .filter_map(serde_json::Value::as_object)
             .take(MAX_TEST_FAILURES)
-        {
+            .collect::<Vec<_>>();
+
+        // Counted from the reported totals where they say more failed than the
+        // browser listed: it sends four at most, and the rest are still
+        // failures the interviewer should know exist.
+        let failing = usize::try_from(total.saturating_sub(passed))
+            .unwrap_or(0)
+            .max(failures.len());
+        let listed = failures.len().min(max_failures);
+        let unlisted = failing - listed;
+        for failure in failures.into_iter().take(max_failures) {
             let label = value_string(failure.get("label")).unwrap_or_else(|| "?".to_string());
             if let Some(error) = truthy_string(failure.get("error")) {
                 lines.push(format!("- FAILED {label}: raised {error}"));
@@ -1489,6 +1515,13 @@ pub fn format_test_run(run: Option<&serde_json::Value>, total_runs: u32) -> Stri
                 let got = value_string(failure.get("got")).unwrap_or_else(|| "None".to_string());
                 lines.push(format!("- FAILED {label}: expected {expected}, got {got}"));
             }
+        }
+        if unlisted > 0 {
+            lines.push(format!(
+                "- {unlisted} {}failing {} not listed",
+                if listed > 0 { "more " } else { "" },
+                if unlisted == 1 { "case" } else { "cases" }
+            ));
         }
     }
     if let Some(cases) = run

@@ -1177,6 +1177,48 @@ fn the_numbered_editor_is_bounded() {
     assert_eq!(numbered("a\n\n"), "1| a");
 }
 
+/// A live reaction reads one failing case and a count of the rest; the full
+/// account stays with `read_editor` and the report.
+#[test]
+fn a_reaction_reads_one_failing_case() {
+    let run = json!({
+        "language": "python", "passed": 0, "total": 3,
+        "failures": [
+            {"label": "first", "expected": "1", "got": "2"},
+            {"label": "second", "expected": "3", "got": "4"},
+            {"label": "third", "expected": "5", "got": "6"}
+        ]
+    });
+    let brief = format_test_run_for_reaction(&run, 2);
+    assert!(
+        brief.contains("- FAILED first: expected 1, got 2"),
+        "{brief}"
+    );
+    assert!(!brief.contains("second"), "{brief}");
+    assert!(
+        brief.ends_with("- 2 more failing cases not listed"),
+        "{brief}"
+    );
+    let full = format_test_run(Some(&run), 2);
+    assert!(
+        full.contains("third") && !full.contains("not listed"),
+        "{full}"
+    );
+
+    // The browser lists four failures at most; the count of the rest comes from
+    // the reported totals, not from the four it listed.
+    let many = json!({
+        "language": "python", "passed": 2, "total": 10,
+        "failures": (1..=4)
+            .map(|index| json!({"label": format!("case{index}"), "expected": "1", "got": "2"}))
+            .collect::<Vec<_>>()
+    });
+    assert!(format_test_run_for_reaction(&many, 1).ends_with("- 7 more failing cases not listed"));
+    assert!(format_test_run(Some(&many), 1).ends_with("- 4 more failing cases not listed"));
+    let unlisted = json!({"language": "python", "passed": 1, "total": 2, "failures": []});
+    assert!(format_test_run(Some(&unlisted), 1).ends_with("- 1 failing case not listed"));
+}
+
 /// The numbered editor's byte cap, at its edge: a buffer whose numbered form
 /// is exactly the cap is shown whole, and one byte more is cut.
 #[test]
