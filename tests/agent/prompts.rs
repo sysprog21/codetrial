@@ -58,7 +58,7 @@ fn prompt_golden_digest_matches_versions() {
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
     let recorded_versions = (8, 13);
-    let recorded_digest = "4112bc4b0e68e4845e2f3a5e6348d6255516a529a528ccce78ff17a456127f13";
+    let recorded_digest = "aad64e8e8b531279e16f688a55f37655413d511cf425a2dd6433405d74f1b7e3";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -151,7 +151,8 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
         "Name the step you are moving to",
         "A reminder is a signpost, not a hint",
         "never make them repeat work",
-        "it is a hint",
+        "is a hint",
+        "WHAT COUNTS AS A HINT",
         "call `log_hint`",
         "unambiguous request for a hint, clue, nudge",
         "Give exactly that clue",
@@ -664,7 +665,10 @@ fn profile_text_is_bounded_and_prompt_context_cannot_change_the_coding_rubric() 
     ] {
         assert!(tailored.contains(guard), "missing profile guard: {guard}");
     }
-    assert!(generic.contains("none supplied"));
+
+    // No profile, no section: a notice that nothing was supplied changed no
+    // decision and was read on every turn.
+    assert!(!generic.contains("OPTIONAL INTERVIEW CONTEXT"));
 }
 
 #[test]
@@ -679,6 +683,23 @@ fn coding_only_prompt_removes_the_behavioral_round_contract() {
     assert!(prompt.contains("coding round owns all 45 minutes"));
     assert!(prompt.contains("STAR BEHAVIORAL ROUND — not configured"));
     assert!(!prompt.contains("STAR BEHAVIORAL CLOSE — use only after"));
+
+    // Document grounding only ever chose the behavioral question.
+    let grounded = build_instructions_for_plan(
+        get_problem(Some("two-sum")),
+        45,
+        &InterviewProfile::default(),
+        &InterviewGrounding {
+            requirements: vec!["Owns incident response".to_string()],
+            ..InterviewGrounding::default()
+        },
+        InterviewLoop::CodingOnly,
+    );
+    assert!(
+        !grounded.contains("OPTIONAL DOCUMENT GROUNDING"),
+        "{grounded}"
+    );
+    assert!(!grounded.contains("Owns incident response"));
 }
 
 /// The counts and the free text arrive on a topic the candidate's browser
