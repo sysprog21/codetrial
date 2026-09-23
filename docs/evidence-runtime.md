@@ -28,8 +28,11 @@ unavailable parsers produce `parser_unavailable`, and an error tree produces
 `syntax_invalid`. Both states intentionally make no structural claim, and no
 text-diff fallback exists.
 
-The kinds a classification turns on are named in full rather than matched as
-substrings, and they are named for all five grammars rather than for one. Every
+The control-flow and interface kinds a classification turns on are named in
+full rather than matched as substrings, and they are named for all five grammars
+rather than for one. Data structures are the exception, matched on words such as
+`list` and `dict` with syntactic groupings and destructuring patterns excluded,
+because the literal kinds are too many to enumerate. Every
 call is spelled with the word "function" or "method" somewhere, so a substring
 match reported calling a helper as changing the signature of the function it
 was called from; every grammar has its own word for a loop, so a list built
@@ -38,6 +41,11 @@ a)` as unclassifiable. What is nested inside a closure is recorded as the
 closure's, under a `closure.` prefix, because a comparator's parameter list is
 spelled exactly like a signature's and counting the two as one kind reported
 writing a comparator as changing a signature.
+
+A loop whose binding changes shape, `for i in` becoming `for i, n in`, is a
+control-flow edit even though no loop was added: the binding is compared by node
+kind alone, so renaming the loop variable stays a rename. Kinds outside the
+three categories are an expression edit however many of them moved.
 
 An edit that repairs a buffer that did not parse is a semantic change even when
 there is nothing to diff it against. The pairwise analysis reports

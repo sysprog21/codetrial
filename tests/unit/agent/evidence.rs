@@ -1,6 +1,6 @@
 //! Reducer tests for the deterministic evidence ledger.
 
-use super::evidence::parser_unavailable;
+use super::evidence::{comment_kind, parser_language, parser_unavailable};
 use super::{
     CodeChangeClass, CodeObservation, EvidenceLedger, LifecycleTransition, ModelInputKind,
     ObservationFamily, Provenance, RuntimeState, analyze_code, apply_data_event,
@@ -1473,6 +1473,109 @@ fn a_comment_rewritten_in_place_is_still_a_comment_edit() {
     assert_eq!(moved.classification, Some(CodeChangeClass::FormattingOnly));
 }
 
+/// Held against the grammars rather than a list of examples: a grammar bump
+/// that names a new comment kind should fail here, not read comments as code.
+#[test]
+fn every_comment_kind_the_grammars_name_is_a_comment() {
+    let mut checked = 0;
+    for language in ["c", "cpp", "java", "javascript", "python"] {
+        let grammar = parser_language(language).unwrap();
+        for id in 0..grammar.node_kind_count() as u16 {
+            if let Some(kind) = grammar.node_kind_for_id(id)
+                && grammar.node_kind_is_named(id)
+                && kind.contains("comment")
+            {
+                assert!(comment_kind(kind), "{language}: {kind}");
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked >= 6, "{checked} comment kinds found");
+}
+
+/// A backslash continuation is where the line breaks, not what the program
+/// does; changing the expression across it still is.
+#[test]
+fn a_python_line_continuation_is_layout() {
+    let joined = "def f(a, b):\n    return a + b\n";
+    let split = analyze_code(
+        "python",
+        joined,
+        "def f(a, b):\n    return a + \\\n        b\n",
+    );
+    assert_eq!(split.observation, CodeObservation::Parsed);
+    assert_eq!(split.classification, Some(CodeChangeClass::FormattingOnly));
+    assert!(!split.semantic_change);
+
+    let changed = analyze_code(
+        "python",
+        joined,
+        "def f(a, b):\n    return a - \\\n        b\n",
+    );
+    assert!(changed.semantic_change);
+}
+
+#[test]
+fn a_javascript_html_comment_is_a_comment_edit() {
+    let analysis = analyze_code(
+        "javascript",
+        "function f() { return 1; }\n",
+        "<!-- note\nfunction f() { return 1; }\n",
+    );
+    assert_eq!(analysis.classification, Some(CodeChangeClass::CommentOnly));
+    assert!(!analysis.semantic_change);
+}
+
+#[test]
+fn java_comments_do_not_advance_semantic_review_state() {
+    for template in [
+        "{comment}\nclass Solution { int solve(int n) { return n; } }",
+        "class Solution { int solve({comment}\nint n) { return n; } }",
+        "class Solution { int solve(int n) { for (int {comment}\ni = 0; i < n; i++) {} return n; } }",
+        "class Solution { void solve() { Runnable r = () -> { {comment}\nreturn; }; } }",
+    ] {
+        for (before_comment, after_comment) in [
+            ("", "// note"),
+            ("// note", "// revised"),
+            ("// note", ""),
+            ("", "/* note */"),
+            ("/* note */", "/* revised */"),
+            ("/* note */", ""),
+            ("// note", "/* note */"),
+        ] {
+            let before = template.replace("{comment}", before_comment);
+            let after = template.replace("{comment}", after_comment);
+            let analysis = analyze_code("java", &before, &after);
+            assert_eq!(analysis.observation, CodeObservation::Parsed, "{after}");
+            assert_eq!(
+                analysis.classification,
+                Some(CodeChangeClass::CommentOnly),
+                "{before} -> {after}"
+            );
+            assert!(!analysis.semantic_change);
+            assert!(analysis.changed_nodes.is_empty());
+            let mut ledger = EvidenceLedger::default();
+            ledger.record_code_with_analysis(
+                None,
+                100,
+                "java",
+                &before,
+                false,
+                analyze_code("java", "", &before),
+            );
+            ledger.record_code_with_analysis(None, 200, "java", &after, true, analysis);
+            assert_eq!(ledger.code.semantic_revision, 0);
+        }
+    }
+    let mixed = analyze_code(
+        "java",
+        "class Solution { int solve() { /* before */ return 1; } }",
+        "class Solution { int solve() { /* after */ return 2; } }",
+    );
+    assert!(mixed.semantic_change);
+    assert_eq!(mixed.classification, Some(CodeChangeClass::Expression));
+}
+
 /// A signature the caller can see, in the grammars where the node counts do
 /// not move when it changes.
 #[test]
@@ -1875,9 +1978,11 @@ fn an_end_packet_that_only_moves_the_language_records_no_buffer() {
     assert_eq!(state.evidence_ledger.code.language, "python");
 }
 
-/// One node kind moved is an expression edit; several is a mixed one.
+/// Kinds outside the three categories are an expression edit however many of
+/// them moved: `- 1` on a loop bound adds an operator and a literal, and that
+/// is one edit, not several.
 #[test]
-fn a_single_changed_kind_is_an_expression_rather_than_a_mixed_edit() {
+fn uncategorized_kinds_are_an_expression_edit_however_many_moved() {
     let single = analyze_code(
         "python",
         "def f():\n    if a:\n        pass\n",
@@ -1892,7 +1997,81 @@ fn a_single_changed_kind_is_an_expression_rather_than_a_mixed_edit() {
         "def f():\n    if a:\n        pass\n    return total + 1\n",
     );
     assert!(several.changed_nodes.len() > 1);
-    assert_eq!(several.classification, Some(CodeChangeClass::Mixed));
+    assert_eq!(several.classification, Some(CodeChangeClass::Expression));
+
+    let bound = analyze_code(
+        "python",
+        "def f(nums):\n    for i in range(len(nums)):\n        pass\n",
+        "def f(nums):\n    for i in range(len(nums) - 1):\n        pass\n",
+    );
+    assert_eq!(bound.classification, Some(CodeChangeClass::Expression));
+}
+
+/// The loop was already there, so its count never moved; what it iterates with
+/// did. Unpacking builds no data structure, and renaming the loop variable is
+/// still only a rename.
+#[test]
+fn a_loop_that_binds_differently_is_a_control_flow_edit() {
+    let base = "def f(nums):\n    for i in range(len(nums)):\n        print(nums[i])\n";
+    let unpacked = analyze_code(
+        "python",
+        base,
+        "def f(nums):\n    for i, n in enumerate(nums):\n        print(n)\n",
+    );
+    assert_eq!(unpacked.classification, Some(CodeChangeClass::ControlFlow));
+
+    let renamed = analyze_code(
+        "python",
+        base,
+        "def f(nums):\n    for j in range(len(nums)):\n        print(nums[j])\n",
+    );
+    assert_eq!(
+        renamed.classification,
+        Some(CodeChangeClass::IdentifierOnly)
+    );
+
+    // A C-style loop's start value is an expression, as the same off-by-one is
+    // in Python's `range`, and a range loop's init-statement is not what it
+    // binds.
+    for (language, before, after) in [
+        (
+            "c",
+            "void f(int n) { for (int i = 0; i < n; i++) {} }",
+            "void f(int n) { for (int i = n - 1; i >= 0; i--) {} }",
+        ),
+        (
+            "javascript",
+            "function f(a) { for (let i = 0; i < a.length; i++) {} }",
+            "function f(a) { for (let i = a.length - 1; i >= 0; i--) {} }",
+        ),
+    ] {
+        let analysis = analyze_code(language, before, after);
+        assert_eq!(
+            analysis.classification,
+            Some(CodeChangeClass::Expression),
+            "{language}"
+        );
+    }
+    let init_statement = analyze_code(
+        "cpp",
+        "void f(std::vector<int> v) { for (auto w = v; int x : w) {} }",
+        "void f(std::vector<int> v) { for (auto w = v; auto [x, y] : w) {} }",
+    );
+    assert_eq!(init_statement.observation, CodeObservation::Parsed);
+    assert_eq!(
+        init_statement.classification,
+        Some(CodeChangeClass::ControlFlow)
+    );
+
+    let destructured = analyze_code(
+        "javascript",
+        "function f(p) { const x = p[0]; return x; }",
+        "function f(p) { const [x] = p; return x; }",
+    );
+    assert_ne!(
+        destructured.classification,
+        Some(CodeChangeClass::DataStructure)
+    );
 }
 
 /// A tab switch is an observation even when the two buffers happen to match.
@@ -2311,13 +2490,13 @@ fn a_closures_parameters_are_not_the_enclosing_signature() {
             "java",
             "class S {\n  int f(java.util.List<Integer> a) { return 0; }\n}\n",
             "class S {\n  int f(java.util.List<Integer> a) {\n    a.sort((Integer x, Integer y) -> x - y);\n    return 0;\n  }\n}\n",
-            CodeChangeClass::Mixed,
+            CodeChangeClass::Expression,
         ),
         (
             "cpp",
             "int f(std::vector<int> v) { return 0; }\n",
             "int f(std::vector<int> v) {\n  std::sort(v.begin(), v.end(), [](int a, int b) { return a < b; });\n  return 0;\n}\n",
-            CodeChangeClass::Mixed,
+            CodeChangeClass::Expression,
         ),
     ] {
         let analysis = analyze_code(language, before, after);

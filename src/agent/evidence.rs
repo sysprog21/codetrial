@@ -68,7 +68,6 @@ pub enum CodeChangeClass {
     ControlFlow,
     DataStructure,
     FunctionInterface,
-    Mixed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -995,6 +994,8 @@ pub(crate) fn analyze_code_sides(
         }
     } else if before.interface_leaves != after.interface_leaves {
         CodeChangeClass::FunctionInterface
+    } else if before.loop_bindings != after.loop_bindings {
+        CodeChangeClass::ControlFlow
     } else if before.node_counts == after.node_counts && before.leaves == after.leaves {
         // Same identifiers in a different order is not a rename, it is an
         // argument swap, and calling it `identifier_only` told the report the
@@ -1016,10 +1017,11 @@ pub(crate) fn analyze_code_sides(
         CodeChangeClass::DataStructure
     } else if changed_kinds().any(interface_kind) {
         CodeChangeClass::FunctionInterface
-    } else if changed_nodes.len() == 1 {
-        CodeChangeClass::Expression
     } else {
-        CodeChangeClass::Mixed
+        // Every kind outside the three categories, however many moved. Adding
+        // `- 1` to a loop bound adds an operator and a literal, two kinds, and
+        // counting them as a mixed edit described one expression as several.
+        CodeChangeClass::Expression
     };
     let semantic_change = !matches!(
         classification,
@@ -1084,7 +1086,7 @@ fn sorted<'a>(identifiers: &[&'a str]) -> Vec<&'a str> {
     sorted
 }
 
-fn parser_language(language: &str) -> Option<tree_sitter::Language> {
+pub(super) fn parser_language(language: &str) -> Option<tree_sitter::Language> {
     Some(match language {
         "c" => tree_sitter_c::LANGUAGE.into(),
         "cpp" => tree_sitter_cpp::LANGUAGE.into(),
@@ -1120,6 +1122,20 @@ struct SyntaxFacts<'a> {
     /// reindent. A brace language moves a `}` for the same edit; this is the
     /// same fact for the grammar that has none.
     shape: Vec<(&'static str, u32)>,
+    /// Each loop's kind followed by the named kinds of what it binds, the
+    /// target of a `for ... in`, `for ... of` or `for (... : ...)`. Kinds
+    /// alone, so renaming the loop variable is still a rename, while `for i in`
+    /// becoming `for i, n in` changes what the loop iterates with: the loop
+    /// was already there, so its count never moved, and the new tuple pattern
+    /// was all the edit showed.
+    ///
+    /// Not a C-style loop's initializer, which holds the start value as well
+    /// as the variable: `int i = 0` becoming `int i = n - 1` is the same
+    /// off-by-one Python spells in `range`, and it read as control flow in C
+    /// and JavaScript while Python read it as an expression. C++ puts an
+    /// optional init-statement under the same field name ahead of a range
+    /// loop's declarator, which it would have shadowed.
+    loop_bindings: Vec<&'static str>,
 }
 
 /// Walks the tree in document order and records what a change to the code can
@@ -1144,28 +1160,71 @@ struct SyntaxFacts<'a> {
 /// is a fact about the code the candidate wrote; only what is nested inside it
 /// is qualified.
 fn syntax_facts<'a>(root: tree_sitter::Node<'_>, source: &'a str) -> SyntaxFacts<'a> {
-    // Node, inside a parameter list, inside a closure, parameters here belong
-    // to no signature, depth.
-    let mut stack = vec![(root, false, false, false, 0_u32)];
+    struct Frame<'tree> {
+        node: tree_sitter::Node<'tree>,
+        in_parameters: bool,
+        in_closure: bool,
+        /// Parameters here belong to no signature: a closure's or a catch's.
+        opaque_parameters: bool,
+        in_binding: bool,
+        depth: u32,
+    }
+    let mut stack = vec![Frame {
+        node: root,
+        in_parameters: false,
+        in_closure: false,
+        opaque_parameters: false,
+        in_binding: false,
+        depth: 0,
+    }];
     let mut node_counts = std::collections::BTreeMap::new();
     let mut identifiers = Vec::new();
     let mut leaves = Vec::new();
     let mut comments = Vec::new();
     let mut interface_leaves = Vec::new();
     let mut shape = Vec::new();
+    let mut loop_bindings = Vec::new();
 
     // `Node::kind` is an FFI call and a UTF-8 validation scan every time, and
     // this loop asked for it seven times a node over a walk that runs twice per
     // analysis.
     let mut scratch = String::new();
     let mut cursor = root.walk();
-    while let Some((node, in_parameters, in_closure, opaque_parameters, depth)) = stack.pop() {
+    while let Some(Frame {
+        node,
+        in_parameters,
+        in_closure,
+        opaque_parameters,
+        in_binding,
+        depth,
+    }) = stack.pop()
+    {
         let kind = node.kind();
-        if node.is_named() && kind != "comment" {
+
+        // A Python `\` joins two lines into one, which is layout like the
+        // newline it hides, but the grammar makes it a named token: breaking a
+        // long expression across lines read as an expression edit and moved the
+        // review gate. It is a leaf, so there is nothing beneath to walk.
+        if kind == "line_continuation" {
+            continue;
+        }
+        let is_comment = comment_kind(kind);
+        if node.is_named() && !is_comment {
             shape.push((kind, depth));
+            if in_binding {
+                loop_bindings.push(kind);
+            }
+        }
+        let mut binding = None;
+        if loop_kind(kind) {
+            loop_bindings.push(kind);
+            binding = ["left", "declarator", "name"]
+                .into_iter()
+                .find_map(|field| node.child_by_field_name(field))
+                .map(|child| child.id());
         }
         if node.is_named() {
-            if kind == "comment" {
+            if is_comment {
                 if let Ok(text) = node.utf8_text(source.as_bytes()) {
                     comments.push(text);
                 }
@@ -1215,7 +1274,7 @@ fn syntax_facts<'a>(root: tree_sitter::Node<'_>, source: &'a str) -> SyntaxFacts
         }
         if node.child_count() == 0
             && kind != "identifier"
-            && kind != "comment"
+            && !is_comment
             && let Ok(text) = node.utf8_text(source.as_bytes())
         {
             if in_parameters {
@@ -1246,13 +1305,14 @@ fn syntax_facts<'a>(root: tree_sitter::Node<'_>, source: &'a str) -> SyntaxFacts
         stack.extend(node.children(&mut cursor).map(|child| {
             let opaque =
                 child_opaque_parameters || catch_body.is_some_and(|body| body != Some(child.id()));
-            (
-                child,
-                !opaque && (in_parameters || kind.contains("parameter")),
-                child_in_closure,
-                opaque,
-                depth + 1,
-            )
+            Frame {
+                node: child,
+                in_parameters: !opaque && (in_parameters || kind.contains("parameter")),
+                in_closure: child_in_closure,
+                opaque_parameters: opaque,
+                in_binding: in_binding || binding == Some(child.id()),
+                depth: depth + 1,
+            }
         }));
         stack[pushed_from..].reverse();
     }
@@ -1263,6 +1323,7 @@ fn syntax_facts<'a>(root: tree_sitter::Node<'_>, source: &'a str) -> SyntaxFacts
         comments,
         interface_leaves,
         shape,
+        loop_bindings,
     }
 }
 
@@ -1294,30 +1355,47 @@ fn changed_node_facts(
 /// `for (int x : a)` is an `enhanced_for_statement` in Java and `for (auto x :
 /// v)` is a `for_range_loop` in C++, and none of them is a `for_statement`: the
 /// most ordinary loop a candidate writes in three of these tabs was reported as
-/// an unclassifiable `mixed` edit. A `do`/`while` is a `do_statement` in all
+/// an edit of no particular kind. A `do`/`while` is a `do_statement` in all
 /// four C-family grammars and was missing for the same reason.
 fn control_kind(kind: &str) -> bool {
+    loop_kind(kind)
+        || matches!(
+            kind,
+            "if_statement"
+                | "elif_clause"
+                | "else_clause"
+                | "while_statement"
+                | "do_statement"
+                | "switch_statement"
+                | "switch_expression"
+                | "case_statement"
+                | "match_statement"
+                | "try_statement"
+                | "catch_clause"
+                | "finally_clause"
+                | "with_statement"
+                | "break_statement"
+                | "continue_statement"
+        )
+}
+
+/// Every comment kind the pinned grammars have. Java has no `comment`, only
+/// `line_comment` and `block_comment`, so matching the one word read every
+/// Java comment edit as code and moved the review gate on it; JavaScript adds
+/// `html_comment` for a `<!--` line.
+pub(super) fn comment_kind(kind: &str) -> bool {
     matches!(
         kind,
-        "if_statement"
-            | "elif_clause"
-            | "else_clause"
-            | "for_statement"
-            | "for_in_statement"
-            | "for_range_loop"
-            | "enhanced_for_statement"
-            | "while_statement"
-            | "do_statement"
-            | "switch_statement"
-            | "switch_expression"
-            | "case_statement"
-            | "match_statement"
-            | "try_statement"
-            | "catch_clause"
-            | "finally_clause"
-            | "with_statement"
-            | "break_statement"
-            | "continue_statement"
+        "comment" | "line_comment" | "block_comment" | "html_comment"
+    )
+}
+
+/// The loops that bind something, a subset of [`control_kind`]: `while` and
+/// `do` iterate with nothing of their own.
+fn loop_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "for_statement" | "for_in_statement" | "for_range_loop" | "enhanced_for_statement"
     )
 }
 
@@ -1346,8 +1424,9 @@ fn closure_kind(kind: &str) -> bool {
 /// spell a syntactic grouping as a list: `argument_list` is what a call puts
 /// its arguments in, so extracting a helper and calling it, which is the most
 /// ordinary refactor an interview contains, was reported as the candidate
-/// changing a data structure. It read as `mixed` in JavaScript, where the same
-/// node is named `arguments`, so the same edit was described differently
+/// changing a data structure. It read as something else again in JavaScript,
+/// where the same node is named `arguments`, so the same edit was described
+/// differently
 /// depending on the tab. A literal that really is a data structure keeps its
 /// own name, C's `initializer_list` included.
 fn data_structure_kind(kind: &str) -> bool {
@@ -1359,7 +1438,11 @@ fn data_structure_kind(kind: &str) -> bool {
         "enumerator_list",
         "type_list",
     ];
-    if GROUPING.iter().any(|grouping| kind.contains(grouping)) {
+
+    // A destructuring target is spelled as a list or an object in several
+    // grammars, `pattern_list` in Python and `array_pattern` in JavaScript, and
+    // unpacking `for i, n in enumerate(nums)` builds no structure at all.
+    if kind.contains("pattern") || GROUPING.iter().any(|grouping| kind.contains(grouping)) {
         return false;
     }
     ["array", "list", "dict", "object", "map", "set"]
