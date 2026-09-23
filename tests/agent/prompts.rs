@@ -58,7 +58,7 @@ fn prompt_golden_digest_matches_versions() {
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
     let recorded_versions = (8, 13);
-    let recorded_digest = "aad64e8e8b531279e16f688a55f37655413d511cf425a2dd6433405d74f1b7e3";
+    let recorded_digest = "49ac925ffb119cf1dfd64416038890cbc576f158a35e393e99d1daf9469bd2ef";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -259,11 +259,13 @@ fn report_brief_states_the_hint_rung() {
     assert!(prompt.contains("candidate reached hint rung 2 of 3"));
     assert!(prompt.contains("1 hint was volunteered rather than requested"));
 
-    // A declined probe is unassessed, not failed, in both halves of the prompt.
-    assert!(prompt.contains("When the candidate cannot recall an example, declines to give one, or cannot share one, assess"));
-    assert!(prompt.contains("For an abandoned probe, use `null`"));
+    // A declined probe is unassessed, not failed, in both the scoring and the
+    // phase rules, which the system instruction carries.
+    let rules = report_system_instruction();
+    assert!(rules.contains("When the candidate cannot recall an example, declines to give one, or cannot share one, assess"));
+    assert!(rules.contains("For an abandoned probe, use `null`"));
     assert!(
-        prompt.contains(
+        rules.contains(
             "cannot share one; the refusal itself is not evidence of poor STAR performance"
         )
     );

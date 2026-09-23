@@ -1,3 +1,7 @@
+// `prompt_samples` names every prompt builder in one `json!` literal, which
+// outgrew the macro's default expansion depth.
+#![recursion_limit = "256"]
+
 use codetrial::agent::*;
 use codetrial::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
 use serde_json::Value;
@@ -252,6 +256,8 @@ fn prompt_samples() -> Value {
             already_recorded: "",
             evidence: &empty,
         }),
+        "interimSystem": interim_system_instruction(),
+        "reportSystem": report_system_instruction(),
         "testsPass": test_results_reaction("3/3 passed", true, None),
         "testsFail": test_results_reaction(
             "2/3 passed",
@@ -426,6 +432,11 @@ fn exact_fixture_keys(value: &Value, expected: &[&str], path: &str) {
     assert_eq!(actual, expected, "{path} has schema drift");
 }
 
+/// What the report model reads: the system instruction and the brief.
+fn model_report_input(brief: String) -> String {
+    format!("{}\n\n{brief}", report_system_instruction())
+}
+
 /// Puts the interview past its coding round, which is the state the browser's
 /// one `round_transition` announcement arrives in.
 ///
@@ -493,7 +504,7 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
             .generate_reply
             .expect("round gate produces a reaction")
         }
-        "report" => report_prompt(ReportPromptInput {
+        "report" => model_report_input(report_prompt(ReportPromptInput {
             problem: get_problem(Some("two-sum")),
             transcript: case["transcript"].as_str().expect("transcript is text"),
             rolling_assessment: "",
@@ -507,7 +518,7 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
             test_summary: "No trusted server-side test was available.",
             practice_level: None,
             evidence: "",
-        }),
+        })),
         other => panic!("unknown reaction kind {other}"),
     }
 }

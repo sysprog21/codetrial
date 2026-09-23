@@ -712,7 +712,11 @@ async fn generate_interim_review_at(
     let result = generate_content_once(
         &api_key,
         url,
-        &content_request(prompt, interim_generation_config()),
+        &content_request(
+            &crate::agent::interim_system_instruction(),
+            prompt,
+            interim_generation_config(),
+        ),
         INTERIM_ATTEMPT_TIMEOUT,
         "interim review",
     )
@@ -751,12 +755,13 @@ fn interim_generation_config() -> Value {
     })
 }
 
-/// The `generateContent` envelope. One prompt part, and whatever the caller
-/// wants generated from it -- the two callers here differ only in the config,
-/// and the envelope is the wire contract, which is not a thing to assert in two
-/// places.
-fn content_request(prompt: &str, generation_config: Value) -> Value {
+/// The `generateContent` envelope: the constant instruction first, then the
+/// one prompt part, and whatever the caller wants generated from it. The two
+/// callers differ only in the instruction and the config, and the envelope is
+/// the wire contract, which is not a thing to assert in two places.
+fn content_request(system: &str, prompt: &str, generation_config: Value) -> Value {
     json!({
+        "systemInstruction": { "parts": [ { "text": system } ] },
         "contents": [ { "parts": [ { "text": prompt } ] } ],
         "generationConfig": generation_config
     })
@@ -1126,6 +1131,7 @@ fn tool_response_message(answers: &[(GeminiFunctionCall, Value)]) -> Value {
 
 fn generate_report_request(prompt: &str) -> Value {
     content_request(
+        &crate::agent::report_system_instruction(),
         prompt,
         json!({
             "responseMimeType": "application/json",

@@ -13,8 +13,8 @@ use ::livekit::prelude::{DataPacket, Room};
 
 use crate::agent::{
     ModelInputKind, ReportPromptInput, RuntimeState, final_report, format_test_run,
-    framework_evidence_json, interview_contract_json, report_prompt, rolling_assessment,
-    transcript_for_report,
+    framework_evidence_json, interview_contract_json, report_prompt, report_system_instruction,
+    rolling_assessment, transcript_for_report,
 };
 use crate::gemini::{GeminiKeys, generate_report_with_keys};
 use crate::runtime::{RuntimeBootstrap, TOPIC_REPORT};
@@ -35,9 +35,13 @@ pub(super) fn freeze_report_prompt(
     elapsed_min: f64,
 ) -> String {
     let prompt = report_prompt_text(boot, state, elapsed_min);
-    state
-        .evidence_ledger
-        .record_model_input(ModelInputKind::FinalReport, &prompt);
+
+    // Counted with the system instruction it goes out behind, since the model
+    // reads both.
+    state.evidence_ledger.record_model_input(
+        ModelInputKind::FinalReport,
+        &format!("{}\n\n{prompt}", report_system_instruction()),
+    );
     prompt
 }
 

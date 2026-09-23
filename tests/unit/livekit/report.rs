@@ -716,9 +716,11 @@ fn a_frozen_report_prompt_is_counted_and_a_missed_deadline_still_reports() {
     let mut state = RuntimeState::default();
     let prompt = freeze_report_prompt(&boot, &mut state, 12.0);
     assert_eq!(state.evidence_ledger.metrics.final_report_prompt_count, 1);
+
+    // Counted with the system instruction the brief goes out behind.
     assert_eq!(
         state.evidence_ledger.metrics.final_report_prompt_bytes,
-        prompt.len() as u64
+        (crate::agent::report_system_instruction().len() + 2 + prompt.len()) as u64
     );
 
     let missed = tokio::runtime::Builder::new_current_thread()

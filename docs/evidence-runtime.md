@@ -139,7 +139,8 @@ events, and measures what the session handed the models: bytes and a count for
 the watch prompts, the conversational turns (greeting, cold restart, the reply
 a data event asks for, and the wrap-up), the interim reviews, the final report
 prompt, the `read_editor` responses and every other tool answer, refusals
-included. Every model-bound text falls into exactly one of them. They are bytes
+included; an HTTP prompt is counted with the system instruction it is sent
+behind. Every model-bound text falls into exactly one of them. They are bytes
 rather than tokens because the tokenizer belongs to the provider, they are
 written to stderr once at the end of a session, and they are deliberately
 absent from the prompt: a model handed its own byte count is being told

@@ -1149,9 +1149,11 @@ fn each_pause_reviews_the_speech_since_the_last_one() {
         "a review carries the recent notes, not the whole session"
     );
     assert_eq!(state.evidence_ledger.metrics.interim_prompt_count, 4);
+    // Each counted with the system instruction it goes out behind.
+    let system = crate::agent::interim_system_instruction().len() + 2;
     assert_eq!(
         state.evidence_ledger.metrics.interim_prompt_bytes,
-        (first.len() + second.len() + third.len() + bounded.len()) as u64
+        (4 * system + first.len() + second.len() + third.len() + bounded.len()) as u64
     );
 }
 

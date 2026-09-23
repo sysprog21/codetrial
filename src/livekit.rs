@@ -656,9 +656,10 @@ fn take_interim_review_window(state: &mut RuntimeState, boot: &RuntimeBootstrap<
         already_recorded: &state.interim_notes[recent..].join("\n"),
         evidence: &evidence,
     });
-    state
-        .evidence_ledger
-        .record_model_input(ModelInputKind::Interim, &prompt);
+    state.evidence_ledger.record_model_input(
+        ModelInputKind::Interim,
+        &format!("{}\n\n{prompt}", crate::agent::interim_system_instruction()),
+    );
     prompt
 }
 

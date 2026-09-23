@@ -48,10 +48,11 @@ pub use prompts::{
     InterimReviewInput, LanguageChoiceContext, ReportPromptInput, behavioral_silence_nudge,
     behavioral_time_warning, build_instructions_for_plan, changed_excerpt, cold_restart,
     format_test_run, greeting, hint_ladder_used_text, hint_rung_text, hint_rung_withheld_text,
-    interim_review_prompt, language_choice, log_hint_text, numbered, proactive_review,
-    read_editor_text, released_follow_ups, report_prompt, resume, rolling_assessment,
-    round_skipped, round_started, silence_nudge, spoken_language, test_results_reaction,
-    test_setup_error_reaction, time_warning, unrecorded_earlier_phases, wrap_up,
+    interim_review_prompt, interim_system_instruction, language_choice, log_hint_text, numbered,
+    proactive_review, read_editor_text, released_follow_ups, report_prompt,
+    report_system_instruction, resume, rolling_assessment, round_skipped, round_started,
+    silence_nudge, spoken_language, test_results_reaction, test_setup_error_reaction, time_warning,
+    unrecorded_earlier_phases, wrap_up,
 };
 pub(crate) use report::sanitize_report_candidate;
 pub use report::{

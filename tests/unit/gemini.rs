@@ -1520,6 +1520,17 @@ fn report_generation_request_matches_python_report_model_config() {
 
     let request = generate_report_request("score this");
     assert_eq!(request["contents"][0]["parts"][0]["text"], "score this");
+
+    // The constant half goes first, as the system instruction, so every report
+    // call and every repair of one opens on the same prefix.
+    assert_eq!(
+        request["systemInstruction"]["parts"][0]["text"],
+        crate::agent::report_system_instruction()
+    );
+    assert_eq!(
+        generate_report_request("another session")["systemInstruction"],
+        request["systemInstruction"]
+    );
     assert_eq!(
         request["generationConfig"]["responseMimeType"],
         "application/json"
@@ -1940,7 +1951,11 @@ async fn a_resumed_session_keeps_its_handle_until_a_new_one_arrives() {
 /// length it likes, arriving at a twelve-second deadline.
 #[test]
 fn the_interim_review_asks_for_bounded_prose_and_no_thinking() {
-    let request = content_request("read this stretch", interim_generation_config());
+    let request = content_request(
+        &crate::agent::interim_system_instruction(),
+        "read this stretch",
+        interim_generation_config(),
+    );
     let config = &request["generationConfig"];
 
     assert_eq!(
