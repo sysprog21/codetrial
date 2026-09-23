@@ -1092,12 +1092,20 @@ pub fn live_tool_declarations() -> Value {
 /// intact, which is the difference between a reconnect the candidate hears as
 /// a pause and one they hear as the interviewer starting over.
 fn live_setup_message(boot: &RuntimeBootstrap<'_>, resume: Option<&str>) -> Value {
-    json!({
+    let mut setup = json!({
         "setup": {
             "model": format!("models/{}", gemini_model_id(boot.live_model)),
             "generationConfig": {
                 "temperature": 0.7,
                 "responseModalities": ["AUDIO"],
+
+                // Pinned off, as the HTTP calls pin it and in the same field
+                // for the same compatibility. Measured against the Live model,
+                // six replies each way reached first audio in a median 506 ms
+                // unpinned and 500 ms at the lowest level, and neither reported
+                // a thought token: this changes nothing today and holds against
+                // a server default that moves.
+                "thinkingConfig": { "thinkingBudget": 0 },
                 "speechConfig": {
                     "voiceConfig": {
                         "prebuiltVoiceConfig": {
@@ -1117,12 +1125,12 @@ fn live_setup_message(boot: &RuntimeBootstrap<'_>, resume: Option<&str>) -> Valu
             "realtimeInputConfig": {
                 "activityHandling": "START_OF_ACTIVITY_INTERRUPTS",
 
-                // Both halves of the endpointing decision are named here.
-                // Either one left absent puts the API's own value in force,
-                // where it cannot be measured or tuned, and the two fail in
-                // opposite directions: the silence window decides how long to
-                // wait before answering, and the start sensitivity decides how
-                // readily a reply already in flight is abandoned.
+                // The silence window decides how long to wait before answering,
+                // and the start sensitivity how readily a reply already in
+                // flight is abandoned; both are named, because left absent the
+                // API's own value is in force where it cannot be measured or
+                // tuned. The end sensitivity is added below only when
+                // configured: nothing measured picks a value for it.
                 "automaticActivityDetection": {
                     "silenceDurationMs": boot.silence_ms,
                     "startOfSpeechSensitivity": boot.start_sensitivity
@@ -1141,7 +1149,12 @@ fn live_setup_message(boot: &RuntimeBootstrap<'_>, resume: Option<&str>) -> Valu
                 None => json!({}),
             }
         }
-    })
+    });
+    if let Some(end) = boot.end_sensitivity {
+        setup["setup"]["realtimeInputConfig"]["automaticActivityDetection"]["endOfSpeechSensitivity"] =
+            json!(end);
+    }
+    setup
 }
 
 fn realtime_text_message(text: &str) -> Value {

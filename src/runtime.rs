@@ -36,6 +36,7 @@ pub struct RuntimeBootstrap<'a> {
     pub voice: &'a str,
     pub silence_ms: u32,
     pub start_sensitivity: &'a str,
+    pub end_sensitivity: Option<&'a str>,
     pub instructions: String,
     pub greeting: String,
 }
@@ -102,6 +103,7 @@ pub fn bootstrap_with_rounds<'a>(
         voice: &config.gemini_voice,
         silence_ms: config.gemini_silence_ms,
         start_sensitivity: &config.gemini_start_sensitivity,
+        end_sensitivity: config.gemini_end_sensitivity.as_deref(),
         greeting: greeting(problem),
     }
 }

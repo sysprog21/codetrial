@@ -191,12 +191,14 @@ fn bootstrap_carries_the_configured_endpointing_window() {
         ("GOOGLE_API_KEY", "google"),
         ("GEMINI_SILENCE_MS", "2400"),
         ("GEMINI_START_SENSITIVITY", "HIGH"),
+        ("GEMINI_END_SENSITIVITY", "low"),
     ])
     .unwrap();
     let boot = bootstrap(&tuned, "interview-fixed", Some("two-sum"), 45);
 
     assert_eq!(boot.silence_ms, 2_400);
     assert_eq!(boot.start_sensitivity, "START_SENSITIVITY_HIGH");
+    assert_eq!(boot.end_sensitivity, Some("END_SENSITIVITY_LOW"));
 
     // And the defaults travel the same path, so the wiring is not merely
     // reading one configured value back.
@@ -204,4 +206,5 @@ fn bootstrap_carries_the_configured_endpointing_window() {
     let default = bootstrap(&stock, "interview-fixed", Some("two-sum"), 45);
     assert_eq!(default.silence_ms, DEFAULT_GEMINI_SILENCE_MS);
     assert_eq!(default.start_sensitivity, DEFAULT_GEMINI_START_SENSITIVITY);
+    assert_eq!(default.end_sensitivity, None, "left at the API's own value");
 }

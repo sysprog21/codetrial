@@ -1333,6 +1333,26 @@ fn live_setup_uses_native_audio_voice_tools_and_transcription() {
         json!({})
     );
     assert_eq!(setup["sessionResumption"], json!({}));
+    assert_eq!(
+        setup["generationConfig"]["thinkingConfig"],
+        json!({"thinkingBudget": 0})
+    );
+
+    // The end sensitivity is sent only when configured, and then as set.
+    assert!(
+        setup["realtimeInputConfig"]["automaticActivityDetection"]
+            .get("endOfSpeechSensitivity")
+            .is_none()
+    );
+    let tuned = RuntimeBootstrap {
+        end_sensitivity: Some("END_SENSITIVITY_LOW"),
+        ..boot.clone()
+    };
+    assert_eq!(
+        live_setup_message(&tuned, None)["setup"]["realtimeInputConfig"]["automaticActivityDetection"]
+            ["endOfSpeechSensitivity"],
+        "END_SENSITIVITY_LOW"
+    );
 }
 
 /// The empty object above asks for handles; this is what spends one. A

@@ -503,6 +503,9 @@ pub struct AgentConfig {
     pub gemini_voice: String,
     pub gemini_silence_ms: u32,
     pub gemini_start_sensitivity: String,
+    /// `None` leaves the end-of-speech sensitivity at the API's own value; see
+    /// `end_sensitivity`.
+    pub gemini_end_sensitivity: Option<String>,
     pub room_prefix: String,
     pub default_duration_min: u32,
     pub gemini_candidate_video_enabled: bool,
@@ -676,6 +679,7 @@ pub fn load_from_pairs(
         gemini_silence_ms: optional_u32(&values, "GEMINI_SILENCE_MS", DEFAULT_GEMINI_SILENCE_MS)
             .min(MAX_GEMINI_SILENCE_MS),
         gemini_start_sensitivity: start_sensitivity_or_default(&values),
+        gemini_end_sensitivity: end_sensitivity(&values),
         room_prefix: optional(&values, "CODETRIAL_ROOM_PREFIX", DEFAULT_ROOM_PREFIX),
         default_duration_min: optional_u32(&values, "CODETRIAL_DURATION_MIN", DEFAULT_DURATION_MIN),
         gemini_candidate_video_enabled: gemini_candidate_video_enabled(
@@ -764,6 +768,27 @@ fn start_sensitivity_or_default(values: &BTreeMap<String, String>) -> String {
                 "GEMINI_START_SENSITIVITY: {other} is not LOW or HIGH; using {DEFAULT_GEMINI_START_SENSITIVITY}"
             );
             DEFAULT_GEMINI_START_SENSITIVITY.to_string()
+        }
+    }
+}
+
+/// How readily Gemini decides the candidate has finished, beside the silence
+/// window that decides how long it then waits. Unset by default, which leaves
+/// the API's own value in force: unlike the start sensitivity there is no
+/// measurement here to choose a side with, and HIGH ends turns sooner at the
+/// cost the silence window already documents, a candidate cut off
+/// mid-sentence. An unreadable value is refused to the default for the reason
+/// `start_sensitivity_or_default` gives.
+fn end_sensitivity(values: &BTreeMap<String, String>) -> Option<String> {
+    let value = present(values, "GEMINI_END_SENSITIVITY")?.to_ascii_uppercase();
+    match value.as_str() {
+        "LOW" | "END_SENSITIVITY_LOW" => Some("END_SENSITIVITY_LOW".to_string()),
+        "HIGH" | "END_SENSITIVITY_HIGH" => Some("END_SENSITIVITY_HIGH".to_string()),
+        other => {
+            eprintln!(
+                "GEMINI_END_SENSITIVITY: {other} is not LOW or HIGH; leaving the API default"
+            );
+            None
         }
     }
 }
