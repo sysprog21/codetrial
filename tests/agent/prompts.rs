@@ -58,7 +58,7 @@ fn prompt_golden_digest_matches_versions() {
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
     let recorded_versions = (8, 13);
-    let recorded_digest = "afdb5a0308ce139a4efdf0dc2fa82ffcef66e9a5e85912e13323a9ab37f98203";
+    let recorded_digest = "02030bf5ddc158d02d5fc5273267c85f234a026b12718ab68664e33a60920470";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -177,13 +177,17 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
     ] {
         assert!(prompt.contains(safeguard), "missing safeguard: {safeguard}");
     }
-    assert!(time_warning().contains("source `session_timing`, kind `skipped`"));
-    assert!(wrap_up("candidate_ended").contains("source `session_timing`, kind `skipped`"));
+
+    // The platform closes the STAR steps of a round that never opened itself,
+    // so neither prompt spends a tool round trip on them before the candidate
+    // hears anything.
+    assert!(!time_warning().contains("record_framework_evidence"));
+    assert!(!wrap_up("candidate_ended", false).contains("record_framework_evidence"));
 
     // The timing skip is the rule and the refusal the one exception to it. A
     // skip conditioned on the model judging that timing prevented assessment
     // left a Result cut off by the clock with no entry at all.
-    let wrap = wrap_up("time_up");
+    let wrap = wrap_up("time_up", true);
     assert!(wrap.contains("a short summary that the session ended before assessment, except where the candidate cannot recall an example"));
     assert!(!wrap.contains("only if the session ending"));
 
@@ -217,7 +221,7 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
         silence_nudge("(the editor is currently empty)", None),
         proactive_review("  1| answer = []", None),
         time_warning(),
-        wrap_up("time_up"),
+        wrap_up("time_up", false),
         test_results_reaction("2/3 passed", false),
         test_results_reaction("3/3 passed", true),
     ]

@@ -396,7 +396,10 @@ fn leetcode_reactions_preserve_stage_transitions() {
     assert!(passed.contains("do not start a behavioral question"));
 
     assert!(time_warning().contains("Do not start a behavioral question"));
-    assert!(wrap_up("candidate_ended").contains("Do not ask a new coding or behavioral question"));
+    assert!(
+        wrap_up("candidate_ended", false)
+            .contains("Do not ask a new coding or behavioral question")
+    );
     assert!(
         language_choice("Python", LanguageChoiceContext::Start).contains("begin the interview")
     );
@@ -410,7 +413,7 @@ fn leetcode_reactions_preserve_stage_transitions() {
         language_choice("Python", LanguageChoiceContext::Start),
         silence_nudge("(the editor is currently empty)", None),
         time_warning(),
-        wrap_up("time_up"),
+        wrap_up("time_up", false),
         test_results_reaction("1/3 passed", false),
         test_results_reaction("3/3 passed", true),
         test_setup_error_reaction("The runner could not start."),

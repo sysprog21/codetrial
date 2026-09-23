@@ -1061,6 +1061,80 @@ fn round_transition_is_one_shot_plan_scoped_and_evidence_gated() {
     assert_eq!(complete.language, "python");
 }
 
+/// The unasked STAR steps are closed by the platform: at the five-minute
+/// warning of a round that never reached them, and at the end of a session
+/// whose behavioral round never opened, however it ended, once per step and
+/// never over evidence the candidate earned.
+#[test]
+fn the_platform_closes_unasked_star_steps_itself() {
+    let skips = |state: &RuntimeState| {
+        state
+            .framework_evidence
+            .iter()
+            .filter(|item| {
+                item.kind == EvidenceKind::Skipped && item.source == EvidenceSource::SessionTiming
+            })
+            .map(|item| item.phase)
+            .collect::<Vec<_>>()
+    };
+    let star = [
+        FrameworkPhase::Situation,
+        FrameworkPhase::Task,
+        FrameworkPhase::Action,
+        FrameworkPhase::Result,
+    ];
+    let warning = json!({"type":"time_warning","remainingSeconds":300});
+    let end = json!({"type":"end_interview","reason":"candidate_ended"});
+
+    let mut state = near_time_up(RuntimeState::default());
+    apply_data_event(&mut state, TOPIC_CONTROL, &warning, 99.0);
+    assert_eq!(skips(&state), star);
+    assert!(
+        state
+            .framework_evidence
+            .iter()
+            .all(|item| item.confidence == 100
+                && item.summary == "The five-minute cutoff prevented assessment.")
+    );
+    apply_data_event(&mut state, TOPIC_CONTROL, &end, 99.0);
+    assert_eq!(skips(&state), star, "the end adds no second skip");
+    assert!(
+        framework_progress(&state).is_empty(),
+        "a skip ticks nothing"
+    );
+
+    // A candidate who leaves on their own gets the same rows, and a step they
+    // answered keeps its evidence rather than gaining a skip beside it.
+    let mut ended = RuntimeState::default();
+    record_framework_evidence(
+        &mut ended,
+        &json!({"phase":"situation","source":"candidate_speech","kind":"observed",
+                "confidence":80,"summary":"Described the outage."}),
+    )
+    .unwrap();
+    apply_data_event(&mut ended, TOPIC_CONTROL, &end, 99.0);
+    assert_eq!(skips(&ended), star[1..]);
+    assert!(
+        ended
+            .framework_evidence
+            .iter()
+            .filter(|item| item.kind == EvidenceKind::Skipped)
+            .all(|item| item.summary == "The session ended before assessment.")
+    );
+
+    // A warning inside a running behavioral round leaves its parts open for the
+    // one follow-up the round still allows.
+    let mut behavioral = near_time_up(RuntimeState::default());
+    behavioral.behavioral_round_started = true;
+    apply_data_event(&mut behavioral, TOPIC_CONTROL, &warning, 99.0);
+    assert!(skips(&behavioral).is_empty());
+
+    // Nor does the end of one: a step left without evidence there may belong to
+    // a probe the candidate declined, which the wrap-up leaves unassessed.
+    apply_data_event(&mut behavioral, TOPIC_CONTROL, &end, 99.0);
+    assert!(skips(&behavioral).is_empty());
+}
+
 #[test]
 fn framework_evidence_is_server_stamped_validated_deduplicated_and_capped() {
     let mut state = with_written_code(RuntimeState::default());

@@ -232,9 +232,10 @@ fn prompt_samples() -> Value {
         "review": proactive_review(&working_changed, Some(&excerpt)),
         "reviewWithoutExcerpt": proactive_review(&working, None),
         "time": time_warning(),
-        "wrapCandidate": wrap_up("candidate_ended"),
-        "wrapTimer": wrap_up("time_up"),
-        "wrapComplete": wrap_up("interview_complete"),
+        "wrapCandidate": wrap_up("candidate_ended", false),
+        "wrapTimer": wrap_up("time_up", false),
+        "wrapBehavioral": wrap_up("time_up", true),
+        "wrapComplete": wrap_up("interview_complete", false),
         "interim": interim_review_prompt(&InterimReviewInput {
             problem,
             transcript_window: "Candidate: I will use a hash map.",

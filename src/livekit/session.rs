@@ -603,7 +603,10 @@ pub(super) async fn send_wrap_up_and_wait(
     context: &mut GeminiEventContext<'_>,
     reason: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let farewell = with_timer(context.state, wrap_up(reason));
+    let farewell = with_timer(
+        context.state,
+        wrap_up(reason, context.state.behavioral_round_started),
+    );
     send_model_text(
         context.gemini,
         context.state,

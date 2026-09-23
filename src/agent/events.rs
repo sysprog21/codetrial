@@ -558,6 +558,9 @@ fn time_warning_is_due(state: &RuntimeState) -> bool {
 /// interrupted the candidate.
 fn control_time_warning(state: &mut RuntimeState) -> DataEventResult {
     state.time_warning_seen = true;
+    if !state.behavioral_round_started {
+        super::skip_unassessed_star(state, "The five-minute cutoff prevented assessment.");
+    }
     DataEventResult {
         generate_reply: Some(if state.behavioral_round_started {
             behavioral_time_warning()
@@ -574,6 +577,12 @@ fn control_end_interview(
     payload: &serde_json::Value,
     receipt_timestamp_ms: u64,
 ) -> DataEventResult {
+    // Only for a round that never opened. Once it has, a step left without a
+    // row may be one the candidate declined, which stays unassessed rather than
+    // skipped, and only the conversation can tell the two apart.
+    if !state.behavioral_round_started {
+        super::skip_unassessed_star(state, "The session ended before assessment.");
+    }
     let prior_code = state.code.clone();
     let prior_language = state.language.clone();
 

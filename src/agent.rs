@@ -1272,6 +1272,51 @@ pub fn record_framework_evidence(
     Ok(evidence)
 }
 
+/// Closes every STAR step that holds no row as skipped for session timing.
+///
+/// The platform's own bookkeeping, done here rather than asked of the model.
+/// The five-minute warning and the wrap-up used to tell the interviewer to call
+/// `record_framework_evidence` once per missing step before speaking, which is
+/// up to four tool round trips in front of the two moments the candidate is
+/// listening hardest, and a skip only when the model complied. A candidate
+/// who ended the session themselves got no wrap-up and so no skips at all.
+/// Any row closes a step, a skip included, so the warning and the end never
+/// write two skips for one step. Skips never reach the ledger's coverage, the
+/// rule `record_framework_evidence` applies to them as well.
+pub(crate) fn skip_unassessed_star(state: &mut RuntimeState, summary: &str) {
+    let at_ms = state
+        .started_at
+        .elapsed()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64;
+    for phase in [
+        FrameworkPhase::Situation,
+        FrameworkPhase::Task,
+        FrameworkPhase::Action,
+        FrameworkPhase::Result,
+    ] {
+        if state
+            .framework_evidence
+            .iter()
+            .any(|item| item.phase == phase)
+        {
+            continue;
+        }
+        if state.framework_evidence.len() == MAX_FRAMEWORK_EVIDENCE {
+            evict_one_observation(&mut state.framework_evidence);
+        }
+        state.framework_evidence.push(FrameworkEvidence {
+            at_ms,
+            phase,
+            source: EvidenceSource::SessionTiming,
+            kind: EvidenceKind::Skipped,
+            confidence: 100,
+            summary: summary.to_string(),
+            framework_version: FRAMEWORK_VERSION,
+        });
+    }
+}
+
 /// Whether the coding round is finished on evidence rather than on the clock.
 ///
 /// Test and Optimizations, both observed or inferred and neither skipped: a
