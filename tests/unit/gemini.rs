@@ -1229,6 +1229,8 @@ fn live_setup_uses_native_audio_voice_tools_and_transcription() {
 
     assert_eq!(setup["model"], "models/gemini-live");
     assert_eq!(setup["generationConfig"]["temperature"], 0.7);
+    // Unseeded on purpose, unlike the two HTTP calls: see `GENERATION_SEED`.
+    assert!(setup["generationConfig"].get("seed").is_none());
     assert_eq!(setup["generationConfig"]["responseModalities"][0], "AUDIO");
     assert_eq!(
         setup["generationConfig"]["responseModalities"]
@@ -1523,6 +1525,7 @@ fn report_generation_request_matches_python_report_model_config() {
         "application/json"
     );
     assert_eq!(request["generationConfig"]["temperature"], 0.3);
+    assert_eq!(request["generationConfig"]["seed"], GENERATION_SEED);
     assert_eq!(request["generationConfig"]["maxOutputTokens"], 16_384);
 
     // Thinking is spent from the same budget as the report, so an unpinned
@@ -1932,6 +1935,7 @@ fn the_interim_review_asks_for_bounded_prose_and_no_thinking() {
     assert_eq!(config["responseMimeType"], "text/plain");
     assert_eq!(config["maxOutputTokens"], 512);
     assert_eq!(config["thinkingConfig"]["thinkingBudget"], 0);
+    assert_eq!(config["seed"], GENERATION_SEED);
     assert!(
         config.get("responseSchema").is_none(),
         "a schema here would reject the prose the prompt asks for"

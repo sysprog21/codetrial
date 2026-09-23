@@ -409,6 +409,7 @@
     "read_editor_calls": 0,
     "read_editor_bytes": 0,
     "tool_response_count": 0,
-    "tool_response_bytes": 0
+    "tool_response_bytes": 0,
+    "model_input_digest": ""
   }
 }

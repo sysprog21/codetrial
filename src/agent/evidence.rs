@@ -304,6 +304,12 @@ pub struct EvidenceMetrics {
     /// worth watching on its own.
     pub tool_response_count: u32,
     pub tool_response_bytes: u64,
+    /// Every text above folded into one SHA-256, in the order it was handed
+    /// over, kind by kind. Two runs of the same session send the same prompts
+    /// exactly when these match, which is the check a replay needs and the
+    /// byte counts cannot give: two different prompts of one length count
+    /// the same. Empty until something is sent.
+    pub model_input_digest: String,
 }
 
 impl EvidenceMetrics {
@@ -342,6 +348,7 @@ impl EvidenceMetrics {
             read_editor_bytes,
             tool_response_count,
             tool_response_bytes,
+            model_input_digest: _,
         } = self;
         let total = watch_prompt_bytes
             + turn_prompt_bytes
@@ -574,6 +581,12 @@ impl EvidenceLedger {
                 self.metrics.tool_response_bytes += bytes;
             }
         }
+        let mut hasher = Sha256::new();
+        hasher.update(self.metrics.model_input_digest.as_bytes());
+        hasher.update(format!("{kind:?}").as_bytes());
+        hasher.update(bytes.to_le_bytes());
+        hasher.update(text.as_bytes());
+        self.metrics.model_input_digest = format!("{:x}", hasher.finalize());
     }
 
     /// Records a code observation whose structural classification was produced

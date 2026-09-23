@@ -99,7 +99,15 @@ included. Every model-bound text falls into exactly one of them. They are bytes
 rather than tokens because the tokenizer belongs to the provider, they are
 written to stderr once at the end of a session, and they are deliberately
 absent from the projection: a model handed its own byte count is being told
-something no interview should turn on. A bounded digest history makes an edit
+something no interview should turn on. Beside them, every model-bound text is
+folded in order into one SHA-256, so two runs of a session sent the same prompts
+exactly when that digest matches.
+
+The interim review and the final report sample with a fixed seed. Measured on
+the report model at its temperature, four calls with one prompt and the seed
+returned one answer, and four without it returned four. The Live session is
+left unseeded: identical words for every candidate is not a trade the interview
+should make, and its audio cannot be replayed byte for byte either way. A bounded digest history makes an edit
 that revisits an earlier state observable as an undo/redo cycle; it retains
 hashes only, each a digest of the language and the buffer together, so the same
 text in another tab is not a way back. Meaningful-change and test-progress

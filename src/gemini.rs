@@ -724,6 +724,16 @@ async fn generate_interim_review_at(
     result
 }
 
+/// The seed both HTTP calls sample with. Measured against the report model at
+/// its report temperature, four calls with one prompt and this seed returned
+/// one answer four times, and four without it returned four. The same prompt
+/// then gets the same notes and the same report, which is what lets a replayed
+/// session be compared with the one it replays; the Live session is left
+/// unseeded, since a voice that answers every candidate in identical words is
+/// not a trade the interview should make, and its audio cannot be replayed
+/// byte for byte whatever the seed.
+const GENERATION_SEED: i64 = 71;
+
 /// Plain text and a small ceiling, where the report asks for JSON against a
 /// schema. The prompt caps the answer at four lines; this caps what an answer
 /// that ignores that can cost. Thinking is off for the reason it is off on the
@@ -735,7 +745,8 @@ fn interim_generation_config() -> Value {
         "responseMimeType": "text/plain",
         "maxOutputTokens": 512,
         "thinkingConfig": { "thinkingBudget": 0 },
-        "temperature": 0.2
+        "temperature": 0.2,
+        "seed": GENERATION_SEED
     })
 }
 
@@ -1130,7 +1141,8 @@ fn generate_report_request(prompt: &str) -> Value {
             // generations, and an operator who has pointed
             // `GEMINI_REPORT_MODEL` at an earlier model is not owed a 400.
             "thinkingConfig": { "thinkingBudget": 0 },
-            "temperature": 0.3
+            "temperature": 0.3,
+            "seed": GENERATION_SEED
         }),
     )
 }

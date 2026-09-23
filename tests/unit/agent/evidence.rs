@@ -2957,3 +2957,38 @@ fn a_buffer_past_the_parse_limit_is_not_parsed() {
         CodeObservation::Parsed
     );
 }
+
+/// The digest moves with every text and depends on its order and kind, so two
+/// sessions that sent the same prompts agree on it and no others do.
+#[test]
+fn the_model_input_digest_tells_identical_sends_from_different_ones() {
+    let send = |texts: &[(ModelInputKind, &str)]| {
+        let mut ledger = EvidenceLedger::default();
+        for (kind, text) in texts {
+            ledger.record_model_input(*kind, text);
+        }
+        ledger.metrics.model_input_digest
+    };
+    let session = [
+        (ModelInputKind::Turn, "hello"),
+        (ModelInputKind::Watch, "review"),
+    ];
+    assert_eq!(send(&session), send(&session));
+    assert_eq!(send(&session).len(), 64);
+    assert_ne!(send(&session), send(&[session[1], session[0]]));
+    assert_ne!(
+        send(&session),
+        send(&[
+            (ModelInputKind::Turn, "hello"),
+            (ModelInputKind::Interim, "review")
+        ])
+    );
+    assert_ne!(
+        send(&session),
+        send(&[
+            (ModelInputKind::Turn, "hello"),
+            (ModelInputKind::Watch, "reviews")
+        ])
+    );
+    assert_eq!(send(&[]), "");
+}
