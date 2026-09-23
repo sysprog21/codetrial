@@ -1,9 +1,11 @@
 //! Building the report packet the browser receives when an interview ends.
 //!
-//! One region because it is one output. `publish_report` is the only thing the
-//! interview loop calls; everything below it is how the packet is assembled,
-//! and the pieces are separated so that a failure in one of them is a note in
-//! the report rather than no report at all.
+//! One region because it is one output. The interview loop freezes the prompt
+//! with `freeze_report_prompt`, runs `generate_report_bounded` beside the
+//! farewell, and hands what came back to `publish_report`; everything below
+//! is how the packet is assembled, and the pieces are separated so that a
+//! failure in one of them is a note in the report rather than no report at
+//! all.
 //!
 //! Split out of `livekit.rs` along the line its module doc already drew.
 
@@ -19,37 +21,62 @@ use crate::runtime::{RuntimeBootstrap, TOPIC_REPORT};
 
 use super::{REPORT_TIMEOUT, browser_packet};
 
+/// What the report call returned, or the deadline it missed.
+pub(super) type GeneratedReport = Result<
+    Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>>,
+    tokio::time::error::Elapsed,
+>;
+
+/// The report prompt, built and counted once the interview's assessment is
+/// over and before the farewell is spoken, so the call can run while it plays.
+pub(super) fn freeze_report_prompt(
+    boot: &RuntimeBootstrap<'_>,
+    state: &mut RuntimeState,
+    elapsed_min: f64,
+) -> String {
+    let prompt = report_prompt_text(boot, state, elapsed_min);
+    state
+        .evidence_ledger
+        .record_model_input(ModelInputKind::FinalReport, &prompt);
+    prompt
+}
+
+/// The report call under `REPORT_TIMEOUT`. Borrows nothing of the interview
+/// state, which is what lets it run beside the farewell that still needs it.
+pub(super) async fn generate_report_bounded(
+    boot: &RuntimeBootstrap<'_>,
+    prompt: &str,
+    api_key: &GeminiKeys,
+) -> GeneratedReport {
+    tokio::time::timeout(
+        REPORT_TIMEOUT,
+        generate_report_with_keys(api_key, boot.report_model, prompt, boot.problem),
+    )
+    .await
+}
+
 pub(super) async fn publish_report(
     room: &Room,
     boot: &RuntimeBootstrap<'_>,
     state: &mut RuntimeState,
     reason: &str,
-    elapsed_min: f64,
     api_key: &GeminiKeys,
+    generated: GeneratedReport,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     room.local_participant()
-        .publish_data(report_packet(boot, state, reason, elapsed_min, api_key).await?)
+        .publish_data(report_packet(boot, state, reason, api_key, generated)?)
         .await?;
     Ok(())
 }
 
-async fn report_packet(
+fn report_packet(
     boot: &RuntimeBootstrap<'_>,
     state: &mut RuntimeState,
     reason: &str,
-    elapsed_min: f64,
     api_key: &GeminiKeys,
+    generated: GeneratedReport,
 ) -> Result<DataPacket, Box<dyn std::error::Error + Send + Sync>> {
-    let prompt = report_prompt_text(boot, state, elapsed_min);
-    state
-        .evidence_ledger
-        .record_model_input(ModelInputKind::FinalReport, &prompt);
-    let mut report = match tokio::time::timeout(
-        REPORT_TIMEOUT,
-        generate_report_with_keys(api_key, boot.report_model, &prompt, boot.problem),
-    )
-    .await
-    {
+    let mut report = match generated {
         Ok(Ok(raw)) => final_report(Some(&raw), state.hints_used, None, boot.problem),
         Ok(Err(error)) => final_report(
             None,

@@ -706,3 +706,37 @@ fn a_report_carries_the_evidence_block_and_counts_what_it_cost() {
         prompt.len() as u64
     );
 }
+
+/// The prompt is frozen and counted before the farewell, and what a missed
+/// deadline leaves is the incomplete report with its reason, not no report.
+#[test]
+fn a_frozen_report_prompt_is_counted_and_a_missed_deadline_still_reports() {
+    let config = report_test_config();
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let mut state = RuntimeState::default();
+    let prompt = freeze_report_prompt(&boot, &mut state, 12.0);
+    assert_eq!(state.evidence_ledger.metrics.final_report_prompt_count, 1);
+    assert_eq!(
+        state.evidence_ledger.metrics.final_report_prompt_bytes,
+        prompt.len() as u64
+    );
+
+    let missed = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            tokio::time::timeout(std::time::Duration::ZERO, std::future::pending::<()>()).await
+        })
+        .unwrap_err();
+    let packet = report_packet(
+        &boot,
+        &mut state,
+        "time_up",
+        &GeminiKeys::single("google"),
+        Err(missed),
+    )
+    .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&packet.payload).unwrap();
+    assert_eq!(payload["incomplete"], true, "{payload}");
+}

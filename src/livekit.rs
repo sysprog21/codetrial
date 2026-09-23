@@ -107,7 +107,7 @@ use session::{
     send_wrap_up_and_wait, set_agent_state,
 };
 
-use report::publish_report;
+use report::{freeze_report_prompt, generate_report_bounded, publish_report};
 use rooms::{evict_duplicate_agent, isolate_local_agent};
 
 // Re-exported rather than merely used: `web::setup` calls this to check the
@@ -1701,21 +1701,48 @@ async fn handle_data_packet(
         return Ok(ControlFlow::Continue(()));
     };
 
-    if should_send_wrap_up(&reason) {
-        send_wrap_up_and_wait(room, context, &reason).await?;
-    }
-
-    // The goodbye is the last turn there will be. Closing here keeps the panel
-    // from leaving it rendered as still-in-progress for the rest of the page's
-    // life, and costs one publish.
+    // The assessment ends here, before the goodbye: the reducer has closed the
+    // unasked steps of a round that never opened, and the turns still open are
+    // the candidate's last words. The report is written from this point while
+    // the farewell plays, so the candidate waits for the longer of the two
+    // rather than for both. The farewell stays out of what is assessed: all it
+    // can add is the skips a started behavioral round leaves to it, and the
+    // report scores those steps as unassessed with or without them.
     close_turns(room, context).await?;
+    let prompt = freeze_report_prompt(
+        interview.boot,
+        context.state,
+        interview.started_at.elapsed().as_secs_f64() / 60.0,
+    );
+    let api_key = &**interview.keys;
+    let farewell = async {
+        if should_send_wrap_up(&reason) {
+            send_wrap_up_and_wait(room, context, &reason).await?;
+        }
+
+        // The goodbye is the last turn there will be. Closing here keeps the
+        // panel from leaving it rendered as still-in-progress for the rest of
+        // the page's life, and costs one publish.
+        close_turns(room, context).await
+    };
+
+    // `try_join`, so a farewell that fails drops the report call with it rather
+    // than holding teardown for the call's whole deadline to publish nothing.
+    let (generated, ()) = tokio::try_join!(
+        async {
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(
+                generate_report_bounded(interview.boot, &prompt, api_key).await,
+            )
+        },
+        farewell
+    )?;
     publish_report(
         room,
         interview.boot,
         context.state,
         &reason,
-        interview.started_at.elapsed().as_secs_f64() / 60.0,
-        interview.keys,
+        api_key,
+        generated,
     )
     .await?;
     eprintln!("{}", context.state.evidence_ledger.metrics.cost_line());
