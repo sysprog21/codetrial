@@ -35,6 +35,9 @@ pub use evidence::{
     CodeAnalysis, CodeChangeClass, CodeObservation, EvidenceLedger, LifecycleTransition,
     ObservationFamily, Provenance,
 };
+// For the `livekit` tests, which size a buffer past the parse limit from it.
+#[cfg(test)]
+pub(crate) use evidence::MAX_PARSED_BYTES;
 pub(crate) use evidence::{ModelInputKind, ViewFor};
 pub(crate) use evidence::{analyze_code, analyze_code_cached, observe_code, observe_code_cached};
 use integrity::integrity_hash;

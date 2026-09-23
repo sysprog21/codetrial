@@ -1769,7 +1769,9 @@ fn a_rename_or_code_that_does_not_parse_holds_the_review() {
         600,
         "def f():\n    count = 3\n    return count + 1\n",
     );
-    edit(&mut state, 700, &"x = 1\n".repeat(20_000));
+    // One line past the limit, whatever the limit is.
+    let unparsed = "x = 1\n".repeat(crate::agent::MAX_PARSED_BYTES / "x = 1\n".len() + 1);
+    edit(&mut state, 700, &unparsed);
     ready_for_review(&mut activity, now);
     assert!(
         activity.watch_prompt(&state, now).is_none(),

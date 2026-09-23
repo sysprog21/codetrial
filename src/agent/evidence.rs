@@ -27,7 +27,7 @@ const CLOSURE_PREFIX: &str = "closure.";
 /// well inside that, so the work stays inline rather than behind a worker that
 /// would have to put results back in event order. What stays unbounded is a
 /// paste, and past this size one is recorded as not parsed instead.
-const MAX_PARSED_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_PARSED_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -8,7 +8,9 @@ use super::{
     ObservationFamily, Provenance, RuntimeState, analyze_code, apply_data_event,
     apply_data_event_at, apply_server_event_at, record_framework_evidence, record_hint,
 };
-use super::{ParseCache, ViewFor, analyze_code_cached, observe_code, observe_code_cached};
+use super::{
+    MAX_PARSED_BYTES, ParseCache, ViewFor, analyze_code_cached, observe_code, observe_code_cached,
+};
 
 /// A buffer recorded with no parse behind it, which is all a caller that never
 /// saw the prior text can honestly claim. It lived on the ledger until it had
@@ -2923,12 +2925,20 @@ fn the_parse_cache_holds_the_last_buffer_for_its_grammar_only() {
     assert_eq!(format!("{cache:?}"), "ParseCache");
 }
 
-/// The limit is inclusive: a buffer of exactly 64 KiB is parsed, one byte
-/// more is not.
+/// The limit is inclusive: a buffer of exactly `MAX_PARSED_BYTES` is parsed,
+/// one byte more is not.
 #[test]
 fn a_buffer_of_exactly_the_parse_limit_is_parsed() {
-    let exact = format!("{}#ab\n", "x = 1\n".repeat(10_922));
-    assert_eq!(exact.len(), 64 * 1024);
+    // Whole lines up to the limit, then a comment that takes it exactly there,
+    // so the buffer is the limit's size whatever the limit is.
+    let line = "x = 1\n";
+    let mut exact = line.repeat(MAX_PARSED_BYTES / line.len());
+    match MAX_PARSED_BYTES - exact.len() {
+        0 => {}
+        1 => exact.push('\n'),
+        rest => exact.push_str(&format!("#{}\n", "a".repeat(rest - 2))),
+    }
+    assert_eq!(exact.len(), MAX_PARSED_BYTES);
     assert_eq!(
         analyze_code("python", "x = 1\n", &exact).observation,
         CodeObservation::Parsed
@@ -2990,7 +3000,7 @@ fn an_input_edit_names_exactly_the_bytes_that_changed() {
 /// claims nothing about it, rather than stalling the agent's task on it.
 #[test]
 fn a_buffer_past_the_parse_limit_is_not_parsed() {
-    let huge = "x = 1\n".repeat(20_000);
+    let huge = "x = 1\n".repeat(MAX_PARSED_BYTES / "x = 1\n".len() + 1);
     assert_eq!(
         analyze_code("python", "x = 1\n", &huge).observation,
         CodeObservation::ParserUnavailable
