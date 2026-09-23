@@ -8,9 +8,9 @@
 use super::{
     DataEventResult, INTERVIEWER_SPEAKER, InterviewLoop, LanguageChoiceContext,
     LifecycleTransition, MAX_INTEGRITY_EVENTS, ROUND_TRANSITION_SKEW, RuntimeState, TIME_WARNING_S,
-    analyze_code, analyze_code_sides, behavioral_time_warning, cold_restart, format_test_run,
-    integrity_hash, language_choice, observe_code, python_truthy, resume, round_skipped,
-    round_started, sanitize_integrity_event, sanitize_test_run, spoken_language,
+    analyze_code, analyze_code_cached, behavioral_time_warning, cold_restart, format_test_run,
+    integrity_hash, language_choice, observe_code, observe_code_cached, python_truthy, resume,
+    round_skipped, round_started, sanitize_integrity_event, sanitize_test_run, spoken_language,
     test_reaction_decision, test_results_reaction, test_setup_error_reaction, time_warning,
 };
 use crate::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
@@ -240,7 +240,7 @@ fn apply_code_update(
             // `last_parseable_code` survives the switch. It is keyed by
             // language and only consulted for a matching one, so a trip to
             // another tab and back is exactly the case it should recover from.
-            observe_code(&state.language, new_code)
+            observe_code_cached(&mut state.parse_cache, &state.language, new_code)
         } else {
             analyze_code_update(
                 state,
@@ -283,7 +283,8 @@ fn analyze_code_update(
     let language = state.language.clone();
     let previous_was_parsed =
         state.evidence_ledger.code.parser_observation == Some(super::CodeObservation::Parsed);
-    let (analysis, current_alone) = analyze_code_sides(&language, previous, current);
+    let (analysis, current_alone) =
+        analyze_code_cached(&mut state.parse_cache, &language, previous, current);
     if analysis.observation != super::CodeObservation::SyntaxInvalid {
         // Only this language's baseline is spent. Another tab's is still the
         // buffer that tab was last known to parse, and dropping it here is what
@@ -325,7 +326,7 @@ fn analyze_code_update(
     // moved, so there is no text-unchanged case for this to overstate.
     //
     // Spelled out rather than `..observe_code(&language, current)`, which reads
-    // better and re-parses the buffer `analyze_code_sides` parsed to produce
+    // better and re-parses the buffer `analyze_code_cached` parsed to produce
     // `current_alone`. That parse is the one this pair exists to remove.
     if current_alone == super::CodeObservation::Parsed {
         return super::CodeAnalysis {

@@ -31,11 +31,12 @@ pub use events::apply_data_event;
 pub(crate) use events::apply_data_event_at;
 pub(crate) use events::apply_server_event_at;
 pub(crate) use evidence::ModelInputKind;
+pub use evidence::ParseCache;
 pub use evidence::{
     CodeAnalysis, CodeChangeClass, CodeObservation, EvidenceLedger, LifecycleTransition,
     ObservationFamily, Provenance,
 };
-pub(crate) use evidence::{analyze_code, analyze_code_sides, observe_code};
+pub(crate) use evidence::{analyze_code, analyze_code_cached, observe_code, observe_code_cached};
 use integrity::integrity_hash;
 pub use integrity::{sanitize_integrity_event, sanitize_test_run};
 use problems::variant_for;
@@ -712,6 +713,9 @@ pub struct RuntimeState {
     /// baseline. These runtime-only recovery baselines never enter the
     /// evidence ledger.
     pub last_parseable_code: std::collections::BTreeMap<String, String>,
+    /// The last buffer parsed and its tree, so the next update does not parse
+    /// it again. Runtime-only for the same reason as the baselines above.
+    pub parse_cache: ParseCache,
     /// Whether the candidate has typed, as opposed to the browser having
     /// published a template. See `apply_code_update`.
     pub code_edited: bool,
@@ -834,6 +838,7 @@ impl Default for RuntimeState {
             evidence_ledger: EvidenceLedger::default(),
             code: String::new(),
             last_parseable_code: std::collections::BTreeMap::new(),
+            parse_cache: ParseCache::default(),
             code_edited: false,
             code_templates: std::collections::BTreeMap::new(),
             language: "python".to_string(),

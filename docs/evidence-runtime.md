@@ -17,6 +17,15 @@ unchanged code after one is not progress. An edit followed by a run is one
 edit/test cycle; further runs over an untouched buffer are retries and are not
 counted again.
 
+Parsing reuses one parser per grammar and keeps the last buffer's tree, so an
+update parses only the new buffer, incrementally from the previous tree edited to
+match it. A test holds the incremental tree to the fresh one node by node,
+because an edit that claims too little of the buffer leaves nodes at the wrong
+offsets while still counting the same kinds. With the crate optimized an update
+costs about 1 ms at fifty lines and 12 ms at five hundred, down from 3.6 ms and
+39 ms, and it stays inline on the agent's task; a buffer past 64 KiB is recorded
+as not parsed instead.
+
 Code observations use Tree-sitter 0.25.10 with pinned C, C++, Java,
 JavaScript and Python grammars. A successful parse classifies only stable
 syntax facts, and those facts are the named structure, the identifiers and

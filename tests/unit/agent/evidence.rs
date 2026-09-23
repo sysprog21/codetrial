@@ -1,11 +1,14 @@
 //! Reducer tests for the deterministic evidence ledger.
 
-use super::evidence::{comment_kind, parser_language, parser_unavailable};
+use super::evidence::{
+    comment_kind, grammar_key, input_edit, parse_with, parser_language, parser_unavailable,
+};
 use super::{
     CodeChangeClass, CodeObservation, EvidenceLedger, LifecycleTransition, ModelInputKind,
     ObservationFamily, Provenance, RuntimeState, analyze_code, apply_data_event,
     apply_data_event_at, apply_server_event_at, record_framework_evidence, record_hint,
 };
+use super::{ParseCache, analyze_code_cached, observe_code, observe_code_cached};
 
 /// A buffer recorded with no parse behind it, which is all a caller that never
 /// saw the prior text can honestly claim. It lived on the ledger until it had
@@ -2740,5 +2743,217 @@ fn the_prompt_samples_carry_what_prompt_slice_renders() {
     assert_eq!(
         rendered, frozen,
         "the prompt samples no longer carry what prompt_slice renders; regenerate {path}"
+    );
+}
+
+/// The cache is only a cache if what it produces is what a fresh parse does:
+/// every step of a session here is analyzed both ways and must agree, through
+/// typing, an edit in the middle of a line, a deleted line, a draft that stops
+/// parsing and the fix after it, a multi-byte character ahead of the edits,
+/// and a trip to another tab and back, where the cached tree belongs to the
+/// other grammar and must not be read.
+#[test]
+fn a_cached_incremental_parse_analyzes_exactly_as_a_fresh_one() {
+    // The Greek letters are there for their byte width: an edit offset that
+    // lands inside one is the bug an incremental edit can have and a fresh
+    // parse cannot.
+    let solution = "def two_sum(nums, target):\n    seen = {}  # \u{3b1}\u{3b2}\n    for i, n in enumerate(nums):\n        if target - n in seen:\n            return [seen[target - n], i]\n        seen[n] = i\n    return []\n";
+    let chars = solution.chars().collect::<Vec<_>>();
+    let mut steps = chars
+        .chunks(5)
+        .scan(String::new(), |typed, chunk| {
+            typed.extend(chunk);
+            Some(("python", typed.clone()))
+        })
+        .collect::<Vec<_>>();
+    let edited = solution.replace("target - n in", "target + n in");
+    steps.push(("python", edited.clone()));
+
+    // Longer and shorter in the middle, where an edit that claims too little
+    // leaves the old tree's later nodes at the wrong offsets.
+    let widened = edited.replace("for i, n in", "for position, value in");
+    steps.push(("python", widened.clone()));
+    steps.push(("python", widened.replace("position, value", "i, n")));
+    steps.push(("python", edited.replace("        seen[n] = i\n", "")));
+    steps.push((
+        "python",
+        edited.replace("    return []\n", "    if (\n    return []\n"),
+    ));
+    steps.push(("python", edited.clone()));
+    steps.push(("javascript", "function f(a) { return a; }\n".to_string()));
+    steps.push((
+        "javascript",
+        "function f(a) { return a + 1; }\n".to_string(),
+    ));
+    steps.push(("python", edited.clone()));
+    steps.push(("python", edited.replace("seen", "index")));
+
+    // The trees themselves, node by node, before the analyses: two trees can
+    // count the same kinds while one has its nodes at the wrong offsets, and an
+    // edit that claims too little of the buffer produces exactly that.
+    fn nodes(tree: &tree_sitter::Tree) -> Vec<(&'static str, usize, usize)> {
+        let mut out = Vec::new();
+        let mut cursor = tree.walk();
+        loop {
+            let node = cursor.node();
+            out.push((node.kind(), node.start_byte(), node.end_byte()));
+            if cursor.goto_first_child() || cursor.goto_next_sibling() {
+                continue;
+            }
+            loop {
+                if !cursor.goto_parent() {
+                    return out;
+                }
+                if cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+    }
+    for pair in steps.windows(2) {
+        let [(language, previous), (next, current)] = pair else {
+            unreachable!()
+        };
+        if language != next {
+            continue;
+        }
+        let grammar = grammar_key(language).unwrap();
+        let mut edited = parse_with(grammar, previous, None).unwrap();
+        edited.edit(&input_edit(previous, current));
+        let incremental = parse_with(grammar, current, Some(&edited)).unwrap();
+        let fresh = parse_with(grammar, current, None).unwrap();
+        assert_eq!(
+            nodes(&incremental),
+            nodes(&fresh),
+            "{previous:?} -> {current:?}"
+        );
+    }
+
+    let mut cache = ParseCache::default();
+    let (mut language, mut previous) = ("python", String::new());
+    observe_code_cached(&mut cache, language, &previous);
+    for (step, (next_language, current)) in steps.into_iter().enumerate() {
+        if next_language != language {
+            assert_eq!(
+                observe_code_cached(&mut cache, next_language, &current),
+                observe_code(next_language, &current),
+                "step {step}"
+            );
+        } else {
+            let (analysis, alone) =
+                analyze_code_cached(&mut cache, next_language, &previous, &current);
+            assert_eq!(
+                analysis,
+                analyze_code(next_language, &previous, &current),
+                "step {step}"
+            );
+            assert_eq!(
+                alone,
+                observe_code(next_language, &current).observation,
+                "step {step}"
+            );
+        }
+        (language, previous) = (next_language, current);
+    }
+}
+
+/// The cache holds the last buffer it was given, for that grammar only, and is
+/// no part of the state it sits in.
+#[test]
+fn the_parse_cache_holds_the_last_buffer_for_its_grammar_only() {
+    let mut cache = ParseCache::default();
+    assert!(cache.tree_for("python", "x = 1\n").is_none());
+    observe_code_cached(&mut cache, "python", "x = 1\n");
+    assert!(cache.tree_for("python", "x = 1\n").is_some());
+    assert!(cache.tree_for("python", "x = 2\n").is_none());
+    assert!(cache.tree_for("javascript", "x = 1\n").is_none());
+
+    analyze_code_cached(&mut cache, "python", "x = 1\n", "x = 2\n");
+    assert!(cache.tree_for("python", "x = 2\n").is_some());
+    assert!(cache.tree_for("python", "x = 1\n").is_none());
+
+    assert_eq!(cache, ParseCache::default());
+    assert_eq!(format!("{cache:?}"), "ParseCache");
+}
+
+/// The limit is inclusive: a buffer of exactly 64 KiB is parsed, one byte
+/// more is not.
+#[test]
+fn a_buffer_of_exactly_the_parse_limit_is_parsed() {
+    let exact = format!("{}#ab\n", "x = 1\n".repeat(10_922));
+    assert_eq!(exact.len(), 64 * 1024);
+    assert_eq!(
+        analyze_code("python", "x = 1\n", &exact).observation,
+        CodeObservation::Parsed
+    );
+    assert_eq!(
+        observe_code("python", &exact).observation,
+        CodeObservation::Parsed
+    );
+    let over = format!("{exact}#\n");
+    assert_eq!(
+        observe_code("python", &over).observation,
+        CodeObservation::ParserUnavailable
+    );
+}
+
+/// The edit itself, field by field. A tree parsed from a wrong edit often
+/// still matches a fresh one, because tree-sitter reparses whatever an edit
+/// makes it doubt, so these are checked against the bytes and not the tree.
+#[test]
+fn an_input_edit_names_exactly_the_bytes_that_changed() {
+    let point = |row, column| tree_sitter::Point::new(row, column);
+    let fields = |edit: tree_sitter::InputEdit| {
+        (
+            edit.start_byte,
+            edit.old_end_byte,
+            edit.new_end_byte,
+            edit.start_position,
+            edit.old_end_position,
+            edit.new_end_position,
+        )
+    };
+
+    // An insertion on the second line.
+    assert_eq!(
+        fields(input_edit("ab\ncd\n", "ab\ncXd\n")),
+        (4, 4, 5, point(1, 1), point(1, 1), point(1, 2))
+    );
+
+    // The shared prefix ends inside a two-byte character, so the edit starts at
+    // the character.
+    assert_eq!(
+        fields(input_edit("a\u{3b1}", "a\u{3b2}")),
+        (1, 3, 3, point(0, 1), point(0, 3), point(0, 3))
+    );
+
+    // The shared suffix starts inside one, so it ends there instead; and a
+    // suffix that starts on a character is kept whole.
+    assert_eq!(
+        fields(input_edit("\u{f1}", "\u{3b1}")),
+        (0, 2, 2, point(0, 0), point(0, 2), point(0, 2))
+    );
+    assert_eq!(
+        fields(input_edit("x\u{3b1}", "y\u{3b1}")),
+        (0, 1, 1, point(0, 0), point(0, 1), point(0, 1))
+    );
+}
+
+/// A paste past the size the parser is given is recorded as not parsed, which
+/// claims nothing about it, rather than stalling the agent's task on it.
+#[test]
+fn a_buffer_past_the_parse_limit_is_not_parsed() {
+    let huge = "x = 1\n".repeat(20_000);
+    assert_eq!(
+        analyze_code("python", "x = 1\n", &huge).observation,
+        CodeObservation::ParserUnavailable
+    );
+    assert_eq!(
+        observe_code("python", &huge).observation,
+        CodeObservation::ParserUnavailable
+    );
+    assert_eq!(
+        analyze_code("python", "x = 1\n", "x = 2\n").observation,
+        CodeObservation::Parsed
     );
 }

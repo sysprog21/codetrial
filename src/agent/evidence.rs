@@ -23,6 +23,13 @@ const MAX_CHANGED_NODE_FACTS: usize = 12;
 /// spelled `formal_parameters` in Java and `parameter_list` in C++, and reading
 /// them as one kind made a sort comparator a signature change.
 const CLOSURE_PREFIX: &str = "closure.";
+/// The largest buffer the parser is asked to read. The analysis runs inline on
+/// the agent's task, and with the tree cache an edit costs about 1 ms at fifty
+/// lines and 12 ms at five hundred, measured optimized; an interview's code is
+/// well inside that, so the work stays inline rather than behind a worker that
+/// would have to put results back in event order. What stays unbounded is a
+/// paste, and past this size one is recorded as not parsed instead.
+const MAX_PARSED_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -967,7 +974,7 @@ fn state_digest(language: &str, code: &str) -> String {
 }
 
 pub(crate) fn analyze_code(language: &str, previous: &str, current: &str) -> CodeAnalysis {
-    analyze_code_sides(language, previous, current).0
+    analyze_sides(None, language, previous, current).0
 }
 
 /// The same analysis, and beside it what the current buffer is on its own.
@@ -982,25 +989,53 @@ pub(crate) fn analyze_code(language: &str, previous: &str, current: &str) -> Cod
 /// three answers, not two: the buffer parsed, the buffer did not, or no parser
 /// ever ran. A bool folded the last two together and left its own meaning
 /// resting on the caller checking the first half first.
-pub(crate) fn analyze_code_sides(
+///
+/// It reads the previous buffer's tree from `cache` when it holds it, and
+/// leaves the current one there for the next update.
+///
+/// Every update used to parse both buffers from nothing, and the previous one
+/// is exactly the buffer the update before had just parsed: measured with the
+/// crate optimized, two parses were most of the 3.6 ms an analysis took on a
+/// fifty-line buffer and of the 39 ms on five hundred lines, run inline on the
+/// agent's task up to three times a second. The current buffer is parsed
+/// incrementally from the previous tree edited to match it, which tree-sitter
+/// guarantees produces the tree a fresh parse would.
+pub(crate) fn analyze_code_cached(
+    cache: &mut ParseCache,
+    language: &str,
+    previous: &str,
+    current: &str,
+) -> (CodeAnalysis, CodeObservation) {
+    analyze_sides(Some(cache), language, previous, current)
+}
+
+fn analyze_sides(
+    cache: Option<&mut ParseCache>,
     language: &str,
     previous: &str,
     current: &str,
 ) -> (CodeAnalysis, CodeObservation) {
     let unavailable = || (parser_unavailable(), CodeObservation::ParserUnavailable);
-    let Some(language) = parser_language(language) else {
+    let Some(grammar) = grammar_key(language) else {
         return unavailable();
     };
-    let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&language).is_err() {
+    if previous.len().max(current.len()) > MAX_PARSED_BYTES {
         return unavailable();
     }
-    let Some(previous_tree) = parser.parse(previous, None) else {
+    let cached = cache
+        .as_deref()
+        .and_then(|cache| cache.tree_for(grammar, previous));
+    let Some(previous_tree) = cached.or_else(|| parse_with(grammar, previous, None)) else {
         return unavailable();
     };
-    let Some(current_tree) = parser.parse(current, None) else {
+    let mut edited = previous_tree.clone();
+    edited.edit(&input_edit(previous, current));
+    let Some(current_tree) = parse_with(grammar, current, Some(&edited)) else {
         return unavailable();
     };
+    if let Some(cache) = cache {
+        cache.store(grammar, current, &current_tree);
+    }
     let current_alone = if current_tree.root_node().has_error() {
         CodeObservation::SyntaxInvalid
     } else {
@@ -1099,20 +1134,151 @@ pub(crate) fn analyze_code_sides(
 /// seen to parse, and claiming the parser was unavailable for a language the
 /// server parses fine left that condition permanently false.
 pub(crate) fn observe_code(language: &str, code: &str) -> CodeAnalysis {
-    let Some(language) = parser_language(language) else {
+    observe(None, language, code)
+}
+
+/// [`observe_code`], leaving the tree in `cache` so the next edit in the tab
+/// just switched to diffs against it without parsing it again.
+pub(crate) fn observe_code_cached(
+    cache: &mut ParseCache,
+    language: &str,
+    code: &str,
+) -> CodeAnalysis {
+    observe(Some(cache), language, code)
+}
+
+fn observe(cache: Option<&mut ParseCache>, language: &str, code: &str) -> CodeAnalysis {
+    let Some(grammar) = grammar_key(language) else {
         return parser_unavailable();
     };
-    let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&language).is_err() {
+    if code.len() > MAX_PARSED_BYTES {
         return parser_unavailable();
     }
-    let Some(tree) = parser.parse(code, None) else {
+    let Some(tree) = parse_with(grammar, code, None) else {
         return parser_unavailable();
     };
+    if let Some(cache) = cache {
+        cache.store(grammar, code, &tree);
+    }
     CodeAnalysis::observed(if tree.root_node().has_error() {
         CodeObservation::SyntaxInvalid
     } else {
         CodeObservation::Parsed
+    })
+}
+
+/// The last buffer this runtime parsed, with its tree. Runtime-only like the
+/// recovery baselines: it holds source, so it never enters the ledger, and it
+/// changes nothing a reducer records. A tree parsed afresh and one read from
+/// here are the same tree, which is what makes it a cache and not state; it
+/// compares equal to any other for that reason, and a clone may keep or drop
+/// it without changing a result.
+#[derive(Clone, Default)]
+pub struct ParseCache {
+    last: Option<(&'static str, String, tree_sitter::Tree)>,
+}
+
+impl ParseCache {
+    pub(super) fn tree_for(
+        &self,
+        grammar: &'static str,
+        source: &str,
+    ) -> Option<tree_sitter::Tree> {
+        self.last
+            .as_ref()
+            .filter(|(cached, text, _)| *cached == grammar && text == source)
+            .map(|(_, _, tree)| tree.clone())
+    }
+
+    fn store(&mut self, grammar: &'static str, source: &str, tree: &tree_sitter::Tree) {
+        self.last = Some((grammar, source.to_string(), tree.clone()));
+    }
+}
+
+impl PartialEq for ParseCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for ParseCache {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ParseCache")
+    }
+}
+
+thread_local! {
+    /// One parser per grammar per thread. Building a parser and loading its
+    /// language was paid on every analysis before, twice.
+    static PARSERS: std::cell::RefCell<std::collections::HashMap<&'static str, tree_sitter::Parser>> =
+        std::cell::RefCell::default();
+}
+
+pub(super) fn parse_with(
+    grammar: &'static str,
+    source: &str,
+    old: Option<&tree_sitter::Tree>,
+) -> Option<tree_sitter::Tree> {
+    PARSERS.with(|parsers| {
+        let mut parsers = parsers.borrow_mut();
+        if !parsers.contains_key(grammar) {
+            let mut parser = tree_sitter::Parser::new();
+            parser.set_language(&parser_language(grammar)?).ok()?;
+            parsers.insert(grammar, parser);
+        }
+        parsers.get_mut(grammar)?.parse(source, old)
+    })
+}
+
+/// The one edit that turns `old` into `new`: the bytes both share at the start
+/// and at the end stay, and everything between is replaced. Cut at character
+/// boundaries, so a point never lands inside a multi-byte character. One
+/// string's boundary is the other's: past a shared prefix both hold the same
+/// lead byte, and valid UTF-8 gives both the same continuation bytes after it,
+/// and a shared suffix starts on the same byte in both.
+pub(super) fn input_edit(old: &str, new: &str) -> tree_sitter::InputEdit {
+    let prefix = old.floor_char_boundary(
+        old.bytes()
+            .zip(new.bytes())
+            .take_while(|(left, right)| left == right)
+            .count(),
+    );
+    let suffix = old.as_bytes()[prefix..]
+        .iter()
+        .rev()
+        .zip(new.as_bytes()[prefix..].iter().rev())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let suffix = old.len() - old.ceil_char_boundary(old.len() - suffix);
+    let point = |text: &str, byte: usize| {
+        let before = &text.as_bytes()[..byte];
+        let row = before.iter().filter(|&&byte| byte == b'\n').count();
+        let column = before
+            .iter()
+            .rposition(|&byte| byte == b'\n')
+            .map_or(byte, |newline| byte - newline - 1);
+        tree_sitter::Point::new(row, column)
+    };
+    tree_sitter::InputEdit {
+        start_byte: prefix,
+        old_end_byte: old.len() - suffix,
+        new_end_byte: new.len() - suffix,
+        start_position: point(old, prefix),
+        old_end_position: point(old, old.len() - suffix),
+        new_end_position: point(new, new.len() - suffix),
+    }
+}
+
+/// The grammar a language is parsed with, spelled as the static name the parser
+/// pool is keyed by.
+pub(super) fn grammar_key(language: &str) -> Option<&'static str> {
+    Some(match language {
+        "c" => "c",
+        "cpp" => "cpp",
+        "java" => "java",
+        "javascript" => "javascript",
+        "python" => "python",
+        _ => return None,
     })
 }
 
