@@ -150,14 +150,17 @@ pub fn report_response_schema() -> serde_json::Value {
         },
         "required": ["phase", "weakness", "impact", "frequency", "drill", "durationMin", "successCriterion", "selfReview"]
     });
+
+    // No `weaknessTags`: `apply_weakness_tags` derives the row from the plan
+    // and overwrote whatever the model wrote, so asking for it bought output
+    // tokens, each a repeated improvement, that nothing ever read.
     let assessment_row = serde_json::json!({
-        "type": "OBJECT", "propertyOrdering": ["phase", "score", "weaknessTags"],
+        "type": "OBJECT", "propertyOrdering": ["phase", "score"],
         "properties": {
             "phase": { "type": "STRING", "enum": IMPROVEMENT_PHASES },
-            "score": { "type": "INTEGER", "minimum": 0, "maximum": 100, "nullable": true },
-            "weaknessTags": strings(0, MAX_WEAKNESS_TAGS as u32)
+            "score": { "type": "INTEGER", "minimum": 0, "maximum": 100, "nullable": true }
         },
-        "required": ["phase", "score", "weaknessTags"]
+        "required": ["phase", "score"]
     });
     serde_json::json!({
         "type": "OBJECT",
@@ -214,6 +217,8 @@ pub fn validate_report_candidate(
     raw: &serde_json::Value,
     problem: &Problem,
 ) -> Result<serde_json::Value, Vec<String>> {
+    let snapped = snap_plan_weaknesses(raw);
+    let raw = &snapped;
     let mut errors = Vec::new();
     let Some(object) = raw.as_object() else {
         return Err(vec!["$: expected object".to_string()]);
@@ -414,13 +419,7 @@ fn visit_strings(value: &serde_json::Value, path: &str, visit: &mut impl FnMut(&
 /// last.
 ///
 /// The counterpart copy, `improvementPlan[].weakness` against the feedback
-/// improvements, stays the model's to get right. It is the only one of the
-/// three that is a mapping rather than a projection, and the cheap way to kill
-/// it, referencing improvements by index, changes the response schema and so
-/// the contract bundle. A bundle bump makes `sanitizeReport` refuse every
-/// report already in a candidate's history: no scores, no plan, "cannot be
-/// scored by this version". That is not worth paying to spare the repair pass a
-/// call it recovers from.
+/// improvements, stays the model's to write; see `snap_plan_weaknesses`.
 fn apply_weakness_tags(report: &mut serde_json::Value) {
     let tags = |phase: &str| {
         report
@@ -446,6 +445,57 @@ fn apply_weakness_tags(report: &mut serde_json::Value) {
             row.insert("weaknessTags".to_string(), serde_json::Value::Array(tags));
         }
     }
+}
+
+/// Each plan weakness that differs from exactly one feedback improvement only
+/// in case, spacing or a closing full stop, rewritten to that improvement.
+///
+/// The plan item is a mapping the model makes, one per improvement, and a
+/// copy that changed nothing but the capitals or a trailing period was a
+/// rejected report and a whole repair call. Referencing improvements by index
+/// instead would spare the copy, but a wrong index is a plan item silently
+/// attached to someone else's weakness, where a wrong copy is refused and
+/// repaired; so the copy stays, and only what cannot change its meaning is
+/// forgiven. A match against two improvements, or a paraphrase, is left for
+/// validation to refuse.
+fn snap_plan_weaknesses(raw: &serde_json::Value) -> serde_json::Value {
+    let normal = |text: &str| {
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim_end_matches('.')
+            .to_lowercase()
+    };
+    let improvements = ["codingFeedback", "communicationFeedback"]
+        .iter()
+        .filter_map(|key| raw.get(*key)?.get("improvements")?.as_array())
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    let mut snapped = raw.clone();
+    let Some(items) = snapped
+        .get_mut("improvementPlan")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return snapped;
+    };
+    for item in items {
+        let Some(weakness) = item.get("weakness").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if improvements.contains(&weakness.trim()) {
+            continue;
+        }
+        let matches = improvements
+            .iter()
+            .filter(|improvement| normal(improvement) == normal(weakness))
+            .collect::<Vec<_>>();
+        if let [only] = matches.as_slice() {
+            item["weakness"] = serde_json::Value::String(only.to_string());
+        }
+    }
+    snapped
 }
 
 /// Plan order is presentation, not judgment: the same items in the wrong
@@ -819,12 +869,17 @@ fn validate_framework_assessment(value: Option<&serde_json::Value>, errors: &mut
             continue;
         };
 
-        // `weaknessTags` is required here because the response schema asks for
-        // it and a response answering a different shape is not the one that was
-        // ordered. Its contents are not checked: `apply_weakness_tags`
-        // overwrites the row from the plan, so a rule on it would be judging a
-        // value nothing downstream ever sees.
-        exact_keys(row, &["phase", "score", "weaknessTags"], &path, errors);
+        // `weaknessTags` is allowed and never required: the response schema no
+        // longer asks for it, and a report this validated once carries the tags
+        // `apply_weakness_tags` wrote, which is the shape `final_report` hands
+        // back here. Its contents are not checked, since that function
+        // overwrites them from the plan.
+        let row = row
+            .iter()
+            .filter(|(key, _)| key.as_str() != "weaknessTags")
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<serde_json::Map<_, _>>();
+        exact_keys(&row, &["phase", "score"], &path, errors);
         if row.get("phase").and_then(serde_json::Value::as_str) != Some(*expected_phase) {
             errors.push(format!("{path}.phase: expected {expected_phase}"));
         }

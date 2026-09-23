@@ -100,25 +100,15 @@
                 "minimum": 0,
                 "nullable": true,
                 "type": "INTEGER"
-              },
-              "weaknessTags": {
-                "items": {
-                  "type": "STRING"
-                },
-                "maxItems": 4,
-                "minItems": 0,
-                "type": "ARRAY"
               }
             },
             "propertyOrdering": [
               "phase",
-              "score",
-              "weaknessTags"
+              "score"
             ],
             "required": [
               "phase",
-              "score",
-              "weaknessTags"
+              "score"
             ],
             "type": "OBJECT"
           },

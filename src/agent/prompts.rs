@@ -1189,8 +1189,7 @@ impact (high, medium or low), frequency (a positive count of observations in
 this session), drill, durationMin (1-30), successCriterion and selfReview; and
 frameworkAssessment with rubricVersion {rubric_version} and one phase entry each
 for Repeat, Example, Algorithm, Coding, Test, Optimizations, Situation, Task,
-Action and Result in that order, each with a score (integer 0-100 or null) and
-weaknessTags.
+Action and Result in that order, each with a score (integer 0-100 or null).
 Each strengths/improvements list must contain 2 to 4 concrete, specific items
 grounded in the rolling assessment, the transcript, and the code, never generic
 filler, and no item may repeat another in the same list. A session with little to praise still holds two
@@ -1203,8 +1202,7 @@ For `improvementPlan`, take every string in `codingFeedback.improvements` and
 plan holds exactly as many items as those two lists hold between them. Copy the
 improvement into `weakness` character for character: a paraphrase, a merge of
 two, or an improvement left without an item is a rejected report. Never add
-advice that is not one of those strings, and never repeat one. Sort high
-impact before medium before low, then higher observed frequency first. Choose from
+advice that is not one of those strings, and never repeat one. Choose from
 these small drills where applicable: problem restatement, edge-case enumeration,
 complexity narration, test-table construction, a 60-second STAR response,
 personal-contribution rewrite, or truthful metric mining. Every drill needs a
@@ -1226,9 +1224,7 @@ assessed phase: 90–100 = complete, precise, and independent; 75–89 = sound w
 minor gap; 60–74 = partially demonstrated with a material gap; 40–59 = weak or
 substantially incomplete; 0–39 = directly observed incorrect or missing despite a
 clear opportunity. A zero is observed performance, never a substitute for `null`.
-Weakness tags must be copied character for character from the `weakness` of an
-`improvementPlan` item whose `phase` is this phase; where no plan item names this
-phase, the list is empty. Evidence confidence is not
+Evidence confidence is not
 performance and must never become a phase score."#
     )
 }
