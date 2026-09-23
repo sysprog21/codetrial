@@ -787,8 +787,7 @@ const NO_SPEECH: &str = "(no speech was captured)";
 /// The heading both prompts that carry the ledger put above it. One constant,
 /// because the interim review and the report each spelled it out and an edit to
 /// one would have left the other saying something else.
-const SESSION_EVIDENCE_HEADING: &str =
-    "DETERMINISTIC SESSION EVIDENCE (server-derived metadata, not candidate prose):";
+const SESSION_EVIDENCE_HEADING: &str = "DETERMINISTIC SESSION EVIDENCE (server-derived metadata; browser claims are labeled unverified):";
 
 pub fn wrap_up(reason: &str) -> String {
     let why = match reason {

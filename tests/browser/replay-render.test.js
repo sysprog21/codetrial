@@ -523,7 +523,7 @@ test("the report card this page renders names no finding either", () => {
     said,
     new Set([
       "(.md)", "(Sxlang)", "(editor", "(none", "-", "/", "0", "01:05", "1", "10",
-      "100", "15", "2", "2.", "2;", "3", "37", "7", "70", "8", "95%",
+      "100", "16", "2", "2.", "2;", "3", "37", "7", "70", "8", "95%",
       "Approach", "Chain", "CodeTrial.", "Coding", "Committee", "Common",
       "Communication", "Contract", "Done", "Download", "Evidence",
       "FACE_MISSING", "Follow-ups", "Framework", "Given:", "HIRE", "Held",

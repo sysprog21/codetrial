@@ -1065,7 +1065,10 @@ fn unobserved_diagnostic_categories_are_not_reported_as_zero() {
         }),
     );
     let slice = ledger.prompt_view(None);
-    assert!(slice.contains("diagnostics: other 1"), "{slice}");
+    assert!(
+        slice.contains("diagnostics: browser-reported claims (unverified): other 1"),
+        "{slice}"
+    );
 
     // The browser half never names these, so a written-out zero would be a
     // claim about something nothing measured.
@@ -1108,7 +1111,10 @@ fn a_large_paste_does_not_evict_the_session_from_the_prompt() {
 
     // The session before the paste is still what the view reports: it states
     // aggregates, so there is no list of entries for one edit to push out.
-    assert!(slice.contains("tests: 1 of 2 passing"), "{slice}");
+    assert!(
+        slice.contains("tests: browser-reported claims (unverified): 1 of 2 passing"),
+        "{slice}"
+    );
     assert!(!slice.contains("changed_nodes") && !slice.contains("changedNodes"));
     assert!(
         !slice.contains("identifier:"),
@@ -3029,6 +3035,46 @@ fn failing_run(passed: u32) -> serde_json::Value {
     })
 }
 
+#[test]
+fn test_claims_keep_browser_provenance_in_every_prompt_view() {
+    let mut ledger = EvidenceLedger::default();
+    for (index, passed) in [1, 3, 0].into_iter().enumerate() {
+        ledger.record_test(
+            None,
+            index as u64 + 1,
+            &serde_json::json!({
+                "passed": passed, "total": 3, "language": "python",
+                "diagnostic": { "category": "syntax" }
+            }),
+        );
+        for since in [None, Some(0)] {
+            let view = ledger.prompt_view(since);
+            let tests = view
+                .lines()
+                .find(|line| line.starts_with("tests:"))
+                .unwrap();
+            assert!(
+                tests.starts_with("tests: browser-reported claims (unverified): "),
+                "{view}"
+            );
+            assert!(tests.contains(&format!("{passed} of 3 passing")), "{view}");
+            if index > 0 {
+                assert!(tests.contains("since the run before"), "{view}");
+            }
+            assert!(
+                view.contains("diagnostics: browser-reported claims (unverified): syntax"),
+                "{view}"
+            );
+            if since.is_some() {
+                assert!(
+                    view.contains(&format!("{} browser-reported test runs", index + 1)),
+                    "{view}"
+                );
+            }
+        }
+    }
+}
+
 /// An empty ledger says so in three lines and no more: every other line has
 /// nothing to say yet.
 #[test]
@@ -3049,7 +3095,9 @@ fn the_test_line_states_differences_only_against_an_earlier_run() {
     ledger.record_test(Some(1), 1_000, &failing_run(1));
     let first = ledger.prompt_view(None);
     assert!(
-        first.contains("tests: 1 of 3 passing, 0 edit-and-run"),
+        first.contains(
+            "tests: browser-reported claims (unverified): 1 of 3 passing, 0 edit-and-run"
+        ),
         "{first}"
     );
     assert!(!first.contains("runs in a row"), "{first}");
@@ -3137,7 +3185,7 @@ fn hints_and_what_arrived_since_are_counted() {
     let delta = ledger.prompt_view(Some(since));
     assert!(
         delta.ends_with(
-            "since the last event like this: 0 editor updates (0 changed the program), 0 test runs, 2 hints, 3 turns"
+            "since the last event like this: 0 editor updates (0 changed the program), 0 browser-reported test runs, 2 hints, 3 turns"
         ),
         "{delta}"
     );

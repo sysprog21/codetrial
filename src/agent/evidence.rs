@@ -513,6 +513,7 @@ impl EvidenceLedger {
             out.push_str("not run");
         } else {
             let tests = &self.tests;
+            out.push_str("browser-reported claims (unverified): ");
             let _ = write!(out, "{} of {} passing", tests.passed, tests.total);
 
             // Differences in the counts, which can be negative, and only
@@ -564,7 +565,11 @@ impl EvidenceLedger {
         .map(|(name, count)| format!("{name} {count}"))
         .collect::<Vec<_>>();
         if !counted.is_empty() {
-            let _ = write!(out, "\ndiagnostics: {}", counted.join(", "));
+            let _ = write!(
+                out,
+                "\ndiagnostics: browser-reported claims (unverified): {}",
+                counted.join(", ")
+            );
         }
 
         if let (Some(meaningful), Some(latest)) = (
@@ -649,7 +654,7 @@ impl EvidenceLedger {
             }
             let _ = write!(
                 out,
-                "\nsince the last event like this: {updates} editor updates ({changes} changed the program), {runs} test runs, {hints} hints, {turns} turns"
+                "\nsince the last event like this: {updates} editor updates ({changes} changed the program), {runs} browser-reported test runs, {hints} hints, {turns} turns"
             );
         }
         out
