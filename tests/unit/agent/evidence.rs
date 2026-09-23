@@ -1073,9 +1073,9 @@ fn a_large_paste_does_not_evict_the_session_from_the_prompt() {
         );
     }
 
-    // A solution pasted over the template changes dozens of node kinds at once,
-    // and the list is carried twice: once in `code.last_analysis` and once in
-    // the entry. Uncapped, one such edit spent the whole budget.
+    // A solution pasted over the template changes dozens of node kinds at once.
+    // The projection carries none of them now, and the ledger, which keeps them
+    // twice (in `code.last_analysis` and in the entry), caps them.
     let pasted = (0..40)
         .map(|index| {
             format!(
@@ -1097,9 +1097,8 @@ fn a_large_paste_does_not_evict_the_session_from_the_prompt() {
     let projection: serde_json::Value = serde_json::from_str(&slice).unwrap();
     let entries = projection["entries"].as_array().unwrap().len();
     assert!(entries >= 8, "{entries} entries survived the paste");
-    let facts = projection["code"]["last_analysis"]["changed_nodes"]
-        .as_array()
-        .unwrap();
+    assert!(!slice.contains("changed_nodes") && !slice.contains("changedNodes"));
+    let facts = &ledger.code.last_analysis.as_ref().unwrap().changed_nodes;
     assert_eq!(facts.len(), 13);
 
     // The cap keeps twelve and says how many it dropped. The number is the

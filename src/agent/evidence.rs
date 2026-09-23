@@ -13,10 +13,10 @@ const MAX_PROMPT_ENTRIES: usize = 24;
 const MAX_PROMPT_BYTES: usize = 6_000;
 const MAX_CONVERSATION_SEQUENCE: usize = 16;
 const MAX_CODE_DIGEST_HISTORY: usize = 16;
-/// How many changed node kinds one edit may put in front of the model. A paste
-/// over the template changes dozens of kinds at once, and the list is carried
-/// twice, in `code.last_analysis` and in the entry, so an uncapped one spends
-/// the prompt budget on a single edit and evicts the rest of the session.
+/// How many changed node kinds one edit may record. A paste over the template
+/// changes dozens of kinds at once, and the list is kept twice, in
+/// `code.last_analysis` and in the entry. The projection no longer carries it,
+/// but the ledger and its replay still do.
 const MAX_CHANGED_NODE_FACTS: usize = 12;
 /// Qualifies a node kind that was found inside a closure, so that the facts can
 /// tell a lambda's parameter list from the enclosing function's. Both are
@@ -68,6 +68,37 @@ pub enum CodeChangeClass {
     ControlFlow,
     DataStructure,
     FunctionInterface,
+}
+
+impl CodeChangeClass {
+    /// What the model is told: whether the edit was layout, a comment, only
+    /// identifiers, or the code itself: distinctions the review gate and the
+    /// parse can back, where the finer class is a heuristic.
+    pub(crate) fn coarse(&self) -> &'static str {
+        match self {
+            Self::FormattingOnly => "formatting",
+            Self::CommentOnly => "comment",
+            Self::IdentifierOnly => "identifier",
+            Self::Expression
+            | Self::ControlFlow
+            | Self::DataStructure
+            | Self::FunctionInterface => "code",
+        }
+    }
+}
+
+/// Replaces a serialized analysis's class with its coarse word and drops its
+/// node facts. A `null` analysis, or one that never classified, is left alone.
+fn coarsen(analysis: &mut serde_json::Value, nodes: &str) {
+    let Some(fields) = analysis.as_object_mut() else {
+        return;
+    };
+    fields.remove(nodes);
+    if let Some(class) = fields.get_mut("classification")
+        && let Ok(fine) = CodeChangeClass::deserialize(&*class)
+    {
+        *class = fine.coarse().into();
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -422,33 +453,50 @@ impl EvidenceLedger {
     ///
     /// The loop drops entries oldest-first, so the bound holds only if what is
     /// left once the entries run out is smaller than the budget. Everything in
-    /// that remainder is capped at a constant: the digest history, the changed
-    /// node facts, the recent sequence, and the two digests. `changed_nodes`
-    /// was the one that was not, and a solution pasted over the template put
-    /// fifty node kinds in the projection twice over and evicted the session
-    /// that explains it.
+    /// that remainder is capped at a constant: the digest history, the recent
+    /// sequence, and the two digests.
+    ///
+    /// A code change reaches the model as [`CodeChangeClass::coarse`] and no
+    /// node facts. The fine class is a heuristic over grammar node kinds, and
+    /// it read an off-by-one as several edits and an `enumerate` rewrite as a
+    /// new data structure; the ledger keeps it for replay, but a wrong class
+    /// here is wrong evidence the interviewer reads, and nothing has shown the
+    /// finer one helps it.
     pub(crate) fn prompt_slice(&self) -> String {
         let oldest = self.entries.len().saturating_sub(MAX_PROMPT_ENTRIES);
-        for first in oldest..self.entries.len() {
-            let rendered = self.render_prompt(first);
+        let entries = self.entries[oldest..]
+            .iter()
+            .map(|entry| {
+                let mut value = serde_json::to_value(entry).expect("evidence entry serializes");
+                if entry.family == ObservationFamily::Code {
+                    coarsen(&mut value["observation"], "changedNodes");
+                }
+                value
+            })
+            .collect::<Vec<_>>();
+        let mut code = serde_json::to_value(&self.code).expect("code state serializes");
+        coarsen(&mut code["last_analysis"], "changed_nodes");
+
+        for first in 0..entries.len() {
+            let rendered = self.render_prompt(&entries[first..], &code);
             if rendered.len() <= MAX_PROMPT_BYTES {
                 return rendered;
             }
         }
 
         // Every entry dropped and it still has to render, so the budget rests
-        // on what is left: the digest history, the changed node facts, the
-        // recent sequence and the two digests, each capped at a constant. A
-        // walk that could only stop once it was under the budget would have
-        // nothing to stop on if that ever stopped being true.
-        self.render_prompt(self.entries.len())
+        // on what is left: the digest history, the recent sequence and the two
+        // digests, each capped at a constant. A walk that could only stop once
+        // it was under the budget would have nothing to stop on if that ever
+        // stopped being true.
+        self.render_prompt(&[], &code)
     }
 
-    fn render_prompt(&self, first: usize) -> String {
+    fn render_prompt(&self, entries: &[serde_json::Value], code: &serde_json::Value) -> String {
         let value = serde_json::json!({
             "version": self.version,
-            "entries": &self.entries[first..],
-            "code": &self.code,
+            "entries": entries,
+            "code": code,
             "tests": &self.tests,
             "diagnostics": &self.diagnostics,
             "progress": &self.progress,

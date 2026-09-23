@@ -47,6 +47,13 @@ control-flow edit even though no loop was added: the binding is compared by node
 kind alone, so renaming the loop variable stays a rename. Kinds outside the
 three categories are an expression edit however many of them moved.
 
+The model is told less than the ledger records. A code change reaches the
+projection as a coarse class, `formatting`, `comment`, `identifier` or `code`,
+with no node facts. The finer class is a heuristic over grammar node kinds and
+the ledger keeps it for replay, but the review gate turns only on whether an
+edit was layout or a comment, and nothing yet shows the finer class helps the
+interviewer rather than misleading it when it is wrong.
+
 An edit that repairs a buffer that did not parse is a semantic change even when
 there is nothing to diff it against. The pairwise analysis reports
 `syntax_invalid` when either side fails to parse, so the repair is recovered
