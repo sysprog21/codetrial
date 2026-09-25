@@ -208,11 +208,11 @@ reads them.
 ## Checks outside the gate
 
 Whether the interviewer actually follows the live prompt, rather than whether
-the prompt says the right things, needs a Gemini key. The check scripts a
-candidate through three problems against a text model given the same
-instructions, greeting and tools, and fails on a named source, a volunteered
-limit, an unanswered size question, or a hint that goes past the rung it was
-served:
+the prompt says the right things, needs a Gemini key or a local model. The
+check scripts a candidate through three problems against a text model given
+the same instructions, greeting and tools, and fails on a named source, a
+volunteered limit, an unanswered size question, or a hint that goes past the
+rung it was served:
 
 ```bash
 scripts/interview-behavior-check.sh
@@ -221,6 +221,15 @@ BEHAVIOR_PROBLEMS=3sum,lru-cache scripts/interview-behavior-check.sh
 
 A free key allows fifteen requests a minute, so the check waits out rate
 limits; three problems take about two minutes.
+
+Against a local model, point it at `scripts/gemini-shim.py` the way the report
+is pointed. The key is still read but goes no further than the shim, which
+ignores it, so any non-empty value does when the config file has none:
+
+```bash
+CODETRIAL_GEMINI_REST_BASE=http://127.0.0.1:8090 GOOGLE_API_KEY=local \
+    scripts/interview-behavior-check.sh
+```
 
 The end-to-end browser check additionally needs Playwright and Chromium:
 

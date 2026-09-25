@@ -273,6 +273,7 @@ unittest_gate()
 }
 
 gate gen-problems-tests unittest_gate "$ROOT/tests/test_gen_problems.py"
+gate gemini-shim-tests unittest_gate "$ROOT/tests/test_gemini_shim.py"
 gate gen-problem-cards python3 "$ROOT/scripts/gen-problem-cards.py" --check
 gate wire-fixtures node "$ROOT/scripts/gen-wire-fixtures.mjs" --check
 gate recording-fixtures node "$ROOT/scripts/gen-recording-fixtures.mjs" --check

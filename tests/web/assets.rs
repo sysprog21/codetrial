@@ -401,6 +401,22 @@ async fn static_server_serves_health_fixture_and_missing_asset() {
 
 #[tokio::test]
 async fn runtime_config_can_disable_compiled_language_runs() {
+    // Whichever deadline this process's environment selects: a run with
+    // CODETRIAL_GEMINI_REST_BASE set is told the local wait, and that is right.
+    // Without it the hosted wait is pinned exactly, which is also what catches
+    // a `report_endpoint_is_local` that answers true for Google.
+    let escape_wait_ms =
+        codetrial::livekit::report_escape_wait(codetrial::livekit::report_timeout()).as_millis();
+    let base_set =
+        std::env::var("CODETRIAL_GEMINI_REST_BASE").is_ok_and(|base| !base.trim().is_empty());
+    if base_set {
+        assert!(
+            matches!(escape_wait_ms, 135_000 | 250_000),
+            "{escape_wait_ms}"
+        );
+    } else {
+        assert_eq!(escape_wait_ms, 135_000);
+    }
     let (enabled_base, enabled_server) = spawn_web_server(web_config()).await;
     let client = reqwest::Client::new();
 
@@ -417,7 +433,9 @@ async fn runtime_config_can_disable_compiled_language_runs() {
     assert_eq!(enabled.headers().get("cache-control").unwrap(), "no-store");
     assert_eq!(
         enabled.text().await.unwrap(),
-        "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = true;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"https://godbolt.org\";\nglobalThis.CODETRIAL_RECORDING_ENABLED = false;\nglobalThis.CODETRIAL_CONSENT_VERSION = \"2026-08-21\";\nglobalThis.CODETRIAL_REPLAY_VERSION = 1;\n"
+        format!(
+            "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = true;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"https://godbolt.org\";\nglobalThis.CODETRIAL_RECORDING_ENABLED = false;\nglobalThis.CODETRIAL_CONSENT_VERSION = \"2026-08-21\";\nglobalThis.CODETRIAL_REPLAY_VERSION = 1;\nglobalThis.CODETRIAL_REPORT_ESCAPE_WAIT_MS = {escape_wait_ms};\n"
+        )
     );
     enabled_server.abort();
 
@@ -432,7 +450,9 @@ async fn runtime_config_can_disable_compiled_language_runs() {
     assert_eq!(disabled.status(), 200);
     assert_eq!(
         disabled.text().await.unwrap(),
-        "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = false;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"\";\nglobalThis.CODETRIAL_RECORDING_ENABLED = false;\nglobalThis.CODETRIAL_CONSENT_VERSION = \"2026-08-21\";\nglobalThis.CODETRIAL_REPLAY_VERSION = 1;\n"
+        format!(
+            "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = false;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"\";\nglobalThis.CODETRIAL_RECORDING_ENABLED = false;\nglobalThis.CODETRIAL_CONSENT_VERSION = \"2026-08-21\";\nglobalThis.CODETRIAL_REPLAY_VERSION = 1;\nglobalThis.CODETRIAL_REPORT_ESCAPE_WAIT_MS = {escape_wait_ms};\n"
+        )
     );
     disabled_server.abort();
 

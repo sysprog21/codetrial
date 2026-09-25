@@ -2277,6 +2277,47 @@ fn binary_web_does_not_require_github_oauth_config() {
     assert!(response.contains(r#""loginRequired":true"#), "{response}");
 }
 
+/// The report base is read from the process environment once, so the only way
+/// to see a process that has one is to start one. What the page is told to
+/// wait is where the choice of deadline shows: the local 240-second report, 8
+/// of wrap-up and 2 for the packet, against 135 seconds for Gemini. The
+/// trailing slash is what an operator pastes, and the base must still count as
+/// set, not as blank.
+#[test]
+fn binary_web_gives_a_local_report_base_the_longer_wait() {
+    let dir = temp_path("local-report-base");
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("codetrial.env.local");
+    std::fs::write(
+        &config,
+        format!(
+            "LIVEKIT_URL=wss://example\nLIVEKIT_API_KEY=key\nLIVEKIT_API_SECRET=secret\nCODETRIAL_DB_PATH={}/accounts.db\n",
+            dir.display()
+        ),
+    )
+    .unwrap();
+
+    let (addr, _server) = spawn_server(|addr| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_codetrial"));
+        command
+            .args(["web", "--web-addr", addr, "--config"])
+            .arg(config.to_str().unwrap())
+            .env("CODETRIAL_GEMINI_REST_BASE", "http://127.0.0.1:9/");
+        command
+    });
+    let response = http_request(
+        &addr,
+        "GET /runtime-config.js HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(
+        response.contains("globalThis.CODETRIAL_REPORT_ESCAPE_WAIT_MS = 250000;"),
+        "{response}"
+    );
+}
+
 #[test]
 fn binary_web_reports_bind_failure_after_config_validation() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("occupied port should bind");

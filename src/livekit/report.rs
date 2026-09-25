@@ -16,7 +16,7 @@ use crate::agent::{
 use crate::gemini::{generate_report, redact_api_key};
 use crate::runtime::{RuntimeBootstrap, TOPIC_REPORT};
 
-use super::{REPORT_TIMEOUT, browser_packet};
+use super::{browser_packet, report_timeout};
 
 pub(super) async fn publish_report(
     room: &Room,
@@ -40,7 +40,7 @@ async fn report_packet(
     api_key: &str,
 ) -> Result<DataPacket, Box<dyn std::error::Error + Send + Sync>> {
     let mut report = match tokio::time::timeout(
-        REPORT_TIMEOUT,
+        report_timeout(),
         generate_report(
             api_key,
             boot.report_model,

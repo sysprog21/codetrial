@@ -1461,25 +1461,37 @@ fn observer_is_not_the_candidate() {
 #[test]
 fn the_browser_escape_hatch_outlasts_the_report_deadline() {
     let page = std::fs::read_to_string("web/interview.js").expect("the page is readable");
-    let declaration = "const REPORT_ESCAPE_WAIT_MS = ";
+    let declaration = "const DEFAULT_REPORT_ESCAPE_WAIT_MS = ";
     let start = page
         .find(declaration)
-        .expect("web/interview.js declares REPORT_ESCAPE_WAIT_MS")
+        .expect("web/interview.js declares DEFAULT_REPORT_ESCAPE_WAIT_MS")
         + declaration.len();
     let rest = &page[start..];
     let end = rest.find(';').expect("the declaration ends in a semicolon");
-    let wait = Duration::from_millis(
+    let default = Duration::from_millis(
         rest[..end]
             .trim()
             .parse()
-            .expect("REPORT_ESCAPE_WAIT_MS is a number"),
+            .expect("DEFAULT_REPORT_ESCAPE_WAIT_MS is a number"),
     );
 
+    // The page's own default covers the hosted deadline, so a page that never
+    // got its runtime config still waits long enough for Gemini.
     assert!(
-        wait >= REPORT_TIMEOUT + WRAP_UP_WAIT,
+        default >= REPORT_TIMEOUT + WRAP_UP_WAIT,
         "a report bounded at {REPORT_TIMEOUT:?} after a {WRAP_UP_WAIT:?} wrap-up cannot land \
-         before the page offers to leave at {wait:?}"
+         before the page offers to leave at {default:?}"
     );
+
+    // And what the server sends in its place covers whichever deadline is in
+    // force, local included.
+    for deadline in [REPORT_TIMEOUT, LOCAL_REPORT_TIMEOUT] {
+        let wait = report_escape_wait(deadline);
+        assert!(
+            wait >= deadline + WRAP_UP_WAIT,
+            "a report bounded at {deadline:?} cannot land before the page offers to leave at {wait:?}"
+        );
+    }
 }
 
 /// Each pause reads the stretch since the last one, and never that stretch

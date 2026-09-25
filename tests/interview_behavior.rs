@@ -22,7 +22,7 @@ use codetrial::agent::{
     build_instructions_for_plan, find_problem, get_problem, greeting, log_hint_text,
     names_published_problem,
 };
-use codetrial::gemini::{GeminiFunctionCall, live_tool_declarations};
+use codetrial::gemini::{GeminiFunctionCall, gemini_generate_content_url, live_tool_declarations};
 use codetrial::livekit::execute_tool_call;
 use codetrial::runtime::TOOL_LOG_HINT;
 use serde_json::{Value, json};
@@ -261,10 +261,9 @@ impl Conversation {
         for _ in 0..8 {
             let response: Value = self
                 .client
-                .post(format!(
-                    "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-                    self.model
-                ))
+                // The production URL, so `CODETRIAL_GEMINI_REST_BASE` points
+                // this at a local model the same way it points the report.
+                .post(gemini_generate_content_url(&self.model))
                 .header("x-goog-api-key", &self.key)
                 .json(&json!({
                     "systemInstruction": { "parts": [{ "text": self.instructions }] },

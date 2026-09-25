@@ -159,7 +159,8 @@ actually goes are in [docs/development.md](docs/development.md).
 ## Configuration
 
 `config/codetrial.env.example` documents the variables that belong in a config
-file; `NODE_ENV` and `INTERVIEW_ROOM_NAME` are set in the environment instead.
+file; `NODE_ENV`, `INTERVIEW_ROOM_NAME` and `CODETRIAL_GEMINI_REST_BASE` are set
+in the environment instead.
 The common ones:
 
 | Variable | Default | Purpose |
@@ -192,6 +193,22 @@ save.
 
 Serving more than one LiveKit project from one deployment is in
 [docs/providers.md](docs/providers.md).
+
+The report and the quiet-pause reviews can be written by a model on your own
+hardware instead. Point `CODETRIAL_GEMINI_REST_BASE` at a server that answers
+Gemini's `generateContent`, such as `scripts/gemini-shim.py` in front of
+llama.cpp's `llama-server`; the shim's docstring has the commands. The live
+interviewer still talks to Gemini. Any base other than Google's gets longer
+report deadlines, 45 seconds a call and 240 in all instead of 20 and 125, since
+a 12B model on one 16 GB GPU takes 14 to 32 seconds per report.
+
+The shim carries function calls too, so the interviewer behaviour check in
+[docs/development.md](docs/development.md#checks-outside-the-gate) runs against
+the same base. With Gemma 4, start it with `--thinking off`. That check names no
+thinking budget, and with thinking on gemma-4-12b sometimes repeated itself to
+the output limit or put its reasoning in the reply. With it off the check
+passed 18 of 21 problem runs across seven runs, about 24 seconds a run against
+240; each miss was a second hint request answered without calling `log_hint`.
 
 ## Recording
 
