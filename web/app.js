@@ -45,6 +45,7 @@ const nodes = {
   deleteReports: document.querySelector("#delete-reports"),
   reportDeleteStatus: document.querySelector("#report-delete-status"),
   recommendation: document.querySelector("#recommendation"),
+  randomProblem: document.querySelector("#random-problem"),
   practiceFocus: document.querySelector("#practice-focus"),
   practiceFocusShare: document.querySelector("#practice-focus-share"),
   practiceFocusShareInput: document.querySelector("#practice-focus-share-input"),
@@ -124,9 +125,16 @@ for (const card of cards) {
     manualProblem = true;
     setProblem(card);
     setDuration(suggestedDuration(new Set([card.difficulty])));
-    nodes.recommendation.textContent = `Selected: ${title(card)}.`;
+    nodes.recommendation.textContent = `Selected problem: ${title(card)}.`;
   });
 }
+
+nodes.randomProblem.addEventListener("click", () => {
+  if (!historyReady) return;
+  manualProblem = false;
+  roll = Math.random();
+  recommend();
+});
 
 for (const input of levels) {
   input.addEventListener("change", () => {
@@ -343,6 +351,7 @@ window.addEventListener("pageshow", (event) => {
   // `starting` with it: the page came back, so whatever start was on its way
   // out did not happen, and a latch left set here disables the button for good.
   historyReady = false;
+  nodes.randomProblem.disabled = true;
   starting = false;
   start.disabled = true;
   nodes.deleteReports.disabled = true;
@@ -392,6 +401,7 @@ loadAccount().finally(settle);
 /// the page had already replaced.
 function settle() {
   historyReady = true;
+  nodes.randomProblem.disabled = false;
   // The level suggestion only applies when the candidate has not already said
   // what they want. Moving their checkboxes would also hide the card they just
   // picked.
@@ -591,12 +601,12 @@ function recommend(note = "") {
       : ` (${choice.picked.difficulty})`;
     const days = choice.review.intervalDays;
     nodes.recommendation.textContent =
-      `${note}Review due after ${days} day${days === 1 ? "" : "s"}${level}: ${title(choice.picked)}.`;
+      `${note}Selected problem: ${title(choice.picked)}. Review due after ${days} day${days === 1 ? "" : "s"}${level}.`;
     return;
   }
   nodes.recommendation.textContent = choice.repeat
-    ? `${note}You have passed every problem at this level. Recommended again: ${title(choice.picked)}.`
-    : `${note}Recommended: ${title(choice.picked)}.`;
+    ? `${note}Selected problem: ${title(choice.picked)}. You have passed every problem at this level.`
+    : `${note}Selected problem: ${title(choice.picked)}.`;
 }
 
 /// Read off `reports` alone, so it is rendered wherever those change: the two
@@ -801,7 +811,7 @@ function renderAttemptHistory(attempts) {
       card.button.hidden = false;
       setProblem(card);
       setDuration(suggestedDuration(new Set([card.difficulty])));
-      nodes.recommendation.textContent = `Selected: ${title(card)}.`;
+      nodes.recommendation.textContent = `Selected problem: ${title(card)}.`;
     });
     item.append(label, open, retry);
     nodes.attemptHistory.append(item);

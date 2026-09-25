@@ -135,6 +135,7 @@ p {
 }
 
 .difficulty-row,
+.random-picker,
 .problem-picker {
   margin-top: 1.5rem;
 }
@@ -171,6 +172,11 @@ p {
 .recommendation {
   color: var(--ink);
   font-weight: 700;
+}
+
+.random-picker .recommendation {
+  margin-top: 0.75rem;
+  padding-left: 1rem;
 }
 
 .problem-picker .problem-grid {
@@ -245,6 +251,7 @@ p {
 }
 
 .duration-button,
+#random-problem,
 .start-button {
   border: 1px solid var(--hairline);
   cursor: pointer;
@@ -254,7 +261,8 @@ p {
     border-color 120ms ease;
 }
 
-.duration-button {
+.duration-button,
+#random-problem {
   border-radius: 999px;
   padding: 0.5rem 1rem;
   background: var(--surface);
@@ -262,6 +270,7 @@ p {
 }
 
 .duration-button:hover,
+#random-problem:hover,
 .duration-button.selected {
   border-color: var(--accent);
 }
@@ -312,7 +321,8 @@ p {
   background: var(--accent-deep);
 }
 
-.start-button:disabled {
+.start-button:disabled,
+#random-problem:disabled {
   opacity: 0.6;
 }
 

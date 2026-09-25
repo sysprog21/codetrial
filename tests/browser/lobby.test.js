@@ -265,7 +265,7 @@ const cardInfo = (page, id) =>
   }, id);
 
 lobbyTest(
-  "the lobby fits on one screen instead of a wall of problems",
+  "the lobby keeps the start control on screen with the problem grid collapsed",
   async (page) => {
     await lobby(page);
 
@@ -273,9 +273,10 @@ lobbyTest(
     // beside it. The option was dropped once already when this became a
     // `lobbyTest`, leaving an 800 written here and a 720 on screen.
     const { height } = page.viewportSize();
-    // The whole reason the picker collapsed. 150 cards made this about 7500.
+    // The footer may scroll below the new random-picker section; starting should not.
     const closed = await page.evaluate(() => document.body.scrollHeight);
-    assert.ok(closed <= height, `the lobby is ${closed}px tall, past one ${height}px screen`);
+    const start = await page.locator("#start").boundingBox();
+    assert.ok(start.y + start.height <= height, "starting an interview requires scrolling");
 
     // And the wall is still reachable, just not in the way.
     await page.click("details.problem-picker summary");
@@ -586,6 +587,49 @@ lobbyTest("choosing a problem by hand keeps the filter and the length the candid
   assert.equal(after.duration, "60", "picking a card discarded the length the candidate chose");
 });
 
+lobbyTest("Random problem restores automatic selection and can draw again", async (page) => {
+  await lobby(page);
+  await setLevel(page, "Hard", true);
+  await page.click('[data-duration="60"]');
+  await page.click("details.problem-picker summary");
+  await page.click(`[data-problem="${pageOf("candy")}"]`);
+  await page.evaluate(() => { Math.random = () => 0; });
+  await page.click("#random-problem");
+  const first = await snapshot(page);
+  const title = await page.locator(`[data-problem="${first.card}"] .problem-title`).textContent();
+  assert.equal(first.note, `Selected problem: ${title}.`);
+  assert.notEqual(first.card, pageOf("candy"));
+  assert.deepEqual(first.levels, ["Medium", "Hard"]);
+  assert.equal(first.duration, "60");
+  const button = await page.locator("#random-problem").boundingBox();
+  const recommendation = await page.locator("#recommendation").boundingBox();
+  assert.ok(button.y + button.height <= recommendation.y);
+
+  await page.evaluate(() => { Math.random = () => 0.999; });
+  await page.click("#random-problem");
+  const second = await snapshot(page);
+  assert.notEqual(second.card, first.card);
+  assert.deepEqual(await page.locator("#random-problem").boundingBox(), button);
+  await page.click("#start");
+  await page.waitForURL(/\/interview/);
+  assert.equal(new URL(page.url()).searchParams.get("problem"), second.card);
+});
+
+lobbyTest("Random problem waits for history on load and browser restore", async (page) => {
+  const release = await heldLobby(page);
+  assert.equal(await page.isDisabled("#random-problem"), true);
+  release();
+  await awaitReady(page);
+  assert.equal(await page.isEnabled("#random-problem"), true);
+
+  const releaseRestore = holdHistory();
+  await restore(page);
+  assert.equal(await page.isDisabled("#random-problem"), true);
+  releaseRestore();
+  await awaitReady(page);
+  assert.equal(await page.isEnabled("#random-problem"), true);
+});
+
 lobbyTest("an explicit length survives everything that would otherwise suggest one", async (page) => {
   await lobby(page);
 
@@ -708,7 +752,7 @@ lobbyTest("try again selects the problem", async (page) => {
   await lobby(page);
   await page.getByRole("button", { name: "Try again" }).click();
   assert.equal((await snapshot(page)).card, EASY[0]);
-  assert.match(await page.locator("#recommendation").textContent(), /Selected:/);
+  assert.match(await page.locator("#recommendation").textContent(), /Selected problem:/);
 });
 
 lobbyTest("an unmappable history entry fetches the page map at most once", async (page) => {
