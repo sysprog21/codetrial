@@ -17,8 +17,8 @@ use crate::config::DEFAULT_MAX_INTERIM_REVIEWS;
 
 use crate::agent::{
     RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput, behavioral_silence_nudge,
-    candidate_lines, numbered, proactive_review, significant_change, silence_nudge,
-    timing_decision, unreviewed_from, with_timer,
+    candidate_lines, proactive_review, significant_change, silence_nudge, timing_decision,
+    unreviewed_from, with_timer,
 };
 
 /// How long the room has to be quiet before a pause is worth reading into.
@@ -52,6 +52,14 @@ pub(super) const INTERIM_MIN_NEW_TURNS: usize = 4;
 /// paused. Give them a beat before a periodic review tries to take the floor.
 pub(super) const CODE_SETTLE: Duration = Duration::from_secs(10);
 
+/// How long a prompt may go without Gemini producing anything for it before the
+/// floor goes back to the candidate. Gemini starts a reply within a couple of
+/// seconds; a prompt still unanswered after this is one it will not answer.
+/// Holding `Floor::Speaking` for it keeps every silence nudge quiet, and holds
+/// back the replacement a `GoAway` asked for until the server closes the socket
+/// itself, from an older checkpoint than an orderly replacement resumes.
+pub(super) const PROMPT_STALL: Duration = Duration::from_secs(20);
+
 pub(super) struct RuntimeActivity {
     pub(super) last_code_change: Instant,
     pub(super) last_user_speech: Instant,
@@ -67,6 +75,16 @@ pub(super) struct RuntimeActivity {
     ///
     /// Read as liveness as well as latency; see `reply_in_flight`.
     pub(super) awaiting_reply_since: Option<Instant>,
+    /// When a prompt went out that Gemini has produced nothing for yet. The
+    /// other half of what the interviewer owes: `awaiting_reply_since` covers a
+    /// candidate who finished speaking, this covers a test result, nudge or
+    /// briefing sent in text. Outlives `release_stalled_prompt`, which gives
+    /// the floor back without pretending the reply arrived.
+    pub(super) prompted_at: Option<Instant>,
+    /// The prompt behind `prompted_at` accepts silence as an answer, as an
+    /// editor review does. It still holds the floor until output or a stall,
+    /// but a replacement socket does not owe the candidate anything for it.
+    pub(super) prompt_allows_silence: bool,
     pub(super) last_agent_speech: Instant,
     pub(super) last_nudge: Instant,
     pub(super) last_review: Instant,
@@ -100,6 +118,8 @@ pub(super) struct RuntimeActivity {
 pub(super) struct WatchPrompt {
     pub(super) text: String,
     pub(super) behavioral_nudge: bool,
+    /// An editor review, which may rightly get no answer at all.
+    pub(super) allows_silence: bool,
 }
 
 /// Whether a pause landing now leaves output still on its way.
@@ -135,6 +155,8 @@ impl RuntimeActivity {
             last_code_change: now,
             last_user_speech: now,
             awaiting_reply_since: None,
+            prompted_at: None,
+            prompt_allows_silence: false,
             last_agent_speech: now,
             last_nudge: now,
             last_review: now,
@@ -164,6 +186,48 @@ impl RuntimeActivity {
     /// conversation until Gemini reports the turn complete.
     pub(super) fn mark_speaking(&mut self) {
         self.floor = Floor::Speaking;
+    }
+
+    /// A prompt just went out: the floor is the agent's, and a reply is owed
+    /// until Gemini produces something for it.
+    pub(super) fn mark_prompted(&mut self, now: Instant) {
+        self.mark_speaking();
+        self.prompted_at = Some(now);
+        self.prompt_allows_silence = false;
+    }
+
+    /// `mark_prompted` for a prompt that may be answered with nothing at all.
+    pub(super) fn mark_prompted_allowing_silence(&mut self, now: Instant) {
+        self.mark_prompted(now);
+        self.prompt_allows_silence = true;
+    }
+
+    /// Gemini produced output, so whatever it was prompted with is answered.
+    pub(super) fn note_output(&mut self) {
+        self.prompted_at = None;
+    }
+
+    /// Whether a replaced socket leaves the interviewer owing a reply: the
+    /// candidate finished and heard nothing back, a prompt got no output, or
+    /// a tool response still needs its continuation.
+    pub(super) fn owes_reply(&self) -> bool {
+        self.reply_in_flight()
+            || (self.prompted_at.is_some() && !self.prompt_allows_silence)
+            || self.tool_response_outstanding
+    }
+
+    /// Hands the floor back when a prompt has gone `PROMPT_STALL` without any
+    /// output. `true` when it did, so the caller can log it and spend a held
+    /// `GoAway`. The reply stays owed: a replacement socket answers it.
+    pub(super) fn release_stalled_prompt(&mut self, now: Instant) -> bool {
+        let stalled = self.floor == Floor::Speaking
+            && self
+                .prompted_at
+                .is_some_and(|at| now.duration_since(at) >= PROMPT_STALL);
+        if stalled {
+            self.mark_listening();
+        }
+        stalled
     }
 
     /// Gemini owes a reply it has not begun to deliver.
@@ -301,15 +365,16 @@ impl RuntimeActivity {
         let text = if decision.silence_nudge && behavioral {
             behavioral_silence_nudge()
         } else if decision.silence_nudge {
-            silence_nudge(&numbered(&state.code))
+            silence_nudge(state)
         } else if decision.proactive_review {
-            proactive_review(&numbered(&state.code))
+            proactive_review(state)
         } else {
             return None;
         };
         Some(WatchPrompt {
             text: with_timer(state, text),
             behavioral_nudge: decision.silence_nudge && behavioral,
+            allows_silence: decision.proactive_review && !decision.silence_nudge,
         })
     }
 }

@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use codetrial::agent::*;
 use codetrial::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
 use serde_json::Value;
@@ -146,6 +148,13 @@ fn prompt_samples() -> Value {
         code: "def two_sum(nums, target):".to_string(),
         ..RuntimeState::default()
     };
+    let tested_state = RuntimeState {
+        last_test_run: Some(json!({"language": "python", "passed": 3, "total": 3})),
+        test_runs: 1,
+        ..cold_state.clone()
+    };
+    let mut solved_state = tested_state.clone();
+    record_coding_gate_evidence(&mut solved_state);
     let behavioral_state = RuntimeState {
         behavioral_round_started: true,
         transcript: vec![
@@ -159,21 +168,21 @@ fn prompt_samples() -> Value {
         "resumeBehavioral": resume(true),
         "roundStarted": round_started(),
         "roundSkipped": round_skipped(),
-        "coldRestartBehavioral": cold_restart(&behavioral_state),
-        "coldRestartBehavioralInFlight": cold_restart(&RuntimeState {
+        "connectionRecoveryBehavioral": connection_recovery(&behavioral_state),
+        "connectionRecoveryBehavioralInFlight": connection_recovery(&RuntimeState {
             behavioral_round_started: true,
             behavioral_round_transcript_start: 1,
             behavioral_round_prior_turn: Some((0, "Interviewer: That covers the code.".to_string())),
             transcript: vec!["Interviewer: That covers the code. Tell me about a tricky bug you tracked down.".to_string()],
             ..RuntimeState::default()
         }),
-        "coldRestartBehavioralOpened": cold_restart(&RuntimeState {
+        "connectionRecoveryBehavioralOpened": connection_recovery(&RuntimeState {
             behavioral_round_started: true,
             behavioral_round_transcript_start: 1,
             transcript: vec!["Candidate: The map lookup is constant time.".to_string()],
             ..RuntimeState::default()
         }),
-        "coldRestartBehavioralTruncated": cold_restart(&RuntimeState {
+        "connectionRecoveryBehavioralTruncated": connection_recovery(&RuntimeState {
             behavioral_round_started: true,
             behavioral_round_transcript_start: 0,
             transcript: vec![overflowing_turn()],
@@ -192,13 +201,21 @@ fn prompt_samples() -> Value {
         "languageChoice": language_choice("C++", LanguageChoiceContext::Start),
         "languageSwitch": language_choice("Java", LanguageChoiceContext::SwitchWithCode),
         "silenceBehavioral": behavioral_silence_nudge(),
-        "silenceEmpty": silence_nudge("(the editor is currently empty)"),
-        "silencePlan": silence_nudge("  1| # scan once with a map"),
-        "silenceCode": silence_nudge("  1| def two_sum(nums, target):"),
-        "coldRestart": cold_restart(&cold_state),
-        "coldRestartEmpty": cold_restart(&RuntimeState::default()),
-        "review": proactive_review("  1| seen = {}"),
-        "time": time_warning(),
+        "silenceEmpty": silence_nudge(&RuntimeState::default()),
+        "silencePlan": silence_nudge(&RuntimeState {
+            code: "# scan once with a map".to_string(),
+            ..RuntimeState::default()
+        }),
+        "silenceCode": silence_nudge(&cold_state),
+        "resumedContext": resumed_context(&cold_state, false),
+        "resumedContextBehavioral": resumed_context(&behavioral_state, false),
+        "connectionRecovery": connection_recovery(&cold_state),
+        "connectionRecoveryEmpty": connection_recovery(&RuntimeState::default()),
+        "review": proactive_review(&RuntimeState {
+            code: "seen = {}".to_string(),
+            ..RuntimeState::default()
+        }),
+        "time": time_warning(&RuntimeState::default()),
         "wrapCandidate": wrap_up("candidate_ended"),
         "wrapTimer": wrap_up("time_up"),
         "wrapComplete": wrap_up("interview_complete"),
@@ -312,6 +329,17 @@ fn prompt_samples() -> Value {
             test_summary: "Latest test run (run #1, python): 2/3 cases passed.",
             practice_level: None,
         }),
+        "silenceTested": silence_nudge(&tested_state),
+        "silenceSetupError": silence_nudge(&RuntimeState {
+            last_test_run: Some(json!({"setupError": "runner unavailable"})),
+            ..tested_state.clone()
+        }),
+        "silenceSolved": silence_nudge(&solved_state),
+        "resumedContextReply": resumed_context(&cold_state, true),
+        "resumedContextSolved": resumed_context(&solved_state, false),
+        "reviewTested": proactive_review(&tested_state),
+        "timeTested": time_warning(&tested_state),
+        "timeSolved": time_warning(&solved_state),
     })
 }
 
@@ -395,6 +423,12 @@ fn past_the_coding_round(state: &mut RuntimeState) {
 /// round transition's completion gate opens the behavioral round.
 fn past_the_coding_gate(state: &mut RuntimeState) {
     past_the_coding_round(state);
+    record_coding_gate_evidence(state);
+}
+
+/// Test and Optimizations evidence, which is what the coding completion gate
+/// reads. The state needs code in the editor for either to be accepted.
+fn record_coding_gate_evidence(state: &mut RuntimeState) {
     for phase in ["test", "optimizations"] {
         record_framework_evidence(state, &json!({"phase": phase, "source": "candidate_speech", "kind": "observed", "confidence": 90, "summary": format!("candidate completed {phase}")})).unwrap();
     }
@@ -417,8 +451,8 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
         assert_eq!(state.code, code);
     }
     match reaction["kind"].as_str().expect("reaction kind is text") {
-        "silence" => silence_nudge(&numbered(code)),
-        "proactive" => proactive_review(&numbered(code)),
+        "silence" => silence_nudge(state),
+        "proactive" => proactive_review(state),
         "tests_failed" | "tests_passed" => {
             let all_passed = reaction["kind"] == "tests_passed";
             let before = state.test_runs;

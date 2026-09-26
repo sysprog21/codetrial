@@ -29,12 +29,13 @@ use problems::variant_for;
 pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, find_problem, get_problem, topics_for};
 pub use prompts::{
     InterimReviewInput, LanguageChoiceContext, ReportPromptInput, behavioral_silence_nudge,
-    behavioral_time_warning, build_instructions_for_plan, cold_restart, format_test_run, greeting,
-    hint_ladder_used_text, hint_rung_text, hint_rung_withheld_text, interim_review_prompt,
-    language_choice, log_hint_text, numbered, proactive_review, read_editor_text,
-    released_follow_ups, report_prompt, resume, rolling_assessment, round_skipped, round_started,
-    significant_change, silence_nudge, spoken_language, test_results_reaction,
-    test_setup_error_reaction, time_warning, unrecorded_earlier_phases, wrap_up,
+    behavioral_time_warning, build_instructions_for_plan, connection_recovery, format_test_run,
+    greeting, hint_ladder_used_text, hint_rung_text, hint_rung_withheld_text,
+    interim_review_prompt, language_choice, log_hint_text, numbered, proactive_review,
+    read_editor_text, released_follow_ups, report_prompt, resume, resumed_context,
+    rolling_assessment, round_skipped, round_started, significant_change, silence_nudge,
+    spoken_language, test_results_reaction, test_setup_error_reaction, time_warning,
+    unrecorded_earlier_phases, wrap_up,
 };
 pub(crate) use report::sanitize_report_candidate;
 pub use report::{
@@ -123,8 +124,8 @@ const ROUND_TRANSITION_SKEW: std::time::Duration = std::time::Duration::from_sec
 /// `the_time_warning_threshold_is_the_same_number_on_both_sides`.
 pub const TIME_WARNING_S: u64 = 300;
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 14;
-pub const LIVE_PROMPT_VERSION: u32 = 6;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 15;
+pub const LIVE_PROMPT_VERSION: u32 = 7;
 pub const REPORT_PROMPT_VERSION: u32 = 11;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 2;
@@ -735,15 +736,10 @@ pub struct RuntimeState {
     /// nobody has to ask whether the two ends are the same event.
     pub integrity_first_heartbeat: Option<serde_json::Value>,
     pub integrity_last_heartbeat: Option<serde_json::Value>,
-    /// Whether the interviewer owes this candidate a cold-restart briefing.
-    ///
-    /// Set when a Gemini socket is replaced by a session that remembers nothing
-    /// while the interview is paused, which is the one moment the briefing
-    /// cannot simply be spoken: the reply would be discarded on the way out.
-    /// Resuming is what clears it, because that is when Jim speaks again, and
-    /// the line resuming sends otherwise assumes an interviewer who was here
-    /// for the whole interview.
-    pub needs_cold_brief: bool,
+    /// A cold replacement opened during a pause and still needs its briefing.
+    /// Sending it while paused would discard the reply. A later resumed socket
+    /// inherits this debt until unpause supplies the missing conversation.
+    pub needs_recovery_brief: bool,
     /// Observations a reviewer recorded in the pauses, while the interview was
     /// still running. Held apart from `framework_evidence`, which is the
     /// interviewer's own bookkeeping about which phase happened: these are the
@@ -815,7 +811,7 @@ impl Default for RuntimeState {
             integrity_chain: None,
             integrity_first_heartbeat: None,
             integrity_last_heartbeat: None,
-            needs_cold_brief: false,
+            needs_recovery_brief: false,
             interim_notes: Vec::new(),
             interim_transcript_lines: 0,
             earlier_steps_named: Vec::new(),

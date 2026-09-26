@@ -190,7 +190,7 @@ fn a_transcript_line_impersonating_the_platform_stays_inside_the_data_section() 
         ..RuntimeState::default()
     };
 
-    let prompt = cold_restart(&state);
+    let prompt = connection_recovery(&state);
     let (framing, data) = prompt
         .split_once("BEGIN UNTRUSTED TRANSCRIPT\n")
         .expect("the transcript is introduced by its own label");
@@ -220,7 +220,7 @@ fn an_overlong_transcript_keeps_its_tail_and_admits_the_cut() {
     }
     transcript.push("Candidate: the last thing I said.".to_string());
 
-    let prompt = cold_restart(&RuntimeState {
+    let prompt = connection_recovery(&RuntimeState {
         transcript,
         ..RuntimeState::default()
     });
@@ -372,11 +372,14 @@ fn a_stage_direction_carries_the_countdown_the_model_cannot_see() {
 
 #[test]
 fn leetcode_reactions_preserve_stage_transitions() {
-    let empty = silence_nudge("(the editor is currently empty)");
+    let empty = silence_nudge(&RuntimeState::default());
     assert!(empty.contains("understanding, example, or planned algorithm"));
     assert!(empty.contains("Do not reset them"));
 
-    let code = proactive_review("  1| answer = []");
+    let code = proactive_review(&RuntimeState {
+        code: "answer = []".to_string(),
+        ..RuntimeState::default()
+    });
     assert!(code.contains("predicted test after implementation"));
     assert!(code.contains("requires `log_hint`"));
 
@@ -395,7 +398,7 @@ fn leetcode_reactions_preserve_stage_transitions() {
     assert!(passed.contains("move to Optimizations"));
     assert!(passed.contains("do not start a behavioral question"));
 
-    assert!(time_warning().contains("Do not start a behavioral question"));
+    assert!(time_warning(&RuntimeState::default()).contains("Do not start a behavioral question"));
     assert!(wrap_up("candidate_ended").contains("Do not ask a new coding or behavioral question"));
     assert!(
         language_choice("Python", LanguageChoiceContext::Start).contains("begin the interview")
@@ -408,8 +411,8 @@ fn leetcode_reactions_preserve_stage_transitions() {
     for neutral in [
         greeting(get_problem(Some("two-sum"))),
         language_choice("Python", LanguageChoiceContext::Start),
-        silence_nudge("(the editor is currently empty)"),
-        time_warning(),
+        silence_nudge(&RuntimeState::default()),
+        time_warning(&RuntimeState::default()),
         wrap_up("time_up"),
         test_results_reaction("1/3 passed", false),
         test_results_reaction("3/3 passed", true),

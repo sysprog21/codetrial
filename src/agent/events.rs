@@ -8,7 +8,7 @@
 use super::{
     DataEventResult, INTERVIEWER_SPEAKER, InterviewLoop, LanguageChoiceContext,
     MAX_INTEGRITY_EVENTS, ROUND_TRANSITION_SKEW, RuntimeState, TIME_WARNING_S,
-    behavioral_time_warning, cold_restart, format_test_run, integrity_hash, language_choice,
+    behavioral_time_warning, connection_recovery, format_test_run, integrity_hash, language_choice,
     python_truthy, resume, round_skipped, round_started, sanitize_integrity_event,
     sanitize_test_run, spoken_language, test_reaction_decision, test_results_reaction,
     test_setup_error_reaction, time_warning,
@@ -239,16 +239,14 @@ fn control_pause(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
     }
     state.paused = paused;
 
-    // A resumed interview whose interviewer was replaced mid-pause has to be
-    // re-grounded before it is told to carry on: the fixed line below assumes a
-    // Jim who remembers the conversation, and after a cold restart there is
-    // none to continue from.
-    let cold_brief = !paused && std::mem::take(&mut state.needs_cold_brief);
+    // A cold replacement opened during the pause has no conversation to carry
+    // on. Resumed sockets already received their silent context update.
+    let recovery_brief = !paused && std::mem::take(&mut state.needs_recovery_brief);
     DataEventResult {
         pause_changed: Some(paused),
         generate_reply: (!paused).then(|| {
-            if cold_brief {
-                cold_restart(state)
+            if recovery_brief {
+                connection_recovery(state)
             } else {
                 resume(state.behavioral_round_started)
             }
@@ -313,7 +311,7 @@ fn control_time_warning(state: &mut RuntimeState) -> DataEventResult {
         generate_reply: Some(if state.behavioral_round_started {
             behavioral_time_warning()
         } else {
-            time_warning()
+            time_warning(state)
         }),
         ..DataEventResult::default()
     }

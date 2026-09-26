@@ -57,8 +57,8 @@ fn prompt_golden_digest_matches_versions() {
     // its hash is a string nothing checks. The pair is still asserted, because
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
-    let recorded_versions = (6, 11);
-    let recorded_digest = "a8cef452df6f9c2dd743227e1012a7094a5d87953889e994e4d4e36a37b11763";
+    let recorded_versions = (7, 11);
+    let recorded_digest = "eaacdf9c745f097a4c9d01986fe2096fa6e09fe2611157f288dd393315523a96";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -74,12 +74,12 @@ fn prompt_golden_digest_matches_versions() {
 /// A cold restart during a pause is owed a briefing, and unpausing is what
 /// pays it. Without this the resumed interview hands "continue with your REACTO
 /// step" to an interviewer that has never heard this candidate, which is the
-/// exact state `cold_restart` exists to prevent.
+/// exact state `connection_recovery` exists to prevent.
 #[test]
-fn unpausing_delivers_the_cold_brief_the_pause_deferred() {
+fn unpausing_delivers_the_recovery_brief_the_pause_deferred() {
     let mut state = RuntimeState {
         paused: true,
-        needs_cold_brief: true,
+        needs_recovery_brief: true,
         code: "def two_sum(nums, target):".to_string(),
         ..RuntimeState::default()
     };
@@ -92,10 +92,10 @@ fn unpausing_delivers_the_cold_brief_the_pause_deferred() {
     );
 
     let reply = resumed.generate_reply.expect("resuming makes Jim speak");
-    assert!(reply.contains("everything said so far is gone from your memory"));
+    assert!(reply.contains("Any restored memory may predate the latest local events"));
     assert!(reply.contains("def two_sum"));
     assert!(
-        !state.needs_cold_brief,
+        !state.needs_recovery_brief,
         "a briefing delivered once must not be delivered again on the next pause"
     );
 }
@@ -103,10 +103,10 @@ fn unpausing_delivers_the_cold_brief_the_pause_deferred() {
 /// The briefing a cold restart sends is stamped once, by the one stamp on the
 /// way out of `apply_data_event`.
 #[test]
-fn the_cold_restart_briefing_reads_the_timer_once() {
+fn the_connection_recovery_briefing_reads_the_timer_once() {
     let mut state = RuntimeState {
         paused: true,
-        needs_cold_brief: true,
+        needs_recovery_brief: true,
         ..RuntimeState::default()
     };
 
@@ -177,7 +177,9 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
     ] {
         assert!(prompt.contains(safeguard), "missing safeguard: {safeguard}");
     }
-    assert!(time_warning().contains("source `session_timing`, kind `skipped`"));
+    assert!(
+        time_warning(&RuntimeState::default()).contains("source `session_timing`, kind `skipped`")
+    );
     assert!(wrap_up("candidate_ended").contains("source `session_timing`, kind `skipped`"));
 
     // The timing skip is the rule and the refusal the one exception to it. A
@@ -189,7 +191,16 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
 
     // Both coding watchers speak only during coding, which is exactly where a
     // stray behavioral question was being revived.
-    for watcher in [silence_nudge("  1| x = 1"), proactive_review("  1| x = 1")] {
+    for watcher in [
+        silence_nudge(&RuntimeState {
+            code: "x = 1".to_string(),
+            ..RuntimeState::default()
+        }),
+        proactive_review(&RuntimeState {
+            code: "x = 1".to_string(),
+            ..RuntimeState::default()
+        }),
+    ] {
         assert!(
             watcher
                 .to_lowercase()
@@ -211,9 +222,12 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
         greeting(problem),
         language_choice("C++", LanguageChoiceContext::Start),
         language_choice("Java", LanguageChoiceContext::SwitchWithCode),
-        silence_nudge("(the editor is currently empty)"),
-        proactive_review("  1| answer = []"),
-        time_warning(),
+        silence_nudge(&RuntimeState::default()),
+        proactive_review(&RuntimeState {
+            code: "answer = []".to_string(),
+            ..RuntimeState::default()
+        }),
+        time_warning(&RuntimeState::default()),
         wrap_up("time_up"),
         test_results_reaction("2/3 passed", false),
         test_results_reaction("3/3 passed", true),
@@ -918,16 +932,16 @@ fn interview_contract_versions_are_one_closed_bundle() {
         "the bundle table has no row for {INTERVIEW_CONTRACT_BUNDLE_VERSION}"
     );
 
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 14);
-    assert_eq!(LIVE_PROMPT_VERSION, 6);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 15);
+    assert_eq!(LIVE_PROMPT_VERSION, 7);
     assert_eq!(REPORT_PROMPT_VERSION, 11);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 2);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 14,
-            "livePromptVersion": 6,
+            "bundleVersion": 15,
+            "livePromptVersion": 7,
             "reportPromptVersion": 11,
             "rubricVersion": 1,
             "reportSchemaVersion": 2,

@@ -124,6 +124,25 @@ impl GeminiLiveSession {
         self.send_json(realtime_text_message(text)).await
     }
 
+    /// Reconciles a resumed checkpoint as ordered context. With `turn_complete`
+    /// false it only adds to what the model knows; true asks for a reply, for a
+    /// turn the replaced socket owed. `clientContent` rather than
+    /// `realtimeInput` because the Live API orders it deterministically against
+    /// the history the checkpoint restored.
+    pub async fn send_context(
+        &mut self,
+        text: &str,
+        turn_complete: bool,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.send_json(json!({
+            "clientContent": {
+                "turns": [{"role": "user", "parts": [{"text": text}]}],
+                "turnComplete": turn_complete,
+            }
+        }))
+        .await
+    }
+
     pub async fn send_audio_pcm_16khz(
         &mut self,
         bytes: &[u8],
