@@ -2018,16 +2018,20 @@ fn a_turns_usage_is_read_off_the_frame_that_completes_it() {
             }
         }"#,
     );
+
+    // Usage first: the room loop reads these one at a time, and a completion
+    // that ends the interview or replaces the socket would leave the tokens
+    // behind it unread.
     assert_eq!(
         message.events,
         vec![
-            GeminiEvent::TurnComplete,
             GeminiEvent::Usage(TokenUsage {
                 prompt: 304,
                 response: 185,
                 cached: 0,
                 thoughts: 0,
             }),
+            GeminiEvent::TurnComplete,
         ]
     );
 

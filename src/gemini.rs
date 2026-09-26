@@ -1370,6 +1370,17 @@ fn parse_server_message(text: &str) -> ServerMessage {
     {
         events.push(GeminiEvent::OutputTranscript(text.to_string()));
     }
+
+    // Before `TurnComplete`, because the frame that completes a turn is the
+    // frame that bills it and the two reach the room loop one at a time through
+    // a channel. Behind the completion, the last turn's tokens are still queued
+    // when the interview tears down or the socket is replaced, and
+    // `replace_gemini_session` empties that queue: the session's own billing
+    // line then reports less than the session spent.
+    if let Some(metadata) = message.get("usageMetadata") {
+        events.push(GeminiEvent::Usage(TokenUsage::from_metadata(metadata)));
+    }
+
     if message
         .pointer("/serverContent/turnComplete")
         .and_then(Value::as_bool)
@@ -1401,10 +1412,6 @@ fn parse_server_message(text: &str) -> ServerMessage {
         if !calls.is_empty() {
             events.push(GeminiEvent::ToolCall(calls));
         }
-    }
-
-    if let Some(metadata) = message.get("usageMetadata") {
-        events.push(GeminiEvent::Usage(TokenUsage::from_metadata(metadata)));
     }
 
     // How long this socket has left. Advisory, and carried as an event rather
