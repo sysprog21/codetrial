@@ -834,7 +834,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
   return dummy.next;
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("copy-list-with-random-pointer"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -852,7 +852,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
   return copies.get(head);
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("rotate-list"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -877,7 +877,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
   return next;
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("invert-binary-tree"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -892,7 +892,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
   return root;
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("construct-binary-tree-from-preorder-and-inorder-traversal"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -914,7 +914,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
   return build(0, inorder.length - 1);
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("populating-next-right-pointers-in-each-node-ii"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -935,7 +935,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
   return root;
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("binary-search-tree-iterator"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -964,7 +964,7 @@ OrderedCursor.prototype.hasNext = function() {
   return this.stack.length > 0;
 };
 `);
-      await runAndExpectPassing(3);
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("lowest-common-ancestor-of-a-binary-tree"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -979,7 +979,7 @@ OrderedCursor.prototype.hasNext = function() {
   return left || right;
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(6);
 
       await page.goto(interviewUrl("binary-tree-zigzag-level-order-traversal"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -1007,7 +1007,7 @@ OrderedCursor.prototype.hasNext = function() {
   return rows;
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("validate-binary-search-tree"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -1023,7 +1023,7 @@ OrderedCursor.prototype.hasNext = function() {
   return valid(root, -Infinity, Infinity);
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(7);
 
       await page.goto(interviewUrl("clone-graph"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -1043,7 +1043,7 @@ OrderedCursor.prototype.hasNext = function() {
   return clone(node);
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("course-schedule-ii"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -1072,7 +1072,7 @@ OrderedCursor.prototype.hasNext = function() {
   return order.length === migrationCount ? order : [];
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("implement-trie-prefix-tree"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -1111,7 +1111,7 @@ CommandIndex.prototype.find = function(text) {
   return node;
 };
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("design-add-and-search-words-data-structure"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -1148,7 +1148,7 @@ PatternLexicon.prototype.search = function(word) {
   return dfs(this, 0);
 };
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("combination-sum"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -1173,7 +1173,7 @@ PatternLexicon.prototype.search = function(word) {
   return results;
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("permutations"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -1200,7 +1200,7 @@ PatternLexicon.prototype.search = function(word) {
   return results;
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("generate-parentheses"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -1221,7 +1221,7 @@ PatternLexicon.prototype.search = function(word) {
   return results;
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("n-queens-ii"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -1253,7 +1253,7 @@ PatternLexicon.prototype.search = function(word) {
   return count;
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("word-search"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -1282,7 +1282,7 @@ PatternLexicon.prototype.search = function(word) {
   return false;
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.goto(interviewUrl("convert-sorted-array-to-binary-search-tree"), { waitUntil: "domcontentloaded" });
       await clearMediaGate(page);
@@ -1298,7 +1298,7 @@ PatternLexicon.prototype.search = function(word) {
   return build(0, nums.length - 1);
 }
 `);
-      await runAndExpectPassing();
+      await runAndExpectPassing(5);
 
       await page.getByRole("button", { name: "End interview" }).click();
       await page.getByRole("heading", { name: "No evaluation" }).waitFor({ timeout: 30000 });
