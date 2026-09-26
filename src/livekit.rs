@@ -2070,8 +2070,17 @@ pub fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) ->
         // clock.
         TOOL_END_INTERVIEW => {
             if !crate::agent::coding_round_complete(state) {
+                // The way to Test named for the state the gate is in: a Run
+                // button is no help while the runner is reported missing.
+                let way_to_test = if crate::agent::test_source(state)
+                    == crate::agent::TestSource::Trace
+                {
+                    "The runner cannot provide tests for this language, so ask the candidate to trace their code by hand and record Test from that trace"
+                } else {
+                    "If the candidate has not run the code now in the editor, invite them to click Run and wait for the results"
+                };
                 return serde_json::json!({
-                    "error": "The coding round has no Test and Optimizations evidence yet, so the interview is not finished. Continue, and record evidence when the candidate earns it."
+                    "error": format!("The coding round has no Test and Optimizations evidence yet, so the interview is not finished. {way_to_test}; otherwise continue, and record evidence when the candidate earns it.")
                 });
             }
             if state.interview_loop == crate::agent::InterviewLoop::CodingBehavioral

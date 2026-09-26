@@ -229,11 +229,14 @@ test("a judge that cannot be fetched is not a problem without tests", async () =
   });
   try {
     const { runBrowserTests } = await import(`${join(web, "runners.js")}?judge-unreachable`);
-    const summary = await runBrowserTests("two-sum", "", "python");
+    const summary = await runBrowserTests("two-sum", "x = 1", "python");
 
     assert.match(summary.setupError, /could not be loaded/);
     assert.doesNotMatch(summary.setupError, /No test cases are defined/);
     assert.equal(summary.total, 0);
+    // Not the candidate's error: the agent may take a hand trace for Test.
+    assert.equal(summary.runnerUnavailable, true);
+    assert.equal(summary.code, "x = 1");
   } finally {
     restore();
   }
@@ -257,7 +260,9 @@ test("the interview page keeps the structure the script drives", () => {
   assert.match(page, /data-language="python"/, "the language tabs drive setLanguage");
   assert.match(page, /C, C\+\+ and Java runs are sent to Compiler Explorer/, "compiled language runs need third-party disclosure");
   const script = interviewSource();
-  assert.match(script, /CODETRIAL_COMPILER_EXPLORER_ENABLED !== false/);
+  // The disclosure reads the same "compiled runs are on" the tabs do.
+  assert.match(script, /compileDisclosure\.textContent = compiledTestsEnabled\(\)/);
+  assert.match(read("compiler-explorer.js"), /CODETRIAL_COMPILER_EXPLORER_ENABLED !== false/);
   assert.match(script, /C, C\+\+ and Java test runs are disabled by this server/);
   assert.match(page, /id="audio-step-camera"/, "preflight must expose camera readiness");
   // Screen sharing was removed rather than left behind a disabled flag, so no
@@ -376,7 +381,7 @@ test("runtime config can withdraw compiled language test runs", async () => {
       const summary = await runBrowserTests(twoSum.page, "", language);
       assert.equal(summary.language, language);
       assert.equal(summary.passed, 0);
-      assert.match(summary.setupError, /tests are not wired up yet/);
+      assert.match(summary.setupError, /disabled by this server/);
     }
   } finally {
     restore();

@@ -78,6 +78,25 @@ export function nativeLiteral(value, type, language) {
 /// would change what every later caller is offered.
 export const ALL_LANGUAGES = Object.freeze(["python", "javascript", "c", "cpp", "java"]);
 
+/// The languages that compile through Compiler Explorer rather than running in
+/// a Worker.
+export const COMPILED_LANGUAGES = Object.freeze(["c", "cpp", "java"]);
+
+// C, C++ and Java runs leave the machine, which the editor toolbar says out loud.
+// Setting this to an empty string turns those runs off instead of pointing them
+// somewhere else; the editor withdraws those language choices too.
+//
+// /runtime-config.js always sets this, and the server builds its CSP from the
+// same value, so the literal below is only reached by tests that import this
+// module directly. Read on each call rather than at import, so the setting
+// cannot be frozen by whichever page happened to load this module first.
+export const compilerExplorerBaseUrl = () => globalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL ?? "https://godbolt.org";
+/// The one reading of "compiled runs are on", for the tabs, the runner and
+/// the toolbar disclosure alike. The server writes both globals together, so
+/// they agree, but a reader that checked only one of them could not tell.
+export const compiledTestsEnabled = () => globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED !== false
+  && Boolean(compilerExplorerBaseUrl());
+
 /// Why this judge cannot be run in this language, in a sentence a candidate can
 /// read, or null when it can. The tab row disables from it and shows it as the
 /// tooltip, so the reason a tab is dead cannot drift from the rule that killed
@@ -88,21 +107,26 @@ export const ALL_LANGUAGES = Object.freeze(["python", "javascript", "c", "cpp", 
 /// candidate would otherwise find that out by writing a whole solution and
 /// pressing run.
 export function harnessGap(language, spec) {
-  if (language === "c" && spec?.kind === "class") {
+  if (!compiledTestsEnabled() && COMPILED_LANGUAGES.includes(language)) {
+    return "Compiled language tests are disabled by this server. Choose Python or JavaScript to run tests.";
+  }
+  if (language === "c" && !spec) {
+    return "C is available only after function-style tests load. Choose another language or reload to retry.";
+  }
+  if (language === "c" && spec.kind === "class") {
     return "This problem asks for a class, and the C harness only builds function judges.";
   }
   return null;
 }
 
-/// A missing or unreadable judge offers everything: the run path says why it
-/// failed on its own, and dropping a tab over a dropped request is the worse
-/// guess.
+/// Withhold C until the judge proves it is function-style, so a slow fetch
+/// cannot let a candidate start a class problem in an untestable language.
 export function languagesFor(spec) {
   return ALL_LANGUAGES.filter((language) => !harnessGap(language, spec));
 }
 
 export function generateHarness(language, spec, candidateCode) {
-  if (!["c", "cpp", "java"].includes(language)) throw new Error(`Unsupported harness language: ${language}`);
+  if (!COMPILED_LANGUAGES.includes(language)) throw new Error(`Unsupported harness language: ${language}`);
   if (spec.kind === "class" && language === "c") throw new Error("Only function judges are supported for C");
   if (spec.kind === "class") return language === "cpp" ? cppClassHarness(spec, candidateCode) : javaClassHarness(spec, candidateCode);
   if (spec.kind !== "function") throw new Error("Only function judges are supported");

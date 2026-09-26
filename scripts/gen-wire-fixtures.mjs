@@ -76,6 +76,7 @@ function testResultsCases() {
           passed: 5,
           total: 5,
           language: "python",
+          code: EDITED,
           setupError: null,
           cases: [
             { label: "example 1", pass: true, expected: "[0,1]", got: "[0,1]", timeMs: 3 },
@@ -89,6 +90,7 @@ function testResultsCases() {
           passed: 3,
           total: 5,
           language: "python",
+          code: EDITED,
           setupError: null,
           cases: [
             { label: "example 1", pass: true, expected: "[0,1]", got: "[0,1]", timeMs: 3 },
@@ -106,6 +108,7 @@ function testResultsCases() {
           passed: 0,
           total: 5,
           language: "python",
+          code: EDITED,
           setupError: null,
           cases: [1, 2, 3, 4, 5].map((index) => ({
             label: `example ${index}`,
@@ -126,6 +129,7 @@ function testResultsCases() {
           passed: 1,
           total: 1,
           language: "python",
+          code: EDITED,
           setupError: null,
           cases: [
             { label: "example 1", pass: true, expected: "[0,1]", got: "[0,1]", timeMs: 1 },
@@ -146,7 +150,22 @@ function testResultsCases() {
           passed: 0,
           total: 0,
           language: "cpp",
-          setupError: "Compiler Explorer returned 503",
+          code: EDITED,
+          setupError: "Compilation failed: expected expression",
+          cases: [],
+        }),
+      },
+      {
+        // The judge never loaded, which no edit of the candidate's can fix.
+        // The agent lets a hand trace stand for Test only on this flag.
+        name: "runner unavailable",
+        payload: lib.testPayload({
+          passed: 0,
+          total: 0,
+          language: "python",
+          code: EDITED,
+          runnerUnavailable: true,
+          setupError: "The test cases could not be loaded. Check your connection and run again.",
           cases: [],
         }),
       },

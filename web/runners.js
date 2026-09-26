@@ -5,21 +5,9 @@
 // that never returns costs one test run, not the interview.
 
 import { loadJudge } from "./problem-data.js";
-import { generateHarness, mapCompilerResponse } from "./compiler-explorer.js";
+import { compilerExplorerBaseUrl, generateHarness, harnessGap, mapCompilerResponse } from "./compiler-explorer.js";
 import { checkAnswer, renderValue } from "./lib.js";
 
-const pendingTestLanguages = new Set();
-// C, C++ and Java runs leave the machine, which the editor toolbar says out loud.
-// Setting this to an empty string turns those runs off instead of pointing them
-// somewhere else; the editor still works, only the runner is withdrawn.
-//
-// /runtime-config.js always sets this, and the server builds its CSP from the
-// same value, so the literal below is only reached by tests that import this
-// module directly.
-const compilerExplorerBaseUrl = globalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL ?? "https://godbolt.org";
-if (!compilerExplorerBaseUrl) {
-  pendingTestLanguages.add("c").add("cpp").add("java");
-}
 /// How long candidate code may run locally, in either Worker. This bounds
 /// execution, so it is the one number an infinite loop is measured against.
 const testTimeoutMs = 5000;
@@ -196,8 +184,16 @@ function parseClassCandidateCase(spec, input) {
   return input;
 }
 
+/// A run the platform could not start: no edit of the candidate's can fix it,
+/// so the agent may take a hand trace for Test while it lasts.
+function outage(setupError) {
+  return { runnerUnavailable: true, setupError };
+}
+
 export async function runBrowserTests(problemId, code, language, onStatus = null, candidateCases = []) {
-  const empty = { problemId, language, passed: 0, total: 0, cases: [], at: Date.now() };
+  // `code` is what this run executed. The agent credits Test to it rather than
+  // to the editor when the results land, which may have moved on since.
+  const empty = { problemId, language, code, passed: 0, total: 0, cases: [], at: Date.now() };
   // A judge that cannot be fetched is not a problem without tests. Reporting
   // both the same way told a candidate on a flaky connection that their problem
   // had no test cases, which is the one reading that makes them stop trying.
@@ -205,15 +201,16 @@ export async function runBrowserTests(problemId, code, language, onStatus = null
   try {
     spec = await loadJudge(problemId);
   } catch {
-    return { ...empty, setupError: "The test cases could not be loaded. Check your connection and run again." };
+    return { ...empty, ...outage("The test cases could not be loaded. Check your connection and run again.") };
   }
-  if (!spec) return { ...empty, setupError: "No test cases are defined for this problem." };
+  // Neither of these is the candidate's doing, and no edit can make a run pass
+  // them, so the agent is told the runner itself is missing.
+  if (!spec) return { ...empty, ...outage("No test cases are defined for this problem.") };
   const candidates = candidateCases.map((testCase, index) => ({ ...testCase, label: testCase.label || `Your case ${index + 1}` }));
   const runnable = { ...spec, cases: [...spec.cases, ...candidates] };
   const base = { ...empty, total: spec.cases.length };
-  if (pendingTestLanguages.has(language)) {
-    return { ...base, setupError: `${languageLabel(language)} tests are not wired up yet. Keep using the editor; Jim can still review this code.` };
-  }
+  const gap = harnessGap(language, spec);
+  if (gap) return { ...base, setupError: gap };
   const reportStatus = (status) => onStatus?.(status);
   try {
     const raw = language === "python"
@@ -221,7 +218,7 @@ export async function runBrowserTests(problemId, code, language, onStatus = null
       : compilerExplorer[language]
         ? await runCompilerExplorer(language, code, runnable, reportStatus)
         : (reportStatus("running"), await runWorker(code, runnable));
-    if (raw.setupError || !raw.results) return { ...base, setupError: raw.setupError || "The run produced no results." };
+    if (raw.setupError || !raw.results) return { ...base, runnerUnavailable: raw.runnerUnavailable, setupError: raw.setupError || "The run produced no results." };
     const cases = runnable.cases.map((testCase, index) => {
       const candidate = index >= spec.cases.length;
       const observed = candidate && !Object.hasOwn(testCase, "expected");
@@ -247,20 +244,13 @@ export async function runBrowserTests(problemId, code, language, onStatus = null
   }
 }
 
-function languageLabel(language) {
-  return { c: "C", cpp: "C++", java: "Java" }[language] || language;
-}
-
 async function runCompilerExplorer(language, code, spec, reportStatus = null) {
-  if (spec.kind !== "function" && !(spec.kind === "class" && language !== "c")) {
-    return { setupError: `${languageLabel(language)} class-style tests are not wired up yet. Keep using the editor; Jim can still review this code.` };
-  }
   reportStatus?.("compiling");
   const config = compilerExplorer[language];
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), compilerExplorerTimeoutMs);
   try {
-    const response = await fetch(`${compilerExplorerBaseUrl}/api/compiler/${config.compiler}/compile`, {
+    const response = await fetch(`${compilerExplorerBaseUrl()}/api/compiler/${config.compiler}/compile`, {
       method: "POST",
       headers: {
         "Accept": "application/json",
@@ -278,14 +268,14 @@ async function runCompilerExplorer(language, code, spec, reportStatus = null) {
       signal: controller.signal,
     });
     if (!response.ok) {
-      return { setupError: `Compiler Explorer returned HTTP ${response.status}. Try again later.` };
+      return outage(`Compiler Explorer returned HTTP ${response.status}. Try again later.`);
     }
     return mapCompilerResponse(await response.json());
   } catch (error) {
     if (error?.name === "AbortError") {
-      return { setupError: `Compiler Explorer did not respond within ${compilerExplorerTimeoutMs / 1000} seconds. Try again later.` };
+      return outage(`Compiler Explorer did not respond within ${compilerExplorerTimeoutMs / 1000} seconds. Try again later.`);
     }
-    return { setupError: `Compiler Explorer run failed: ${String(error?.message || error).slice(0, 300)}` };
+    return outage(`Compiler Explorer run failed: ${String(error?.message || error).slice(0, 300)}`);
   } finally {
     clearTimeout(timer);
   }
@@ -895,7 +885,12 @@ _codetrial_run(_CODETRIAL_CODE, _CODETRIAL_SPEC)
 /// torn down when a run overruns.
 async function runPython(code, spec, reportStatus = null) {
   reportStatus?.("booting");
-  const worker = await pythonWorkerOnce();
+  let worker;
+  try {
+    worker = await pythonWorkerOnce();
+  } catch (error) {
+    return outage(String(error.message || error).slice(0, 400));
+  }
   reportStatus?.("running");
   return new Promise((resolve) => {
     let timer = null;

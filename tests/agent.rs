@@ -115,6 +115,23 @@ fn with_written_code(state: RuntimeState) -> RuntimeState {
     }
 }
 
+/// The source an observation of `phase` is recorded from: Test is the run's.
+fn observed_source(phase: &str) -> &'static str {
+    if phase == "test" {
+        "test_event"
+    } else {
+        "candidate_speech"
+    }
+}
+
+/// A run that executed one case against the code in the editor now. The unit
+/// tests keep the same helper in tests/unit/livekit.rs, which this crate cannot
+/// reach; change the two together.
+fn receive_test_run(state: &mut RuntimeState) {
+    let run = json!({"passed": 1, "total": 1, "code": state.code, "language": state.language});
+    apply_data_event(state, TOPIC_TEST_RESULTS, &run, 99.0);
+}
+
 /// A state whose clock has reached the point the browser announces the warning
 /// at, which the agent now checks before believing the packet.
 fn near_time_up(state: RuntimeState) -> RuntimeState {
@@ -154,7 +171,7 @@ fn prompt_samples() -> Value {
         ],
         ..RuntimeState::default()
     };
-    json!({
+    let mut prompts = json!({
         "resume": resume(false),
         "resumeBehavioral": resume(true),
         "roundStarted": round_started(),
@@ -216,9 +233,12 @@ fn prompt_samples() -> Value {
             language: "python",
             already_recorded: "",
         }),
-        "testsPass": test_results_reaction("3/3 passed", true),
-        "testsFail": test_results_reaction("2/3 passed", false),
+        "testsPass": test_results_reaction("3/3 passed", true, TestRecord::Record),
+        "testsFail": test_results_reaction("2/3 passed", false, TestRecord::Record),
         "testsSetupError": test_setup_error_reaction("The runner could not start."),
+        "testsFailNotRecordable": test_results_reaction("2/3 passed", false, TestRecord::Settled),
+        "testsFailRunAgain": test_results_reaction("2/3 passed", false, TestRecord::RunAgain),
+        "testsRunnerUnavailable": test_runner_unavailable_reaction("Compiler Explorer returned HTTP 503."),
         "logHint": log_hint_text(2),
         "hintRung": hint_rung_text(2, 2, "Compare the current value with what you recorded."),
         "hintRungWithheld": hint_rung_withheld_text(2),
@@ -312,7 +332,17 @@ fn prompt_samples() -> Value {
             test_summary: "Latest test run (run #1, python): 2/3 cases passed.",
             practice_level: None,
         }),
-    })
+    });
+
+    // Outside the literal because one more key there passes the json! macro's
+    // recursion limit. The map is sorted, so where a key is added changes
+    // nothing in the golden.
+    prompts["testsRecordEarlier"] = json!(test_results_reaction(
+        "3/3 passed",
+        true,
+        TestRecord::RecordEarlier
+    ));
+    prompts
 }
 
 fn valid_strict_report() -> Value {
@@ -395,8 +425,9 @@ fn past_the_coding_round(state: &mut RuntimeState) {
 /// round transition's completion gate opens the behavioral round.
 fn past_the_coding_gate(state: &mut RuntimeState) {
     past_the_coding_round(state);
+    receive_test_run(state);
     for phase in ["test", "optimizations"] {
-        record_framework_evidence(state, &json!({"phase": phase, "source": "candidate_speech", "kind": "observed", "confidence": 90, "summary": format!("candidate completed {phase}")})).unwrap();
+        record_framework_evidence(state, &json!({"phase": phase, "source": observed_source(phase), "kind": "observed", "confidence": 90, "summary": format!("candidate completed {phase}")})).unwrap();
     }
 }
 
@@ -427,7 +458,7 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
                 TOPIC_TEST_RESULTS,
                 &json!({
                     "language": "python", "passed": if all_passed { 3 } else { 1 },
-                    "total": 3, "cases": [], "setupError": null
+                    "total": 3, "cases": [], "setupError": null, "code": state.code
                 }),
                 99.0,
             );

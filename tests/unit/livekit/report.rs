@@ -25,7 +25,7 @@ fn the_rounds_a_report_calls_complete_are_the_ones_with_evidence() {
             state,
             &serde_json::json!({
                 "phase": phase, "source": if kind == "skipped" { "session_timing" }
-                    else { "candidate_speech" },
+                    else { crate::livekit::tests::observed_source(phase) },
                 "kind": kind, "confidence": 90,
                 "summary": format!("candidate {kind} {phase}"),
             }),
@@ -57,6 +57,7 @@ fn the_rounds_a_report_calls_complete_are_the_ones_with_evidence() {
 
     // One of the two coding phases is not both of them.
     let mut half = bare.clone();
+    crate::livekit::tests::receive_test_run(&mut half);
     bank(&mut half, "test", "observed");
     assert_eq!(
         rounds(&half)[0]["status"],
@@ -325,6 +326,7 @@ fn an_interview_past_the_evidence_cap_still_reports_every_phase_it_reached() {
         code: "def solve(nums):\n    return sorted(nums)\n".to_string(),
         ..RuntimeState::default()
     };
+    crate::livekit::tests::receive_test_run(&mut state);
     for phase in [
         "repeat",
         "example",
@@ -336,7 +338,8 @@ fn an_interview_past_the_evidence_cap_still_reports_every_phase_it_reached() {
         record_framework_evidence(
             &mut state,
             &serde_json::json!({
-                "phase": phase, "source": "candidate_speech", "kind": "observed",
+                "phase": phase,
+                "source": crate::livekit::tests::observed_source(phase), "kind": "observed",
                 "confidence": 90, "summary": format!("Candidate completed {phase}.")
             }),
         )

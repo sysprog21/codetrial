@@ -43,6 +43,24 @@ pub(super) fn test_output_audio() -> (OutputAudio, mpsc::Receiver<QueuedOutputFr
     )
 }
 
+/// A run that executed one case against the code in the editor now. The
+/// integration tests keep the same helper in tests/agent.rs, which this crate
+/// cannot reach; change the two together.
+pub(crate) fn receive_test_run(state: &mut RuntimeState) {
+    let run = serde_json::json!({"passed": 1, "total": 1,
+        "code": state.code, "language": state.language});
+    crate::agent::apply_data_event(state, crate::runtime::TOPIC_TEST_RESULTS, &run, 99.0);
+}
+
+/// The source an observation of `phase` is recorded from: Test is the run's.
+pub(crate) fn observed_source(phase: &str) -> &'static str {
+    if phase == "test" {
+        "test_event"
+    } else {
+        "candidate_speech"
+    }
+}
+
 /// The interview starts from the plan its token was minted for.
 ///
 /// None of this can be recovered once it is missed: the clock the round
@@ -712,11 +730,13 @@ fn execute_tool_call_reads_editor_and_tracks_hints() {
     );
     assert!(!state.end_requested);
 
+    receive_test_run(&mut state);
     for phase in ["test", "optimizations"] {
         record_framework_evidence(
             &mut state,
             &serde_json::json!({
-                "phase":phase, "source":"candidate_speech", "kind":"observed",
+                "phase":phase,
+                "source":observed_source(phase), "kind":"observed",
                 "confidence":90, "summary":format!("Candidate finished {phase}.")
             }),
         )
@@ -787,7 +807,8 @@ fn the_evidence_that_completes_coding_releases_the_follow_ups_once() {
                 id: phase.to_string(),
                 name: TOOL_RECORD_FRAMEWORK_EVIDENCE.to_string(),
                 args: serde_json::json!({
-                    "phase": phase, "source": "candidate_speech", "kind": "observed",
+                    "phase": phase,
+                "source": observed_source(phase), "kind": "observed",
                     "confidence": 90, "summary": format!("Candidate finished {phase}.")
                 }),
             },
@@ -795,6 +816,7 @@ fn the_evidence_that_completes_coding_releases_the_follow_ups_once() {
     };
     let first = problem.variant().follow_ups[0];
 
+    receive_test_run(&mut state);
     let tested = record(&mut state, "test");
     assert!(
         tested.get("followUps").is_none(),
@@ -844,11 +866,13 @@ fn end_interview_allows_a_completed_coding_only_plan() {
         code: "def solve(nums):\n    return sorted(nums)\n".to_string(),
         ..RuntimeState::default()
     };
+    receive_test_run(&mut state);
     for phase in ["test", "optimizations"] {
         record_framework_evidence(
             &mut state,
             &serde_json::json!({
-                "phase": phase, "source": "candidate_speech", "kind": "observed",
+                "phase": phase,
+                "source": observed_source(phase), "kind": "observed",
                 "confidence": 90, "summary": format!("Candidate finished {phase}.")
             }),
         )
@@ -876,6 +900,7 @@ fn evidence_reply_names_the_earlier_steps_still_open() {
         code: "def solve(nums):\n    return sorted(nums)\n".to_string(),
         ..RuntimeState::default()
     };
+    receive_test_run(&mut state);
     let mut record = |phase: &str, kind: &str, source: &str, summary: &str| {
         execute_tool_call(
             &mut state,
@@ -918,7 +943,8 @@ fn evidence_reply_names_the_earlier_steps_still_open() {
 
     // Algorithm is still open, but Coding already named it: the candidate may
     // have skipped it, and asking again leaves inventing it as the only answer.
-    let test = record("test", "observed", "candidate_speech", "Predicted [].");
+    let test = record("test", "observed", "test_event", "Predicted and ran [].");
+    assert!(test["result"].is_object(), "{test}");
     assert!(test.get("earlierSteps").is_none(), "{test}");
 
     // A skip ticks nothing, so it has no gap to report, even with Situation and
@@ -2042,4 +2068,96 @@ async fn an_exhausted_rotation_waits_only_for_a_key_out_on_quota() {
             );
         }
     }
+}
+
+#[test]
+fn oral_test_trace_cannot_end_the_interview_before_execution() {
+    let mut state = RuntimeState {
+        interview_loop: crate::agent::InterviewLoop::CodingOnly,
+        code: "def solve(nums):\n    return sorted(nums)\n".to_string(),
+        ..RuntimeState::default()
+    };
+    let evidence = |phase: &str, source: &str| GeminiFunctionCall {
+        id: phase.to_string(),
+        name: TOOL_RECORD_FRAMEWORK_EVIDENCE.to_string(),
+        args: serde_json::json!({"phase": phase, "source": source,
+            "kind": "observed", "confidence": 100,
+            "summary": "Candidate explained this step."}),
+    };
+    let end = GeminiFunctionCall {
+        id: "end".to_string(),
+        name: TOOL_END_INTERVIEW.to_string(),
+        args: serde_json::json!({}),
+    };
+    assert!(
+        execute_tool_call(&mut state, &evidence("optimizations", "candidate_speech"))
+            .get("error")
+            .is_none()
+    );
+
+    // The trace of issue #92, and a model claiming a run nobody made.
+    for source in ["candidate_speech", "test_event"] {
+        let refused = execute_tool_call(&mut state, &evidence("test", source));
+        assert!(refused["error"].as_str().unwrap().contains("click Run"));
+        assert!(refused.get("followUps").is_none());
+    }
+    assert_eq!(crate::agent::framework_progress(&state), ["optimizations"]);
+
+    // The candidate asks to test and the model tries to wrap up: the refusal
+    // has to point it at the Run button, not merely say "continue".
+    let ending = execute_tool_call(&mut state, &end);
+    assert!(
+        ending["error"].as_str().unwrap().contains("click Run"),
+        "{ending}"
+    );
+    assert!(!state.end_requested);
+
+    // With the runner reported missing, the refusal points at the hand trace
+    // rather than at a Run button that cannot help.
+    let outage = serde_json::json!({"total": 0, "setupError": "HTTP 503",
+        "runnerUnavailable": true, "code": state.code, "language": state.language});
+    crate::agent::apply_data_event(
+        &mut state,
+        crate::runtime::TOPIC_TEST_RESULTS,
+        &outage,
+        99.0,
+    );
+    let ending = execute_tool_call(&mut state, &end);
+    let refusal = ending["error"].as_str().unwrap();
+    assert!(refusal.contains("trace their code by hand"), "{ending}");
+    assert!(!refusal.contains("click Run"), "{ending}");
+    assert!(!state.end_requested);
+
+    let setup = serde_json::json!({"total": 0, "setupError": "SyntaxError",
+        "code": state.code, "language": state.language});
+    crate::agent::apply_data_event(&mut state, crate::runtime::TOPIC_TEST_RESULTS, &setup, 99.0);
+    assert!(
+        execute_tool_call(&mut state, &evidence("test", "test_event"))
+            .get("error")
+            .is_some()
+    );
+    assert!(execute_tool_call(&mut state, &end).get("error").is_some());
+    assert!(!state.end_requested);
+
+    let run = serde_json::json!({"passed": 1, "total": 2,
+        "code": state.code, "language": state.language});
+    crate::agent::apply_data_event(&mut state, crate::runtime::TOPIC_TEST_RESULTS, &run, 99.0);
+    assert!(!crate::agent::framework_progress(&state).contains(&"test"));
+    assert!(
+        execute_tool_call(&mut state, &evidence("test", "candidate_speech"))
+            .get("error")
+            .is_some(),
+        "even after a run, Test is the run's evidence and not the speech's"
+    );
+    assert!(
+        execute_tool_call(&mut state, &evidence("test", "test_event"))
+            .get("error")
+            .is_none()
+    );
+    assert_eq!(
+        crate::agent::framework_progress(&state),
+        ["optimizations", "test"]
+    );
+    assert!(execute_tool_call(&mut state, &end).get("error").is_none());
+    assert!(state.end_requested);
 }

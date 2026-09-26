@@ -386,12 +386,13 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
       compilerExplorerMock = await startCompilerExplorerMock();
       compilerExplorerBaseUrl = compilerExplorerMock.url;
     }
-    // Not in mock mode. `web/runners.js` reads this global once, when the
-    // module evaluates, and `/runtime-config.js` assigns it too; which of the
-    // two lands first is not fixed, so injecting a third writer made the run
-    // pass or fail depending on load order. Under interception the page needs
-    // no injection at all: it computes the real origin, exactly as in
-    // production, and the request is answered before it leaves.
+    // Not in mock mode. An init script runs before `/runtime-config.js`, which
+    // then assigns the same global, so a value injected here is overwritten
+    // before `web/compiler-explorer.js` reads it; that ordering is fixed, and
+    // it is why mock mode intercepts requests instead of injecting. Under
+    // interception the page needs no injection at all: it computes the real
+    // origin, exactly as in production, and the request is answered before it
+    // leaves.
     if (compilerExplorerBaseUrl !== "__default__" && !compilerExplorerMock) {
       await page.addInitScript((baseUrl) => {
         globalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = baseUrl;

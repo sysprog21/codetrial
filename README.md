@@ -110,8 +110,9 @@ the two is the configuration, not the command. A `web` process hosts agents for
 at most `CODETRIAL_MAX_CONCURRENT_INTERVIEWS` interviews at once, 16 by default;
 past that, dispatch is refused and the candidate waits.
 
-Set `CODETRIAL_COMPILER_EXPLORER_ENABLED=false` to leave C, C++, and Java
-editors available while disabling their remote test runs.
+Set `CODETRIAL_COMPILER_EXPLORER_ENABLED=false` to withdraw C, C++, and Java,
+whose tests run remotely: their language tabs are disabled, since code that
+cannot be run cannot complete the REACTO Test step.
 
 ## Interview behavior
 

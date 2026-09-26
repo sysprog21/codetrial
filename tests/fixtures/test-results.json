@@ -8,6 +8,8 @@
         "total": 5,
         "language": "python",
         "setupError": null,
+        "runnerUnavailable": false,
+        "code": "def match_pair(amounts, total):\n    seen = {}\n    return []\n",
         "failures": [],
         "candidateCases": [],
         "at": 1770000000000
@@ -20,6 +22,8 @@
         "total": 5,
         "language": "python",
         "setupError": null,
+        "runnerUnavailable": false,
+        "code": "def match_pair(amounts, total):\n    seen = {}\n    return []\n",
         "failures": [
           {
             "label": "example 2",
@@ -45,6 +49,8 @@
         "total": 5,
         "language": "python",
         "setupError": null,
+        "runnerUnavailable": false,
+        "code": "def match_pair(amounts, total):\n    seen = {}\n    return []\n",
         "failures": [
           {
             "label": "example 1",
@@ -82,6 +88,8 @@
         "total": 1,
         "language": "python",
         "setupError": null,
+        "runnerUnavailable": false,
+        "code": "def match_pair(amounts, total):\n    seen = {}\n    return []\n",
         "failures": [],
         "candidateCases": [
           {
@@ -129,7 +137,23 @@
         "passed": 0,
         "total": 0,
         "language": "cpp",
-        "setupError": "Compiler Explorer returned 503",
+        "setupError": "Compilation failed: expected expression",
+        "runnerUnavailable": false,
+        "code": "def match_pair(amounts, total):\n    seen = {}\n    return []\n",
+        "failures": [],
+        "candidateCases": [],
+        "at": 1770000000000
+      }
+    },
+    {
+      "name": "runner unavailable",
+      "payload": {
+        "passed": 0,
+        "total": 0,
+        "language": "python",
+        "setupError": "The test cases could not be loaded. Check your connection and run again.",
+        "runnerUnavailable": true,
+        "code": "def match_pair(amounts, total):\n    seen = {}\n    return []\n",
         "failures": [],
         "candidateCases": [],
         "at": 1770000000000

@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 
 import {
   ALL_LANGUAGES,
+  COMPILED_LANGUAGES,
   compilerType,
   generateHarness,
   harnessGap,
@@ -595,11 +596,27 @@ test("a class-style judge withholds C, and says why", () => {
   assert.equal(harnessGap("cpp", judges["lru-cache"]), null);
 });
 
-test("a function-style judge offers every language, and so does an unreadable one", () => {
+test("C is offered only once a function-style judge is known", () => {
   assert.equal(judges["two-sum"].kind, "function");
   assert.deepEqual(languagesFor(judges["two-sum"]), ALL_LANGUAGES);
-  // A judge that could not be fetched must not cost a candidate a language:
-  // the run path reports the failure itself.
-  assert.deepEqual(languagesFor(null), ALL_LANGUAGES);
-  assert.equal(harnessGap("c", null), null);
+  assert.deepEqual(languagesFor(null), ALL_LANGUAGES.filter((one) => one !== "c"));
+  assert.match(harnessGap("c", null), /only after function-style tests load/);
+});
+
+test("disabled compiled runners withhold their languages for every judge", () => {
+  // The module reads the runtime config on every call, as the page's own
+  // /runtime-config.js would leave it on a server with the runs turned off.
+  const previous = globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED;
+  globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = false;
+  try {
+    for (const spec of [null, judges["two-sum"], judges["lru-cache"]]) {
+      assert.deepEqual(languagesFor(spec), ["python", "javascript"]);
+      for (const language of COMPILED_LANGUAGES) {
+        assert.match(harnessGap(language, spec), /disabled by this server/);
+      }
+    }
+  } finally {
+    if (previous === undefined) delete globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED;
+    else globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = previous;
+  }
 });

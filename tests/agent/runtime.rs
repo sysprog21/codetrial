@@ -380,8 +380,9 @@ fn leetcode_reactions_preserve_stage_transitions() {
     assert!(code.contains("predicted test after implementation"));
     assert!(code.contains("requires `log_hint`"));
 
-    let failed = test_results_reaction("1/3 passed", false);
-    assert!(failed.contains("Return from Test to diagnosis/Coding"));
+    let failed = test_results_reaction("1/3 passed", false, TestRecord::Record);
+    assert!(failed.contains("still counts as testing"));
+    assert!(failed.contains("go back to diagnosis"));
     assert!(failed.contains("choose one failing case"));
     assert!(failed.contains("expected result and what their code produced"));
     assert!(failed.contains("Do not state the commonality, bug, location, or fix"));
@@ -391,7 +392,7 @@ fn leetcode_reactions_preserve_stage_transitions() {
     assert!(setup.contains("prevents loading the tests, compilation, or execution"));
     assert!(setup.contains("Do not identify the error's cause, location, or fix"));
 
-    let passed = test_results_reaction("3/3 passed", true);
+    let passed = test_results_reaction("3/3 passed", true, TestRecord::Record);
     assert!(passed.contains("move to Optimizations"));
     assert!(passed.contains("do not start a behavioral question"));
 
@@ -411,8 +412,8 @@ fn leetcode_reactions_preserve_stage_transitions() {
         silence_nudge("(the editor is currently empty)"),
         time_warning(),
         wrap_up("time_up"),
-        test_results_reaction("1/3 passed", false),
-        test_results_reaction("3/3 passed", true),
+        test_results_reaction("1/3 passed", false, TestRecord::Record),
+        test_results_reaction("3/3 passed", true, TestRecord::Record),
         test_setup_error_reaction("The runner could not start."),
     ] {
         assert!(
@@ -965,9 +966,14 @@ fn test_reaction_decision_applies_throttle() {
         update_last_interjection: true,
     };
 
-    assert_eq!(test_reaction_decision(false, 19.9), none);
-    assert_eq!(test_reaction_decision(false, 20.0), react);
-    assert_eq!(test_reaction_decision(true, 20.0), none);
+    assert_eq!(test_reaction_decision(false, 19.9, false), none);
+    assert_eq!(test_reaction_decision(false, 20.0, false), react);
+    assert_eq!(test_reaction_decision(true, 20.0, false), none);
+
+    // A run the model has to hear about is heard inside the cooldown, but never
+    // after the interview has ended.
+    assert_eq!(test_reaction_decision(false, 0.0, true), react);
+    assert_eq!(test_reaction_decision(true, 0.0, true), none);
 }
 
 /// The greeting asks the candidate to pick a language, and a click is silent:
