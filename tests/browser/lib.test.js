@@ -200,6 +200,7 @@ test("testPayload keeps the agent wire contract and caps failures at four", () =
       ...Array.from({ length: 6 }, (_, index) => ({
         label: `bad-${index}`,
         pass: false,
+        displayInput: `[${index}]`,
         expected: "1",
         got: "2",
         error: "",
@@ -221,6 +222,7 @@ test("testPayload keeps the agent wire contract and caps failures at four", () =
   assert.equal(payload.setupError, null, "empty setup error normalizes to null");
   assert.equal(payload.failures.length, 4);
   assert.deepEqual(Object.keys(payload.failures[0]).sort(), ["error", "expected", "got", "label"]);
+  assert.equal(Object.hasOwn(payload.failures[0], "displayInput"), false, "browser-only input stays off the agent wire");
   assert.equal(payload.failures[0].error, null);
   assert.deepEqual(payload.candidateCases, Array.from({ length: 5 }, (_, index) => ({
     label: `mine-${index}`,

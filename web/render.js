@@ -33,9 +33,10 @@ export function resultsMarkup(summary, status = null) {
     // places that used to re-derive it had to agree on what null meant.
     const observed = item.pass === null;
     // Only a case that did not pass shows it, and most cases pass.
-    const detail = item.pass ? "" : item.error ? escapeHtml(item.error)
+    const displayInput = item.displayInput === undefined ? "" : `input ${escapeHtml(item.displayInput)}\n`;
+    const detail = item.pass ? "" : displayInput + (item.error ? escapeHtml(item.error)
       : observed ? `got ${escapeHtml(item.got)}`
-        : `expected ${escapeHtml(item.expected)}\ngot ${escapeHtml(item.got)}`;
+        : `expected ${escapeHtml(item.expected)}\ngot ${escapeHtml(item.got)}`);
     return `
       <li>
         <div><span class="${observed || item.pass ? "good" : "critical"}">${observed ? "OUTPUT" : item.pass ? "OK" : "FAIL"}</span> ${escapeHtml(item.label)} <span>${escapeHtml(item.timeMs)}ms</span></div>
