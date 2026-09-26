@@ -243,12 +243,25 @@ export function endInterviewPayload(reason, code, language) {
 /// held to its own copy rather than inheriting the sanitizer's.
 export const CANDIDATE_CASE_LIMIT = 5;
 
+/// Every diagnostic a runner attaches, one per category it can name. The
+/// category is a word the agent checks against a closed list
+/// (`DiagnosticCategory::from_wire` in src/agent/evidence.rs), so each is spelled
+/// once here rather than at every place a run can fail, and the wire fixtures
+/// emit one case per entry so that list and this one are held together. Frozen,
+/// because every result of a kind shares its entry.
+export const DIAGNOSTIC = Object.freeze({
+  timeout: Object.freeze({ category: "timeout" }),
+  other: Object.freeze({ category: "other" }),
+  runtimeSignal: Object.freeze({ category: "runtime_signal" }),
+});
+
 export function testPayload(summary) {
   return {
     passed: summary.passed,
     total: summary.total,
     language: summary.language,
     setupError: summary.setupError || null,
+    diagnostic: summary.diagnostic || null,
     failures: summary.cases.filter((item) => !item.candidate && !item.pass).slice(0, 4).map((item) => ({ label: item.label, expected: item.expected, got: item.got, error: item.error || null })),
     candidateCases: summary.cases.filter((item) => item.candidate).slice(0, CANDIDATE_CASE_LIMIT).map((item) => ({ label: item.label, input: item.input, expected: item.expected ?? null, got: item.got, error: item.error || null })),
     at: Date.now(),
@@ -437,9 +450,9 @@ const textEncoder = new TextEncoder();
 /// function-local, moving it left the whole suite green with the supported-card
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
-  bundleVersion: 14,
-  livePromptVersion: 6,
-  reportPromptVersion: 11,
+  bundleVersion: 16,
+  livePromptVersion: 8,
+  reportPromptVersion: 13,
   reportSchemaVersion: 2,
   rubricVersion: 1,
 };

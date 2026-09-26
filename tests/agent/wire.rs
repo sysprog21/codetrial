@@ -643,6 +643,53 @@ fn an_empty_test_packet_is_not_counted_as_a_run() {
     }
 }
 
+/// The category a runner names is a word the agent checks against a closed
+/// list, and this is the one place both halves meet over it.
+///
+/// The fixture carries one case per category the browser can send, generated
+/// from its own map, so a runner that started sending a word the sanitizer does
+/// not know fails here rather than being counted, quietly, as `other`. Each
+/// category is looked up by name in the counts the ledger serializes: for the
+/// ones the browser sends today the name and the count are spelled alike, and
+/// a new one that is spelled differently fails the lookup and asks to be read.
+///
+/// `other` is the one this cannot hold. A run that failed to start is counted
+/// as `other` whenever its category goes unrecognized, so an `other` the agent
+/// had stopped recognizing would count exactly as one it recognized, here and
+/// in production alike. Its case is still generated, since the map carries it,
+/// and it pins only that the browser still sends it.
+#[test]
+fn every_category_the_browser_sends_is_one_the_agent_counts() {
+    let (topic, cases) = wire_fixture(include_str!("../fixtures/test-results.json"));
+    let diagnostics: Vec<_> = cases
+        .iter()
+        .filter(|(name, _)| name.starts_with("diagnostic "))
+        .collect();
+
+    // A floor, so a fixture that lost its cases cannot pass by checking none.
+    assert!(
+        diagnostics.len() >= 3,
+        "the fixture carries {} diagnostic cases",
+        diagnostics.len()
+    );
+
+    for (name, payload) in diagnostics {
+        let category = payload["diagnostic"]["category"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{name} carries no category"));
+        let mut state = RuntimeState::default();
+        apply_data_event(&mut state, &topic, payload, TEST_REACTION_COOLDOWN_S);
+
+        let mut counted = serde_json::to_value(&state.evidence_ledger.diagnostics).unwrap();
+        counted.as_object_mut().unwrap().remove("latest_signature");
+        assert_eq!(
+            counted,
+            json!({ category: 1 }),
+            "the {category} diagnostic was not counted as itself"
+        );
+    }
+}
+
 /// A packet with nothing in it must still read as "no run happened". Bounding
 /// one into shape would build a run out of nothing and tell the report a run
 /// occurred and scored zero, which is the same false claim in the other

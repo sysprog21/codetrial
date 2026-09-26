@@ -111,6 +111,30 @@ import { consumeGroundingPacket } from "./document-grounding.js";
 let frameworkRound = "coding";
 let editorInitialized = false;
 let codePublishTimer = null;
+/// The switch waiting out its debounce, held as the buffer and language it was
+/// made with rather than as a flag. By the time a keystroke can ask for it the
+/// editor already holds what was typed, so the tab cannot be published from the
+/// live editor any more; this is the only copy of what the tab arrived with.
+///
+/// It is also the whole of what the debouncer needs to remember. Only two
+/// places arm the timer, and they disagree on exactly this: a keystroke leaves
+/// it null, a switch fills it. So "an edit is queued" is `codePublishTimer &&
+/// !pendingLanguagePublish`, and the separate boolean that used to say so was a
+/// second variable for one three-state machine, kept in step by hand at six
+/// sites.
+let pendingLanguagePublish = null;
+/// What the gutter was last drawn for, so it is redrawn only when it would
+/// differ. Not derivable without reading and splitting `textContent` back out
+/// of the DOM, which is the work the guard exists to skip.
+///
+/// Declared up here with the rest of the module's state, not beside
+/// `paintEditor`, and the placement is load-bearing: `init()` runs at the top
+/// of this module and paints the editor before its first `await`, so a `let`
+/// further down is still in its temporal dead zone when the first paint reads
+/// it. That threw, and because `init` is async the throw became a rejected
+/// promise nobody saw: `bindEvents` never ran, and the audio check sat on a
+/// disabled button until the browser test timed out.
+let paintedLineCount = 0;
 // The agent reads the editor once per 2s watch tick, so publishing every
 // keystroke sends ~10x more full-buffer packets than anyone consumes.
 const CODE_PUBLISH_DEBOUNCE_MS = 300;
@@ -562,13 +586,26 @@ function bindEvents() {
     }
   });
   nodes.editor.addEventListener("input", () => {
+    // Before the buffer below is taken, because this sends the tab as it
+    // arrived. Typing inside the switch's own debounce window cancels it
+    // otherwise, and the single packet that survives carries the switch and the
+    // typing together: the agent reads a packet that changes the language as
+    // the tab arriving with its starter, which is nobody's work, so the first
+    // thing typed into a freshly picked tab was filed as part of the template
+    // and became the buffer every later edit was measured against.
+    //
+    // Only a keystroke flushes it, so clicking through three tabs still
+    // coalesces into one packet. The click that gets a confirmation spoken is
+    // the one the candidate stayed on.
+    flushPendingLanguagePublish();
     state.codeByLanguage[state.language] = nodes.editor.value;
     paintEditor();
     clearTimeout(codePublishTimer);
-    codePublishTimer = setTimeout(() => {
-      publishCode(Date.now());
-      codePublishTimer = null;
-    }, CODE_PUBLISH_DEBOUNCE_MS);
+    // The flush itself, not a copy of its publish. The copy sent the edit and
+    // left it out of the editor replay, so only an edit some flush overtook
+    // inside its window was ever recorded, and a recording showed the starter
+    // beside test results for a buffer it never contained.
+    codePublishTimer = setTimeout(flushPendingEditorPublish, CODE_PUBLISH_DEBOUNCE_MS);
   });
   nodes.report.addEventListener("click", (event) => {
     if (event.target.closest("#done")) window.location.assign("/");
@@ -1316,6 +1353,10 @@ function applyLanguages(spec) {
 function setLanguage(language) {
   if (!languages.includes(language)) return;
   if (editorInitialized) {
+    // A switch is a coalescer boundary. Flush the old tab before selecting the
+    // new one so a quick click cannot replace an unreported edit with the new
+    // language's starter buffer.
+    flushPendingEditorPublish();
     state.codeByLanguage[state.language] = nodes.editor.value;
   }
   state.language = language;
@@ -1332,10 +1373,11 @@ function setLanguage(language) {
   // himself. Coalescing here fixes it at the source rather than teaching the
   // agent to ignore packets the browser should not have sent.
   clearTimeout(codePublishTimer);
-  codePublishTimer = setTimeout(() => {
-    publishCode();
-    codePublishTimer = null;
-  }, CODE_PUBLISH_DEBOUNCE_MS);
+  pendingLanguagePublish = { code: nodes.editor.value, language };
+  // The flush, as the input debounce uses its own: one place resets the
+  // three-state machine, and the switch leaves carrying the buffer it was made
+  // with whichever way it ends.
+  codePublishTimer = setTimeout(flushPendingLanguagePublish, CODE_PUBLISH_DEBOUNCE_MS);
 }
 
 /// One banner element, several owners, ranked. Each owner keeps its own slot,
@@ -1735,14 +1777,49 @@ function updateTranscriptSegment(id, speaker, text, final) {
   state.transcript.upsert(id, speaker, text, final);
 }
 
+/// Flushes whatever is queued, each as the kind it is. Running the tests needs
+/// both: a switch waiting out its debounce, then any edit behind it.
+///
+/// A queued switch goes first and leaves as a switch. The edit path used to take
+/// whatever was queued, so running the tests inside a switch's debounce window
+/// stamped the switch with `at` and wrote the new tab's starter to the editor
+/// replay as though the candidate had typed it. The switch's own flush clears
+/// the timer, so the edit flush after it finds nothing left to send.
 function flushPendingCodePublish() {
-  if (!codePublishTimer) return;
+  flushPendingLanguagePublish();
+  flushPendingEditorPublish();
+}
+
+/// Sends a queued edit, and only an edit: a live timer with no switch behind it,
+/// which is what "an edit is queued" means. `setLanguage` flushes through this
+/// one so that clicking through several tabs still coalesces into the last, and
+/// the input debounce ends here when nothing flushed it first.
+function flushPendingEditorPublish() {
+  if (!codePublishTimer || pendingLanguagePublish) return;
   clearTimeout(codePublishTimer);
   codePublishTimer = null;
   publishCode(Date.now());
   // The same debounce the agent gets. An event per keystroke would be the
   // whole per-interview budget spent on the first ten minutes of typing.
   recordReplay("editor", { code: currentCode(), language: state.language });
+}
+
+/// The other half of the same coalescer boundary. A switch waiting out its
+/// debounce is sent on its own, carrying the buffer the tab arrived with,
+/// before the edit that is about to take over the timer. The agent then sees
+/// the tab arrive and the typing land as two packets rather than one it would
+/// have to guess about.
+function flushPendingLanguagePublish() {
+  if (!pendingLanguagePublish) return;
+  const pending = pendingLanguagePublish;
+  pendingLanguagePublish = null;
+  clearTimeout(codePublishTimer);
+  codePublishTimer = null;
+  // No `at`, and no replay event, because neither is what a switch carries:
+  // this sends early exactly what setLanguage's own timer would have sent late.
+  // The editor replay stream records what the candidate typed, and a tab
+  // arriving with its starter is not that.
+  publishCode(undefined, pending.code, pending.language);
 }
 
 /// When the page stops waiting for the report and offers to leave. Held against
@@ -1792,11 +1869,20 @@ function endInterview(reason) {
   // "ended" nobody sent leaves a replay that just stops. Inside a Retry-After
   // window the flush sends nothing and the event still waits on that timer,
   // so a tab closed before the window passes loses it.
+  // An edit still waiting out its debounce is cancelled below, because the end
+  // payload carries it to the agent. The replay has no end payload, so this is
+  // its one chance to see what was typed last, and it goes ahead of "ended" so
+  // the recording shows it inside the interview.
+  if (codePublishTimer && !pendingLanguagePublish) {
+    recordReplay("editor", { code: currentCode(), language: state.language });
+  }
   recordReplay("lifecycle", { state: "ended", reason });
   void flushReplay();
   // The end_interview payload carries the final buffer, so drop any debounced
   // code_update still in flight rather than racing it.
   clearTimeout(codePublishTimer);
+  codePublishTimer = null;
+  pendingLanguagePublish = null;
   nodes.end.disabled = true;
   nodes.ending.hidden = false;
   // Only the interviewer answers `end_interview`, so a report is coming only
@@ -2162,9 +2248,24 @@ function setAgentStateLabel(label, ready = false) {
   nodes.agentState.closest(".agent-pill")?.classList.toggle("ready", ready);
 }
 
+/// Repaints the syntax layer and the gutter behind the textarea.
+///
+/// One read of the buffer rather than two, and the gutter is rebuilt only when
+/// the line count actually moves. Typing inside a line is most of what a
+/// candidate does and none of it changes the numbers down the side.
+///
+/// The highlight pass above it is unconditional and is the larger cost: a
+/// full-buffer regex and an `innerHTML` assignment per keystroke. Coalescing
+/// the whole repaint onto `requestAnimationFrame` is what would fix that, and
+/// it would change when the paint lands, so it is not folded in here.
 function paintEditor() {
-  nodes.editorHighlight.firstElementChild.innerHTML = highlight(currentCode(), state.language);
-  nodes.editorLines.textContent = Array.from({ length: currentCode().split("\n").length }, (_, index) => index + 1).join("\n");
+  const code = currentCode();
+  nodes.editorHighlight.firstElementChild.innerHTML = highlight(code, state.language);
+  const lines = code.split("\n").length;
+  if (lines !== paintedLineCount) {
+    paintedLineCount = lines;
+    nodes.editorLines.textContent = Array.from({ length: lines }, (_, index) => index + 1).join("\n");
+  }
 }
 
 function currentCode() {
@@ -2173,6 +2274,6 @@ function currentCode() {
 
 /// The one way the editor reaches the agent: the buffer and its language. The
 /// agent holds its own copy of the starters it measures written code against.
-function publishCode(at) {
-  publish(topics.code, codeUpdatePayload(currentCode(), state.language, at));
+function publishCode(at, code = currentCode(), language = state.language) {
+  publish(topics.code, codeUpdatePayload(code, language, at));
 }

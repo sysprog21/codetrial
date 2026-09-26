@@ -825,6 +825,18 @@ fn browser_check_prints_server_log_on_node_failure() {
 }
 
 #[test]
+fn browser_check_bounds_room_service_requests() {
+    let driver = fs::read_to_string("scripts/livekit-room-service.cjs").unwrap();
+    let room_service = source_block(
+        &driver,
+        "async function roomService",
+        "\n/// Protobuf JSON omits",
+    );
+
+    assert!(room_service.contains("signal: AbortSignal.timeout(30000)"));
+}
+
+#[test]
 fn static_interview_script_keeps_exit_fallback_short() {
     let source = fs::read_to_string("web/interview.js").unwrap();
     let ending = source_block(&source, "function endInterview", "function leaveRoom");

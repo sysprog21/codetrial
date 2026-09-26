@@ -12,28 +12,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::accounts::Accounts;
+use crate::web::BackgroundTasks;
 
 /// How often the sweeper runs. The shortest retry backoff, because a schedule
 /// checked less often than its own first step is a schedule with a different
 /// first step.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
-
-/// The timers this module owns, stopped when the server that started them is.
-///
-/// Held rather than detached. A router is built per test and more than one can
-/// share a runtime, so a sweeper nothing aborted went on scanning a database
-/// its own server had finished with, and a delivery worker went on uploading
-/// from it. `QuotaRefresher` is the same shape for the same reason.
-#[derive(Default)]
-pub(crate) struct RecordingWorkers(Vec<tokio::task::JoinHandle<()>>);
-
-impl Drop for RecordingWorkers {
-    fn drop(&mut self) {
-        for handle in self.0.drain(..) {
-            handle.abort();
-        }
-    }
-}
 
 /// Starts the sweeper and the delivery worker, which always run as a pair.
 ///
@@ -43,22 +27,14 @@ impl Drop for RecordingWorkers {
 /// minutes long and a sweep that only ran at startup would turn every provider
 /// hiccup into a failed recording. The delivery worker moves what the sweeper
 /// finds finished.
-///
-/// Silent when there is no runtime to spawn on. `web_router` is public and can
-/// be built outside one; a router that serves without these is degraded, and a
-/// panic at construction is worse.
 pub(crate) fn spawn_recording_workers(
     accounts: Arc<Accounts>,
     recorder: crate::recording::Recorder,
-) -> RecordingWorkers {
-    let Ok(handle) = tokio::runtime::Handle::try_current() else {
-        eprintln!("recording is configured but there is no runtime to sweep or deliver on");
-        return RecordingWorkers::default();
-    };
-    let mut workers = RecordingWorkers::default();
+) -> BackgroundTasks {
+    let mut workers = BackgroundTasks::default();
 
     let sweeping = (accounts.clone(), recorder.clone());
-    workers.0.push(handle.spawn(async move {
+    workers.push("sweep recordings", async move {
         let (accounts, recorder) = sweeping;
         loop {
             let outcome = crate::recording::sweep_recordings(&accounts, &recorder).await;
@@ -67,13 +43,13 @@ pub(crate) fn spawn_recording_workers(
             }
             tokio::time::sleep(SWEEP_INTERVAL).await;
         }
-    }));
+    });
 
     // A deployment whose credentials do not build a delivery client records and
     // hands nothing over, which `delivery_provider` has already warned about.
     // The sweeper still runs: it is what expires those rows.
     if let Some(delivery) = recorder.delivery.clone() {
-        workers.0.push(handle.spawn(async move {
+        workers.push("deliver recordings", async move {
             loop {
                 let outcome = crate::recording::run_delivery_queue(
                     &accounts,
@@ -86,7 +62,7 @@ pub(crate) fn spawn_recording_workers(
                 }
                 tokio::time::sleep(DELIVERY_INTERVAL).await;
             }
-        }));
+        });
     }
     workers
 }
@@ -139,7 +115,7 @@ pub(crate) fn delivery_provider(
         &recording.service_account_json,
         &recording.gcs_bucket,
         &recording.drive_id,
-        Arc::new(|| crate::current_epoch_seconds() as i64),
+        Arc::new(crate::current_epoch_seconds_i64),
     ) {
         Ok(delivery) => Some(Arc::new(delivery)),
         Err(error) => {

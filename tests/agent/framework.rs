@@ -612,7 +612,7 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
         let transcript = case["transcript"].as_str().expect("case has a transcript");
         let final_code = case["finalCode"].as_str().expect("case has code");
         let test_summary = case["testSummary"].as_str().expect("case has tests");
-        let prompt = report_prompt(ReportPromptInput {
+        let prompt = model_report_input(report_prompt(ReportPromptInput {
             problem: get_problem(Some("two-sum")),
             transcript,
             rolling_assessment: "",
@@ -625,7 +625,8 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
             elapsed_min: 15.0,
             test_summary,
             practice_level: None,
-        });
+            evidence: "",
+        }));
 
         assert!(prompt.contains(transcript), "{name}: transcript was lost");
         assert!(prompt.contains(final_code), "{name}: code was lost");
@@ -634,14 +635,14 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
             "{name}: test history was lost"
         );
         for key in [
-            "\"codingScore\"",
-            "\"communicationScore\"",
-            "\"decision\"",
-            "\"summary\"",
-            "\"codingFeedback\"",
-            "\"communicationFeedback\"",
-            "\"improvementPlan\"",
-            "\"frameworkAssessment\"",
+            "codingScore",
+            "communicationScore",
+            "decision",
+            "summary",
+            "codingFeedback",
+            "communicationFeedback",
+            "improvementPlan",
+            "frameworkAssessment",
         ] {
             assert!(prompt.contains(key), "{name}: report contract lost {key}");
         }
@@ -1058,6 +1059,80 @@ fn round_transition_is_one_shot_plan_scoped_and_evidence_gated() {
     assert_eq!(end.finish_interview.as_deref(), Some("time_up"));
     assert_eq!(complete.code, "frozen");
     assert_eq!(complete.language, "python");
+}
+
+/// The unasked STAR steps are closed by the platform: at the five-minute
+/// warning of a round that never reached them, and at the end of a session
+/// whose behavioral round never opened, however it ended, once per step and
+/// never over evidence the candidate earned.
+#[test]
+fn the_platform_closes_unasked_star_steps_itself() {
+    let skips = |state: &RuntimeState| {
+        state
+            .framework_evidence
+            .iter()
+            .filter(|item| {
+                item.kind == EvidenceKind::Skipped && item.source == EvidenceSource::SessionTiming
+            })
+            .map(|item| item.phase)
+            .collect::<Vec<_>>()
+    };
+    let star = [
+        FrameworkPhase::Situation,
+        FrameworkPhase::Task,
+        FrameworkPhase::Action,
+        FrameworkPhase::Result,
+    ];
+    let warning = json!({"type":"time_warning","remainingSeconds":300});
+    let end = json!({"type":"end_interview","reason":"candidate_ended"});
+
+    let mut state = near_time_up(RuntimeState::default());
+    apply_data_event(&mut state, TOPIC_CONTROL, &warning, 99.0);
+    assert_eq!(skips(&state), star);
+    assert!(
+        state
+            .framework_evidence
+            .iter()
+            .all(|item| item.confidence == 100
+                && item.summary == "The five-minute cutoff prevented assessment.")
+    );
+    apply_data_event(&mut state, TOPIC_CONTROL, &end, 99.0);
+    assert_eq!(skips(&state), star, "the end adds no second skip");
+    assert!(
+        framework_progress(&state).is_empty(),
+        "a skip ticks nothing"
+    );
+
+    // A candidate who leaves on their own gets the same rows, and a step they
+    // answered keeps its evidence rather than gaining a skip beside it.
+    let mut ended = RuntimeState::default();
+    record_framework_evidence(
+        &mut ended,
+        &json!({"phase":"situation","source":"candidate_speech","kind":"observed",
+                "confidence":80,"summary":"Described the outage."}),
+    )
+    .unwrap();
+    apply_data_event(&mut ended, TOPIC_CONTROL, &end, 99.0);
+    assert_eq!(skips(&ended), star[1..]);
+    assert!(
+        ended
+            .framework_evidence
+            .iter()
+            .filter(|item| item.kind == EvidenceKind::Skipped)
+            .all(|item| item.summary == "The session ended before assessment.")
+    );
+
+    // A warning inside a running behavioral round leaves its parts open for the
+    // one follow-up the round still allows.
+    let mut behavioral = near_time_up(RuntimeState::default());
+    behavioral.behavioral_round_started = true;
+    apply_data_event(&mut behavioral, TOPIC_CONTROL, &warning, 99.0);
+    assert!(skips(&behavioral).is_empty());
+
+    // Nor does the end of one: a step left without evidence there may belong to
+    // a probe the candidate declined, which the wrap-up leaves unassessed.
+    apply_data_event(&mut behavioral, TOPIC_CONTROL, &end, 99.0);
+    assert!(skips(&behavioral).is_empty());
 }
 
 #[test]

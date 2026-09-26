@@ -137,6 +137,21 @@ pub fn sanitize_test_run(payload: &serde_json::Value) -> serde_json::Value {
     let failures = reported_cases("failures", MAX_TEST_FAILURES);
     let candidate_cases = reported_cases("candidateCases", crate::agent::MAX_CANDIDATE_CASES);
 
+    // A category is useful deterministic metadata only when the runner named it
+    // from structured execution state. Free-form compiler prose never gets
+    // classified here, and a string outside the list is dropped rather than
+    // passed on. That still counts as `other` in the evidence reducer whenever
+    // the run carries a setup error, which is the only way the browser ever
+    // attaches a category. An unknown string on a run that did not fail to
+    // start is counted as nothing: recording it would put a runner failure on a
+    // run that reported no failure at all.
+    let diagnostic = payload
+        .get("diagnostic")
+        .and_then(|value| value.get("category"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|category| super::evidence::DiagnosticCategory::from_wire(category).is_some())
+        .map(|category| serde_json::json!({ "category": category }));
+
     serde_json::json!({
         "passed": passed,
         "total": total,
@@ -153,6 +168,7 @@ pub fn sanitize_test_run(payload: &serde_json::Value) -> serde_json::Value {
             .and_then(spoken_language)
             .unwrap_or("?"),
         "setupError": text(payload.get("setupError")),
+        "diagnostic": diagnostic,
         "failures": failures,
     })
 }

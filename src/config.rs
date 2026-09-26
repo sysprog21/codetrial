@@ -20,10 +20,14 @@ pub const DEFAULT_GEMINI_LIVE_MODEL: &str = "gemini-3.1-flash-live-preview";
 /// composing an answer in a second language. 700ms was measured against a
 /// fluent speaker and is inside the pause such a candidate takes to find the
 /// next word: Gemini called the turn over, Jim answered, and the candidate was
-/// still mid-sentence. The cost of the other mistake is that every reply now
-/// starts about eight tenths of a second later, which nobody reports as a
-/// broken interview.
-pub const DEFAULT_GEMINI_SILENCE_MS: u32 = 1_500;
+/// still mid-sentence. The cost of the other mistake is that every reply
+/// starts later, which nobody reports as a broken interview, but every reply
+/// pays: at 1,500ms the window was about seven tenths of what the candidate
+/// waited between finishing and hearing the reply start. 1,000ms keeps most of
+/// the room the second-language pause needed and gives half a second back on
+/// every turn. A room that still sees candidates cut off sets
+/// `GEMINI_SILENCE_MS` higher.
+pub const DEFAULT_GEMINI_SILENCE_MS: u32 = 1_000;
 
 /// How readily Gemini decides the candidate has started speaking, and so how
 /// readily it abandons a reply it is part way through delivering.
@@ -77,9 +81,11 @@ pub const DEFAULT_GEMINI_CANDIDATE_VIDEO_ENABLED: bool = false;
 pub const DEFAULT_MAX_CONCURRENT_INTERVIEWS: usize = 16;
 
 /// Interim reviews use the report model's quota before the final report does.
-/// Twelve four-line notes fill the final report's note budget exactly; zero is
+/// Six four-line notes fill half the final report's note budget, which the
+/// report does not need full: it reads the whole transcript and the code
+/// itself, and each review is a call of about five hundred tokens. Zero is
 /// useful to an operator who must reserve a shared key for final reports.
-pub const DEFAULT_MAX_INTERIM_REVIEWS: usize = 12;
+pub const DEFAULT_MAX_INTERIM_REVIEWS: usize = 6;
 pub const MAX_INTERIM_REVIEWS: usize = 72;
 
 const REQUIRED_KEYS: &[&str] = &[
@@ -497,6 +503,9 @@ pub struct AgentConfig {
     pub gemini_voice: String,
     pub gemini_silence_ms: u32,
     pub gemini_start_sensitivity: String,
+    /// `None` leaves the end-of-speech sensitivity at the API's own value; see
+    /// `end_sensitivity`.
+    pub gemini_end_sensitivity: Option<String>,
     pub room_prefix: String,
     pub default_duration_min: u32,
     pub gemini_candidate_video_enabled: bool,
@@ -670,6 +679,7 @@ pub fn load_from_pairs(
         gemini_silence_ms: optional_u32(&values, "GEMINI_SILENCE_MS", DEFAULT_GEMINI_SILENCE_MS)
             .min(MAX_GEMINI_SILENCE_MS),
         gemini_start_sensitivity: start_sensitivity_or_default(&values),
+        gemini_end_sensitivity: end_sensitivity(&values),
         room_prefix: optional(&values, "CODETRIAL_ROOM_PREFIX", DEFAULT_ROOM_PREFIX),
         default_duration_min: optional_u32(&values, "CODETRIAL_DURATION_MIN", DEFAULT_DURATION_MIN),
         gemini_candidate_video_enabled: gemini_candidate_video_enabled(
@@ -758,6 +768,27 @@ fn start_sensitivity_or_default(values: &BTreeMap<String, String>) -> String {
                 "GEMINI_START_SENSITIVITY: {other} is not LOW or HIGH; using {DEFAULT_GEMINI_START_SENSITIVITY}"
             );
             DEFAULT_GEMINI_START_SENSITIVITY.to_string()
+        }
+    }
+}
+
+/// How readily Gemini decides the candidate has finished, beside the silence
+/// window that decides how long it then waits. Unset by default, which leaves
+/// the API's own value in force: unlike the start sensitivity there is no
+/// measurement here to choose a side with, and HIGH ends turns sooner at the
+/// cost the silence window already documents, a candidate cut off
+/// mid-sentence. An unreadable value is refused to the default for the reason
+/// `start_sensitivity_or_default` gives.
+fn end_sensitivity(values: &BTreeMap<String, String>) -> Option<String> {
+    let value = present(values, "GEMINI_END_SENSITIVITY")?.to_ascii_uppercase();
+    match value.as_str() {
+        "LOW" | "END_SENSITIVITY_LOW" => Some("END_SENSITIVITY_LOW".to_string()),
+        "HIGH" | "END_SENSITIVITY_HIGH" => Some("END_SENSITIVITY_HIGH".to_string()),
+        other => {
+            eprintln!(
+                "GEMINI_END_SENSITIVITY: {other} is not LOW or HIGH; leaving the API default"
+            );
+            None
         }
     }
 }

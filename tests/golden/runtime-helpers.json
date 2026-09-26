@@ -1,12 +1,7 @@
 {
   "numbered": {
     "empty": "(the editor is currently empty)",
-    "twoLines": "  1| a\n  2| b"
-  },
-  "significantChange": {
-    "emptyToLong": true,
-    "oneToFourLines": true,
-    "unicodeLong": false
+    "twoLines": "1| a\n2| b"
   },
   "testRuns": {
     "empty": "No test run was recorded; tests may not have been attempted or may not have been available for the selected language/problem yet.",
@@ -14,7 +9,7 @@
     "nestedFailure": "Latest test run (run #5, python): 0/1 cases passed.\n- FAILED nested: expected ['a'], got {'message': 'boom'}",
     "none": "No test run was recorded; tests may not have been attempted or may not have been available for the selected language/problem yet.",
     "passing": "Latest test run (run #2, python): 3/3 cases passed.",
-    "readEditorLatest": "Latest test run (run #1, python): 1/2 cases passed.",
+    "readEditorLatest": "Latest test run (run #1, python): 1/2 cases passed.\n- 1 failing case not listed",
     "setupError": "Latest test run (run #4) could not execute the code: module failed to load"
   },
   "transcript": "Interviewer: Hi\nCandidate: Hello\nInterviewer: [SYSTEM EVENT] kept by Python"

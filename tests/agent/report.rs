@@ -652,3 +652,89 @@ fn a_turn_with_no_words_is_dropped_from_the_report_transcript() {
         "Candidate: I will use a map.\nInterviewer: Why a map?"
     );
 }
+
+/// A plan weakness that differs from its improvement only in case, spacing or
+/// a closing full stop is the same improvement, and is written back as it; one
+/// that matches two improvements that way, or paraphrases one, is refused.
+#[test]
+fn a_plan_weakness_is_matched_across_case_spacing_and_a_full_stop() {
+    let mut raw = valid_strict_report();
+    let improvement = raw["codingFeedback"]["improvements"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let item = raw["improvementPlan"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|item| item["weakness"] == improvement.as_str())
+        .expect("the fixture plans every improvement");
+    item["weakness"] = json!(format!(
+        "{}.",
+        improvement.to_uppercase().replace(' ', "  ")
+    ));
+    let accepted = validate_report_candidate(&raw, get_problem(Some("two-sum")))
+        .expect("a copy that changed nothing but its case is the same weakness");
+    assert!(
+        accepted["improvementPlan"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["weakness"] == improvement.as_str())
+    );
+
+    let mut paraphrased = valid_strict_report();
+    paraphrased["improvementPlan"][0]["weakness"] = json!(format!(
+        "Try to {}",
+        paraphrased["improvementPlan"][0]["weakness"]
+            .as_str()
+            .unwrap()
+    ));
+    assert!(validate_report_candidate(&paraphrased, get_problem(Some("two-sum"))).is_err());
+
+    // Two improvements that differ only in case: a weakness matching both is
+    // not snapped to either, and the plan is refused.
+    let mut ambiguous = valid_strict_report();
+    let first = ambiguous["codingFeedback"]["improvements"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    ambiguous["codingFeedback"]["improvements"][1] = json!(first.to_uppercase());
+    for item in ambiguous["improvementPlan"].as_array_mut().unwrap() {
+        if item["weakness"] == first.as_str() {
+            item["weakness"] = json!(format!("{first}."));
+        }
+    }
+    let errors = validate_report_candidate(&ambiguous, get_problem(Some("two-sum")))
+        .unwrap_err()
+        .join("\n");
+    assert!(errors.contains("exactly reference"), "{errors}");
+}
+
+/// The model no longer writes the phase rows' tags; the server derives them
+/// from the plan, and a report that already carries them, as `final_report`
+/// hands back, still validates.
+#[test]
+fn phase_rows_need_no_tags_from_the_model() {
+    let mut raw = valid_strict_report();
+    for row in raw["frameworkAssessment"]["phases"].as_array_mut().unwrap() {
+        row.as_object_mut().unwrap().remove("weaknessTags");
+    }
+    let accepted = validate_report_candidate(&raw, get_problem(Some("two-sum")))
+        .expect("a row without tags is the shape the schema asks for");
+    let tagged = accepted["frameworkAssessment"]["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| !row["weaknessTags"].as_array().unwrap().is_empty())
+        .count();
+    assert!(tagged > 0, "the tags are derived from the plan: {accepted}");
+    validate_report_candidate(&accepted, get_problem(Some("two-sum")))
+        .expect("the derived tags validate again");
+    assert!(
+        report_response_schema()["properties"]["frameworkAssessment"]["properties"]["phases"]
+            ["items"]["properties"]
+            .get("weaknessTags")
+            .is_none()
+    );
+}

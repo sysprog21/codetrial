@@ -1,3 +1,5 @@
+import { DIAGNOSTIC } from "./lib.js";
+
 const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 const CPP_TYPES = {
@@ -126,14 +128,14 @@ export function parseCompilerResults(stdout) {
 
 export function mapCompilerResponse(response) {
   if (!response) return { setupError: "Compiler Explorer did not return a response." };
-  if (response.timedOut) return { setupError: "Compiler Explorer timed out before the run completed." };
+  if (response.timedOut) return { setupError: "Compiler Explorer timed out before the run completed.", diagnostic: DIAGNOSTIC.timeout };
   if (response.didExecute === false) {
     const diagnostics = compilerText(response.buildResult?.stderr || response.stderr);
-    return { setupError: diagnostics || "Compilation failed before the tests could run." };
+    return { setupError: diagnostics || "Compilation failed before the tests could run.", diagnostic: DIAGNOSTIC.other };
   }
   if (response.code && response.code !== 0) {
     const diagnostics = compilerText(response.stderr);
-    return { setupError: diagnostics || `Compiler Explorer exited with status ${response.code}.` };
+    return { setupError: diagnostics || `Compiler Explorer exited with status ${response.code}.`, diagnostic: DIAGNOSTIC.runtimeSignal };
   }
   return parseCompilerResults(response.stdout);
 }

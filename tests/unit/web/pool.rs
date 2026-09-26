@@ -485,33 +485,6 @@ fn a_verdict_that_did_not_move_prints_nothing() {
     );
 }
 
-/// The guard exists so the refresher cannot outlive the server that wanted
-/// it. Nothing proved it: `drop` could have been empty and every test still
-/// passed, which is precisely the leak this type was added to stop.
-#[tokio::test]
-async fn dropping_the_refresher_aborts_the_task_it_owns() {
-    let task = tokio::spawn(async {
-        // Never finishes on its own, so anything that ends it is the abort.
-        loop {
-            tokio::time::sleep(Duration::from_secs(3600)).await;
-        }
-    });
-    let watch = task.abort_handle();
-    assert!(!watch.is_finished(), "the task is running before the drop");
-
-    drop(QuotaRefresher(Some(task)));
-
-    // The abort lands at the task's next scheduling point, not inside `drop`,
-    // so this yields rather than asserting straight away.
-    for _ in 0..100 {
-        if watch.is_finished() {
-            return;
-        }
-        tokio::task::yield_now().await;
-    }
-    panic!("the task outlived the QuotaRefresher that owned it");
-}
-
 /// A disabled probe and an empty pool are separate reasons not to spawn the
 /// refresher. Combining them with `&&` starts a task for either disabled
 /// configuration, even though there is no useful work for that task to do.
@@ -519,13 +492,10 @@ async fn dropping_the_refresher_aborts_the_task_it_owns() {
 async fn a_refresher_starts_only_for_an_enabled_nonempty_pool() {
     let disabled =
         spawn_provider_quota_refresher(ProviderQuota::new(false), config_with(&["a"]).pool);
-    assert!(
-        disabled.0.is_none(),
-        "disabled quota probing starts no task"
-    );
+    assert!(disabled.is_empty(), "disabled quota probing starts no task");
 
     let empty = spawn_provider_quota_refresher(ProviderQuota::new(true), config_with(&[]).pool);
-    assert!(empty.0.is_none(), "an empty pool starts no task");
+    assert!(empty.is_empty(), "an empty pool starts no task");
 }
 
 /// The room name is a contract between two modules that never call each

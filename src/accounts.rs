@@ -33,8 +33,6 @@ use rusqlite::OptionalExtension;
 
 use serde_json::{Value, json};
 
-use crate::current_epoch_seconds;
-
 /// No `Debug`: `session_secret` signs the session cookie, so a copy in a log
 /// is not a credential to steal but the ability to mint any user's session,
 /// and `oauth` carries the client secret beneath it.

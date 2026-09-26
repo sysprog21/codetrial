@@ -20,6 +20,34 @@ pub fn current_epoch_seconds() -> u64 {
         .as_secs()
 }
 
+/// The same reading, in the signed type SQLite stores a timestamp in.
+///
+/// Every account and recording table spells a time as `INTEGER`, which rusqlite
+/// binds from `i64`, so this conversion happened at eleven call sites as `as
+/// i64`. An `as` cast between a wide unsigned and a signed type is the one that
+/// wraps silently, and eleven of them are eleven places to check rather than
+/// one. Saturating rather than wrapping, for the same reason the two clocks
+/// above saturate: a clock far enough ahead to overflow this is a broken clock,
+/// and a negative timestamp would read as 1969 and delete every row a sweep
+/// looked at.
+pub fn current_epoch_seconds_i64() -> i64 {
+    i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX)
+}
+
+/// The receipt clock the evidence ledger is stamped with. One reading is taken
+/// per packet at the boundary and passed down, so every entry a single event
+/// produces shares it and the reducers themselves stay pure enough to replay.
+/// Saturates rather than wrapping, because a clock behind the epoch is a broken
+/// clock and not a reason to record a negative time.
+pub fn current_epoch_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
 /// The folder the executable itself sits in, which is where anything
 /// `codetrial` writes or looks for without being told a path belongs. A
 /// released binary is unpacked into a folder of its own and everything it

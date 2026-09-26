@@ -29,11 +29,14 @@ Authentication failures, bad models, malformed responses, and other permanent
 failures get no transport retry.
 
 Quiet-pause interim reviews use that same report model and quota. A review is
-eligible after 8 seconds of candidate quiet and 75 seconds from interview start,
-no more often than every 75 seconds, and only after four new candidate turns.
+eligible after 8 seconds of candidate quiet and 150 seconds from interview start,
+no more often than every 150 seconds, and only after six new candidate turns;
+none starts once the interviewer has asked to close or the planned time would
+run out before the call returned, and a review whose editor has not changed
+since the last one is told so instead of being sent it again.
 Before the cap, a 90-minute
-interview can make at most 72 such calls; shorter interviews cannot exceed that
-rate. `CODETRIAL_MAX_INTERIM_REVIEWS` defaults to 12, accepts `0` to disable
+interview can make at most 36 such calls; shorter interviews cannot exceed that
+rate. `CODETRIAL_MAX_INTERIM_REVIEWS` defaults to 6, accepts `0` to disable
 the reviews, and is capped at 72. This is a quota guard, not a completeness
 limit: the final report still receives the complete transcript and editor state.
 

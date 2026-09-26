@@ -140,12 +140,13 @@ impl GeminiLiveSession {
             .await
     }
 
-    pub async fn send_tool_response(
+    /// Every answer to one batch of calls in one message: the model resumes
+    /// once, on the whole batch, rather than once per answer.
+    pub async fn send_tool_responses(
         &mut self,
-        call: &GeminiFunctionCall,
-        response: Value,
+        answers: &[(GeminiFunctionCall, Value)],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.send_json(tool_response_message(call, response)).await
+        self.send_json(tool_response_message(answers)).await
     }
 
     pub async fn next_event(&mut self) -> Option<GeminiEvent> {
@@ -201,8 +202,52 @@ impl GeminiLiveSession {
     }
 }
 
+/// What one model turn or one HTTP call was billed, as the provider reports
+/// it. The Live model answers no `countTokens` call, so this is the only
+/// measure of what a session actually spends: every turn is billed on the
+/// whole context it runs in, which a count of the text this server sends
+/// cannot see.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TokenUsage {
+    pub prompt: u64,
+    pub response: u64,
+    pub cached: u64,
+    pub thoughts: u64,
+}
+
+impl TokenUsage {
+    fn from_metadata(metadata: &Value) -> Self {
+        let count = |key: &str| metadata.get(key).and_then(Value::as_u64).unwrap_or(0);
+        Self {
+            prompt: count("promptTokenCount"),
+            response: count("responseTokenCount") + count("candidatesTokenCount"),
+            cached: count("cachedContentTokenCount"),
+            thoughts: count("thoughtsTokenCount"),
+        }
+    }
+
+    pub fn add(&mut self, other: Self) {
+        self.prompt += other.prompt;
+        self.response += other.response;
+        self.cached += other.cached;
+        self.thoughts += other.thoughts;
+    }
+
+    /// The fields of a log line, in one spelling for the Live session's total
+    /// and each HTTP call.
+    pub fn log_fields(&self) -> String {
+        format!(
+            "prompt_tokens={} response_tokens={} cached_tokens={} thought_tokens={}",
+            self.prompt, self.response, self.cached, self.thoughts
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GeminiEvent {
+    /// One turn's billing, which Live reports once, on the frame that completes
+    /// the turn.
+    Usage(TokenUsage),
     Audio {
         bytes: Vec<u8>,
         mime_type: String,
@@ -711,7 +756,11 @@ async fn generate_interim_review_at(
     let result = generate_content_once(
         &api_key,
         url,
-        &content_request(prompt, interim_generation_config()),
+        &content_request(
+            &crate::agent::interim_system_instruction(),
+            prompt,
+            interim_generation_config(),
+        ),
         INTERIM_ATTEMPT_TIMEOUT,
         "interim review",
     )
@@ -724,6 +773,16 @@ async fn generate_interim_review_at(
     result
 }
 
+/// The seed both HTTP calls sample with. Measured against the report model at
+/// its report temperature, four calls with one prompt and this seed returned
+/// one answer four times, and four without it returned four. The same prompt
+/// then gets the same notes and the same report, which is what lets a replayed
+/// session be compared with the one it replays; the Live session is left
+/// unseeded, since a voice that answers every candidate in identical words is
+/// not a trade the interview should make, and its audio cannot be replayed
+/// byte for byte whatever the seed.
+const GENERATION_SEED: i64 = 71;
+
 /// Plain text and a small ceiling, where the report asks for JSON against a
 /// schema. The prompt caps the answer at four lines; this caps what an answer
 /// that ignores that can cost. Thinking is off for the reason it is off on the
@@ -735,16 +794,18 @@ fn interim_generation_config() -> Value {
         "responseMimeType": "text/plain",
         "maxOutputTokens": 512,
         "thinkingConfig": { "thinkingBudget": 0 },
-        "temperature": 0.2
+        "temperature": 0.2,
+        "seed": GENERATION_SEED
     })
 }
 
-/// The `generateContent` envelope. One prompt part, and whatever the caller
-/// wants generated from it -- the two callers here differ only in the config,
-/// and the envelope is the wire contract, which is not a thing to assert in two
-/// places.
-fn content_request(prompt: &str, generation_config: Value) -> Value {
+/// The `generateContent` envelope: the constant instruction first, then the
+/// one prompt part, and whatever the caller wants generated from it. The two
+/// callers differ only in the instruction and the config, and the envelope is
+/// the wire contract, which is not a thing to assert in two places.
+fn content_request(system: &str, prompt: &str, generation_config: Value) -> Value {
     json!({
+        "systemInstruction": { "parts": [ { "text": system } ] },
         "contents": [ { "parts": [ { "text": prompt } ] } ],
         "generationConfig": generation_config
     })
@@ -776,6 +837,12 @@ async fn generate_content_once(
         return Err(ApiFailure::from_response(status.as_u16(), &body).into());
     }
     let response = response.json::<Value>().await?;
+    if let Some(metadata) = response.get("usageMetadata") {
+        eprintln!(
+            "gemini {what} usage {}",
+            TokenUsage::from_metadata(metadata).log_fields()
+        );
+    }
     gemini_text(&response).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -973,11 +1040,17 @@ pub fn live_tool_declarations() -> Value {
     json!([
         {
             "name": TOOL_READ_EDITOR,
-            "description": "Return the current editor language, numbered code, latest test run summary, and how many minutes remain on the candidate's countdown."
+            "description": "The editor's language and numbered code, the latest test run and the minutes left.",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "fromLine": { "type": "INTEGER", "description": "The line to start from, when a cut answer names one." }
+                }
+            }
         },
         {
             "name": TOOL_LOG_HINT,
-            "description": "Record a hint. Before a hint the candidate asked for, call with requested true and give the clue it returns; after any other hint, call with requested false.",
+            "description": "Record a hint: requested true before one they asked for, then give the clue it returns with their editor; requested false after any other.",
             "parameters": {
                 "type": "OBJECT",
                 "properties": {
@@ -988,7 +1061,7 @@ pub fn live_tool_declarations() -> Value {
         },
         {
             "name": TOOL_RECORD_FRAMEWORK_EVIDENCE,
-            "description": "Record trusted REACTO or STAR evidence only after it is present in candidate speech, an editor snapshot, or a test event.",
+            "description": "Record REACTO or STAR evidence present in their speech, an editor snapshot or a test event.",
 
             // Schema.Type is an enum, so these are its value names, not free
             // text. Lowercase happens to be accepted here and is rejected on
@@ -1008,7 +1081,7 @@ pub fn live_tool_declarations() -> Value {
         },
         {
             "name": TOOL_END_INTERVIEW,
-            "description": "Close the interview because it is genuinely finished and there is nothing further to ask. The platform speaks the closing; do not say goodbye before calling this."
+            "description": "Close an interview with nothing left to ask. The platform speaks the closing, so say no goodbye first."
         }
     ])
 }
@@ -1019,12 +1092,20 @@ pub fn live_tool_declarations() -> Value {
 /// intact, which is the difference between a reconnect the candidate hears as
 /// a pause and one they hear as the interviewer starting over.
 fn live_setup_message(boot: &RuntimeBootstrap<'_>, resume: Option<&str>) -> Value {
-    json!({
+    let mut setup = json!({
         "setup": {
             "model": format!("models/{}", gemini_model_id(boot.live_model)),
             "generationConfig": {
                 "temperature": 0.7,
                 "responseModalities": ["AUDIO"],
+
+                // Pinned off, as the HTTP calls pin it and in the same field
+                // for the same compatibility. Measured against the Live model,
+                // six replies each way reached first audio in a median 506 ms
+                // unpinned and 500 ms at the lowest level, and neither reported
+                // a thought token: this changes nothing today and holds against
+                // a server default that moves.
+                "thinkingConfig": { "thinkingBudget": 0 },
                 "speechConfig": {
                     "voiceConfig": {
                         "prebuiltVoiceConfig": {
@@ -1044,12 +1125,12 @@ fn live_setup_message(boot: &RuntimeBootstrap<'_>, resume: Option<&str>) -> Valu
             "realtimeInputConfig": {
                 "activityHandling": "START_OF_ACTIVITY_INTERRUPTS",
 
-                // Both halves of the endpointing decision are named here.
-                // Either one left absent puts the API's own value in force,
-                // where it cannot be measured or tuned, and the two fail in
-                // opposite directions: the silence window decides how long to
-                // wait before answering, and the start sensitivity decides how
-                // readily a reply already in flight is abandoned.
+                // The silence window decides how long to wait before answering,
+                // and the start sensitivity how readily a reply already in
+                // flight is abandoned; both are named, because left absent the
+                // API's own value is in force where it cannot be measured or
+                // tuned. The end sensitivity is added below only when
+                // configured: nothing measured picks a value for it.
                 "automaticActivityDetection": {
                     "silenceDurationMs": boot.silence_ms,
                     "startOfSpeechSensitivity": boot.start_sensitivity
@@ -1068,7 +1149,12 @@ fn live_setup_message(boot: &RuntimeBootstrap<'_>, resume: Option<&str>) -> Valu
                 None => json!({}),
             }
         }
-    })
+    });
+    if let Some(end) = boot.end_sensitivity {
+        setup["setup"]["realtimeInputConfig"]["automaticActivityDetection"]["endOfSpeechSensitivity"] =
+            json!(end);
+    }
+    setup
 }
 
 fn realtime_text_message(text: &str) -> Value {
@@ -1097,22 +1183,24 @@ fn realtime_video_message(bytes: &[u8], mime_type: &str) -> Value {
     })
 }
 
-fn tool_response_message(call: &GeminiFunctionCall, response: Value) -> Value {
+fn tool_response_message(answers: &[(GeminiFunctionCall, Value)]) -> Value {
     json!({
         "toolResponse": {
-            "functionResponses": [
-                {
+            "functionResponses": answers
+                .iter()
+                .map(|(call, response)| json!({
                     "name": call.name,
                     "id": call.id,
                     "response": response
-                }
-            ]
+                }))
+                .collect::<Vec<_>>()
         }
     })
 }
 
 fn generate_report_request(prompt: &str) -> Value {
     content_request(
+        &crate::agent::report_system_instruction(),
         prompt,
         json!({
             "responseMimeType": "application/json",
@@ -1130,7 +1218,8 @@ fn generate_report_request(prompt: &str) -> Value {
             // generations, and an operator who has pointed
             // `GEMINI_REPORT_MODEL` at an earlier model is not owed a 400.
             "thinkingConfig": { "thinkingBudget": 0 },
-            "temperature": 0.3
+            "temperature": 0.3,
+            "seed": GENERATION_SEED
         }),
     )
 }
@@ -1281,6 +1370,17 @@ fn parse_server_message(text: &str) -> ServerMessage {
     {
         events.push(GeminiEvent::OutputTranscript(text.to_string()));
     }
+
+    // Before `TurnComplete`, because the frame that completes a turn is the
+    // frame that bills it and the two reach the room loop one at a time through
+    // a channel. Behind the completion, the last turn's tokens are still queued
+    // when the interview tears down or the socket is replaced, and
+    // `replace_gemini_session` empties that queue: the session's own billing
+    // line then reports less than the session spent.
+    if let Some(metadata) = message.get("usageMetadata") {
+        events.push(GeminiEvent::Usage(TokenUsage::from_metadata(metadata)));
+    }
+
     if message
         .pointer("/serverContent/turnComplete")
         .and_then(Value::as_bool)

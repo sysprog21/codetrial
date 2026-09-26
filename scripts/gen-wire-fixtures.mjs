@@ -150,6 +150,22 @@ function testResultsCases() {
           cases: [],
         }),
       },
+      // One case per category a runner can name, taken from the producer's own
+      // map rather than a copy of it: the category is a word the agent checks
+      // against a closed list, and a copy here would agree with itself while
+      // the runners sent something else. A category added to the map gets its
+      // case, and its check on the agent side, without anyone writing either.
+      ...Object.values(lib.DIAGNOSTIC).map((diagnostic) => ({
+        name: `diagnostic ${diagnostic.category}`,
+        payload: lib.testPayload({
+          passed: 0,
+          total: 0,
+          language: "python",
+          setupError: `The run stopped with a ${diagnostic.category} diagnostic.`,
+          diagnostic,
+          cases: [],
+        }),
+      })),
     ];
   } finally {
     Date.now = realNow;

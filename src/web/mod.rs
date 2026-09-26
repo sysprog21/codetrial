@@ -39,7 +39,7 @@ pub(crate) use {
 pub use assets::static_file_meta;
 pub use auth::login_config;
 pub use interviews::REPLAY_RATE_LIMIT;
-use pool::{ProviderQuota, QuotaRefresher, spawn_provider_quota_refresher};
+use pool::{ProviderQuota, spawn_provider_quota_refresher};
 pub use recordings::READ_RATE_LIMIT;
 pub use setup::setup_service;
 pub use token::{TOKEN_RATE_LIMIT, TokenConfig, TokenResponse, token_response};
@@ -184,16 +184,10 @@ pub(crate) struct AppState {
     recorder: Option<crate::recording::Recorder>,
     token_limit: TokenRateLimit,
 
-    /// Held only so the background quota refresher stops when this server does.
-    /// Never read.
+    /// Every timer this server started, held only so they stop when it does.
+    /// Never read. Why that matters is on `BackgroundTasks`.
     #[allow(dead_code)]
-    quota_refresher: Arc<QuotaRefresher>,
-
-    /// The same, for the recording sweeper and the delivery worker. Detached,
-    /// these outlived the router that started them and went on scanning a
-    /// database the server they belonged to had finished with.
-    #[allow(dead_code)]
-    recording_workers: Arc<RecordingWorkers>,
+    background: Arc<BackgroundTasks>,
 
     // A separate bucket, for the same reason `/api/token` checks the session
     // before spending its own: login is reachable without any credential, so a
@@ -252,23 +246,123 @@ pub(crate) fn open_accounts(login: GitHubLoginConfig) -> Option<Arc<Accounts>> {
         })
         .ok()?;
 
-    // Bounded to one uptime rather than never: every unverified sign-in left a
-    // throwaway account row and a session row behind, and nothing reclaimed
-    // either, so the database grew for the lifetime of the deployment. A
-    // long-running server still wants a periodic sweep; this is the cheapest
-    // correct place to put one, not the finished answer.
-    //
-    // Best effort, because a transient lock must not disable otherwise healthy
-    // account requests. Said out loud either way, because a sweep nobody can
-    // see is a database nobody notices growing.
-    match crate::accounts::sweep_expired_sessions(&accounts, current_epoch_seconds() as i64) {
+    // One pass before the server answers anything, because a process that died
+    // leaves rows no request will ever touch again. The repeating half is
+    // `spawn_session_sweeper`, and this is deliberately not it: `open_accounts`
+    // is called from tests and from `web_router`, neither of which is
+    // guaranteed a runtime to spawn on, and a schema that opens is worth more
+    // than a timer that could not start.
+    sweep_sessions_once(&accounts);
+    Some(Arc::new(accounts))
+}
+
+/// Deletes what has expired, and says what it deleted.
+///
+/// Best effort, because a transient lock must not disable otherwise healthy
+/// account requests. Said out loud either way, because a sweep nobody can see
+/// is a database nobody notices growing.
+fn sweep_sessions_once(accounts: &Accounts) {
+    let now = crate::current_epoch_seconds_i64();
+    match crate::accounts::sweep_expired_sessions(accounts, now) {
         Ok((0, 0)) => {}
         Ok((sessions, users)) => {
             eprintln!("swept {sessions} expired session(s) and {users} throwaway account(s)")
         }
         Err(error) => eprintln!("WARNING: session sweep failed: {error}"),
     }
-    Some(Arc::new(accounts))
+}
+
+/// How often expired sessions are reclaimed. An hour, because the rows are
+/// small and the thing being bounded is a deployment's lifetime, not a
+/// request's.
+const SESSION_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Background tasks stopped when the server that started them is.
+///
+/// Held rather than detached. A router is built per test and more than one can
+/// share a runtime, so a sweeper nothing aborted went on scanning a database
+/// its own server had finished with, and a delivery worker went on uploading
+/// from it.
+///
+/// One type for all of them. This was written out three times -- once for the
+/// recording workers, once for the quota refresher, once for the session sweep
+/// -- as the same `Drop` over the same handle, so the rule "a server owns its
+/// timers" was stated three times and could have been got wrong in three
+/// places.
+#[derive(Default)]
+pub(crate) struct BackgroundTasks(Vec<tokio::task::JoinHandle<()>>);
+
+impl Drop for BackgroundTasks {
+    fn drop(&mut self) {
+        for handle in self.0.drain(..) {
+            handle.abort();
+        }
+    }
+}
+
+impl BackgroundTasks {
+    /// Spawns on the current runtime, or says which task it could not start
+    /// and carries on.
+    ///
+    /// Degraded rather than fatal, because `web_router` is public and can be
+    /// built outside a runtime: a server whose quota cache is cold, or whose
+    /// expired sessions accumulate, still answers every request it is asked.
+    /// Said once here rather than in each spawner that calls this.
+    pub(crate) fn push(
+        &mut self,
+        what: &str,
+        task: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => self.0.push(handle.spawn(task)),
+            Err(_) => eprintln!("no runtime to {what} on"),
+        }
+    }
+
+    /// Takes another set's handles over, leaving it empty so its `Drop` aborts
+    /// nothing. What a server holds is one set; what starts them is three
+    /// functions that each know their own work.
+    pub(crate) fn absorb(&mut self, mut other: Self) {
+        self.0.append(&mut other.0);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// Reclaims expired sessions and the throwaway accounts behind them, for as
+/// long as the server runs.
+///
+/// Returns the timer so the caller owns its lifetime; what it does on each tick
+/// is [`sweep_sessions_once`], tested directly against a database in
+/// tests/unit/web/setup.rs.
+///
+/// Every unverified sign-in leaves a session row and a throwaway account row,
+/// and nothing else reclaims either. Sweeping once at startup bounded that to
+/// one uptime, which is no bound at all on the deployment this is written for:
+/// a server that stays up for a month swept in its first second and never
+/// again.
+pub(crate) fn spawn_session_sweeper(accounts: Arc<Accounts>) -> BackgroundTasks {
+    let mut tasks = BackgroundTasks::default();
+    tasks.push("sweep expired sessions", async move {
+        loop {
+            // Sleeps first on purpose. `open_accounts` has already swept by the
+            // time this is spawned, and a second pass in the same second would
+            // scan a table it just emptied.
+            tokio::time::sleep(SESSION_SWEEP_INTERVAL).await;
+
+            // Off the async worker, because rusqlite is synchronous and this
+            // one holds a transaction across two deletes. `spawn_blocking`
+            // directly rather than `accounts::blocking`, whose `Result` this
+            // has nothing to put in: the sweep reports its own failures, and a
+            // task that did not finish is already reported by the join.
+            let accounts = accounts.clone();
+            let _ = tokio::task::spawn_blocking(move || sweep_sessions_once(&accounts)).await;
+        }
+    });
+    tasks
 }
 
 /// Not public: `/api/token` extracts `ConnectInfo`, so a bare `Router` served
@@ -309,20 +403,23 @@ pub(crate) fn web_router(
         );
     }
     let accounts = login.and_then(open_accounts);
-    let recording_workers = match (&accounts, &recorder) {
-        (Some(accounts), Some(recorder)) => {
-            spawn_recording_workers(accounts.clone(), recorder.clone())
-        }
-        _ => RecordingWorkers::default(),
-    };
+    let mut background = BackgroundTasks::default();
+    if let (Some(accounts), Some(recorder)) = (&accounts, &recorder) {
+        background.absorb(spawn_recording_workers(accounts.clone(), recorder.clone()));
+    }
+    if let Some(accounts) = accounts.clone() {
+        background.absorb(spawn_session_sweeper(accounts));
+    }
 
     // Built here rather than in the state literal below, because the refresher
     // and the request path have to share one cache: a second `ProviderQuota`
     // would give the background task its own map and leave every token request
     // probing inline exactly as it did before.
     let provider_quota = ProviderQuota::new(config.probe_provider_quota);
-    let quota_refresher =
-        spawn_provider_quota_refresher(provider_quota.clone(), config.pool.clone());
+    background.absorb(spawn_provider_quota_refresher(
+        provider_quota.clone(),
+        config.pool.clone(),
+    ));
     Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/api/token", post(token_handler))
@@ -394,8 +491,7 @@ pub(crate) fn web_router(
             read_limit: TokenRateLimit::with_limit(recordings::READ_RATE_LIMIT),
             provider_counter: Arc::new(AtomicUsize::new(0)),
             provider_quota,
-            quota_refresher: Arc::new(quota_refresher),
-            recording_workers: Arc::new(recording_workers),
+            background: Arc::new(background),
             room_authorizations: Arc::default(),
         })
 }

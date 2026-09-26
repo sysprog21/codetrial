@@ -212,6 +212,7 @@ test("testPayload keeps the agent wire contract and caps failures at four", () =
   assert.deepEqual(Object.keys(payload).sort(), [
     "at",
     "candidateCases",
+    "diagnostic",
     "failures",
     "language",
     "passed",
@@ -219,6 +220,7 @@ test("testPayload keeps the agent wire contract and caps failures at four", () =
     "total",
   ]);
   assert.equal(payload.setupError, null, "empty setup error normalizes to null");
+  assert.equal(payload.diagnostic, null);
   assert.equal(payload.failures.length, 4);
   assert.deepEqual(Object.keys(payload.failures[0]).sort(), ["error", "expected", "got", "label"]);
   assert.equal(payload.failures[0].error, null);

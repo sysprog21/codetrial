@@ -109,40 +109,56 @@ fn the_interview_begins_from_the_plan_it_was_booked_with() {
         boot.problem.variant().starters.len(),
         "every language's starter is seeded from the problem"
     );
+
+    // A coding-only interview has no behavioral round, so seeding its phases as
+    // uncovered would ask the report to account for one that was never
+    // configured.
+    assert_eq!(
+        state.evidence_ledger.coverage.uncovered.len(),
+        crate::agent::REACTO_PHASE_IDS.len()
+    );
+    assert!(
+        !state
+            .evidence_ledger
+            .coverage
+            .uncovered
+            .iter()
+            .any(|phase| phase == "situation")
+    );
 }
 
-/// Closing a turn yields what to publish, once, and only for an open one.
-///
-/// The pair is the line and the segment it replaces, so an empty text or a
-/// borrowed id publishes a turn that says nothing or overwrites another
-/// one. Closing a turn nobody opened would publish a blank line for a
-/// speaker who has not spoken.
+/// The other loop, which is the one that owes STAR phases as well.
 #[test]
-fn a_turn_closes_once_and_only_when_it_was_open() {
-    let mut unopened = SpeakerTurn::default();
-    assert!(
-        close_turn(&mut unopened, "Candidate").is_none(),
-        "a speaker who has not spoken has no line to publish"
+fn a_two_round_interview_leaves_both_frameworks_uncovered() {
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google-key"),
+    ])
+    .unwrap();
+    let boot = crate::runtime::bootstrap_with_rounds(
+        &config,
+        "interview-fixed",
+        Some("two-sum"),
+        45,
+        crate::runtime::RuntimeOptions {
+            interview_loop: crate::agent::InterviewLoop::CodingBehavioral,
+            ..crate::runtime::RuntimeOptions::default()
+        },
     );
-
-    let mut turn = SpeakerTurn::default();
-    turn.record(&mut Vec::new(), "Candidate", "I will use a hash map.");
-    let open_segment = turn.segment_id("Candidate");
-    let (text, segment) = close_turn(&mut turn, "Candidate").expect("an open turn closes");
-    assert_eq!(text, "I will use a hash map.");
+    let state = initial_runtime_state(&boot, Instant::now());
     assert_eq!(
-        segment, open_segment,
-        "the id names the segment being replaced, not the one after it"
+        state.evidence_ledger.coverage.uncovered.len(),
+        crate::agent::REACTO_PHASE_IDS.len() + crate::agent::STAR_PHASE_IDS.len()
     );
-    assert_ne!(
-        turn.segment_id("Candidate"),
-        open_segment,
-        "and the next line is a new segment, not an overwrite of this one"
-    );
-
     assert!(
-        close_turn(&mut turn, "Candidate").is_none(),
-        "a closed turn closes once; publishing it again repeats the line"
+        state
+            .evidence_ledger
+            .coverage
+            .uncovered
+            .iter()
+            .any(|phase| phase == "situation")
     );
 }
 
@@ -194,62 +210,6 @@ fn the_interview_clock_starts_when_the_candidate_joined() {
     assert!(
         bound.contains("setup_began"),
         "the clock must start where the candidate's does, not after setup: {bound}"
-    );
-}
-
-/// The checklist is redrawn for a change the candidate can see, and for
-/// nothing else.
-///
-/// Evidence for a phase they never reached is recorded but never shown, so
-/// keying the publish on the evidence count sends a message whose phase
-/// list is identical to the one already on screen. The browser unhides the
-/// checklist on every `framework_state` it receives, so the first such
-/// message reveals an empty, wholly unticked list before the candidate has
-/// banked anything.
-#[test]
-fn the_checklist_is_republished_only_when_it_would_look_different() {
-    let mut state = RuntimeState::default();
-    let skip = serde_json::json!({
-        "phase": "optimizations",
-        "source": "session_timing",
-        "kind": "skipped",
-        "confidence": 0,
-        "summary": "the session ended before optimizations",
-    });
-
-    let shown_before = framework_progress(&state);
-    record_framework_evidence(&mut state, &skip).expect("evidence should record");
-    assert_eq!(
-        state.framework_evidence.len(),
-        1,
-        "the skip is still recorded for the report"
-    );
-    assert_eq!(
-        framework_progress(&state),
-        shown_before,
-        "a skip changes nothing on screen, so it must not trigger a redraw"
-    );
-
-    // And the rule the publish is keyed on, which the assertion above cannot
-    // see: same phases means no redraw, a new phase means one.
-    assert!(
-        !checklist_changed(&shown_before, &state),
-        "a skip leaves the checklist looking exactly as it did"
-    );
-    record_framework_evidence(
-        &mut state,
-        &serde_json::json!({
-            "phase": "repeat",
-            "source": "candidate_speech",
-            "kind": "observed",
-            "confidence": 80,
-            "summary": "restated the inputs and outputs",
-        }),
-    )
-    .expect("evidence should record");
-    assert!(
-        checklist_changed(&shown_before, &state),
-        "a phase the candidate reached is a new tick and has to be sent"
     );
 }
 
@@ -334,80 +294,6 @@ fn the_server_side_deadline_is_the_planned_minutes_plus_the_grace() {
     assert_eq!(
         interview_hard_deadline(90),
         Duration::from_secs(90 * 60) + INTERVIEW_DEADLINE_GRACE
-    );
-}
-
-/// A pause silences output for as long as it lasts, and nothing about the
-/// event changes that.
-#[test]
-fn a_pause_drops_output_and_passes_everything_else_through() {
-    let audio = GeminiEvent::Audio {
-        bytes: vec![0],
-        mime_type: "audio/pcm".to_string(),
-    };
-
-    assert_eq!(
-        output_disposition(&audio, false, true),
-        OutputDisposition::Drop
-    );
-    assert_eq!(
-        output_disposition(
-            &GeminiEvent::OutputTranscript("hi".to_string()),
-            false,
-            true
-        ),
-        OutputDisposition::Drop
-    );
-
-    // Not output, so never the thing a pause silences: a tool call still has to
-    // be answered or Gemini waits on a response that is never sent.
-    assert_eq!(
-        output_disposition(&GeminiEvent::ToolCall(Vec::new()), false, true),
-        OutputDisposition::Deliver
-    );
-    assert_eq!(
-        output_disposition(&GeminiEvent::InputTranscript("hi".to_string()), false, true),
-        OutputDisposition::Deliver
-    );
-}
-
-/// A discard is one turn's sentence, not a standing condition, and the turn's
-/// own end is what serves it.
-#[test]
-fn a_discard_lasts_exactly_one_turn() {
-    let audio = GeminiEvent::Audio {
-        bytes: vec![0],
-        mime_type: "audio/pcm".to_string(),
-    };
-
-    assert_eq!(
-        output_disposition(&audio, true, false),
-        OutputDisposition::Drop
-    );
-    assert_eq!(
-        output_disposition(&GeminiEvent::TurnComplete, true, false),
-        OutputDisposition::EndsTheDiscard
-    );
-    assert_eq!(
-        output_disposition(&GeminiEvent::Interrupted, true, false),
-        OutputDisposition::EndsTheDiscard
-    );
-
-    // Nothing to serve once it is spent.
-    assert_eq!(
-        output_disposition(&audio, false, false),
-        OutputDisposition::Deliver
-    );
-}
-
-/// The ordering the two rules are checked in. A turn that ends while the
-/// interview is still paused has to serve the discard, or the sentence outlives
-/// the turn it belonged to and the next reply is dropped as well.
-#[test]
-fn a_turn_ending_under_a_pause_still_ends_the_discard() {
-    assert_eq!(
-        output_disposition(&GeminiEvent::TurnComplete, true, true),
-        OutputDisposition::EndsTheDiscard
     );
 }
 
@@ -617,349 +503,6 @@ fn candidate_bootstrap_uses_participant_metadata() {
 }
 
 #[test]
-fn execute_tool_call_reads_editor_and_tracks_hints() {
-    let mut state = RuntimeState {
-        code: "def two_sum(nums, target):\n    return [0, 1]".to_string(),
-        language: "python".to_string(),
-        last_test_run: Some(serde_json::json!({
-            "language": "python",
-            "passed": 1,
-            "total": 2,
-            "failures": [],
-        })),
-        test_runs: 1,
-        ..RuntimeState::default()
-    };
-
-    let editor = execute_tool_call(
-        &mut state,
-        &GeminiFunctionCall {
-            id: "1".to_string(),
-            name: TOOL_READ_EDITOR.to_string(),
-            args: serde_json::json!({}),
-        },
-    );
-    let hint = execute_tool_call(
-        &mut state,
-        &GeminiFunctionCall {
-            id: "2".to_string(),
-            name: TOOL_LOG_HINT.to_string(),
-            args: serde_json::json!({"requested": false}),
-        },
-    );
-    let evidence = execute_tool_call(
-        &mut state,
-        &GeminiFunctionCall {
-            id: "3".to_string(),
-            name: TOOL_RECORD_FRAMEWORK_EVIDENCE.to_string(),
-            args: serde_json::json!({
-                "phase":"algorithm", "source":"candidate_speech", "kind":"observed",
-                "confidence":90, "summary":"Candidate explained the invariant."
-            }),
-        },
-    );
-
-    assert!(
-        editor["result"]
-            .as_str()
-            .unwrap()
-            .contains("Editor language: python")
-    );
-    assert!(
-        editor["result"]
-            .as_str()
-            .unwrap()
-            .contains("Latest test run")
-    );
-    assert_eq!(hint["result"], "Recorded. Total hints so far: 1.");
-
-    // A call that leaves the flag out is read as asked for, so a candidate
-    // whose request the model logged carelessly still gets the next rung.
-    let mut laddered = RuntimeState {
-        hint_ladder: &["first rung", "second rung", "third rung"],
-        ..RuntimeState::default()
-    };
-    let unflagged = execute_tool_call(
-        &mut laddered,
-        &GeminiFunctionCall {
-            id: "5".to_string(),
-            name: TOOL_LOG_HINT.to_string(),
-            args: serde_json::json!({}),
-        },
-    );
-    assert!(unflagged["result"].as_str().unwrap().contains("first rung"));
-    assert_eq!(laddered.hint_rungs_given, 1);
-    assert_eq!(state.hints_used, 1);
-    assert_eq!(evidence["result"]["phase"], "algorithm");
-    assert_eq!(state.framework_evidence.len(), 1);
-
-    // An interview with one phase of evidence is not a finished interview, and
-    // the model saying so does not make it one.
-    let refused = execute_tool_call(
-        &mut state,
-        &GeminiFunctionCall {
-            id: "4".to_string(),
-            name: TOOL_END_INTERVIEW.to_string(),
-            args: serde_json::json!({}),
-        },
-    );
-    assert!(
-        refused["error"]
-            .as_str()
-            .unwrap()
-            .contains("Test and Optimizations evidence"),
-        "closing the session early is the one mistake here nobody can undo"
-    );
-    assert!(!state.end_requested);
-
-    for phase in ["test", "optimizations"] {
-        record_framework_evidence(
-            &mut state,
-            &serde_json::json!({
-                "phase":phase, "source":"candidate_speech", "kind":"observed",
-                "confidence":90, "summary":format!("Candidate finished {phase}.")
-            }),
-        )
-        .unwrap();
-    }
-
-    // The coding evidence may arrive before the browser opens the behavioral
-    // reserve. Letting the model close in that interval makes the required
-    // round unreachable, so only a started or explicitly skipped reserve
-    // permits the two-round interview to finish.
-    let reserve_pending = execute_tool_call(
-        &mut state,
-        &GeminiFunctionCall {
-            id: "5".to_string(),
-            name: TOOL_END_INTERVIEW.to_string(),
-            args: serde_json::json!({}),
-        },
-    );
-    assert!(
-        reserve_pending["error"]
-            .as_str()
-            .unwrap()
-            .contains("behavioral reserve has not started or been skipped")
-    );
-    assert!(!state.end_requested);
-
-    // Nothing here ends anything. The tool records a request and the room loop
-    // reads it on the way out of the event that carried it, because ending
-    // means publishing a report and leaving a room, and this function has
-    // neither in scope.
-    state.round_transition_seen = true;
-    let ending = execute_tool_call(
-        &mut state,
-        &GeminiFunctionCall {
-            id: "6".to_string(),
-            name: TOOL_END_INTERVIEW.to_string(),
-            args: serde_json::json!({}),
-        },
-    );
-    assert!(state.end_requested);
-    assert!(!state.ended, "the request is not the ending");
-    assert!(
-        ending["result"]
-            .as_str()
-            .unwrap()
-            .contains("Say nothing further"),
-        "Gemini owes a generation for every tool response, and the closing is \
-         about to be prompted for: without this Jim says goodbye twice"
-    );
-}
-
-/// The follow-ups arrive with the evidence that completes the coding round,
-/// once, and not before: the live prompt no longer holds them.
-#[test]
-fn the_evidence_that_completes_coding_releases_the_follow_ups_once() {
-    let problem = crate::agent::get_problem(Some("two-sum"));
-    let mut state = RuntimeState {
-        code: "def solve(nums):\n    return sorted(nums)\n".to_string(),
-        ..RuntimeState::for_problem(problem)
-    };
-    state
-        .code_templates
-        .insert("python".to_string(), String::new());
-    let record = |state: &mut RuntimeState, phase: &str| {
-        execute_tool_call(
-            state,
-            &GeminiFunctionCall {
-                id: phase.to_string(),
-                name: TOOL_RECORD_FRAMEWORK_EVIDENCE.to_string(),
-                args: serde_json::json!({
-                    "phase": phase, "source": "candidate_speech", "kind": "observed",
-                    "confidence": 90, "summary": format!("Candidate finished {phase}.")
-                }),
-            },
-        )
-    };
-    let first = problem.variant().follow_ups[0];
-
-    let tested = record(&mut state, "test");
-    assert!(
-        tested.get("followUps").is_none(),
-        "Test alone completes nothing"
-    );
-    let optimized = record(&mut state, "optimizations");
-    let released = optimized["followUps"]
-        .as_str()
-        .expect("the completing call releases them");
-    assert!(released.contains(first) && released.contains("at most two of these"));
-    let again = record(&mut state, "test");
-    assert!(
-        again.get("followUps").is_none(),
-        "released once, not per note"
-    );
-
-    // A cold restart after the round completed hands them over again, since the
-    // replacement session never saw that tool response.
-    let restarted = crate::agent::cold_restart(&state);
-    assert!(restarted.contains(first));
-    assert!(
-        restarted.contains("Do not ask another coding question")
-            && !restarted.contains("The coding round is active"),
-        "a completed round must not read as one still in progress"
-    );
-
-    // Once the behavioral round has begun the follow-ups are behind it: the
-    // restart names the round and nothing sends the interviewer back.
-    let behavioral = RuntimeState {
-        behavioral_round_started: true,
-        ..state.clone()
-    };
-    let restarted = crate::agent::cold_restart(&behavioral);
-    assert!(restarted.contains("The behavioral round has just opened"));
-    assert!(
-        !restarted.contains(first) && !restarted.contains("follow-ups"),
-        "the behavioral round must not be pointed back at coding follow-ups"
-    );
-    let fresh = RuntimeState::for_problem(problem);
-    assert!(!crate::agent::cold_restart(&fresh).contains(first));
-}
-
-#[test]
-fn end_interview_allows_a_completed_coding_only_plan() {
-    let mut state = RuntimeState {
-        interview_loop: crate::agent::InterviewLoop::CodingOnly,
-        code: "def solve(nums):\n    return sorted(nums)\n".to_string(),
-        ..RuntimeState::default()
-    };
-    for phase in ["test", "optimizations"] {
-        record_framework_evidence(
-            &mut state,
-            &serde_json::json!({
-                "phase": phase, "source": "candidate_speech", "kind": "observed",
-                "confidence": 90, "summary": format!("Candidate finished {phase}.")
-            }),
-        )
-        .unwrap();
-    }
-
-    let ending = execute_tool_call(
-        &mut state,
-        &GeminiFunctionCall {
-            id: "1".to_string(),
-            name: TOOL_END_INTERVIEW.to_string(),
-            args: serde_json::json!({}),
-        },
-    );
-
-    assert!(ending["result"].is_string());
-    assert!(state.end_requested);
-}
-
-/// The reply that first ticks a later step names the earlier ones still open,
-/// each once, and never names a step that already has a row, a skip included.
-#[test]
-fn evidence_reply_names_the_earlier_steps_still_open() {
-    let mut state = RuntimeState {
-        code: "def solve(nums):\n    return sorted(nums)\n".to_string(),
-        ..RuntimeState::default()
-    };
-    let mut record = |phase: &str, kind: &str, source: &str, summary: &str| {
-        execute_tool_call(
-            &mut state,
-            &GeminiFunctionCall {
-                id: "1".to_string(),
-                name: TOOL_RECORD_FRAMEWORK_EVIDENCE.to_string(),
-                args: serde_json::json!({
-                    "phase": phase, "source": source, "kind": kind,
-                    "confidence": 90, "summary": summary,
-                }),
-            },
-        )
-    };
-
-    let first = record("repeat", "observed", "candidate_speech", "Restated it.");
-    assert!(first["result"].is_object());
-    assert!(
-        first.get("earlierSteps").is_none(),
-        "nothing comes before Repeat"
-    );
-
-    let coding = record("coding", "observed", "editor_snapshot", "Wrote a sort.");
-    let reminder = coding["earlierSteps"]
-        .as_str()
-        .expect("Coding skipped two steps");
-    assert!(reminder.contains("example, algorithm"), "{reminder}");
-    assert!(
-        !reminder.contains("repeat"),
-        "Repeat is already ticked: {reminder}"
-    );
-    assert!(reminder.contains("If they skipped it, record nothing"));
-
-    // Coding is already ticked, so a second note on it is not a new gap.
-    let again = record("coding", "observed", "editor_snapshot", "Added a guard.");
-    assert!(again.get("earlierSteps").is_none());
-
-    // Example comes before Algorithm, so the Algorithm gap is not its to name.
-    let example = record("example", "observed", "candidate_speech", "Walked [1].");
-    assert!(example.get("earlierSteps").is_none());
-
-    // Algorithm is still open, but Coding already named it: the candidate may
-    // have skipped it, and asking again leaves inventing it as the only answer.
-    let test = record("test", "observed", "candidate_speech", "Predicted [].");
-    assert!(test.get("earlierSteps").is_none(), "{test}");
-
-    // A skip ticks nothing, so it has no gap to report, even with Situation and
-    // Task open and never named.
-    let action = record("action", "skipped", "session_timing", "Out of time.");
-    assert!(action.get("earlierSteps").is_none(), "{action}");
-
-    // A step closed out as skipped has a row, so it is not missing.
-    let situation = record("situation", "skipped", "session_timing", "Out of time.");
-    assert!(situation.get("earlierSteps").is_none());
-
-    // STAR is its own list: a REACTO gap is not named on a STAR step. Task is
-    // still named here, because the skip above named nothing.
-    let result = record("result", "observed", "candidate_speech", "Shipped it.");
-    let star = result["earlierSteps"]
-        .as_str()
-        .expect("STAR steps are open");
-    assert!(star.contains(": task."), "{star}");
-    assert!(!star.contains("situation"), "{star}");
-    assert!(!star.contains("action"), "{star}");
-    assert!(!star.contains("algorithm"), "{star}");
-}
-
-#[test]
-fn execute_tool_call_reports_unknown_tools() {
-    let mut state = RuntimeState::default();
-
-    assert_eq!(
-        execute_tool_call(
-            &mut state,
-            &GeminiFunctionCall {
-                id: "1".to_string(),
-                name: "missing".to_string(),
-                args: serde_json::json!({}),
-            },
-        ),
-        serde_json::json!({"error":"unknown tool: missing"})
-    );
-}
-
-#[test]
 fn runtime_activity_emits_periodic_prompts_and_updates_gates() {
     let now = Instant::now();
     let mut activity = RuntimeActivity::new(now);
@@ -975,30 +518,60 @@ fn runtime_activity_emits_periodic_prompts_and_updates_gates() {
     quiet_since(&mut activity, now - past_silence);
     activity.last_nudge = now - Duration::from_secs_f64(crate::agent::SILENCE_COOLDOWN_S + 1.0);
 
-    let prompt = activity.watch_prompt(&state, now).unwrap();
+    let prompt = activity.watch_prompt(&mut state, now).unwrap();
 
-    assert!(prompt.text.contains("silent AND has not typed"));
+    assert!(prompt.text.contains("Silent and not typing"));
+
+    // The code reaches the prompt only inside the fenced excerpt, as the change
+    // since the last review, which for the first one is the whole buffer.
+    let fence = position(&prompt.text, "BEGIN UNTRUSTED EDITOR (");
+    assert!(
+        position(&prompt.text, "def two_sum") > fence,
+        "{}",
+        prompt.text
+    );
     assert!(!prompt.behavioral_nudge);
-    assert!(activity.watch_prompt(&state, now).is_none());
+    assert!(activity.watch_prompt(&mut state, now).is_none());
 
     activity.last_code_change = now - CODE_SETTLE - Duration::from_secs(1);
     activity.last_user_speech = now - Duration::from_secs(5);
     activity.last_agent_speech = now - Duration::from_secs(5);
     activity.last_review = now - Duration::from_secs(31);
     activity.last_interjection = now - Duration::from_secs(46);
-    state
-        .code
-        .push_str("\nseen = {}\nfor i, n in enumerate(nums):\n    pass");
+    state.evidence_ledger.code.substantive_revision = 1;
+    state.evidence_ledger.code.parser_observation = Some(crate::agent::CodeObservation::Parsed);
 
     state.behavioral_round_started = true;
-    assert!(activity.watch_prompt(&state, now).is_none());
+    assert!(activity.watch_prompt(&mut state, now).is_none());
     state.behavioral_round_started = false;
-    let prompt = activity.watch_prompt(&state, now).unwrap();
+    let prompt = activity.watch_prompt(&mut state, now).unwrap();
 
-    assert!(prompt.text.contains("Periodic editor snapshot"));
+    assert!(prompt.text.contains("A code change settled"));
+
+    // The nudge already showed this buffer, so the review says it is unchanged
+    // rather than sending it again or sending the model to read it; only the
+    // review consumes the change that armed it.
+    assert!(
+        !prompt.text.contains("BEGIN UNTRUSTED EDITOR"),
+        "{}",
+        prompt.text
+    );
+    assert!(
+        prompt
+            .text
+            .contains("The editor is unchanged since you last saw it.")
+    );
+    assert!(!prompt.text.contains("read_editor"), "{}", prompt.text);
+    assert_eq!(activity.substantive_revision_at_last_review, 1);
+    assert_eq!(state.code_shown, state.code);
     assert!(!prompt.behavioral_nudge);
-    assert_eq!(activity.code_at_last_review, state.code);
-    assert!(activity.watch_prompt(&state, now).is_none());
+    assert!(activity.watch_prompt(&mut state, now).is_none());
+
+    // No counter assertion here any more, and deliberately: a prompt is counted
+    // where it is handed to the socket, so `watch_prompt` hands its caller a
+    // string and nothing else. `send_model_text` is what counts it, alongside
+    // every other text this server sends, and `record_model_input` is what
+    // tests the counting.
 }
 
 /// Every timestamp the watcher reads as activity, set to one instant.
@@ -1023,11 +596,11 @@ fn behavioral_silence_nudge_waits_for_quiet_and_leaves_the_editor_out() {
     activity.last_nudge = now - cooldown;
 
     state.paused = true;
-    assert!(activity.watch_prompt(&state, now).is_none());
+    assert!(activity.watch_prompt(&mut state, now).is_none());
     state.paused = false;
     for floor in [Floor::Speaking, Floor::AwaitingPlayout] {
         activity.floor = floor;
-        assert!(activity.watch_prompt(&state, now).is_none());
+        assert!(activity.watch_prompt(&mut state, now).is_none());
     }
     activity.floor = Floor::Listening;
 
@@ -1040,13 +613,13 @@ fn behavioral_silence_nudge_waits_for_quiet_and_leaves_the_editor_out() {
     ];
     for touch in recent {
         touch(&mut activity, just_inside);
-        assert!(activity.watch_prompt(&state, now).is_none());
+        assert!(activity.watch_prompt(&mut state, now).is_none());
         quiet_since(&mut activity, now - threshold);
     }
 
     let last_review = activity.last_review;
     let prompt = activity
-        .watch_prompt(&state, now)
+        .watch_prompt(&mut state, now)
         .expect("quiet behavioral answer gets a nudge");
     assert_eq!(
         prompt.text,
@@ -1057,10 +630,10 @@ fn behavioral_silence_nudge_waits_for_quiet_and_leaves_the_editor_out() {
     assert_eq!(activity.last_nudge, now);
     assert_eq!(activity.last_interjection, now);
     assert_eq!(activity.last_review, last_review);
-    assert!(activity.code_at_last_review.is_empty());
+    assert_eq!(activity.substantive_revision_at_last_review, 0);
     assert!(
         activity
-            .watch_prompt(&state, now + cooldown - Duration::from_millis(1))
+            .watch_prompt(&mut state, now + cooldown - Duration::from_millis(1))
             .is_none()
     );
 }
@@ -1093,7 +666,7 @@ async fn only_a_delivered_behavioral_nudge_spends_the_round() {
     assert_eq!(activity.floor, Floor::Speaking);
     activity.floor = Floor::Listening;
 
-    let prompt = activity.watch_prompt(&state, now).unwrap();
+    let prompt = activity.watch_prompt(&mut state, now).unwrap();
     let failed = send_watched_prompt(&mut activity, &prompt, async {
         Err::<(), _>(std::io::Error::new(
             std::io::ErrorKind::BrokenPipe,
@@ -1107,7 +680,7 @@ async fn only_a_delivered_behavioral_nudge_spends_the_round() {
 
     clear_abandoned_socket_work(&mut state, &mut activity);
     let prompt = activity
-        .watch_prompt(&state, now + cooldown)
+        .watch_prompt(&mut state, now + cooldown)
         .expect("a nudge that never reached Gemini is offered again");
     send_watched_prompt(&mut activity, &prompt, async {
         Ok::<(), std::io::Error>(())
@@ -1120,7 +693,53 @@ async fn only_a_delivered_behavioral_nudge_spends_the_round() {
 
     // One delivered nudge per round, including after a connection replacement.
     clear_abandoned_socket_work(&mut state, &mut activity);
-    assert!(activity.watch_prompt(&state, now + cooldown * 2).is_none());
+    assert!(
+        activity
+            .watch_prompt(&mut state, now + cooldown * 2)
+            .is_none()
+    );
+}
+
+/// Every gate a periodic review waits on, opened as of `now`.
+fn ready_for_review(activity: &mut RuntimeActivity, now: Instant) {
+    activity.last_code_change = now - CODE_SETTLE - Duration::from_secs(1);
+    activity.last_user_speech = now - Duration::from_secs(5);
+    activity.last_agent_speech = now - Duration::from_secs(5);
+    activity.last_review = now - Duration::from_secs(31);
+    activity.last_interjection = now - Duration::from_secs(46);
+}
+
+/// An editor packet, received at `receipt`.
+fn edit(state: &mut RuntimeState, receipt: u64, code: &str) {
+    crate::agent::apply_data_event_at(
+        state,
+        crate::runtime::TOPIC_CODE_UPDATE,
+        &serde_json::json!({ "code": code }),
+        99.0,
+        receipt,
+    );
+}
+
+/// A test run the browser reported, received at `receipt`.
+fn run_tests(state: &mut RuntimeState, receipt: u64, passed: u32, total: u32) {
+    crate::agent::apply_data_event_at(
+        state,
+        crate::runtime::TOPIC_TEST_RESULTS,
+        &serde_json::json!({
+            "passed": passed, "total": total, "language": "python", "cases": [],
+            "setupError": null,
+        }),
+        99.0,
+        receipt,
+    );
+}
+
+/// Where `needle` sits in a prompt. A layout change is what these checks exist
+/// to catch, so a missing marker fails with the prompt it is missing from.
+fn position(prompt: &str, needle: &str) -> usize {
+    prompt
+        .find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} is not in the prompt:\n{prompt}"))
 }
 
 /// The point of CODE_SETTLE. Without it the whole gate can be reverted to a
@@ -1142,10 +761,12 @@ fn recent_typing_holds_off_the_periodic_review() {
     state
         .code
         .push_str("\nseen = {}\nfor i, n in enumerate(nums):\n    pass");
+    state.evidence_ledger.code.substantive_revision = 1;
+    state.evidence_ledger.code.parser_observation = Some(crate::agent::CodeObservation::Parsed);
 
     activity.last_code_change = now - CODE_SETTLE + Duration::from_secs(1);
     assert!(
-        activity.watch_prompt(&state, now).is_none(),
+        activity.watch_prompt(&mut state, now).is_none(),
         "a candidate who typed a second ago is still working; the review must wait"
     );
 
@@ -1153,9 +774,9 @@ fn recent_typing_holds_off_the_periodic_review() {
     // the boundary is only bracketed, and `<` reads the same as `<=`.
     activity.last_code_change = now - CODE_SETTLE;
     let prompt = activity
-        .watch_prompt(&state, now)
+        .watch_prompt(&mut state, now)
         .expect("an edit exactly CODE_SETTLE old has settled; the review may take the floor");
-    assert!(prompt.text.contains("Periodic editor snapshot"));
+    assert!(prompt.text.contains("A code change settled"));
 }
 
 #[test]
@@ -1202,85 +823,6 @@ fn floor_transitions_track_who_is_talking() {
     activity.mark_listening();
     assert_eq!(activity.floor, Floor::Listening);
     assert!(activity.last_agent_speech >= now);
-}
-
-/// The browser patches one row per segment id, so an in-progress turn has
-/// to carry the same id it will carry when it closes.
-#[test]
-fn transcript_stream_options_carry_a_segment_id_and_final_flag() {
-    let open = transcript_stream_options("interviewer-0".to_string(), false, None);
-
-    assert_eq!(open.topic, TOPIC_TRANSCRIPTION);
-    assert_eq!(
-        open.attributes.get("lk.segment_id"),
-        Some(&"interviewer-0".to_string())
-    );
-    assert_eq!(
-        open.attributes.get("lk.transcription_final"),
-        Some(&"false".to_string())
-    );
-    assert_eq!(open.sender_identity, None);
-
-    let closed = transcript_stream_options("interviewer-0".to_string(), true, None);
-
-    assert_eq!(
-        closed.attributes.get("lk.segment_id"),
-        Some(&"interviewer-0".to_string()),
-        "closing a turn must not change the row it patches"
-    );
-    assert_eq!(
-        closed.attributes.get("lk.transcription_final"),
-        Some(&"true".to_string())
-    );
-}
-
-#[test]
-fn transcript_stream_options_can_preserve_candidate_identity() {
-    let options =
-        transcript_stream_options("candidate-0".to_string(), true, Some("candidate-fixed"));
-
-    assert_eq!(
-        options.sender_identity.as_ref().map(ToString::to_string),
-        Some("candidate-fixed".to_string())
-    );
-}
-
-#[test]
-fn transcript_text_trims_and_drops_empty_events() {
-    assert_eq!(transcript_text("  hello  "), Some("hello"));
-    assert_eq!(transcript_text("  \n\t  "), None);
-}
-
-#[test]
-fn agent_state_attributes_preserve_existing_values() {
-    let attributes = agent_state_attributes(
-        HashMap::from([("role".to_string(), "interviewer".to_string())]),
-        AGENT_STATE_SPEAKING,
-    );
-
-    assert_eq!(attributes.get("role"), Some(&"interviewer".to_string()));
-    assert_eq!(
-        attributes.get(LIVEKIT_AGENT_STATE),
-        Some(&AGENT_STATE_SPEAKING.to_string())
-    );
-}
-
-/// The closing message is the one turn barge-in must not touch. Cutting it
-/// leaves the candidate without the ending, and the wrap-up wait reads the
-/// emptied queue as the turn being over, so the interview ended there.
-#[test]
-fn the_closing_message_is_not_cut_short_by_a_candidate_talking_over_it() {
-    let (mut output_audio, _frames) = test_output_audio();
-    let closing = output_audio.output_cancellation.clone();
-    output_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
-    let mut activity = RuntimeActivity::new(Instant::now());
-    activity.floor = Floor::AwaitingPlayout;
-
-    assert!(take_stale_playout(&mut activity, &mut output_audio, Interruptible::No).is_none());
-
-    assert!(!closing.is_cancelled(), "the ending has to play out");
-    assert!(output_audio.is_playing());
-    assert_eq!(activity.floor, Floor::AwaitingPlayout);
 }
 
 /// Dropping ahead of a chunk `capture` will refuse leaves the interviewer
@@ -1384,6 +926,75 @@ fn a_reply_nobody_was_measured_waiting_for_reports_no_latency() {
     );
 }
 
+/// The two turns an interruption must not cut: one nobody can be answering
+/// yet, and one the interview is over after.
+///
+/// An interviewer line is not the candidate, which is the half a prefix check
+/// can get wrong in the direction that matters: it would read Jim's own
+/// greeting as evidence that somebody is there to interrupt it.
+#[test]
+fn a_greeting_and_a_goodbye_survive_an_interruption() {
+    let (mut output_audio, _frames) = test_output_audio();
+    let kept = output_audio.output_cancellation.clone();
+    output_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
+    let mut activity = RuntimeActivity::new(Instant::now());
+    activity.floor = Floor::Speaking;
+    let greeting_only = ["Jim: hey there, I am Jim".to_string()];
+
+    assert!(
+        session::cut_unless_protected(
+            &greeting_only,
+            Interruptible::Yes,
+            &mut activity,
+            &mut output_audio,
+        )
+        .is_none(),
+        "a turn nobody has answered yet is kept"
+    );
+    assert!(!kept.is_cancelled(), "the queued frames must still play");
+    assert!(output_audio.is_playing());
+
+    let answered = [
+        greeting_only[0].clone(),
+        format!(
+            "{}: sure, so the input is an array",
+            crate::agent::CANDIDATE_SPEAKER
+        ),
+    ];
+    let unplayed = session::cut_unless_protected(
+        &answered,
+        Interruptible::Yes,
+        &mut activity,
+        &mut output_audio,
+    )
+    .expect("a candidate who has been heard can barge in");
+
+    // The closing message is the turn that plays to the end. Gemini reports its
+    // own interruption through a different door from the transcript that
+    // `take_stale_playout` guards, and that door used to have no lock.
+    let (mut closing_audio, _closing_frames) = test_output_audio();
+    let closing = closing_audio.output_cancellation.clone();
+    closing_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
+    assert!(
+        session::cut_unless_protected(
+            &answered,
+            Interruptible::No,
+            &mut activity,
+            &mut closing_audio,
+        )
+        .is_none(),
+        "the goodbye is not cut by a throat cleared over it"
+    );
+    assert!(
+        !closing.is_cancelled(),
+        "the closing frames must still play"
+    );
+
+    assert!(unplayed >= Duration::from_secs(9), "reports {unplayed:?}");
+    assert!(kept.is_cancelled(), "queued frames must be dropped");
+    assert_eq!(activity.floor, Floor::Listening);
+}
+
 /// `Interrupted` used to assign the floor bare. `last_agent_speech` is
 /// parked at the playout deadline while audio is queued, so leaving it
 /// there after discarding the queue suppressed the silence nudge for the
@@ -1406,72 +1017,6 @@ fn a_cut_off_turn_stamps_the_moment_it_was_cut_not_when_it_would_have_ended() {
         activity.last_agent_speech <= Instant::now(),
         "the stamp must not sit in the future, where it suppresses the nudge"
     );
-}
-
-/// The first candidate answer used to land behind the rest of the greeting.
-/// Gemini streams a twenty second greeting in about two, marks the turn
-/// complete, and then never reports an interruption, because from its side
-/// that turn is long over. Only this process knows the queue is still
-/// draining.
-#[test]
-fn a_candidate_speaking_over_a_draining_turn_drops_what_is_left_of_it() {
-    let (mut output_audio, _frames) = test_output_audio();
-    let stale = output_audio.output_cancellation.clone();
-    output_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
-    let mut activity = RuntimeActivity::new(Instant::now());
-    activity.floor = Floor::AwaitingPlayout;
-
-    let dropped = take_stale_playout(&mut activity, &mut output_audio, Interruptible::Yes)
-        .expect("a draining turn must be dropped");
-    assert!(
-        dropped >= Duration::from_secs(9),
-        "reports what it dropped: {dropped:?}"
-    );
-
-    assert!(
-        stale.is_cancelled(),
-        "queued greeting frames must be dropped"
-    );
-    assert!(!output_audio.is_playing(), "the deadline must come forward");
-    assert_eq!(activity.floor, Floor::Listening);
-}
-
-/// The guard is two conditions and both are load bearing. `AwaitingPlayout`
-/// is stamped once when the turn completes and outlives the queue it was
-/// named for, so on its own it would cut into a turn that is only just
-/// starting.
-#[test]
-fn nothing_is_dropped_once_the_queue_has_drained_or_while_the_agent_speaks() {
-    for (floor, deadline, why) in [
-        (
-            Floor::AwaitingPlayout,
-            Instant::now(),
-            "queue already drained",
-        ),
-        (
-            Floor::Speaking,
-            Instant::now() + Duration::from_secs(10),
-            "turn still being produced",
-        ),
-        (
-            Floor::Listening,
-            Instant::now() + Duration::from_secs(10),
-            "candidate already holds the floor",
-        ),
-    ] {
-        let (mut output_audio, _frames) = test_output_audio();
-        let live = output_audio.output_cancellation.clone();
-        output_audio.playout_deadline = deadline;
-        let mut activity = RuntimeActivity::new(Instant::now());
-        activity.floor = floor;
-
-        assert!(
-            take_stale_playout(&mut activity, &mut output_audio, Interruptible::Yes).is_none(),
-            "{why}"
-        );
-        assert!(!live.is_cancelled(), "{why}");
-        assert_eq!(activity.floor, floor, "{why}");
-    }
 }
 
 /// The ceiling is a boundary, so both sides of it are named. One attempt
@@ -1650,6 +1195,11 @@ fn each_pause_reviews_the_speech_since_the_last_one() {
     );
     assert_eq!(state.interim_transcript_lines, 3);
 
+    // The code the first review read has not changed, so the second is told so
+    // rather than sent it again.
+    assert!(!second.contains("seen = {}"), "{second}");
+    assert!(second.contains(INTERIM_CODE_UNCHANGED), "{second}");
+
     // A transcript shorter than the cursor is not reachable today. It is one
     // future edit away, and the arithmetic that would panic on it is in here.
     state.transcript.clear();
@@ -1672,6 +1222,56 @@ fn each_pause_reviews_the_speech_since_the_last_one() {
         !bounded.contains("note 0\n"),
         "a review carries the recent notes, not the whole session"
     );
+    assert_eq!(state.evidence_ledger.metrics.interim_prompt_count, 4);
+    // Each counted with the system instruction it goes out behind.
+    let system = crate::agent::interim_system_instruction().len() + 2;
+    assert_eq!(
+        state.evidence_ledger.metrics.interim_prompt_bytes,
+        (4 * system + first.len() + second.len() + third.len() + bounded.len()) as u64
+    );
+}
+
+/// An editor cleared and then restored is a change, because the review in
+/// between showed the model an empty one.
+///
+/// The cursor used to hold the code from before the clearing, so the restored
+/// buffer compared equal to it and the review said "unchanged" to a model
+/// whose last look at the editor found nothing in it.
+#[test]
+fn code_restored_after_an_empty_review_is_sent_again() {
+    let config = crate::config::load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google"),
+    ])
+    .unwrap();
+    let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let mut state = RuntimeState {
+        transcript: vec!["Candidate: here is my first pass".to_string()],
+        code: "seen = {}".to_string(),
+        ..RuntimeState::default()
+    };
+
+    let first = take_interim_review_window(&mut state, &boot);
+    assert!(first.contains("seen = {}"), "{first}");
+
+    // Cleared. The review carries no code at all, which is what makes the next
+    // one a change rather than a repeat.
+    state.code = "   \n".to_string();
+    let cleared = take_interim_review_window(&mut state, &boot);
+    assert!(!cleared.contains("seen = {}"), "{cleared}");
+    assert!(!cleared.contains(INTERIM_CODE_UNCHANGED), "{cleared}");
+
+    state.code = "seen = {}".to_string();
+    let restored = take_interim_review_window(&mut state, &boot);
+    assert!(restored.contains("seen = {}"), "{restored}");
+    assert!(!restored.contains(INTERIM_CODE_UNCHANGED), "{restored}");
+
+    // And a genuine repeat still says so, so the fix did not buy the change
+    // report by sending the buffer every time.
+    let repeated = take_interim_review_window(&mut state, &boot);
+    assert!(repeated.contains(INTERIM_CODE_UNCHANGED), "{repeated}");
 }
 
 /// A review is owned for as long as it runs, and only for as long as it runs.
@@ -2042,4 +1642,275 @@ async fn an_exhausted_rotation_waits_only_for_a_key_out_on_quota() {
             );
         }
     }
+}
+
+/// Who is written down first when both speakers close at once.
+#[test]
+fn a_closed_turn_is_recorded_in_the_order_it_opened() {
+    // The usual case: the interviewer asked, the candidate answered.
+    assert_eq!(
+        closing_order(Some(4), Some(5)),
+        ["interviewer", "candidate"]
+    );
+
+    // The case that was being reported backwards. The candidate's answer opened
+    // first and a late interviewer fragment closed with it, so a fixed speaker
+    // order filed the question ahead of the answer it followed.
+    assert_eq!(
+        closing_order(Some(9), Some(8)),
+        ["candidate", "interviewer"]
+    );
+
+    // A speaker with no line has nothing to record and sorts last either way.
+    assert_eq!(closing_order(None, Some(3)), ["candidate", "interviewer"]);
+    assert_eq!(closing_order(Some(3), None), ["interviewer", "candidate"]);
+    assert_eq!(closing_order(None, None), ["interviewer", "candidate"]);
+
+    // Two turns cannot own one line, so the tie is unreachable from the room.
+    // It is pinned anyway: the comparison is the whole function, and a tie that
+    // silently changes hands is how a strict rule becomes a loose one.
+    assert_eq!(
+        closing_order(Some(3), Some(3)),
+        ["interviewer", "candidate"]
+    );
+}
+
+/// The proactive-review gate driven by an edit instead of a hand-set counter.
+///
+/// Every other test of this gate assigns `semantic_revision` directly, so what
+/// the candidate types and what the interviewer interjects about were never
+/// joined up in one test: an analyzer that reported an operator fix as
+/// formatting left all of them passing and the interviewer silent.
+#[test]
+fn a_real_operator_fix_arms_the_proactive_review() {
+    let now = Instant::now();
+    let mut activity = RuntimeActivity::new(now);
+    let mut state = RuntimeState::default();
+    let ready = |activity: &mut RuntimeActivity| ready_for_review(activity, now);
+
+    edit(
+        &mut state,
+        100,
+        "def search(low, high):\n    while low < high:\n        low += 1\n    return low\n",
+    );
+    edit(
+        &mut state,
+        200,
+        "def search(low, high):\n    while low < high:\n        low += 1\n\n    return low\n",
+    );
+    ready(&mut activity);
+    assert!(
+        activity.watch_prompt(&mut state, now).is_none(),
+        "a blank line is not something to interject about"
+    );
+
+    edit(
+        &mut state,
+        300,
+        "def search(low, high):\n    while low <= high:\n        low += 1\n\n    return low\n",
+    );
+    ready(&mut activity);
+    let prompt = activity
+        .watch_prompt(&mut state, now)
+        .expect("an off-by-one fix is a semantic edit");
+    assert!(prompt.text.contains("A code change settled"));
+
+    // The fixed line is inside the fenced excerpt, numbered as `read_editor`
+    // numbers it, so the review needs no read to see it.
+    let fence = position(&prompt.text, "BEGIN UNTRUSTED EDITOR (");
+    assert!(
+        position(&prompt.text, "2|     while low <= high:") > fence,
+        "{}",
+        prompt.text
+    );
+}
+
+/// A watch prompt the socket refused showed the model nothing, so undoing it
+/// leaves the change and the evidence it carried for the next one.
+#[test]
+fn an_unsent_review_leaves_its_change_for_the_next_one() {
+    let now = Instant::now();
+    let mut activity = RuntimeActivity::new(now);
+    let mut state = RuntimeState::default();
+    let ready = |activity: &mut RuntimeActivity| ready_for_review(activity, now);
+
+    // Nothing to undo before any prompt.
+    activity.unsend_watch_prompt(&mut state);
+    assert_eq!(activity.evidence_shown, None);
+
+    // The first packet is the starter, which is not the candidate's edit.
+    edit(&mut state, 50, "def f():\n    pass\n");
+    edit(&mut state, 100, "def f():\n    return 1\n");
+    ready(&mut activity);
+    activity
+        .watch_prompt(&mut state, now)
+        .expect("the first review");
+    let markers = |activity: &RuntimeActivity, state: &RuntimeState| {
+        (
+            activity.substantive_revision_at_last_review,
+            state.code_shown.clone(),
+            activity.evidence_shown.clone(),
+        )
+    };
+    let seen = markers(&activity, &state);
+
+    // Run before the edit: the reaction to a run shows the code that changed,
+    // and this one has none to show, so it leaves the markers where they are.
+    run_tests(&mut state, 150, 1, 2);
+    assert_eq!(markers(&activity, &state), seen);
+    edit(&mut state, 200, "def f():\n    return 2\n");
+    ready(&mut activity);
+    let failed = activity
+        .watch_prompt(&mut state, now)
+        .expect("the review that fails");
+    let ran = "tests: browser-reported claims (unverified): 1 of 2 passing";
+    assert!(failed.text.contains(ran), "{}", failed.text);
+    assert_ne!(state.code_shown, seen.1);
+    activity.unsend_watch_prompt(&mut state);
+    assert_eq!(markers(&activity, &state), seen);
+
+    // The retry carries the edit the failed prompt did, measured from what the
+    // model last saw.
+    ready(&mut activity);
+    let retried = activity.watch_prompt(&mut state, now).expect("the retry");
+    assert!(
+        position(&retried.text, "    return 2")
+            > position(&retried.text, "BEGIN UNTRUSTED EDITOR (")
+    );
+    assert!(retried.text.contains(ran), "{}", retried.text);
+}
+
+/// A Live session keeps what it was told, so a watch prompt sends only the
+/// evidence lines that differ from the last one's, none at all when nothing
+/// moved, and all of them to a session that has heard nothing.
+#[test]
+fn a_watch_prompt_sends_only_the_evidence_lines_that_changed() {
+    let now = Instant::now();
+    let mut activity = RuntimeActivity::new(now);
+    let mut state = RuntimeState::default();
+    edit(&mut state, 50, "def f():\n    pass\n");
+    edit(&mut state, 100, "def f():\n    return 1\n");
+    ready_for_review(&mut activity, now);
+    let first = activity
+        .watch_prompt(&mut state, now)
+        .expect("the first review");
+    assert!(
+        first
+            .text
+            .contains("Deterministic session evidence:\ntests: not run\n"),
+        "{}",
+        first.text
+    );
+
+    edit(&mut state, 200, "def f():\n    return 2\n");
+    ready_for_review(&mut activity, now);
+    let unchanged = activity
+        .watch_prompt(&mut state, now)
+        .expect("a second review");
+    assert!(
+        !unchanged.text.contains("Deterministic session evidence"),
+        "{}",
+        unchanged.text
+    );
+    assert!(!unchanged.text.contains("tests:"), "{}", unchanged.text);
+
+    edit(&mut state, 300, "def f():\n    return 3\n");
+    run_tests(&mut state, 350, 1, 2);
+    ready_for_review(&mut activity, now);
+    let tested = activity
+        .watch_prompt(&mut state, now)
+        .expect("a third review");
+    assert!(
+        tested.text.contains(
+            "Deterministic session evidence:\ntests: browser-reported claims (unverified): 1 of 2 passing"
+        ),
+        "{}", tested.text
+    );
+
+    // A cold replacement starts from nothing.
+    activity.evidence_shown = None;
+    edit(&mut state, 400, "def f():\n    return 4\n");
+    ready_for_review(&mut activity, now);
+    let cold = activity
+        .watch_prompt(&mut state, now)
+        .expect("a review on a new session");
+    assert!(
+        cold.text
+            .contains("tests: browser-reported claims (unverified): 1 of 2 passing"),
+        "{}",
+        cold.text
+    );
+}
+
+/// A review is armed by a change worth one, in code that parses: a rename
+/// alone is not one, and a buffer mid-edit that does not parse holds the review
+/// until the next change that does.
+#[test]
+fn a_rename_or_code_that_does_not_parse_holds_the_review() {
+    let now = Instant::now();
+    let mut activity = RuntimeActivity::new(now);
+    let mut state = RuntimeState::default();
+    edit(&mut state, 50, "def f():\n    pass\n");
+    edit(
+        &mut state,
+        100,
+        "def f():\n    total = 1\n    return total\n",
+    );
+    ready_for_review(&mut activity, now);
+    activity
+        .watch_prompt(&mut state, now)
+        .expect("the first review");
+
+    edit(
+        &mut state,
+        200,
+        "def f():\n    count = 1\n    return count\n",
+    );
+    ready_for_review(&mut activity, now);
+    assert!(
+        activity.watch_prompt(&mut state, now).is_none(),
+        "a rename armed a review"
+    );
+
+    edit(
+        &mut state,
+        300,
+        "def f():\n    count = 2\n    return count\n",
+    );
+    edit(
+        &mut state,
+        400,
+        "def f():\n    count = 2\n    return count +\n",
+    );
+    ready_for_review(&mut activity, now);
+    assert!(
+        activity.watch_prompt(&mut state, now).is_none(),
+        "a review fired on code that does not parse"
+    );
+
+    edit(
+        &mut state,
+        500,
+        "def f():\n    count = 2\n    return count + 1\n",
+    );
+    ready_for_review(&mut activity, now);
+    activity
+        .watch_prompt(&mut state, now)
+        .expect("the change that parses arms it");
+
+    // Nor a buffer past what the parser reads, which has no parse to trust: the
+    // change before it is still unreviewed when it lands.
+    edit(
+        &mut state,
+        600,
+        "def f():\n    count = 3\n    return count + 1\n",
+    );
+    // One line past the limit, whatever the limit is.
+    let unparsed = "x = 1\n".repeat(crate::agent::MAX_PARSED_BYTES / "x = 1\n".len() + 1);
+    edit(&mut state, 700, &unparsed);
+    ready_for_review(&mut activity, now);
+    assert!(
+        activity.watch_prompt(&mut state, now).is_none(),
+        "a review fired on a buffer that was never parsed"
+    );
 }

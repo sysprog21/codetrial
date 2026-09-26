@@ -108,7 +108,7 @@ pub fn save_report(
         payload["problemId"] = problem_id.as_str().into();
     }
     accounts.with(|connection| {
-        let now = current_epoch_seconds() as i64;
+        let now = crate::current_epoch_seconds_i64();
 
         // Who holds the id, and how full the account is, in one round trip.
         // Counting only the rows matching both columns could not tell "that id

@@ -391,7 +391,13 @@ jobs:
           count=$(wc -l <"$RUNNER_TEMP/list.txt" | tr -d ' ')
           width=$(( (count + 24) / 25 ))
           [ "$width" -lt 1 ] && width=1
-          [ "$width" -gt 4 ] && width=4
+
+          # The ceiling is a runner budget, not a target. Twenty-five mutants a
+          # shard is what the line above asks for and what fits the job's
+          # timeout; a ceiling of four turned a 764-mutant diff into 191 a
+          # shard, which is seven times the design load and forty-five minutes
+          # of work reported as nothing at all.
+          [ "$width" -gt 16 ] && width=16
           {
             echo "count=$count"
             echo "width=$width"
@@ -523,8 +529,43 @@ jobs:
           echo "::endgroup::"
           echo "shard ${{ matrix.shard }}/${{ needs.plan-mutants.outputs.width }}: \
             $(wc -l <"$RUNNER_TEMP/shard.txt") mutants" >>"$GITHUB_STEP_SUMMARY"
-          cargo mutants --in-place --in-diff "$RUNNER_TEMP/pr.diff" \
-            --shard ${{ matrix.shard }}/${{ needs.plan-mutants.outputs.width }}
+          # Bounded here rather than only by `timeout-minutes`, because a job
+          # the runner kills is reported as "Cancelled after 45m", which reads
+          # in the checks list exactly like a human cancelling it or a newer
+          # push superseding it. This budget is below the job's, so an overrun
+          # is this step failing with a line saying what overran.
+          #
+          # SIGINT and not SIGKILL: cargo-mutants stops on it and writes what
+          # it had, which the upload below keeps.
+          # `|| status=$?` and not an `if`, because the shell is `bash -e` and
+          # the exit status of an `if` whose branch did not run is zero: the
+          # overrun would be swallowed by the construct meant to report it.
+          status=0
+          timeout --signal=INT --kill-after=60s 35m \
+            cargo mutants --in-place --in-diff "$RUNNER_TEMP/pr.diff" \
+            --shard ${{ matrix.shard }}/${{ needs.plan-mutants.outputs.width }} \
+            || status=$?
+          if [ "$status" -eq 124 ]; then
+            # The shard's size, not what is left: the list is the assignment
+            # made before the run, and cargo-mutants reports progress only in
+            # the summary it never got to print. The artifact below is what
+            # says how far it got.
+            assigned=$(wc -l <"$RUNNER_TEMP/shard.txt" | tr -d ' ')
+            echo "::error::shard ${{ matrix.shard }} ran out of its 35m budget; it was assigned $assigned mutants. Not a surviving mutant: give plan-mutants a higher shard ceiling, or raise both timeouts."
+          fi
+          exit "$status"
+
+      # An overrun or a surviving mutant both leave the answer in mutants.out,
+      # and the log carries none of it: cargo-mutants prints one summary line
+      # at the end and nothing before it. Without this a timed-out shard cannot
+      # say how far it got.
+      - name: Keep what the shard managed to test
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: mutants.out
+          if-no-files-found: ignore
 
   # The release is a binary, not a directory beside a binary: `rust-embed`
   # compiles `web/` (including its WASM) into it. Native runners avoid a

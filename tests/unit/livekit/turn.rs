@@ -55,7 +55,7 @@ fn a_pause_is_read_only_when_the_room_is_actually_idle() {
     /// One way the room is busy: the thing to break, and why it disqualifies
     /// the pause.
     type Busy = (&'static str, fn(&mut RuntimeActivity, &mut RuntimeState));
-    let busy: [Busy; 6] = [
+    let busy: [Busy; 8] = [
         (
             "Jim is mid-sentence, so the stretch is not finished",
             |activity, _| {
@@ -94,6 +94,19 @@ fn a_pause_is_read_only_when_the_room_is_actually_idle() {
         ("a stretch already read is not read again", |_, state| {
             state.interim_transcript_lines = state.transcript.len();
         }),
+        (
+            "the interviewer asked to close, and the end aborts a running review",
+            |_, state| {
+                state.end_requested = true;
+            },
+        ),
+        (
+            "the planned time runs out before the call could return",
+            |_, state| {
+                let planned = u64::from(state.coding_minutes + state.behavioral_minutes) * 60;
+                state.started_at -= Duration::from_secs(planned - 5);
+            },
+        ),
     ];
     for (why, break_it) in busy {
         let mut activity = RuntimeActivity::new(start);
@@ -182,9 +195,10 @@ fn one_review_at_a_time_is_arithmetic_and_not_a_hope() {
     // every review is handed a context it cannot help repeating.
     const { assert!(INTERIM_CONTEXT_NOTES + MAX_INTERIM_LINES_PER_REVIEW < MAX_INTERIM_NOTES) };
 
-    // The default quota fills the retained note budget without evicting a
-    // previous review before the interview ends.
-    const { assert!(DEFAULT_MAX_INTERIM_REVIEWS * MAX_INTERIM_LINES_PER_REVIEW == MAX_INTERIM_NOTES) };
+    // The default quota fits the retained note budget, so no review evicts a
+    // previous one before the interview ends. It uses half: the budget is sized
+    // for an operator who sets twelve.
+    const { assert!(DEFAULT_MAX_INTERIM_REVIEWS * MAX_INTERIM_LINES_PER_REVIEW <= MAX_INTERIM_NOTES) };
 
     // A pause has to be long enough to be worth reading and short enough to
     // happen; a threshold at or above the cooldown would mean the cooldown
@@ -203,4 +217,51 @@ fn one_review_at_a_time_is_arithmetic_and_not_a_hope() {
     // about nothing -- the failure a ceiling on its own cannot see.
     const { assert!(INTERIM_WINDOW_BYTES >= 4 * 1024) };
     const { assert!(INTERIM_CODE_BYTES >= 2 * 1024) };
+}
+
+/// A line the model was shown and that has since gone is retracted in so many
+/// words; left out, the model keeps holding the stale one.
+#[test]
+fn an_evidence_line_that_goes_away_is_retracted() {
+    let lines = |items: &[&str]| {
+        items
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+    };
+    let shown = lines(&["tests: not run", "session: paused"]);
+    assert_eq!(
+        evidence_delta(Some(&shown), &lines(&["tests: not run"])),
+        "session: none"
+    );
+    assert_eq!(
+        evidence_delta(
+            Some(&shown),
+            &lines(&["tests: 1 of 2 passing", "session: paused"])
+        ),
+        "tests: 1 of 2 passing"
+    );
+    assert_eq!(evidence_delta(Some(&shown), &shown), "");
+    assert_eq!(
+        evidence_delta(None, &lines(&["tests: not run"])),
+        "tests: not run"
+    );
+}
+
+/// A review has to be able to return before the planned end: one whose call
+/// would run into it is not started, and one a second earlier is.
+#[test]
+fn no_interim_review_starts_that_the_end_would_abort() {
+    let state = RuntimeState {
+        transcript: (0..INTERIM_MIN_NEW_TURNS)
+            .map(|index| format!("Candidate: line {index}"))
+            .collect(),
+        ..RuntimeState::default()
+    };
+    let planned =
+        Duration::from_secs(u64::from(state.coding_minutes + state.behavioral_minutes) * 60);
+    let last_call = state.started_at + planned - crate::gemini::INTERIM_ATTEMPT_TIMEOUT;
+    let activity = RuntimeActivity::new(state.started_at);
+    assert!(!activity.interim_review_due(&state, last_call));
+    assert!(activity.interim_review_due(&state, last_call - Duration::from_secs(1)));
 }

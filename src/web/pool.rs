@@ -24,7 +24,7 @@ use crate::config::{Provider, ProviderPool};
 use crate::token::{LivekitTokenInput, livekit_token};
 
 use super::token::suffix;
-use super::{AppState, WebServerConfig};
+use super::{AppState, BackgroundTasks, WebServerConfig};
 
 /// How long a project's quota verdict is trusted.
 ///
@@ -419,44 +419,23 @@ async fn report_pool_health(
     verdicts
 }
 
-/// Stops the refresher when the server it belongs to goes away.
-///
-/// A bare `handle.spawn` outlives its caller: the loop would go on probing on a
-/// thirty-second beat after the server that wanted it was dropped, and nothing
-/// would hold a handle to stop it. Aborting on drop ties the loop's life to the
-/// server's, which is what every caller already assumes.
-#[derive(Default)]
-pub(crate) struct QuotaRefresher(Option<tokio::task::JoinHandle<()>>);
-
-impl Drop for QuotaRefresher {
-    fn drop(&mut self) {
-        if let Some(handle) = self.0.take() {
-            handle.abort();
-        }
-    }
-}
-
 /// Keeps every project's verdict fresh for as long as the server runs.
 ///
-/// Silent when there is no runtime to spawn on, matching the recording workers:
-/// `web_router` is public and can be built outside one, and a server whose
-/// quota cache is merely cold still works. A cold cache costs an inline probe
-/// on the first request per project, which is what happened before this
+/// Without a runtime to spawn on the cache merely stays cold, which costs an
+/// inline probe on the first request per project: what happened before this
 /// existed.
 pub(crate) fn spawn_provider_quota_refresher(
     quota: ProviderQuota,
     pool: ProviderPool,
-) -> QuotaRefresher {
+) -> BackgroundTasks {
+    let mut tasks = BackgroundTasks::default();
+
     // The same switch `verdict_for` reads, so a server that does not probe
     // starts no timer either, and no caller has to check it first.
     if !quota.probe || pool.providers.is_empty() {
-        return QuotaRefresher::default();
+        return tasks;
     }
-    let Ok(handle) = tokio::runtime::Handle::try_current() else {
-        eprintln!("livekit quota: no runtime to refresh provider quotas on");
-        return QuotaRefresher::default();
-    };
-    QuotaRefresher(Some(handle.spawn(async move {
+    tasks.push("refresh provider quotas", async move {
         // The first pass runs immediately and says what it found, so the
         // startup log carries the pool's actual state. Held by the task rather
         // than by `ProviderQuota`, because it is the reporting state of this
@@ -471,7 +450,8 @@ pub(crate) fn spawn_provider_quota_refresher(
                 previous = verdicts;
             }
         }
-    })))
+    });
+    tasks
 }
 
 #[cfg(test)]

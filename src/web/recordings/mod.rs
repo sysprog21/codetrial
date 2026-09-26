@@ -19,7 +19,7 @@ pub(crate) use webhook::recording_webhook_handler;
 // Not re-exported: the replay route below is the only caller outside `webhook`,
 // so these stay visible to this module and no wider.
 use webhook::{signed_by_the_rooms_project, webhook_credentials};
-pub(crate) use workers::{RecordingWorkers, delivery_provider, spawn_recording_workers};
+pub(crate) use workers::{delivery_provider, spawn_recording_workers};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -32,7 +32,7 @@ use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
 use crate::accounts::{Accounts, blocking, random_token};
-use crate::current_epoch_seconds;
+use crate::current_epoch_seconds_i64;
 
 use super::auth::Owner;
 use super::consent::recording_requires_consent;
@@ -453,7 +453,7 @@ pub(crate) async fn recording_handler(
     let Some(summary) = found else {
         return recording_missing();
     };
-    if let Some(gone) = gone_response(&summary, current_epoch_seconds() as i64) {
+    if let Some(gone) = gone_response(&summary, current_epoch_seconds_i64()) {
         return gone;
     }
 
@@ -502,7 +502,7 @@ pub(crate) async fn recording_events_handler(
     if let Some(refused) = read_allowed(&state, user.id) {
         return refused;
     }
-    let now = current_epoch_seconds() as i64;
+    let now = current_epoch_seconds_i64();
     let after = replay_after(&params);
 
     // Exact, not truthy. An unknown value is the ordinary snapshot rather than

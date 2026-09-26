@@ -1229,6 +1229,8 @@ fn live_setup_uses_native_audio_voice_tools_and_transcription() {
 
     assert_eq!(setup["model"], "models/gemini-live");
     assert_eq!(setup["generationConfig"]["temperature"], 0.7);
+    // Unseeded on purpose, unlike the two HTTP calls: see `GENERATION_SEED`.
+    assert!(setup["generationConfig"].get("seed").is_none());
     assert_eq!(setup["generationConfig"]["responseModalities"][0], "AUDIO");
     assert_eq!(
         setup["generationConfig"]["responseModalities"]
@@ -1266,11 +1268,10 @@ fn live_setup_uses_native_audio_voice_tools_and_transcription() {
         setup["tools"][0]["functionDeclarations"][0]["name"],
         TOOL_READ_EDITOR
     );
-    assert!(
-        setup["tools"][0]["functionDeclarations"][0]
-            .get("parameters")
-            .is_none()
-    );
+    // One optional parameter, the page to start from, and nothing required.
+    let read = &setup["tools"][0]["functionDeclarations"][0]["parameters"];
+    assert_eq!(read["properties"]["fromLine"]["type"], "INTEGER");
+    assert!(read.get("required").is_none());
     assert_eq!(
         setup["tools"][0]["functionDeclarations"][1]["name"],
         TOOL_LOG_HINT
@@ -1332,6 +1333,26 @@ fn live_setup_uses_native_audio_voice_tools_and_transcription() {
         json!({})
     );
     assert_eq!(setup["sessionResumption"], json!({}));
+    assert_eq!(
+        setup["generationConfig"]["thinkingConfig"],
+        json!({"thinkingBudget": 0})
+    );
+
+    // The end sensitivity is sent only when configured, and then as set.
+    assert!(
+        setup["realtimeInputConfig"]["automaticActivityDetection"]
+            .get("endOfSpeechSensitivity")
+            .is_none()
+    );
+    let tuned = RuntimeBootstrap {
+        end_sensitivity: Some("END_SENSITIVITY_LOW"),
+        ..boot.clone()
+    };
+    assert_eq!(
+        live_setup_message(&tuned, None)["setup"]["realtimeInputConfig"]["automaticActivityDetection"]
+            ["endOfSpeechSensitivity"],
+        "END_SENSITIVITY_LOW"
+    );
 }
 
 /// The empty object above asks for handles; this is what spends one. A
@@ -1518,11 +1539,23 @@ fn report_generation_request_matches_python_report_model_config() {
 
     let request = generate_report_request("score this");
     assert_eq!(request["contents"][0]["parts"][0]["text"], "score this");
+
+    // The constant half goes first, as the system instruction, so every report
+    // call and every repair of one opens on the same prefix.
+    assert_eq!(
+        request["systemInstruction"]["parts"][0]["text"],
+        crate::agent::report_system_instruction()
+    );
+    assert_eq!(
+        generate_report_request("another session")["systemInstruction"],
+        request["systemInstruction"]
+    );
     assert_eq!(
         request["generationConfig"]["responseMimeType"],
         "application/json"
     );
     assert_eq!(request["generationConfig"]["temperature"], 0.3);
+    assert_eq!(request["generationConfig"]["seed"], GENERATION_SEED);
     assert_eq!(request["generationConfig"]["maxOutputTokens"], 16_384);
 
     // Thinking is spent from the same budget as the report, so an unpinned
@@ -1601,8 +1634,18 @@ fn tool_response_message_matches_live_websocket_shape() {
         args: json!({}),
     };
 
+    let hint = GeminiFunctionCall {
+        id: "call-2".to_string(),
+        name: TOOL_LOG_HINT.to_string(),
+        args: json!({"requested": false}),
+    };
+
+    // One message for the whole batch, answers in the order of the calls.
     assert_eq!(
-        tool_response_message(&call, json!({"result":"code"})),
+        tool_response_message(&[
+            (call, json!({"result":"code"})),
+            (hint, json!({"result":"Recorded."})),
+        ]),
         json!({
             "toolResponse": {
                 "functionResponses": [
@@ -1610,6 +1653,11 @@ fn tool_response_message_matches_live_websocket_shape() {
                         "name": TOOL_READ_EDITOR,
                         "id": "call-1",
                         "response": {"result":"code"}
+                    },
+                    {
+                        "name": TOOL_LOG_HINT,
+                        "id": "call-2",
+                        "response": {"result":"Recorded."}
                     }
                 ]
             }
@@ -1922,7 +1970,11 @@ async fn a_resumed_session_keeps_its_handle_until_a_new_one_arrives() {
 /// length it likes, arriving at a twelve-second deadline.
 #[test]
 fn the_interim_review_asks_for_bounded_prose_and_no_thinking() {
-    let request = content_request("read this stretch", interim_generation_config());
+    let request = content_request(
+        &crate::agent::interim_system_instruction(),
+        "read this stretch",
+        interim_generation_config(),
+    );
     let config = &request["generationConfig"];
 
     assert_eq!(
@@ -1932,6 +1984,7 @@ fn the_interim_review_asks_for_bounded_prose_and_no_thinking() {
     assert_eq!(config["responseMimeType"], "text/plain");
     assert_eq!(config["maxOutputTokens"], 512);
     assert_eq!(config["thinkingConfig"]["thinkingBudget"], 0);
+    assert_eq!(config["seed"], GENERATION_SEED);
     assert!(
         config.get("responseSchema").is_none(),
         "a schema here would reject the prose the prompt asks for"
@@ -1948,4 +2001,106 @@ fn the_interim_review_asks_for_bounded_prose_and_no_thinking() {
         report["contents"][0]["parts"][0]["text"],
         "write the debrief"
     );
+}
+
+/// Live reports each turn's billing once, on the frame that completes it, and
+/// the prompt count covers the whole context the turn ran in: summing the
+/// frames is what the session spent.
+#[test]
+fn a_turns_usage_is_read_off_the_frame_that_completes_it() {
+    let message = parse_server_message(
+        r#"{
+            "serverContent": { "turnComplete": true },
+            "usageMetadata": {
+                "promptTokenCount": 304, "responseTokenCount": 185,
+                "totalTokenCount": 489,
+                "promptTokensDetails": [{ "modality": "TEXT", "tokenCount": 281 }]
+            }
+        }"#,
+    );
+
+    // Usage first: the room loop reads these one at a time, and a completion
+    // that ends the interview or replaces the socket would leave the tokens
+    // behind it unread.
+    assert_eq!(
+        message.events,
+        vec![
+            GeminiEvent::Usage(TokenUsage {
+                prompt: 304,
+                response: 185,
+                cached: 0,
+                thoughts: 0,
+            }),
+            GeminiEvent::TurnComplete,
+        ]
+    );
+
+    // The HTTP calls spell the response count differently.
+    let mut total = TokenUsage::from_metadata(&json!({
+        "promptTokenCount": 2430, "candidatesTokenCount": 900,
+        "cachedContentTokenCount": 1024, "thoughtsTokenCount": 3
+    }));
+    total.add(TokenUsage {
+        prompt: 1,
+        response: 1,
+        cached: 1,
+        thoughts: 1,
+    });
+    assert_eq!(
+        total.log_fields(),
+        "prompt_tokens=2431 response_tokens=901 cached_tokens=1025 thought_tokens=4"
+    );
+}
+
+/// Every answer to a batch goes out, in one frame, over the socket.
+#[tokio::test]
+async fn tool_answers_leave_on_the_socket_in_one_frame() {
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(socket).await.unwrap();
+        socket.next().await.unwrap().unwrap();
+        socket
+            .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+            .await
+            .unwrap();
+
+        // Bounded, so a frame that never leaves fails here instead of hanging
+        // the test until the harness gives up on it.
+        tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .expect("the tool answers never reached the socket")
+            .unwrap()
+            .unwrap()
+            .into_text()
+            .unwrap()
+    });
+
+    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+        .await
+        .unwrap();
+    let call = |id: &str| GeminiFunctionCall {
+        id: id.to_string(),
+        name: TOOL_READ_EDITOR.to_string(),
+        args: json!({}),
+    };
+    session
+        .send_tool_responses(&[
+            (call("a"), json!({"result": "one"})),
+            (call("b"), json!({"result": "two"})),
+        ])
+        .await
+        .unwrap();
+    let frame: Value = serde_json::from_str(&server.await.unwrap()).unwrap();
+    let answers = frame["toolResponse"]["functionResponses"]
+        .as_array()
+        .unwrap();
+    assert_eq!(answers.len(), 2);
+    assert_eq!(answers[0]["id"], "a");
+    assert_eq!(answers[1]["id"], "b");
+    session.close().await.unwrap();
 }

@@ -1,0 +1,417 @@
+{
+  "version": 1,
+  "next_sequence": 18,
+  "candidate_edits_at_last_test": 7,
+  "entries": [
+    {
+      "sequence": 1,
+      "family": "CODE",
+      "provenance": "derived",
+      "source_timestamp_ms": 10,
+      "receipt_timestamp_ms": 100,
+      "observation": {
+        "changedNodes": [],
+        "classification": null,
+        "digest": "e98bc246f130d5a8ee419c8199b1e7b9d00955266a11446f4af6a69dae9e9aa1",
+        "language": "python",
+        "parser": "parsed",
+        "revision": 1,
+        "semanticChange": false,
+        "semanticRevision": 0
+      }
+    },
+    {
+      "sequence": 2,
+      "family": "CODE",
+      "provenance": "derived",
+      "source_timestamp_ms": 20,
+      "receipt_timestamp_ms": 200,
+      "observation": {
+        "changedNodes": [
+          "assignment:added:1",
+          "dictionary:added:1",
+          "expression_statement:added:1",
+          "identifier:added:1"
+        ],
+        "classification": "data_structure",
+        "digest": "70bb7b7e362a5f34dda315da1932579d102dd1f098790d57008fcd48f372199a",
+        "language": "python",
+        "parser": "parsed",
+        "revision": 2,
+        "semanticChange": true,
+        "semanticRevision": 1
+      }
+    },
+    {
+      "sequence": 3,
+      "family": "CODE",
+      "provenance": "derived",
+      "source_timestamp_ms": 30,
+      "receipt_timestamp_ms": 300,
+      "observation": {
+        "changedNodes": [
+          "block:added:1",
+          "identifier:added:1",
+          "if_statement:added:1",
+          "integer:added:2",
+          "list:added:1",
+          "return_statement:added:1"
+        ],
+        "classification": "control_flow",
+        "digest": "693cc1c90614b58126cac18e7338860ed187c0b9d7bf6a8f224bb40673cc4b2c",
+        "language": "python",
+        "parser": "parsed",
+        "revision": 3,
+        "semanticChange": true,
+        "semanticRevision": 2
+      }
+    },
+    {
+      "sequence": 4,
+      "family": "CODE",
+      "provenance": "derived",
+      "source_timestamp_ms": 40,
+      "receipt_timestamp_ms": 400,
+      "observation": {
+        "changedNodes": [
+          "block:removed:1",
+          "identifier:removed:1",
+          "if_statement:removed:1",
+          "integer:removed:2",
+          "list:removed:1",
+          "return_statement:removed:1"
+        ],
+        "classification": "control_flow",
+        "digest": "70bb7b7e362a5f34dda315da1932579d102dd1f098790d57008fcd48f372199a",
+        "language": "python",
+        "parser": "parsed",
+        "revision": 4,
+        "semanticChange": true,
+        "semanticRevision": 3
+      }
+    },
+    {
+      "sequence": 5,
+      "family": "TEST",
+      "provenance": "browser_claim",
+      "source_timestamp_ms": 50,
+      "receipt_timestamp_ms": 500,
+      "observation": {
+        "consecutiveIdenticalFailures": 1,
+        "executed": true,
+        "failed": 2,
+        "failureSignature": "564ddbbd4b5af2e69f7d61000907ef08738dc62969edf54fc322b31be34d9693",
+        "newlyFailed": 2,
+        "newlyPassed": 0,
+        "passed": 0,
+        "regression": false,
+        "total": 2
+      }
+    },
+    {
+      "sequence": 6,
+      "family": "CODE",
+      "provenance": "derived",
+      "source_timestamp_ms": 60,
+      "receipt_timestamp_ms": 600,
+      "observation": {
+        "changedNodes": [
+          "argument_list:added:1",
+          "block:added:1",
+          "call:added:1",
+          "comparison_operator:added:1",
+          "identifier:added:2",
+          "if_statement:added:1",
+          "integer:added:3",
+          "list:added:1",
+          "return_statement:added:1"
+        ],
+        "classification": "control_flow",
+        "digest": "eecc1e1db5366883d0cb1e20d54edd0feed5542254d205c1a5ee96b7fd8addaa",
+        "language": "python",
+        "parser": "parsed",
+        "revision": 5,
+        "semanticChange": true,
+        "semanticRevision": 4
+      }
+    },
+    {
+      "sequence": 7,
+      "family": "CODE",
+      "provenance": "derived",
+      "source_timestamp_ms": 70,
+      "receipt_timestamp_ms": 700,
+      "observation": {
+        "changedNodes": [],
+        "classification": "expression",
+        "digest": "447641299f5f23b52962d26d6b1e24dd7c5b0ca559d35bdecfaef1cde5b3df67",
+        "language": "python",
+        "parser": "parsed",
+        "revision": 6,
+        "semanticChange": true,
+        "semanticRevision": 5
+      }
+    },
+    {
+      "sequence": 8,
+      "family": "CODE",
+      "provenance": "derived",
+      "source_timestamp_ms": 80,
+      "receipt_timestamp_ms": 800,
+      "observation": {
+        "changedNodes": [],
+        "classification": null,
+        "digest": "bc4a3d67219eba3d8f46b246869199e9ad8a8a6622bc77f32fb5181845d779bd",
+        "language": "python",
+        "parser": "syntax_invalid",
+        "revision": 7,
+        "semanticChange": false,
+        "semanticRevision": 5
+      }
+    },
+    {
+      "sequence": 9,
+      "family": "CODE",
+      "provenance": "derived",
+      "source_timestamp_ms": 90,
+      "receipt_timestamp_ms": 900,
+      "observation": {
+        "changedNodes": [],
+        "classification": null,
+        "digest": "80a7161009ffaf868641acac3f5e49bc5f86021ee1d177f3b1cbb47573513649",
+        "language": "cpp",
+        "parser": "parsed",
+        "revision": 8,
+        "semanticChange": false,
+        "semanticRevision": 5
+      }
+    },
+    {
+      "sequence": 10,
+      "family": "CODE",
+      "provenance": "derived",
+      "source_timestamp_ms": 100,
+      "receipt_timestamp_ms": 1000,
+      "observation": {
+        "changedNodes": [],
+        "classification": null,
+        "digest": "bc4a3d67219eba3d8f46b246869199e9ad8a8a6622bc77f32fb5181845d779bd",
+        "language": "python",
+        "parser": "syntax_invalid",
+        "revision": 9,
+        "semanticChange": false,
+        "semanticRevision": 5
+      }
+    },
+    {
+      "sequence": 11,
+      "family": "CODE",
+      "provenance": "derived",
+      "source_timestamp_ms": 110,
+      "receipt_timestamp_ms": 1100,
+      "observation": {
+        "changedNodes": [],
+        "classification": "expression",
+        "digest": "9ec7bfb3f944378bfcdd93de772660fe8693948571b860e97610cdabded1d767",
+        "language": "python",
+        "parser": "parsed",
+        "revision": 10,
+        "semanticChange": true,
+        "semanticRevision": 6
+      }
+    },
+    {
+      "sequence": 12,
+      "family": "DIAGNOSTIC",
+      "provenance": "browser_claim",
+      "source_timestamp_ms": 120,
+      "receipt_timestamp_ms": 1200,
+      "observation": {
+        "category": "other",
+        "signature": "8c4fb73c2783877e428804ebb4449a3be14229be1bd82f41f58b9c486f70773f"
+      }
+    },
+    {
+      "sequence": 13,
+      "family": "TEST",
+      "provenance": "browser_claim",
+      "source_timestamp_ms": 120,
+      "receipt_timestamp_ms": 1200,
+      "observation": {
+        "consecutiveIdenticalFailures": 0,
+        "executed": false,
+        "failed": 0,
+        "failureSignature": null,
+        "newlyFailed": 0,
+        "newlyPassed": 0,
+        "passed": 0,
+        "regression": false,
+        "total": 0
+      }
+    },
+    {
+      "sequence": 14,
+      "family": "TEST",
+      "provenance": "browser_claim",
+      "source_timestamp_ms": 130,
+      "receipt_timestamp_ms": 1300,
+      "observation": {
+        "consecutiveIdenticalFailures": 1,
+        "executed": true,
+        "failed": 1,
+        "failureSignature": "564ddbbd4b5af2e69f7d61000907ef08738dc62969edf54fc322b31be34d9693",
+        "newlyFailed": -1,
+        "newlyPassed": 1,
+        "passed": 1,
+        "regression": false,
+        "total": 2
+      }
+    },
+    {
+      "sequence": 15,
+      "family": "LIFECYCLE",
+      "provenance": "server_observation",
+      "source_timestamp_ms": null,
+      "receipt_timestamp_ms": 1400,
+      "observation": {
+        "transition": "paused"
+      }
+    },
+    {
+      "sequence": 16,
+      "family": "LIFECYCLE",
+      "provenance": "server_observation",
+      "source_timestamp_ms": null,
+      "receipt_timestamp_ms": 1500,
+      "observation": {
+        "transition": "resumed"
+      }
+    },
+    {
+      "sequence": 17,
+      "family": "LIFECYCLE",
+      "provenance": "server_observation",
+      "source_timestamp_ms": null,
+      "receipt_timestamp_ms": 1600,
+      "observation": {
+        "transition": "ended"
+      }
+    }
+  ],
+  "code": {
+    "language": "python",
+    "revision": 10,
+    "candidate_edits": 7,
+    "semantic_revision": 6,
+    "substantive_revision": 6,
+    "parser_observation": "parsed",
+    "latest_digest": "9ec7bfb3f944378bfcdd93de772660fe8693948571b860e97610cdabded1d767",
+    "digest_history": [
+      "611a123da2961343d196cf2b3b6e8c21c2a188b783169318f1a514246ca6d95c",
+      "054bcff2afd8a92d4fb0475d41bfe8f0e7239ccbd3b6c66cf75e61a6adb3c415",
+      "120aae0ae167776356388bafa88f5c6adf5cf378e32849107cff9807cb9dce94",
+      "054bcff2afd8a92d4fb0475d41bfe8f0e7239ccbd3b6c66cf75e61a6adb3c415",
+      "001ae8acc8af85a16444dfc473461e6648b3841f7b9e0f561f78a7a8671a8847",
+      "ee3dcbb745edb2f777be7412eef44f487831a4e11d5dd89ef7d900e83a48958a",
+      "5e72739c5e9beff50573be17fef8c8484378c056b6876dec4d2762612b00ce89",
+      "2e1378451263c0044cdb4e618d8a8d268021f233f558cd3d0406f4550339debe",
+      "5e72739c5e9beff50573be17fef8c8484378c056b6876dec4d2762612b00ce89",
+      "308bb65d1c9cf12bf4dc68cf7a0df6b6863d6c189f00d5049c60707a25e968c1"
+    ],
+    "last_analysis": {
+      "observation": "parsed",
+      "classification": "expression",
+      "semantic_change": true,
+      "changed_nodes": []
+    }
+  },
+  "tests": {
+    "total": 2,
+    "passed": 1,
+    "failed": 1,
+    "newly_passed": 1,
+    "newly_failed": -1,
+    "follows_executed_run": true,
+    "regression": false,
+    "consecutive_identical_failures": 1,
+    "failure_signature": "564ddbbd4b5af2e69f7d61000907ef08738dc62969edf54fc322b31be34d9693",
+    "source_timestamp_ms": 130
+  },
+  "diagnostics": {
+    "other": 1,
+    "latest_signature": "8c4fb73c2783877e428804ebb4449a3be14229be1bd82f41f58b9c486f70773f"
+  },
+  "progress": {
+    "first_edit_ms": 200,
+    "runner_attempted": true,
+    "tested": true,
+    "test_progress": true,
+    "all_tests_passed_once": false
+  },
+  "stuck": {
+    "repeated_failure_count": 1,
+    "compile_or_runner_failure_count": 1,
+    "edit_test_cycles": 2,
+    "undo_redo_cycles": 1,
+    "last_meaningful_change_ms": 1100,
+    "last_test_progress_ms": 1300,
+    "test_progress_latency_ms": 200
+  },
+  "hints": {
+    "current_level": 0,
+    "requested": 0,
+    "volunteered": 0,
+    "withheld": 0,
+    "last_hint_sequence": null
+  },
+  "lifecycle": {
+    "paused": false,
+    "ended": true,
+    "behavioral_round_started": false,
+    "transitions": 3
+  },
+  "coverage": {
+    "covered": [],
+    "uncovered": [
+      "algorithm",
+      "coding",
+      "example",
+      "optimizations",
+      "repeat",
+      "test"
+    ]
+  },
+  "conversation": {
+    "interviewer_turns": 0,
+    "candidate_turns": 0,
+    "recent_sequence": [
+      "edit",
+      "edit",
+      "edit",
+      "test",
+      "edit",
+      "edit",
+      "edit",
+      "edit",
+      "test",
+      "test"
+    ]
+  },
+  "metrics": {
+    "raw_events_received": 15,
+    "code_events_emitted": 10,
+    "watch_prompt_count": 0,
+    "watch_prompt_bytes": 0,
+    "turn_prompt_count": 0,
+    "turn_prompt_bytes": 0,
+    "interim_prompt_count": 0,
+    "interim_prompt_bytes": 0,
+    "final_report_prompt_count": 0,
+    "final_report_prompt_bytes": 0,
+    "read_editor_calls": 0,
+    "read_editor_bytes": 0,
+    "tool_response_count": 0,
+    "tool_response_bytes": 0,
+    "model_input_digest": ""
+  }
+}

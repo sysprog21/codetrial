@@ -6,7 +6,7 @@
 
 import { loadJudge } from "./problem-data.js";
 import { generateHarness, mapCompilerResponse } from "./compiler-explorer.js";
-import { checkAnswer, renderValue } from "./lib.js";
+import { DIAGNOSTIC, checkAnswer, renderValue } from "./lib.js";
 
 const pendingTestLanguages = new Set();
 // C, C++ and Java runs leave the machine, which the editor toolbar says out loud.
@@ -221,7 +221,7 @@ export async function runBrowserTests(problemId, code, language, onStatus = null
       : compilerExplorer[language]
         ? await runCompilerExplorer(language, code, runnable, reportStatus)
         : (reportStatus("running"), await runWorker(code, runnable));
-    if (raw.setupError || !raw.results) return { ...base, setupError: raw.setupError || "The run produced no results." };
+    if (raw.setupError || !raw.results) return { ...base, setupError: raw.setupError || "The run produced no results.", diagnostic: raw.diagnostic || null };
     const cases = runnable.cases.map((testCase, index) => {
       const candidate = index >= spec.cases.length;
       const observed = candidate && !Object.hasOwn(testCase, "expected");
@@ -243,7 +243,11 @@ export async function runBrowserTests(problemId, code, language, onStatus = null
     });
     return { ...base, cases, passed: cases.filter((item) => !item.candidate && item.pass === true).length };
   } catch (error) {
-    return { ...base, setupError: String(error.message || error).slice(0, 400) };
+    return {
+      ...base,
+      setupError: String(error.message || error).slice(0, 400),
+      diagnostic: error?.name === "TimeoutError" ? DIAGNOSTIC.timeout : null,
+    };
   }
 }
 
@@ -283,7 +287,7 @@ async function runCompilerExplorer(language, code, spec, reportStatus = null) {
     return mapCompilerResponse(await response.json());
   } catch (error) {
     if (error?.name === "AbortError") {
-      return { setupError: `Compiler Explorer did not respond within ${compilerExplorerTimeoutMs / 1000} seconds. Try again later.` };
+      return { setupError: `Compiler Explorer did not respond within ${compilerExplorerTimeoutMs / 1000} seconds. Try again later.`, diagnostic: DIAGNOSTIC.timeout };
     }
     return { setupError: `Compiler Explorer run failed: ${String(error?.message || error).slice(0, 300)}` };
   } finally {
@@ -581,7 +585,11 @@ function runWorker(code, spec) {
     const timer = setTimeout(() => {
       worker.terminate();
       URL.revokeObjectURL(url);
-      reject(new Error(`Execution timed out after ${testTimeoutMs / 1000}s - check for an infinite loop.`));
+      const error = new Error(`Execution timed out after ${testTimeoutMs / 1000}s - check for an infinite loop.`);
+      // Named as a timeout rather than tagged with a diagnostic, so it reaches
+      // the same branch the catch below takes for `AbortSignal.timeout`.
+      error.name = "TimeoutError";
+      reject(error);
     }, testTimeoutMs);
     worker.onmessage = (event) => {
       clearTimeout(timer);
@@ -916,7 +924,10 @@ async function runPython(code, spec, reportStatus = null) {
       resolve(value);
     };
     timer = setTimeout(() => {
-      finish({ setupError: `Execution timed out after ${testTimeoutMs / 1000}s - check for an infinite loop.` }, true);
+      finish({
+        setupError: `Execution timed out after ${testTimeoutMs / 1000}s - check for an infinite loop.`,
+        diagnostic: DIAGNOSTIC.timeout,
+      }, true);
     }, testTimeoutMs);
     worker.onmessage = (event) => finish(event.data);
     worker.onerror = (event) => finish({ setupError: event.message || "The Python runtime crashed." }, true);

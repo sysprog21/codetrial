@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 use crate::config::DEFAULT_MAX_INTERIM_REVIEWS;
 
 use crate::agent::{
-    RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput, behavioral_silence_nudge,
-    candidate_lines, numbered, proactive_review, significant_change, silence_nudge,
+    RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput, ViewFor,
+    behavioral_silence_nudge, candidate_lines, changed_excerpt, proactive_review, silence_nudge,
     timing_decision, unreviewed_from, with_timer,
 };
 
@@ -30,9 +30,10 @@ use crate::agent::{
 /// because the call it starts runs beside the room instead of inside it.
 pub(super) const INTERIM_IDLE: Duration = Duration::from_secs(8);
 /// Between two idle-window reviews. A pause every eight seconds would spend a
-/// call on every breath; this is roughly the interval at which an interview has
-/// produced a new stretch worth reading.
-pub(super) const INTERIM_COOLDOWN: Duration = Duration::from_secs(75);
+/// call on every breath. At seventy-five seconds a review read little more
+/// than the one before it, and the final report reads the whole transcript
+/// regardless, so the stretch between two is longer.
+pub(super) const INTERIM_COOLDOWN: Duration = Duration::from_secs(150);
 /// What one review may read, in bytes.
 ///
 /// The pause it runs in is the budget: `INTERIM_ATTEMPT_TIMEOUT` gives the call
@@ -45,8 +46,13 @@ pub(super) const INTERIM_WINDOW_BYTES: usize = 8 * 1024;
 /// the stretch since the last one.
 pub(super) const INTERIM_CODE_BYTES: usize = 4 * 1024;
 /// Candidate turns a pause has to have produced before one is read. Below this,
-/// the window is an "mm-hm" and the note would be about nothing.
-pub(super) const INTERIM_MIN_NEW_TURNS: usize = 4;
+/// the window is an "mm-hm" and the note would be about nothing; at four, a
+/// short exchange of acknowledgements still qualified.
+pub(super) const INTERIM_MIN_NEW_TURNS: usize = 6;
+/// What an idle-window review is sent in place of an editor it was already
+/// sent.
+pub(super) const INTERIM_CODE_UNCHANGED: &str =
+    "(unchanged since the notes on record were written; judge this stretch's speech)";
 
 /// A candidate who has just typed is still working, even if their speech has
 /// paused. Give them a beat before a periodic review tries to take the floor.
@@ -72,7 +78,15 @@ pub(super) struct RuntimeActivity {
     pub(super) last_review: Instant,
     pub(super) last_interjection: Instant,
     pub(super) last_test_reaction: Instant,
-    pub(super) code_at_last_review: String,
+    pub(super) substantive_revision_at_last_review: u64,
+    /// The evidence lines the last watch prompt of this Live session left the
+    /// model holding, so the next sends only the lines that differ. The session
+    /// keeps its earlier turns, and a line repeated unchanged every prompt was
+    /// paid for every prompt. `None` on a session shown none, which a cold
+    /// replacement is: it has heard nothing before, so it gets them all.
+    pub(super) evidence_shown: Option<Vec<String>>,
+    /// What the last watch prompt moved. See [`Self::unsend_watch_prompt`].
+    pub(super) unsent_watch: Option<UnsentWatch>,
     pub(super) floor: Floor,
     /// A pause can arrive between Gemini producing a reply and this loop
     /// receiving its final event. Drop that old turn after resume too.
@@ -92,6 +106,10 @@ pub(super) struct RuntimeActivity {
     /// The behavioral round gets one silence nudge. Repeating it every
     /// cooldown would keep inviting a candidate who has declined or finished.
     pub(super) behavioral_nudged: bool,
+    /// What the Live turns of this interview were billed, summed over every
+    /// socket it ran on. Operational, logged at the end; never model input.
+    pub(super) live_usage: crate::gemini::TokenUsage,
+    pub(super) live_turns: u64,
 }
 
 /// A prompt the watcher wants spoken, and whether delivering it spends the
@@ -145,11 +163,15 @@ impl RuntimeActivity {
             last_test_reaction: now
                 .checked_sub(Duration::from_secs_f64(TEST_REACTION_COOLDOWN_S))
                 .unwrap_or(now),
-            code_at_last_review: String::new(),
+            substantive_revision_at_last_review: 0,
+            evidence_shown: None,
+            unsent_watch: None,
             floor: Floor::Listening,
             discarding_output: false,
             tool_response_outstanding: false,
             behavioral_nudged: false,
+            live_usage: crate::gemini::TokenUsage::default(),
+            live_turns: 0,
 
             // Seeded at `now` rather than in the past: the first minutes of an
             // interview are the greeting and the problem statement, and there
@@ -237,8 +259,17 @@ impl RuntimeActivity {
         due
     }
 
+    /// Not once the end is due either: the interviewer has asked to close, or
+    /// the planned time runs out before the call could return, and the end
+    /// aborts a review still running.
     fn interim_review_due(&self, state: &RuntimeState, now: Instant) -> bool {
+        let planned =
+            Duration::from_secs(u64::from(state.coding_minutes + state.behavioral_minutes) * 60);
         !state.paused
+            && !state.end_requested
+            && now.saturating_duration_since(state.started_at)
+                + crate::gemini::INTERIM_ATTEMPT_TIMEOUT
+                < planned
             && self.floor == Floor::Listening
             && !self.reply_in_flight()
             && !self.tool_response_outstanding
@@ -254,7 +285,7 @@ impl RuntimeActivity {
     /// a closed one behave identically to every test that can be written.
     pub(super) fn watch_prompt(
         &mut self,
-        state: &RuntimeState,
+        state: &mut RuntimeState,
         now: Instant,
     ) -> Option<WatchPrompt> {
         let behavioral = state.behavioral_round_started;
@@ -282,9 +313,16 @@ impl RuntimeActivity {
             speech_gap_seconds: now
                 .duration_since(self.last_user_speech.max(self.last_agent_speech))
                 .as_secs_f64(),
-            // Editor changes cannot reopen coding during the behavioral round.
+
+            // A change worth a review, in code that parses now: a review of a
+            // half-typed line is an "mm-hm" about something still being
+            // written, and the next change that parses arms it again. Editor
+            // changes cannot reopen coding during the behavioral round.
             significant_change: !behavioral
-                && significant_change(&self.code_at_last_review, &state.code),
+                && state.evidence_ledger.code.substantive_revision
+                    > self.substantive_revision_at_last_review
+                && state.evidence_ledger.code.parser_observation
+                    == Some(crate::agent::CodeObservation::Parsed),
         });
         if decision.update_last_nudge {
             self.last_nudge = now;
@@ -295,23 +333,109 @@ impl RuntimeActivity {
         if decision.update_last_interjection {
             self.last_interjection = now;
         }
-        if decision.sync_code_at_last_review {
-            self.code_at_last_review = state.code.clone();
-        }
-        let text = if decision.silence_nudge && behavioral {
-            behavioral_silence_nudge()
-        } else if decision.silence_nudge {
-            silence_nudge(&numbered(&state.code))
-        } else if decision.proactive_review {
-            proactive_review(&numbered(&state.code))
-        } else {
+        if !(decision.silence_nudge || decision.proactive_review) {
             return None;
+        }
+
+        // Carries no evidence and no code, so it moves nothing the model has
+        // been shown and leaves nothing for a failed send to put back.
+        if decision.silence_nudge && behavioral {
+            self.unsent_watch = None;
+            return Some(WatchPrompt {
+                text: with_timer(state, behavioral_silence_nudge()),
+                behavioral_nudge: true,
+            });
+        }
+        let excerpt = changed_excerpt(&state.language, &state.code_shown, &state.code);
+        let lines = state.evidence_ledger.prompt_view(ViewFor::Watch);
+        let evidence = evidence_delta(self.evidence_shown.as_deref(), &lines);
+
+        // A nudge shows the code as a review does, so both move what the model
+        // has seen; only a review consumes the change that armed it.
+        let mut unsent = UnsentWatch {
+            revision: None,
+            code_shown: std::mem::replace(&mut state.code_shown, state.code.clone()),
+            evidence_shown: self.evidence_shown.replace(lines),
+        };
+        if decision.sync_revision_at_last_review {
+            unsent.revision = Some(std::mem::replace(
+                &mut self.substantive_revision_at_last_review,
+                state.evidence_ledger.code.substantive_revision,
+            ));
+        }
+
+        // Returned uncounted. Anything that goes out over the live socket is
+        // counted at the door, by `send_model_text`, and counting it here as
+        // well would have been two answers to one question: a prompt this
+        // returns is not always sent, because the caller gives up on a socket
+        // Gemini has already closed.
+        //
+        // The interim review and the final report are the two that are counted
+        // where they are built instead, because neither touches the socket --
+        // both are one-shot HTTP calls, and the interim prompt is handed to a
+        // spawned task that never sees the ledger.
+        self.unsent_watch = Some(unsent);
+        let text = if decision.silence_nudge {
+            silence_nudge(&evidence, excerpt.as_deref())
+        } else {
+            proactive_review(&evidence, excerpt.as_deref())
         };
         Some(WatchPrompt {
             text: with_timer(state, text),
-            behavioral_nudge: decision.silence_nudge && behavioral,
+            behavioral_nudge: false,
         })
     }
+
+    /// Puts back what the last watch prompt moved, for one the socket refused.
+    /// Those markers say what the model has seen, and a prompt that died on a
+    /// closed socket showed it nothing: left moved, the next prompt on a
+    /// resumed session that kept its context skipped the change and the
+    /// evidence this one carried. The timing stamps stay moved, since the
+    /// socket is dead until the close is reported and restoring them would
+    /// build and fail a prompt on every tick until then.
+    pub(super) fn unsend_watch_prompt(&mut self, state: &mut RuntimeState) {
+        let Some(unsent) = self.unsent_watch.take() else {
+            return;
+        };
+        if let Some(revision) = unsent.revision {
+            self.substantive_revision_at_last_review = revision;
+        }
+        state.code_shown = unsent.code_shown;
+        self.evidence_shown = unsent.evidence_shown;
+    }
+}
+
+/// The watch evidence lines the model does not hold yet: every line that
+/// differs from the last ones shown, and `key: none` for a line that was shown
+/// and has since gone. A line vanishing said nothing, so a session flag that
+/// cleared stayed in the model's context as though it still held.
+fn evidence_delta(shown: Option<&[String]>, lines: &[String]) -> String {
+    let key = |line: &str| {
+        line.split_once(':')
+            .map_or(line, |(key, _)| key)
+            .to_string()
+    };
+    let mut delta = lines
+        .iter()
+        .filter(|line| shown.is_none_or(|shown| !shown.contains(line)))
+        .cloned()
+        .collect::<Vec<_>>();
+    let current = lines.iter().map(|line| key(line)).collect::<Vec<_>>();
+    for gone in shown.into_iter().flatten().map(|line| key(line)) {
+        if !current.contains(&gone) {
+            delta.push(format!("{gone}: none"));
+        }
+    }
+    delta.join("\n")
+}
+
+/// What a watch prompt moved, as it was before: the code and the evidence the
+/// model had been shown, and the review baseline when it was a review.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct UnsentWatch {
+    revision: Option<u64>,
+    code_shown: String,
+    evidence_shown: Option<Vec<String>>,
 }
 
 /// What one interview accumulates, minus the two things the select loop borrows
@@ -357,6 +481,28 @@ pub(super) enum Interruptible {
 pub(super) struct SpeakerTurns {
     pub(super) interviewer: SpeakerTurn,
     pub(super) candidate: SpeakerTurn,
+}
+
+/// The two speakers in the order their turns opened.
+///
+/// Both can be open at once, and whichever is written to the ledger first is a
+/// claim about who spoke first. Closing them in a fixed speaker order made that
+/// claim out of the source: a candidate answer that finished while a late
+/// interviewer fragment was still arriving was recorded after the question it
+/// had already answered, and a reader of the ledger saw an answer that preceded
+/// nothing. A turn's transcript line is where it opened, so the lower line
+/// spoke first. A speaker with no line has nothing to record and sorts last.
+pub(super) fn closing_order(
+    interviewer_line: Option<usize>,
+    candidate_line: Option<usize>,
+) -> [&'static str; 2] {
+    match (interviewer_line, candidate_line) {
+        (Some(interviewer), Some(candidate)) if candidate < interviewer => {
+            ["candidate", "interviewer"]
+        }
+        (None, Some(_)) => ["candidate", "interviewer"],
+        _ => ["interviewer", "candidate"],
+    }
 }
 
 pub(super) fn should_send_wrap_up(reason: &str) -> bool {

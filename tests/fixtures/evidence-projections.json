@@ -1,0 +1,8 @@
+{
+  "early": "tests: not run\nphases covered: none; not yet: algorithm, coding, example, optimizations, repeat, test",
+  "empty": "tests: not run\nphases covered: none; not yet: algorithm, coding, example, optimizations, repeat, test",
+  "working": "tests: browser-reported claims (unverified): 1 of 3 passing, 1 edit-and-run cycles\nphases covered: repeat; not yet: algorithm, coding, example, optimizations, test",
+  "workingChanged": "tests: browser-reported claims (unverified): 1 of 3 passing, 1 edit-and-run cycles\nphases covered: repeat; not yet: algorithm, coding, example, optimizations, test",
+  "workingInterim": "code: python, 1 candidate edits, 1 changed the program, parses, last edit code\ntests: browser-reported claims (unverified): 1 of 3 passing, 1 edit-and-run cycles\nlast program change: 1 s before the latest event",
+  "workingReport": "code: python, 1 candidate edits, 1 changed the program, parses, last edit code\ntests: browser-reported claims (unverified): 1 edit-and-run cycles"
+}

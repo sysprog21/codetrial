@@ -1,3 +1,7 @@
+// `prompt_samples` names every prompt builder in one `json!` literal, which
+// outgrew the macro's default expansion depth.
+#![recursion_limit = "256"]
+
 use codetrial::agent::*;
 use codetrial::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
 use serde_json::Value;
@@ -132,9 +136,41 @@ fn overflowing_turn() -> String {
     format!("Candidate: {}", "so ".repeat(4_000))
 }
 
+/// What `EvidenceLedger::prompt_view` renders for a session nobody has typed
+/// in yet (`early`), and for one a few minutes in (`working`).
+///
+/// Real output, and held to it. `prompt_view` is crate-internal, so this file
+/// cannot call it. The projections live in the fixture named below, and the
+/// unit test `the_prompt_samples_carry_what_prompt_view_renders` builds the
+/// two ledgers and fails when the fixture stops matching.
+/// Frozen strings here used to be checked against nothing, so a change to the
+/// projection's shape would have been regenerated straight into the prompt
+/// golden while the samples described a ledger production no longer sends.
+fn evidence_projection(which: &str) -> String {
+    let projections: Value =
+        serde_json::from_str(include_str!("fixtures/evidence-projections.json"))
+            .expect("the projection fixture parses");
+    projections[which]
+        .as_str()
+        .expect("the projection fixture holds this sample")
+        .to_string()
+}
+
 /// Every prompt the agent sends, in one place, so the frozen fixture and the
 /// regeneration path cannot drift apart.
 fn prompt_samples() -> Value {
+    let empty = evidence_projection("empty");
+    let early = evidence_projection("early");
+    let working = evidence_projection("working");
+    let working_changed = evidence_projection("workingChanged");
+    let working_interim = evidence_projection("workingInterim");
+    let working_report = evidence_projection("workingReport");
+    let excerpt = changed_excerpt(
+        "python",
+        "def two_sum(nums, target):\n    return []\n",
+        "def two_sum(nums, target):\n    seen = {}\n    return []\n",
+    )
+    .expect("an edit has an excerpt");
     let problem = get_problem(Some("two-sum"));
     let full_profile = InterviewProfile {
         role: "backend engineer".to_string(),
@@ -192,22 +228,25 @@ fn prompt_samples() -> Value {
         "languageChoice": language_choice("C++", LanguageChoiceContext::Start),
         "languageSwitch": language_choice("Java", LanguageChoiceContext::SwitchWithCode),
         "silenceBehavioral": behavioral_silence_nudge(),
-        "silenceEmpty": silence_nudge("(the editor is currently empty)"),
-        "silencePlan": silence_nudge("  1| # scan once with a map"),
-        "silenceCode": silence_nudge("  1| def two_sum(nums, target):"),
+        "silenceEmpty": silence_nudge(&empty, None),
+        "silenceEarly": silence_nudge(&early, None),
+        "silenceWorking": silence_nudge(&working, Some(&excerpt)),
         "coldRestart": cold_restart(&cold_state),
         "coldRestartEmpty": cold_restart(&RuntimeState::default()),
-        "review": proactive_review("  1| seen = {}"),
+        "review": proactive_review(&working_changed, Some(&excerpt)),
+        "reviewWithoutExcerpt": proactive_review(&working, None),
         "time": time_warning(),
-        "wrapCandidate": wrap_up("candidate_ended"),
-        "wrapTimer": wrap_up("time_up"),
-        "wrapComplete": wrap_up("interview_complete"),
+        "wrapCandidate": wrap_up("candidate_ended", false),
+        "wrapTimer": wrap_up("time_up", false),
+        "wrapBehavioral": wrap_up("time_up", true),
+        "wrapComplete": wrap_up("interview_complete", false),
         "interim": interim_review_prompt(&InterimReviewInput {
             problem,
             transcript_window: "Candidate: I will use a hash map.",
             code: "seen = {}",
             language: "python",
             already_recorded: "Candidate restated the inputs and the return shape.",
+            evidence: &working_interim,
         }),
         "interimEmpty": interim_review_prompt(&InterimReviewInput {
             problem,
@@ -215,10 +254,17 @@ fn prompt_samples() -> Value {
             code: "",
             language: "python",
             already_recorded: "",
+            evidence: &empty,
         }),
-        "testsPass": test_results_reaction("3/3 passed", true),
-        "testsFail": test_results_reaction("2/3 passed", false),
-        "testsSetupError": test_setup_error_reaction("The runner could not start."),
+        "interimSystem": interim_system_instruction(),
+        "reportSystem": report_system_instruction(),
+        "testsPass": test_results_reaction("3/3 passed", true, None),
+        "testsFail": test_results_reaction(
+            "2/3 passed",
+            false,
+            changed_excerpt("python", "", "def two_sum(nums, target):\n    return []").as_deref(),
+        ),
+        "testsSetupError": test_setup_error_reaction("The runner could not start.", None),
         "logHint": log_hint_text(2),
         "hintRung": hint_rung_text(2, 2, "Compare the current value with what you recorded."),
         "hintRungWithheld": hint_rung_withheld_text(2),
@@ -235,6 +281,7 @@ fn prompt_samples() -> Value {
             elapsed_min: 12.4,
             test_summary: "Latest test run: 2/3 cases passed.\n- CANDIDATE CASE empty input with input [[]]: got []",
             practice_level: None,
+            evidence: &working_report,
         }),
         "reportEmpty": report_prompt(ReportPromptInput {
             problem,
@@ -249,6 +296,7 @@ fn prompt_samples() -> Value {
             elapsed_min: 0.0,
             test_summary: "",
             practice_level: None,
+            evidence: "",
         }),
         "reportHalfElapsed": report_prompt(ReportPromptInput {
             problem,
@@ -263,6 +311,7 @@ fn prompt_samples() -> Value {
             elapsed_min: 12.5,
             test_summary: "",
             practice_level: None,
+            evidence: "",
         }),
 
         // Assembled by the real builder rather than written out here. A
@@ -297,6 +346,7 @@ fn prompt_samples() -> Value {
             elapsed_min: 12.4,
             test_summary: "Latest test run: 2/3 cases passed.",
             practice_level: None,
+            evidence: "",
         }),
         "reportMultiline": report_prompt(ReportPromptInput {
             problem,
@@ -311,6 +361,7 @@ fn prompt_samples() -> Value {
             elapsed_min: 12.0,
             test_summary: "Latest test run (run #1, python): 2/3 cases passed.",
             practice_level: None,
+            evidence: "",
         }),
     })
 }
@@ -381,6 +432,11 @@ fn exact_fixture_keys(value: &Value, expected: &[&str], path: &str) {
     assert_eq!(actual, expected, "{path} has schema drift");
 }
 
+/// What the report model reads: the system instruction and the brief.
+fn model_report_input(brief: String) -> String {
+    format!("{}\n\n{brief}", report_system_instruction())
+}
+
 /// Puts the interview past its coding round, which is the state the browser's
 /// one `round_transition` announcement arrives in.
 ///
@@ -417,8 +473,8 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
         assert_eq!(state.code, code);
     }
     match reaction["kind"].as_str().expect("reaction kind is text") {
-        "silence" => silence_nudge(&numbered(code)),
-        "proactive" => proactive_review(&numbered(code)),
+        "silence" => silence_nudge("", changed_excerpt("python", "", code).as_deref()),
+        "proactive" => proactive_review("", changed_excerpt("python", "", code).as_deref()),
         "tests_failed" | "tests_passed" => {
             let all_passed = reaction["kind"] == "tests_passed";
             let before = state.test_runs;
@@ -448,7 +504,7 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
             .generate_reply
             .expect("round gate produces a reaction")
         }
-        "report" => report_prompt(ReportPromptInput {
+        "report" => model_report_input(report_prompt(ReportPromptInput {
             problem: get_problem(Some("two-sum")),
             transcript: case["transcript"].as_str().expect("transcript is text"),
             rolling_assessment: "",
@@ -461,7 +517,8 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
             elapsed_min: 20.0,
             test_summary: "No trusted server-side test was available.",
             practice_level: None,
-        }),
+            evidence: "",
+        })),
         other => panic!("unknown reaction kind {other}"),
     }
 }

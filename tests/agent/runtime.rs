@@ -372,31 +372,34 @@ fn a_stage_direction_carries_the_countdown_the_model_cannot_see() {
 
 #[test]
 fn leetcode_reactions_preserve_stage_transitions() {
-    let empty = silence_nudge("(the editor is currently empty)");
+    let empty = silence_nudge("(the editor is currently empty)", None);
     assert!(empty.contains("understanding, example, or planned algorithm"));
-    assert!(empty.contains("Do not reset them"));
+    assert!(empty.contains("Do not restart them"));
 
-    let code = proactive_review("  1| answer = []");
-    assert!(code.contains("predicted test after implementation"));
-    assert!(code.contains("requires `log_hint`"));
+    let code = proactive_review("1| answer = []", None);
+    assert!(code.contains("a predicted test"));
+    assert!(code.contains("`log_hint` with `requested` false"));
 
-    let failed = test_results_reaction("1/3 passed", false);
+    let failed = test_results_reaction("1/3 passed", false, None);
     assert!(failed.contains("Return from Test to diagnosis/Coding"));
     assert!(failed.contains("choose one failing case"));
     assert!(failed.contains("expected result and what their code produced"));
     assert!(failed.contains("Do not state the commonality, bug, location, or fix"));
 
-    let setup = test_setup_error_reaction("Compiler Explorer returned 503");
+    let setup = test_setup_error_reaction("Compiler Explorer returned 503", None);
     assert!(setup.contains("first setup error"));
     assert!(setup.contains("prevents loading the tests, compilation, or execution"));
     assert!(setup.contains("Do not identify the error's cause, location, or fix"));
 
-    let passed = test_results_reaction("3/3 passed", true);
+    let passed = test_results_reaction("3/3 passed", true, None);
     assert!(passed.contains("move to Optimizations"));
     assert!(passed.contains("do not start a behavioral question"));
 
     assert!(time_warning().contains("Do not start a behavioral question"));
-    assert!(wrap_up("candidate_ended").contains("Do not ask a new coding or behavioral question"));
+    assert!(
+        wrap_up("candidate_ended", false)
+            .contains("Do not ask a new coding or behavioral question")
+    );
     assert!(
         language_choice("Python", LanguageChoiceContext::Start).contains("begin the interview")
     );
@@ -408,12 +411,12 @@ fn leetcode_reactions_preserve_stage_transitions() {
     for neutral in [
         greeting(get_problem(Some("two-sum"))),
         language_choice("Python", LanguageChoiceContext::Start),
-        silence_nudge("(the editor is currently empty)"),
+        silence_nudge("(the editor is currently empty)", None),
         time_warning(),
-        wrap_up("time_up"),
-        test_results_reaction("1/3 passed", false),
-        test_results_reaction("3/3 passed", true),
-        test_setup_error_reaction("The runner could not start."),
+        wrap_up("time_up", false),
+        test_results_reaction("1/3 passed", false, None),
+        test_results_reaction("3/3 passed", true, None),
+        test_setup_error_reaction("The runner could not start.", None),
     ] {
         assert!(
             !neutral.contains("`log_hint`"),
@@ -433,32 +436,6 @@ fn helpers_match_frozen_fixture() {
     assert_eq!(
         numbered(""),
         expected["numbered"]["empty"].as_str().unwrap()
-    );
-    assert!(!significant_change("a\nb", "a\nb\nc"));
-
-    // Tab types four spaces, so reindenting a block moves characters without
-    // changing any code. Counting content rather than layout keeps that from
-    // spending a proactive-review turn on a question with no answer in it.
-    let flat = "if a:\nreturn 1\n".repeat(10);
-    let indented = flat.replace('\n', "\n    ");
-    assert!(!significant_change(&flat, &indented));
-    assert_eq!(
-        significant_change("", &"x".repeat(81)),
-        expected["significantChange"]["emptyToLong"]
-            .as_bool()
-            .unwrap()
-    );
-    assert_eq!(
-        significant_change("a", "a\nb\nc\nd"),
-        expected["significantChange"]["oneToFourLines"]
-            .as_bool()
-            .unwrap()
-    );
-    assert_eq!(
-        significant_change("é", &"é".repeat(81)),
-        expected["significantChange"]["unicodeLong"]
-            .as_bool()
-            .unwrap()
     );
 }
 
@@ -520,12 +497,13 @@ fn runtime_helpers_match_frozen_fixture() {
         read_editor_text(
             "python",
             "def two_sum(nums, target):\n    return [0, 1]",
+            1,
             Some(&json!({"language":"python","passed":1,"total":2,"failures":[]})),
             1,
             18,
         ),
         format!(
-            "Editor language: python\n{}\n\n{}\n\n{}",
+            "BEGIN UNTRUSTED EDITOR (python)\n{}\nEND UNTRUSTED EDITOR\nBEGIN UNTRUSTED TEST RUN\n{}\nEND UNTRUSTED TEST RUN\n{}",
             numbered("def two_sum(nums, target):\n    return [0, 1]"),
             expected["testRuns"]["readEditorLatest"].as_str().unwrap(),
             timer_line(18)
@@ -775,6 +753,14 @@ fn the_editor_a_review_reads_is_bounded_at_a_character_boundary() {
     // A budget smaller than the first character walks all the way back rather
     // than looping or slicing into it.
     assert!(code_head("\u{1F600}xy", 2).starts_with("\n(remainder"));
+
+    // What the budget covers, written down because the return value is longer
+    // than it whenever anything was cut: the code kept is within the budget,
+    // and the overshoot is the notice and nothing else.
+    let notice = "\n(remainder of the editor omitted)";
+    let cut = code_head(&"a".repeat(10_000), 4_000);
+    assert!(cut.ends_with(notice));
+    assert_eq!(cut.len() - notice.len(), 4_000);
 }
 
 /// What a pause-time reviewer returns is model output on its way to the report
@@ -874,7 +860,7 @@ fn timing_decision_applies_watch_loop_gates() {
         update_last_nudge: true,
         update_last_review: false,
         update_last_interjection: true,
-        sync_code_at_last_review: false,
+        sync_revision_at_last_review: false,
     };
     let review = TimingDecision {
         silence_nudge: false,
@@ -882,7 +868,7 @@ fn timing_decision_applies_watch_loop_gates() {
         update_last_nudge: false,
         update_last_review: true,
         update_last_interjection: true,
-        sync_code_at_last_review: true,
+        sync_revision_at_last_review: true,
     };
 
     // Both sides of the threshold, named by the constant. The numbers used to
@@ -1271,6 +1257,32 @@ fn interleaved_speakers_keep_their_own_transcript_lines() {
         interviewer.segment_id("interviewer"),
         candidate.segment_id("candidate")
     );
+}
+
+/// The line a turn owns is when it started speaking, and `close_turns` orders
+/// the two speakers by it. A turn that has said nothing owns no line, so a
+/// speaker with nothing to record cannot claim to have spoken first.
+#[test]
+fn a_turn_owns_the_transcript_line_it_opened() {
+    let mut transcript = Vec::new();
+    let mut interviewer = SpeakerTurn::default();
+    let mut candidate = SpeakerTurn::default();
+    assert_eq!(candidate.transcript_line(), None);
+
+    // The candidate answers while the interviewer is still mid-question, which
+    // is the order these two get closed in.
+    candidate.record(&mut transcript, "Candidate", "A hash map, I think.");
+    interviewer.record(&mut transcript, "Interviewer", "What would you reach for?");
+    assert_eq!(candidate.transcript_line(), Some(0));
+    assert_eq!(interviewer.transcript_line(), Some(1));
+
+    // A turn holding nothing but an artifact published no segment and owes no
+    // line, and a finished turn gives its line back.
+    let mut artifact = SpeakerTurn::default();
+    artifact.record(&mut transcript, "Candidate", "  ");
+    assert_eq!(artifact.transcript_line(), None);
+    candidate.finish();
+    assert_eq!(candidate.transcript_line(), None);
 }
 
 /// The opening sync must stay silent, and that requires two files to agree on
@@ -2297,4 +2309,32 @@ fn the_renderer_caps_the_failure_list_even_on_a_run_it_was_handed_directly() {
         4,
         "the renderer must cap the list itself: {rendered}"
     );
+}
+
+/// A run is when the interviewer most needs the code it is reacting to, so the
+/// reaction carries what changed since the model last saw the editor, and
+/// nothing when nothing did: no second copy, and no `read_editor` first.
+#[test]
+fn a_test_reaction_carries_the_code_the_model_has_not_seen() {
+    let mut state = RuntimeState {
+        code: "def f(nums):\n    return sorted(nums)".to_string(),
+        ..RuntimeState::default()
+    };
+    let run =
+        json!({"passed": 1, "total": 2, "language": "python", "cases": [], "setupError": null});
+    let first = apply_data_event(&mut state, TOPIC_TEST_RESULTS, &run, 99.0)
+        .generate_reply
+        .expect("the first run is reacted to");
+    assert!(
+        first.contains("Their code, numbered:\nBEGIN UNTRUSTED EDITOR (python, all 2 lines)"),
+        "{first}"
+    );
+    assert!(first.contains("return sorted(nums)"), "{first}");
+    assert_eq!(state.code_shown, state.code);
+
+    let again = apply_data_event(&mut state, TOPIC_TEST_RESULTS, &run, 99.0)
+        .generate_reply
+        .expect("a second run past the cooldown is reacted to");
+    assert!(!again.contains("BEGIN UNTRUSTED EDITOR"), "{again}");
+    assert!(!again.contains("read_editor"), "{again}");
 }

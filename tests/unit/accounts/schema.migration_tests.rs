@@ -496,7 +496,7 @@ fn the_upgrade_and_the_sweep_together_spare_real_accounts_and_reports() {
     initialize_account_database(&path).unwrap();
     let accounts = accounts_at(&path);
     let (swept_sessions, swept_users) =
-        sweep_expired_sessions(&accounts, current_epoch_seconds() as i64).unwrap();
+        sweep_expired_sessions(&accounts, crate::current_epoch_seconds_i64()).unwrap();
 
     // Migration 3 already emptied the table, so the sweep finds no expired
     // session of its own to remove.

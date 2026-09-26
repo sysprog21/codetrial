@@ -12,6 +12,7 @@
 //! and `prompts` are the data this file used to hold.
 
 mod events;
+mod evidence;
 mod integrity;
 mod problem_guides;
 mod problem_rubrics;
@@ -22,18 +23,36 @@ mod prompts;
 mod report;
 mod value;
 
+#[cfg(test)]
+#[path = "../tests/unit/agent/evidence.rs"]
+mod evidence_tests;
+
 pub use events::apply_data_event;
+pub(crate) use events::apply_data_event_at;
+pub(crate) use events::apply_server_event_at;
+pub use evidence::ParseCache;
+pub use evidence::{
+    CodeAnalysis, CodeChangeClass, CodeObservation, EvidenceLedger, LifecycleTransition,
+    ObservationFamily, Provenance,
+};
+// For the `livekit` tests, which size a buffer past the parse limit from it.
+#[cfg(test)]
+pub(crate) use evidence::MAX_PARSED_BYTES;
+pub(crate) use evidence::{ModelInputKind, ViewFor};
+pub(crate) use evidence::{analyze_code, analyze_code_cached, observe_code, observe_code_cached};
 use integrity::integrity_hash;
 pub use integrity::{sanitize_integrity_event, sanitize_test_run};
 use problems::variant_for;
 pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, find_problem, get_problem, topics_for};
 pub use prompts::{
-    InterimReviewInput, LanguageChoiceContext, ReportPromptInput, behavioral_silence_nudge,
-    behavioral_time_warning, build_instructions_for_plan, cold_restart, format_test_run, greeting,
-    hint_ladder_used_text, hint_rung_text, hint_rung_withheld_text, interim_review_prompt,
-    language_choice, log_hint_text, numbered, proactive_review, read_editor_text,
-    released_follow_ups, report_prompt, resume, rolling_assessment, round_skipped, round_started,
-    significant_change, silence_nudge, spoken_language, test_results_reaction,
+    InterimReviewInput, LanguageChoiceContext, MAX_EXCERPT_LINE_CHARS, MAX_NUMBERED_BYTES,
+    ReportPromptInput, behavioral_silence_nudge, behavioral_time_warning,
+    build_instructions_for_plan, changed_excerpt, cold_restart, format_test_run,
+    format_test_run_for_reaction, greeting, hint_ladder_used_text, hint_rung_text,
+    hint_rung_withheld_text, interim_review_prompt, interim_system_instruction, language_choice,
+    log_hint_text, numbered, numbered_from, proactive_review, read_editor_text,
+    released_follow_ups, report_prompt, report_system_instruction, resume, rolling_assessment,
+    round_skipped, round_started, silence_nudge, spoken_language, test_results_reaction,
     test_setup_error_reaction, time_warning, unrecorded_earlier_phases, wrap_up,
 };
 pub(crate) use report::sanitize_report_candidate;
@@ -123,9 +142,9 @@ const ROUND_TRANSITION_SKEW: std::time::Duration = std::time::Duration::from_sec
 /// `the_time_warning_threshold_is_the_same_number_on_both_sides`.
 pub const TIME_WARNING_S: u64 = 300;
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 14;
-pub const LIVE_PROMPT_VERSION: u32 = 6;
-pub const REPORT_PROMPT_VERSION: u32 = 11;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 16;
+pub const LIVE_PROMPT_VERSION: u32 = 8;
+pub const REPORT_PROMPT_VERSION: u32 = 13;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 2;
 
@@ -630,6 +649,13 @@ impl SpeakerTurn {
         format!("{speaker}-{}", self.index)
     }
 
+    /// Which transcript line this turn owns, which is also when it started
+    /// speaking relative to the other speaker. `None` until the turn has said
+    /// a real word.
+    pub fn transcript_line(&self) -> Option<usize> {
+        self.line
+    }
+
     /// Whether this turn has said anything. Asked of the cleaned text, because
     /// a turn holding only an artifact published no segment and owes no line.
     pub fn is_open(&self) -> bool {
@@ -682,7 +708,19 @@ pub struct RuntimeState {
     pub behavioral_round_prior_turn: Option<(usize, String)>,
     pub paused: bool,
     pub framework_evidence: Vec<FrameworkEvidence>,
+    /// Deterministic, bounded facts derived from the live session.  The ledger
+    /// deliberately holds no editor text or runner diagnostics: those remain
+    /// at their existing boundary and are available to a model only on demand.
+    pub evidence_ledger: EvidenceLedger,
     pub code: String,
+    /// Kept only while an editor buffer is syntactically invalid, keyed by
+    /// language so switching tabs cannot overwrite another tab's recovery
+    /// baseline. These runtime-only recovery baselines never enter the
+    /// evidence ledger.
+    pub last_parseable_code: std::collections::BTreeMap<String, String>,
+    /// The last buffer parsed and its tree, so the next update does not parse
+    /// it again. Runtime-only for the same reason as the baselines above.
+    pub parse_cache: ParseCache,
     /// Whether the candidate has typed, as opposed to the browser having
     /// published a template. See `apply_code_update`.
     pub code_edited: bool,
@@ -753,9 +791,21 @@ pub struct RuntimeState {
     /// shown. The window it gets is everything after this, so a pause that
     /// arrives with nothing new said costs no call at all.
     pub interim_transcript_lines: usize,
+    /// The editor the last idle-window review was sent. A review whose code
+    /// has not changed since says so instead of sending up to four kilobytes
+    /// a note on record already read; like the transcript cursor, it moves
+    /// when the call goes out.
+    pub interim_code: String,
     /// The earlier steps an evidence reply has already named as open, so each
     /// is named once; see `unrecorded_earlier_phases`.
     pub earlier_steps_named: Vec<&'static str>,
+    /// The buffer the Live model was last shown, whole or around a change: by a
+    /// watch prompt, a test reaction, `read_editor`, a requested hint or a
+    /// cold-restart briefing. The next watch prompt or test reaction shows the
+    /// change since this, and says the editor is unchanged when there is none,
+    /// rather than sending code the model holds or telling it to read the
+    /// editor again. Runtime-only, like the recovery baselines above.
+    pub code_shown: String,
     /// The interviewer said the session is over. Read by the room loop, which
     /// ends the interview through the same packet the browser sends, so this is
     /// a request and not the end itself; `ended` is the end itself.
@@ -771,7 +821,7 @@ impl RuntimeState {
     /// nothing.
     pub fn for_problem(problem: &Problem) -> Self {
         let variant = problem.variant();
-        Self {
+        let mut state = Self {
             hint_ladder: variant.hints,
             follow_ups: variant.follow_ups,
             code_templates: variant
@@ -780,7 +830,11 @@ impl RuntimeState {
                 .map(|(language, code)| ((*language).to_string(), (*code).to_string()))
                 .collect(),
             ..Self::default()
-        }
+        };
+        state
+            .evidence_ledger
+            .set_uncovered_coverage(REACTO_PHASE_IDS);
+        state
     }
 }
 
@@ -798,7 +852,10 @@ impl Default for RuntimeState {
             behavioral_round_prior_turn: None,
             paused: false,
             framework_evidence: Vec::new(),
+            evidence_ledger: EvidenceLedger::default(),
             code: String::new(),
+            last_parseable_code: std::collections::BTreeMap::new(),
+            parse_cache: ParseCache::default(),
             code_edited: false,
             code_templates: std::collections::BTreeMap::new(),
             language: "python".to_string(),
@@ -818,7 +875,9 @@ impl Default for RuntimeState {
             needs_cold_brief: false,
             interim_notes: Vec::new(),
             interim_transcript_lines: 0,
+            interim_code: String::new(),
             earlier_steps_named: Vec::new(),
+            code_shown: String::new(),
             end_requested: false,
             ended: false,
         }
@@ -885,6 +944,12 @@ pub(crate) fn unreviewed_from(state: &RuntimeState) -> usize {
 }
 
 /// The head of the editor, within a byte budget, on a character boundary.
+///
+/// The budget covers the code. The notice that follows a cut is added on top
+/// of it, so a truncated head is the budget plus that fixed string: a cap on
+/// what is quoted, not on the length of the return value. Reserving its width
+/// instead would buy an exact ceiling by dropping a line of code for a
+/// constant thirty-odd bytes, which is not the thing being bounded.
 ///
 /// The head and not the tail, unlike a transcript: code is read from the top,
 /// and the signature and the approach are what a reviewer needs. Nothing
@@ -1208,11 +1273,70 @@ pub fn record_framework_evidence(
         summary,
         framework_version: FRAMEWORK_VERSION,
     });
-    Ok(state
+    let evidence = state
         .framework_evidence
         .last()
         .expect("just appended evidence")
-        .clone())
+        .clone();
+
+    // `at_ms` is milliseconds since the interview started, which is what the
+    // report renders. The ledger stamps receipts with the epoch clock every
+    // other entry uses, so passing the elapsed value here put a third scale in
+    // a field that is read as one timeline. Read once for the call, so a second
+    // entry added here later shares this one's reading rather than taking its
+    // own, which is the rule the packet path already follows.
+    let receipt_timestamp_ms = crate::current_epoch_millis();
+    if evidence.kind != EvidenceKind::Skipped {
+        state
+            .evidence_ledger
+            .record_coverage(receipt_timestamp_ms, phase_id(evidence.phase));
+    }
+    Ok(evidence)
+}
+
+/// Closes every STAR step that holds no row as skipped for session timing.
+///
+/// The platform's own bookkeeping, done here rather than asked of the model.
+/// The five-minute warning and the wrap-up used to tell the interviewer to call
+/// `record_framework_evidence` once per missing step before speaking, which is
+/// up to four tool round trips in front of the two moments the candidate is
+/// listening hardest, and a skip only when the model complied. A candidate
+/// who ended the session themselves got no wrap-up and so no skips at all.
+/// Any row closes a step, a skip included, so the warning and the end never
+/// write two skips for one step. Skips never reach the ledger's coverage, the
+/// rule `record_framework_evidence` applies to them as well.
+pub(crate) fn skip_unassessed_star(state: &mut RuntimeState, summary: &str) {
+    let at_ms = state
+        .started_at
+        .elapsed()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64;
+    for phase in [
+        FrameworkPhase::Situation,
+        FrameworkPhase::Task,
+        FrameworkPhase::Action,
+        FrameworkPhase::Result,
+    ] {
+        if state
+            .framework_evidence
+            .iter()
+            .any(|item| item.phase == phase)
+        {
+            continue;
+        }
+        if state.framework_evidence.len() == MAX_FRAMEWORK_EVIDENCE {
+            evict_one_observation(&mut state.framework_evidence);
+        }
+        state.framework_evidence.push(FrameworkEvidence {
+            at_ms,
+            phase,
+            source: EvidenceSource::SessionTiming,
+            kind: EvidenceKind::Skipped,
+            confidence: 100,
+            summary: summary.to_string(),
+            framework_version: FRAMEWORK_VERSION,
+        });
+    }
 }
 
 /// Whether the coding round is finished on evidence rather than on the clock.
@@ -1350,6 +1474,8 @@ pub fn framework_evidence_json(evidence: &FrameworkEvidence) -> serde_json::Valu
 /// told to ask what the candidate would try; the request is not counted,
 /// because the candidate was given nothing.
 pub fn record_hint(state: &mut RuntimeState, requested: bool) -> String {
+    // One reading for the call, whichever of the branches below answers it.
+    let receipt_timestamp_ms = crate::current_epoch_millis();
     let clue = requested
         .then(|| state.hint_ladder.get(state.hint_rungs_given))
         .flatten();
@@ -1359,6 +1485,9 @@ pub fn record_hint(state: &mut RuntimeState, requested: bool) -> String {
             item.phase == FrameworkPhase::Algorithm && item.kind == EvidenceKind::Observed
         }) || phases_evidenced(state, &[FrameworkPhase::Coding]);
         if last && !approach_stated {
+            state
+                .evidence_ledger
+                .record_hint(receipt_timestamp_ms, requested, false);
             return hint_rung_withheld_text(state.hints_used);
         }
     }
@@ -1369,10 +1498,23 @@ pub fn record_hint(state: &mut RuntimeState, requested: bool) -> String {
     match clue {
         Some(clue) => {
             state.hint_rungs_given += 1;
+            state
+                .evidence_ledger
+                .record_hint(receipt_timestamp_ms, requested, true);
             hint_rung_text(state.hints_used, state.hint_rungs_given, clue)
         }
-        None if requested => hint_ladder_used_text(state.hints_used),
-        None => log_hint_text(state.hints_used),
+        None if requested => {
+            state
+                .evidence_ledger
+                .record_hint(receipt_timestamp_ms, requested, false);
+            hint_ladder_used_text(state.hints_used)
+        }
+        None => {
+            state
+                .evidence_ledger
+                .record_hint(receipt_timestamp_ms, requested, true);
+            log_hint_text(state.hints_used)
+        }
     }
 }
 
@@ -1406,7 +1548,7 @@ pub struct TimingDecision {
     pub update_last_nudge: bool,
     pub update_last_review: bool,
     pub update_last_interjection: bool,
-    pub sync_code_at_last_review: bool,
+    pub sync_revision_at_last_review: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1448,6 +1590,12 @@ pub fn transcript_for_report(lines: &[String]) -> String {
 }
 
 /// The newest entries that fit in `budget` bytes, joined.
+///
+/// `budget` bounds the entries, and `EARLIER_OMITTED` is added above them when
+/// any were dropped, so a trimmed tail is that much longer than the budget.
+/// The same trade as `code_head`: the notice is what stops the reader taking
+/// the opening as missing, and paying for it in dropped conversation would be
+/// the wrong economy.
 ///
 /// Two callers want the same tail against different ceilings: the report prompt
 /// above, and the briefing a cold-restarted interviewer is rebuilt from. The
@@ -1614,7 +1762,7 @@ pub fn timing_decision(input: &TimingInput) -> TimingDecision {
             update_last_nudge: true,
             update_last_review: false,
             update_last_interjection: true,
-            sync_code_at_last_review: false,
+            sync_revision_at_last_review: false,
         };
     }
 
@@ -1629,7 +1777,7 @@ pub fn timing_decision(input: &TimingInput) -> TimingDecision {
             update_last_nudge: false,
             update_last_review: true,
             update_last_interjection: true,
-            sync_code_at_last_review: true,
+            sync_revision_at_last_review: true,
         };
     }
 

@@ -57,8 +57,8 @@ fn prompt_golden_digest_matches_versions() {
     // its hash is a string nothing checks. The pair is still asserted, because
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
-    let recorded_versions = (6, 11);
-    let recorded_digest = "a8cef452df6f9c2dd743227e1012a7094a5d87953889e994e4d4e36a37b11763";
+    let recorded_versions = (8, 13);
+    let recorded_digest = "b250d8d7824b45c49954903949980a38c9f7a08d713b4d252ec4b8c8780cb051";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -151,7 +151,8 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
         "Name the step you are moving to",
         "A reminder is a signpost, not a hint",
         "never make them repeat work",
-        "it is a hint",
+        "is a hint",
+        "WHAT COUNTS AS A HINT",
         "call `log_hint`",
         "unambiguous request for a hint, clue, nudge",
         "Give exactly that clue",
@@ -177,19 +178,26 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
     ] {
         assert!(prompt.contains(safeguard), "missing safeguard: {safeguard}");
     }
-    assert!(time_warning().contains("source `session_timing`, kind `skipped`"));
-    assert!(wrap_up("candidate_ended").contains("source `session_timing`, kind `skipped`"));
+
+    // The platform closes the STAR steps of a round that never opened itself,
+    // so neither prompt spends a tool round trip on them before the candidate
+    // hears anything.
+    assert!(!time_warning().contains("record_framework_evidence"));
+    assert!(!wrap_up("candidate_ended", false).contains("record_framework_evidence"));
 
     // The timing skip is the rule and the refusal the one exception to it. A
     // skip conditioned on the model judging that timing prevented assessment
     // left a Result cut off by the clock with no entry at all.
-    let wrap = wrap_up("time_up");
+    let wrap = wrap_up("time_up", true);
     assert!(wrap.contains("a short summary that the session ended before assessment, except where the candidate cannot recall an example"));
     assert!(!wrap.contains("only if the session ending"));
 
     // Both coding watchers speak only during coding, which is exactly where a
     // stray behavioral question was being revived.
-    for watcher in [silence_nudge("  1| x = 1"), proactive_review("  1| x = 1")] {
+    for watcher in [
+        silence_nudge("  1| x = 1", None),
+        proactive_review("  1| x = 1", None),
+    ] {
         assert!(
             watcher
                 .to_lowercase()
@@ -211,12 +219,12 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
         greeting(problem),
         language_choice("C++", LanguageChoiceContext::Start),
         language_choice("Java", LanguageChoiceContext::SwitchWithCode),
-        silence_nudge("(the editor is currently empty)"),
-        proactive_review("  1| answer = []"),
+        silence_nudge("(the editor is currently empty)", None),
+        proactive_review("1| answer = []", None),
         time_warning(),
-        wrap_up("time_up"),
-        test_results_reaction("2/3 passed", false),
-        test_results_reaction("3/3 passed", true),
+        wrap_up("time_up", false),
+        test_results_reaction("2/3 passed", false, None),
+        test_results_reaction("3/3 passed", true, None),
     ]
     .join("\n");
     assert!(
@@ -246,15 +254,18 @@ fn report_brief_states_the_hint_rung() {
         elapsed_min: 12.0,
         test_summary: "",
         practice_level: Some("intern"),
+        evidence: "",
     });
     assert!(prompt.contains("candidate reached hint rung 2 of 3"));
     assert!(prompt.contains("1 hint was volunteered rather than requested"));
 
-    // A declined probe is unassessed, not failed, in both halves of the prompt.
-    assert!(prompt.contains("When the candidate cannot recall an example, declines to give one, or cannot share one, assess"));
-    assert!(prompt.contains("For an abandoned probe, use `null`"));
+    // A declined probe is unassessed, not failed, in both the scoring and the
+    // phase rules, which the system instruction carries.
+    let rules = report_system_instruction();
+    assert!(rules.contains("When the candidate cannot recall an example, declines to give one, or cannot share one, assess"));
+    assert!(rules.contains("For an abandoned probe, use `null`"));
     assert!(
-        prompt.contains(
+        rules.contains(
             "cannot share one; the refusal itself is not evidence of poor STAR performance"
         )
     );
@@ -275,6 +286,7 @@ fn report_prompt_names_the_practice_level() {
         elapsed_min: 12.0,
         test_summary: "",
         practice_level: Some("intern"),
+        evidence: "",
     };
     let selected = report_prompt(base);
     assert!(selected.contains("candidate practiced for intern"));
@@ -348,7 +360,7 @@ fn live_instructions_pose_the_variant_and_hold_no_source_or_walkthrough() {
         "never answer a question they did not ask",
         "held back until the coding round is complete",
         "returns the one clue to give now",
-        "from a ladder\n   you do not otherwise hold",
+        "from a ladder you do not otherwise hold",
     ] {
         assert!(prompt.contains(rule), "missing rule: {rule}");
     }
@@ -369,6 +381,7 @@ fn live_instructions_pose_the_variant_and_hold_no_source_or_walkthrough() {
         elapsed_min: 30.0,
         test_summary: "",
         practice_level: None,
+        evidence: "",
     });
     assert!(report.contains("Reference notes on approaches"));
     assert!(report.contains("never name the published problem, its title, LeetCode"));
@@ -654,7 +667,10 @@ fn profile_text_is_bounded_and_prompt_context_cannot_change_the_coding_rubric() 
     ] {
         assert!(tailored.contains(guard), "missing profile guard: {guard}");
     }
-    assert!(generic.contains("none supplied"));
+
+    // No profile, no section: a notice that nothing was supplied changed no
+    // decision and was read on every turn.
+    assert!(!generic.contains("OPTIONAL INTERVIEW CONTEXT"));
 }
 
 #[test]
@@ -669,6 +685,23 @@ fn coding_only_prompt_removes_the_behavioral_round_contract() {
     assert!(prompt.contains("coding round owns all 45 minutes"));
     assert!(prompt.contains("STAR BEHAVIORAL ROUND — not configured"));
     assert!(!prompt.contains("STAR BEHAVIORAL CLOSE — use only after"));
+
+    // Document grounding only ever chose the behavioral question.
+    let grounded = build_instructions_for_plan(
+        get_problem(Some("two-sum")),
+        45,
+        &InterviewProfile::default(),
+        &InterviewGrounding {
+            requirements: vec!["Owns incident response".to_string()],
+            ..InterviewGrounding::default()
+        },
+        InterviewLoop::CodingOnly,
+    );
+    assert!(
+        !grounded.contains("OPTIONAL DOCUMENT GROUNDING"),
+        "{grounded}"
+    );
+    assert!(!grounded.contains("Owns incident response"));
 }
 
 /// The counts and the free text arrive on a topic the candidate's browser
@@ -918,17 +951,17 @@ fn interview_contract_versions_are_one_closed_bundle() {
         "the bundle table has no row for {INTERVIEW_CONTRACT_BUNDLE_VERSION}"
     );
 
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 14);
-    assert_eq!(LIVE_PROMPT_VERSION, 6);
-    assert_eq!(REPORT_PROMPT_VERSION, 11);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 16);
+    assert_eq!(LIVE_PROMPT_VERSION, 8);
+    assert_eq!(REPORT_PROMPT_VERSION, 13);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 2);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 14,
-            "livePromptVersion": 6,
-            "reportPromptVersion": 11,
+            "bundleVersion": 16,
+            "livePromptVersion": 8,
+            "reportPromptVersion": 13,
             "rubricVersion": 1,
             "reportSchemaVersion": 2,
         })
@@ -981,5 +1014,280 @@ fn a_paragraph_separator_cannot_forge_a_prompt_line() {
         1,
         "the rendered run must stay one line: {}",
         format_test_run(Some(&run), 1)
+    );
+}
+
+/// An editor holding nothing but whitespace, and too much of it to send
+/// whole, is labelled as empty rather than with a range that runs backwards.
+///
+/// The line count drops the blank lines at the end, so a buffer over the byte
+/// cap that is all blank lines measures zero of them. The excerpt wording then
+/// read "lines 1-0 of 0" above a body already saying the editor is empty.
+#[test]
+fn an_oversized_blank_buffer_is_labelled_empty() {
+    let before = "def f(nums):\n    return nums\n";
+    let after = "\n".repeat(5_000);
+    let excerpt = changed_excerpt("python", before, &after).expect("the code was deleted");
+
+    assert!(
+        excerpt.starts_with("BEGIN UNTRUSTED EDITOR (python, all 0 lines)"),
+        "{excerpt}"
+    );
+    assert!(
+        excerpt.contains("(the editor is currently empty)"),
+        "{excerpt}"
+    );
+    assert!(!excerpt.contains("lines 1-0"), "{excerpt}");
+}
+
+/// A watch prompt shows the code, fenced as the candidate's, and points at
+/// `read_editor` only for what it leaves out.
+#[test]
+fn a_watch_prompt_carries_the_code_instead_of_a_read() {
+    let before =
+        "def f(nums):\n    total = 0\n    for n in nums:\n        total += n\n    return total\n";
+    let after =
+        "def f(nums):\n    total = 0\n    for n in nums:\n        total -= n\n    return total\n";
+    let excerpt = changed_excerpt("python", before, after).expect("a line changed");
+    assert!(excerpt.starts_with("BEGIN UNTRUSTED EDITOR (python, all 5 lines)"));
+    assert!(excerpt.ends_with("END UNTRUSTED EDITOR"));
+
+    // A short buffer goes whole, the changed line with its own number.
+    assert!(excerpt.contains("4|         total -= n"));
+    assert!(excerpt.contains("1| def f(nums):") && excerpt.contains("5|     return total"));
+
+    let review = proactive_review("code: python", Some(&excerpt));
+    assert!(review.contains(&excerpt));
+    assert!(review.contains("`read_editor` shows anything it leaves out"));
+
+    // Without an excerpt the model already holds the code, so the prompt says
+    // so instead of sending it to read the editor again.
+    let without = proactive_review("code: python", None);
+    assert!(without.contains("The editor is unchanged since you last saw it."));
+    assert!(!without.contains("read_editor"), "{without}");
+
+    // Nothing changed, nothing to show; a trailing newline is not a line.
+    assert_eq!(changed_excerpt("python", before, before), None);
+    assert_eq!(changed_excerpt("python", before, before.trim_end()), None);
+}
+
+#[test]
+fn whole_buffer_excerpts_keep_changes_past_line_forty() {
+    for count in [41, 60, 80] {
+        let before = (1..=count)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        let after = before.replace(&format!("line {count}\n"), "changed\n");
+        let excerpt = changed_excerpt("python", &before, &after).expect("a line changed");
+        assert!(excerpt.contains(&format!("all {count} lines")));
+        assert!(excerpt.contains(&format!("{count}| changed")));
+        assert_eq!(
+            excerpt.lines().filter(|line| line.contains("| ")).count(),
+            count
+        );
+        assert!(!excerpt.contains("more lines"));
+    }
+}
+
+#[test]
+fn excerpts_switch_to_changed_regions_above_whole_buffer_budgets() {
+    for (count, width, whole) in [(80, 49, true), (80, 50, false), (81, 10, false)] {
+        let before = format!("{}\n", "x".repeat(width)).repeat(count);
+        let mut after = before.clone();
+        let last_line = (count - 1) * (width + 1);
+        after.replace_range(last_line..last_line + 1, "y");
+        let excerpt = changed_excerpt("python", &before, &after).expect("a line changed");
+        assert!(excerpt.contains(&format!("{count}| y")));
+        assert_eq!(excerpt.contains(&format!("all {count} lines")), whole);
+        assert_eq!(
+            excerpt.lines().filter(|line| line.contains("| ")).count(),
+            if whole { count } else { 4 }
+        );
+    }
+}
+
+#[test]
+fn an_excerpt_is_bounded_and_shows_where_a_deletion_was() {
+    let long: String = (0..100)
+        .map(|index| format!("x{index} = {index}\n"))
+        .collect();
+    let excerpt = changed_excerpt("python", "", &long).expect("a paste changed lines");
+    assert_eq!(excerpt.matches("| x").count(), 40);
+    assert!(excerpt.contains("... 60 more lines; call `read_editor` for them"));
+
+    // Labelled with the lines it shows, not the ones the change spans.
+    assert!(excerpt.contains("(python, lines 1-40 of 100,"), "{excerpt}");
+
+    // Past the whole-buffer size, one changed line is shown with its context
+    // and the rest of the buffer is left to `read_editor`.
+    let edited = long.replace("x50 = 50\n", "x50 = 51\n");
+    let region = changed_excerpt("python", &long, &edited).expect("a line changed");
+    assert!(
+        region.starts_with(
+            "BEGIN UNTRUSTED EDITOR (python, lines 48-54 of 100, around the change since the last review)"
+        ),
+        "{region}"
+    );
+    assert!(region.contains("51| x50 = 51"));
+    assert_eq!(region.matches("| x").count(), 7);
+
+    // A buffer sent whole is sent whole, a long line included: it is under the
+    // byte cap already, and cutting it made "all N lines" untrue. In a region,
+    // one long line still cannot stand in for the whole budget.
+    let wide = format!("value = '{}'\n", "\u{3b1}".repeat(400));
+    let whole = changed_excerpt("python", "", &wide).expect("a line changed");
+    assert!(whole.contains(&"\u{3b1}".repeat(400)), "{whole}");
+    let region = changed_excerpt("python", &long, &format!("{long}{wide}")).expect("a line added");
+    assert!(region.contains(" ..."), "a long line is cut: {region}");
+    assert!(region.len() < 1000, "{} bytes", region.len());
+
+    // A deleted line leaves no changed line behind, so the lines either side of
+    // where it was are what the excerpt shows.
+    let deleted =
+        changed_excerpt("python", "a = 1\nb = 2\nc = 3\n", "a = 1\nc = 3\n").expect("a deletion");
+    assert!(deleted.contains("1| a = 1") && deleted.contains("2| c = 3"));
+
+    // Past the whole-buffer size too, where the region is all there is: the
+    // lines either side of the gap, and no note of lines left out, since none
+    // were.
+    let removed = long.replace("x50 = 50\n", "");
+    let region = changed_excerpt("python", &long, &removed).expect("a deletion");
+    assert!(
+        region.starts_with(
+            "BEGIN UNTRUSTED EDITOR (python, lines 48-53 of 99, around the change since the last review)"
+        ),
+        "{region}"
+    );
+    assert!(
+        region.contains("50| x49 = 49") && region.contains("51| x51 = 51"),
+        "{region}"
+    );
+    assert_eq!(region.matches("| x").count(), 6, "{region}");
+    assert!(!region.contains("more lines"), "{region}");
+}
+
+/// Every carrier of the whole editor is bounded: a pasted file stays in the
+/// Live session for the rest of the interview.
+#[test]
+fn the_numbered_editor_is_bounded() {
+    let huge = "x = 1\n".repeat(20_000);
+    let shown = numbered(&huge);
+    assert!(shown.len() < 32_200, "{} bytes", shown.len());
+
+    // The cut names the line to ask for next, and that page starts there, so
+    // nothing past the cap is out of reach.
+    let tail = shown.lines().last().unwrap();
+    let next = tail
+        .split("fromLine ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|line| line.parse::<usize>().ok())
+        .unwrap_or_else(|| panic!("the cut names no line: {tail}"));
+    assert!(
+        tail.starts_with(&format!("... {} more lines;", 20_000 - next + 1)),
+        "{tail}"
+    );
+    assert!(numbered_from(&huge, next).starts_with(&format!("{next}| x = 1")));
+    assert!(numbered_from(&huge, 19_999).ends_with("20000| x = 1"));
+    assert_eq!(numbered_from(&huge, 20_001), "(the editor has 20000 lines)");
+
+    let line = format!("s = '{}'", "a".repeat(5_000));
+    let cut = numbered(&line);
+    assert!(cut.ends_with(" ..."));
+    assert!(cut.len() < 1_100, "{} bytes", cut.len());
+
+    // A short buffer is untouched.
+    assert_eq!(numbered("a\n\n"), "1| a");
+}
+
+/// A live reaction reads one failing case and a count of the rest; the full
+/// account stays with `read_editor` and the report.
+#[test]
+fn a_reaction_reads_one_failing_case() {
+    let run = json!({
+        "language": "python", "passed": 0, "total": 3,
+        "failures": [
+            {"label": "first", "expected": "1", "got": "2"},
+            {"label": "second", "expected": "3", "got": "4"},
+            {"label": "third", "expected": "5", "got": "6"}
+        ]
+    });
+    let brief = format_test_run_for_reaction(&run, 2);
+    assert!(
+        brief.contains("- FAILED first: expected 1, got 2"),
+        "{brief}"
+    );
+    assert!(!brief.contains("second"), "{brief}");
+    assert!(
+        brief.ends_with("- 2 more failing cases not listed"),
+        "{brief}"
+    );
+    let full = format_test_run(Some(&run), 2);
+    assert!(
+        full.contains("third") && !full.contains("not listed"),
+        "{full}"
+    );
+
+    // The browser lists four failures at most; the count of the rest comes from
+    // the reported totals, not from the four it listed.
+    let many = json!({
+        "language": "python", "passed": 2, "total": 10,
+        "failures": (1..=4)
+            .map(|index| json!({"label": format!("case{index}"), "expected": "1", "got": "2"}))
+            .collect::<Vec<_>>()
+    });
+    assert!(format_test_run_for_reaction(&many, 1).ends_with("- 7 more failing cases not listed"));
+    assert!(format_test_run(Some(&many), 1).ends_with("- 4 more failing cases not listed"));
+    let unlisted = json!({"language": "python", "passed": 1, "total": 2, "failures": []});
+    assert!(format_test_run(Some(&unlisted), 1).ends_with("- 1 failing case not listed"));
+}
+
+/// The numbered editor's byte cap, at its edge: a buffer whose numbered form
+/// is exactly the cap is shown whole, and one byte more is cut.
+#[test]
+fn the_numbered_cap_holds_at_its_edge() {
+    // Lines of one width, then a last line sized to land on the cap.
+    let mut lines = Vec::new();
+    let mut length = 0;
+    while MAX_NUMBERED_BYTES - length > 900 {
+        let line = "x".repeat(400);
+        length += usize::from(length > 0) + format!("{}| {line}", lines.len() + 1).len();
+        lines.push(line);
+    }
+    let prefix = format!("{}| ", lines.len() + 1).len();
+    let last = MAX_NUMBERED_BYTES - length - 1 - prefix;
+    assert!(last < 1_000, "the last line must stay under the line cut");
+    lines.push("y".repeat(last));
+    let shown = numbered(&lines.join("\n"));
+    assert_eq!(shown.len(), MAX_NUMBERED_BYTES);
+    assert!(!shown.contains("more lines"), "cut at the cap itself");
+
+    lines.pop();
+    lines.push("y".repeat(last + 1));
+    let over = numbered(&lines.join("\n"));
+    assert!(
+        over.ends_with(&format!(
+            "... 1 more lines; call `read_editor` with fromLine {} for them",
+            lines.len()
+        )),
+        "{}",
+        &over[over.len() - 90..]
+    );
+}
+
+/// A line in a changed region exactly as long as the cut keeps is not cut.
+#[test]
+fn an_excerpt_line_at_the_cut_is_kept_whole() {
+    let long: String = (0..100)
+        .map(|index| format!("x{index} = {index}\n"))
+        .collect();
+    let edge = "z".repeat(MAX_EXCERPT_LINE_CHARS);
+    let over = "w".repeat(MAX_EXCERPT_LINE_CHARS + 1);
+    let edited = long.replace("x50 = 50\n", &format!("{edge}\n{over}\n"));
+    let region = changed_excerpt("python", &long, &edited).expect("lines changed");
+    assert!(region.contains(&format!("| {edge}\n")), "{region}");
+    assert!(
+        region.contains(&format!("| {} ...\n", "w".repeat(MAX_EXCERPT_LINE_CHARS))),
+        "{region}"
     );
 }
