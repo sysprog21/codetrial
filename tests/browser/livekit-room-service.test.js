@@ -83,8 +83,17 @@ test("the base URL is derived the way the server derives it", () => {
 });
 
 test("a missing LIVEKIT_URL is named, not dereferenced", () => {
-  assert.throws(() => roomService.livekitHttpBase(undefined), /LIVEKIT_URL is not set/);
+  // `null`, not `undefined`: the parameter defaults to `process.env.LIVEKIT_URL`,
+  // so `undefined` tests whatever the shell running the suite happens to
+  // export and passes for the wrong reason on a developer's machine.
+  assert.throws(() => roomService.livekitHttpBase(null), /LIVEKIT_URL is not set/);
   assert.throws(() => roomService.livekitHttpBase("  "), /LIVEKIT_URL is not set/);
+
+  // And the default path itself, with the variable owned by the case rather
+  // than inherited.
+  return withEnv("", () => {
+    assert.throws(() => roomService.livekitHttpBase(), /LIVEKIT_URL is not set/);
+  });
 });
 
 test("a 200 that is not JSON says which call and what came back", async () => {
