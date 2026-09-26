@@ -156,6 +156,7 @@ for (const input of levels) {
     if (manualProblem && selectedDifficulties().has(problem?.difficulty)) return;
     manualProblem = false;
     roll = Math.random();
+    avoidedProblem = undefined;
     // Not before the reports are in. Recommending from an empty history here
     // would offer a problem the candidate has already passed and then swap it
     // when the fetch lands. `settle` makes the pick for this level instead, and

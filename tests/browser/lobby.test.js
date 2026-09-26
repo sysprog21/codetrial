@@ -619,6 +619,16 @@ lobbyTest("Random problem restores automatic selection and can draw again", asyn
   assert.equal(new URL(page.url()).searchParams.get("problem"), second.card);
 });
 
+lobbyTest("changing difficulty clears the previous random-pick exclusion", async (page) => {
+  await page.addInitScript(() => { Math.random = () => 0; });
+  const before = await lobby(page);
+  await page.click("#random-problem");
+  assert.notEqual((await snapshot(page)).card, before.card);
+  await setLevel(page, "Hard", true);
+  await setLevel(page, "Hard", false);
+  assert.equal((await snapshot(page)).card, before.card);
+});
+
 lobbyTest("Random problem waits for history on load and browser restore", async (page) => {
   const release = await heldLobby(page);
   assert.equal(await page.isDisabled("#random-problem"), true);
