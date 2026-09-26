@@ -2,6 +2,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 
 import { DEFAULT_RUNTIME_CONFIG, launchChromium, startStaticServer } from "./source.js";
+import { COMPILED_LANGUAGES } from "../../web/compiler-explorer.js";
 
 let browser = null;
 let server = null;
@@ -400,5 +401,88 @@ test("a case cannot be removed while tests are running", async (t) => {
     assert.equal(await page.locator("#candidate-case-status").textContent(), "2/5 cases ready.");
   } finally {
     await page.close();
+  }
+});
+
+/// Holds every judge request until the returned function is called, so a test
+/// can look at the page before the judge has loaded.
+async function holdJudge(page) {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  await page.route("**/judges/*.json", async (route) => {
+    await held;
+    await route.continue();
+  });
+  return release;
+}
+
+/// Clicks a tab even when it is disabled, and answers whether it took.
+async function clickSelects(tab) {
+  await tab.evaluate((button) => button.click());
+  return tab.evaluate((button) => button.classList.contains("selected"));
+}
+
+test("disabled compiled runners cannot be selected while the judge loads", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  let releaseJudge = () => {};
+  try {
+    releaseJudge = await holdJudge(page);
+    await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => document.querySelector('[data-language="c"]').disabled);
+    for (const language of COMPILED_LANGUAGES) {
+      const tab = page.locator(`[data-language="${language}"]`);
+      assert.equal(await tab.isDisabled(), true);
+      assert.match(await tab.getAttribute("title"), /disabled by this server/);
+      assert.equal(await clickSelects(tab), false);
+    }
+    releaseJudge();
+    await candidateCasesReady(page);
+    for (const language of ["python", "javascript"]) {
+      const tab = page.locator(`[data-language="${language}"]`);
+      assert.equal(await tab.isDisabled(), false);
+      assert.equal(await clickSelects(tab), true);
+    }
+    for (const language of COMPILED_LANGUAGES) {
+      assert.equal(await page.locator(`[data-language="${language}"]`).isDisabled(), true);
+    }
+  } finally {
+    releaseJudge();
+    await page.close();
+  }
+});
+
+test("C stays unavailable until a function-style judge has loaded", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const runtimeConfig = DEFAULT_RUNTIME_CONFIG
+    .replace("ENABLED = false", "ENABLED = true")
+    .replace('BASE_URL = ""', 'BASE_URL = "https://godbolt.org"');
+  const enabled = await startStaticServer({ runtimeConfig });
+  try {
+    for (const [problem, classStyle] of [["edge-thumbnail-store", true], ["chargeback-pair-match", false]]) {
+      const page = await browser.newPage();
+      let releaseJudge = () => {};
+      try {
+        releaseJudge = await holdJudge(page);
+        await page.goto(`${enabled.base}/interview.html?problem=${problem}`, { waitUntil: "domcontentloaded" });
+        const c = page.locator('[data-language="c"]');
+        await page.waitForFunction(() => document.querySelector('[data-language="c"]').disabled);
+        assert.match(await c.getAttribute("title"), /only after function-style tests load/);
+        assert.equal(await clickSelects(c), false);
+        releaseJudge();
+        await candidateCasesReady(page);
+        assert.equal(await c.isDisabled(), classStyle);
+        if (classStyle) assert.match(await c.getAttribute("title"), /only builds function judges/);
+        else assert.equal(await clickSelects(c), true);
+        for (const language of ["python", "javascript", "cpp", "java"]) {
+          assert.equal(await page.locator(`[data-language="${language}"]`).isDisabled(), false);
+        }
+      } finally {
+        releaseJudge();
+        await page.close();
+      }
+    }
+  } finally {
+    await new Promise((closed) => enabled.server.close(closed));
   }
 });
