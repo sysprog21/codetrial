@@ -926,6 +926,44 @@ fn a_reply_nobody_was_measured_waiting_for_reports_no_latency() {
     );
 }
 
+/// An interruption before the candidate has been recorded saying anything is
+/// room noise, not a barge-in, and the turn it would discard is already
+/// generated and sitting in the queue.
+///
+/// An interviewer line is not the candidate, which is the half a prefix check
+/// can get wrong in the direction that matters: it would read Jim's own
+/// greeting as evidence that somebody is there to interrupt it.
+#[test]
+fn an_unheard_candidate_cannot_barge_in_on_the_greeting() {
+    let (mut output_audio, _frames) = test_output_audio();
+    let kept = output_audio.output_cancellation.clone();
+    output_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
+    let mut activity = RuntimeActivity::new(Instant::now());
+    activity.floor = Floor::Speaking;
+    let greeting_only = ["Jim: hey there, I am Jim".to_string()];
+
+    assert!(
+        session::cut_unless_unheard(&greeting_only, &mut activity, &mut output_audio).is_none(),
+        "a turn nobody has answered yet is kept"
+    );
+    assert!(!kept.is_cancelled(), "the queued frames must still play");
+    assert!(output_audio.is_playing());
+
+    let answered = [
+        greeting_only[0].clone(),
+        format!(
+            "{}: sure, so the input is an array",
+            crate::agent::CANDIDATE_SPEAKER
+        ),
+    ];
+    let unplayed = session::cut_unless_unheard(&answered, &mut activity, &mut output_audio)
+        .expect("a candidate who has been heard can barge in");
+
+    assert!(unplayed >= Duration::from_secs(9), "reports {unplayed:?}");
+    assert!(kept.is_cancelled(), "queued frames must be dropped");
+    assert_eq!(activity.floor, Floor::Listening);
+}
+
 /// `Interrupted` used to assign the floor bare. `last_agent_speech` is
 /// parked at the playout deadline while audio is queued, so leaving it
 /// there after discarding the queue suppressed the silence nudge for the

@@ -344,11 +344,20 @@ async fn on_interruption(
         eprintln!("interviewer's ending cancelled: the candidate spoke over the close");
     }
 
-    // The only other path that empties the queue, and it used to do so
-    // silently. If a turn is cut this way the candidate hears a fragment or
-    // nothing, and without this line the log shows only the consequence: a turn
-    // that completed with nothing left to play.
-    let unplayed = cut_off_turn(context.activity, context.output_audio);
+    // A kept turn is over as far as Gemini is concerned: it has stopped
+    // generating and will send no `TurnComplete` for a turn it considers
+    // interrupted, so the floor is settled the way a finished one settles it or
+    // the loop waits for a reply that has already happened. Why a turn is kept
+    // at all is on `cut_unless_unheard`, and the line `on_turn_complete` prints
+    // carries how much of it is still to play.
+    let Some(unplayed) = cut_unless_unheard(
+        &context.state.transcript,
+        context.activity,
+        context.output_audio,
+    ) else {
+        eprintln!("timing: kept a turn Gemini cut before the candidate had said anything");
+        return on_turn_complete(room, context).await;
+    };
 
     // What Gemini heard is the whole diagnosis. It interrupts on its own voice
     // activity detection, so a cut with the candidate mid-sentence is barge-in
@@ -729,6 +738,38 @@ pub(super) fn cut_off_turn(
     // The generation this was waiting for died with the turn.
     activity.tool_response_outstanding = false;
     unplayed
+}
+
+/// Cuts the queued turn, unless the candidate has not been transcribed yet in
+/// this interview. Returns what it threw away, or `None` when it kept it.
+///
+/// Gemini interrupts on its own voice activity detection, and the opening
+/// seconds of a room give it plenty that is not speech: a microphone opening,
+/// a chair, a breath. Until the candidate has been recorded saying something
+/// there is nobody who could be barging in, and the turn the cut would discard
+/// is already generated and queued, so discarding it hands the candidate
+/// exactly the silence this path exists to explain. Two consecutive interviews
+/// lost ten seconds of the opening line that way, each with nothing
+/// transcribed.
+///
+/// Asked of the transcript rather than of a flag kept beside it, because the
+/// transcript is what "the candidate has spoken" means everywhere else here
+/// and a second copy of that answer can disagree with it: `on_input_transcript`
+/// admits any non-empty text, while a transcript line is opened only for
+/// spoken words, so a fragment that is nothing but a hashtag artifact would
+/// set the flag and record nothing. That fragment is the room noise this
+/// exists to ignore.
+///
+/// The candidate's first words are the case this defers rather than serves. A
+/// genuine barge-in over the greeting keeps playing until they are
+/// transcribed, and `drop_stale_playout` cuts the queue when they are. Every
+/// barge-in after that is immediate.
+pub(super) fn cut_unless_unheard(
+    transcript: &[String],
+    activity: &mut RuntimeActivity,
+    output_audio: &mut OutputAudio,
+) -> Option<Duration> {
+    (crate::agent::candidate_lines(transcript) > 0).then(|| cut_off_turn(activity, output_audio))
 }
 
 fn take_stale_playout(
