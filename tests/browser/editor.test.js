@@ -120,6 +120,131 @@ test("Enter ignores a matching delimiter inside a trailing comment", () => {
     { value: "    work(); // {\n    }", start: start + 5, end: start + 5 });
 });
 
+test("Enter carries block comments across lines in C-like languages", () => {
+  for (const language of ["javascript", "c", "cpp", "java"]) {
+    for (const before of [
+      "/*\n * setup {",
+      "/*\n\n    [",
+      "call(); /* note\n    (",
+      "/*\n    ' \" ` // /* {",
+      "/*\r\n\tsetup {",
+    ]) {
+      const value = `${before}\n */`;
+      const indentation = before.slice(before.lastIndexOf("\n") + 1).match(/^[ \t]*/)[0];
+      const insertion = `\n${indentation}`;
+      assert.deepEqual(indentNewline(value, before.length, before.length, language), {
+        value: `${before}${insertion}\n */`,
+        start: before.length + insertion.length,
+        end: before.length + insertion.length,
+      }, `${language}: ${before}`);
+    }
+  }
+});
+
+test("Enter resumes code scanning after a cross-line block comment closes", () => {
+  for (const language of ["javascript", "c", "cpp", "java"]) {
+    for (const [line, nested] of [
+      ["*/", false],
+      ["*/ if (ready) {", true],
+      ["*/ call();", false],
+      ["*/ if (ready) { /* trailing */", true],
+      ["*/ // {", false],
+      ["*/ /* another\n    setup {", false],
+      ["*/ /* another */ if (ready) {", true],
+      ["*/\n    if (ready) {", true],
+    ]) {
+      const value = `/* ignored {\n    ${line}`;
+      const expected = `${value}\n${nested ? "        " : "    "}`;
+      assert.deepEqual(indentNewline(value, value.length, value.length, language),
+        { value: expected, start: expected.length, end: expected.length }, `${language}: ${line}`);
+    }
+  }
+});
+
+test("Enter carries only an open block comment into the next line", () => {
+  for (const [name, prefix, language] of [
+    ["code opener", "if (ready) {", "javascript"],
+    ["block marker in a line comment", "// /*", "c"],
+    ["block marker in a quoted string", 'const char *text = "/*";', "cpp"],
+    ["block marker in a multiline template string", "const text = `\n/*\n`;", "javascript"],
+    ["block marker in a JavaScript regex", String.raw`const re = /\/*/;`, "javascript"],
+    ["block marker in a C++ raw string", 'auto text = R"tag(\n/*\n)tag";', "cpp"],
+    ["block marker in a Java text block", 'String text = """\n/*\n""";', "java"],
+    ["block marker in a Python triple-quoted string", 'text = """\n/*\n"""', "python"],
+    ["closed block comment", "/* closed */", "java"],
+    ["Python block marker", "/*", "python"],
+  ]) {
+    const value = `${prefix}\n    `;
+    const unchanged = `${value}\n    `;
+    assert.deepEqual(indentNewline(value, value.length, value.length, language),
+      { value: unchanged, start: unchanged.length, end: unchanged.length }, name);
+    const code = `${value}${language === "python" ? "if ready:" : "if (ready) {"}`;
+    const nested = `${code}\n        `;
+    assert.deepEqual(indentNewline(code, code.length, code.length, language),
+      { value: nested, start: nested.length, end: nested.length }, `${name}: current line`);
+  }
+});
+
+test("Enter resumes indentation after division, regex, and numeric separators", () => {
+  for (const [language, before] of [
+    ["javascript", "const n = object.return / 2;"],
+    ["javascript", "const n = object.if(ready) / 2;"],
+    ["javascript", "const n = π / 2;"],
+    ["javascript", String.raw`if (ready) {} /\/*/.test(text);`],
+    ["javascript", "const object = {} / 2;"],
+    ["cpp", "auto n = 1'000;"],
+  ]) {
+    const value = `${before}\n    if (ready) {`;
+    const expected = `${value}\n        `;
+    assert.deepEqual(indentNewline(value, value.length, value.length, language),
+      { value: expected, start: expected.length, end: expected.length }, value);
+  }
+  const continued = 'const s = "a\\\r\n/*\\\r\n";\r\n    if (ready) {';
+  const expected = `${continued}\n        `;
+  assert.deepEqual(indentNewline(continued, continued.length, continued.length, "javascript"),
+    { value: expected, start: expected.length, end: expected.length });
+});
+
+test("Enter does not add indentation when a string or regex follows an opening parenthesis", () => {
+  for (const [language, value] of [
+    ["javascript", 'call("text"'],
+    ["javascript", String.raw`call(/\/*/`],
+    ["python", 'call("text"'],
+  ]) {
+    const expected = `${value}\n`;
+    assert.deepEqual(indentNewline(value, value.length, value.length, language),
+      { value: expected, start: expected.length, end: expected.length }, value);
+  }
+});
+
+test("Enter uses only the prefix before a selection for comment state", () => {
+  const value = "/*\n    setup {}\n*/";
+  const start = value.indexOf("}");
+  assert.deepEqual(indentNewline(value, start, start, "javascript"),
+    { value: "/*\n    setup {\n    }\n*/", start: start + 5, end: start + 5 });
+  assert.deepEqual(indentNewline(value, start, value.length, "javascript"),
+    { value: "/*\n    setup {\n    ", start: start + 5, end: start + 5 });
+  const code = "/*\n */ if (ready) {}";
+  const caret = code.indexOf("}");
+  assert.deepEqual(indentNewline(code, caret, caret, "cpp"),
+    { value: "/*\n */ if (ready) {\n     \n }", start: caret + 6, end: caret + 6 });
+});
+
+test("Enter derives block comment state from the current value and language", () => {
+  for (const [name, prefix, language, spaces] of [
+    ["open JavaScript block comment", "/*", "javascript", 4],
+    ["JavaScript line comment", "//", "javascript", 8],
+    ["Python block marker", "/*", "python", 8],
+    ["open C++ block comment", "/*", "cpp", 4],
+    ["closed C++ block comment", "/* */", "cpp", 8],
+  ]) {
+    const value = `${prefix}\n    setup {`;
+    const expected = `${value}\n${" ".repeat(spaces)}`;
+    assert.deepEqual(indentNewline(value, value.length, value.length, language),
+      { value: expected, start: expected.length, end: expected.length }, name);
+  }
+});
+
 test("Enter between matching delimiters leaves the caret on the inner line", () => {
   for (const [open, close] of [["{", "}"], ["[", "]"], ["(", ")"]]) {
     assert.deepEqual(

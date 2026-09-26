@@ -1,32 +1,20 @@
+import { tokenize } from "./tokenizer.js";
+
 const INDENT = "    ";
 
-// Return the last non-whitespace code character on this line, ignoring
-// comments while respecting quoted strings. No state carries across lines;
-// multiline strings/comments and JavaScript regex literals need a tokenizer.
-function lastCodeCharacter(line, language) {
-  let quote = "";
+function lastCodeCharacter(value, start, language) {
+  const prefix = value.slice(0, start);
+  const lineStart = prefix.lastIndexOf("\n") + 1;
   let last = "";
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index];
-    if (quote) {
-      if (char === "\\") index += 1;
-      else if (char === quote) quote = "";
-      continue;
+  for (const token of tokenize(prefix, language).tokens) {
+    if (token.end <= lineStart || token.kind === "comment") continue;
+    const text = prefix.slice(Math.max(token.start, lineStart), token.end);
+    if (token.kind !== "code") {
+      if (text.trim()) last = "value";
+    } else {
+      const meaningful = text.trimEnd();
+      if (meaningful) last = meaningful.at(-1);
     }
-    if (char === '"' || char === "'" || (language === "javascript" && char === "`")) {
-      quote = char;
-    } else if (language === "python") {
-      if (char === "#") break;
-    } else if (char === "/") {
-      if (line[index + 1] === "/") break;
-      if (line[index + 1] === "*") {
-        const end = line.indexOf("*/", index + 2);
-        if (end === -1) break;
-        index = end + 1;
-        continue;
-      }
-    }
-    if (char.trim()) last = char;
   }
   return last;
 }
@@ -37,7 +25,7 @@ export function indentNewline(value, start, end, language) {
   const lineStart = start === 0 ? 0 : value.lastIndexOf("\n", start - 1) + 1;
   const before = value.slice(lineStart, start);
   const indentation = before.match(/^[ \t]*/)[0];
-  const opener = lastCodeCharacter(before, language);
+  const opener = lastCodeCharacter(value, start, language);
   const closer = BRACKET_PAIRS[opener];
   const nested = Boolean(closer) || (language === "python" && opener === ":");
   const innerIndent = indentation + (nested ? INDENT : "");
