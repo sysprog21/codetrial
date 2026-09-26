@@ -314,8 +314,16 @@ script_requires()
       let unresolved = 0;
       for (const file of process.argv.slice(1)) {
         // Comments first: a `require("x")` inside one is prose, and failing
-        // the gate on it would teach people to delete the comment.
-        const source = fs.readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, "");
+        // the gate on it would teach people to delete the comment. Whole-line
+        // comments only, because a `//` mid-line is as likely to be inside a
+        // URL in a string as to start a comment, and erasing the rest of that
+        // line would hide a real require. This errs towards a false alarm,
+        // which is visible, over a miss, which is the failure the gate exists
+        // to catch.
+        const source = fs
+          .readFileSync(file, "utf8")
+          .replace(/\/\*[\s\S]*?\*\//g, "")
+          .replace(/^[ \t]*\/\/.*$/gm, "");
         for (const [, , spec] of source.matchAll(/require\s*\((["\x27])([^"\x27]+)\1\)/g)) {
           if (spec.startsWith(".") || isBuiltin(spec)) continue;
           try {
