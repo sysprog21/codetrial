@@ -36,7 +36,10 @@
         <label><input type="checkbox" name="difficulty" value="Hard"> Hard</label>
       </fieldset>
 
-      <p id="recommendation" class="recommendation" aria-live="polite"></p>
+      <div class="random-picker">
+        <button id="random-problem" type="button" disabled>Pick a random problem</button>
+        <p id="recommendation" class="recommendation" aria-live="polite"></p>
+      </div>
       <p id="practice-focus" class="muted small" aria-live="polite" hidden></p>
       <label id="practice-focus-share" class="muted small" hidden><input id="practice-focus-share-input" type="checkbox"> Share this focus with Jim. It may guide one neutral follow-up; it does not change the problem or score.</label>
 

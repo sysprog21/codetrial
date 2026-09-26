@@ -16,6 +16,7 @@ let manualProblem = false;
 let manualDuration = false;
 let manualDifficulty = false;
 let historyReady = false;
+let historyLoad = 0;
 /// The longest interview this deployment can record, which only the server
 /// knows. `Infinity` until `/api/session` answers: the duration row is live
 /// before that lands, and `/api/token` clamps anything that gets out in the
@@ -34,6 +35,8 @@ let durationCeiling = Infinity;
 // restore re-run the recommendation without the card moving under whoever is
 // reading it.
 let roll = Math.random();
+// Keep the exclusion with the roll so restoring the page repeats the same draw.
+let avoidedProblem;
 
 const nodes = {
   accountStatus: document.querySelector("#account-status"),
@@ -45,6 +48,7 @@ const nodes = {
   deleteReports: document.querySelector("#delete-reports"),
   reportDeleteStatus: document.querySelector("#report-delete-status"),
   recommendation: document.querySelector("#recommendation"),
+  randomProblem: document.querySelector("#random-problem"),
   practiceFocus: document.querySelector("#practice-focus"),
   practiceFocusShare: document.querySelector("#practice-focus-share"),
   practiceFocusShareInput: document.querySelector("#practice-focus-share-input"),
@@ -124,9 +128,18 @@ for (const card of cards) {
     manualProblem = true;
     setProblem(card);
     setDuration(suggestedDuration(new Set([card.difficulty])));
-    nodes.recommendation.textContent = `Selected: ${title(card)}.`;
+    nodes.recommendation.textContent = `Selected problem: ${title(card)}.`;
   });
 }
+
+nodes.randomProblem.addEventListener("click", () => {
+  if (!historyReady) return;
+  manualProblem = false;
+  roll = Math.random();
+  avoidedProblem = problem?.id;
+  applyDifficulties();
+  recommend();
+});
 
 for (const input of levels) {
   input.addEventListener("change", () => {
@@ -143,6 +156,7 @@ for (const input of levels) {
     if (manualProblem && selectedDifficulties().has(problem?.difficulty)) return;
     manualProblem = false;
     roll = Math.random();
+    avoidedProblem = undefined;
     // Not before the reports are in. Recommending from an empty history here
     // would offer a problem the candidate has already passed and then swap it
     // when the fetch lands. `settle` makes the pick for this level instead, and
@@ -343,12 +357,13 @@ window.addEventListener("pageshow", (event) => {
   // `starting` with it: the page came back, so whatever start was on its way
   // out did not happen, and a latch left set here disables the button for good.
   historyReady = false;
+  nodes.randomProblem.disabled = true;
   starting = false;
   start.disabled = true;
   nodes.deleteReports.disabled = true;
   nodes.reportDeleteStatus.textContent = "";
   accountHistory = null;
-  loadAccount().finally(settle);
+  refreshHistory();
 });
 
 nodes.loginLink.addEventListener("click", async () => {
@@ -381,7 +396,15 @@ applyDifficulties();
 // one that starts an interview on nothing. `finally` rather than `then` for the
 // same reason: a rejection in `loadAccount` would otherwise leave it disabled
 // for good.
-loadAccount().finally(settle);
+refreshHistory();
+
+function refreshHistory() {
+  const generation = ++historyLoad;
+  // A restored page can start a second load before the first one finishes.
+  return loadAccount(generation).finally(() => {
+    if (generation === historyLoad) settle();
+  });
+}
 
 /// What the lobby settles into once it knows the candidate's history: the level
 /// that history points at, a problem at that level, and a start button.
@@ -392,6 +415,7 @@ loadAccount().finally(settle);
 /// the page had already replaced.
 function settle() {
   historyReady = true;
+  nodes.randomProblem.disabled = false;
   // The level suggestion only applies when the candidate has not already said
   // what they want. Moving their checkboxes would also hide the card they just
   // picked.
@@ -404,10 +428,11 @@ function settle() {
   nodes.deleteReports.disabled = false;
 }
 
-async function loadAccount() {
+async function loadAccount(generation) {
   accountHistory = null;
   try {
     const session = await fetchJson("/api/session");
+    if (generation !== historyLoad) return;
     accountHistory = false;
     applyDurationCeiling(session.maxDurationMin);
     if (session.signedIn) {
@@ -417,7 +442,7 @@ async function loadAccount() {
       nodes.loginLink.hidden = true;
       nodes.logout.hidden = false;
       setStartGate(false);
-      await renderServerHistory();
+      await renderServerHistory(generation);
       return;
     }
     if (session.loginRequired) {
@@ -426,19 +451,20 @@ async function loadAccount() {
       nodes.loginLink.hidden = false;
       nodes.logout.hidden = true;
       setStartGate(true);
-      await renderLocalHistory();
+      await renderLocalHistory(generation);
       return;
     }
   } catch {
     // A server that cannot answer about accounts is not one that will mint a
     // token either, but the editor still works offline, so do not lock the page.
   }
+  if (generation !== historyLoad) return;
   nodes.accountStatus.textContent = "Signed out";
   nodes.githubLogin.hidden = false;
   nodes.loginLink.hidden = false;
   nodes.logout.hidden = true;
   setStartGate(false);
-  await renderLocalHistory();
+  await renderLocalHistory(generation);
 }
 
 async function recordGitHubLogin(reload) {
@@ -469,15 +495,17 @@ async function recordGitHubLogin(reload) {
   }
 }
 
-async function renderServerHistory() {
+async function renderServerHistory(generation) {
   try {
     const data = await fetchJson("/api/reports");
+    if (generation !== historyLoad) return;
     // The picker needs the account row's timestamp for review scheduling and
     // the verdict as it was saved; the progress panel normalizes its own.
     // The server reads its rows back under page names, so no map is needed.
     reports = data.reports.map(pickerEntry);
     showProgress(data.reports, "saved to your account");
   } catch {
+    if (generation !== historyLoad) return;
     showProgressError("Could not load saved account progress.");
   }
 }
@@ -487,7 +515,7 @@ async function renderServerHistory() {
 /// once, so the picker still knows what the candidate has passed and the next
 /// visit fetches nothing. Account history needs none of this: the server reads
 /// it back under page names.
-async function renderLocalHistory() {
+async function renderLocalHistory(generation = historyLoad) {
   try {
     // Both stores, merged by `readDeviceHistory`: the review list keeps
     // attempts long after the 20-row history has dropped them, so it can hold
@@ -496,6 +524,7 @@ async function renderLocalHistory() {
     if (entries.some((entry) =>
       !cardIds.has(pickerEntry(entry).problemId) && entry?.pageMapChecked !== true)) {
       const pages = await loadPageMap().catch(() => null);
+      if (generation !== historyLoad) return;
       if (pages) {
         renameLocalHistory(pages, undefined, true);
         entries = readDeviceHistory();
@@ -504,6 +533,7 @@ async function renderLocalHistory() {
     reports = entries.map(pickerEntry);
     showProgress(entries, "saved on this device");
   } catch {
+    if (generation !== historyLoad) return;
     showProgressError("Could not load progress saved on this device.");
   }
 }
@@ -571,7 +601,7 @@ function recommend(note = "") {
   // it stays answered. Naming a different problem here contradicted the card
   // they had just selected.
   if (manualProblem) return;
-  const choice = pickProblem(cards, selectedDifficulties(), reports, () => roll);
+  const choice = pickProblem(cards, selectedDifficulties(), reports, () => roll, undefined, avoidedProblem);
   // Nothing to offer is still an answer, and it has to go through `setProblem`
   // like every other one. Returning here left whatever was picked for the
   // levels this call just replaced sitting selected behind a live button, on a
@@ -591,12 +621,12 @@ function recommend(note = "") {
       : ` (${choice.picked.difficulty})`;
     const days = choice.review.intervalDays;
     nodes.recommendation.textContent =
-      `${note}Review due after ${days} day${days === 1 ? "" : "s"}${level}: ${title(choice.picked)}.`;
+      `${note}Selected problem: ${title(choice.picked)}. Review due after ${days} day${days === 1 ? "" : "s"}${level}.`;
     return;
   }
   nodes.recommendation.textContent = choice.repeat
-    ? `${note}You have passed every problem at this level. Recommended again: ${title(choice.picked)}.`
-    : `${note}Recommended: ${title(choice.picked)}.`;
+    ? `${note}Selected problem: ${title(choice.picked)}. You have passed every problem at this level.`
+    : `${note}Selected problem: ${title(choice.picked)}.`;
 }
 
 /// Read off `reports` alone, so it is rendered wherever those change: the two
@@ -801,7 +831,7 @@ function renderAttemptHistory(attempts) {
       card.button.hidden = false;
       setProblem(card);
       setDuration(suggestedDuration(new Set([card.difficulty])));
-      nodes.recommendation.textContent = `Selected: ${title(card)}.`;
+      nodes.recommendation.textContent = `Selected problem: ${title(card)}.`;
     });
     item.append(label, open, retry);
     nodes.attemptHistory.append(item);

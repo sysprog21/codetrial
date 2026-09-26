@@ -34,6 +34,25 @@ test("a due completed problem takes priority over an unseen one", () => {
   assert.equal(choice.review.intervalDays, 1);
 });
 
+for (const [name, levels, reports, avoid, expected, review] of [
+  ["another due review still takes priority", ["Easy"],
+    [completed("passed", 0), completed("hard", 0)], "passed", "hard", true],
+  ["the only due review yields to an unseen problem", ["Easy"],
+    [completed("passed", 0)], "passed", "fresh", false],
+  ["the only unseen problem yields to another eligible problem", ["Easy"],
+    [hired("passed")], "fresh", "passed", false],
+  ["the only eligible problem stays selected", ["Medium"],
+    [], "medium", "medium", false],
+  ["the only due review stays selected when no level is eligible", [],
+    [completed("passed", 0)], "passed", "passed", true],
+]) {
+  test(`on a redraw, ${name}`, () => {
+    const choice = pickProblem(bank, new Set(levels), reports, first, 10 * day, avoid);
+    assert.equal(choice.picked.id, expected);
+    assert.equal(Boolean(choice.review), review);
+  });
+}
+
 test("a completed problem stays out of the queue until its interval has elapsed", () => {
   const now = 10 * day;
   const choice = pickProblem(
