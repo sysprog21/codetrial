@@ -1,14 +1,17 @@
 # Evidence runtime
 
 The evidence ledger is the deterministic, session-scoped record of observations
-used by the interview runtime. Version 1 records an append-only sequence with a
-browser source timestamp when supplied and a server receipt timestamp. The
-receipt is read from the server's clock once per packet and is never taken from
-the packet: `at` is the browser's claim, and the receipt is the one timestamp in
-the ledger that is not. Its reduced code state holds a digest and an explicit
-parser status, never editor text. Its test state holds claimed totals, deltas, a
-regression flag and a bounded failure digest; browser-reported test results are
-observations, not a grading verdict.
+used by the interview runtime. Version 1 records a sequence with a browser
+source timestamp when supplied and a server receipt timestamp. The sequence is
+bounded at 256 entries and drops its oldest to stay there, so a long session
+replays from where the window starts rather than from the first observation;
+the sequence numbers are not reused, so a replay can tell a dropped entry from
+one that never existed. The receipt is read from the server's clock once per
+packet and is never taken from the packet: `at` is the browser's claim, and the
+receipt is the one timestamp in the ledger that is not. Its reduced code state
+holds a digest and an explicit parser status, never editor text. Its test state
+holds claimed totals, deltas, a regression flag and a bounded failure digest;
+browser-reported test results are observations, not a grading verdict.
 
 A run that reports no cases at all did not execute. It is recorded as an
 attempt, with its diagnostic, and it does not move the deltas or the progress
@@ -38,11 +41,12 @@ unavailable parsers produce `parser_unavailable`, and an error tree produces
 text-diff fallback exists.
 
 The control-flow and interface kinds a classification turns on are named in
-full rather than matched as substrings, and they are named for all five grammars
-rather than for one. Data structures are the exception, matched on words such as
-`list` and `dict` with syntactic groupings and destructuring patterns excluded,
-because the literal kinds are too many to enumerate. Every
-call is spelled with the word "function" or "method" somewhere, so a substring
+full rather than matched as substrings, and they are named for all five
+grammars rather than for one. Data structures are the exception, matched on
+words such as `list` and `dict` with syntactic groupings and destructuring
+patterns excluded, because the literal kinds are too many to enumerate. A call
+is spelled with one of those words often enough for a substring match to catch
+it, `arrow_function` in JavaScript and `method_invocation` in Java, so the
 match reported calling a helper as changing the signature of the function it
 was called from; every grammar has its own word for a loop, so a list built
 from `for_statement` alone reported `for (const x of items)` and `for (int x :
@@ -57,27 +61,26 @@ kind alone, so renaming the loop variable stays a rename. Kinds outside the
 three categories are an expression edit however many of them moved.
 
 The model is told less than the ledger records. What a prompt carries is a few
-lines of plain text rendered from the ledger's aggregates, and of those only the
-lines the rest of that prompt does not already state: the code history with the
-last edit as a coarse class (`formatting`, `comment`, `identifier` or `code`),
-the test state and nonzero diagnostic categories, labeled as the browser's
-unverified claims, hints, phase coverage, the time since the last program
-change and the session state. A watch prompt carries the code and goes to a
-session that holds the conversation, so it gets the tests, diagnostics, hints,
-phases and session state; the interim review gets the code history, tests,
-diagnostics, last change, hints and session state; the report, whose own
+lines of plain text rendered from the ledger's aggregates, and of those only
+the lines the rest of that prompt does not already state: the code history with
+the last edit as a coarse class (`formatting`, `comment`, `identifier` or
+`code`), the test state and nonzero diagnostic categories, labeled as the
+browser's unverified claims, hints, phase coverage, the time since the last
+program change and the session state. A watch prompt carries the code and goes
+to a session that holds the conversation, so it gets the tests, diagnostics,
+hints, phases and session state; the interim review gets the code history,
+tests, diagnostics, last change, hints and session state; the report, whose own
 sections carry the last run, the hint counts, the framework evidence and the
 transcript, gets the code history, the test history, the diagnostics and the
-session state. No
-entry, digest, timestamp or node fact reaches any of them. The ledger itself was
-the prompt once, as JSON capped at 6,000 bytes; counted with Gemini's tokenizer
-that was 1,000 to 2,700 tokens a prompt, more than half of them SHA-256 digests,
-and a simulated forty-five line session spent 42,212 tokens on review evidence
-where pasting the code had spent 6,776. The text view is bounded by construction
-and costs tens of tokens. The finer class stays in the ledger for
-replay: the review gate turns only on whether an edit was layout or a comment,
-and nothing yet shows the finer class helps the interviewer rather than
-misleading it when it is wrong.
+session state. No entry, digest, timestamp or node fact reaches any of them.
+The ledger itself was the prompt once, as JSON capped at 6,000 bytes; counted
+with Gemini's tokenizer that was 1,000 to 2,700 tokens a prompt, more than half
+of them SHA-256 digests, and a simulated forty-five line session spent 42,212
+tokens on review evidence where pasting the code had spent 6,776. The text view
+is bounded by construction and costs tens of tokens. The finer class stays in
+the ledger for replay: the review gate turns only on whether an edit was
+layout, a comment or a rename, and nothing yet shows the finer class helps the
+interviewer rather than misleading it when it is wrong.
 
 A watch prompt sends only the lines that differ from the ones the last watch
 prompt left the same Live session holding, and no evidence heading at all when
