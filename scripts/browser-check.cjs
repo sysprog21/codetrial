@@ -12,7 +12,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const http = require("http");
 const { spawn } = require("child_process");
-let livekitServerSdk;
+const { isGone, listRoomParticipants, removeParticipant } = require("./livekit-room-service.cjs");
 
 // The browser loads scenario names, while the checks stay keyed by the stable
 // bank ids that identify their judges and candidate programs. Reading the
@@ -105,9 +105,12 @@ const HANDOVER_SIGNALS = {
 
 function redact(text) {
   let output = String(text);
-  for (const key of ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "GOOGLE_API_KEY"]) {
-    const value = process.env[key];
-    if (value) output = output.split(value).join("[redacted]");
+  // GOOGLE_API_KEYS is the pooled spelling and holds a comma-separated list,
+  // so the list as a whole never appears in a message; its members do.
+  for (const key of ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "GOOGLE_API_KEY", "GOOGLE_API_KEYS"]) {
+    for (const value of String(process.env[key] ?? "").split(",")) {
+      if (value.trim()) output = output.split(value.trim()).join("[redacted]");
+    }
   }
   return output.replace(/[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/g, "[jwt]");
 }
@@ -141,16 +144,6 @@ async function clearMediaGate(page) {
   }
   await join.click();
   await gate.waitFor({ state: "hidden" });
-}
-
-async function listRoomParticipants(roomName) {
-  livekitServerSdk ||= requireLivekitServerSdk();
-  const host = process.env.LIVEKIT_URL.replace(/^wss:/, "https:");
-  const client = new livekitServerSdk.RoomServiceClient(host, process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET);
-  return {
-    client,
-    participants: await client.listParticipants(roomName),
-  };
 }
 
 function isAgentParticipant(participant) {
@@ -202,7 +195,7 @@ async function soakInterview(page, roomName, agentIdentity, agentOutput) {
 
   while (Date.now() < deadline) {
     await sleep(Math.min(15_000, deadline - Date.now()));
-    const { participants } = await listRoomParticipants(roomName);
+    const participants = await listRoomParticipants(roomName);
     if (!agentParticipantIdentities(participants).includes(agentIdentity)) {
       throw new Error(`interviewer left during ${soakSeconds}s soak`);
     }
@@ -260,20 +253,20 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
   const started = Date.now();
   let lastAgentParticipants = [];
   while (Date.now() - started < timeoutMs) {
-    let roomState;
+    let participants;
     try {
-      roomState = await listRoomParticipants(roomName);
+      participants = await listRoomParticipants(roomName);
     } catch (error) {
-      if (error.status === 404 || error.code === "not_found") {
+      if (isGone(error)) {
         await sleep(500);
         continue;
       }
       throw error;
     }
     let removed = false;
-    for (const participant of roomState.participants) {
+    for (const participant of participants) {
       if (isAgentParticipant(participant) && participant.identity !== rustAgentIdentity) {
-        await roomState.client.removeParticipant(roomName, participant.identity);
+        await removeParticipant(roomName, participant.identity);
         removed = true;
       }
     }
@@ -281,7 +274,7 @@ async function isolateRustAgent(roomName, rustAgentIdentity, timeoutMs = 120000)
       await sleep(500);
       continue;
     }
-    lastAgentParticipants = agentParticipantIdentities(roomState.participants);
+    lastAgentParticipants = agentParticipantIdentities(participants);
     if (lastAgentParticipants.length === 1 && lastAgentParticipants[0] === rustAgentIdentity) {
       return lastAgentParticipants;
     }
@@ -1382,7 +1375,7 @@ PatternLexicon.prototype.search = function(word) {
           // that some agent arrived; this proves it was the one this server
           // dispatched, which is the difference between the fix working and a
           // stray worker registered on the LiveKit project covering for it.
-          const staffing = (await listRoomParticipants(roomName)).participants;
+          const staffing = await listRoomParticipants(roomName);
           rustAgentParticipants = agentParticipantIdentities(staffing);
           const identities = staffing.map((participant) => participant.identity);
           if (!identities.includes(rustAgentIdentity)) {
@@ -1463,7 +1456,6 @@ PatternLexicon.prototype.search = function(word) {
       console.error(redact(await page.locator("body").innerText().catch(() => "")));
       if (roomName) {
         const participants = await listRoomParticipants(roomName)
-          .then((roomState) => roomState.participants)
           .catch((apiError) => [`list failed: ${apiError.message}`]);
         console.error(redact(JSON.stringify(participants, null, 2)));
       }
@@ -1482,13 +1474,12 @@ PatternLexicon.prototype.search = function(word) {
     await browser.close();
   }
 })().catch((error) => {
-  console.error(error);
+  // Redacted like every other error path in this file. This one is the last
+  // resort, so it is also the one that prints a `fetch` failure verbatim, and
+  // a LiveKit URL or a bearer token in a CI log outlives the run that wrote it.
+  console.error(redact(error?.stack ?? error));
   process.exit(1);
 });
-
-function requireLivekitServerSdk() {
-  return require("livekit-server-sdk");
-}
 
 function startCompilerExplorerMock() {
   const server = http.createServer((request, response) => {
