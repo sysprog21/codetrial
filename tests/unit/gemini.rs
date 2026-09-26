@@ -602,7 +602,10 @@ async fn check_moves_past_a_rejected_key_to_a_working_backup() {
                     .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
                     .await
                     .unwrap();
-                let _ = socket.next().await;
+
+                // Bounded: a close that never arrives is `shutdown`'s failure
+                // to report, and this test is about which keys were tried.
+                let _ = tokio::time::timeout(Duration::from_secs(5), socket.next()).await;
                 return seen;
             }
         }
@@ -1765,9 +1768,7 @@ async fn a_live_session_ages_from_the_moment_its_socket_opened() {
 ///
 /// The close succeeds here, so what this pins is that the reader is ended
 /// at all, not the order the two happen in. A close that fails while the
-/// reader is still parked is the case that was wrong, and it has no test:
-/// every way of making a write fail locally breaks the read as well, and
-/// then the reader ends on its own and proves nothing.
+/// reader is still parked is `a_close_the_peer_never_takes_is_bounded`.
 #[tokio::test]
 async fn shutdown_ends_the_reader_task() {
     let config = live_config(&[]);
@@ -1791,13 +1792,203 @@ async fn shutdown_ends_the_reader_task() {
         .unwrap();
     session.shutdown().await.unwrap();
 
+    // Bounded, because the detached reader this guards against never joins.
     assert!(
-        (&mut session.reader)
+        tokio::time::timeout(Duration::from_secs(5), &mut session.reader)
             .await
+            .expect("shutdown must end the reader task rather than detach it")
             .expect_err("a reader that was aborted cannot have joined")
             .is_cancelled(),
         "shutdown must end the reader task rather than detach it"
     );
+}
+
+/// A peer that finished setup and then stopped reading without closing: the
+/// shape a dropped NAT mapping leaves. `frames` collects what reached it, for
+/// the one test that reads them; the others leave the socket unread so that
+/// writes pile up in the kernel buffers.
+async fn stalled_live_server(
+    read: bool,
+) -> (
+    std::net::SocketAddr,
+    tokio::sync::mpsc::UnboundedReceiver<Message>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (frames, received) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(socket).await.unwrap();
+        let _ = socket.next().await;
+        socket
+            .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+            .await
+            .unwrap();
+        while read && let Some(Ok(frame)) = socket.next().await {
+            let _ = frames.send(frame);
+        }
+        std::future::pending::<()>().await;
+    });
+    (address, received)
+}
+
+/// The write that meets a peer which stopped acknowledging has to fail, and
+/// the failure has to reach `next_event`. Before, the write waited out the
+/// OS retransmit timer, minutes, with the room loop parked behind it; and
+/// once it did fail, every caller logged it and waited for a close the
+/// reader, parked on a read that never returns, was never going to report.
+///
+/// Chunks are large so the loopback buffers fill in well under a second;
+/// what is measured is the stall after that, which `WRITE_TIMEOUT` bounds.
+#[tokio::test]
+async fn a_write_the_peer_never_takes_ends_the_session() {
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let (address, _frames) = stalled_live_server(false).await;
+    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+        .await
+        .unwrap();
+
+    let chunk = vec![0u8; 1 << 20];
+    let failed = tokio::time::timeout(WRITE_TIMEOUT * 4, async {
+        loop {
+            if let Err(error) = session.send_audio_pcm_16khz(&chunk).await {
+                return error;
+            }
+
+            // A write that answers without waiting never yields, and then the
+            // timeout around this loop never gets to fire.
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("a write to a peer that stopped reading must fail, not wait");
+    assert!(
+        failed.to_string().contains("timed out"),
+        "unexpected error: {failed}"
+    );
+
+    let closed = tokio::time::timeout(Duration::from_secs(1), session.next_event()).await;
+    assert_eq!(
+        closed,
+        Ok(None),
+        "the stalled write has to report the close the room loop waits for"
+    );
+
+    // The frame the timed-out write was sending may still be in the sink, and
+    // flushing it again would stall every later write for the same timeout.
+    let started = std::time::Instant::now();
+    assert!(session.send_text("after").await.is_err());
+    assert!(started.elapsed() < Duration::from_millis(100));
+
+    tokio::time::timeout(CLOSE_TIMEOUT * 2, session.shutdown())
+        .await
+        .expect("shutdown after a stalled write must not wait on the peer")
+        .unwrap();
+}
+
+/// A close that the peer never lets through is bounded too. It is called on
+/// the socket being replaced and on the way out of the room, and waiting on
+/// it held up the reconnect and the agent's exit behind a peer already gone.
+#[tokio::test]
+async fn a_close_the_peer_never_takes_is_bounded() {
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let (address, _frames) = stalled_live_server(false).await;
+    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+        .await
+        .unwrap();
+
+    // Fill the buffers without tripping the write timeout, so the close is the
+    // first operation to meet the stall.
+    let chunk = vec![0u8; 1 << 16];
+    while tokio::time::timeout(
+        Duration::from_millis(200),
+        session.writer.send(Message::Binary(chunk.clone().into())),
+    )
+    .await
+    .is_ok()
+    {}
+
+    let closed = tokio::time::timeout(CLOSE_TIMEOUT * 2, session.shutdown())
+        .await
+        .expect("shutdown must not wait on a peer that stopped reading");
+    assert!(closed.is_err(), "a close that did not land must say so");
+    assert!(
+        (&mut session.reader)
+            .await
+            .expect_err("the reader has to be ended even when the close fails")
+            .is_cancelled()
+    );
+}
+
+/// A socket nobody writes to cannot fail a write, and a paused interview
+/// writes nothing. The reader's idle limit is what notices a peer that went
+/// away then, and ending the reader is what hands the socket to the
+/// reconnect.
+#[tokio::test]
+async fn a_silent_peer_ends_the_reader() {
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let (address, _frames) = stalled_live_server(false).await;
+    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+        .await
+        .unwrap();
+
+    tokio::time::pause();
+    let closed = tokio::time::timeout(READ_IDLE_LIMIT * 2, session.next_event()).await;
+    assert_eq!(
+        closed,
+        Ok(None),
+        "a peer silent past the idle limit is gone"
+    );
+}
+
+/// The ping is what keeps a healthy but quiet socket inside the reader's
+/// idle limit, and it is asked for on every watch tick, so it has to hold
+/// itself to its own interval rather than ping every two seconds.
+#[tokio::test]
+async fn keep_alive_pings_once_an_interval() {
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let (address, mut frames) = stalled_live_server(true).await;
+    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+        .await
+        .unwrap();
+
+    tokio::time::pause();
+    session.keep_alive().await.unwrap();
+    session.send_text("marker").await.unwrap();
+    tokio::time::advance(KEEPALIVE_INTERVAL).await;
+    session.keep_alive().await.unwrap();
+    session.keep_alive().await.unwrap();
+    session.send_text("marker").await.unwrap();
+
+    // Timed from a ping stamped on the paused clock, so the boundary is exact:
+    // one millisecond short of the interval is too early, the interval itself
+    // is due.
+    tokio::time::advance(KEEPALIVE_INTERVAL - Duration::from_millis(1)).await;
+    session.keep_alive().await.unwrap();
+    session.send_text("marker").await.unwrap();
+    tokio::time::advance(Duration::from_millis(1)).await;
+    session.keep_alive().await.unwrap();
+
+    // Real time again for the wait, which is bounded: a ping that never goes
+    // out has to fail this test, not hang it. On the paused clock the runtime
+    // would jump to the deadline before the loopback delivered anything.
+    tokio::time::resume();
+    let mut kinds = Vec::new();
+    while kinds.len() < 5 {
+        let frame = tokio::time::timeout(Duration::from_secs(5), frames.recv())
+            .await
+            .unwrap_or_else(|_| panic!("expected five frames, got {kinds:?}"));
+        kinds.push(match frame.unwrap() {
+            Message::Ping(_) => "ping",
+            Message::Text(_) => "text",
+            other => panic!("unexpected frame {other:?}"),
+        });
+    }
+    assert_eq!(kinds, ["text", "ping", "text", "text", "ping"]);
 }
 
 #[tokio::test]

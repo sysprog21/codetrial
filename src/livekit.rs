@@ -839,10 +839,19 @@ async fn on_watch_tick(
         );
 
         // `shutdown` rather than `close`: it is the same teardown for a caller
-        // holding a borrow, which is what every handler here has.
-        context.gemini.shutdown().await?;
+        // holding a borrow, which is what every handler here has. Not `?`: a
+        // socket that fails its close is no reason to stay in the room.
+        if let Err(error) = context.gemini.shutdown().await {
+            eprintln!("Gemini close failed ({error}); leaving anyway");
+        }
         leave_room(room).await;
         return Ok(ControlFlow::Break(()));
+    }
+
+    // Not `?`, for the reason the nudge below gives. A ping that times out has
+    // already ended the reader, so the close it found is reported next.
+    if let Err(error) = context.gemini.keep_alive().await {
+        eprintln!("Gemini ping failed ({error}); waiting for the close to be reported");
     }
 
     if let Some(review) = loops.interim_review.finished() {
@@ -1631,15 +1640,30 @@ async fn handle_data_packet(
             .await?;
     }
     if let Some(prompt) = result.generate_reply {
-        context.gemini.send_text(&prompt).await?;
-        context.activity.mark_speaking();
+        // Not `?`: a failed write here ended the interview with no report, and
+        // the socket it failed on is replaced when the close is reported.
+        match context.gemini.send_text(&prompt).await {
+            Ok(()) => context.activity.mark_speaking(),
+            Err(error) => {
+                eprintln!(
+                    "Gemini reply request failed ({error}); waiting for the close to be reported"
+                );
+            }
+        }
     }
     let Some(reason) = result.finish_interview else {
         return Ok(ControlFlow::Continue(()));
     };
 
-    if should_send_wrap_up(&reason) {
-        send_wrap_up_and_wait(room, context, &reason).await?;
+    // The goodbye is the only part of the ending that needs the Live socket.
+    // The report is written over HTTP from what this process already holds, so
+    // a socket that died under the goodbye costs the goodbye and nothing else;
+    // propagating here skipped `publish_report` and left the candidate waiting
+    // on a report nobody was writing.
+    if should_send_wrap_up(&reason)
+        && let Err(error) = send_wrap_up_and_wait(room, context, &reason).await
+    {
+        eprintln!("wrap-up failed ({error}); writing the report without it");
     }
 
     // The goodbye is the last turn there will be. Closing here keeps the panel
@@ -1655,7 +1679,12 @@ async fn handle_data_packet(
         interview.keys,
     )
     .await?;
-    context.gemini.shutdown().await?;
+
+    // The report is out; a close that fails now changes nothing but whether the
+    // agent leaves, and it has to.
+    if let Err(error) = context.gemini.shutdown().await {
+        eprintln!("Gemini close failed ({error}); leaving anyway");
+    }
     // Give the report packet a moment to leave before the agent goes.
     tokio::time::sleep(Duration::from_millis(250)).await;
     leave_room(room).await;
@@ -1767,11 +1796,20 @@ async fn on_tool_calls(
     for call in calls {
         let shown_before = framework_progress(context.state);
         let response = execute_tool_call(context.state, &call);
-        context.gemini.send_tool_response(&call, response).await?;
 
-        // Gemini now owes a generation for this, and will deliver it on this
-        // socket or not at all.
-        context.activity.tool_response_outstanding = true;
+        // Not `?`. A response that did not go out is owed nothing back, so the
+        // flag stays down, and the socket it failed on is replaced when its
+        // close is reported; the checklist below still reflects the call.
+        match context.gemini.send_tool_response(&call, response).await {
+            // Gemini now owes a generation for this, and will deliver it on
+            // this socket or not at all.
+            Ok(()) => context.activity.tool_response_outstanding = true,
+            Err(error) => {
+                eprintln!(
+                    "Gemini tool response failed ({error}); waiting for the close to be reported"
+                );
+            }
+        }
         if checklist_changed(&shown_before, context.state) {
             publish_framework_progress(room, context.state).await?;
         }

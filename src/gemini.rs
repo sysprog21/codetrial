@@ -32,6 +32,27 @@ const SETUP_TIMEOUT: Duration = Duration::from_secs(15);
 /// candidate leaves during a stalled reconnect would not notice they had gone,
 /// and its own deadline would not fire either.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Bounds one write on an open socket. A peer that stopped acknowledging
+/// without closing, which is what a dropped NAT mapping or a network change
+/// leaves behind, does not fail a write: the send buffer fills and the write
+/// waits until the OS abandons the retransmits, which is minutes. The room
+/// loop awaits every write inline, so for those minutes it answered nothing,
+/// the candidate's `end_interview` included. Audio leaves every hundred
+/// milliseconds, so a healthy socket never comes near this.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Bounds the close handshake the same way. The socket being closed is most
+/// often the one that stopped answering, and a close that waits on it held up
+/// the reconnect and the agent's exit behind a peer that was already gone.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+/// How often the room loop pings. A socket nobody is writing to cannot fail a
+/// write, and a paused interview writes nothing, so without a ping a peer that
+/// went away there would not be noticed until something was finally said.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+/// Silence the reader accepts before it treats the peer as gone. Gemini answers
+/// a ping within milliseconds, so three missed intervals is not a slow network;
+/// it is a socket that will never deliver another event, and ending the reader
+/// is what hands it to the reconnect in `livekit.rs`.
+const READ_IDLE_LIMIT: Duration = Duration::from_secs(45);
 /// An interview's first open, retries included, gets no longer than the one
 /// attempt it had before failover gave it retries. The candidate is in the
 /// room by then and the tab already shows a listening interviewer, so an
@@ -99,6 +120,12 @@ pub struct GeminiLiveSession {
     resumption: Arc<Mutex<Option<String>>>,
     credential: Option<String>,
     failure: Arc<Mutex<Option<CredentialFailure>>>,
+    /// Set by a write that timed out. The frame it was sending may still sit
+    /// in the sink, so the next write would wait out the same timeout flushing
+    /// it; with audio every hundred milliseconds, that is a room loop stalled
+    /// five seconds at a time while the close waits behind it.
+    dead: bool,
+    last_ping: tokio::time::Instant,
 }
 
 impl GeminiLiveSession {
@@ -184,19 +211,60 @@ impl GeminiLiveSession {
         // write, which is what the reconnect in `livekit.rs` calls this for, so
         // the one session that cannot end on its own was the one this left
         // behind.
-        let closed = self.writer.close().await;
+        let closed = if self.dead {
+            Ok(Ok(()))
+        } else {
+            tokio::time::timeout(CLOSE_TIMEOUT, self.writer.close()).await
+        };
         self.reader.abort();
-        closed?;
+        closed.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Gemini close timed out"))??;
         Ok(())
+    }
+
+    /// Pings once `KEEPALIVE_INTERVAL` has passed since the last one, and
+    /// otherwise does nothing, so the caller can ask on every tick. The pong
+    /// is what the reader's idle limit is waiting for.
+    pub async fn keep_alive(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if self.last_ping.elapsed() < KEEPALIVE_INTERVAL {
+            return Ok(());
+        }
+        self.last_ping = tokio::time::Instant::now();
+        self.write(Message::Ping(Default::default())).await
     }
 
     async fn send_json(
         &mut self,
         message: Value,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.writer
-            .send(Message::Text(serde_json::to_string(&message)?.into()))
-            .await?;
+        self.write(Message::Text(serde_json::to_string(&message)?.into()))
+            .await
+    }
+
+    async fn write(
+        &mut self,
+        message: Message,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if self.dead {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "Gemini socket stopped answering",
+            )
+            .into());
+        }
+        let Ok(sent) = tokio::time::timeout(WRITE_TIMEOUT, self.writer.send(message)).await else {
+            // Every caller in the room loop logs a failed write and waits for
+            // `next_event` to report the close, which a peer that stopped
+            // answering never sends. Ending the reader drops its sender, and
+            // that is the close the loop is waiting for.
+            eprintln!(
+                "Gemini write stalled for {}s, ending the session",
+                WRITE_TIMEOUT.as_secs()
+            );
+            self.dead = true;
+            self.reader.abort();
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "Gemini write timed out").into());
+        };
+        sent?;
         Ok(())
     }
 }
@@ -844,7 +912,18 @@ async fn open_live_session_redacted_at(
     let failure = Arc::new(Mutex::new(None));
     let closed_with = Arc::clone(&failure);
     let reader = tokio::spawn(async move {
-        while let Some(message) = reader.next().await {
+        loop {
+            let Ok(next) = tokio::time::timeout(READ_IDLE_LIMIT, reader.next()).await else {
+                eprintln!(
+                    "Gemini socket silent for {}s, ending the session",
+                    READ_IDLE_LIMIT.as_secs()
+                );
+                break;
+            };
+            let Some(message) = next else {
+                break;
+            };
+
             // Both arms below used to end the session without saying anything.
             // The whole chain from here to the candidate is silent: the channel
             // drops, `next_event` returns None, and `run_room` returns Ok, so
@@ -911,6 +990,8 @@ async fn open_live_session_redacted_at(
         credential: None,
         failure,
         opened_at: std::time::Instant::now(),
+        dead: false,
+        last_ping: tokio::time::Instant::now(),
     })
 }
 

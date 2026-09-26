@@ -1873,7 +1873,12 @@ async fn first_cold_open_retries_a_503_on_the_selected_key() {
                         .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
                         .await
                         .unwrap();
-                    let _ = socket.next().await;
+
+                    // Bounded: a close that never arrives is `shutdown`'s
+                    // failure to report, and this test is about which keys were
+                    // tried.
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+                        .await;
                     return seen;
                 }
             }

@@ -47,6 +47,9 @@ tower-http = { version = "0.6", default-features = false, features = ["compressi
 [dev-dependencies]
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 livekit-protocol = "0.7.12"
+# The paused clock, so the Live socket's keepalive and idle limits are tested
+# at their real values instead of waiting them out.
+tokio = { version = "1", features = ["test-util"] }
 
 # Release archives distribute the executable, not a debugging target. Cargo
 # already omits debug information in this profile; omit linker symbols too.
