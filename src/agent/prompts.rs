@@ -767,7 +767,8 @@ pub fn behavioral_silence_nudge() -> String {
 
 /// Where the coding round stands on the steps #66 kept sending candidates back
 /// to, for every coding prompt that might otherwise ask for them again. `None`
-/// until a real test run exists: a runner setup error is not one.
+/// until a real test run exists: neither a runner setup error nor a run with no
+/// cases is one.
 ///
 /// Numbers only. The run is a browser claim whose failure lines carry candidate
 /// text, which belongs inside an untrusted block. The counts are stated rather
@@ -778,14 +779,15 @@ fn coding_progress(state: &RuntimeState) -> Option<String> {
         return Some("The Test and Optimizations steps are done: do not ask them to run tests again or repeat complexity or edge-case questions already answered.".to_string());
     }
     let run = state.last_test_run.as_ref()?;
-    if run.get("setupError").is_some_and(python_truthy) {
-        return None;
-    }
     let count = |key| {
         run.get(key)
             .and_then(serde_json::Value::as_i64)
             .unwrap_or(0)
     };
+    // A packet with no counts is sanitized into a 0/0 run, which ran nothing.
+    if run.get("setupError").is_some_and(python_truthy) || count("total") <= 0 {
+        return None;
+    }
     Some(format!(
         "They have already run the tests ({} run(s) so far; the latest passed {}/{} cases). Do not ask them to run tests again unless the code changed since.",
         state.test_runs,

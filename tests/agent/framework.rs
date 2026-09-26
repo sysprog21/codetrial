@@ -1711,6 +1711,19 @@ fn review_and_time_warning_follow_the_recorded_test_progress() {
     );
     assert!(warning.contains("Do not ask them to run tests again unless the code changed"));
 
+    // A packet with no counts sanitizes into a 0/0 run, which tested nothing.
+    let mut empty = with_written_code(RuntimeState::default());
+    apply_data_event(
+        &mut empty,
+        TOPIC_TEST_RESULTS,
+        &json!({"language": "python"}),
+        100.0,
+    );
+    assert_eq!(empty.last_test_run.as_ref().unwrap()["total"], 0);
+    assert!(time_warning(&empty).contains("run or describe the highest-value tests"));
+    assert!(silence_nudge(&empty).contains("narrate or test what is there"));
+    assert!(!proactive_review(&empty).contains("already run the tests"));
+
     // A setup error is not a run, so the warning still asks for one.
     let mut setup = with_written_code(RuntimeState::default());
     apply_data_event(
