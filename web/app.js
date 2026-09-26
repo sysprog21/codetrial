@@ -2,6 +2,15 @@ import { FRAMEWORKS, codingLoop } from "./lib.js";
 import { clearReportHistory, readDeviceHistory, renameLocalHistory } from "./history.js";
 import { pickProblem, practiceFocus, storeSharedFocus, suggestDifficulty } from "./problem-picker.js";
 import { normalizeProgressEntries, pickerEntry, progressModelFrom } from "./progress.js";
+import {
+  availableTopics,
+  clearPracticeAttempts,
+  filterProblems,
+  practiceAttemptScope,
+  readPracticeAttempts,
+  recentPerformance,
+  recordPracticeAttempt,
+} from "./practice-insights.js";
 import { reportMarkup } from "./render.js";
 import { loadPageMap } from "./problem-data.js";
 import { parseGroundingFile, retainedSelection, selectedGroundingPacket, storeGroundingPacket } from "./document-grounding.js";
@@ -10,6 +19,8 @@ let problem;
 let duration;
 let interviewLoop = "coding_behavioral";
 let reports = [];
+let practiceAttempts = [];
+let currentPracticeAttemptScope = "anonymous";
 /// The practice focus the share box currently refers to.
 let sharedFocus = null;
 let manualProblem = false;
@@ -56,6 +67,13 @@ const nodes = {
   progressDifficulty: document.querySelector("#progress-difficulty"),
   progressLanguage: document.querySelector("#progress-language"),
   progressDuration: document.querySelector("#progress-duration"),
+  problemTopic: document.querySelector("#problem-topic"),
+  problemStatus: document.querySelector("#problem-status"),
+  problemFiltersReset: document.querySelector("#problem-filters-reset"),
+  problemFilterSummary: document.querySelector("#problem-filter-summary"),
+  recentPerformance: document.querySelector("#recent-performance"),
+  recentPerformanceSummary: document.querySelector("#recent-performance-summary"),
+  recentWeakTopics: document.querySelector("#recent-weak-topics"),
   profileRole: document.querySelector("#profile-role"),
   profileSeniority: document.querySelector("#profile-seniority"),
   profileCompany: document.querySelector("#profile-company"),
@@ -76,6 +94,7 @@ const nodes = {
 const cards = [...document.querySelectorAll("[data-problem]")].map((button) => ({
   id: button.dataset.problem,
   difficulty: button.dataset.difficulty,
+  topics: String(button.dataset.topics || "").split("|").filter(Boolean),
   button,
 }));
 const cardIds = new Set(cards.map((card) => card.id));
@@ -114,6 +133,30 @@ showSources.addEventListener("change", () => {
 });
 void applySources();
 const levels = [...document.querySelectorAll('[name="difficulty"]')];
+const PRACTICE_FILTERS_KEY = "codetrial.practiceFilters";
+for (const topic of availableTopics(cards)) nodes.problemTopic.add(new Option(topic, topic));
+restorePracticeFilters();
+
+for (const input of [nodes.problemTopic, nodes.problemStatus]) {
+  input.addEventListener("change", () => {
+    savePracticeFilters();
+    applyProblemFilters();
+    if (!problem?.button.hidden) return;
+    manualProblem = false;
+    roll = Math.random();
+    if (historyReady) recommend();
+    else setProblem(null);
+  });
+}
+nodes.problemFiltersReset.addEventListener("click", () => {
+  nodes.problemTopic.value = "all";
+  nodes.problemStatus.value = "all";
+  savePracticeFilters();
+  applyProblemFilters();
+  manualProblem = false;
+  roll = Math.random();
+  if (historyReady) recommend();
+});
 
 // A picked card is a choice about this one interview, not about the filter the
 // checkboxes carry, so it leaves them alone. It suggests a length to go with
@@ -264,6 +307,9 @@ start.addEventListener("click", async () => {
     setStartGate(signInFirst);
     return;
   }
+  practiceAttempts = recordPracticeAttempt(problem.id, {
+    scope: currentPracticeAttemptScope,
+  });
   window.location.href = destination.toString();
 });
 
@@ -406,8 +452,10 @@ function settle() {
 
 async function loadAccount() {
   accountHistory = null;
+  selectPracticeAttemptScope(null);
   try {
     const session = await fetchJson("/api/session");
+    selectPracticeAttemptScope(session);
     accountHistory = false;
     applyDurationCeiling(session.maxDurationMin);
     if (session.signedIn) {
@@ -441,6 +489,11 @@ async function loadAccount() {
   await renderLocalHistory();
 }
 
+function selectPracticeAttemptScope(session) {
+  currentPracticeAttemptScope = practiceAttemptScope(session);
+  practiceAttempts = readPracticeAttempts({ scope: currentPracticeAttemptScope });
+}
+
 async function recordGitHubLogin(reload) {
   const login = nodes.githubLogin.value.trim().replace(/^@+/, "");
   if (!/^[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?$/i.test(login)) {
@@ -461,6 +514,7 @@ async function recordGitHubLogin(reload) {
       nodes.accountStatus.textContent = body?.error || "Could not record GitHub username.";
       return false;
     }
+    selectPracticeAttemptScope({ signedIn: true, user: { login } });
     if (reload) window.location.reload();
     return true;
   } catch {
@@ -520,6 +574,7 @@ async function deleteSavedReports() {
   try {
     const result = await clearReportHistory({ account: accountHistory });
     if (result === "cleared") {
+      if (clearPracticeAttempts({ scope: currentPracticeAttemptScope })) practiceAttempts = [];
       showReportDeleteStatus("Saved reports and progress were deleted.", "good small");
       reports = [];
       showProgress([], "saved");
@@ -558,10 +613,59 @@ function selectedDifficulties() {
 /// copies of these two lines is three places to forget one.
 function applyDifficulties() {
   const difficulties = selectedDifficulties();
-  // The picker is a shortcut to one problem, not a second copy of the wall the
-  // checkboxes just hid, so it shows what the checkboxes selected.
-  for (const card of cards) card.button.hidden = !difficulties.has(card.difficulty);
+  applyProblemFilters();
   setDuration(suggestedDuration(difficulties));
+}
+
+function selectedProblemFilters(difficulties = selectedDifficulties()) {
+  return {
+    difficulties,
+    topics: nodes.problemTopic.value === "all"
+      ? new Set()
+      : new Set([nodes.problemTopic.value]),
+    status: nodes.problemStatus.value,
+  };
+}
+
+function filteredCards(difficulties) {
+  return filterProblems(cards, reports, {
+    ...selectedProblemFilters(difficulties),
+    attempts: practiceAttempts,
+  });
+}
+
+function applyProblemFilters() {
+  // The lightweight non-browser import check has named nodes but no native
+  // select defaults. Treat that as an unavailable control surface, not as a
+  // real filter that matched zero problems.
+  if (!nodes.problemTopic.value || !nodes.problemStatus.value) return;
+  const visible = new Set(filteredCards().map((card) => card.id));
+  for (const card of cards) card.button.hidden = !visible.has(card.id);
+  if (!cards.length) return;
+  const topic = nodes.problemTopic.value === "all" ? "all topics" : nodes.problemTopic.value;
+  nodes.problemFilterSummary.textContent =
+    `${visible.size} of ${cards.length} problems shown · ${topic}.`;
+}
+
+function restorePracticeFilters() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PRACTICE_FILTERS_KEY) || "null");
+    if ([...nodes.problemTopic.options].some((option) => option.value === saved?.topic)) {
+      nodes.problemTopic.value = saved.topic;
+    }
+    if ([...nodes.problemStatus.options].some((option) => option.value === saved?.status)) {
+      nodes.problemStatus.value = saved.status;
+    }
+  } catch { /* defaults are the safe fallback */ }
+}
+
+function savePracticeFilters() {
+  try {
+    localStorage.setItem(PRACTICE_FILTERS_KEY, JSON.stringify({
+      topic: nodes.problemTopic.value,
+      status: nodes.problemStatus.value,
+    }));
+  } catch { /* persistence is a convenience */ }
 }
 
 /// `note` is the sentence explaining a level the reports chose, empty when the
@@ -571,7 +675,11 @@ function recommend(note = "") {
   // it stays answered. Naming a different problem here contradicted the card
   // they had just selected.
   if (manualProblem) return;
-  const choice = pickProblem(cards, selectedDifficulties(), reports, () => roll);
+  // Keep due reviews from other difficulty levels available to the picker.
+  // Topic and status filters still apply; pickProblem applies the selected
+  // difficulty only to new problems and deliberately prioritizes due reviews.
+  const eligible = filteredCards(new Set());
+  const choice = pickProblem(eligible, selectedDifficulties(), reports, () => roll);
   // Nothing to offer is still an answer, and it has to go through `setProblem`
   // like every other one. Returning here left whatever was picked for the
   // levels this call just replaced sitting selected behind a live button, on a
@@ -597,6 +705,28 @@ function recommend(note = "") {
   nodes.recommendation.textContent = choice.repeat
     ? `${note}You have passed every problem at this level. Recommended again: ${title(choice.picked)}.`
     : `${note}Recommended: ${title(choice.picked)}.`;
+}
+
+function renderRecentPerformance() {
+  const recent = recentPerformance(cards, reports);
+  nodes.recentPerformance.hidden = recent.attempts === 0 && practiceAttempts.length === 0;
+  if (!recent.attempts && !practiceAttempts.length) {
+    nodes.recentPerformanceSummary.textContent = "";
+    nodes.recentWeakTopics.textContent = "";
+    return;
+  }
+  const streak = recent.currentStreak > 1
+    ? ` Current ${recent.latest === "HIRE" ? "pass" : "retry"} streak: ${recent.currentStreak}.`
+    : "";
+  const starts = practiceAttempts.length
+    ? `${practiceAttempts.length} recent interview start${practiceAttempts.length === 1 ? "" : "s"} saved locally. `
+    : "";
+  nodes.recentPerformanceSummary.textContent = recent.attempts
+    ? `${starts}Last ${recent.attempts} assessed interview${recent.attempts === 1 ? "" : "s"}: ${recent.passes} passed, ${recent.misses} to revisit (${recent.passRate}% pass rate).${streak}`
+    : `${starts}No assessed result is available yet.`;
+  nodes.recentWeakTopics.textContent = recent.weakTopics.length
+    ? `Recent weak topics: ${recent.weakTopics.slice(0, 5).map((row) => `${row.topic} (${row.misses}/${row.attempts} to revisit)`).join(", ")}.`
+    : "No recent topic has more misses than passes.";
 }
 
 /// Read off `reports` alone, so it is rendered wherever those change: the two
@@ -738,6 +868,8 @@ function showProgressError(message) {
   reports = [];
   progressNormalized = [];
   renderPracticeFocus();
+  renderRecentPerformance();
+  applyProblemFilters();
   nodes.historyHeader.hidden = false;
   nodes.history.hidden = false;
   nodes.progressSummary.textContent = message;
@@ -749,6 +881,8 @@ function showProgressError(message) {
 
 function showProgress(entries, suffix) {
   renderPracticeFocus();
+  renderRecentPerformance();
+  applyProblemFilters();
   // Normalized once here, not per render: the filters below only select from
   // these rows, so a dropdown change has nothing to re-sanitize.
   progressNormalized = normalizeProgressEntries(entries);

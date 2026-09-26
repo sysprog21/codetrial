@@ -558,6 +558,38 @@ lobbyTest("the picker shows the levels that are checked and no others", async (p
   assert.deepEqual([...new Set(shown)], ["Hard"]);
 });
 
+lobbyTest("local practice attempts follow the signed-in account", async (page) => {
+  const key = (login) => `codetrial.practiceAttempts:${encodeURIComponent(`github:${login}`)}`;
+  await page.addInitScript(({ aliceKey, bobKey, aliceProblem, bobProblem }) => {
+    localStorage.setItem(aliceKey, JSON.stringify([{ problemId: aliceProblem, at: 100 }]));
+    localStorage.setItem(bobKey, JSON.stringify([{ problemId: bobProblem, at: 200 }]));
+  }, {
+    aliceKey: key("alice"),
+    bobKey: key("bob"),
+    aliceProblem: MEDIUM[0],
+    bobProblem: MEDIUM[1],
+  });
+
+  session = { signedIn: true, user: { login: "Alice" } };
+  await lobby(page);
+  const showAttempted = () => page.evaluate(() => {
+    const status = document.querySelector("#problem-status");
+    status.value = "attempted";
+    status.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await showAttempted();
+  const visibleProblems = () => page.evaluate(() =>
+    [...document.querySelectorAll(".problem-card")]
+      .filter((card) => !card.hidden)
+      .map((card) => card.dataset.problem));
+  assert.deepEqual(await visibleProblems(), [MEDIUM[0]]);
+
+  session = { signedIn: true, user: { login: "bob" } };
+  await lobby(page);
+  await showAttempted();
+  assert.deepEqual(await visibleProblems(), [MEDIUM[1]]);
+});
+
 lobbyTest("choosing a problem by hand keeps the filter and the length the candidate set", async (page) => {
   await lobby(page);
 
@@ -796,6 +828,14 @@ lobbyTest("a gated candidate signs in and reaches the interview", async (page) =
   // started, leaving the button disabled on "Recording GitHub..." for good.
   await page.waitForURL(/\/interview/);
   assert.deepEqual(errors, [], "the start handler threw on the way to the interview");
+  const storedScopes = await page.evaluate(() => ({
+    account: JSON.parse(localStorage.getItem(
+      "codetrial.practiceAttempts:github%3Acandidate",
+    )),
+    anonymous: localStorage.getItem("codetrial.practiceAttempts:anonymous"),
+  }));
+  assert.equal(storedScopes.account.length, 1);
+  assert.equal(storedScopes.anonymous, null);
 });
 
 lobbyTest("a lobby restored from cache rechecks the session instead of replaying it", async (page) => {
