@@ -593,12 +593,14 @@ lobbyTest("Random problem restores automatic selection and can draw again", asyn
   await page.click('[data-duration="60"]');
   await page.click("details.problem-picker summary");
   await page.click(`[data-problem="${pageOf("candy")}"]`);
+  const eligible = await page.locator(".problem-card:not([hidden])")
+    .evaluateAll((cards) => cards.map((card) => card.dataset.problem));
   await page.evaluate(() => { Math.random = () => 0; });
   await page.click("#random-problem");
   const first = await snapshot(page);
   const title = await page.locator(`[data-problem="${first.card}"] .problem-title`).textContent();
   assert.equal(first.note, `Selected problem: ${title}.`);
-  assert.notEqual(first.card, pageOf("candy"));
+  assert.equal(first.card, eligible[0]);
   assert.deepEqual(first.levels, ["Medium", "Hard"]);
   assert.equal(first.duration, "60");
   const button = await page.locator("#random-problem").boundingBox();
@@ -608,7 +610,7 @@ lobbyTest("Random problem restores automatic selection and can draw again", asyn
   await page.evaluate(() => { Math.random = () => 0.999; });
   await page.click("#random-problem");
   const second = await snapshot(page);
-  assert.notEqual(second.card, first.card);
+  assert.equal(second.card, eligible.at(-1));
   assert.deepEqual(await page.locator("#random-problem").boundingBox(), button);
   await page.click("#start");
   await page.waitForURL(/\/interview/);
@@ -629,6 +631,50 @@ lobbyTest("Random problem waits for history on load and browser restore", async 
   await awaitReady(page);
   assert.equal(await page.isEnabled("#random-problem"), true);
 });
+
+lobbyTest("a random draw hides an out-of-filter retry without changing its duration", async (page) => {
+  reports = [savedAttempt(EASY[0])];
+  reports[0].payload.date = new Date().toISOString();
+  await lobby(page);
+  await page.getByRole("button", { name: "Try again", exact: true }).click();
+  const before = await snapshot(page);
+  assert.equal((await cardInfo(page, EASY[0])).hidden, false);
+  await page.click("#random-problem");
+  const after = await snapshot(page);
+  assert.equal((await cardInfo(page, EASY[0])).hidden, true);
+  assert.equal((await cardInfo(page, after.card)).level, "Medium");
+  assert.deepEqual(after.levels, before.levels);
+  assert.equal(after.duration, before.duration);
+});
+
+for (const first of [0, 1]) {
+  lobbyTest(`overlapping history loads ignore the old response when load ${first} finishes first`, async (page) => {
+    await page.addInitScript(() => {
+      const fetch = window.fetch.bind(window);
+      window.pendingHistory = [];
+      window.fetch = (url, ...args) => url === "/api/reports"
+        ? new Promise((resolve) => window.pendingHistory.push((reports) =>
+          resolve(new Response(JSON.stringify({ reports })))))
+        : fetch(url, ...args);
+    });
+    await page.goto(`${base}/`);
+    await page.waitForFunction(() => window.pendingHistory.length === 1);
+    await restore(page);
+    await page.waitForFunction(() => window.pendingHistory.length === 2);
+    let latestDone = false;
+    for (const index of [first, 1 - first]) {
+      await page.evaluate(async ([index, reports]) => {
+        window.pendingHistory[index](reports);
+        await new Promise(requestAnimationFrame);
+      }, [index, [savedAttempt(index === 0 ? EASY[0] : MEDIUM[0])]]);
+      latestDone ||= index === 1;
+      assert.equal(await page.isDisabled("#random-problem"), !latestDone);
+      assert.equal((await snapshot(page)).card, latestDone ? MEDIUM[0] : null);
+    }
+    await page.click("#random-problem");
+    assert.equal((await snapshot(page)).card, MEDIUM[0]);
+  });
+}
 
 lobbyTest("an explicit length survives everything that would otherwise suggest one", async (page) => {
   await lobby(page);

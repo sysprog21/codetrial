@@ -270,7 +270,7 @@ p {
 }
 
 .duration-button:hover,
-#random-problem:hover,
+#random-problem:not(:disabled):hover,
 .duration-button.selected {
   border-color: var(--accent);
 }
@@ -324,6 +324,10 @@ p {
 .start-button:disabled,
 #random-problem:disabled {
   opacity: 0.6;
+}
+
+#random-problem:disabled {
+  cursor: not-allowed;
 }
 
 /* Reads as not-yet-actionable while staying clickable, so a candidate who
