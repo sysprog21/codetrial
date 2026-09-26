@@ -148,7 +148,7 @@ pub(super) async fn handle_gemini_event(
             context.activity.live_turns += 1;
             Ok(())
         }
-        GeminiEvent::Interrupted => on_interruption(room, context).await,
+        GeminiEvent::Interrupted => on_interruption(room, context, interruptible).await,
 
         // Named rather than left to the catch-all: the room loop intercepts
         // this before dispatching, so the only way one arrives here is through
@@ -332,6 +332,7 @@ async fn on_turn_complete(
 async fn on_interruption(
     room: &Room,
     context: &mut GeminiEventContext<'_>,
+    interruptible: Interruptible,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // A barge-in cancels a pending close. `cut_off_turn` below clears
     // `tool_response_outstanding`, which is the only thing holding the end
@@ -348,14 +349,22 @@ async fn on_interruption(
     // generating and will send no `TurnComplete` for a turn it considers
     // interrupted, so the floor is settled the way a finished one settles it or
     // the loop waits for a reply that has already happened. Why a turn is kept
-    // at all is on `cut_unless_unheard`, and the line `on_turn_complete` prints
-    // carries how much of it is still to play.
-    let Some(unplayed) = cut_unless_unheard(
+    // at all is on `cut_unless_protected`, and the line `on_turn_complete`
+    // prints carries how much of it is still to play.
+    let Some(unplayed) = cut_unless_protected(
         &context.state.transcript,
+        interruptible,
         context.activity,
         context.output_audio,
     ) else {
-        eprintln!("timing: kept a turn Gemini cut before the candidate had said anything");
+        eprintln!(
+            "timing: kept a turn Gemini cut: {}",
+            if interruptible == Interruptible::No {
+                "the closing turn plays to the end"
+            } else {
+                "the candidate has said nothing yet"
+            }
+        );
         return on_turn_complete(room, context).await;
     };
 
@@ -740,8 +749,15 @@ pub(super) fn cut_off_turn(
     unplayed
 }
 
-/// Cuts the queued turn, unless the candidate has not been transcribed yet in
-/// this interview. Returns what it threw away, or `None` when it kept it.
+/// Cuts the queued turn, unless this turn has to play to the end or the
+/// candidate has not been transcribed yet in this interview. Returns what it
+/// threw away, or `None` when it kept it.
+///
+/// `Interruptible::No` is the closing message, which `send_wrap_up_and_wait`
+/// waits out and `take_stale_playout` already refuses to drop. Gemini's own
+/// interruption used to walk past that promise from the other side: the arm
+/// that dispatches it had the mode in hand and did not pass it on, so a
+/// candidate clearing their throat over the goodbye cut the goodbye.
 ///
 /// Gemini interrupts on its own voice activity detection, and the opening
 /// seconds of a room give it plenty that is not speech: a microphone opening,
@@ -764,12 +780,14 @@ pub(super) fn cut_off_turn(
 /// genuine barge-in over the greeting keeps playing until they are
 /// transcribed, and `drop_stale_playout` cuts the queue when they are. Every
 /// barge-in after that is immediate.
-pub(super) fn cut_unless_unheard(
+pub(super) fn cut_unless_protected(
     transcript: &[String],
+    interruptible: Interruptible,
     activity: &mut RuntimeActivity,
     output_audio: &mut OutputAudio,
 ) -> Option<Duration> {
-    (crate::agent::candidate_lines(transcript) > 0).then(|| cut_off_turn(activity, output_audio))
+    let cut = interruptible == Interruptible::Yes && crate::agent::candidate_lines(transcript) > 0;
+    cut.then(|| cut_off_turn(activity, output_audio))
 }
 
 fn take_stale_playout(

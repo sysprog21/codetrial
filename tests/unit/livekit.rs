@@ -926,15 +926,14 @@ fn a_reply_nobody_was_measured_waiting_for_reports_no_latency() {
     );
 }
 
-/// An interruption before the candidate has been recorded saying anything is
-/// room noise, not a barge-in, and the turn it would discard is already
-/// generated and sitting in the queue.
+/// The two turns an interruption must not cut: one nobody can be answering
+/// yet, and one the interview is over after.
 ///
 /// An interviewer line is not the candidate, which is the half a prefix check
 /// can get wrong in the direction that matters: it would read Jim's own
 /// greeting as evidence that somebody is there to interrupt it.
 #[test]
-fn an_unheard_candidate_cannot_barge_in_on_the_greeting() {
+fn a_greeting_and_a_goodbye_survive_an_interruption() {
     let (mut output_audio, _frames) = test_output_audio();
     let kept = output_audio.output_cancellation.clone();
     output_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
@@ -943,7 +942,13 @@ fn an_unheard_candidate_cannot_barge_in_on_the_greeting() {
     let greeting_only = ["Jim: hey there, I am Jim".to_string()];
 
     assert!(
-        session::cut_unless_unheard(&greeting_only, &mut activity, &mut output_audio).is_none(),
+        session::cut_unless_protected(
+            &greeting_only,
+            Interruptible::Yes,
+            &mut activity,
+            &mut output_audio,
+        )
+        .is_none(),
         "a turn nobody has answered yet is kept"
     );
     assert!(!kept.is_cancelled(), "the queued frames must still play");
@@ -956,8 +961,34 @@ fn an_unheard_candidate_cannot_barge_in_on_the_greeting() {
             crate::agent::CANDIDATE_SPEAKER
         ),
     ];
-    let unplayed = session::cut_unless_unheard(&answered, &mut activity, &mut output_audio)
-        .expect("a candidate who has been heard can barge in");
+    let unplayed = session::cut_unless_protected(
+        &answered,
+        Interruptible::Yes,
+        &mut activity,
+        &mut output_audio,
+    )
+    .expect("a candidate who has been heard can barge in");
+
+    // The closing message is the turn that plays to the end. Gemini reports its
+    // own interruption through a different door from the transcript that
+    // `take_stale_playout` guards, and that door used to have no lock.
+    let (mut closing_audio, _closing_frames) = test_output_audio();
+    let closing = closing_audio.output_cancellation.clone();
+    closing_audio.playout_deadline = Instant::now() + Duration::from_secs(10);
+    assert!(
+        session::cut_unless_protected(
+            &answered,
+            Interruptible::No,
+            &mut activity,
+            &mut closing_audio,
+        )
+        .is_none(),
+        "the goodbye is not cut by a throat cleared over it"
+    );
+    assert!(
+        !closing.is_cancelled(),
+        "the closing frames must still play"
+    );
 
     assert!(unplayed >= Duration::from_secs(9), "reports {unplayed:?}");
     assert!(kept.is_cancelled(), "queued frames must be dropped");
