@@ -1323,6 +1323,11 @@ pub fn numbered_from(code: &str, from: usize) -> String {
             .collect::<String>();
         let cut = if kept.len() < line.len() { " ..." } else { "" };
         let rendered = numbered_line(index + 1, &format!("{kept}{cut}"));
+
+        // `MAX_NUMBERED_BYTES` bounds the numbered lines. The pointer at
+        // `read_editor` below is added once the loop stops, so a view that had
+        // to stop is that string longer: the cap is on what is quoted, as in
+        // `code_head`.
         if !out.is_empty() && out.len() + rendered.len() + 1 > MAX_NUMBERED_BYTES {
             out.push_str(&format!(
                 "\n... {} more lines; call `read_editor` with fromLine {} for them",

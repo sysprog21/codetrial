@@ -753,6 +753,14 @@ fn the_editor_a_review_reads_is_bounded_at_a_character_boundary() {
     // A budget smaller than the first character walks all the way back rather
     // than looping or slicing into it.
     assert!(code_head("\u{1F600}xy", 2).starts_with("\n(remainder"));
+
+    // What the budget covers, written down because the return value is longer
+    // than it whenever anything was cut: the code kept is within the budget,
+    // and the overshoot is the notice and nothing else.
+    let notice = "\n(remainder of the editor omitted)";
+    let cut = code_head(&"a".repeat(10_000), 4_000);
+    assert!(cut.ends_with(notice));
+    assert_eq!(cut.len() - notice.len(), 4_000);
 }
 
 /// What a pause-time reviewer returns is model output on its way to the report

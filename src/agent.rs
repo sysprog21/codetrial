@@ -945,6 +945,12 @@ pub(crate) fn unreviewed_from(state: &RuntimeState) -> usize {
 
 /// The head of the editor, within a byte budget, on a character boundary.
 ///
+/// The budget covers the code. The notice that follows a cut is added on top
+/// of it, so a truncated head is the budget plus that fixed string: a cap on
+/// what is quoted, not on the length of the return value. Reserving its width
+/// instead would buy an exact ceiling by dropping a line of code for a
+/// constant thirty-odd bytes, which is not the thing being bounded.
+///
 /// The head and not the tail, unlike a transcript: code is read from the top,
 /// and the signature and the approach are what a reviewer needs. Nothing
 /// bounds `state.code` on the way in -- `apply_code_update` appends whatever
@@ -1584,6 +1590,12 @@ pub fn transcript_for_report(lines: &[String]) -> String {
 }
 
 /// The newest entries that fit in `budget` bytes, joined.
+///
+/// `budget` bounds the entries, and `EARLIER_OMITTED` is added above them when
+/// any were dropped, so a trimmed tail is that much longer than the budget.
+/// The same trade as `code_head`: the notice is what stops the reader taking
+/// the opening as missing, and paying for it in dropped conversation would be
+/// the wrong economy.
 ///
 /// Two callers want the same tail against different ceilings: the report prompt
 /// above, and the briefing a cold-restarted interviewer is rebuilt from. The
