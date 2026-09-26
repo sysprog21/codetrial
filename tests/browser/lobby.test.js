@@ -265,7 +265,7 @@ const cardInfo = (page, id) =>
   }, id);
 
 lobbyTest(
-  "the lobby keeps the start control on screen with the problem grid collapsed",
+  "the lobby fits on one screen instead of a wall of problems",
   async (page) => {
     await lobby(page);
 
@@ -273,10 +273,9 @@ lobbyTest(
     // beside it. The option was dropped once already when this became a
     // `lobbyTest`, leaving an 800 written here and a 720 on screen.
     const { height } = page.viewportSize();
-    // The footer may scroll below the new random-picker section; starting should not.
+    // The whole reason the picker collapsed. 150 cards made this about 7500.
     const closed = await page.evaluate(() => document.body.scrollHeight);
-    const start = await page.locator("#start").boundingBox();
-    assert.ok(start.y + start.height <= height, "starting an interview requires scrolling");
+    assert.ok(closed <= height, `the lobby is ${closed}px tall, past one ${height}px screen`);
 
     // And the wall is still reachable, just not in the way.
     await page.click("details.problem-picker summary");
@@ -592,25 +591,28 @@ lobbyTest("Random problem restores automatic selection and can draw again", asyn
   await setLevel(page, "Hard", true);
   await page.click('[data-duration="60"]');
   await page.click("details.problem-picker summary");
-  await page.click(`[data-problem="${pageOf("candy")}"]`);
   const eligible = await page.locator(".problem-card:not([hidden])")
     .evaluateAll((cards) => cards.map((card) => card.dataset.problem));
+  await page.click(`[data-problem="${eligible[0]}"]`);
   await page.evaluate(() => { Math.random = () => 0; });
   await page.click("#random-problem");
   const first = await snapshot(page);
   const title = await page.locator(`[data-problem="${first.card}"] .problem-title`).textContent();
   assert.equal(first.note, `Selected problem: ${title}.`);
-  assert.equal(first.card, eligible[0]);
+  assert.equal(first.card, eligible[1]);
   assert.deepEqual(first.levels, ["Medium", "Hard"]);
   assert.equal(first.duration, "60");
+  await restore(page);
+  await awaitReady(page);
+  assert.equal((await snapshot(page)).card, first.card);
   const button = await page.locator("#random-problem").boundingBox();
   const recommendation = await page.locator("#recommendation").boundingBox();
-  assert.ok(button.y + button.height <= recommendation.y);
+  assert.ok(button.x + button.width <= recommendation.x);
+  assert.ok(recommendation.y >= button.y && recommendation.y < button.y + button.height);
 
-  await page.evaluate(() => { Math.random = () => 0.999; });
   await page.click("#random-problem");
   const second = await snapshot(page);
-  assert.equal(second.card, eligible.at(-1));
+  assert.equal(second.card, eligible[0]);
   assert.deepEqual(await page.locator("#random-problem").boundingBox(), button);
   await page.click("#start");
   await page.waitForURL(/\/interview/);
@@ -632,19 +634,20 @@ lobbyTest("Random problem waits for history on load and browser restore", async 
   assert.equal(await page.isEnabled("#random-problem"), true);
 });
 
-lobbyTest("a random draw hides an out-of-filter retry without changing its duration", async (page) => {
+lobbyTest("a random draw hides an out-of-filter retry and updates its suggested duration", async (page) => {
   reports = [savedAttempt(EASY[0])];
   reports[0].payload.date = new Date().toISOString();
   await lobby(page);
   await page.getByRole("button", { name: "Try again", exact: true }).click();
   const before = await snapshot(page);
+  assert.equal(before.duration, "30");
   assert.equal((await cardInfo(page, EASY[0])).hidden, false);
   await page.click("#random-problem");
   const after = await snapshot(page);
   assert.equal((await cardInfo(page, EASY[0])).hidden, true);
   assert.equal((await cardInfo(page, after.card)).level, "Medium");
   assert.deepEqual(after.levels, before.levels);
-  assert.equal(after.duration, before.duration);
+  assert.equal(after.duration, "45");
 });
 
 for (const first of [0, 1]) {
@@ -671,8 +674,13 @@ for (const first of [0, 1]) {
       assert.equal(await page.isDisabled("#random-problem"), !latestDone);
       assert.equal((await snapshot(page)).card, latestDone ? MEDIUM[0] : null);
     }
+    await page.click("details.problem-picker summary");
+    await page.click(`[data-problem="${MEDIUM[1]}"]`);
+    assert.equal((await snapshot(page)).card, MEDIUM[1]);
     await page.click("#random-problem");
     assert.equal((await snapshot(page)).card, MEDIUM[0]);
+    await page.click("#random-problem");
+    assert.notEqual((await snapshot(page)).card, MEDIUM[0]);
   });
 }
 

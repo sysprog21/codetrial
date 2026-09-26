@@ -123,7 +123,8 @@ function step(level, by) {
 /// keyed by page name, with a normalized `at`.
 ///
 /// The optional clock keeps the scheduling rule deterministic in its tests.
-export function pickProblem(problems, difficulties, reports, random = Math.random, now = Date.now()) {
+/// An explicit redraw avoids the current problem whenever another is available.
+export function pickProblem(problems, difficulties, reports, random = Math.random, now = Date.now(), avoid) {
   const eligible = problems.filter((problem) => difficulties.has(problem.difficulty));
   const reportList = Array.isArray(reports) ? reports : [];
   const reviews = reviewStatus(reportList, now);
@@ -132,11 +133,13 @@ export function pickProblem(problems, difficulties, reports, random = Math.rando
   );
   const due = problems.filter((problem) => reviews.get(problem.id)?.due);
   const fresh = eligible.filter((problem) => !passed.has(problem.id));
-  const choices = due.length ? due : fresh.length ? fresh : eligible;
+  const choices = [due, fresh, eligible]
+    .map((pool) => pool.filter((problem) => problem.id !== avoid))
+    .find((pool) => pool.length) ?? (due.length ? due : fresh.length ? fresh : eligible);
   const picked = choices[Math.floor(random() * choices.length)];
   if (!picked) return null;
   const review = reviews.get(picked.id);
-  return { picked, repeat: !fresh.length, review: due.length ? review : null };
+  return { picked, repeat: !fresh.length, review: due.includes(picked) ? review : null };
 }
 
 function reviewStatus(reports, now) {

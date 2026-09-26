@@ -135,7 +135,6 @@ p {
 }
 
 .difficulty-row,
-.random-picker,
 .problem-picker {
   margin-top: 1.5rem;
 }
@@ -174,9 +173,16 @@ p {
   font-weight: 700;
 }
 
+.random-picker {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
 .random-picker .recommendation {
-  margin-top: 0.75rem;
-  padding-left: 1rem;
+  margin: 0;
 }
 
 .problem-picker .problem-grid {

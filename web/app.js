@@ -35,6 +35,8 @@ let durationCeiling = Infinity;
 // restore re-run the recommendation without the card moving under whoever is
 // reading it.
 let roll = Math.random();
+// Keep the exclusion with the roll so restoring the page repeats the same draw.
+let avoidedProblem;
 
 const nodes = {
   accountStatus: document.querySelector("#account-status"),
@@ -134,8 +136,8 @@ nodes.randomProblem.addEventListener("click", () => {
   if (!historyReady) return;
   manualProblem = false;
   roll = Math.random();
-  const difficulties = selectedDifficulties();
-  for (const card of cards) card.button.hidden = !difficulties.has(card.difficulty);
+  avoidedProblem = problem?.id;
+  applyDifficulties();
   recommend();
 });
 
@@ -598,7 +600,7 @@ function recommend(note = "") {
   // it stays answered. Naming a different problem here contradicted the card
   // they had just selected.
   if (manualProblem) return;
-  const choice = pickProblem(cards, selectedDifficulties(), reports, () => roll);
+  const choice = pickProblem(cards, selectedDifficulties(), reports, () => roll, undefined, avoidedProblem);
   // Nothing to offer is still an answer, and it has to go through `setProblem`
   // like every other one. Returning here left whatever was picked for the
   // levels this call just replaced sitting selected behind a live button, on a
