@@ -204,3 +204,52 @@ fn one_review_at_a_time_is_arithmetic_and_not_a_hope() {
     const { assert!(INTERIM_WINDOW_BYTES >= 4 * 1024) };
     const { assert!(INTERIM_CODE_BYTES >= 2 * 1024) };
 }
+
+#[test]
+fn a_tool_continuation_stays_owed_after_prompt_output() {
+    let start = Instant::now();
+    let mut activity = RuntimeActivity::new(start);
+    activity.mark_prompted(start);
+    activity.note_output();
+    activity.tool_response_outstanding = true;
+
+    assert!(activity.prompted_at.is_none());
+    assert!(activity.awaiting_reply_since.is_none());
+    assert!(activity.owes_reply());
+
+    activity.tool_response_outstanding = false;
+    activity.mark_listening();
+    assert!(!activity.owes_reply());
+}
+
+/// A prompt Gemini never answers must not hold the floor forever: a held floor
+/// silences every nudge and keeps a `GoAway` waiting until the server drops the
+/// socket from an older checkpoint. Releasing it keeps the reply owed, so the
+/// replacement socket still answers.
+#[test]
+fn a_prompt_with_no_output_returns_the_floor_but_stays_owed() {
+    let start = Instant::now();
+    let mut activity = RuntimeActivity::new(start);
+    assert!(!activity.owes_reply());
+
+    activity.mark_prompted(start);
+    assert!(activity.owes_reply());
+    assert!(!activity.release_stalled_prompt(start + PROMPT_STALL - Duration::from_millis(1)));
+    assert_eq!(activity.floor, Floor::Speaking);
+
+    assert!(activity.release_stalled_prompt(start + PROMPT_STALL));
+    assert_eq!(activity.floor, Floor::Listening);
+    assert!(activity.owes_reply(), "the reply was never given");
+    assert!(
+        !activity.release_stalled_prompt(start + PROMPT_STALL * 2),
+        "a floor already returned is not returned again"
+    );
+
+    activity.mark_prompted(start);
+    activity.note_output();
+    assert!(!activity.owes_reply());
+    assert!(
+        !activity.release_stalled_prompt(start + PROMPT_STALL),
+        "a prompt that produced output is being answered, however slowly it plays"
+    );
+}

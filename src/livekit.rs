@@ -444,41 +444,56 @@ async fn replace_gemini_session(
 
     *context.gemini = session;
 
-    // Whatever was mid-flight died with the socket. The turn ids have to close
-    // here for the same reason an interruption closes them: left open, the next
-    // thing either party says appends to an utterance that was cut off, and the
-    // panel and the report both read the two as one.
-    cut_off_turn(context.activity, context.output_audio);
-
-    clear_abandoned_socket_work(context.state, context.activity);
+    let owed = settle_replaced_socket(context.state, context.activity, context.output_audio);
     close_turns(room, context).await?;
     set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
     publish_interviewer_state(room, false).await?;
+    brief_replacement(
+        context.gemini,
+        context.state,
+        context.activity,
+        if resumed {
+            Replacement::Resumed { owed }
+        } else {
+            Replacement::Cold
+        },
+    )
+    .await;
+    Ok(ControlFlow::Continue(()))
+}
 
-    if resumed {
+/// How a socket was replaced, as far as the briefing sent to it cares.
+#[derive(Clone, Copy)]
+enum Replacement {
+    /// A session that remembers nothing, which always has to be briefed.
+    Cold,
+    /// Continued from a resumption handle. `owed` when the old socket owed a
+    /// reply it never produced.
+    Resumed { owed: bool },
+}
+
+/// Tells a replacement socket what it cannot know on its own.
+///
+/// A resumed checkpoint is the last turn boundary the server marked resumable,
+/// so it may predate the latest test run or spoken answer; a cold one knows
+/// nothing. Both get the local record. Kept apart from `replace_gemini_session`
+/// so a test drives the same branch production does, log line included.
+async fn brief_replacement(
+    gemini: &mut GeminiLiveSession,
+    state: &mut RuntimeState,
+    activity: &mut RuntimeActivity,
+    replacement: Replacement,
+) {
+    if matches!(replacement, Replacement::Resumed { .. }) {
         // Matched literally by the soak in scripts/browser-check.cjs, which has
         // no other way to tell a resumption from a cold replacement: both leave
         // the interviewer in the room. Rewording this line without moving that
         // one turns the soak's only positive signal into a timeout.
         eprintln!("Gemini session resumed; the interview continues where it left off");
-        return Ok(ControlFlow::Continue(()));
-    }
-
-    // A cold session has never heard this candidate. Without this it waits for
-    // someone to speak first, holding whatever they say against a rubric it
-    // thinks nobody has started yet, and the editor is the one part of the lost
-    // conversation that still exists in this process.
-    eprintln!(
-        "Gemini session restart degraded; resumption was unavailable and the interviewer is rebuilding from local transcript, editor and interview state"
-    );
-
-    // Except while the interview is paused, which is the one state where making
-    // Jim talk is the wrong move: the reply would be discarded on the way out.
-    // The briefing is owed rather than skipped, and unpausing is what pays it,
-    // because that is the next moment Jim speaks at all.
-    if context.state.paused {
-        context.state.needs_cold_brief = true;
-        return Ok(ControlFlow::Continue(()));
+    } else {
+        eprintln!(
+            "Gemini session restart degraded; resumption was unavailable and the interviewer is rebuilding from local transcript, editor and interview state"
+        );
     }
 
     // Not `?`, for the reason the watch loop already gives about writes to
@@ -486,19 +501,72 @@ async fn replace_gemini_session(
     // `next_event`, where this arm is waiting to restart it. Propagating here
     // would end the interview on the one write the restart exists to make, and
     // the write most likely to meet a socket that is already gone.
-    if let Err(error) = context
-        .gemini
-        .send_text(&crate::agent::with_timer(
-            context.state,
-            crate::agent::cold_restart(context.state),
-        ))
-        .await
-    {
-        eprintln!("cold-restart briefing failed ({error}); waiting for the close to be reported");
-        return Ok(ControlFlow::Continue(()));
+    match send_recovery_brief(gemini, state, replacement).await {
+        Ok(true) => activity.mark_prompted(Instant::now()),
+        Ok(false) => {}
+        Err(error) => {
+            eprintln!(
+                "connection-recovery briefing failed ({error}); waiting for the close to be reported"
+            );
+        }
     }
-    context.activity.mark_speaking();
-    Ok(ControlFlow::Continue(()))
+}
+
+/// Sends the briefing and reports whether it asked for a reply.
+///
+/// A resumed socket gets its update as context. It speaks only when the old
+/// socket owed a reply, since otherwise the candidate has the floor. A cold
+/// socket always speaks, except during a pause, where the reply would be
+/// discarded: the briefing is owed until unpause instead.
+async fn send_recovery_brief(
+    gemini: &mut GeminiLiveSession,
+    state: &mut RuntimeState,
+    replacement: Replacement,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    if let Replacement::Resumed { owed } = replacement
+        && !state.needs_recovery_brief
+    {
+        let reply = owed && !state.paused;
+        gemini
+            .send_context(
+                &crate::agent::with_timer(state, crate::agent::resumed_context(state, reply)),
+                reply,
+            )
+            .await?;
+        return Ok(reply);
+    }
+    if state.paused {
+        state.needs_recovery_brief = true;
+        return Ok(false);
+    }
+    gemini
+        .send_text(&crate::agent::with_timer(
+            state,
+            crate::agent::connection_recovery(state),
+        ))
+        .await?;
+    state.needs_recovery_brief = false;
+    Ok(true)
+}
+
+/// Ends what the dead socket left in flight and reports whether it owed a
+/// reply.
+///
+/// Read before `cut_off_turn` clears the pending work: a reply the old socket
+/// owed is still owed, and the replacement is the only one left to give it.
+/// Whatever was mid-flight died with the socket. The turn ids have to close
+/// for the same reason an interruption closes them: left open, the next thing
+/// either party says appends to an utterance that was cut off, and the panel
+/// and the report both read the two as one.
+fn settle_replaced_socket(
+    state: &mut RuntimeState,
+    activity: &mut RuntimeActivity,
+    output_audio: &mut OutputAudio,
+) -> bool {
+    let owed = activity.owes_reply();
+    cut_off_turn(activity, output_audio);
+    clear_abandoned_socket_work(state, activity);
+    owed
 }
 
 /// Drops work that could only have been completed by the replaced socket.
@@ -757,7 +825,7 @@ async fn open_session<'a>(
     gemini
         .send_text(&with_timer(&turn.state, boot.greeting.clone()))
         .await?;
-    turn.activity.mark_speaking();
+    turn.activity.mark_prompted(Instant::now());
 
     Ok(Some(OpenSession {
         room,
@@ -829,6 +897,7 @@ async fn on_watch_tick(
     // instants microseconds apart, so a cooldown stamped from one and tested
     // against another was answering a question nobody asked.
     let tick_at = Instant::now();
+
     if loops.presence.gave_up(tick_at) {
         // No report: it would be graded from a session the candidate walked out
         // of, and there is nobody in the room to receive it. The browser writes
@@ -845,6 +914,23 @@ async fn on_watch_tick(
         return Ok(ControlFlow::Break(()));
     }
 
+    // A prompt Gemini never answered holds the floor, and a held floor keeps
+    // both the silence nudge and a deferred `GoAway` waiting on output that is
+    // not coming. The reply stays owed, so a replacement socket still gives it.
+    // After the absence check, so a room being torn down is not reconnected.
+    if context.activity.release_stalled_prompt(tick_at) {
+        eprintln!(
+            "timing: no output {}s after a prompt; returning the floor room={}",
+            PROMPT_STALL.as_secs(),
+            interview.boot.room_name
+        );
+        if spend_deferred_restart(room, context, loops, interview)
+            .await?
+            .is_break()
+        {
+            return Ok(ControlFlow::Break(()));
+        }
+    }
     if let Some(review) = loops.interim_review.finished() {
         match review.await {
             Ok(notes) => record_interim_notes(context.state, &notes),
@@ -909,7 +995,11 @@ async fn send_watched_prompt<E>(
     if prompt.behavioral_nudge {
         activity.behavioral_nudged = true;
     }
-    activity.mark_speaking();
+    if prompt.allows_silence {
+        activity.mark_prompted_allowing_silence(Instant::now());
+    } else {
+        activity.mark_prompted(Instant::now());
+    }
     Ok(())
 }
 
@@ -1004,11 +1094,7 @@ async fn on_gemini_event(
     // on an `InputTranscript`, and Gemini sends no `Interrupted` for a turn it
     // already considers finished, so a boundary-only check waits out the whole
     // `timeLeft` and lets the socket drop cold instead.
-    if loops.deferred_restart.take_if_due(
-        context.activity.floor,
-        context.output_audio.is_playing(),
-        context.activity.tool_response_outstanding,
-    ) && replace_gemini_session(room, context, interview, &mut loops.restarts)
+    if spend_deferred_restart(room, context, loops, interview)
         .await?
         .is_break()
     {
@@ -1016,6 +1102,24 @@ async fn on_gemini_event(
     }
 
     Ok(ControlFlow::Continue(()))
+}
+
+/// Spends a held `GoAway` if the floor has settled. Every place that hands the
+/// floor back asks this, so the settled rule is read the same way at each.
+async fn spend_deferred_restart(
+    room: &Room,
+    context: &mut GeminiEventContext<'_>,
+    loops: &mut RoomLoop,
+    interview: InterviewContext<'_>,
+) -> Result<ControlFlow<()>, Box<dyn std::error::Error + Send + Sync>> {
+    if !loops.deferred_restart.take_if_due(
+        context.activity.floor,
+        context.output_audio.is_playing(),
+        context.activity.tool_response_outstanding,
+    ) {
+        return Ok(ControlFlow::Continue(()));
+    }
+    replace_gemini_session(room, context, interview, &mut loops.restarts).await
 }
 
 /// The queued audio finished playing, so the floor is the candidate's again.
@@ -1030,11 +1134,7 @@ async fn on_playout_settled(
     }
     context.activity.mark_listening();
     set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING).await?;
-    if loops.deferred_restart.take_if_due(
-        context.activity.floor,
-        context.output_audio.is_playing(),
-        context.activity.tool_response_outstanding,
-    ) && replace_gemini_session(room, context, interview, &mut loops.restarts)
+    if spend_deferred_restart(room, context, loops, interview)
         .await?
         .is_break()
     {
@@ -1632,7 +1732,7 @@ async fn handle_data_packet(
     }
     if let Some(prompt) = result.generate_reply {
         context.gemini.send_text(&prompt).await?;
-        context.activity.mark_speaking();
+        context.activity.mark_prompted(Instant::now());
     }
     let Some(reason) = result.finish_interview else {
         return Ok(ControlFlow::Continue(()));
@@ -1691,7 +1791,7 @@ enum OutputDisposition {
 /// function decides before dispatching, and none of it needs a room, a socket
 /// or an await. It is also the rule a restart has to get right: the discard
 /// belongs to the socket that armed it, and a replacement that inherits one
-/// drops its own first turn, which is the cold-restart briefing.
+/// drops its own first turn, which is the connection-recovery briefing.
 fn output_disposition(event: &GeminiEvent, discarding: bool, paused: bool) -> OutputDisposition {
     let is_output = matches!(
         event,
@@ -1733,8 +1833,19 @@ async fn handle_gemini_event(
         context.state.paused,
     ) {
         OutputDisposition::Drop => return Ok(()),
+
+        // The turn a discard ends belongs to the generation the pause cut off,
+        // so it answers nothing sent since; only delivered output settles a
+        // prompt.
         OutputDisposition::EndsTheDiscard => context.activity.discarding_output = false,
-        OutputDisposition::Deliver => {}
+        OutputDisposition::Deliver => {
+            if !matches!(
+                event,
+                GeminiEvent::InputTranscript(_) | GeminiEvent::GoAway { .. }
+            ) {
+                context.activity.note_output();
+            }
+        }
     }
     match event {
         GeminiEvent::ToolCall(calls) => on_tool_calls(room, context, calls).await,
@@ -2172,7 +2283,7 @@ async fn send_wrap_up_and_wait(
         .gemini
         .send_text(&with_timer(context.state, wrap_up(reason)))
         .await?;
-    context.activity.mark_speaking();
+    context.activity.mark_prompted(Instant::now());
     let deadline = Instant::now() + WRAP_UP_WAIT;
     loop {
         if Instant::now() >= deadline {
@@ -2253,6 +2364,7 @@ fn cut_off_turn(activity: &mut RuntimeActivity, output_audio: &mut OutputAudio) 
     // without its own transcript measured from it: the same lie this field was
     // split out of `last_user_speech` to stop telling, one turn later.
     activity.awaiting_reply_since = None;
+    activity.prompted_at = None;
 
     // The generation this was waiting for died with the turn.
     activity.tool_response_outstanding = false;
