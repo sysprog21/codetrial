@@ -1162,6 +1162,49 @@ fn each_pause_reviews_the_speech_since_the_last_one() {
     );
 }
 
+/// An editor cleared and then restored is a change, because the review in
+/// between showed the model an empty one.
+///
+/// The cursor used to hold the code from before the clearing, so the restored
+/// buffer compared equal to it and the review said "unchanged" to a model
+/// whose last look at the editor found nothing in it.
+#[test]
+fn code_restored_after_an_empty_review_is_sent_again() {
+    let config = crate::config::load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google"),
+    ])
+    .unwrap();
+    let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let mut state = RuntimeState {
+        transcript: vec!["Candidate: here is my first pass".to_string()],
+        code: "seen = {}".to_string(),
+        ..RuntimeState::default()
+    };
+
+    let first = take_interim_review_window(&mut state, &boot);
+    assert!(first.contains("seen = {}"), "{first}");
+
+    // Cleared. The review carries no code at all, which is what makes the next
+    // one a change rather than a repeat.
+    state.code = "   \n".to_string();
+    let cleared = take_interim_review_window(&mut state, &boot);
+    assert!(!cleared.contains("seen = {}"), "{cleared}");
+    assert!(!cleared.contains(INTERIM_CODE_UNCHANGED), "{cleared}");
+
+    state.code = "seen = {}".to_string();
+    let restored = take_interim_review_window(&mut state, &boot);
+    assert!(restored.contains("seen = {}"), "{restored}");
+    assert!(!restored.contains(INTERIM_CODE_UNCHANGED), "{restored}");
+
+    // And a genuine repeat still says so, so the fix did not buy the change
+    // report by sending the buffer every time.
+    let repeated = take_interim_review_window(&mut state, &boot);
+    assert!(repeated.contains(INTERIM_CODE_UNCHANGED), "{repeated}");
+}
+
 /// A review is owned for as long as it runs, and only for as long as it runs.
 ///
 /// Both halves cost something. A task that panics answers nothing, so a loop

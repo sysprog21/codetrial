@@ -649,6 +649,12 @@ fn take_interim_review_window(state: &mut RuntimeState, boot: &RuntimeBootstrap<
         .prompt_view(crate::agent::ViewFor::Interim)
         .join("\n");
     let code = if state.code.trim().is_empty() {
+        // The cursor moves here too, because it records what the last review
+        // showed the model rather than the last code it was sent. Left behind,
+        // a candidate who clears the editor and then restores exactly what was
+        // there before is reported as unchanged, to a model whose last look at
+        // the editor found it empty.
+        state.interim_code = state.code.clone();
         String::new()
     } else if state.code == state.interim_code {
         INTERIM_CODE_UNCHANGED.to_string()
