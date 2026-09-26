@@ -1017,6 +1017,29 @@ fn a_paragraph_separator_cannot_forge_a_prompt_line() {
     );
 }
 
+/// An editor holding nothing but whitespace, and too much of it to send
+/// whole, is labelled as empty rather than with a range that runs backwards.
+///
+/// The line count drops the blank lines at the end, so a buffer over the byte
+/// cap that is all blank lines measures zero of them. The excerpt wording then
+/// read "lines 1-0 of 0" above a body already saying the editor is empty.
+#[test]
+fn an_oversized_blank_buffer_is_labelled_empty() {
+    let before = "def f(nums):\n    return nums\n";
+    let after = "\n".repeat(5_000);
+    let excerpt = changed_excerpt("python", before, &after).expect("the code was deleted");
+
+    assert!(
+        excerpt.starts_with("BEGIN UNTRUSTED EDITOR (python, all 0 lines)"),
+        "{excerpt}"
+    );
+    assert!(
+        excerpt.contains("(the editor is currently empty)"),
+        "{excerpt}"
+    );
+    assert!(!excerpt.contains("lines 1-0"), "{excerpt}");
+}
+
 /// A watch prompt shows the code, fenced as the candidate's, and points at
 /// `read_editor` only for what it leaves out.
 #[test]

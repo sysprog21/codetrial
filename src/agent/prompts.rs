@@ -1434,7 +1434,12 @@ pub fn changed_excerpt(language: &str, previous: &str, current: &str) -> Option<
 
     // The range shown, not the range the change spans: a region past the line
     // cap used to be labelled with lines the excerpt never reached.
-    let scope = if whole {
+    //
+    // Nothing shown takes the whole-buffer wording too. A buffer over the byte
+    // cap whose lines are all blank measures zero content lines, and the
+    // numbered form then reads "lines 1-0 of 0": a range that runs backwards,
+    // over the body's own "the editor is currently empty".
+    let scope = if whole || shown == 0 {
         format!("all {total} lines")
     } else {
         format!(
