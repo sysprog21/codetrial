@@ -28,13 +28,14 @@ pub use integrity::{sanitize_integrity_event, sanitize_test_run};
 use problems::variant_for;
 pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, find_problem, get_problem, topics_for};
 pub use prompts::{
-    InterimReviewInput, LanguageChoiceContext, ReportPromptInput, behavioral_silence_nudge,
-    behavioral_time_warning, build_instructions_for_plan, cold_restart, format_test_run, greeting,
-    hint_ladder_used_text, hint_rung_text, hint_rung_withheld_text, interim_review_prompt,
-    language_choice, log_hint_text, numbered, proactive_review, read_editor_text,
-    released_follow_ups, report_prompt, resume, rolling_assessment, round_skipped, round_started,
-    significant_change, silence_nudge, spoken_language, test_results_reaction,
-    test_setup_error_reaction, time_warning, unrecorded_earlier_phases, wrap_up,
+    InterimReviewInput, LanguageChoiceContext, ReportPromptInput, TestRecord,
+    behavioral_silence_nudge, behavioral_time_warning, build_instructions_for_plan, cold_restart,
+    format_test_run, greeting, hint_ladder_used_text, hint_rung_text, hint_rung_withheld_text,
+    interim_review_prompt, language_choice, log_hint_text, numbered, proactive_review,
+    read_editor_text, released_follow_ups, report_prompt, resume, rolling_assessment,
+    round_skipped, round_started, significant_change, silence_nudge, spoken_language,
+    test_results_reaction, test_runner_unavailable_reaction, test_setup_error_reaction,
+    time_warning, unrecorded_earlier_phases, wrap_up,
 };
 pub(crate) use report::sanitize_report_candidate;
 pub use report::{
@@ -123,8 +124,8 @@ const ROUND_TRANSITION_SKEW: std::time::Duration = std::time::Duration::from_sec
 /// `the_time_warning_threshold_is_the_same_number_on_both_sides`.
 pub const TIME_WARNING_S: u64 = 300;
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 14;
-pub const LIVE_PROMPT_VERSION: u32 = 6;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 15;
+pub const LIVE_PROMPT_VERSION: u32 = 7;
 pub const REPORT_PROMPT_VERSION: u32 = 11;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 2;
@@ -659,6 +660,13 @@ impl SpeakerTurn {
     }
 }
 
+/// Code a test run executed; see `RuntimeState::tested_code`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestedCode {
+    pub language: String,
+    pub code: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeState {
     pub started_at: std::time::Instant,
@@ -702,6 +710,18 @@ pub struct RuntimeState {
     pub transcript: Vec<String>,
     pub last_test_run: Option<serde_json::Value>,
     pub test_runs: u32,
+    /// The language and code of the latest run that executed cases against
+    /// code the candidate wrote, as the browser submitted it to the runner.
+    /// Test is judged against this snapshot rather than a flag, so a run of an
+    /// early stub, or of another language's buffer, does not vouch for code
+    /// written after it.
+    pub tested_code: Option<TestedCode>,
+    /// The language whose latest run said the platform could not run tests at
+    /// all: the judge is missing or the execution service could not start a
+    /// run. A trace of the written code in that language can complete Test
+    /// while it is unavailable; switching to a language whose runner works
+    /// does not inherit the exception.
+    pub runner_unavailable: Option<String>,
     pub hints_used: u32,
     pub volunteered_hints: u32,
     /// The authored rungs for this problem, handed out one at a time by
@@ -806,6 +826,8 @@ impl Default for RuntimeState {
             transcript: Vec::new(),
             last_test_run: None,
             test_runs: 0,
+            tested_code: None,
+            runner_unavailable: None,
             hints_used: 0,
             volunteered_hints: 0,
             hint_ladder: &[],
@@ -1046,10 +1068,12 @@ pub fn record_interim_notes(state: &mut RuntimeState, text: &str) {
 
 /// How much the candidate must have added to the template before the editor
 /// counts as holding their code: a short expression, not a keystroke. Counted
-/// in non-whitespace characters, in order; see `added_characters`.
+/// in non-whitespace characters, in order; see `changed_characters`. The same
+/// bound, added or removed, is how far the editor may move from a tested
+/// snapshot before that run stops covering it, so tuning one tunes both.
 const MIN_WRITTEN_CHARS: usize = 5;
 
-/// Cells in the table `added_characters` fills, a few milliseconds of work.
+/// Cells in the table `changed_characters` fills, a few milliseconds of work.
 const MAX_WRITTEN_TABLE: usize = 4_000_000;
 
 /// Whether the editor holds code the candidate wrote.
@@ -1058,18 +1082,178 @@ const MAX_WRITTEN_TABLE: usize = 4_000_000;
 /// A session once ticked Coding with nothing typed at all, because the model
 /// recorded it from what the candidate said they would write.
 pub fn code_written(state: &RuntimeState) -> bool {
+    written_in(state, &state.language, &state.code)
+}
+
+/// Whether `code` holds code the candidate wrote over the starter of
+/// `language`.
+pub(crate) fn written_in(state: &RuntimeState, language: &str, code: &str) -> bool {
     let template = state
         .code_templates
-        .get(&state.language)
+        .get(language)
         .map_or("", String::as_str);
-    let template = content_chars(template).collect::<Vec<_>>();
-    let code = content_chars(&state.code).collect::<Vec<_>>();
+
+    // Too long to compare is not written: the shortcut below already credits
+    // anything that grew by the threshold, which is all a length can prove.
+    written_beyond(template, code).unwrap_or(false)
+}
+
+/// Whether `code` adds at least `MIN_WRITTEN_CHARS` of content to `before`, or
+/// `None` when the two differ over a stretch too long to compare. Each caller
+/// decides which way an unknown answer fails, because the two readings of
+/// "written" fail in opposite directions.
+fn written_beyond(before: &str, code: &str) -> Option<bool> {
+    let before = content_chars(before).collect::<Vec<_>>();
+    let code = content_chars(code).collect::<Vec<_>>();
 
     // A common subsequence is never longer than the starter, so code that
     // outgrows it by the threshold has written that much whatever it kept, and
     // a large paste needs no table.
-    code.len() >= template.len() + MIN_WRITTEN_CHARS
-        || added_characters(&template, &code) >= MIN_WRITTEN_CHARS
+    if code.len() >= before.len() + MIN_WRITTEN_CHARS {
+        return Some(true);
+    }
+    changed_characters(&before, &code).map(|(added, _)| added >= MIN_WRITTEN_CHARS)
+}
+
+/// Whether the runner reported itself unavailable for the language on screen.
+fn runner_unavailable_on_screen(state: &RuntimeState) -> bool {
+    state.runner_unavailable.as_deref() == Some(state.language.as_str())
+}
+
+/// What Test can be recorded from right now, decided once for the evidence
+/// gate, the test reactions and the wrap-up refusal, so none of them can tell
+/// the interviewer to record something another refuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TestSource {
+    /// A run of the code on screen: recorded as `test_event`. It wins over an
+    /// outage reported after it, because the run happened.
+    Run,
+    /// No such run, and the runner is reported missing for this language:
+    /// the candidate's hand trace, recorded as `candidate_speech`.
+    Trace,
+    /// Neither: the candidate has to click Run.
+    Neither,
+}
+
+pub(crate) fn test_source(state: &RuntimeState) -> TestSource {
+    if tested_code_is_current(state) {
+        TestSource::Run
+    } else if runner_unavailable_on_screen(state) {
+        TestSource::Trace
+    } else {
+        TestSource::Neither
+    }
+}
+
+/// What a test reaction should say about recording Test after a run, given
+/// whether that run earned execution credit. The reminder follows the gate,
+/// not the run: an earlier run that still matches the editor keeps Test
+/// recordable through a later run that earned nothing, though that later
+/// run's counts are kept out of it. RunAgain is only for a run that earned
+/// credit the candidate has already typed past.
+pub(crate) fn test_record_after_run(state: &RuntimeState, credited: bool) -> TestRecord {
+    // Cheapest first: after Test is recorded, a run compares nothing.
+    if phases_evidenced(state, &[FrameworkPhase::Test]) || !code_written(state) {
+        TestRecord::Settled
+    } else if test_source(state) == TestSource::Run {
+        if credited {
+            TestRecord::Record
+        } else {
+            TestRecord::RecordEarlier
+        }
+    } else if credited {
+        TestRecord::RunAgain
+    } else {
+        TestRecord::Settled
+    }
+}
+
+/// Whether the editor still holds the code the latest executed run covered:
+/// the same language, with less than a short expression added or removed
+/// since. Fixing a failing case in place keeps the run; writing the solution
+/// after running a stub does not, and neither does deleting a guard the run
+/// exercised, which changes what runs without typing anything. A change too
+/// long to compare is not current: a same-length rewrite of a long solution
+/// would otherwise count as the code that ran.
+fn tested_code_is_current(state: &RuntimeState) -> bool {
+    state.tested_code.as_ref().is_some_and(|tested| {
+        tested.language == state.language
+            && (tested.code == state.code
+                || edited_within(&state.language, &tested.code, &state.code))
+    })
+}
+
+/// Whether fewer than `MIN_WRITTEN_CHARS` were added and fewer removed, from
+/// one table: the common subsequence is the same either way round. Comments
+/// are left out, so noting the complexity after a run, or deleting the
+/// starter's prompt line, does not void a run of code that did not change.
+fn edited_within(language: &str, before: &str, code: &str) -> bool {
+    let before = uncommented_chars(language, before);
+    let code = uncommented_chars(language, code);
+    changed_characters(&before, &code)
+        .is_some_and(|(added, removed)| added < MIN_WRITTEN_CHARS && removed < MIN_WRITTEN_CHARS)
+}
+
+/// The content characters of `code` with its comments left out: `#` to the
+/// end of the line in Python, `//` to the end of the line and `/* */` in the
+/// other tabs. A quote opens a string until the same quote closes it, past a
+/// backslash escape, so a `#` or `//` inside a literal is code; in Python a
+/// tripled quote opens a string only the same three close, so a lone quote
+/// inside a docstring does not end it. An unterminated
+/// string runs to the end and keeps everything after it counted, which errs
+/// toward asking for a rerun; an unterminated block comment hides the rest,
+/// and what it hid is counted as removed.
+fn uncommented_chars(language: &str, code: &str) -> Vec<char> {
+    let hash_comments = language == "python";
+    let mut kept = Vec::with_capacity(code.len());
+    let mut chars = code.chars().peekable();
+    // The quote that opened the current string, and whether it was tripled.
+    let mut quote: Option<(char, bool)> = None;
+    let tripled = |chars: &std::iter::Peekable<std::str::Chars<'_>>, quote: char| {
+        let mut ahead = chars.clone();
+        ahead.next() == Some(quote) && ahead.next() == Some(quote)
+    };
+    while let Some(character) = chars.next() {
+        if let Some((open, triple)) = quote {
+            kept.push(character);
+            if character == '\\' {
+                kept.extend(chars.next());
+            } else if character == open && (!triple || tripled(&chars, open)) {
+                if triple {
+                    kept.extend(chars.by_ref().take(2));
+                }
+                quote = None;
+            }
+            continue;
+        }
+        match character {
+            '"' | '\'' | '`' => {
+                let triple = hash_comments && tripled(&chars, character);
+                kept.push(character);
+                if triple {
+                    kept.extend(chars.by_ref().take(2));
+                }
+                quote = Some((character, triple));
+            }
+            '#' if hash_comments => while chars.next_if(|&next| next != '\n').is_some() {},
+            '/' if !hash_comments && chars.peek() == Some(&'/') => {
+                while chars.next_if(|&next| next != '\n').is_some() {}
+            }
+            '/' if !hash_comments && chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut previous = '\0';
+                for next in chars.by_ref() {
+                    if previous == '*' && next == '/' {
+                        break;
+                    }
+                    previous = next;
+                }
+            }
+            _ => kept.push(character),
+        }
+    }
+    kept.retain(|character| !character.is_whitespace());
+    kept
 }
 
 /// The characters of a piece of code that are content rather than layout.
@@ -1078,43 +1262,46 @@ pub(crate) fn content_chars(code: &str) -> impl Iterator<Item = char> + '_ {
 }
 
 /// The characters of `code` outside its longest common subsequence with
-/// `template`: what was typed, in order, with nothing credited for deletions.
+/// `before`, and of `before` outside it: what was typed and what was deleted,
+/// each in order, so neither cancels the other.
 ///
 /// In order because an unordered count lets a deletion cancel an addition. The
 /// starters carry a "think out loud" comment, and deleting it used to cancel
 /// most of a one-line answer, so `return sqrt(x);` did not count as code. The
 /// shared prefix and suffix, the signature and its closing lines, are trimmed
-/// first so the quadratic table covers only the body that changed; this runs
-/// on an evidence call, a few times an interview.
-fn added_characters(template: &[char], code: &[char]) -> usize {
-    let prefix = template
+/// first so the quadratic table covers only the body that changed. It runs on
+/// an evidence call and on a received test run, a few times a minute at most.
+fn changed_characters(before: &[char], code: &[char]) -> Option<(usize, usize)> {
+    let prefix = before
         .iter()
         .zip(code)
         .take_while(|(expected, written)| expected == written)
         .count();
-    let (template, code) = (&template[prefix..], &code[prefix..]);
-    let suffix = template
+    let (before, code) = (&before[prefix..], &code[prefix..]);
+    let suffix = before
         .iter()
         .rev()
         .zip(code.iter().rev())
         .take_while(|(expected, written)| expected == written)
         .count();
-    let (template, code) = (
-        &template[..template.len() - suffix],
+    let (before, code) = (
+        &before[..before.len() - suffix],
         &code[..code.len() - suffix],
     );
 
-    // A bound on the table rather than on the packets: past it, count only what
-    // the length alone proves was added. Server starters are a few hundred
-    // characters, so a real buffer never gets here; a forged one cannot make an
-    // evidence call stall the room.
-    if template.len().saturating_mul(code.len()) > MAX_WRITTEN_TABLE {
-        return code.len().saturating_sub(template.len());
+    // A bound on the table rather than on the packets: past it there is no
+    // count, and the caller decides which way that fails. Against a starter of
+    // a few hundred characters a real buffer never gets here. Against a tested
+    // snapshot it can, when a long solution was edited near both ends; either
+    // way a forged buffer cannot make an evidence call or a test run stall the
+    // room.
+    if before.len().saturating_mul(code.len()) > MAX_WRITTEN_TABLE {
+        return None;
     }
-    let mut previous = vec![0usize; template.len() + 1];
+    let mut previous = vec![0usize; before.len() + 1];
     let mut current = previous.clone();
     for written in code {
-        for (at, expected) in template.iter().enumerate() {
+        for (at, expected) in before.iter().enumerate() {
             current[at + 1] = if written == expected {
                 previous[at] + 1
             } else {
@@ -1123,7 +1310,8 @@ fn added_characters(template: &[char], code: &[char]) -> usize {
         }
         std::mem::swap(&mut previous, &mut current);
     }
-    code.len() - previous[template.len()]
+    let common = previous[before.len()];
+    Some((code.len() - common, before.len() - common))
 }
 
 pub fn record_framework_evidence(
@@ -1191,6 +1379,40 @@ pub fn record_framework_evidence(
         item.phase == phase && item.source == source && item.kind == kind && item.summary == summary
     }) {
         return Ok(state.framework_evidence[index].clone());
+    }
+
+    // After the duplicate check, so a resumed interviewer repeating a Test it
+    // already recorded is answered with that row rather than refused because
+    // the candidate has typed since.
+    //
+    // A verbal trace is useful preparation, but cannot stand in for running the
+    // implementation. Test is the run's evidence, so it is recorded from the
+    // test event, and only while the editor still holds the code that run
+    // executed. This also covers model-inferred completion and a model claiming
+    // a test_event the server never received. The one exception is a platform
+    // that cannot run tests at all, where the candidate's hand trace is the
+    // only testing left, and it is recorded as what it is: speech. That outage
+    // is the browser's claim, as its pass counts are; a Test row from
+    // `candidate_speech` exists only on this path, so the report shows a reader
+    // which interviews took it. A run of the code on screen still wins over an
+    // outage reported after it.
+    if phase == FrameworkPhase::Test && kind != EvidenceKind::Skipped {
+        match test_source(state) {
+            TestSource::Run if source != EvidenceSource::TestEvent => {
+                return Err("record Test with source test_event: it is the run's evidence");
+            }
+            TestSource::Trace if source != EvidenceSource::CandidateSpeech => {
+                return Err(
+                    "the runner cannot provide tests, so Test is recorded from the candidate's hand trace, with source candidate_speech",
+                );
+            }
+            TestSource::Neither => {
+                return Err(
+                    "test evidence requires a received run with executed cases of the code now in the editor; ask the candidate to click Run, and record Test with source test_event as soon as the results arrive",
+                );
+            }
+            TestSource::Run | TestSource::Trace => {}
+        }
     }
     if state.framework_evidence.len() == MAX_FRAMEWORK_EVIDENCE {
         evict_one_observation(&mut state.framework_evidence);
@@ -1636,11 +1858,15 @@ pub fn timing_decision(input: &TimingInput) -> TimingDecision {
     TimingDecision::default()
 }
 
+/// `must_react` is a run the model has to hear about whatever the cooldown
+/// says, because nothing else would tell it: one that makes Test recordable,
+/// or the first to find the runner missing for the code on screen.
 pub fn test_reaction_decision(
     ended: bool,
     since_last_test_reaction_seconds: f64,
+    must_react: bool,
 ) -> TestReactionDecision {
-    if ended || since_last_test_reaction_seconds < TEST_REACTION_COOLDOWN_S {
+    if ended || (since_last_test_reaction_seconds < TEST_REACTION_COOLDOWN_S && !must_react) {
         return TestReactionDecision::default();
     }
 

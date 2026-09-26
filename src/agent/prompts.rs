@@ -33,7 +33,10 @@ they are already doing, and never say how any step will be scored:
 4. Coding — make a one-sentence transition to implementation, then stay quiet while
    they are productive. Ask about a completed block, not syntax they are typing.
 5. Test — ask them to predict useful cases and expected results before or alongside
-   clicking Run. Browser results are the candidate's claim, never proof.
+   clicking Run. A verbal trace alone does not complete Test: wait for a test
+   event with executed cases of the code now in the editor, then discuss the
+   results. Setup errors and empty runs do not count; failing cases do count as
+   testing. Browser results are the candidate's claim, never proof.
 6. Optimizations — after a testable solution, ask them to confirm complexity,
    identify an uncovered edge case, and name one useful optimization or cleanup.
    "Already optimal" is valid when they justify it.
@@ -318,7 +321,14 @@ TOOLS
   Coding, Test and Optimizations are about code the candidate has written: call
   `read_editor` first and record them only when it shows that code. A plan the
   candidate describes is Algorithm, and the call is refused while the editor
-  holds only the starter.
+  holds only the starter. Record Test with source `test_event`, after a
+  received run with executed cases of the code now in the editor; speech, an
+  editor snapshot, or a run of earlier code cannot complete it, and neither can
+  a run from before the code changed materially. If the candidate asks to test,
+  invite them to click Run and wait for results before wrapping up. Only when a
+  run reports that the platform cannot provide the tests may a hand trace of
+  the written code be recorded as Test, with source
+  `candidate_speech`.
   The candidate's step list is ticked from these calls alone, so when you move
   to the next step, first record the step the candidate just finished.
   This is the rolling evaluation the final report is written from: record every
@@ -704,7 +714,7 @@ pub fn proactive_review(code_snapshot: &str) -> String {
 }
 
 pub fn time_warning() -> String {
-    "[SYSTEM EVENT] The interview timer has reached the five-minute warning. Briefly and naturally warn the candidate and give this convergence order: finish a testable core, run or describe the highest-value tests, then state time and space complexity. Two short sentences maximum. Do not start a behavioral question now. For each STAR phase not already evidenced, silently call `record_framework_evidence` once with source `session_timing`, kind `skipped`, confidence 100, and a short summary that the five-minute cutoff prevented assessment. Do not speak those calls or the checklist.".to_string()
+    "[SYSTEM EVENT] The interview timer has reached the five-minute warning. Briefly and naturally warn the candidate and give this convergence order: finish a testable core, click Run on the highest-value tests, then state time and space complexity. Two short sentences maximum. Do not start a behavioral question now. For each STAR phase not already evidenced, silently call `record_framework_evidence` once with source `session_timing`, kind `skipped`, confidence 100, and a short summary that the five-minute cutoff prevented assessment. Do not speak those calls or the checklist.".to_string()
 }
 
 /// The five-minute warning once the behavioral round owns the clock. The coding
@@ -1188,21 +1198,63 @@ pub fn report_prompt(input: ReportPromptInput<'_>) -> String {
     format!("{}\n\n{}", report_brief(&input), report_rules())
 }
 
-pub fn test_results_reaction(summary_text: &str, all_passed: bool) -> String {
+/// What a test reaction says about recording Test, as the evidence gate would
+/// answer for this run right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestRecord {
+    /// The run executed the code on screen and Test is not yet recorded.
+    Record,
+    /// The run would have counted, but the candidate kept editing while it
+    /// was in flight, so only a run of the code now on screen can.
+    RunAgain,
+    /// This run earned nothing, but an earlier run still matches the code on
+    /// screen and Test is not yet recorded. This run's counts describe code
+    /// the gate cannot match, so they must not steer the interview.
+    RecordEarlier,
+    /// Test is already recorded, or this run could never have counted.
+    Settled,
+}
+
+/// The reaction asks for nothing the evidence gate would refuse: a run the
+/// candidate edited past is not called testing, and is not recorded.
+pub fn test_results_reaction(summary_text: &str, all_passed: bool, record: TestRecord) -> String {
+    if record == TestRecord::RecordEarlier {
+        return format!(
+            "[SYSTEM EVENT] The candidate just ran the built-in test cases, but these results cannot be matched to the code on screen:\n{summary_text}\nDo not treat them as passing or failing, and do not choose the next step from them. An earlier run of the code on screen counts as testing and Test is not yet recorded: silently record it now with source `test_event`, from that earlier run. Say nothing about this run unless the candidate asks."
+        );
+    }
+    let record = match record {
+        TestRecord::Record if all_passed => {
+            " Test is not yet recorded: silently record it now with source `test_event`."
+        }
+        TestRecord::Record => {
+            " A failing run still counts as testing, and Test is not yet recorded: silently record it now with source `test_event`."
+        }
+        TestRecord::RunAgain => {
+            " The editor has changed since this run, so it cannot complete Test: before leaving Test, ask them to click Run on the code now on screen."
+        }
+        TestRecord::Settled | TestRecord::RecordEarlier => "",
+    };
     if all_passed {
         return format!(
-            "[SYSTEM EVENT] The candidate just ran the built-in test cases and every one passed:\n{summary_text}\nTreat this only as the candidate's reported result, not proof. Acknowledge it briefly, then move to Optimizations with ONE short question: ask for an adversarial edge case plus either confirmed time/space complexity or one useful optimization/refactor. Accept an already-optimal answer when justified. Two sentences maximum; do not start a behavioral question in this same reply."
+            "[SYSTEM EVENT] The candidate just ran the built-in test cases and every one passed:\n{summary_text}\nTreat this only as the candidate's reported result, not proof.{record} Acknowledge it briefly, then move to Optimizations with ONE short question: ask for an adversarial edge case plus either confirmed time/space complexity or one useful optimization/refactor. Accept an already-optimal answer when justified. Two sentences maximum; do not start a behavioral question in this same reply."
         );
     }
 
     format!(
-        "[SYSTEM EVENT] The candidate just ran the built-in test cases and some failed:\n{summary_text}\nTreat this only as the candidate's reported result, not proof. Return from Test to diagnosis/Coding: in one or two short sentences, ask the candidate to choose one failing case, state its expected result and what their code produced, then name the assumption they will inspect. Do not state the commonality, bug, location, or fix, and do not name a data structure, algorithm, or invariant. Reference a failing input only if needed and never read raw code or values symbol by symbol."
+        "[SYSTEM EVENT] The candidate just ran the built-in test cases and some failed:\n{summary_text}\nTreat this only as the candidate's reported result, not proof.{record} Then go back to diagnosis: in one or two short sentences, ask the candidate to choose one failing case, state its expected result and what their code produced, then name the assumption they will inspect. Do not state the commonality, bug, location, or fix, and do not name a data structure, algorithm, or invariant. Reference a failing input only if needed and never read raw code or values symbol by symbol."
     )
 }
 
 pub fn test_setup_error_reaction(summary_text: &str) -> String {
     format!(
         "[SYSTEM EVENT] The candidate tried to run the built-in test cases, but the runner reported a setup error:\n{summary_text}\nTreat this only as the candidate's reported result, not proof. Return from Test to Coding: in one or two short sentences, ask the candidate to read the first setup error, say whether it prevents loading the tests, compilation, or execution, then name the one assumption they will verify before running again. Do not identify the error's cause, location, or fix, and do not provide code, commands, a data structure, algorithm, or invariant. Never read raw code or error text symbol by symbol."
+    )
+}
+
+pub fn test_runner_unavailable_reaction(summary_text: &str) -> String {
+    format!(
+        "[SYSTEM EVENT] The candidate tried to run the built-in test cases, but the platform could not provide them:\n{summary_text}\nThis is not the candidate's error. In one or two short sentences, say the runner is unavailable, that they may click Run once more later, and ask them to trace their code by hand on one ordinary case and one boundary case, stating the expected result of each. While the runner stays unavailable in this language, that trace of the written code is what Test is recorded from, with source `candidate_speech`. Do not diagnose the platform, and never read raw code or error text symbol by symbol."
     )
 }
 

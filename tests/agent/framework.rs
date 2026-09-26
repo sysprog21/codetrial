@@ -135,7 +135,7 @@ fn code_phases_need_code_the_candidate_wrote() {
         let source = if kind == "skipped" {
             "session_timing"
         } else {
-            "candidate_speech"
+            observed_source(phase)
         };
         record_framework_evidence(
             state,
@@ -183,6 +183,7 @@ fn code_phases_need_code_the_candidate_wrote() {
         "python",
     );
     assert!(code_written(&state));
+    receive_test_run(&mut state);
     for phase in ["coding", "test", "optimizations"] {
         assert!(
             record(&mut state, phase, "observed").is_ok(),
@@ -748,6 +749,12 @@ fn framework_evaluation_scenarios_exercise_reactions_evidence_and_reports() {
 
         let mut state = with_written_code(RuntimeState::default());
         let evidence = case["evidence"].as_array().expect("evidence is an array");
+        if evidence
+            .iter()
+            .any(|item| item["phase"] == "test" && item["kind"] != "skipped")
+        {
+            receive_test_run(&mut state);
+        }
         assert!(evidence.len() <= MAX_FRAMEWORK_EVIDENCE);
         let round_gate = case["reaction"]["kind"] == "round_gate";
         for (evidence_index, item) in evidence.iter().enumerate() {
@@ -1133,10 +1140,11 @@ fn the_evidence_cap_never_evicts_a_phases_only_observation() {
     // counts: the round gates read non-skipped rows only. Evicting it reports a
     // finished round as incomplete and refuses the interviewer its own ending.
     let mut mixed = with_written_code(RuntimeState::default());
+    receive_test_run(&mut mixed);
     record_framework_evidence(
         &mut mixed,
         &json!({
-            "phase":"test", "source":"candidate_speech", "kind":"observed",
+            "phase":"test", "source":"test_event", "kind":"observed",
             "confidence":90, "summary":"the only real test note"
         }),
     )
@@ -1168,12 +1176,14 @@ fn the_evidence_cap_never_evicts_a_phases_only_observation() {
     );
 
     let mut state = with_written_code(RuntimeState::default());
+    receive_test_run(&mut state);
     for phase in ["repeat", "example", "algorithm", "test", "optimizations"] {
         record_framework_evidence(
             &mut state,
             &json!({
-                "phase":phase, "source":"candidate_speech", "kind":"observed",
-                "confidence":90, "summary":format!("the only {phase} note")
+                "phase":phase,
+                "source":observed_source(phase),
+                "kind":"observed", "confidence":90, "summary":format!("the only {phase} note")
             }),
         )
         .unwrap();
@@ -1238,12 +1248,14 @@ fn complete_partial_and_skipped_framework_sessions_remain_distinct() {
         "result",
     ];
     let mut complete = with_written_code(RuntimeState::default());
+    receive_test_run(&mut complete);
     for phase in phases {
         record_framework_evidence(
             &mut complete,
             &json!({
-                "phase":phase, "source":"candidate_speech", "kind":"observed",
-                "confidence":90, "summary":format!("Evidence for {phase}")
+                "phase":phase,
+                "source":observed_source(phase),
+                "kind":"observed", "confidence":90, "summary":format!("Evidence for {phase}")
             }),
         )
         .unwrap();
@@ -1500,4 +1512,525 @@ fn a_framework_summary_is_bounded_and_cannot_write_its_own_line() {
         "statedtheinvariant",
         "an interior break would write a line of the evidence block"
     );
+}
+
+#[test]
+fn test_evidence_requires_execution_even_when_the_model_claims_it_happened() {
+    let record = |state: &mut RuntimeState, source: &str, kind: &str| {
+        record_framework_evidence(
+            state,
+            &json!({"phase": "test", "source": source, "kind": kind,
+                "confidence": 100, "summary": "Candidate traced the boundary case."}),
+        )
+    };
+    for kind in ["observed", "inferred"] {
+        let mut state = with_written_code(RuntimeState::default());
+        let code = state.code.clone();
+        for payload in [
+            Value::Null,
+            json!({}),
+            json!({"total": 0, "code": code, "language": "python"}),
+            json!({"total": 3, "setupError": "compiler unavailable", "code": code, "language": "python"}),
+            json!({"total": 3, "setupError": true, "code": code, "language": "python"}),
+            json!({"total": 3, "setupError": "\n", "code": code, "language": "python"}),
+            // Executed, but without the code it executed: nothing to vouch for.
+            json!({"passed": 3, "total": 3}),
+            json!({"passed": 3, "total": 3, "code": code, "language": "klingon"}),
+        ] {
+            apply_data_event(&mut state, TOPIC_TEST_RESULTS, &payload, 99.0);
+            for source in ["candidate_speech", "editor_snapshot", "test_event"] {
+                assert!(
+                    record(&mut state, source, kind).is_err(),
+                    "{payload} {source}"
+                );
+            }
+            assert!(framework_progress(&state).is_empty());
+            assert!(state.framework_evidence.is_empty());
+        }
+
+        // A failing run is still testing, and one that never says how many
+        // passed failed them all. Scores must not control progress.
+        apply_data_event(
+            &mut state,
+            TOPIC_TEST_RESULTS,
+            &json!({"total": 2, "code": code, "language": "python"}),
+            99.0,
+        );
+        for source in ["candidate_speech", "editor_snapshot"] {
+            let refused = record(&mut state, source, kind).unwrap_err();
+            assert!(refused.contains("test_event"), "{refused}");
+        }
+        record(&mut state, "test_event", kind).unwrap();
+        assert_eq!(framework_progress(&state), ["test"]);
+    }
+    let mut state = RuntimeState::default();
+    record_framework_evidence(
+        &mut state,
+        &json!({"phase": "test",
+        "source": "session_timing", "kind": "skipped", "confidence": 100,
+        "summary": "Time expired before running tests."}),
+    )
+    .unwrap();
+    assert!(framework_progress(&state).is_empty());
+}
+
+fn tested(state: &mut RuntimeState) -> Result<FrameworkEvidence, &'static str> {
+    record_framework_evidence(
+        state,
+        &json!({"phase": "test", "source": "test_event", "kind": "observed",
+            "confidence": 90, "summary": "Candidate ran the cases."}),
+    )
+}
+
+fn type_code(state: &mut RuntimeState, language: &str, code: &str) {
+    apply_data_event(
+        state,
+        TOPIC_CODE_UPDATE,
+        &json!({"language": language, "code": code}),
+        99.0,
+    );
+}
+
+#[test]
+fn test_execution_credit_requires_written_code_and_survives_later_setup_failure() {
+    let mut state = RuntimeState::default();
+    type_code(&mut state, "python", "def solve(nums):\n    pass\n");
+    receive_test_run(&mut state);
+    assert!(
+        state.tested_code.is_none(),
+        "running the starter tests nothing"
+    );
+    let mut state = with_written_code(state);
+    assert!(tested(&mut state).is_err());
+    receive_test_run(&mut state);
+    apply_data_event(
+        &mut state,
+        TOPIC_TEST_RESULTS,
+        &json!({"total": 0, "setupError": "runner unavailable", "code": "", "language": "python"}),
+        99.0,
+    );
+    tested(&mut state).unwrap();
+    assert_eq!(framework_progress(&state), ["test"]);
+}
+
+#[test]
+fn a_run_vouches_only_for_the_code_it_executed() {
+    // A stub run, then the real solution only traced aloud: the run covered
+    // code that is no longer in the editor.
+    let mut state = with_written_code(RuntimeState::default());
+    type_code(&mut state, "python", "def solve(nums):\n    return 0\n");
+    receive_test_run(&mut state);
+    type_code(
+        &mut state,
+        "python",
+        "def solve(nums):\n    seen = {}\n    for index, value in enumerate(nums):\n        seen[value] = index\n    return seen\n",
+    );
+    let refused = tested(&mut state).unwrap_err();
+    assert!(refused.contains("click Run"), "{refused}");
+
+    // Rerunning the current code restores it, and a fix in place keeps it.
+    receive_test_run(&mut state);
+    type_code(
+        &mut state,
+        "python",
+        "def solve(nums):\n    seen = {}\n    for index, value in enumerate(nums):\n        seen[value] = index+1\n    return seen\n",
+    );
+    tested(&mut state).unwrap();
+
+    // A run in Python does not vouch for a Java buffer written after it.
+    let mut state = with_written_code(RuntimeState::default());
+    receive_test_run(&mut state);
+    let python = state.code.clone();
+    type_code(&mut state, "java", "class Solution {}");
+    type_code(
+        &mut state,
+        "java",
+        "class Solution { int[] solve(int[] nums) { return nums; } }",
+    );
+    assert!(tested(&mut state).is_err());
+    type_code(&mut state, "python", &python);
+    tested(&mut state).unwrap();
+}
+
+#[test]
+fn deleting_what_the_run_exercised_is_not_the_code_that_ran() {
+    // The run covered the empty-list guard; removing it types nothing, but the
+    // code on screen is no longer the code that ran.
+    let guarded =
+        "def solve(nums):\n    if not nums:\n        return []\n    return sorted(nums)\n";
+    let mut state = with_written_code(RuntimeState::default());
+    type_code(&mut state, "python", guarded);
+    receive_test_run(&mut state);
+    type_code(
+        &mut state,
+        "python",
+        "def solve(nums):\n    return sorted(nums)\n",
+    );
+    assert!(tested(&mut state).is_err());
+
+    // A small trim in place, like a small fix, keeps the run.
+    let mut state = with_written_code(RuntimeState::default());
+    type_code(&mut state, "python", guarded);
+    receive_test_run(&mut state);
+
+    // Cumulative: a layout change and two one-character deletions, which
+    // together remove fewer characters than the threshold.
+    let trimmed = guarded
+        .replace("return []", "return[]")
+        .replace("not nums", "not num")
+        .replace("sorted(nums)", "sorted(num)");
+    type_code(&mut state, "python", &trimmed);
+    tested(&mut state).unwrap();
+}
+
+#[test]
+fn a_comment_written_after_the_run_keeps_it() {
+    // The model records Test a turn after the results arrive. A candidate
+    // noting the complexity in that turn, or clearing the starter's prompt
+    // line, has not changed what runs. Changing the body has.
+    let solution = "class Solution:\n    def matchDisputedCharge(self, nums, target):\n        # Think out loud as you go!\n        seen = {}\n        for i, n in enumerate(nums):\n            if target - n in seen:\n                return [seen[target - n], i]\n            seen[n] = i\n";
+    for later in [
+        format!("{solution}        # O(n) time, O(n) space\n"),
+        solution.replace("        # Think out loud as you go!\n", ""),
+    ] {
+        let mut state = with_written_code(RuntimeState::default());
+        type_code(&mut state, "python", solution);
+        receive_test_run(&mut state);
+        type_code(&mut state, "python", &later);
+        tested(&mut state).unwrap();
+    }
+    let mut state = with_written_code(RuntimeState::default());
+    type_code(&mut state, "python", solution);
+    receive_test_run(&mut state);
+    type_code(
+        &mut state,
+        "python",
+        &solution.replace("seen[n] = i", "seen[n] = i if n else -1"),
+    );
+    assert!(tested(&mut state).is_err());
+
+    // The same for the other tabs' comment syntax.
+    let mut state = with_written_code(RuntimeState::default());
+    let cpp = "int solve(int x) {\n    // Think out loud as you go!\n    return x * 2;\n}\n";
+    type_code(&mut state, "cpp", "int solve(int x) {}");
+    type_code(&mut state, "cpp", cpp);
+    receive_test_run(&mut state);
+    type_code(
+        &mut state,
+        "cpp",
+        &cpp.replace(
+            "return x * 2;",
+            "return x * 2; /* O(1) time and space */ // no allocation",
+        ),
+    );
+    tested(&mut state).unwrap();
+}
+
+#[test]
+fn a_long_solution_rewritten_in_place_is_not_the_code_that_ran() {
+    // Edited near both ends, so the stretch that differs is past what the
+    // comparison will tabulate. The same length on both sides used to read as
+    // nothing typed, and so as the code that ran.
+    let long = |fill: &str, answer: &str| {
+        format!(
+            "def solve(nums):\n    table = '{}'\n    return {answer}\n",
+            fill.repeat(2200)
+        )
+    };
+    let mut state = with_written_code(RuntimeState::default());
+    type_code(&mut state, "python", &long("a", "1"));
+    receive_test_run(&mut state);
+    tested(&mut state).unwrap();
+
+    let mut state = with_written_code(RuntimeState::default());
+    type_code(&mut state, "python", &long("a", "1"));
+    receive_test_run(&mut state);
+    type_code(&mut state, "python", &long("b", "2"));
+    assert!(tested(&mut state).is_err());
+}
+
+#[test]
+fn a_run_is_credited_to_the_code_submitted_not_the_editor_it_lands_in() {
+    // The starter was running while the solution was pasted. The results are
+    // the starter's, however the editor looks when they arrive.
+    let mut state = RuntimeState::default();
+    let starter = "def solve(nums):\n    pass\n";
+    type_code(&mut state, "python", starter);
+    type_code(
+        &mut state,
+        "python",
+        "def solve(nums):\n    return sorted(nums)\n",
+    );
+    apply_data_event(
+        &mut state,
+        TOPIC_TEST_RESULTS,
+        &json!({"passed": 0, "total": 3, "code": starter, "language": "python"}),
+        99.0,
+    );
+    assert!(state.tested_code.is_none());
+    assert!(tested(&mut state).is_err());
+
+    // The other way round: a real run whose results land after a switch to an
+    // untouched buffer keeps its credit for when the candidate comes back.
+    let mut state = with_written_code(RuntimeState::default());
+    let written = state.code.clone();
+    type_code(&mut state, "javascript", "function solve(nums) {}");
+    apply_data_event(
+        &mut state,
+        TOPIC_TEST_RESULTS,
+        &json!({"passed": 1, "total": 3, "code": written, "language": "python"}),
+        99.0,
+    );
+    assert!(state.tested_code.is_some());
+    type_code(&mut state, "python", &written);
+    tested(&mut state).unwrap();
+}
+
+#[test]
+fn a_paused_run_earns_nothing() {
+    let mut state = with_written_code(RuntimeState {
+        paused: true,
+        ..RuntimeState::default()
+    });
+    receive_test_run(&mut state);
+    assert!(state.tested_code.is_none());
+    assert_eq!(state.test_runs, 0);
+    state.paused = false;
+    assert!(tested(&mut state).is_err());
+}
+
+#[test]
+fn a_run_of_the_code_on_screen_outranks_a_later_outage() {
+    // The run happened; an outage reported after it does not undo that. Every
+    // reader has to agree, or the reaction invites a trace the gate refuses.
+    let mut state = with_written_code(RuntimeState::default());
+    receive_test_run(&mut state);
+    let outage = json!({"total": 0, "setupError": "Compiler Explorer returned HTTP 503.",
+        "runnerUnavailable": true, "code": state.code, "language": "python"});
+    let reply = apply_data_event(&mut state, TOPIC_TEST_RESULTS, &outage, 99.0)
+        .generate_reply
+        .unwrap();
+    assert!(!reply.contains("trace their code by hand"), "{reply}");
+    let trace = json!({"phase": "test", "source": "candidate_speech", "kind": "observed",
+        "confidence": 80, "summary": "Traced the solution by hand."});
+    let refused = record_framework_evidence(&mut state, &trace).unwrap_err();
+    assert!(refused.contains("test_event"), "{refused}");
+    tested(&mut state).unwrap();
+}
+
+#[test]
+fn a_missing_runner_lets_a_hand_trace_stand_for_test() {
+    let mut state = with_written_code(RuntimeState::default());
+    let trace = json!({"phase": "test", "source": "candidate_speech", "kind": "observed",
+        "confidence": 80, "summary": "Traced an ordinary and a boundary case by hand."});
+    let unavailable = json!({"total": 0, "runnerUnavailable": true,
+        "setupError": "The test cases could not be loaded.", "code": state.code, "language": "python"});
+    let reply = apply_data_event(&mut state, TOPIC_TEST_RESULTS, &unavailable, 99.0)
+        .generate_reply
+        .unwrap();
+    assert!(reply.contains("not the candidate's error"), "{reply}");
+    assert!(reply.contains("trace their code by hand"), "{reply}");
+    assert!(state.tested_code.is_none());
+
+    // Recorded as what it is. A run or a snapshot claimed during an outage
+    // would put the wrong provenance in the report.
+    for source in ["test_event", "editor_snapshot"] {
+        let mut claimed = trace.clone();
+        claimed["source"] = json!(source);
+        let refused = record_framework_evidence(&mut state, &claimed).unwrap_err();
+        assert!(refused.contains("candidate_speech"), "{refused}");
+    }
+    record_framework_evidence(&mut state, &trace).unwrap();
+    assert_eq!(framework_progress(&state), ["test"]);
+
+    // Only while it stays missing: an ordinary setup error is the candidate's
+    // to fix, and the trace is refused again.
+    let mut state = with_written_code(RuntimeState::default());
+    apply_data_event(&mut state, TOPIC_TEST_RESULTS, &unavailable, 99.0);
+    let compile =
+        json!({"total": 0, "setupError": "SyntaxError", "code": state.code, "language": "python"});
+    apply_data_event(&mut state, TOPIC_TEST_RESULTS, &compile, 99.0);
+    assert!(record_framework_evidence(&mut state, &trace).is_err());
+
+    // And never for code the candidate has not written.
+    let mut state = RuntimeState::default();
+    apply_data_event(&mut state, TOPIC_TEST_RESULTS, &unavailable, 99.0);
+    assert!(record_framework_evidence(&mut state, &trace).is_err());
+
+    // Only in the language whose runner failed: a switch to one that works
+    // needs a run like any other.
+    let mut state = with_written_code(RuntimeState::default());
+    apply_data_event(&mut state, TOPIC_TEST_RESULTS, &unavailable, 99.0);
+    type_code(&mut state, "javascript", "function solve(nums) {}");
+    type_code(
+        &mut state,
+        "javascript",
+        "function solve(nums) { return nums.sort(); }",
+    );
+    assert!(record_framework_evidence(&mut state, &trace).is_err());
+
+    // A run that executed cases is believed on its cases, whatever flag rides
+    // along with it.
+    let mut state = with_written_code(RuntimeState::default());
+    let executed = json!({"passed": 1, "total": 1, "runnerUnavailable": true,
+        "code": state.code, "language": "python"});
+    let reply = apply_data_event(&mut state, TOPIC_TEST_RESULTS, &executed, 99.0)
+        .generate_reply
+        .unwrap();
+    assert!(state.runner_unavailable.is_none());
+    assert!(!reply.contains("trace their code by hand"), "{reply}");
+    assert!(record_framework_evidence(&mut state, &trace).is_err());
+    tested(&mut state).unwrap();
+}
+
+#[test]
+fn a_test_reaction_asks_for_a_record_only_when_one_would_be_accepted() {
+    const RECORD: &str = "silently record it now";
+    let run = |state: &mut RuntimeState, code: &str, since: f64| {
+        let payload = json!({"passed": 1, "total": 2, "code": code, "language": "python"});
+        apply_data_event(state, TOPIC_TEST_RESULTS, &payload, since).generate_reply
+    };
+
+    let mut state = with_written_code(RuntimeState::default());
+    let code = state.code.clone();
+    assert!(run(&mut state, &code, 99.0).unwrap().contains(RECORD));
+
+    // A later run that earns nothing, here one without its code, does not take
+    // the reminder away while the earlier run still matches the editor, but its
+    // counts describe code the gate cannot match, so they are kept out of the
+    // next step. It does not jump the cooldown either.
+    let bare = json!({"passed": 2, "total": 2, "language": "python"});
+    let reminded = apply_data_event(&mut state, TOPIC_TEST_RESULTS, &bare, 99.0)
+        .generate_reply
+        .unwrap();
+    assert!(reminded.contains(RECORD), "{reminded}");
+    assert!(reminded.contains("from that earlier run"), "{reminded}");
+    assert!(
+        reminded.contains("cannot be matched to the code on screen"),
+        "{reminded}"
+    );
+    assert!(!reminded.contains("every one passed"), "{reminded}");
+    assert!(!reminded.contains("Optimizations"), "{reminded}");
+    assert!(
+        apply_data_event(&mut state, TOPIC_TEST_RESULTS, &bare, 1.0)
+            .generate_reply
+            .is_none()
+    );
+
+    tested(&mut state).unwrap();
+    let again = run(&mut state, &code, 99.0).unwrap();
+    assert!(!again.contains(RECORD), "Test is already recorded: {again}");
+
+    // The candidate kept typing while the run was in flight. The gate would
+    // refuse the record, so the reaction must not ask for it.
+    let mut state = with_written_code(RuntimeState::default());
+    let submitted = state.code.clone();
+    type_code(
+        &mut state,
+        "python",
+        "def solve(nums):\n    if not nums:\n        return []\n    return sorted(nums)\n",
+    );
+    let stale = run(&mut state, &submitted, 99.0).unwrap();
+    assert!(!stale.contains(RECORD), "{stale}");
+    assert!(!stale.contains("counts as testing"), "{stale}");
+    assert!(
+        stale.contains("click Run on the code now on screen"),
+        "{stale}"
+    );
+    assert!(tested(&mut state).is_err());
+
+    // Inside the cooldown a run is not narrated, unless it is the one that
+    // makes Test recordable: nothing else would tell the model to record it.
+    let mut state = with_written_code(RuntimeState::default());
+    let code = state.code.clone();
+    let setup =
+        json!({"total": 0, "setupError": "SyntaxError", "code": code, "language": "python"});
+    assert!(
+        apply_data_event(&mut state, TOPIC_TEST_RESULTS, &setup, 1.0)
+            .generate_reply
+            .is_none()
+    );
+    assert!(run(&mut state, &code, 1.0).unwrap().contains(RECORD));
+    tested(&mut state).unwrap();
+    assert!(run(&mut state, &code, 1.0).is_none());
+
+    // The same for the first run to find the runner missing: that reaction is
+    // the only place the model learns a trace may stand for Test. A second
+    // failure in a row is back under the cooldown.
+    let mut state = with_written_code(RuntimeState::default());
+    let code = state.code.clone();
+    let compile =
+        json!({"total": 0, "setupError": "SyntaxError", "code": code, "language": "python"});
+    let outage = json!({"total": 0, "setupError": "Compiler Explorer returned HTTP 503.",
+        "runnerUnavailable": true, "code": code, "language": "python"});
+    assert!(
+        apply_data_event(&mut state, TOPIC_TEST_RESULTS, &compile, 1.0)
+            .generate_reply
+            .is_none()
+    );
+    let reply = apply_data_event(&mut state, TOPIC_TEST_RESULTS, &outage, 1.0)
+        .generate_reply
+        .expect("a newly missing runner is announced inside the cooldown");
+    assert!(reply.contains("trace their code by hand"), "{reply}");
+    assert!(
+        apply_data_event(&mut state, TOPIC_TEST_RESULTS, &outage, 1.0)
+            .generate_reply
+            .is_none()
+    );
+}
+
+#[test]
+fn a_late_outage_from_a_language_left_behind_invites_no_trace() {
+    // A C++ run was in flight when the candidate switched to JavaScript and
+    // wrote there; the outage lands afterwards. The gate refuses a JavaScript
+    // trace, so the reaction must not ask for one.
+    let mut state = with_written_code(RuntimeState::default());
+    type_code(&mut state, "javascript", "function solve(nums) {}");
+    type_code(
+        &mut state,
+        "javascript",
+        "function solve(nums) { return nums.sort(); }",
+    );
+    let outage = json!({"total": 0, "setupError": "Compiler Explorer returned HTTP 503.",
+        "runnerUnavailable": true, "code": "int solve() { return 1; }", "language": "cpp"});
+    assert!(
+        apply_data_event(&mut state, TOPIC_TEST_RESULTS, &outage, 1.0)
+            .generate_reply
+            .is_none(),
+        "not a newly missing runner for the code on screen, so the cooldown holds"
+    );
+    let reply = apply_data_event(&mut state, TOPIC_TEST_RESULTS, &outage, 99.0)
+        .generate_reply
+        .unwrap();
+    assert!(!reply.contains("trace their code by hand"), "{reply}");
+    assert!(reply.contains("first setup error"), "{reply}");
+    let trace = json!({"phase": "test", "source": "candidate_speech", "kind": "observed",
+        "confidence": 80, "summary": "Traced the JavaScript by hand."});
+    assert!(record_framework_evidence(&mut state, &trace).is_err());
+
+    // Back in C++, the outage is the code on screen's again.
+    type_code(&mut state, "cpp", "int solve() {}");
+    type_code(&mut state, "cpp", "int solve() { return 1; }");
+    record_framework_evidence(&mut state, &trace).unwrap();
+}
+
+#[test]
+fn malformed_setup_errors_do_not_sound_like_completed_runs() {
+    for error in [json!(true), json!("\n")] {
+        let mut state = with_written_code(RuntimeState::default());
+        let result = apply_data_event(
+            &mut state,
+            TOPIC_TEST_RESULTS,
+            &json!({"total": 2, "passed": 2, "setupError": error}),
+            99.0,
+        );
+        let reply = result.generate_reply.unwrap();
+        assert!(reply.contains("could not execute the code"));
+        assert!(reply.contains("The runner reported a setup error."));
+        assert!(state.tested_code.is_none());
+        assert_eq!(
+            state.last_test_run.unwrap()["setupError"],
+            "The runner reported a setup error."
+        );
+    }
 }

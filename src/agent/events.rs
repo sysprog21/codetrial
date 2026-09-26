@@ -7,11 +7,11 @@
 
 use super::{
     DataEventResult, INTERVIEWER_SPEAKER, InterviewLoop, LanguageChoiceContext,
-    MAX_INTEGRITY_EVENTS, ROUND_TRANSITION_SKEW, RuntimeState, TIME_WARNING_S,
-    behavioral_time_warning, cold_restart, format_test_run, integrity_hash, language_choice,
-    python_truthy, resume, round_skipped, round_started, sanitize_integrity_event,
+    MAX_INTEGRITY_EVENTS, ROUND_TRANSITION_SKEW, RuntimeState, TIME_WARNING_S, TestRecord,
+    TestSource, behavioral_time_warning, cold_restart, format_test_run, integrity_hash,
+    language_choice, python_truthy, resume, round_skipped, round_started, sanitize_integrity_event,
     sanitize_test_run, spoken_language, test_reaction_decision, test_results_reaction,
-    test_setup_error_reaction, time_warning,
+    test_runner_unavailable_reaction, test_setup_error_reaction, time_warning,
 };
 use crate::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
 
@@ -149,15 +149,20 @@ fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> D
 /// is the code itself, which the agent receives over the code topic and can
 /// read, and the room state it observes for itself. Anything that grades rather
 /// than converses has to judge server-side, against code the server holds.
+///
+/// Test credit is the one thing a run grants, and it goes to the `code` sent
+/// with the results: the browser's account of what ran, not the editor copy
+/// the server holds. It only ever says that a run happened, never how well it
+/// went, and it lasts only while the editor still matches it.
 fn apply_test_results(
     state: &mut RuntimeState,
-    payload: &serde_json::Value,
+    raw: &serde_json::Value,
     since_last_test_reaction_seconds: f64,
 ) -> DataEventResult {
     // Bounded before it is stored, not before it is rendered. Both readers of
     // `last_test_run` put it in front of a model, so the sanitized value has to
     // be the only one that exists past this line.
-    let payload = &sanitize_test_run(payload);
+    let payload = &sanitize_test_run(raw);
 
     // The sanitizer reports "no run happened" as null, and the caller has to
     // honor that or the refusal to invent a run is undone one line later:
@@ -166,30 +171,86 @@ fn apply_test_results(
     if payload.is_null() {
         return DataEventResult::default();
     }
+    let setup_error = payload.get("setupError").is_some_and(python_truthy);
+    let total = payload
+        .get("total")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+
+    // Credit goes to the code the runner was handed, which the browser sends
+    // with the results, not to the editor as it stands when they arrive: a
+    // solution pasted while a starter run was still booting never ran. A later
+    // setup failure or empty run keeps the credit it did not replace. The code
+    // is read off the raw packet because it never belongs in `last_test_run`,
+    // which is put in front of a model. A language the tabs do not offer is no
+    // submission at all.
+    let submitted = raw
+        .get("code")
+        .and_then(serde_json::Value::as_str)
+        .zip(raw.get("language").and_then(serde_json::Value::as_str))
+        .filter(|(_, language)| offered_language(language).is_some());
+    let mut credited = false;
+    if let Some((code, language)) = submitted
+        && !setup_error
+        && total > 0
+        && super::written_in(state, language, code)
+    {
+        state.tested_code = Some(super::TestedCode {
+            language: language.to_string(),
+            code: code.to_string(),
+        });
+        credited = true;
+    }
+
+    // Only a run that failed to start can say its runner is missing: a packet
+    // claiming both executed cases and an absent runner is believed on the
+    // cases. Held against the run's language, so a switch to a language whose
+    // runner works does not carry the trace exception with it.
+    let unavailable = submitted
+        .map(|(_, language)| language)
+        .filter(|_| setup_error && raw.get("runnerUnavailable").is_some_and(python_truthy))
+        .map(str::to_string);
+    let was_unavailable = std::mem::replace(&mut state.runner_unavailable, unavailable);
     state.last_test_run = Some(payload.clone());
     state.test_runs += 1;
 
-    let decision = test_reaction_decision(state.ended, since_last_test_reaction_seconds);
+    // The cooldown keeps back-to-back runs from being narrated twice, but a run
+    // that makes Test recordable is the one reaction that has to be heard:
+    // nothing else tells the model to record it.
+    let record = super::test_record_after_run(state, credited);
+
+    // Likewise the first run to find the runner missing: the sanitized run
+    // drops the flag, so this reaction is the only place the model learns a
+    // trace may stand for Test.
+    let newly_unavailable = super::test_source(state) == TestSource::Trace
+        && state.runner_unavailable != was_unavailable;
+    let decision = test_reaction_decision(
+        state.ended,
+        since_last_test_reaction_seconds,
+        record == TestRecord::Record || newly_unavailable,
+    );
     if !decision.react {
         return DataEventResult::default();
     }
 
-    let setup_error = payload.get("setupError").is_some_and(python_truthy);
-    let all_passed = payload
-        .get("total")
-        .and_then(serde_json::Value::as_i64)
-        .is_some_and(|total| total > 0)
-        && payload.get("passed").and_then(serde_json::Value::as_i64)
-            == payload.get("total").and_then(serde_json::Value::as_i64);
+    let all_passed =
+        total > 0 && payload.get("passed").and_then(serde_json::Value::as_i64) == Some(total);
     let summary = format_test_run(Some(payload), state.test_runs);
 
     DataEventResult {
-        update_last_test_reaction: true,
-        update_last_interjection: true,
-        generate_reply: Some(if setup_error {
+        update_last_test_reaction: decision.update_last_test_reaction,
+        update_last_interjection: decision.update_last_interjection,
+
+        // Held to the gate's own reading: an outage from a run in the language
+        // the candidate has since left is an ordinary setup error for the code
+        // on screen, and inviting a trace there invites a record the gate
+        // refuses.
+        generate_reply: Some(if super::test_source(state) == TestSource::Trace {
+            test_runner_unavailable_reaction(&summary)
+        } else if setup_error {
             test_setup_error_reaction(&summary)
         } else {
-            test_results_reaction(&summary, all_passed)
+            test_results_reaction(&summary, all_passed, record)
         }),
         ..DataEventResult::default()
     }

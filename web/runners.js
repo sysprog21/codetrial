@@ -184,8 +184,16 @@ function parseClassCandidateCase(spec, input) {
   return input;
 }
 
+/// A run the platform could not start: no edit of the candidate's can fix it,
+/// so the agent may take a hand trace for Test while it lasts.
+function outage(setupError) {
+  return { runnerUnavailable: true, setupError };
+}
+
 export async function runBrowserTests(problemId, code, language, onStatus = null, candidateCases = []) {
-  const empty = { problemId, language, passed: 0, total: 0, cases: [], at: Date.now() };
+  // `code` is what this run executed. The agent credits Test to it rather than
+  // to the editor when the results land, which may have moved on since.
+  const empty = { problemId, language, code, passed: 0, total: 0, cases: [], at: Date.now() };
   // A judge that cannot be fetched is not a problem without tests. Reporting
   // both the same way told a candidate on a flaky connection that their problem
   // had no test cases, which is the one reading that makes them stop trying.
@@ -193,9 +201,11 @@ export async function runBrowserTests(problemId, code, language, onStatus = null
   try {
     spec = await loadJudge(problemId);
   } catch {
-    return { ...empty, setupError: "The test cases could not be loaded. Check your connection and run again." };
+    return { ...empty, ...outage("The test cases could not be loaded. Check your connection and run again.") };
   }
-  if (!spec) return { ...empty, setupError: "No test cases are defined for this problem." };
+  // Neither of these is the candidate's doing, and no edit can make a run pass
+  // them, so the agent is told the runner itself is missing.
+  if (!spec) return { ...empty, ...outage("No test cases are defined for this problem.") };
   const candidates = candidateCases.map((testCase, index) => ({ ...testCase, label: testCase.label || `Your case ${index + 1}` }));
   const runnable = { ...spec, cases: [...spec.cases, ...candidates] };
   const base = { ...empty, total: spec.cases.length };
@@ -208,7 +218,7 @@ export async function runBrowserTests(problemId, code, language, onStatus = null
       : compilerExplorer[language]
         ? await runCompilerExplorer(language, code, runnable, reportStatus)
         : (reportStatus("running"), await runWorker(code, runnable));
-    if (raw.setupError || !raw.results) return { ...base, setupError: raw.setupError || "The run produced no results." };
+    if (raw.setupError || !raw.results) return { ...base, runnerUnavailable: raw.runnerUnavailable, setupError: raw.setupError || "The run produced no results." };
     const cases = runnable.cases.map((testCase, index) => {
       const candidate = index >= spec.cases.length;
       const observed = candidate && !Object.hasOwn(testCase, "expected");
@@ -258,14 +268,14 @@ async function runCompilerExplorer(language, code, spec, reportStatus = null) {
       signal: controller.signal,
     });
     if (!response.ok) {
-      return { setupError: `Compiler Explorer returned HTTP ${response.status}. Try again later.` };
+      return outage(`Compiler Explorer returned HTTP ${response.status}. Try again later.`);
     }
     return mapCompilerResponse(await response.json());
   } catch (error) {
     if (error?.name === "AbortError") {
-      return { setupError: `Compiler Explorer did not respond within ${compilerExplorerTimeoutMs / 1000} seconds. Try again later.` };
+      return outage(`Compiler Explorer did not respond within ${compilerExplorerTimeoutMs / 1000} seconds. Try again later.`);
     }
-    return { setupError: `Compiler Explorer run failed: ${String(error?.message || error).slice(0, 300)}` };
+    return outage(`Compiler Explorer run failed: ${String(error?.message || error).slice(0, 300)}`);
   } finally {
     clearTimeout(timer);
   }
@@ -875,7 +885,12 @@ _codetrial_run(_CODETRIAL_CODE, _CODETRIAL_SPEC)
 /// torn down when a run overruns.
 async function runPython(code, spec, reportStatus = null) {
   reportStatus?.("booting");
-  const worker = await pythonWorkerOnce();
+  let worker;
+  try {
+    worker = await pythonWorkerOnce();
+  } catch (error) {
+    return outage(String(error.message || error).slice(0, 400));
+  }
   reportStatus?.("running");
   return new Promise((resolve) => {
     let timer = null;

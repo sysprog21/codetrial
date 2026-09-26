@@ -523,6 +523,7 @@ fn browser_test_result_packets_are_classified_correctly_by_the_agent() {
         ("all passed", true, "every one passed"),
         ("some failed", false, "choose one failing case"),
         ("setup error", false, "first setup error"),
+        ("runner unavailable", false, "trace their code by hand"),
     ];
     for (name, passed, expected_reaction) in expected_reactions {
         let payload = wire_case(&cases, name);
@@ -781,13 +782,30 @@ fn control_events_respect_the_end_and_report_what_they_did() {
     // The coding gate wants both phases, and says which round it moved to
     // either way: the browser closes the editor on that answer.
     let evidence = |phase: &str| {
-        json!({"phase": phase, "source": "candidate_speech", "kind": "observed",
+        json!({"phase": phase, "source": observed_source(phase), "kind": "observed",
                "confidence": 90, "summary": format!("candidate completed {phase}")})
     };
     let transition = json!({"type": "round_transition", "round": "behavioral"});
 
+    // A hand trace of the written code, with Optimizations banked, is the shape
+    // issue #92 reported: it must not open the behavioral round.
+    let mut traced = with_written_code(RuntimeState::default());
+    past_the_coding_round(&mut traced);
+    record_framework_evidence(&mut traced, &evidence("optimizations")).expect("records");
+    let trace = json!({"phase": "test", "source": "candidate_speech", "kind": "observed",
+                       "confidence": 100, "summary": "Traced the boundary case aloud."});
+    assert!(record_framework_evidence(&mut traced, &trace).is_err());
+    let result = apply_data_event(&mut traced, TOPIC_CONTROL, &transition, 99.0);
+    assert_eq!(
+        result.round_changed,
+        Some("skipped"),
+        "a spoken trace is not a test run"
+    );
+    assert!(!traced.behavioral_round_started);
+
     let mut one_phase = with_written_code(RuntimeState::default());
     past_the_coding_round(&mut one_phase);
+    receive_test_run(&mut one_phase);
     record_framework_evidence(&mut one_phase, &evidence("test")).expect("records");
     let result = apply_data_event(&mut one_phase, TOPIC_CONTROL, &transition, 99.0);
     assert_eq!(
@@ -813,6 +831,7 @@ fn control_events_respect_the_end_and_report_what_they_did() {
 
     let mut both = with_written_code(RuntimeState::default());
     past_the_coding_round(&mut both);
+    receive_test_run(&mut both);
     for phase in ["test", "optimizations"] {
         record_framework_evidence(&mut both, &evidence(phase)).expect("records");
     }

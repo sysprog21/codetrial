@@ -11,6 +11,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { failFetchWith, functionBody, read } from "./source.js";
+import { testPayload } from "../../web/lib.js";
 import { parseCandidateCase, runBrowserTests } from "../../web/runners.js";
 
 const runners = read("web/runners.js");
@@ -194,6 +195,8 @@ test("runBrowserTests reports the output of a candidate case", async () => {
     const summary = await runBrowserTests("candidate-case-runner", "", "cpp", null, [{ input: [7] }]);
     assert.equal(summary.passed, 1);
     assert.equal(summary.total, 1);
+    assert.equal(summary.code, "", "the summary carries the code this run executed");
+    assert.equal(summary.runnerUnavailable, undefined, "a run that reached the runner never says it is missing");
     assert.deepEqual(summary.cases.at(-1), {
       label: "Your case 1", pass: null, got: "7", expected: undefined, input: "[7]", timeMs: 2, candidate: true,
     });
@@ -267,4 +270,56 @@ test("the hoisted runner source interpolates nothing", () => {
 
   assert.match(source, /self\.onmessage/, "it has to still be a worker");
   assert.doesNotMatch(source, /\$\{/, "an interpolation here would read from a scope it no longer has");
+});
+
+test("execution infrastructure failures allow tracing but candidate failures do not", async (t) => {
+  const spec = {
+    kind: "function", entry: "sum", paramNames: ["value"], paramTypes: ["integer"],
+    returnType: "integer", checker: "exact", cases: [{ label: "judge", input: [1], expected: 1 }],
+  };
+  const scenarios = [
+    { name: "HTTP outage", response: () => new Response("", { status: 503 }), unavailable: true },
+    { name: "network failure", response: () => { throw new TypeError("Failed to fetch"); }, unavailable: true },
+    { name: "request timeout", response: () => { throw new DOMException("Timed out", "AbortError"); }, unavailable: true },
+    { name: "invalid response", response: () => new Response("<html>down</html>"), unavailable: true },
+    { name: "compilation error", response: () => Response.json({ didExecute: false, stderr: [{ text: "syntax error" }] }), unavailable: false },
+    { name: "execution timeout", response: () => Response.json({ timedOut: true }), unavailable: false },
+    { name: "runtime error", response: () => Response.json({ code: 1, stderr: [{ text: "runtime error" }] }), unavailable: false },
+    { name: "Python loader failure", language: "python", response: () => new Response("", { status: 503 }), unavailable: true },
+    { name: "Python boot failure", language: "python", boot: { setupError: "Wasm failed to initialize" }, unavailable: true },
+    { name: "Python syntax error", language: "python", boot: { ready: true }, unavailable: false },
+  ];
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async (t) => {
+      const restoreFetch = failFetchWith(async (url) => String(url).startsWith("/judges/")
+        ? Response.json(spec)
+        : scenario.response?.() ?? new Response(""));
+      if (scenario.boot) {
+        t.mock.method(globalThis.URL, "createObjectURL", () => "blob:test");
+        t.mock.method(globalThis.URL, "revokeObjectURL", () => {});
+        const previous = globalThis.Worker;
+        globalThis.Worker = class {
+          constructor() { queueMicrotask(() => this.onmessage({ data: scenario.boot })); }
+          postMessage() {
+            queueMicrotask(() => this.onmessage({ data: { setupError: "SyntaxError: invalid syntax" } }));
+          }
+          terminate() {}
+        };
+        t.after(() => {
+          if (previous === undefined) delete globalThis.Worker;
+          else globalThis.Worker = previous;
+        });
+      }
+      try {
+        const summary = await runBrowserTests("infrastructure-" + scenario.name, "candidate code", scenario.language ?? "cpp");
+        assert.ok(summary.setupError);
+        assert.equal(Boolean(summary.runnerUnavailable), scenario.unavailable);
+        assert.equal(testPayload(summary).runnerUnavailable, scenario.unavailable);
+        assert.equal(summary.passed, 0);
+        assert.deepEqual(summary.cases, []);
+      } finally {
+        restoreFetch();
+      }
+    });
+  }
 });

@@ -32,7 +32,7 @@
     {
       "id": "failed-test-recovery",
       "coverage": ["failed-test-recovery"],
-      "reaction": {"kind":"tests_failed", "code":"def two_sum(nums, target): return []", "required":["choose one failing case", "expected result and what their code produced", "diagnosis/Coding", "not proof"], "forbidden":["bug location", "the fix is", "log_hint"]},
+      "reaction": {"kind":"tests_failed", "code":"def two_sum(nums, target): return []", "required":["choose one failing case", "expected result and what their code produced", "go back to diagnosis", "not proof"], "forbidden":["bug location", "the fix is", "log_hint"]},
       "transcript": "Candidate diagnosed that insertion before lookup reused the same index, reversed the operations, and reran the duplicate case.",
       "evidence": [
         {"phase":"coding","source":"editor_snapshot","kind":"observed","confidence":100,"summary":"Revised the implementation after diagnosis."},
@@ -82,7 +82,7 @@
       "reaction": {"kind":"round_gate", "code":"", "required":["completion gate passed", "exactly one concise question"], "forbidden":["did not pass", "Return to Coding"]},
       "transcript":"Candidate described a release incident, owned the rollback task, personally added a canary check, and said later releases completed without recurrence.",
       "evidence":[
-        {"phase":"test","source":"candidate_speech","kind":"observed","confidence":90,"summary":"Explained high-value tests."},
+        {"phase":"test","source":"test_event","kind":"observed","confidence":90,"summary":"Predicted high-value cases, then ran them."},
         {"phase":"optimizations","source":"candidate_speech","kind":"observed","confidence":90,"summary":"Justified final complexity."},
         {"phase":"situation","source":"candidate_speech","kind":"observed","confidence":95,"summary":"Set the release incident context."},
         {"phase":"task","source":"candidate_speech","kind":"observed","confidence":95,"summary":"Owned the rollback task."},

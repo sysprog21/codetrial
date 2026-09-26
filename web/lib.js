@@ -249,6 +249,11 @@ export function testPayload(summary) {
     total: summary.total,
     language: summary.language,
     setupError: summary.setupError || null,
+    runnerUnavailable: Boolean(summary.runnerUnavailable),
+    // The code this run executed, which the agent credits Test to. The whole
+    // buffer, like every code update on its own topic, so one message is no
+    // closer to the data channel's size limit than the editor already goes.
+    code: summary.code ?? null,
     failures: summary.cases.filter((item) => !item.candidate && !item.pass).slice(0, 4).map((item) => ({ label: item.label, expected: item.expected, got: item.got, error: item.error || null })),
     candidateCases: summary.cases.filter((item) => item.candidate).slice(0, CANDIDATE_CASE_LIMIT).map((item) => ({ label: item.label, input: item.input, expected: item.expected ?? null, got: item.got, error: item.error || null })),
     at: Date.now(),
@@ -437,8 +442,8 @@ const textEncoder = new TextEncoder();
 /// function-local, moving it left the whole suite green with the supported-card
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
-  bundleVersion: 14,
-  livePromptVersion: 6,
+  bundleVersion: 15,
+  livePromptVersion: 7,
   reportPromptVersion: 11,
   reportSchemaVersion: 2,
   rubricVersion: 1,

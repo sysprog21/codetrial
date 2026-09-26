@@ -212,13 +212,19 @@ test("testPayload keeps the agent wire contract and caps failures at four", () =
   assert.deepEqual(Object.keys(payload).sort(), [
     "at",
     "candidateCases",
+    "code",
     "failures",
     "language",
     "passed",
+    "runnerUnavailable",
     "setupError",
     "total",
   ]);
   assert.equal(payload.setupError, null, "empty setup error normalizes to null");
+  assert.equal(payload.code, null, "a summary without the executed code sends none");
+  assert.equal(payload.runnerUnavailable, false);
+  assert.equal(testPayload({ ...summary, code: "x = 1", runnerUnavailable: true }).code, "x = 1");
+  assert.equal(testPayload({ ...summary, runnerUnavailable: true }).runnerUnavailable, true);
   assert.equal(payload.failures.length, 4);
   assert.deepEqual(Object.keys(payload.failures[0]).sort(), ["error", "expected", "got", "label"]);
   assert.equal(payload.failures[0].error, null);
