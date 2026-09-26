@@ -898,22 +898,6 @@ async fn on_watch_tick(
     // against another was answering a question nobody asked.
     let tick_at = Instant::now();
 
-    // A prompt Gemini never answered holds the floor, and a held floor keeps
-    // both the silence nudge and a deferred `GoAway` waiting on output that is
-    // not coming. The reply stays owed, so a replacement socket still gives it.
-    if context.activity.release_stalled_prompt(tick_at) {
-        eprintln!(
-            "timing: no output {}s after a prompt; returning the floor room={}",
-            PROMPT_STALL.as_secs(),
-            interview.boot.room_name
-        );
-        if spend_deferred_restart(room, context, loops, interview)
-            .await?
-            .is_break()
-        {
-            return Ok(ControlFlow::Break(()));
-        }
-    }
     if loops.presence.gave_up(tick_at) {
         // No report: it would be graded from a session the candidate walked out
         // of, and there is nobody in the room to receive it. The browser writes
@@ -930,6 +914,23 @@ async fn on_watch_tick(
         return Ok(ControlFlow::Break(()));
     }
 
+    // A prompt Gemini never answered holds the floor, and a held floor keeps
+    // both the silence nudge and a deferred `GoAway` waiting on output that is
+    // not coming. The reply stays owed, so a replacement socket still gives it.
+    // After the absence check, so a room being torn down is not reconnected.
+    if context.activity.release_stalled_prompt(tick_at) {
+        eprintln!(
+            "timing: no output {}s after a prompt; returning the floor room={}",
+            PROMPT_STALL.as_secs(),
+            interview.boot.room_name
+        );
+        if spend_deferred_restart(room, context, loops, interview)
+            .await?
+            .is_break()
+        {
+            return Ok(ControlFlow::Break(()));
+        }
+    }
     if let Some(review) = loops.interim_review.finished() {
         match review.await {
             Ok(notes) => record_interim_notes(context.state, &notes),
