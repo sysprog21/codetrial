@@ -951,6 +951,6 @@ function boxedJavaType(type) {
 
 function compilerText(value) {
   if (Array.isArray(value))
-    return stripAnsi(value.map((item) => item.text ?? item).join(""));
+    return stripAnsi(value.map((item) => item.text ?? item).join("\n"));
   return stripAnsi(value);
 }
