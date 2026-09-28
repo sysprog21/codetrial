@@ -40,6 +40,7 @@ import {
 } from "./editor.js";
 import { createDevicePool } from "./devices.js";
 import { createFaceCheck } from "./face-check.js";
+import { attachSelfView } from "./self-view.js";
 import { createMicMeter, startMediaMeter } from "./mic-meter.js";
 import {
   createTranscriptView,
@@ -209,6 +210,7 @@ const FRAMEWORK_HINT_MS = 12000;
 const HIDE_EXAMPLES_KEY = "codetrial:hideExamples";
 const EDITOR_FONT_SIZE_KEY = "codetrial:editorFontSize";
 const EDITOR_THEME_KEY = "codetrial:editorTheme";
+const SELF_VIEW_KEY = "codetrial:selfView";
 const SIDEBAR_WIDTH_KEY = "codetrial:sidebarWidth";
 const TEST_DRAWER_HEIGHT_KEY = "codetrial:testDrawerHeight";
 // The sidebar's narrowest is the width it had before it could be resized. The
@@ -547,9 +549,11 @@ const nodes = {
   cameraNameDisclosure: document.querySelector("#camera-name-disclosure"),
   cameraSkip: document.querySelector("#camera-skip"),
   cameraIntegrityVideo: document.querySelector("#camera-integrity-video"),
+  selfView: document.querySelector("#self-view"),
   audioJoin: document.querySelector("#audio-check-join"),
   audioLeave: document.querySelector("#audio-check-leave"),
   meetPresentation: document.querySelector("#meet-presentation"),
+  screenRecording: document.querySelector("#screen-recording"),
   interviewerAccent: document.querySelector("#interviewer-accent"),
   interviewerVoice: document.querySelector("#interviewer-voice"),
   hideExamples: document.querySelector("#hide-examples"),
@@ -674,6 +678,10 @@ async function init() {
   // track that is about to vanish is what made this a special case everywhere.
   const presenting = nodes.meetPresentation.checked && !preflight.cameraSkipped;
   if (presenting) releaseCameraToPresenter(preflight.userStream);
+  // After the release, so a camera handed to Meet is simply absent here too.
+  if (nodes.screenRecording.checked) {
+    detachSelfView = attachSelfView(nodes.selfView, preflight.userStream);
+  }
   // Now that the preflight holds a grant, the browser reports real device ids
   // and labels. Before this point the list is empty or a blank placeholder.
   void refreshAudioOutputs();
@@ -830,6 +838,10 @@ function bindEvents() {
       MEET_PRESENTATION_KEY,
       nodes.meetPresentation.checked ? "1" : "0",
     );
+  });
+  nodes.screenRecording.checked = readStored(SELF_VIEW_KEY) === "1";
+  nodes.screenRecording.addEventListener("change", () => {
+    writeStored(SELF_VIEW_KEY, nodes.screenRecording.checked ? "1" : "0");
   });
   nodes.hideExamples.addEventListener("change", () => {
     writeStored(HIDE_EXAMPLES_KEY, nodes.hideExamples.checked ? "1" : "0");
@@ -1691,11 +1703,19 @@ async function publishPreflightTracks(room, preflight) {
   }
 }
 
+/// The undo for the self view, or a no-op while none is shown.
+let detachSelfView = () => {};
+
 function stopPreflight(preflight) {
   // `stop()` fires no `ended`, so the ring's meter is retired here rather
   // than by its track: a join that fails after publishing would otherwise
   // leave it reading a dead microphone for the rest of the page.
   stopTurnRing();
+  // The same reason takes the self view down here rather than in one caller:
+  // the offline fallback stops the camera through this function too, and the
+  // view then sat frozen on the candidate's last frame for the whole session.
+  detachSelfView();
+  detachSelfView = () => {};
   preflight?.userStream?.getTracks?.().forEach((track) => track.stop());
 }
 
