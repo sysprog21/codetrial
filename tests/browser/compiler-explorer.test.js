@@ -893,6 +893,23 @@ test("compiler output helpers parse results and map failures to setupError", () 
       diagnostic: { category: "other" },
     },
   );
+  assert.deepEqual(
+    mapCompilerResponse({
+      didExecute: false,
+      buildResult: {
+        stderr: [
+          { text: "<source>:3: error: ';' expected" },
+          { text: "        return 1" },
+          { text: "                ^" },
+        ],
+      },
+    }),
+    {
+      setupError:
+        "<source>:3: error: ';' expected\n        return 1\n                ^",
+      diagnostic: { category: "other" },
+    },
+  );
   assert.deepEqual(mapCompilerResponse({ stdout: "not json" }), {
     setupError: "The run produced no JSON results.",
   });
