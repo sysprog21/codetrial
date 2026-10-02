@@ -40,6 +40,7 @@ test("recording-template dom ids", () => {
     "problem-title",
     "problem-meta",
     "code",
+    "board",
     "tests",
     "timer",
     "candidate-video",
@@ -100,6 +101,15 @@ test("recording-template dom ids", () => {
   assert.ok(
     !/@media/.test(styles),
     "the recorder's viewport is one fixed shape, so a media query here only ever fires wrong",
+  );
+  // The panels are switched by `hidden` alone, and `.board` sets `display`,
+  // which outranks the browser's own `[hidden]`. Without the reset every
+  // editor recording shows an empty whiteboard beside its code.
+  assert.match(styles, /\.board \{[^}]*display: block;/);
+  assert.match(
+    styles,
+    /\[hidden\] \{\s*display: none !important;\s*\}/,
+    "a hidden panel stays hidden whatever display its own rule sets",
   );
 });
 
@@ -284,7 +294,7 @@ test("recording-bootstrap ordering", () => {
   );
 
   const apply = withoutComments(functionBody(script, "applyReplayEvent"));
-  for (const kind of ["stage", "editor", "tests", "avatar"]) {
+  for (const kind of ["stage", "editor", "board", "tests", "avatar"]) {
     assert.ok(
       apply.includes(`case "${kind}":`),
       `the layout renders ${kind} events`,
@@ -302,15 +312,28 @@ test("recording-bootstrap ordering", () => {
     apply.includes("nodes.code.textContent = payload.code"),
     "and the editor panel is written as text",
   );
+
+  // The two surfaces are exclusive, and the first board event is what says
+  // which interview this is: a recording that showed both would have an empty
+  // panel in every frame of it.
+  assert.ok(
+    apply.includes("nodes.board.hidden = false") &&
+      apply.includes("nodes.code.hidden = true"),
+    "the first board event swaps the panels",
+  );
+  assert.ok(
+    apply.includes("applyOp(board, op)") && apply.includes("drawBoard("),
+    "the drawing is rebuilt from the operations with the module the candidate drew on",
+  );
 });
 
-// The producers. Six kinds, six call sites, all of them in `web/interview.js`:
+// The producers. Seven kinds, seven call sites, all of them in `web/interview.js`:
 // the candidate's page is the only one that knows what the candidate is looking
 // at, and the recording template renders what it sends.
 //
 // One assertion these all rest on: every producer goes through `recordReplay`,
 // so "is this server recording" and "has the server heard enough" are answered
-// once rather than at six call sites.
+// once rather than at seven call sites.
 test("replay-producer envelope", () => {
   const record = withoutComments(functionBody(interview, "recordReplay"));
   assert.ok(
@@ -470,6 +493,32 @@ test("replay-producer tests", () => {
   );
 });
 
+// The board is the one kind whose producer batches: a settle can drain more
+// operations than one event may carry. Pinned like the others, so a renamed
+// field or a checkpoint attached to the wrong batch fails here rather than as a
+// replay that draws nothing in production.
+test("replay-producer board", () => {
+  const body = withoutComments(functionBody(interview, "recordBoardOps"));
+  assert.ok(
+    body.includes("boardOpBatches(board.model.takeOps())"),
+    "the journal is taken, not read, and split into events that fit",
+  );
+  assert.ok(
+    body.includes('recordReplay("board", payload);') &&
+      body.includes("const payload = { ops };"),
+    "each batch is one board event carrying its operations as `ops`",
+  );
+  assert.ok(
+    body.includes("if (checkpoint && index === batches.length - 1)") &&
+      body.includes("payload.checkpoint = checkpoint;"),
+    "the checkpoint rides the last batch, after every operation it names",
+  );
+  assert.ok(
+    body.includes('recordReplay("board", { ops: [], checkpoint });'),
+    "and a phase completed with nothing new drawn is still marked",
+  );
+});
+
 test("replay-producer stage", () => {
   const payload = withoutComments(functionBody(interview, "stagePayload"));
   assert.ok(
@@ -492,11 +541,17 @@ test("replay-producer stage", () => {
     connect.includes("recordStage();"),
     "and again once the interview exists: the lobby render had nothing to attach it to",
   );
+  // Compared without whitespace: the formatter decides where the call wraps.
+  const flat = connect.replace(/\s+/g, "");
   assert.ok(
-    connect.includes(
-      'recordReplay("editor", { code: currentCode(), language: state.language });',
+    flat.includes(
+      'recordReplay("editor",{code:currentCode(),language:state.language,});',
     ),
     "with the starter code, so a candidate who never types is not recorded beside an empty editor",
+  );
+  assert.ok(
+    flat.includes('if(whiteboard)recordReplay("board",{ops:[]});else'),
+    "and at a whiteboard the empty board in its place, so an untouched board is still recorded as a board",
   );
 
   const timer = withoutComments(functionBody(interview, "tickTimer"));

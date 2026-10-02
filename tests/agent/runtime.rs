@@ -508,7 +508,7 @@ fn leetcode_reactions_preserve_stage_transitions() {
     );
 
     for neutral in [
-        greeting(),
+        greeting(InterviewMode::Coding),
         language_choice("Python", LanguageChoiceContext::Start),
         silence_nudge(
             &RuntimeState::default(),

@@ -3013,6 +3013,23 @@ mod replay {
             .unwrap()
         }
 
+        /// Every kind the parser accepts is one the table stores. The two
+        /// lists live apart, the enum in `replay.rs` and the `CHECK` in the
+        /// schema, and a kind added to the first alone parsed, passed every
+        /// envelope test, and then failed its insert with a 500 on every batch.
+        #[tokio::test]
+        async fn every_replay_kind_is_one_the_table_stores() {
+            let (_scratch, accounts) = harness("every-kind");
+            let events = ReplayKind::ALL.map(|kind| event(kind, kind.as_str()));
+            assert_eq!(
+                append_replay_events(&accounts, "int-1", 1, &events, 10).unwrap(),
+                Ingest::Stored {
+                    first: 0,
+                    last: events.len() as i64 - 1
+                }
+            );
+        }
+
         #[tokio::test]
         async fn replay_ingest_monotonic() {
             let (_scratch, accounts) = harness("ingest-monotonic");
@@ -3588,7 +3605,7 @@ mod replay {
 
     #[test]
     fn replay_schema_envelope() {
-        // One shape for six producers. A renderer reads `kind` to decide what
+        // One shape for seven producers. A renderer reads `kind` to decide what
         // to draw, and an envelope it cannot read is an event it cannot place.
         // Written out, not iterated from `ALL`: `parse` reads `ALL` too, so a
         // loop over it would agree with itself whatever the list said.
@@ -3597,6 +3614,7 @@ mod replay {
             [
                 "transcript",
                 "editor",
+                "board",
                 "tests",
                 "stage",
                 "avatar",
@@ -3643,7 +3661,10 @@ mod replay {
         ] {
             assert!(replaces.is_snapshot(), "{}", replaces.as_str());
         }
-        for accumulates in [ReplayKind::Transcript, ReplayKind::Tests] {
+
+        // The board accumulates: its events are the strokes that drew it, so a
+        // late join that kept only the newest would redraw one stroke of it.
+        for accumulates in [ReplayKind::Transcript, ReplayKind::Tests, ReplayKind::Board] {
             assert!(!accumulates.is_snapshot(), "{}", accumulates.as_str());
         }
     }

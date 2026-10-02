@@ -97,6 +97,24 @@
         <section>
           <h3 id="replay-moment-label">Code</h3>
           <pre id="replay-code" class="replay-code"></pre>
+          <!-- Shown in place of the code for a whiteboard interview, and drawn
+               from the same strokes the candidate made rather than from an
+               image of them: the replay keeps the drawing as operations, so
+               any moment of it can be redrawn. Labelled by a reference to the
+               heading above it rather than by an `aria-label`, because this
+               page keeps no words in an attribute, only references to words it
+               shows; tests/browser/history.test.js holds the whole of what it
+               may say. A heading next to a canvas does not name it on its own,
+               and the reference keeps the name in step as the heading moves
+               between moments. -->
+          <canvas
+            id="replay-board"
+            class="replay-board"
+            aria-labelledby="replay-moment-label"
+            width="1600"
+            height="1000"
+            hidden
+          ></canvas>
           <p id="replay-tests" class="muted small"></p>
         </section>
 

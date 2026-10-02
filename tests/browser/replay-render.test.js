@@ -514,6 +514,31 @@ test("the report card this page renders names no finding either", () => {
       },
     },
     { code: "" },
+    // A whiteboard interview: the board timeline in place of the code block,
+    // and the coding steps under the names the candidate was shown. Replay
+    // keeps no board images, so the timeline says where they are.
+    {
+      interviewMode: "whiteboard",
+      frameworkAssessment: {
+        rubricVersion: 1,
+        phases: frameworkPhases.map((phase) => ({
+          phase,
+          score: 60,
+          weaknessTags: [],
+        })),
+      },
+      frameworkEvidence: [
+        {
+          atMs: 65_000,
+          phase: "coding",
+          source: "board_snapshot",
+          kind: "observed",
+          confidence: 95,
+          summary: "Sxev",
+          frameworkVersion: 1,
+        },
+      ],
+    },
   ];
   const said = new Set();
   const rendered = [];
@@ -592,6 +617,8 @@ test("the report card this page renders names no finding either", () => {
     "source event",
     "(editor was empty)",
     "Practice interview report",
+    "No checkpoint was recorded for this step",
+    "Board images are not saved with the report",
   ]) {
     assert.ok(
       rendered.some((markup) => markup.includes(sentence)),
@@ -630,14 +657,19 @@ test("the report card this page renders names no finding either", () => {
       "0",
       "01:05",
       "1",
+      "1.",
       "10",
       "100",
       "2",
       "2.",
-      "26",
+      "27",
       "2;",
       "3",
+      "3.",
       "37",
+      "4.",
+      "5.",
+      "6.",
       "60",
       "7",
       "70",
@@ -646,15 +678,18 @@ test("the report card this page renders names no finding either", () => {
       "Action",
       "Algorithm",
       "Approach",
+      "Board",
       "Chain",
       "CodeTrial.",
       "Coding",
       "Committee",
       "Common",
       "Communication",
+      "Complexity",
       "Contract",
       "Done",
       "Download",
+      "Edge",
       "Evidence",
       "Example",
       "FACE_MISSING",
@@ -665,6 +700,7 @@ test("the report card this page renders names no finding either", () => {
       "Held",
       "Hint",
       "INCOMPLETE",
+      "If",
       "Improve",
       "Integrity",
       "Interview",
@@ -691,7 +727,9 @@ test("the report card this page renders names no finding either", () => {
       "Test",
       "They",
       "This",
+      "Trace",
       "What",
+      "Whiteboard",
       "Your",
       "\u00b7",
       "a",
@@ -708,6 +746,9 @@ test("the report card this page renders names no finding either", () => {
       "bar",
       "be",
       "behavioral",
+      "board",
+      "board,",
+      "board_snapshot",
       "bring",
       "bundle",
       "by",
@@ -715,7 +756,9 @@ test("the report card this page renders names no finding either", () => {
       "candidate_speech",
       "cannot",
       "captured)",
+      "cases",
       "chain",
+      "checkpoint",
       "coaching",
       "code",
       "coding",
@@ -743,10 +786,12 @@ test("the report card this page renders names no finding either", () => {
       "hints",
       "hiring",
       "how",
+      "images",
       "impact",
       "interview",
       "interviewer",
       "is",
+      "its",
       "it",
       "kept,",
       "ladder",
@@ -772,11 +817,17 @@ test("the report card this page renders names no finding either", () => {
       "predates",
       "problem",
       "recall.",
+      "recorded",
+      "recorded,",
+      "redraws",
+      "replay",
       "report",
+      "report.",
       "reporting:",
       "review",
       "rounds",
       "rubric",
+      "saved",
       "schema",
       "score.",
       "scored",
@@ -788,6 +839,10 @@ test("the report card this page renders names no finding either", () => {
       "space",
       "space.",
       "started",
+      "step",
+      "step.",
+      "stroke",
+      "stroke.",
       "summary",
       "tests",
       "the",
@@ -806,6 +861,8 @@ test("the report card this page renders names no finding either", () => {
       "weighted",
       "were",
       "will",
+      "with",
+      "work",
       "your",
     ]),
     "a word on the report card is a word somebody chose",
@@ -910,4 +967,105 @@ test("a response window does not replace the final editor with missing history",
   const code = dom.node("replay-code").textContent;
   dom.node("replay-timeline").querySelectorAll("[data-window]")[0].click();
   assert.equal(dom.node("replay-code").textContent, code);
+});
+
+// A candidate who never drew sends no strokes, and the page used to read that
+// as an editor interview. The producer opens a whiteboard replay with an empty
+// board event for this, and that alone is enough to choose the board.
+test("an untouched whiteboard still replays as a board", () => {
+  dom.node("replay-timeline").replaceChildren();
+  render([
+    stage(BASE, 0),
+    { kind: "board", at: BASE + 500, payload: { ops: [] } },
+  ]);
+  assert.equal(dom.node("replay-board").hidden, false);
+  assert.equal(dom.node("replay-code").hidden, true);
+});
+
+test("a whiteboard recording replays the drawing, not an empty code panel", () => {
+  // The two surfaces are exclusive: a whiteboard interview publishes no editor
+  // snapshot, so the panel that would hold code holds nothing, and the one
+  // thing worse than no board on this page is a heading saying Code above an
+  // empty box.
+  const ops = (at, ...operations) => ({
+    kind: "board",
+    at,
+    payload: { ops: operations },
+  });
+  const stroke = (points) => ({
+    op: "stroke",
+    color: "#101418",
+    width: 3,
+    points,
+  });
+  const events = [
+    stage(BASE, 0),
+    {
+      ...ops(BASE + 1000, stroke([0, 0, 100, 100])),
+      payload: {
+        ops: [stroke([0, 0, 100, 100])],
+        checkpoint: "example",
+      },
+    },
+    {
+      ...ops(BASE + 5000, stroke([200, 200, 300, 200]), { op: "undo" }),
+      payload: {
+        ops: [stroke([200, 200, 300, 200]), { op: "undo" }],
+        checkpoint: "algorithm",
+      },
+    },
+    ops(BASE + 9000, stroke([400, 10, 400, 900])),
+  ];
+  // Cleared first, the way `clearDetail` does between recordings: `render`
+  // appends, so a timeline left over from an earlier test is counted below.
+  dom.node("replay-timeline").replaceChildren();
+  render(events);
+
+  assert.equal(dom.node("replay-board").hidden, false);
+  assert.equal(dom.node("replay-code").hidden, true);
+
+  const buttons = dom.node("replay-timeline").querySelectorAll("[data-moment]");
+  assert.equal(buttons.length, 3, "every board event is a moment to open");
+  assert.match(buttons[0].textContent, /Example checkpoint$/);
+  assert.match(buttons[1].textContent, /Approach checkpoint$/);
+  assert.match(buttons[2].textContent, /board$/);
+
+  // The board at a moment is the whole journal up to it, replayed. The second
+  // moment undoes the stroke it drew, so opening it shows the first stroke
+  // alone and opening the third shows two: a page that accumulated the strokes
+  // instead of replaying the operations would show two and three.
+  // Cleared before each click, because `render` draws the last moment itself
+  // and the calls would otherwise be every paint since the page loaded.
+  const opened = (index) => {
+    const context = dom.node("replay-board").getContext("2d");
+    context.calls.length = 0;
+    buttons[index].click();
+    return context.calls
+      .filter(([name]) => name === "moveTo")
+      .map(([, x, y]) => [x, y]);
+  };
+  assert.deepEqual(opened(0), [[0, 0]]);
+  assert.equal(
+    dom.node("replay-moment-label").textContent,
+    "Example board checkpoint",
+  );
+  assert.deepEqual(
+    opened(1),
+    [[0, 0]],
+    "the undone stroke is not on the board",
+  );
+  assert.equal(
+    dom.node("replay-moment-label").textContent,
+    "Approach board checkpoint",
+  );
+  assert.deepEqual(opened(2), [
+    [0, 0],
+    [400, 10],
+  ]);
+
+  // And an editor recording is untouched by any of it.
+  dom.node("replay-timeline").replaceChildren();
+  render([stage(BASE, 0), editor(BASE + 1000)]);
+  assert.equal(dom.node("replay-board").hidden, true);
+  assert.equal(dom.node("replay-code").hidden, false);
 });

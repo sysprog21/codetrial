@@ -2793,11 +2793,21 @@ fn the_prompt_samples_carry_what_prompt_view_renders() {
         }),
     );
 
+    // At a whiteboard: a phase covered and a turn, and neither an editor nor a
+    // run for the ledger to report, which is what a board prompt carries.
+    let mut board = fresh();
+    board.interview_mode = crate::agent::InterviewMode::Whiteboard;
+    board.evidence_ledger.record_coverage(1_000, "repeat");
+    board
+        .evidence_ledger
+        .record_conversation_turn(1_500, "candidate");
+
     let watch = |state: &RuntimeState| state.evidence_ledger.prompt_view(ViewFor::Watch);
     let rendered = serde_json::json!({
         "empty": watch(&fresh()).join("\n"),
         "early": watch(&early).join("\n"),
         "working": watch(&working).join("\n"),
+        "board": watch(&board).join("\n"),
 
         // What a watch prompt sends once an earlier one has shown `early`: the
         // lines that differ from what the session already holds.

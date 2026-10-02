@@ -20,7 +20,7 @@ import {
   resultsMarkup,
   runnerStatusMarkup,
 } from "../../web/render.js";
-import { sanitizeReport } from "../../web/lib.js";
+import { frameworkPhases, sanitizeReport } from "../../web/lib.js";
 
 const events = [
   {
@@ -1901,4 +1901,186 @@ test("each transcript row is classed by who is speaking", () => {
   view.upsert("a2", "candidate", "And O(n) space.", true, 3_000);
   assert.equal(panel.children[2].className, "transcript-row you");
   assert.equal(rowLabel(panel, 2), "You");
+});
+
+test("a whiteboard report shows the board where the code block would be", () => {
+  const session = {
+    report: {
+      codingScore: 70,
+      communicationScore: 70,
+      decision: "NO_HIRE",
+      summary: "Solid trace.",
+      hintsUsed: 0,
+      codingFeedback: { strengths: [], improvements: [] },
+      communicationFeedback: { strengths: [], improvements: [] },
+    },
+    problemTitle: "Two Sum",
+    language: "python",
+    code: "",
+    transcript: [],
+    at: "2026-08-17",
+  };
+  const image = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
+
+  // Without a board this is the editor interview it has always been, and the
+  // empty editor says so rather than claiming a board nobody drew on.
+  const editor = reportMarkup(session);
+  assert.match(editor, /Your final code \(python\)/);
+  assert.match(editor, /\(editor was empty\)/);
+  assert.doesNotMatch(editor, /final board/);
+
+  const board = reportMarkup({ ...session, board: image });
+  assert.match(board, /Your final board/);
+  assert.match(board, new RegExp(`src="${image.replace(/[/+]/g, "\\$&")}"`));
+  assert.doesNotMatch(board, /Your final code/);
+  assert.doesNotMatch(board, /\(editor was empty\)/);
+
+  // The one `src` this card emits, so what may go in it is a shape rather than
+  // whatever the caller had. A page that handed it a URL of its own, or a
+  // canvas that would not export, gets a sentence instead of an image.
+  for (const refused of [
+    "https://example.test/board.jpg",
+    "javascript:alert(1)",
+    "data:text/html;base64,PHA+",
+    "",
+    null,
+    7,
+  ]) {
+    const bad = reportMarkup({ ...session, board: refused });
+    assert.match(
+      bad,
+      /The board could not be read back\./,
+      `${String(refused)} was rendered`,
+    );
+    assert.doesNotMatch(bad, /<img/);
+  }
+
+  // The export says where the board is rather than carrying a hundred
+  // kilobytes of base64 that no markdown reader will render.
+  const markdown = reportMarkdown({ ...session, board: image });
+  assert.match(markdown, /## Your board, step by step/);
+  assert.match(markdown, /The board images are not part of this file\./);
+  assert.match(markdown, /If this interview was recorded/);
+  assert.doesNotMatch(markdown, /## Final code/);
+  assert.doesNotMatch(markdown, /base64/);
+  assert.match(reportMarkdown(session), /## Final code \(python\)/);
+});
+
+test("a whiteboard report walks the board step by step under the names the candidate saw", () => {
+  const image = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
+  const later = "data:image/jpeg;base64,/9j/4BBQSkZJRg==";
+  const report = sanitizeReport({
+    codingScore: 70,
+    communicationScore: 65,
+    decision: "HIRE",
+    summary: "Solid trace.",
+    hintsUsed: 0,
+    codingFeedback: { strengths: ["Drew the map"], improvements: [] },
+    communicationFeedback: { strengths: [], improvements: [] },
+    interviewMode: "whiteboard",
+    frameworkAssessment: {
+      rubricVersion: 1,
+      phases: frameworkPhases.map((phase) => ({
+        phase,
+        score: phase === "Coding" ? 55 : 80,
+        weaknessTags: [],
+      })),
+    },
+    frameworkEvidence: [
+      {
+        atMs: 65_000,
+        phase: "coding",
+        source: "board_snapshot",
+        kind: "observed",
+        confidence: 90,
+        summary: "Walked the second example across the table.",
+        frameworkVersion: 1,
+      },
+      {
+        atMs: 70_000,
+        phase: "optimizations",
+        source: "session_timing",
+        kind: "skipped",
+        confidence: 100,
+        summary: "Moved on before stating the complexity.",
+        frameworkVersion: 1,
+      },
+    ],
+  });
+  const card = reportMarkup({
+    report,
+    problemTitle: "Two Sum",
+    language: "python",
+    code: "",
+    board: later,
+    boardPhases: [
+      ["example", image],
+      ["coding", later],
+      // Not a shape the card may put in a `src`, so the step shows without it.
+      ["algorithm", "https://example.test/board.jpg"],
+    ],
+  });
+
+  // The steps carry the whiteboard's names, and the coding score is for the
+  // board work rather than for code nobody wrote.
+  assert.match(card, /Your board, step by step/);
+  assert.match(card, /<p>Board work<\/p>/);
+  assert.doesNotMatch(card, /<p>Coding<\/p>/);
+  for (const name of [
+    "Repeat",
+    "Example",
+    "Approach",
+    "Trace",
+    "Edge cases",
+    "Complexity",
+  ]) {
+    assert.match(card, new RegExp(`\\d\\. ${name}</strong>`));
+  }
+  assert.match(card, /4\. Trace<\/strong><span>55 \/ 100<\/span>/);
+  assert.match(card, /Walked the second example across the table\./);
+  // A step the interviewer closed as skipped says so, rather than reading as
+  // a step where nothing was recorded at all.
+  assert.match(
+    card,
+    /6\. Complexity<\/strong>.*?Skipped: Moved on before stating the complexity\./,
+  );
+  // Two step images and the final board, and nothing from the refused one.
+  // `?? []`: with no image at all `match` is null, and `.length` of it is a
+  // TypeError that hides which assertion this was.
+  assert.equal((card.match(/<img /g) ?? []).length, 3);
+  assert.doesNotMatch(card, /example\.test/);
+  assert.match(card, /Your final board/);
+  // The coding table moved into the timeline, and the code block is gone.
+  assert.doesNotMatch(card, /<caption>REACTO<\/caption>/);
+  assert.doesNotMatch(card, /Your final code/);
+
+  // Opened from history there are no pictures, and the card says where they
+  // are rather than showing an empty editor.
+  const saved = reportMarkup({
+    report,
+    problemTitle: "Two Sum",
+    language: "not recorded",
+    code: "(final code was not saved)",
+  });
+  assert.match(saved, /Board images are not saved with the report\./);
+  assert.match(saved, /If this interview was recorded/);
+  assert.match(saved, /No checkpoint was recorded for this step\./);
+  assert.doesNotMatch(saved, /<img/);
+
+  const markdown = reportMarkdown({
+    report,
+    problemTitle: "Two Sum",
+    language: "python",
+    code: null,
+    transcript: null,
+    at: "2026-10-01",
+  });
+  assert.match(markdown, /\| Board work \| 70 \/ 100 \|/);
+  assert.match(markdown, /\| Trace \| 55 \/ 100 \|/);
+  assert.match(markdown, /4\. \*\*Trace\*\*\n {3}- Walked the second example/);
+  assert.match(
+    markdown,
+    /6\. \*\*Complexity\*\*\n {3}- Skipped: Moved on before stating/,
+  );
+  assert.doesNotMatch(markdown, /## Final code/);
 });

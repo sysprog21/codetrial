@@ -16,6 +16,13 @@
   box-sizing: border-box;
 }
 
+/* An author rule that sets `display`, like `.board`'s, outranks the browser's
+   own `[hidden]`, and the panels are switched by `hidden` alone: without this
+   an editor interview records an empty whiteboard beside its code. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background: #0d1117;
@@ -47,6 +54,15 @@ body {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 14px;
+}
+
+.board {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1600 / 1000;
+  background: #ffffff;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
 }
 
 .code {

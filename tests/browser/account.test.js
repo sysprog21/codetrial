@@ -123,18 +123,27 @@ test("a completed test run keeps pause and round locks", () => {
   );
 });
 
-test("the lobby offers one interview and carries no mode to the room", () => {
+test("the lobby offers an editor or a whiteboard and carries the choice into the room", () => {
   const lobby = read("index.html");
   const app = read("app.js");
   const page = read("interview.html");
   const interview = read("interview.js");
 
-  // One interview, so the lobby offers no mode to pick and nothing carries one
-  // to the room. Asserted as absence because the confusion this removed was a
-  // choice on screen, and a stray button is exactly how it would come back.
-  assert.doesNotMatch(lobby, /data-mode=/);
-  assert.doesNotMatch(app, /searchParams\.set\("mode"/);
-  assert.doesNotMatch(interview, /params\.get\("mode"\)/);
+  // The mode the lobby offers is which surface the interview is held on, and
+  // that is the only thing it may be. The practice/scored split this replaced
+  // was a choice on screen about how hard the interview counted, and a stray
+  // button is exactly how it would come back, so the values are asserted
+  // rather than the attribute's absence.
+  assert.deepEqual(
+    [...lobby.matchAll(/data-mode="([^"]*)"/g)].map((match) => match[1]),
+    ["coding", "whiteboard"],
+  );
+  // Both ends of the link, since the payload line below holds whatever `mode`
+  // is: dropping either one leaves every whiteboard interview running as a
+  // coding interview with this test still green.
+  assert.match(app, /destination\.searchParams\.set\("mode", mode\)/);
+  assert.match(interview, /modeIsWhiteboard\(params\.get\("mode"\)\)/);
+  assert.doesNotMatch(app + lobby + interview, /"(practice|scored)"/);
   // Pause stayed; the two coaching controls went with the mode that gated them.
   assert.match(page, /id="pause"/);
   assert.doesNotMatch(interview, /retryPractice/);
@@ -184,7 +193,7 @@ test("the lobby offers one interview and carries no mode to the room", () => {
   );
   assertIncludesCompact(
     interview,
-    "JSON.stringify({ problemId: problem.page, durationMin, interviewId, interviewLoop, interviewProfile, ...(interviewGrounding",
+    "JSON.stringify({ problemId: problem.page, durationMin, interviewId, interviewLoop, interviewMode: mode, interviewProfile, ...(interviewGrounding",
   );
   assertIncludesCompact(interview, "interviewLoop, report: state.report");
 });

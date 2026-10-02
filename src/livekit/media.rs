@@ -36,8 +36,6 @@ pub(super) const GEMINI_AUDIO_CHANNELS: i32 = 1;
 /// them; a smaller batch costs messages, not bytes.
 pub(super) const GEMINI_AUDIO_BUFFER_BYTES: usize = 1_280;
 
-pub(super) const GEMINI_VIDEO_MIME_TYPE: &str = "image/jpeg";
-
 /// One frame in five seconds. Each frame stays in the Live context and is
 /// billed again on every later turn, and a presence check needs no more.
 pub(super) const GEMINI_VIDEO_FRAME_INTERVAL: Duration = Duration::from_secs(5);
@@ -130,7 +128,7 @@ pub(super) async fn pump_video(
     match encode_video_frame_jpeg_off_thread(&frame, GEMINI_VIDEO_JPEG_QUALITY).await {
         Ok(bytes) => {
             gemini
-                .send_video_frame(&bytes, GEMINI_VIDEO_MIME_TYPE)
+                .send_video_frame(&bytes, crate::gemini::GEMINI_IMAGE_MIME_TYPE)
                 .await?
         }
         Err(error) => eprintln!("skipping unencodable video frame: {error}"),

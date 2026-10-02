@@ -11,7 +11,7 @@ use std::path::Path;
 /// Bumped whenever a migration is added below. SQLite carries it in the file
 /// header, so an existing database announces which migrations it has already
 /// run instead of quietly keeping an old shape behind `IF NOT EXISTS`.
-pub const ACCOUNT_SCHEMA_VERSION: i64 = 10;
+pub const ACCOUNT_SCHEMA_VERSION: i64 = 11;
 
 /// Migrations in order, each one taking the database from index `n` to `n + 1`.
 /// Append, never edit: an entry that has already run somewhere will not run
@@ -27,6 +27,7 @@ const ACCOUNT_MIGRATIONS: &[&str] = &[
     CREATE_REPLAY_EVENTS,
     CREATE_DELIVERY_QUEUE,
     INDEX_RECORDINGS_BY_ROOM,
+    ALLOW_BOARD_REPLAY_EVENTS,
 ];
 
 pub fn initialize_account_database(path: &Path) -> rusqlite::Result<()> {
@@ -446,6 +447,40 @@ const CREATE_REPLAY_EVENTS: &str = "
             ON replay_events(interview_id, kind, seq);
 
         ALTER TABLE recordings ADD COLUMN quota_exceeded INTEGER NOT NULL DEFAULT 0;
+";
+
+/// The whiteboard's strokes, as a replay kind the table accepts.
+///
+/// SQLite cannot alter a `CHECK`, so the table is rebuilt under the wider list
+/// and its rows copied across. Nothing references `replay_events`, so dropping
+/// the old one breaks no foreign key, and the index goes with it and is made
+/// again on the new one.
+const ALLOW_BOARD_REPLAY_EVENTS: &str = "
+        CREATE TABLE replay_events_next (
+            interview_id TEXT NOT NULL REFERENCES interviews(id) ON DELETE CASCADE,
+            seq INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            at INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            bytes INTEGER NOT NULL,
+            received_at INTEGER NOT NULL,
+            PRIMARY KEY (interview_id, seq),
+            CHECK (seq >= 0),
+            CHECK (at >= 0),
+            CHECK (bytes >= 0),
+            CHECK (kind IN ('transcript', 'editor', 'board', 'tests', 'stage', 'avatar', 'lifecycle'))
+        );
+
+        INSERT INTO replay_events_next
+            (interview_id, seq, kind, at, payload, bytes, received_at)
+        SELECT interview_id, seq, kind, at, payload, bytes, received_at
+        FROM replay_events;
+
+        DROP TABLE replay_events;
+        ALTER TABLE replay_events_next RENAME TO replay_events;
+
+        CREATE INDEX IF NOT EXISTS replay_events_by_interview_and_kind
+            ON replay_events(interview_id, kind, seq);
 ";
 
 /// The work outstanding between a finished recording and a delivered one.

@@ -21,15 +21,16 @@ use ::livekit::prelude::Room;
 
 use crate::agent::{
     CANDIDATE_SPEAKER, INTERVIEWER_SPEAKER, ModelInputKind, RuntimeState, SpeakerTurn, TestRunNote,
-    framework_progress, phase_id, read_editor_text, record_framework_evidence, released_follow_ups,
-    unrecorded_earlier_phases, with_timer, wrap_up,
+    framework_progress, phase_id, read_board_text, read_editor_text, record_framework_evidence,
+    released_follow_ups, unrecorded_earlier_phases, with_timer, wrap_up,
 };
 use crate::gemini::{GeminiEvent, GeminiFunctionCall, GeminiLiveSession};
 use crate::runtime::{
-    TOOL_END_INTERVIEW, TOOL_LOG_HINT, TOOL_READ_EDITOR, TOOL_RECORD_FRAMEWORK_EVIDENCE,
-    TOPIC_CONTROL, TOPIC_TRANSCRIPTION,
+    TOOL_END_INTERVIEW, TOOL_LOG_HINT, TOOL_READ_BOARD, TOOL_READ_EDITOR,
+    TOOL_RECORD_FRAMEWORK_EVIDENCE, TOPIC_CONTROL, TOPIC_TRANSCRIPTION,
 };
 
+use super::board::{self, Board};
 use super::media::{CandidateMedia, OutputAudio};
 use super::turn::{Floor, Interruptible, RuntimeActivity, SpeakerTurns, TurnState, closing_order};
 use super::{
@@ -106,6 +107,10 @@ pub(super) async fn send_model_context(
 pub(super) struct GeminiEventContext<'a> {
     pub(super) output_audio: &'a mut OutputAudio,
     pub(super) gemini: &'a mut GeminiLiveSession,
+    /// The latest board, for the two paths that have to put it back in front
+    /// of the model: `read_board`, and a session that came up remembering
+    /// nothing.
+    pub(super) board: &'a mut Board,
     pub(super) state: &'a mut RuntimeState,
     pub(super) agent_state: &'a mut String,
     pub(super) activity: &'a mut RuntimeActivity,
@@ -536,6 +541,20 @@ async fn on_tool_calls(
     if checklist_changed(&shown_before, context.state) {
         publish_framework_progress(room, context.state).await?;
     }
+
+    // What `read_board` could not put in its own response. After the responses
+    // rather than between them, so a batch that asked twice puts the board up
+    // once, and after the text so the model reads what it is looking at before
+    // it looks.
+    //
+    // Not `?`: an image the socket would not take is worth a line and a turn
+    // that answers from the board it already had, not an interview ended on the
+    // write.
+    if std::mem::take(&mut context.state.board_resend_requested)
+        && let Err(error) = board::resend(context.board, context.gemini).await
+    {
+        eprintln!("board resend failed ({error}); waiting for the close to be reported");
+    }
     Ok(())
 }
 
@@ -917,6 +936,7 @@ pub fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) ->
         && !state.end_requested
         && [
             TOOL_READ_EDITOR,
+            TOOL_READ_BOARD,
             TOOL_LOG_HINT,
             TOOL_RECORD_FRAMEWORK_EVIDENCE,
         ]
@@ -959,6 +979,22 @@ fn tool_response(state: &mut RuntimeState, call: &GeminiFunctionCall) -> serde_j
         return serde_json::json!({ "error": REFUSED_DURING_HOLD });
     }
     match call.name.as_str() {
+        // The image cannot travel in this response, so the tool records the ask
+        // and the room loop answers it with a realtime image; see
+        // `board::resend`. The text is what a picture cannot say: how much is
+        // on the board, and how long ago it was drawn.
+        TOOL_READ_BOARD => {
+            state.board_resend_requested = true;
+            serde_json::json!({
+                "result": read_board_text(
+                    state.board_strokes,
+                    state.board_snapshots,
+                    crate::agent::board_age_seconds(state),
+                    crate::agent::minutes_left(state),
+                )
+            })
+        }
+
         TOOL_READ_EDITOR => {
             state.code_shown = state.code.clone();
             let from_line = call
@@ -993,8 +1029,14 @@ fn tool_response(state: &mut RuntimeState, call: &GeminiFunctionCall) -> serde_j
             // call rather than `read_editor` and then this: the model is told
             // to fit the clue to their code, and asking for the code first was
             // a whole round trip before it could say anything. The fences are
-            // the ones `read_editor` answers with.
-            if requested {
+            // the ones `read_editor` answers with. A whiteboard has no editor
+            // to fence, so the board comes instead, the way `read_board` sends
+            // it: the newest board can still be inside the send interval, and a
+            // clue fitted to the one before it is fitted to work the candidate
+            // has already moved past.
+            if requested && state.interview_mode.is_whiteboard() {
+                state.board_resend_requested = true;
+            } else if requested {
                 state.code_shown = state.code.clone();
                 result.push_str("\n\n");
                 result.push_str(&read_editor_text(
@@ -1422,11 +1464,13 @@ impl TurnState {
         &'a mut self,
         output_audio: &'a mut OutputAudio,
         gemini: &'a mut GeminiLiveSession,
+        board: &'a mut Board,
         media: &'a mut CandidateMedia,
     ) -> GeminiEventContext<'a> {
         GeminiEventContext {
             output_audio,
             gemini,
+            board,
             state: &mut self.state,
             agent_state: &mut self.agent_state,
             activity: &mut self.activity,

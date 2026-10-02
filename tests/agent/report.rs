@@ -281,61 +281,81 @@ fn log_hint_hands_out_one_rung_per_request_and_holds_the_last_for_an_approach() 
 
 #[test]
 fn greeting_introduces_the_scenario_and_never_the_published_problem() {
-    // The template's own rules, once; the loop is for what each problem brings.
-    let opening = greeting();
-    assert!(opening.contains("may ask for a hint if they get stuck"));
-    assert!(opening.contains("without naming any published problem, practice site"));
-    assert!(opening.contains("do not volunteer a constraint, edge case, or hint"));
-
-    // The scenario reaches the interviewer through THE EXERCISE, which the
-    // greeting points it at; repeated in the greeting it was billed twice on
-    // every turn.
-    assert!(opening.contains("introduce THE EXERCISE"));
-    for problem in PROBLEMS {
-        let variant = problem.variant();
-        let exercise = instructions(problem, 45);
+    for mode in [InterviewMode::Coding, InterviewMode::Whiteboard] {
+        // The template's own rules, once per surface; the loop is for what each
+        // problem brings. Both greetings owe the same things, so both are held
+        // to them, matched without case because one says it mid-sentence and
+        // the other opens a sentence with it.
+        let opening = greeting(mode);
+        let lower = opening.to_lowercase();
         assert!(
-            exercise.contains(variant.title),
-            "{} lost its title",
-            problem.id
+            opening.contains("may ask for a hint if they get stuck"),
+            "{mode:?}"
         );
-        for line in variant.brief {
-            assert!(exercise.contains(line), "{} lost its brief", problem.id);
-        }
         assert!(
-            !opening.contains(variant.title),
-            "{} repeats its title",
-            problem.id
+            opening.contains("without naming any published problem, practice site"),
+            "{mode:?}"
+        );
+        assert!(
+            lower.contains("do not volunteer a constraint, edge case, or hint"),
+            "{mode:?}"
         );
 
-        // The summary is the published statement in a sentence, and what the
-        // interviewer is handed to open with is what it paraphrases aloud.
-        assert!(
-            !opening.contains(problem.summary),
-            "{} opens from the published statement",
-            problem.id
-        );
-        assert!(
-            !names_source(problem, &opening),
-            "{} names its source",
-            problem.id
-        );
-        assert!(
-            !opening.contains(problem.optimal),
-            "{} exposed its private optimal approach",
-            problem.id
-        );
-        for secret in variant
-            .hints
-            .iter()
-            .chain(variant.follow_ups)
-            .chain(variant.constraints)
-        {
+        // The scenario reaches the interviewer through THE EXERCISE, which the
+        // greeting points it at; repeated in the greeting it was billed twice
+        // on every turn.
+        assert!(opening.contains("introduce THE EXERCISE"));
+        for problem in PROBLEMS {
+            let variant = problem.variant();
+            // The plan the greeting goes out with, for the surface it opens.
+            let exercise = match mode {
+                InterviewMode::Coding => instructions(problem, 45),
+                InterviewMode::Whiteboard => board_instructions(problem, 45),
+            };
             assert!(
-                !opening.contains(secret),
-                "{} exposed private variant text",
+                exercise.contains(variant.title),
+                "{} lost its title",
                 problem.id
             );
+            for line in variant.brief {
+                assert!(exercise.contains(line), "{} lost its brief", problem.id);
+            }
+            assert!(
+                !opening.contains(variant.title),
+                "{} repeats its title",
+                problem.id
+            );
+
+            // The summary is the published statement in a sentence, and what
+            // the interviewer is handed to open with is what it paraphrases
+            // aloud.
+            assert!(
+                !opening.contains(problem.summary),
+                "{} opens from the published statement",
+                problem.id
+            );
+            assert!(
+                !names_source(problem, &opening),
+                "{} names its source",
+                problem.id
+            );
+            assert!(
+                !opening.contains(problem.optimal),
+                "{} exposed its private optimal approach",
+                problem.id
+            );
+            for secret in variant
+                .hints
+                .iter()
+                .chain(variant.follow_ups)
+                .chain(variant.constraints)
+            {
+                assert!(
+                    !opening.contains(secret),
+                    "{} exposed private variant text",
+                    problem.id
+                );
+            }
         }
     }
 }

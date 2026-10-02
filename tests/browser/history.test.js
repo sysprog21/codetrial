@@ -475,8 +475,12 @@ test("the response window panel says what the number is worth, in words a test c
       "[data-moment]",
       "replay-item",
       "replay-line",
+      "2d",
+      "image/jpeg",
+      "/whiteboard.js",
       "replay-moment",
       "replay-window",
+      "#replay-board",
       "#replay-code",
       "#replay-empty",
       "#replay-list",
@@ -494,6 +498,7 @@ test("the response window panel says what the number is worth, in words a test c
       "stage",
       "transcript",
       "editor",
+      "board",
       "tests",
       "candidate",
       // What the page says about the media, per state.
@@ -519,6 +524,7 @@ test("the response window panel says what the number is worth, in words a test c
       "Deleted",
       "Not available",
       "Code",
+      "Whiteboard",
       // And the window panel, spread from the set pinned above rather than
       // retyped: the narrower assertion catches a word relocated out of
       // `WINDOW_WORDS`, and this one catches a word added anywhere, so they are
@@ -535,6 +541,8 @@ test("the response window panel says what the number is worth, in words a test c
       " ·  · ",
       " : ",
       "Code · ",
+      " checkpoint",
+      " board checkpoint",
       "/ passing",
     ]),
     "a string this page can say that is not in this list is one nobody chose",

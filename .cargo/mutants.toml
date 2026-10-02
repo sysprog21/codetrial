@@ -1,7 +1,7 @@
 # Functions the mutation gate cannot judge, because `cargo test` cannot reach
 # them. Matched against the mutant names that `cargo mutants --list` prints.
 #
-# EXCLUSIONS: 60
+# EXCLUSIONS: 61
 #
 # That number is checked by `scripts/test.sh`, so adding an entry means editing
 # this line too. The point is not the count, it is that the list only ever grows
@@ -163,6 +163,13 @@
 # `is_interview_participant`, `candidate_video_frames_go_to_gemini`,
 # `should_send_video_frame`, `frame_to_rgba` and `encode_rgba_jpeg`.
 #
+# `handle_board_event` is the whiteboard's counterpart to `handle_media_event`:
+# it takes a `ByteStreamOpened` room event, and the reader that event carries
+# sits in a `TakeCell` whose constructor the SDK keeps private, so no test can
+# build the one event it acts on. What it decides is tested where it is
+# decided: `board_stream_refusal`, `strokes_from_attributes`, and `drain`,
+# which reads any stream of chunks rather than the SDK's reader alone.
+#
 # `create_interview`'s two comparisons on the insert rowcount are the one pair
 # here that is reachable, tested, and still unkillable, so they are named
 # individually rather than by function: every other mutant in it is caught.
@@ -322,6 +329,7 @@ exclude_re = [
     "record_live_usage",
     "drain_live_usage",
     "handle_media_event",
+    "handle_board_event",
     "attach_audio",
     "next_audio_frame",
     "next_video_frame",

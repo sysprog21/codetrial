@@ -431,6 +431,65 @@ fn a_requested_hint_returns_the_editor_with_its_clue() {
     );
 }
 
+/// At a whiteboard the hint brings the board rather than an editor: there is
+/// no editor to fence, and the newest board may still be inside the send
+/// interval, so it is sent again the way `read_board` sends it. A volunteered
+/// hint was not asked for against the current drawing and sends nothing.
+#[test]
+fn a_requested_hint_at_a_whiteboard_brings_the_board() {
+    let mut state = RuntimeState {
+        interview_mode: crate::agent::InterviewMode::Whiteboard,
+        hint_ladder: &["first rung", "second rung"],
+        ..RuntimeState::default()
+    };
+    let asked = execute_tool_call(
+        &mut state,
+        &GeminiFunctionCall {
+            id: "1".to_string(),
+            name: TOOL_LOG_HINT.to_string(),
+            args: serde_json::json!({ "requested": true }),
+        },
+    );
+    let asked = asked["result"].as_str().unwrap();
+    assert!(asked.contains("first rung"), "{asked}");
+    assert!(!asked.contains("UNTRUSTED EDITOR"), "{asked}");
+    assert!(state.board_resend_requested);
+
+    state.board_resend_requested = false;
+    execute_tool_call(
+        &mut state,
+        &GeminiFunctionCall {
+            id: "2".to_string(),
+            name: TOOL_LOG_HINT.to_string(),
+            args: serde_json::json!({ "requested": false }),
+        },
+    );
+    assert!(!state.board_resend_requested);
+}
+
+/// `read_board` answers with what a picture cannot say and asks the room loop
+/// to send the picture, since a tool response cannot carry one.
+#[test]
+fn reading_the_board_asks_for_it_to_be_sent_again() {
+    let mut state = RuntimeState {
+        interview_mode: crate::agent::InterviewMode::Whiteboard,
+        board_snapshots: 3,
+        board_strokes: 12,
+        ..RuntimeState::default()
+    };
+    let answer = execute_tool_call(
+        &mut state,
+        &GeminiFunctionCall {
+            id: "1".to_string(),
+            name: TOOL_READ_BOARD.to_string(),
+            args: serde_json::json!({}),
+        },
+    );
+    let answer = answer["result"].as_str().unwrap();
+    assert!(answer.contains("12 strokes"), "{answer}");
+    assert!(state.board_resend_requested);
+}
+
 fn position_of(text: &str, needle: &str) -> usize {
     text.find(needle)
         .unwrap_or_else(|| panic!("{needle:?} is not in:\n{text}"))
@@ -1090,6 +1149,35 @@ fn editor_tool_keeps_recent_candidate_context_without_replaying_it() {
             .as_str()
             .unwrap()
             .contains("Latest recorded candidate utterance")
+    );
+}
+
+/// `read_board` is the whiteboard's `read_editor`, asked mid-reply for the same
+/// reason, so a compression window can drop the pending utterance under it
+/// just the same.
+#[test]
+fn board_tool_keeps_recent_candidate_context_under_compression() {
+    let mut state = RuntimeState {
+        interview_mode: crate::agent::InterviewMode::Whiteboard,
+        board_snapshots: 2,
+        board_strokes: 9,
+        context_compression: compressing(),
+        transcript: vec!["Candidate: Is the second pointer on my board right?".into()],
+        ..RuntimeState::default()
+    };
+    let result = execute_tool_call(
+        &mut state,
+        &GeminiFunctionCall {
+            id: "board-continuity".into(),
+            name: TOOL_READ_BOARD.into(),
+            args: serde_json::json!({}),
+        },
+    );
+    let text = result["turn_context"].as_str().unwrap();
+    assert!(text.contains("Platform tool continuity"), "{text}");
+    assert!(
+        text.contains("Is the second pointer on my board right?"),
+        "{text}"
     );
 }
 

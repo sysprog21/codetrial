@@ -7,10 +7,53 @@ import {
   FRAMEWORKS,
   escapeHtml,
   formatTime,
+  frameworkChecklist,
   loopLabel,
+  modeIsWhiteboard,
   modeLabel,
   orPlaceholder,
+  surfaceLabel,
 } from "./lib.js";
+
+/// The six coding steps as a whiteboard candidate was shown them, in REACTO
+/// order, so index `i` here is index `i` of `FRAMEWORKS.coding.steps`.
+const BOARD_STEPS = frameworkChecklist("coding", [], "whiteboard").steps;
+
+/// Whether a report is of a whiteboard interview.
+///
+/// The report's own field where it recorded one. A board handed in by the page
+/// says so too, because the offline summary is built on that page before any
+/// report exists to carry a mode.
+function heldAtBoard(report, board) {
+  return modeIsWhiteboard(report.interviewMode) || board !== undefined;
+}
+
+/// What a phase is called on this report.
+///
+/// The report keeps the REACTO vocabulary: the grader scores and plans against
+/// it, and evidence rows carry its ids. At a whiteboard the candidate was shown
+/// other names for four of the six steps, and a report calling step four
+/// Coding names a step they never took. The report spells a phase as an id in
+/// evidence and as a label in scores and plans, so either maps.
+function phaseName(phase, atBoard) {
+  if (!atBoard) return phase;
+  const index = FRAMEWORKS.coding.steps.findIndex(
+    (step) => step.id === String(phase).toLowerCase(),
+  );
+  return index < 0 ? phase : BOARD_STEPS[index].label;
+}
+
+/// A board image this card may put in a `src`.
+///
+/// The images come from the page's own canvas rather than from anything a
+/// server sent, and they are checked all the same: this shape is the only
+/// thing that may go in one.
+function boardImage(value) {
+  return (
+    typeof value === "string" &&
+    /^data:image\/(?:jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(value)
+  );
+}
 
 export function runnerStatusMarkup(status) {
   const text = {
@@ -209,8 +252,14 @@ export function reportMarkup({
   problemTitle,
   language,
   code,
+  board,
+  boardPhases,
   saveResult,
 }) {
+  const atBoard = heldAtBoard(report, board);
+  // At a board the coding score is for the drawing, the trace and the cases
+  // the candidate named against it, so it is not called Coding there.
+  const workTitle = atBoard ? "Board work" : "Coding";
   const hire = report.decision === "HIRE";
   const heading = report.incomplete
     ? "No evaluation"
@@ -227,20 +276,20 @@ export function reportMarkup({
     ? ""
     : `
       <div class="score-grid">
-        <div><p>Coding</p><strong>${escapeHtml(report.codingScore)}<span> / 100</span></strong></div>
+        <div><p>${workTitle}</p><strong>${escapeHtml(report.codingScore)}<span> / 100</span></strong></div>
         <div><p>Interviewer communication</p><strong>${escapeHtml(report.communicationScore)}<span> / 100</span></strong></div>
       </div>
       <p><strong>${escapeHtml(report.hintsUsed)}</strong> hints used during the session</p>`;
   const feedback = report.incomplete
     ? ""
-    : `${feedbackMarkup("Coding", report.codingFeedback)}${feedbackMarkup("Communication", report.communicationFeedback)}`;
+    : `${feedbackMarkup(workTitle, report.codingFeedback)}${feedbackMarkup("Communication", report.communicationFeedback)}`;
   const practiceNext =
     report.incomplete || !report.improvementPlan?.length
       ? ""
       : `<section><h3>Practice next</h3><ol>${report.improvementPlan
           .map(
             (item) => `
-      <li><strong>${escapeHtml(item.phase)} · ${escapeHtml(item.durationMin)} min · ${escapeHtml(item.impact)} impact</strong>
+      <li><strong>${escapeHtml(phaseName(item.phase, atBoard))} · ${escapeHtml(item.durationMin)} min · ${escapeHtml(item.impact)} impact</strong>
         <p>${escapeHtml(item.drill)}</p>
         <p><strong>Success:</strong> ${escapeHtml(item.successCriterion)}</p>
         <ul>${item.selfReview.map((check) => `<li>${escapeHtml(check)}</li>`).join("")}</ul>
@@ -257,7 +306,10 @@ export function reportMarkup({
       ${report.debrief.followUps?.length ? `<h3>Follow-ups this problem offers</h3><ul>${report.debrief.followUps.map((followUp) => `<li>${escapeHtml(followUp)}</li>`).join("")}</ul>` : ""}
     </details>`
     : "";
-  const frameworkTimeline = frameworkEvidenceMarkup(report.frameworkEvidence);
+  const frameworkTimeline = frameworkEvidenceMarkup(
+    report.frameworkEvidence,
+    atBoard,
+  );
   const phaseTable = (group) => {
     const rows = group.rows.map(
       (row) =>
@@ -265,13 +317,20 @@ export function reportMarkup({
     );
     return `<table class="phase-scores"><caption>${group.name}</caption><tbody>${rows.join("")}</tbody></table>`;
   };
-  const phaseGroups = phaseScoreGroups(report);
+  // At a board the coding scores sit beside the board they were earned on, in
+  // the timeline below the summary, so only a behavioral table is left here.
+  const phaseGroups = phaseScoreGroups(report, atBoard).filter(
+    (group) => !atBoard || group.kind !== "coding",
+  );
   const phaseScores = !phaseGroups.length
     ? ""
     : `<section><h3>Phase scores</h3>${phaseGroups.map(phaseTable).join("")}<p class="muted small">${PHASE_SCORE_NOTE}</p></section>`;
   // Only where the report recorded one, like the mode beside it in the header.
   const loop = report.interviewLoop
     ? ` · ${loopLabel(report.interviewLoop)}`
+    : "";
+  const surface = report.interviewMode
+    ? ` · ${surfaceLabel(report.interviewMode)}`
     : "";
   const rounds = report.rounds?.length
     ? `<section><h3>Interview rounds</h3><ul>${report.rounds.map((round) => `<li>${escapeHtml(round.kind)} · ${escapeHtml(round.budgetMin)} min · ${escapeHtml(round.status)}</li>`).join("")}</ul></section>`
@@ -287,10 +346,11 @@ export function reportMarkup({
   return `
     <div class="report-card">
       <div class="report-header">
-        <div><p>${report.mode ? `${modeLabel(report.mode)} ` : ""}interview report${loop} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p>${practiceLevel ? `<p class="muted small">${practiceLevel}</p>` : ""}<h2>${heading}</h2></div>
+        <div><p>${report.mode ? `${modeLabel(report.mode)} ` : ""}interview report${loop}${surface} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p>${practiceLevel ? `<p class="muted small">${practiceLevel}</p>` : ""}<h2>${heading}</h2></div>
         ${badge}
       </div>${scores}
       <section><h3>${report.incomplete ? "What happened" : "Committee summary"}</h3><p>${escapeHtml(report.summary)}</p></section>
+      ${atBoard ? boardTimelineMarkup(report, board, boardPhases) : ""}
       ${feedback}
       ${practiceNext}
       ${debrief}
@@ -298,11 +358,91 @@ export function reportMarkup({
       ${phaseScores}
       ${frameworkTimeline}
       ${integrityEvidenceMarkup(report)}
-      <details><summary>Your final code (${escapeHtml(language)})</summary><pre>${escapeHtml(code.trimEnd() || "(editor was empty)")}</pre></details>
+      ${atBoard ? "" : finalCodeMarkup(language, code)}
       ${saveStatus ? `<p id="report-save-status" class="${saveStatus.className}" role="status">${saveStatus.message}</p>` : ""}
       <div class="report-actions"><button id="download-report" type="button">Download report (.md)</button><button id="done" type="button"${saveResult === null ? " disabled" : ""}>Done - back to lobby</button></div>
     </div>
   `;
+}
+
+/// The candidate's code, at the foot of an editor interview's card.
+function finalCodeMarkup(language, code) {
+  return `<details><summary>Your final code (${escapeHtml(language)})</summary><pre>${escapeHtml(code.trimEnd() || "(editor was empty)")}</pre></details>`;
+}
+
+/// A whiteboard interview's work, step by step: the board when each step was
+/// completed, what that step scored, and what the interviewer wrote down
+/// about it, then the board as the candidate left it.
+///
+/// Placed under the summary rather than at the foot of the card, where an
+/// editor interview keeps its code: the board is the work, and the scores
+/// mean little apart from it. A step with nothing to show says so instead of
+/// disappearing, because a gap in a six-step list is something to notice.
+///
+/// The step images are the page's own copies of the checkpoints it sent, and
+/// nothing saved carries them, so a report opened from history or replay has
+/// the scores and the evidence and says the pictures are not there.
+///
+/// A step the interviewer recorded as skipped says so. Left out with the
+/// observations, it read as "no checkpoint was recorded", which is a different
+/// thing: nothing happened, rather than the step being closed on purpose.
+function boardTimelineMarkup(report, board, boardPhases) {
+  const coding = phaseScoreGroups(report, true).find(
+    (group) => group.kind === "coding",
+  );
+  const images = new Map(
+    (Array.isArray(boardPhases) ? boardPhases : []).filter(
+      (entry) => Array.isArray(entry) && boardImage(entry[1]),
+    ),
+  );
+  const steps = BOARD_STEPS.map((step, index) => {
+    const score = coding?.rows[index].score ?? null;
+    const image = images.get(step.id);
+    const notes = (report.frameworkEvidence || [])
+      .filter((item) => item.phase === step.id)
+      .map((item) =>
+        item.kind === "skipped"
+          ? `<p class="muted small">Skipped: ${escapeHtml(item.summary)}</p>`
+          : `<p>${escapeHtml(item.summary)}</p>`,
+      );
+    const body = `${image ? `<img class="report-board" src="${image}" alt="The board when ${step.label} was completed">` : ""}${notes.join("")}`;
+    return `<li class="board-step${body ? "" : " missing"}"><p class="board-step-head"><strong>${index + 1}. ${step.label}</strong>${score === null ? "" : `<span>${phaseScoreText(score, escapeHtml)}</span>`}</p>${body || `<p class="muted small">No checkpoint was recorded for this step.</p>`}</li>`;
+  });
+  const final =
+    board === undefined
+      ? `<p class="muted small">Board images are not saved with the report. If this interview was recorded, its replay redraws the board stroke by stroke.</p>`
+      : boardImage(board)
+        ? `<figure class="board-final"><figcaption>Your final board</figcaption><img class="report-board" src="${board}" alt="The whiteboard as you left it"></figure>`
+        : `<p>Your final board</p><p class="muted small">The board could not be read back.</p>`;
+  return `<section class="board-timeline"><h3>Your board, step by step</h3><ol>${steps.join("")}</ol>${final}${coding ? `<p class="muted small">${PHASE_SCORE_NOTE}</p>` : ""}</section>`;
+}
+
+/// The board timeline, in the exported document.
+///
+/// The steps and what was said about each, without the pictures. A markdown
+/// file with a hundred kilobytes of base64 per step is a file nothing renders
+/// and no reader can scroll past. It outlives the card that showed them and
+/// a recording may not exist, so it says the pictures are not in it rather
+/// than where they are.
+function boardStepsMarkdown(report, mdText) {
+  const notes = (id) =>
+    (report.frameworkEvidence || [])
+      .filter((item) => item.phase === id)
+      .map(
+        (item) =>
+          `   - ${item.kind === "skipped" ? "Skipped: " : ""}${mdText(item.summary)}`,
+      );
+  return [
+    "## Your board, step by step",
+    "",
+    ...BOARD_STEPS.flatMap((step, index) => [
+      `${index + 1}. **${step.label}**`,
+      ...notes(step.id),
+    ]),
+    "",
+    "The board images are not part of this file. If this interview was recorded, its replay redraws the board stroke by stroke.",
+    "",
+  ];
 }
 
 /// The downloadable report. Pure so the export can be tested without a DOM;
@@ -312,9 +452,12 @@ export function reportMarkdown({
   problemTitle,
   language,
   code,
+  board,
   transcript,
   at,
 }) {
+  const atBoard = heldAtBoard(report, board);
+  const workTitle = atBoard ? "Board work" : "Coding";
   // One rule for every untrusted string in this document, where there used to
   // be three. Evidence rows ran through escapeHtml, feedback bullets and
   // transcript turns ran through nothing. escapeHtml was the wrong escaper for
@@ -380,7 +523,7 @@ export function reportMarkdown({
           "## Practice next",
           "",
           ...report.improvementPlan.flatMap((item, index) => [
-            `${index + 1}. **${mdText(item.phase)} · ${mdText(item.durationMin)} min · ${mdText(item.impact)} impact**`,
+            `${index + 1}. **${mdText(phaseName(item.phase, atBoard))} · ${mdText(item.durationMin)} min · ${mdText(item.impact)} impact**`,
             `   - Drill: ${mdText(item.drill)}`,
             `   - Success: ${mdText(item.successCriterion)}`,
             ...item.selfReview.map((check) => `   - Check: ${mdText(check)}`),
@@ -429,7 +572,7 @@ export function reportMarkdown({
         "",
       ]
     : [];
-  const phaseGroups = phaseScoreGroups(report);
+  const phaseGroups = phaseScoreGroups(report, atBoard);
   const phaseScores = !phaseGroups.length
     ? []
     : [
@@ -452,7 +595,7 @@ export function reportMarkdown({
         "",
         ...report.frameworkEvidence.map(
           (item) =>
-            `- ${frameworkTime(item.atMs)} · **${mdText(item.phase)}** · ${mdText(item.kind)} · ${mdText(item.source)} · ${mdText(item.confidence)}% · v${mdText(item.frameworkVersion)} — ${mdText(item.summary)}`,
+            `- ${frameworkTime(item.atMs)} · **${mdText(phaseName(item.phase, atBoard))}** · ${mdText(item.kind)} · ${mdText(item.source)} · ${mdText(item.confidence)}% · v${mdText(item.frameworkVersion)} — ${mdText(item.summary)}`,
         ),
         "",
       ]
@@ -509,14 +652,14 @@ export function reportMarkdown({
         "",
         "| Metric | Score |",
         "|---|---|",
-        `| Coding | ${mdText(report.codingScore)} / 100 |`,
+        `| ${workTitle} | ${mdText(report.codingScore)} / 100 |`,
         `| Communication | ${mdText(report.communicationScore)} / 100 |`,
         `| Hints used | ${mdText(report.hintsUsed)} |`,
         "",
         "## Committee summary",
         mdText(report.summary) || "(none)",
         "",
-        section("Coding feedback", report.codingFeedback),
+        section(`${workTitle} feedback`, report.codingFeedback),
         section(
           "Communication feedback",
           report.communicationFeedback,
@@ -529,6 +672,9 @@ export function reportMarkdown({
     ...(report.mode ? [`Mode: ${modeLabel(report.mode)}`] : []),
     ...(report.interviewLoop
       ? [`Loop: ${loopLabel(report.interviewLoop)}`]
+      : []),
+    ...(report.interviewMode
+      ? [`Held at: ${surfaceLabel(report.interviewMode)}`]
       : []),
     report.interviewContract
       ? `Contract: bundle ${report.interviewContract.bundleVersion}; live prompt ${report.interviewContract.livePromptVersion}; report prompt ${report.interviewContract.reportPromptVersion}; rubric ${report.interviewContract.rubricVersion}; report schema ${report.interviewContract.reportSchemaVersion}`
@@ -559,9 +705,13 @@ export function reportMarkdown({
     "",
     chainNote,
     "",
-    `## Final code (${mdText(language ?? "not recorded")})`,
-    ...(code == null ? [body] : [fence + info, body, fence]),
-    "",
+    ...(atBoard
+      ? boardStepsMarkdown(report, mdText)
+      : [
+          `## Final code (${mdText(language ?? "not recorded")})`,
+          ...(code == null ? [body] : [fence + info, body, fence]),
+          "",
+        ]),
     "## Conversation transcript",
     conversation || "(no speech captured)",
     "",
@@ -583,10 +733,11 @@ const phaseScoreText = (score, escape) =>
 /// null in a session that asked no behavioral question. A round that did not
 /// run is one `reportRounds` calls skipped or not configured; naming those two
 /// rather than the ones that ran keeps a status added there from hiding scores.
-/// Labels come from FRAMEWORKS, not the report, so only the score is untrusted.
+/// Labels come from FRAMEWORKS, not the report, so only the score is untrusted;
+/// at a board they are the names the candidate was shown for the same steps.
 /// Empty for an incomplete report, and when no framework qualifies, so a caller
 /// emits no heading over nothing.
-function phaseScoreGroups(report) {
+function phaseScoreGroups(report, atBoard = false) {
   if (report.incomplete || !report.frameworkAssessment) return [];
   const scores = new Map(
     report.frameworkAssessment.phases.map((item) => [item.phase, item.score]),
@@ -597,27 +748,35 @@ function phaseScoreGroups(report) {
       .map((round) => round.kind),
   );
   return Object.entries(FRAMEWORKS)
-    .map(([kind, framework]) => ({
-      ran: ran.has(kind),
-      name: framework.name,
-      rows: framework.steps.map((step) => ({
-        label: step.label,
-        score: scores.get(step.label) ?? null,
-      })),
-    }))
+    .map(([kind, framework]) => {
+      const shown = frameworkChecklist(
+        kind,
+        [],
+        atBoard ? "whiteboard" : "coding",
+      );
+      return {
+        kind,
+        ran: ran.has(kind),
+        name: shown.name,
+        rows: framework.steps.map((step, index) => ({
+          label: shown.steps[index].label,
+          score: scores.get(step.label) ?? null,
+        })),
+      };
+    })
     .filter(
       (group) => group.ran || group.rows.some((row) => row.score !== null),
     );
 }
 
-function frameworkEvidenceMarkup(items) {
+function frameworkEvidenceMarkup(items, atBoard) {
   if (!items?.length) return "";
   return `<section aria-labelledby="framework-evidence-title">
     <h3 id="framework-evidence-title">Framework evidence</h3>
     <ol class="framework-timeline">${items
       .map(
         (item) => `<li>
-      <strong>${escapeHtml(item.phase)}</strong>
+      <strong>${escapeHtml(phaseName(item.phase, atBoard))}</strong>
       <span>${frameworkTime(item.atMs)} · ${escapeHtml(item.kind)} · ${escapeHtml(item.source)} · ${escapeHtml(item.confidence)}% confidence · v${escapeHtml(item.frameworkVersion)}</span>
       <p>${escapeHtml(item.summary)}</p>
     </li>`,

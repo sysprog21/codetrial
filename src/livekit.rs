@@ -92,6 +92,7 @@ use crate::gemini::{
 use crate::runtime::{AGENT_NAME, RuntimeBootstrap, agent_identity};
 use crate::token::{LivekitTokenInput, livekit_token};
 
+mod board;
 mod media;
 mod report;
 mod rooms;
@@ -108,6 +109,7 @@ use session::{
     send_wrap_up_and_wait, set_agent_state,
 };
 
+use board::{Board, MAX_BOARD_BYTES, handle_board_event};
 use report::{freeze_report_prompt, generate_report_bounded, publish_report};
 use rooms::{evict_duplicate_agent, isolate_local_agent};
 
@@ -692,6 +694,16 @@ async fn replace_gemini_session(
         owed_prompt.as_deref(),
     )
     .await;
+
+    // A cold session remembers none of the drawing, and the briefing's text
+    // cannot carry it. Sent whether or not the briefing itself was held for a
+    // pause, so the session that eventually speaks has seen the board.
+    if !resumed
+        && context.state.interview_mode.is_whiteboard()
+        && let Err(error) = board::resend(context.board, context.gemini).await
+    {
+        eprintln!("cold-restart board failed ({error}); waiting for the close to be reported");
+    }
     if spoke {
         eprintln!(
             "{}",
@@ -1121,6 +1133,7 @@ fn take_interim_review_window(state: &mut RuntimeState, boot: &RuntimeBootstrap<
     };
     let prompt = interim_review_prompt(&InterimReviewInput {
         problem: boot.problem,
+        interview_mode: state.interview_mode,
         transcript_window: &window,
         code: &code,
         language: &state.language,
@@ -1403,6 +1416,16 @@ async fn on_watch_tick(
         }
         leave_room(room).await;
         return Ok(ControlFlow::Break(()));
+    }
+
+    // A board the send interval held back, or one that arrived during a pause,
+    // goes out here once nothing stops it. Without this it waited for the next
+    // board to carry it, and the candidate who has stopped drawing to explain
+    // is exactly the one who sends no next board.
+    if !context.state.paused
+        && let Err(error) = board::send_if_due(context.board, context.gemini, tick_at).await
+    {
+        eprintln!("Gemini board write failed ({error}); waiting for the close to be reported");
     }
 
     // A prompt Gemini never answered holds the floor, and a held floor keeps
@@ -2034,6 +2057,11 @@ pub async fn run_room(
         presence: CandidatePresence::default(),
     };
 
+    // Held by the loop rather than by `media`, which is the candidate's inbound
+    // tracks: a board is not a track, it arrives on the data channel, and the
+    // one thing it shares with the camera is where it ends up.
+    let mut board = Board::new();
+
     let mut watch = tokio::time::interval(Duration::from_secs_f64(WATCH_TICK_S));
 
     // The interview's own deadline, held by the process that owns the room
@@ -2054,13 +2082,21 @@ pub async fn run_room(
         loop {
             let step = tokio::select! {
                 () = &mut hard_deadline, if !turn.state.ended => {
-                    let mut context =
-                        turn.context(&mut output_audio, &mut gemini, &mut media);
+                    let mut context = turn.context(
+                        &mut output_audio,
+                        &mut gemini,
+                        &mut board,
+                        &mut media,
+                    );
                     on_hard_deadline(&room, &mut context, &mut loops, interview).await?
                 }
                 _ = watch.tick(), if !turn.state.ended => {
-                    let mut context =
-                        turn.context(&mut output_audio, &mut gemini, &mut media);
+                    let mut context = turn.context(
+                        &mut output_audio,
+                        &mut gemini,
+                        &mut board,
+                        &mut media,
+                    );
                     on_watch_tick(&room, &mut context, &mut loops, interview).await?
                 }
                 event = events.recv() => {
@@ -2073,50 +2109,72 @@ pub async fn run_room(
                         return Ok(());
                     };
 
-                    // Media first, because most events are, and because
-                    // attaching a track needs the stream and the socket apart
-                    // -- which is the one thing a context, which borrows both
-                    // together, cannot give.
-                    match handle_media_event(
-                        &mut media,
-                        &mut gemini,
+                    // The board first, because taking the reader off the event
+                    // is all this does with it: the stream is drained on its
+                    // own task, and the loop hears about the board when there
+                    // is a whole one.
+                    if handle_board_event(
+                        turn.state.interview_mode,
                         &candidate_identity,
-                        config.gemini_candidate_video_enabled,
+                        &board,
                         &event,
-                    )
-                    .await
-                    {
-                        Ok(true) => ControlFlow::Continue(()),
-                        Ok(false) => {
-                            let mut context = turn.context(
-                                &mut output_audio,
-                                &mut gemini,
-                                &mut media,
-                            );
-                            handle_room_event(
-                                &room,
-                                &mut context,
-                                &mut loops.presence,
-                                interview,
-                                &ids,
-                                event,
-                            )
-                            .await?
-                        }
-                        Err(error) => {
-                            eprintln!("Gemini media attach failed ({error}); waiting for the close to be reported");
-                            ControlFlow::Continue(())
+                    ) {
+                        ControlFlow::Continue(())
+                    } else {
+                        // Media next, because most events are, and because
+                        // attaching a track needs the stream and the socket
+                        // apart -- which is the one thing a context, which
+                        // borrows both together, cannot give.
+                        match handle_media_event(
+                            &mut media,
+                            &mut gemini,
+                            &candidate_identity,
+                            config.gemini_candidate_video_enabled,
+                            &event,
+                        )
+                        .await
+                        {
+                            Ok(true) => ControlFlow::Continue(()),
+                            Ok(false) => {
+                                let mut context = turn.context(
+                                    &mut output_audio,
+                                    &mut gemini,
+                                    &mut board,
+                                    &mut media,
+                                );
+                                handle_room_event(
+                                    &room,
+                                    &mut context,
+                                    &mut loops.presence,
+                                    interview,
+                                    &ids,
+                                    event,
+                                )
+                                .await?
+                            }
+                            Err(error) => {
+                                eprintln!("Gemini media attach failed ({error}); waiting for the close to be reported");
+                                ControlFlow::Continue(())
+                            }
                         }
                     }
                 }
                 event = gemini.next_event() => {
-                    let mut context =
-                        turn.context(&mut output_audio, &mut gemini, &mut media);
+                    let mut context = turn.context(
+                        &mut output_audio,
+                        &mut gemini,
+                        &mut board,
+                        &mut media,
+                    );
                     on_gemini_event(&room, &mut context, event, &mut loops, interview).await?
                 }
                 _ = wait_for_playout(turn.activity.floor, output_audio.playout_deadline) => {
-                    let mut context =
-                        turn.context(&mut output_audio, &mut gemini, &mut media);
+                    let mut context = turn.context(
+                        &mut output_audio,
+                        &mut gemini,
+                        &mut board,
+                        &mut media,
+                    );
                     on_playout_settled(&room, &mut context, &mut loops, interview).await?
                 }
                 frame = next_audio_frame(&mut media.audio), if media.audio.is_some() => {
@@ -2150,6 +2208,28 @@ pub async fn run_room(
                     release_if_ended(&mut media.audio, ended);
                     ControlFlow::Continue(())
                 }
+                Some(snapshot) = board.rx.recv(), if !turn.state.ended => {
+                    // Kept even while paused. The board is the drawing as it
+                    // stands, and one exported just before the pause is work
+                    // the candidate did; dropping it left the interviewer on
+                    // the board before it until another edit, which a paused
+                    // candidate cannot make. It waits to be shown until the
+                    // interview resumes, through the watch tick.
+                    board::record(&mut board, &mut turn.state, snapshot);
+                    if !turn.state.paused {
+                        // The candidate is working, even while silent. Without
+                        // this the silence nudge counts a candidate who is
+                        // drawing a diagram as idle and interrupts them
+                        // mid-stroke, which is what `last_code_change` stops a
+                        // typing candidate being asked.
+                        let now = Instant::now();
+                        turn.activity.last_code_change = now;
+                        if let Err(error) = board::send_if_due(&mut board, &mut gemini, now).await {
+                            eprintln!("Gemini board write failed ({error}); waiting for the close to be reported");
+                        }
+                    }
+                    ControlFlow::Continue(())
+                }
                 frame = next_video_frame(&mut media.video), if media.video.is_some() => {
                     if turn.state.paused {
                         release_if_ended(&mut media.video, frame.is_none());
@@ -2177,7 +2257,7 @@ pub async fn run_room(
     }
     session::drain_live_usage(
         &room,
-        &mut turn.context(&mut output_audio, &mut gemini, &mut media),
+        &mut turn.context(&mut output_audio, &mut gemini, &mut board, &mut media),
     );
     eprintln!("{}", turn.state.evidence_ledger.metrics.cost_line());
     let outcome = match &result {
@@ -2333,7 +2413,16 @@ async fn join_room(
         now_seconds,
         agent: true,
     })?;
-    let (room, events) = Room::connect(&config.livekit_url, &token, RoomOptions::default()).await?;
+
+    // The board is the only stream this agent is sent, so the room's ceiling on
+    // one is the board's. Left at the SDK default it is five gigabytes, which
+    // is a header away from a client that is not the browser buffering this
+    // process to death before a single chunk is judged.
+    let mut options = RoomOptions::default();
+    options.data_stream = options
+        .data_stream
+        .with_max_payload_byte_length(MAX_BOARD_BYTES);
+    let (room, events) = Room::connect(&config.livekit_url, &token, options).await?;
     eprintln!(
         "joined room={} identity={}",
         room_name,
@@ -2482,6 +2571,7 @@ fn candidate_bootstrap<'a>(
             grounding: candidate.grounding,
             interview_loop: candidate.interview_loop,
             examples_hidden: candidate.examples_hidden,
+            interview_mode: candidate.interview_mode,
         },
     )
 }
@@ -2519,6 +2609,7 @@ fn initial_runtime_state(boot: &RuntimeBootstrap<'_>, started_at: Instant) -> Ru
     let mut state = RuntimeState {
         started_at,
         interview_loop: boot.interview_loop,
+        interview_mode: boot.interview_mode,
         coding_minutes: boot.coding_minutes,
         behavioral_minutes: boot.behavioral_minutes,
         context_compression: boot.context_compression,
@@ -2927,10 +3018,23 @@ async fn handle_data_packet(
     if let Err(error) = close_turns(room, context).await {
         eprintln!("closing the last turns failed ({error}); writing the report anyway");
     }
+
+    // The board the browser sent just before ending can still be on its way;
+    // see `BOARD_FINAL_WAIT`. Copied out rather than borrowed: the farewell
+    // below holds the context, board and all, for as long as the report call
+    // runs beside it. Phase checkpoints preserve work the candidate cleared
+    // before the final board.
+    context.board.settle_for_report(context.state).await;
+    let boards = context.board.report_boards();
+    let report_boards = boards
+        .iter()
+        .map(|board| (board.label, board.bytes.as_slice()))
+        .collect::<Vec<_>>();
     let prompt = freeze_report_prompt(
         interview.boot,
         context.state,
         interview.started_at.elapsed().as_secs_f64() / 60.0,
+        !report_boards.is_empty(),
     );
     let api_key = &**interview.keys;
     let farewell = async {
@@ -2953,7 +3057,7 @@ async fn handle_data_packet(
         }
     };
     let (generated, ()) = tokio::join!(
-        generate_report_bounded(interview.boot, &prompt, api_key),
+        generate_report_bounded(interview.boot, &prompt, &report_boards, api_key),
         farewell
     );
     publish_report(

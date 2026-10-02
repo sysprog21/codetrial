@@ -219,7 +219,7 @@ fn static_interview_script_leaves_candidate_identity_to_the_server() {
     let source = fs::read_to_string("web/interview.js").unwrap();
 
     assert!(compact(&source).contains(
-        "JSON.stringify({problemId:problem.page,durationMin,interviewId,interviewLoop,interviewProfile,...(interviewGrounding?{interviewGrounding}:{}),...(nodes.hideExamples.checked?{hideExamples:true}:{})})"
+        "JSON.stringify({problemId:problem.page,durationMin,interviewId,interviewLoop,interviewMode:mode,interviewProfile,...(interviewGrounding?{interviewGrounding}:{}),...(nodes.hideExamples.checked?{hideExamples:true}:{})})"
     ));
     assert!(!source.contains("candidateIdentity"));
 }

@@ -89,6 +89,7 @@ fn the_interview_begins_from_the_plan_it_was_booked_with() {
         30,
         crate::runtime::RuntimeOptions {
             interview_loop: crate::agent::InterviewLoop::CodingOnly,
+            interview_mode: crate::agent::InterviewMode::Whiteboard,
             ..crate::runtime::RuntimeOptions::default()
         },
     );
@@ -97,6 +98,10 @@ fn the_interview_begins_from_the_plan_it_was_booked_with() {
         (
             "interview_loop",
             boot.interview_loop == untouched.interview_loop,
+        ),
+        (
+            "interview_mode",
+            boot.interview_mode == untouched.interview_mode,
         ),
         (
             "coding_minutes",
@@ -121,6 +126,7 @@ fn the_interview_begins_from_the_plan_it_was_booked_with() {
         "the clock is the room's, not now"
     );
     assert_eq!(state.interview_loop, boot.interview_loop);
+    assert_eq!(state.interview_mode, boot.interview_mode);
     assert_eq!(state.coding_minutes, boot.coding_minutes);
     assert_eq!(state.behavioral_minutes, boot.behavioral_minutes);
     assert_eq!(state.hint_ladder, boot.problem.variant().hints);
@@ -3270,7 +3276,8 @@ async fn settle(
     result: &crate::agent::DataEventResult,
     reply: &mut Option<String>,
 ) -> HoldEffects {
-    let mut context = turn.context(output_audio, gemini, media);
+    let mut board = board::Board::new();
+    let mut context = turn.context(output_audio, gemini, &mut board, media);
     settle_hold(
         &mut context,
         result,
@@ -3352,7 +3359,8 @@ async fn repeated_thinking_acknowledges_without_finalizing_resumed_speech() {
     assert_eq!(turn.state.thinking_hold, original_hold);
     let mut reply = result.generate_reply.clone();
     let effects = {
-        let mut context = turn.context(&mut output_audio, &mut gemini, &mut media);
+        let mut board = board::Board::new();
+        let mut context = turn.context(&mut output_audio, &mut gemini, &mut board, &mut media);
         settle_hold(
             &mut context,
             &result,

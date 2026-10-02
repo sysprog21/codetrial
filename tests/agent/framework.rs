@@ -615,6 +615,8 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
         let test_summary = case["testSummary"].as_str().expect("case has tests");
         let prompt = model_report_input(report_prompt(ReportPromptInput {
             problem: get_problem(Some("two-sum")),
+            interview_mode: InterviewMode::Coding,
+            board_attached: false,
             transcript,
             rolling_assessment: "",
             final_code,

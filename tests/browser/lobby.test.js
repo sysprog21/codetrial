@@ -2102,8 +2102,18 @@ lobbyTest(
     await setLevel(page, "Hard", true);
     await setLevel(page, "Medium", false);
 
+    // The surface too: the destination was built before the await, so a
+    // button lit now would name a mode the interview is not opened in.
+    await page.click('[data-mode="whiteboard"]');
+    assert.equal(
+      await page.getAttribute('[data-mode="coding"]', "aria-pressed"),
+      "true",
+      "a mode click took effect on a start that had already read its mode",
+    );
+
     finishLogin();
     await page.waitForURL(/\/interview/);
+    assert.equal(new URL(page.url()).searchParams.get("mode"), "coding");
     assert.deepEqual(
       errors,
       [],

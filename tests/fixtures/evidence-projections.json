@@ -1,4 +1,5 @@
 {
+  "board": "tests: not run\nphases covered: repeat; not yet: algorithm, coding, example, optimizations, test",
   "early": "tests: not run\nphases covered: none; not yet: algorithm, coding, example, optimizations, repeat, test",
   "empty": "tests: not run\nphases covered: none; not yet: algorithm, coding, example, optimizations, repeat, test",
   "working": "tests: browser-reported claims (unverified): 1 of 3 passing, 1 edit-and-run cycles\nphases covered: repeat; not yet: algorithm, coding, example, optimizations, test",

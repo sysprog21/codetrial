@@ -17,8 +17,8 @@ use crate::config::DEFAULT_MAX_INTERIM_REVIEWS;
 
 use crate::agent::{
     RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput, ViewFor,
-    behavioral_silence_nudge, candidate_lines, changed_excerpt, proactive_review, silence_nudge,
-    timing_decision, unreviewed_from, with_timer,
+    behavioral_silence_nudge, board_silence_nudge, candidate_lines, changed_excerpt,
+    proactive_review, silence_nudge, timing_decision, unreviewed_from, with_timer,
 };
 
 /// How long the room has to be quiet before a pause is worth reading into.
@@ -1167,7 +1167,15 @@ impl RuntimeActivity {
         // Named by the branch that wrote the text, so the flag cannot describe
         // a different prompt from the one sent.
         let (text, allows_silence) = if decision.silence_nudge {
-            (silence_nudge(state, &evidence, excerpt.as_deref()), false)
+            // A board has no text to quote, so the two prompts differ in what
+            // they can carry rather than only in wording; see
+            // `board_silence_nudge`.
+            let nudge = if state.interview_mode.is_whiteboard() {
+                board_silence_nudge(&evidence, state.board_strokes)
+            } else {
+                silence_nudge(state, &evidence, excerpt.as_deref())
+            };
+            (nudge, false)
         } else {
             (proactive_review(state, &evidence, excerpt.as_deref()), true)
         };

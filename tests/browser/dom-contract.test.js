@@ -777,6 +777,44 @@ test("a dropped connection is visible and recovers its state", () => {
   // Nothing published during the gap arrived, so the buffer is resent rather
   // than left to drift until the next keystroke.
   assert.match(connect, /Reconnected[\s\S]*?publishCode\(/);
+  // The board too, or one that settled during the gap waits for a stroke a
+  // candidate who has stopped drawing never makes; and the checkpoints the gap
+  // swallowed go first, since nothing drawn since can stand in for them.
+  assert.match(connect, /Reconnected[\s\S]*?republishBoard\(/);
+  const republish = functionBody(script, "republishBoard");
+  assert.match(republish, /heldCheckpoints[\s\S]*?queueBoardPublish\(\)/);
+});
+
+// The board is locked when the editor is, and for the same two reasons: a
+// paused interview collects no evidence, and the behavioral round retires the
+// coding surface. Left live, a pause sent Jim work drawn while he waited.
+test("the board takes no edits while the interview is paused", () => {
+  const script = interviewSource();
+  assert.match(
+    functionBody(script, "boardLocked"),
+    /state\.paused \|\| frameworkRound === "behavioral"/,
+  );
+  assert.match(
+    functionBody(script, "bindBoardPointer"),
+    /"pointerdown"[\s\S]*?if \(boardLocked\(\)\) return;/,
+  );
+  const paint = functionBody(script, "paintBoard");
+  for (const button of ["boardUndo", "boardRedo", "boardClear"]) {
+    assert.match(
+      paint,
+      new RegExp(`nodes\\.${button}\\.disabled = locked \\|\\|`),
+      `${button} stays usable on a locked board`,
+    );
+  }
+  // Both moments the lock changes repaint the toolbar, after the state moved.
+  assert.match(
+    functionBody(script, "applyPause"),
+    /state\.paused = paused;[\s\S]*?if \(whiteboard\) paintBoard\(\);/,
+  );
+  assert.match(
+    script,
+    /frameworkRound = "behavioral";\s*if \(whiteboard\) paintBoard\(\);/,
+  );
 });
 
 // A degraded start looks identical whether the server has no LiveKit

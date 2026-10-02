@@ -22,6 +22,20 @@ fn instructions(problem: &Problem, duration_min: u32) -> String {
         &InterviewGrounding::default(),
         InterviewLoop::CodingBehavioral,
         false,
+        InterviewMode::Coding,
+    )
+}
+
+/// The same, at a whiteboard.
+fn board_instructions(problem: &Problem, duration_min: u32) -> String {
+    build_instructions_for_plan(
+        problem,
+        duration_min,
+        &InterviewProfile::default(),
+        &InterviewGrounding::default(),
+        InterviewLoop::CodingBehavioral,
+        false,
+        InterviewMode::Whiteboard,
     )
 }
 
@@ -188,6 +202,7 @@ fn prompt_samples() -> Value {
     let empty = evidence_projection("empty");
     let early = evidence_projection("early");
     let working = evidence_projection("working");
+    let board_working = evidence_projection("board");
     let working_changed = evidence_projection("workingChanged");
     let working_interim = evidence_projection("workingInterim");
     let working_report = evidence_projection("workingReport");
@@ -277,6 +292,7 @@ fn prompt_samples() -> Value {
             &InterviewGrounding::default(),
             InterviewLoop::CodingBehavioral,
             false,
+            InterviewMode::Coding,
         ),
         "instructionsExamplesHidden": build_instructions_for_plan(
             problem,
@@ -285,8 +301,25 @@ fn prompt_samples() -> Value {
             &InterviewGrounding::default(),
             InterviewLoop::CodingBehavioral,
             true,
+            InterviewMode::Coding,
         ),
-        "greeting": greeting(),
+        "boardInstructions": board_instructions(problem, 45),
+        "greeting": greeting(InterviewMode::Coding),
+        "boardGreeting": greeting(InterviewMode::Whiteboard),
+        "boardSilenceEmpty": board_silence_nudge(&empty, 0),
+        "boardSilenceDrawn": board_silence_nudge(&board_working, 17),
+        "boardColdRestart": cold_restart(&RuntimeState {
+            interview_mode: InterviewMode::Whiteboard,
+            board_snapshots: 4,
+            board_strokes: 22,
+            ..RuntimeState::default()
+        }),
+        "boardColdRestartEmpty": cold_restart(&RuntimeState {
+            interview_mode: InterviewMode::Whiteboard,
+            ..RuntimeState::default()
+        }),
+        "readBoard": read_board_text(22, 4, Some(9), 31),
+        "readBoardEmpty": read_board_text(0, 0, None, 44),
         "languageChoice": language_choice("C++", LanguageChoiceContext::Start),
         "languageSwitch": language_choice("Java", LanguageChoiceContext::SwitchWithCode),
         "silenceBehavioral": behavioral_silence_nudge(),
@@ -314,14 +347,25 @@ fn prompt_samples() -> Value {
         "wrapComplete": wrap_up("interview_complete", false),
         "interim": interim_review_prompt(&InterimReviewInput {
             problem,
+            interview_mode: InterviewMode::Coding,
             transcript_window: "Candidate: I will use a hash map.",
             code: "seen = {}",
             language: "python",
             already_recorded: "Candidate restated the inputs and the return shape.",
             evidence: &working_interim,
         }),
+        "boardInterim": interim_review_prompt(&InterimReviewInput {
+            problem,
+            interview_mode: InterviewMode::Whiteboard,
+            transcript_window: "Candidate: I will draw the array and walk two pointers inward.",
+            code: "",
+            language: "python",
+            already_recorded: "",
+            evidence: &empty,
+        }),
         "interimEmpty": interim_review_prompt(&InterimReviewInput {
             problem,
+            interview_mode: InterviewMode::Coding,
             transcript_window: "",
             code: "",
             language: "python",
@@ -329,7 +373,8 @@ fn prompt_samples() -> Value {
             evidence: &empty,
         }),
         "interimSystem": interim_system_instruction(),
-        "reportSystem": report_system_instruction(),
+        "reportSystem": report_system_instruction(InterviewMode::Coding),
+        "boardReportSystem": report_system_instruction(InterviewMode::Whiteboard),
         "testsPass": test_results_reaction("3/3 passed", true, TestRecord::Record, None, &RuntimeState::default(), SincePrevious::Other,),
         "testsFail": test_results_reaction(
             &reaction_test_summary,
@@ -345,6 +390,8 @@ fn prompt_samples() -> Value {
         "hintRungWithheld": hint_rung_withheld_text(2),
         "report": report_prompt(ReportPromptInput {
             problem,
+            interview_mode: InterviewMode::Coding,
+            board_attached: false,
             transcript: "Candidate: I will use a hash map.",
             rolling_assessment: "",
             final_code: "def two_sum(nums, target): return []",
@@ -358,8 +405,44 @@ fn prompt_samples() -> Value {
             practice_level: None,
             evidence: &working_report,
         }),
+        "boardReport": report_prompt(ReportPromptInput {
+            problem,
+            interview_mode: InterviewMode::Whiteboard,
+            board_attached: true,
+            transcript: "Candidate: I will keep a map of what I have seen.",
+            rolling_assessment: "",
+            final_code: "",
+            language: "python",
+            hints_used: 1,
+            hint_rung: 1,
+            volunteered_hints: 0,
+            duration_min: 45,
+            elapsed_min: 31.0,
+            test_summary: "",
+            practice_level: None,
+            evidence: "",
+        }),
+        "boardReportNoBoard": report_prompt(ReportPromptInput {
+            problem,
+            interview_mode: InterviewMode::Whiteboard,
+            board_attached: false,
+            transcript: "Candidate: I would rather talk it through.",
+            rolling_assessment: "",
+            final_code: "",
+            language: "python",
+            hints_used: 0,
+            hint_rung: 0,
+            volunteered_hints: 0,
+            duration_min: 45,
+            elapsed_min: 8.0,
+            test_summary: "",
+            practice_level: None,
+            evidence: "",
+        }),
         "reportEmpty": report_prompt(ReportPromptInput {
             problem,
+            interview_mode: InterviewMode::Coding,
+            board_attached: false,
             transcript: "",
             rolling_assessment: "",
             final_code: "",
@@ -375,6 +458,8 @@ fn prompt_samples() -> Value {
         }),
         "reportHalfElapsed": report_prompt(ReportPromptInput {
             problem,
+            interview_mode: InterviewMode::Coding,
+            board_attached: false,
             transcript: "",
             rolling_assessment: "",
             final_code: "",
@@ -395,6 +480,8 @@ fn prompt_samples() -> Value {
         // could then drift and nothing would notice.
         "reportProgressive": report_prompt(ReportPromptInput {
             problem,
+            interview_mode: InterviewMode::Coding,
+            board_attached: false,
             transcript: "Candidate: I will use a hash map.",
             rolling_assessment: &rolling_assessment(
 
@@ -425,6 +512,8 @@ fn prompt_samples() -> Value {
         }),
         "reportMultiline": report_prompt(ReportPromptInput {
             problem,
+            interview_mode: InterviewMode::Coding,
+            board_attached: false,
             transcript: "Candidate: I will use a hash map.",
             rolling_assessment: "",
             final_code: "def two_sum(nums, target):\n    return [0, 1]",
@@ -649,7 +738,10 @@ fn exact_fixture_keys(value: &Value, expected: &[&str], path: &str) {
 
 /// What the report model reads: the system instruction and the brief.
 fn model_report_input(brief: String) -> String {
-    format!("{}\n\n{brief}", report_system_instruction())
+    format!(
+        "{}\n\n{brief}",
+        report_system_instruction(InterviewMode::Coding)
+    )
 }
 
 /// Puts the interview past its coding round, which is the state the browser's
@@ -747,6 +839,8 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
         }
         "report" => model_report_input(report_prompt(ReportPromptInput {
             problem: get_problem(Some("two-sum")),
+            interview_mode: InterviewMode::Coding,
+            board_attached: false,
             transcript: case["transcript"].as_str().expect("transcript is text"),
             rolling_assessment: "",
             final_code: code,
@@ -905,3 +999,6 @@ mod problems;
 
 #[path = "agent/runtime.rs"]
 mod runtime;
+
+#[path = "agent/whiteboard.rs"]
+mod whiteboard;

@@ -649,6 +649,7 @@ server, is the ordering.
 |---|---|---|
 | `transcript` | what was said | no |
 | `editor` | the code and its language | yes |
+| `board` | what was drawn since the last one | no |
 | `tests` | a run's results | no |
 | `stage` | the clock and the interview phase | yes |
 | `avatar` | what Jim is doing | yes |
@@ -839,6 +840,7 @@ so a producer from a later deploy does not stop a recording.
 |---|---|---|
 | `stage` | `{title, meta, remainingSeconds}` | the problem heading and the clock |
 | `editor` | `{code, language}` | the code panel, as text |
+| `board` | `{ops, checkpoint?}`, each op `{op: "stroke", color, width, points}` or `{op: "undo" \| "redo" \| "clear"}`; `checkpoint` is a completed REACTO phase id | the whiteboard, redrawn from every op so far, with completed phases named in the replay |
 | `tests` | `{passed, failed, total}` | one line, red if anything failed |
 | `avatar` | `{state}`, one of `speaking`, `thinking`, `listening` | Jim's expression and label |
 | `transcript` | `{speaker, text}` | nothing here; the replay page renders it |
@@ -854,9 +856,28 @@ already arrived. A `413` or a `404` stops the producers for the rest of the
 interview: over quota and withdrawn consent both mean everything after this is
 refused.
 
+The board is the one kind that does not restate itself, and that is what makes
+a whiteboard interview replayable at all. One board exported as an image is
+over a hundred kilobytes, which is past the per-payload ceiling on its own and
+would spend the whole per-interview budget on a handful of frames; the same
+board as the strokes that drew it is a few kilobytes and arrives as operations,
+so any moment of the interview can be redrawn rather than the few that could be
+photographed. `web/whiteboard.js` is the one model: the candidate draws on it,
+the replay page and this template rebuild from it, and a stroke it refuses
+while drawing is a stroke it refuses coming back off the wire.
+
+When the interviewer banks a REACTO phase, the browser adds a board event even
+if no stroke changed. That event names the phase and therefore freezes the
+current point in the operation journal for review. The same moment is exported
+as a JPEG with the phase id in its byte-stream header. The agent retains one
+image per phase for the report model, so clearing the live board cannot erase
+the Example or Approach evidence that came before it. Replay stores no JPEG:
+it rebuilds each checkpoint from the operations it already has.
+
 Cadence is where the per-interview budget goes. The editor rides the debounce
-the agent's `code_update` already uses; the transcript is one event per spoken
-turn rather than per chunk; the clock is restated every fifteen seconds, because
+the agent's `code_update` already uses; the board rides the same settle that
+sends the interviewer their image, batched so no event outgrows the per-payload
+ceiling; the transcript is one event per spoken turn rather than per chunk; the clock is restated every fifteen seconds, because
 every second would be twenty-seven hundred events for a number the viewer can
 read off the video; and the interviewer's state is sent on the change rather
 than on the participant event that happened to carry it.
@@ -912,7 +933,7 @@ is one nothing later can un-store.
 |---|---|---|---|
 | `interview_id` | TEXT | no | `interviews(id)`, `ON DELETE CASCADE` |
 | `seq` | INTEGER | no | server-allocated, monotonic per interview |
-| `kind` | TEXT | no | one of the six above |
+| `kind` | TEXT | no | one of the seven above |
 | `at` | INTEGER | no | the browser's clock |
 | `payload` | TEXT | no | redacted JSON |
 | `bytes` | INTEGER | no | the payload's size, so the quota is a sum rather than a scan |
@@ -923,7 +944,7 @@ position. It does not rule out a gap: only the server allocating the number does
 that, and the key is what makes the allocation's answer durable.
 
 `CHECK`s carry the rest of the shape: `seq`, `at` and `bytes` are non-negative
-and `kind` is one of the six. A row that fails one has no meaning for this
+and `kind` is one of the seven. A row that fails one has no meaning for this
 table, whoever wrote it.
 
 `ON DELETE CASCADE`, unlike `recordings`. Nothing here is a handle to media

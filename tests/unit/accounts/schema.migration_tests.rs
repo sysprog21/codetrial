@@ -185,6 +185,34 @@ fn rewind_to(path: &Path, version: i64) {
     // Newest first: `recordings` has foreign keys into `interviews`, so
     // dropping them the other way round would leave a table pointing at one
     // that is gone.
+    if version < 11 {
+        // Rebuilt under the list version 10 had, rows and all, so the upgrade
+        // has something to carry across.
+        connection
+            .execute_batch(
+                "CREATE TABLE replay_events_old AS SELECT * FROM replay_events;
+                 DROP TABLE replay_events;
+                 CREATE TABLE replay_events (
+                     interview_id TEXT NOT NULL REFERENCES interviews(id) ON DELETE CASCADE,
+                     seq INTEGER NOT NULL,
+                     kind TEXT NOT NULL,
+                     at INTEGER NOT NULL,
+                     payload TEXT NOT NULL,
+                     bytes INTEGER NOT NULL,
+                     received_at INTEGER NOT NULL,
+                     PRIMARY KEY (interview_id, seq),
+                     CHECK (seq >= 0),
+                     CHECK (at >= 0),
+                     CHECK (bytes >= 0),
+                     CHECK (kind IN ('transcript', 'editor', 'tests', 'stage', 'avatar', 'lifecycle'))
+                 );
+                 INSERT INTO replay_events SELECT * FROM replay_events_old;
+                 DROP TABLE replay_events_old;
+                 CREATE INDEX replay_events_by_interview_and_kind
+                     ON replay_events(interview_id, kind, seq);",
+            )
+            .unwrap();
+    }
     if version < 10 {
         connection
             .execute_batch("DROP INDEX IF EXISTS recordings_by_room;")
@@ -644,6 +672,53 @@ fn an_existing_database_gains_the_room_lookup_index() {
         plan.contains("USING INDEX recordings_by_room"),
         "the room lookup still does not use the index: {plan}"
     );
+}
+
+/// A database from before the whiteboard refused its strokes at the `CHECK`,
+/// so the upgrade has to widen the list without losing the rows already there.
+#[test]
+fn an_existing_database_accepts_board_replay_events_on_upgrade() {
+    let path = scratch("replay-board");
+    initialize_account_database(&path).unwrap();
+    let insert = |connection: &rusqlite::Connection, seq: i64, kind: &str| {
+        connection.execute(
+            "INSERT INTO replay_events (interview_id, seq, kind, at, payload, bytes, received_at)
+             VALUES ('int-1', ?1, ?2, 1, '{}', 2, 1)",
+            rusqlite::params![seq, kind],
+        )
+    };
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO users (id, github_id, login, created_at, updated_at)
+                 VALUES (1, 1, 'octo', 1, 1);
+                 INSERT INTO interviews (id, account_id, consent_version, consent_at)
+                 VALUES ('int-1', 1, 'v1', 1);",
+            )
+            .unwrap();
+        insert(&connection, 0, "transcript").unwrap();
+    }
+    rewind_to(&path, 10);
+    assert!(
+        insert(&rusqlite::Connection::open(&path).unwrap(), 1, "board").is_err(),
+        "the fixture did not rebuild the version 10 list"
+    );
+
+    initialize_account_database(&path).unwrap();
+
+    assert_eq!(user_version(&path), ACCOUNT_SCHEMA_VERSION);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    insert(&connection, 1, "board").unwrap();
+    let kinds: Vec<String> = connection
+        .prepare("SELECT kind FROM replay_events ORDER BY seq")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(kinds, ["transcript", "board"], "the upgrade lost a row");
+    assert!(index_names(&path).contains(&"replay_events_by_interview_and_kind".to_string()));
 }
 
 /// How SQLite says it will answer the query `recording_for_room` issues.

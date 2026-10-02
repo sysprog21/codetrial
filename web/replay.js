@@ -17,7 +17,15 @@ import {
   replayTimeline,
   responseWindowLabel,
   sanitizeReport,
+  whiteboardPhaseLabel,
 } from "/lib.js";
+import {
+  BOARD_HEIGHT,
+  BOARD_WIDTH,
+  applyOp,
+  createBoard,
+  drawBoard,
+} from "/whiteboard.js";
 
 const nodes = {
   list: document.querySelector("#replay-list"),
@@ -30,6 +38,7 @@ const nodes = {
   timeline: document.querySelector("#replay-timeline"),
   windowNote: document.querySelector("#replay-window-note"),
   momentLabel: document.querySelector("#replay-moment-label"),
+  board: document.querySelector("#replay-board"),
   code: document.querySelector("#replay-code"),
   tests: document.querySelector("#replay-tests"),
   report: document.querySelector("#replay-report"),
@@ -59,6 +68,14 @@ let selected = null;
 /// time in the report: the replay already has every version of it, and a copy
 /// in two places is a copy that can disagree.
 let latest = { code: "", language: "" };
+/// Whether this recording is of a whiteboard interview, which decides which of
+/// the two panels the moment is shown in.
+///
+/// Read off the events rather than off the report: a replay is loaded before
+/// the report is fetched and may be shown without one at all, and an interview
+/// that drew nothing has neither a board nor anything to put in the code panel
+/// either way.
+let drawn = false;
 
 /// A recording whose media is gone, in the words the server used.
 ///
@@ -199,6 +216,9 @@ async function select(recordingId) {
 
 function clearDetail() {
   latest = { code: "", language: "" };
+  drawn = false;
+  nodes.board.hidden = true;
+  nodes.code.hidden = false;
   // The paragraph explaining a response window is hidden until there is one to
   // explain. A replay with no `avatar` rows is a replay this feature has nothing
   // to say about, and a standing note about an empty list reads as a promise the
@@ -302,6 +322,13 @@ export function render(events) {
   // timeline because that is where a reader looks for both.
   const { moments, windows, timeline } = replayTimeline(rows);
 
+  // The two panels are exclusive: a whiteboard interview publishes no editor
+  // snapshot at all, so its code panel would be an empty box under a heading
+  // that says Code.
+  drawn = moments.some((moment) => moment.kind === "board");
+  nodes.board.hidden = !drawn;
+  nodes.code.hidden = drawn;
+
   nodes.windowNote.hidden = windows.length === 0;
   // Appended once. Interleaving the windows roughly quadruples this list, and a
   // node at a time is a layout pass at a time.
@@ -321,11 +348,16 @@ export function render(events) {
 
 function momentButton(moments, index) {
   const moment = moments[index];
+  const checkpoint =
+    moment.kind === "board"
+      ? whiteboardPhaseLabel(moment.payload?.checkpoint)
+      : "";
   const button = document.createElement("button");
   button.type = "button";
   button.className = "replay-moment";
   button.dataset.moment = String(index);
-  button.textContent = `${momentTime(moment.at)} · ${moment.kind}`;
+  const label = checkpoint ? `${checkpoint} checkpoint` : moment.kind;
+  button.textContent = `${momentTime(moment.at)} · ${label}`;
   button.addEventListener("click", () => showMoment(moments, index));
   return button;
 }
@@ -371,15 +403,42 @@ function showMoment(moments, index) {
   let code = "";
   let language = "";
   let tests = null;
+  // Rebuilt from the start for each moment rather than carried between them:
+  // the operations include undo, redo and clear, so the board at a moment is
+  // the whole journal up to it replayed, and nothing shorter answers what was
+  // on the board when the interviewer asked their question.
+  const board = createBoard();
   for (const moment of moments.slice(0, index + 1)) {
     if (moment.kind === "editor") {
       code = moment.payload?.code || "";
       language = moment.payload?.language || "";
     }
     if (moment.kind === "tests") tests = moment.payload;
+    if (moment.kind === "board") {
+      for (const op of Array.isArray(moment.payload?.ops)
+        ? moment.payload.ops
+        : []) {
+        applyOp(board, op);
+      }
+    }
   }
   latest = { code, language };
-  nodes.momentLabel.textContent = language ? `Code · ${language}` : "Code";
+  if (drawn) {
+    const checkpoint = whiteboardPhaseLabel(
+      moments[index]?.payload?.checkpoint,
+    );
+    nodes.momentLabel.textContent = checkpoint
+      ? `${checkpoint} board checkpoint`
+      : "Whiteboard";
+    drawBoard(
+      nodes.board.getContext("2d"),
+      board.strokes(),
+      BOARD_WIDTH,
+      BOARD_HEIGHT,
+    );
+  } else {
+    nodes.momentLabel.textContent = language ? `Code · ${language}` : "Code";
+  }
   // `textContent`, never `innerHTML`: this is the candidate's own code coming
   // back from a server that stored it verbatim.
   nodes.code.textContent = code;
@@ -391,6 +450,15 @@ function showMoment(moments, index) {
 
 /// The report, which is `/api/reports` rather than anything recording owns.
 async function loadReport(interviewId, recordingId) {
+  // The work as the events left it, read before the fetch: the timeline is
+  // live while it is in flight, and a moment picked during it redraws the
+  // panel and moves `latest`, so the card would call an earlier board or an
+  // earlier buffer the final one.
+  const final = {
+    language: latest.language,
+    code: latest.code,
+    board: drawn ? nodes.board.toDataURL("image/jpeg", 0.72) : undefined,
+  };
   const response = await fetch("/api/reports");
   if (selected !== recordingId) return;
   if (!response.ok) {
@@ -418,11 +486,12 @@ async function loadReport(interviewId, recordingId) {
   }
   // `reportMarkup` escapes what it interpolates, which is what makes it safe to
   // hand a payload that came back from a server that stored it verbatim.
+  // The board as well as the code, because the card of a whiteboard interview
+  // would otherwise say the editor was empty.
   nodes.report.innerHTML = reportMarkup({
     report,
     problemTitle: saved.problemTitle || "",
-    language: latest.language,
-    code: latest.code,
+    ...final,
   });
 }
 

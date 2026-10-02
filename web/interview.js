@@ -10,6 +10,16 @@ import {
 import { highlight } from "./highlight.js";
 import { prepareLanguage } from "./syntax-parser.js";
 import {
+  BOARD_HEIGHT,
+  BOARD_WIDTH,
+  ERASER_WIDTH,
+  ERASER_WIDTHS,
+  PEN_COLORS,
+  boardPoint,
+  createBoard,
+  drawBoard,
+} from "./whiteboard.js";
+import {
   indentNewline,
   indentSelection,
   insertBracketPair,
@@ -35,6 +45,8 @@ import {
 import {
   acceptsReport,
   CANDIDATE_CASE_LIMIT,
+  boardOpBatches,
+  boardStreamOptions,
   clamp,
   codeUpdatePayload,
   codingLoop,
@@ -46,6 +58,7 @@ import {
   formatTime,
   integrityEventPayload,
   isAgent,
+  modeIsWhiteboard,
   providerUiState,
   roomInterviewer,
   sanitizeReport,
@@ -58,6 +71,7 @@ import {
   isYieldShortcut,
   turnCountdown,
   turnWindowMs,
+  uncapturedBoardPhases,
 } from "./lib.js";
 import {
   attachAvatarAnalyser,
@@ -218,6 +232,60 @@ let durationMin = clamp(
   90,
 );
 const interviewLoop = codingLoop(params.get("loop"));
+/// Whether this interview is held at a whiteboard rather than in the editor.
+///
+/// Read once, from the URL the lobby built, and never from the page: half the
+/// setup below runs before `/api/token` answers, and a mode that arrived with
+/// the answer would leave the editor bound and the starter code published in
+/// an interview that has neither.
+const whiteboard = modeIsWhiteboard(params.get("mode"));
+/// The same answer as the wire spelling, which the token request and the
+/// checklist both need. Derived from the boolean rather than from the URL a
+/// second time, so an unrecognized value cannot reach the server as itself.
+const mode = whiteboard ? "whiteboard" : "coding";
+/// The board, and what is in flight for it.
+///
+/// Declared with the other module state rather than beside the functions that
+/// read it, for the reason `durationCeiling` in web/app.js is: `init()` runs
+/// at the top of this module and calls `initWhiteboard`, so a `const` further
+/// down the file is still in its temporal dead zone when that call reaches it.
+/// Reading one there throws, `init()` stops where it stood, and the media
+/// preflight it was on its way to start never runs: the candidate is left on
+/// "Starting camera and microphone..." with the browser never having asked for
+/// either.
+const board = {
+  model: null,
+  context: null,
+  color: PEN_COLORS[0],
+  tool: "pen",
+  eraserWidth: ERASER_WIDTH,
+  settle: null,
+  /// One board at a time on the wire, chained the way integrity events are: a
+  /// settle that fires while the previous export is still uploading would open
+  /// a second stream, and the agent would show whichever finished last.
+  publishing: Promise.resolve(),
+  /// Numbers the boards so a log can tell one from the next. The agent reads
+  /// the name for nothing, and that is deliberate: it holds the newest board
+  /// it finished reading, not the highest number it has seen.
+  sequence: 0,
+  /// Phase ids already captured. A reconnect can restate the whole framework
+  /// checklist, and restating it must not create a second checkpoint for every
+  /// phase the interviewer had already banked.
+  checkpoints: new Set(),
+  /// A phase can complete while a pointer is still down. Its checkpoint waits
+  /// for pointerup so the JPEG and replay operations describe the same stroke.
+  pendingCheckpoints: [],
+  /// The board as each phase left it, for the candidate's own report card.
+  /// Kept as the data URL the card shows rather than as the JPEG that was
+  /// sent, and never saved: six of them are most of what an account report
+  /// may weigh, and the recording is where a board is kept.
+  snapshots: new Map(),
+  /// Checkpoint images that could not go out because the room was down, by
+  /// phase. Kept rather than dropped like an ordinary board: a checkpoint is
+  /// the board as one phase left it, and the candidate may have cleared that
+  /// drawing since, so nothing sent after the reconnect can stand in for it.
+  heldCheckpoints: new Map(),
+};
 let behavioralMinutes =
   interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
 let codingMinutes = durationMin - behavioralMinutes;
@@ -400,6 +468,15 @@ const nodes = {
   meetOutputRow: document.querySelector("#meet-output-row"),
   meetOutputSelect: document.querySelector("#meet-output-select"),
   meetOutputNote: document.querySelector("#meet-output-note"),
+  editorPanel: document.querySelector(".editor-panel"),
+  boardPanel: document.querySelector("#board-panel"),
+  board: document.querySelector("#board"),
+  boardPens: document.querySelector("#board-pens"),
+  boardEraser: document.querySelector("#board-eraser"),
+  boardEraserSizes: document.querySelector("#board-eraser-sizes"),
+  boardUndo: document.querySelector("#board-undo"),
+  boardRedo: document.querySelector("#board-redo"),
+  boardClear: document.querySelector("#board-clear"),
   jimAvatar: document.querySelector("#jim-avatar"),
   jimAvatarNote: document.querySelector("#jim-avatar-note"),
   jimStage: document.querySelector("#jim-stage"),
@@ -440,6 +517,7 @@ async function init() {
   applyLanguages(null);
   setLanguage("python");
   bindEvents();
+  if (whiteboard) initWhiteboard();
   // After bindEvents, so the callback cannot beat the row it edits: everything
   // above here is synchronous, and a `then` runs no earlier than the next
   // microtask.
@@ -1056,6 +1134,7 @@ async function connect(preflight, presenting = false) {
         durationMin,
         interviewId,
         interviewLoop,
+        interviewMode: mode,
         interviewProfile,
         ...(interviewGrounding ? { interviewGrounding } : {}),
         ...(nodes.hideExamples.checked ? { hideExamples: true } : {}),
@@ -1095,8 +1174,16 @@ async function connect(preflight, presenting = false) {
       // title for the whole interview.
       recordStage();
       // The starter code, once, so a candidate who never types is not recorded
-      // beside an empty editor.
-      recordReplay("editor", { code: currentCode(), language: state.language });
+      // beside an empty editor. At a whiteboard the empty board instead: there
+      // is no editor to record, and the replay and the recording both switch
+      // to the board on its first event, so a candidate who never drew is
+      // still shown the surface they had rather than a blank code panel.
+      if (whiteboard) recordReplay("board", { ops: [] });
+      else
+        recordReplay("editor", {
+          code: currentCode(),
+          language: state.language,
+        });
     }
   } catch (error) {
     // Swallowed for the candidate, logged for everyone else. Offline practice
@@ -1184,6 +1271,7 @@ async function connectLiveKit(connection, preflight, presenting = false) {
     // whatever the last queued keystroke said.
     flushPendingPublishes();
     publishCode();
+    republishBoard();
     updateAgentState();
   });
   room.on(livekit.RoomEvent.Disconnected, () => {
@@ -1768,7 +1856,11 @@ let endingClock = 0;
 /// would need its own record of what is already ticked, which is the second
 /// copy of the truth that these packets exist to avoid.
 function renderFrameworkProgress() {
-  const { name, steps } = frameworkChecklist(frameworkRound, frameworkPhases);
+  const { name, steps } = frameworkChecklist(
+    frameworkRound,
+    frameworkPhases,
+    mode,
+  );
   nodes.frameworkProgress.hidden = false;
   nodes.frameworkProgress.innerHTML = steps
     .map(
@@ -1786,7 +1878,12 @@ function renderFrameworkProgress() {
 /// two-framework list beside the timer already was.
 function showFrameworkHint() {
   nodes.frameworkHintTitle.textContent = "Jim is listening.";
-  nodes.frameworkHintBody.innerHTML = Object.values(FRAMEWORKS)
+  // Through the checklist rather than from `FRAMEWORKS` directly, so the card
+  // and the list beside the timer name the steps the same way: at a board this
+  // said "write what you just described" and "predict what should happen, then
+  // run it" to a candidate holding a marker.
+  nodes.frameworkHintBody.innerHTML = Object.keys(FRAMEWORKS)
+    .map((round) => frameworkChecklist(round, [], mode))
     .map(
       (framework) => `
       <table>
@@ -1834,6 +1931,7 @@ function receiveControl(bytes) {
       Array.isArray(message.phases)
     ) {
       frameworkPhases = message.phases;
+      captureBoardCheckpoints(frameworkPhases);
       renderFrameworkProgress();
     } else if (
       message.type === "round_state" &&
@@ -1852,6 +1950,7 @@ function receiveControl(bytes) {
         nodes.resultsLabel.textContent = "Coding round complete";
         // The round changed, so the checklist and the offer change with it.
         frameworkRound = "behavioral";
+        if (whiteboard) paintBoard();
         renderFrameworkProgress();
         showFrameworkHint();
       }
@@ -2011,6 +2110,7 @@ function applyPause(paused) {
   // behavioral round disables the editor and the runner on purpose, and a
   // pause taken during it used to give both back on the way out.
   nodes.editor.disabled = paused || codingClosed();
+  if (whiteboard) paintBoard();
   updateRunAvailability();
   recordReplay("lifecycle", { state: paused ? "paused" : "resumed" });
   recordStage();
@@ -2343,6 +2443,18 @@ function endInterview(reason) {
   if (codePublishTimer && !pendingLanguagePublish) {
     recordReplay("editor", { code: currentCode(), language: state.language });
   }
+  // Before the lifecycle row, so the drawing a candidate was still working on
+  // when they pressed End is in the replay ahead of the event that says the
+  // interview stopped. The settle timer is about to be irrelevant: this page
+  // stops being one that runs timers a moment from now.
+  if (whiteboard) {
+    clearTimeout(board.settle);
+    recordBoardOps();
+    // The report is frozen as soon as the agent receives `end_interview`, so
+    // the current pixels have to enter the stream first. This also covers an
+    // interview ended before the next phase checkpoint or settle fired.
+    queueBoardPublish();
+  }
   recordReplay("lifecycle", { state: "ended", reason });
   void flushReplay();
   // The end_interview payload carries the final buffer, so drop any debounced
@@ -2392,10 +2504,16 @@ function endInterview(reason) {
       }, REPORT_ESCAPE_WAIT_MS),
     ];
   }
-  publish(
-    topics.control,
-    endInterviewPayload(reason, currentCode(), state.language),
-  );
+  const publishEnd = () =>
+    publish(
+      topics.control,
+      endInterviewPayload(reason, currentCode(), state.language),
+    );
+  if (whiteboard) {
+    void board.publishing.then(publishEnd);
+  } else {
+    publishEnd();
+  }
   if (!reportComing) setTimeout(showReport, 300);
 }
 
@@ -2532,6 +2650,8 @@ function renderReport() {
     problemTitle: problem.title,
     language: state.language,
     code: currentCode(),
+    board: finalBoardImage(),
+    boardPhases: [...board.snapshots],
     saveResult: null,
   });
   mountBehavioralReview(nodes.report, state.transcript.values());
@@ -2549,6 +2669,9 @@ function saveHistory() {
   // The interview id travels with the report so the replay page can put the
   // two beside each other. Reports are keyed by their own id and recordings by
   // theirs, and without this the only thing relating them is the clock.
+  // No language at a whiteboard: nothing is compiled, the tabs are not on
+  // screen, and `state.language` is the default nobody chose. Recorded as one,
+  // it would filter the candidate's own history by a choice they never made.
   const entry = {
     id: randomId(),
     date: new Date().toISOString(),
@@ -2556,7 +2679,7 @@ function saveHistory() {
     problemId: problem.page,
     problemTitle: problem.title,
     difficulty: problem.difficulty,
-    language: state.language,
+    language: whiteboard ? "" : state.language,
     durationMin,
     interviewLoop,
     report: state.report,
@@ -2575,6 +2698,7 @@ function buildMarkdown(at) {
     problemTitle: problem.title,
     language: state.language,
     code: currentCode(),
+    board: finalBoardImage(),
     transcript: state.transcript.values(),
     at: at.toLocaleString(),
   });
@@ -2797,12 +2921,386 @@ function paintEditor() {
   }
 }
 
+/// How long the board has to be still before the interviewer is sent it.
+///
+/// One second after the last stroke ends, which is roughly the pause a person
+/// leaves between finishing a shape and starting the next one. Shorter sends a
+/// half-drawn diagram; much longer and the interviewer is asking about a board
+/// the candidate has already moved on from.
+const BOARD_SETTLE_MS = 1000;
+
+/// What a board is exported at. Below this the handwriting in a dense diagram
+/// stops being legible to the model; above it the image outgrows what a
+/// realtime frame is worth for what it adds.
+const BOARD_JPEG_QUALITY = 0.72;
+
+/// Builds the board panel and puts it where the editor was.
+function initWhiteboard() {
+  nodes.editorPanel.remove();
+  nodes.boardPanel.hidden = false;
+  board.model = createBoard();
+  board.context = nodes.board.getContext("2d");
+  for (const color of PEN_COLORS) {
+    const swatch = document.createElement("button");
+    swatch.type = "button";
+    swatch.className =
+      color === board.color ? "board-color selected" : "board-color";
+    swatch.style.background = color;
+    swatch.dataset.color = color;
+    swatch.setAttribute("aria-label", `Pen ${color}`);
+    swatch.addEventListener("click", () => selectPen(color));
+    nodes.boardPens.append(swatch);
+  }
+  nodes.boardEraser.addEventListener("click", () =>
+    selectTool(board.tool === "eraser" ? "pen" : "eraser"),
+  );
+  for (const [index, width] of ERASER_WIDTHS.entries()) {
+    const size = document.createElement("button");
+    size.type = "button";
+    size.className = "board-size";
+    size.dataset.width = String(width);
+    size.setAttribute(
+      "aria-label",
+      `${["Small", "Medium", "Large"][index] ?? width} eraser`,
+    );
+    size.title = size.getAttribute("aria-label");
+    // The dot grows with the square root of the width, so the large size
+    // still fits the toolbar and the three stay visibly different.
+    const dot = document.createElement("span");
+    const diameter = `${Math.round(Math.sqrt(width) * 2.1)}px`;
+    dot.style.width = diameter;
+    dot.style.height = diameter;
+    size.append(dot);
+    size.addEventListener("click", () => selectEraserWidth(width));
+    nodes.boardEraserSizes.append(size);
+  }
+  // The eraser cursor is drawn at the size it erases, which depends on how
+  // wide the panel is laying the board out.
+  nodes.board.addEventListener("pointerenter", paintBoardCursor);
+  window.addEventListener("resize", paintBoardCursor);
+  paintToolState();
+  nodes.boardUndo.addEventListener("click", () =>
+    applyBoardEdit(board.model.undo()),
+  );
+  nodes.boardRedo.addEventListener("click", () =>
+    applyBoardEdit(board.model.redo()),
+  );
+  nodes.boardClear.addEventListener("click", () =>
+    applyBoardEdit(board.model.clear()),
+  );
+  bindBoardPointer();
+  paintBoard();
+}
+
+/// Mouse only, for this first version: a stylus and a finger both report
+/// through the same events, but neither has been tried against a board this
+/// size, and palm rejection is not something the page can do for them.
+///
+/// The pointer is captured on the way down, which is what keeps a stroke
+/// attached to the canvas when the candidate draws off the edge of it -- the
+/// alternative is a line that stops at the border and a stroke that never
+/// ends.
+function bindBoardPointer() {
+  nodes.board.addEventListener("pointerdown", (event) => {
+    if (event.pointerType !== "mouse" || event.button !== 0) return;
+    if (boardLocked()) return;
+    const point = boardPoint(nodes.board, event);
+    if (
+      !board.model.begin(
+        board.tool,
+        board.color,
+        point.x,
+        point.y,
+        board.eraserWidth,
+      )
+    )
+      return;
+    nodes.board.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    paintBoard();
+  });
+  nodes.board.addEventListener("pointermove", (event) => {
+    if (!board.model.isDrawing()) return;
+    const point = boardPoint(nodes.board, event);
+    if (board.model.extend(point.x, point.y)) paintBoard();
+  });
+  for (const ending of ["pointerup", "pointercancel"]) {
+    nodes.board.addEventListener(ending, (event) => {
+      if (!board.model.end()) return;
+      if (nodes.board.hasPointerCapture?.(event.pointerId)) {
+        nodes.board.releasePointerCapture(event.pointerId);
+      }
+      paintBoard();
+      scheduleBoardPublish();
+      flushPendingBoardCheckpoints();
+    });
+  }
+}
+
+function selectPen(color) {
+  board.color = color;
+  board.tool = "pen";
+  paintToolState();
+}
+
+function selectTool(tool) {
+  board.tool = tool;
+  paintToolState();
+}
+
+function selectEraserWidth(width) {
+  board.eraserWidth = width;
+  board.tool = "eraser";
+  paintToolState();
+}
+
+/// The toolbar and the cursor, from `board` alone, so no selector has to
+/// remember which other controls it un-presses.
+function paintToolState() {
+  const erasing = board.tool === "eraser";
+  for (const swatch of nodes.boardPens.children) {
+    swatch.classList.toggle(
+      "selected",
+      !erasing && swatch.dataset.color === board.color,
+    );
+  }
+  nodes.boardEraser.setAttribute("aria-pressed", String(erasing));
+  for (const size of nodes.boardEraserSizes.children) {
+    size.setAttribute(
+      "aria-pressed",
+      String(erasing && Number(size.dataset.width) === board.eraserWidth),
+    );
+  }
+  paintBoardCursor();
+}
+
+/// A circle the size of what the eraser will take out, in place of the
+/// crosshair, which says nothing about how much a drag is about to remove.
+///
+/// Scaled from board pixels to the canvas's laid-out size. Browsers refuse a
+/// cursor image past 128 pixels, so the large size is capped below that on a
+/// very wide panel; the circle is then a little small, never missing.
+function paintBoardCursor() {
+  if (board.tool !== "eraser") {
+    nodes.board.style.cursor = "";
+    return;
+  }
+  const bounds = nodes.board.getBoundingClientRect();
+  const scale = bounds.width ? bounds.width / BOARD_WIDTH : 1;
+  const diameter = Math.min(
+    120,
+    Math.max(6, Math.round(board.eraserWidth * scale)),
+  );
+  const size = diameter + 2;
+  const centre = size / 2;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}"><circle cx="${centre}" cy="${centre}" r="${diameter / 2}" fill="rgba(255,255,255,0.6)" stroke="#555" stroke-width="1"/></svg>`;
+  nodes.board.style.cursor = `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${Math.round(centre)} ${Math.round(centre)}, crosshair`;
+}
+
+/// Repaints after an edit that changed something, and sends the board on.
+///
+/// Undo, redo and clear all go through here because all three change what the
+/// interviewer should be looking at. A clear that was not published leaves
+/// them asking about a diagram that is no longer on the board.
+function applyBoardEdit(changed) {
+  if (!changed) return;
+  paintBoard();
+  scheduleBoardPublish();
+}
+
+function paintBoard() {
+  drawBoard(board.context, board.model.strokes(), BOARD_WIDTH, BOARD_HEIGHT);
+  const locked = boardLocked();
+  nodes.boardUndo.disabled = locked || !board.model.canUndo();
+  nodes.boardRedo.disabled = locked || !board.model.canRedo();
+  nodes.boardClear.disabled = locked || board.model.strokeCount() === 0;
+}
+
+/// Whether the board takes edits: not while paused, and not once the
+/// behavioral round has started, the two moments the editor is disabled for
+/// the same reasons. A paused interview is not collecting evidence, and a
+/// board left live through it sent Jim work drawn while he had been told to
+/// wait. Not `codingClosed`, which is also true before the interview is live,
+/// when drawing to settle in is harmless and nothing is sent.
+function boardLocked() {
+  return state.paused || frameworkRound === "behavioral";
+}
+
+/// Restarts the settle timer. A candidate drawing steadily therefore sends
+/// nothing until they stop, which is the point: the interviewer is meant to
+/// see finished thoughts, not every stroke of them.
+function scheduleBoardPublish() {
+  clearTimeout(board.settle);
+  board.settle = setTimeout(() => {
+    board.settle = null;
+    recordBoardOps();
+    queueBoardPublish();
+  }, BOARD_SETTLE_MS);
+}
+
+/// Captures every newly completed coding phase at the board.
+///
+/// The control packet is an accumulating list, not a transition, so compare it
+/// with the phases already captured. Only the six coding ids are accepted; an
+/// untrusted control packet cannot turn an arbitrary string into a report
+/// attachment or a replay label.
+function captureBoardCheckpoints(phases) {
+  if (!whiteboard) return;
+  for (const id of uncapturedBoardPhases(phases, board.checkpoints)) {
+    board.checkpoints.add(id);
+    if (board.model.isDrawing()) {
+      board.pendingCheckpoints.push(id);
+      continue;
+    }
+    checkpointBoard(id);
+  }
+}
+
+function flushPendingBoardCheckpoints() {
+  if (board.model.isDrawing()) return;
+  for (const phase of board.pendingCheckpoints.splice(0))
+    checkpointBoard(phase);
+}
+
+/// Freezes one phase before the candidate can clear or change the board.
+///
+/// An empty operation list is intentional: the phase marker still names the
+/// board state produced by every earlier operation. The JPEG is captured now,
+/// before it joins the serialized upload chain, so a slow earlier stream cannot
+/// make this checkpoint photograph a later drawing.
+function checkpointBoard(phase) {
+  clearTimeout(board.settle);
+  board.settle = null;
+  recordBoardOps(phase);
+  queueBoardPublish(phase);
+  board.snapshots.set(phase, boardDataUrl());
+}
+
+/// The board as the candidate left it, for their own report card.
+///
+/// Read off the page's own canvas rather than from anything that came back
+/// from a server, and `undefined` for an editor interview, which is what tells
+/// the card to show the code block instead. Not saved with the report: the
+/// data URL is a hundred kilobytes and the saved report has a quota, and the
+/// recording is where a board is kept.
+function finalBoardImage() {
+  return whiteboard ? boardDataUrl() : undefined;
+}
+
+function boardDataUrl() {
+  try {
+    return nodes.board.toDataURL("image/jpeg", BOARD_JPEG_QUALITY);
+  } catch (error) {
+    // A canvas that will not export is not a reason to lose the report. The
+    // card says the board could not be read rather than showing an empty code
+    // block under a language nobody chose.
+    console.warn("codetrial board_export_failed", error);
+    return "";
+  }
+}
+
+/// The drawing since the last settle, onto the replay.
+///
+/// Operations, not the image the interviewer is sent: a replay event is
+/// bounded in kilobytes and a board is a hundred of them, so what a recording
+/// keeps is what drew the board rather than a photograph of it every second.
+/// The replay page and the recording template rebuild it with the same module
+/// the candidate drew on.
+///
+/// The journal is drained whether or not this interview is being recorded. It
+/// is the board's own record of what has happened to it since somebody asked,
+/// and left unasked for an hour it is every stroke of the interview held in
+/// memory twice.
+function recordBoardOps(checkpoint = "") {
+  const batches = boardOpBatches(board.model.takeOps());
+  if (!batches.length && checkpoint) {
+    recordReplay("board", { ops: [], checkpoint });
+    return;
+  }
+  for (const [index, ops] of batches.entries()) {
+    const payload = { ops };
+    if (checkpoint && index === batches.length - 1)
+      payload.checkpoint = checkpoint;
+    recordReplay("board", payload);
+  }
+}
+
+/// Captures the board and appends its upload to the one stream-at-a-time chain.
+function queueBoardPublish(checkpoint = "") {
+  const strokes = board.model.strokeCount();
+  const image = new Promise((resolve) => {
+    nodes.board.toBlob(resolve, "image/jpeg", BOARD_JPEG_QUALITY);
+  });
+  chainBoardPublish(image, strokes, checkpoint);
+}
+
+/// Appends one captured board to the upload chain. A checkpoint that does not
+/// make it out is held for the reconnect; see `board.heldCheckpoints`.
+function chainBoardPublish(image, strokes, checkpoint) {
+  board.publishing = board.publishing
+    .then(async () => {
+      const blob = await image;
+      try {
+        if (await publishBoard(blob, strokes, checkpoint)) return;
+      } catch (error) {
+        console.warn("codetrial board_publish_failed", error);
+      }
+      if (checkpoint && blob)
+        board.heldCheckpoints.set(checkpoint, { blob, strokes });
+    })
+    .catch((error) => {
+      console.warn("codetrial board_publish_failed", error);
+    });
+}
+
+/// After a reconnect: the checkpoints the gap held back, each as it was
+/// captured, then the board as it is now. Without the second, a board that
+/// settled while the room was down reached the interviewer only with the
+/// candidate's next stroke, and one who had stopped drawing never made one.
+function republishBoard() {
+  if (!whiteboard) return;
+  const held = [...board.heldCheckpoints];
+  board.heldCheckpoints.clear();
+  for (const [checkpoint, { blob, strokes }] of held)
+    chainBoardPublish(Promise.resolve(blob), strokes, checkpoint);
+  queueBoardPublish();
+}
+
+/// Sends one already-captured board JPEG over its own byte stream, and says
+/// whether it did.
+///
+/// An ordinary board is dropped rather than queued while the room is down: it
+/// is the whole state of the drawing, so the one `republishBoard` sends after
+/// the reconnect carries everything this one would have.
+async function publishBoard(blob, strokes, checkpoint) {
+  if (!state.room || !state.connected || !blob) return false;
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  board.sequence += 1;
+  const writer = await state.room.localParticipant.streamBytes(
+    boardStreamOptions(board.sequence, strokes, bytes.byteLength, checkpoint),
+  );
+  await writer.write(bytes);
+  await writer.close();
+  return true;
+}
+
 function currentCode() {
-  return nodes.editor.value;
+  // Empty at a whiteboard, where the textarea is still a page element holding
+  // the starter the language row seeded until `initWhiteboard` takes its panel
+  // out. Anything reading it -- the report, the ending packet -- would be
+  // reporting that starter as the candidate's own work.
+  return whiteboard ? "" : nodes.editor.value;
 }
 
 /// The one way the editor reaches the agent: the buffer and its language. The
 /// agent holds its own copy of the starters it measures written code against.
+///
+/// Silent in a whiteboard interview, and silenced here rather than at the four
+/// call sites. Connecting, reconnecting, a keystroke and a test run all
+/// publish; missing one of them would seed an interview that has no editor
+/// with a starter the candidate never saw, and the agent would hold it as the
+/// candidate's work.
 function publishCode(at, code = currentCode(), language = state.language) {
+  if (whiteboard) return;
   publish(topics.code, codeUpdatePayload(code, language, at));
 }

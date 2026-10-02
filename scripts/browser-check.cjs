@@ -36,8 +36,9 @@ function scenarioTitle(problemId) {
   return scenario(problemId).title;
 }
 
-function interviewUrl(problemId) {
-  return `${process.env.BASE_URL}/interview?problem=${scenario(problemId).page}&duration=20`;
+function interviewUrl(problemId, mode) {
+  const surface = mode ? `&mode=${mode}` : "";
+  return `${process.env.BASE_URL}/interview?problem=${scenario(problemId).page}&duration=20${surface}`;
 }
 
 async function checkEditorNewlines(page) {
@@ -396,6 +397,82 @@ function stopProcessGroup(child) {
   }
 }
 
+/// The whiteboard interview, as far as a run with no credentials can take it.
+///
+/// The media gate is the assertion, and it is a stronger one than it looks.
+/// `init()` builds the board and only then starts the preflight, so anything
+/// that throws on the way up stops the page where it stood: the gate sits at
+/// "Starting camera and microphone..." for ever and the browser never asks for
+/// either device. That is what a `const` still inside its temporal dead zone
+/// did here, and every check that reads source text stayed green through it,
+/// because the source was right and the order it ran in was not.
+async function checkWhiteboardInterview(page, pageErrors) {
+  const before = pageErrors.length;
+  await page.goto(interviewUrl("two-sum", "whiteboard"), {
+    waitUntil: "domcontentloaded",
+  });
+
+  // The board first, and the order is the point. `init()` builds it and then
+  // starts the preflight, so a page that threw on the way up leaves the gate
+  // disabled for ever and Playwright reports that as a two-minute click
+  // timeout on a button nobody can place. The pens are built in the same
+  // function, one line before the preflight, so asking for them first turns
+  // that into a sentence naming what stopped.
+  try {
+    await page.locator("#board-pens button").nth(3).waitFor({ timeout: 15000 });
+  } catch {
+    const status = await page.locator("#audio-check-status").textContent();
+    throw new Error(
+      `the board never finished building, so init() stopped before the media preflight it runs next: the gate says ${JSON.stringify(status)}`,
+    );
+  }
+  await page.locator("#board").waitFor({ state: "visible" });
+  const pens = await page.locator("#board-pens button").count();
+  if (pens !== 4)
+    throw new Error(`the board offered ${pens} pens rather than 4`);
+  await clearMediaGate(page);
+  const clear = page.getByRole("button", { name: "Clear board" });
+  if (!(await clear.isDisabled()))
+    throw new Error("an empty board offered to clear itself");
+  const bounds = await page.locator("#board").boundingBox();
+  if (!bounds) throw new Error("the visible board had no drawing bounds");
+  await page.mouse.move(bounds.x + 40, bounds.y + 40);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + 90, bounds.y + 90);
+  await page.mouse.up();
+  if (await clear.isDisabled())
+    throw new Error("the board could not be cleared after drawing");
+  await clear.click();
+  if (!(await clear.isDisabled()))
+    throw new Error("clearing the board left it non-empty");
+  // Clicked rather than only seen enabled: an enabled button over a broken
+  // handler is the failure this has to catch.
+  const undo = page.getByRole("button", { name: "Undo" });
+  if (await undo.isDisabled())
+    throw new Error("a cleared board could not be restored with Undo");
+  await undo.click();
+  if (await clear.isDisabled())
+    throw new Error("Undo did not restore the cleared board");
+  const redo = page.getByRole("button", { name: "Redo" });
+  if (await redo.isDisabled())
+    throw new Error("an undone clear could not be redone");
+  await redo.click();
+  if (!(await clear.isDisabled()))
+    throw new Error("Redo did not clear the restored board again");
+  // The editor is removed rather than hidden, so its absence is what says the
+  // page understood which interview it is holding.
+  if (await page.locator(".editor-panel").count()) {
+    throw new Error("the editor panel survived into a whiteboard interview");
+  }
+  const raised = pageErrors.slice(before);
+  if (raised.length) {
+    throw new Error(`the whiteboard interview raised:\n${raised.join("\n")}`);
+  }
+  console.log(
+    "whiteboard: the board drew, cleared, undid and redid the clear, and opened the media gate behind it",
+  );
+}
+
 /// The interview page gates the room join on local media, with no bypass, so
 /// every run clears it the way a candidate would. Fake browser devices drive
 /// the level meter.
@@ -690,6 +767,12 @@ async function isolateRustAgent(
       }
     });
     page.on("pageerror", (error) => consoleErrors.push(String(error)));
+    // The same errors again, on a list of their own. They belong in
+    // `consoleErrors` for the diagnostics that quote it, and a flow that wants
+    // to assert nothing threw cannot ask that list: offline practice warns
+    // there legitimately, and so does the avatar when its model is absent.
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(String(error)));
     // "status of 500" with no URL is not a diagnosis, so pair every failing
     // response with the thing that was being fetched.
     page.on("response", (response) => {
@@ -1013,6 +1096,7 @@ async function isolateRustAgent(
     }
 
     if (mode === "offline") {
+      await checkWhiteboardInterview(page, pageErrors);
       await page.goto(interviewUrl("two-sum"), {
         waitUntil: "domcontentloaded",
       });

@@ -1,4 +1,4 @@
-import { FRAMEWORKS, codingLoop } from "./lib.js";
+import { FRAMEWORKS, codingLoop, interviewMode } from "./lib.js";
 import {
   clearReportHistory,
   deleteReport,
@@ -31,6 +31,8 @@ const requestTimeoutMs = 10_000;
 let problem;
 let duration;
 let interviewLoop = "coding_behavioral";
+/// Which surface the interview runs on; see the format row in index.html.
+let mode = "coding";
 let reports = [];
 /// The practice focus the share box currently refers to.
 let sharedFocus = null;
@@ -252,6 +254,25 @@ for (const button of document.querySelectorAll("[data-loop]")) {
   });
 }
 
+for (const button of document.querySelectorAll("[data-mode]")) {
+  button.addEventListener("click", () => {
+    // A start already on its way out has read the mode it will open, so a
+    // click now would light a surface the interview is not going to use.
+    if (starting) return;
+    mode = interviewMode(button.dataset.mode);
+    select("[data-mode]", button);
+    // Said once, here, because every other difference the candidate will meet
+    // follows from it: no editor, no test runner, and a board the interviewer
+    // is sent as they draw.
+    const note = document.querySelector("#mode-note");
+    note.textContent =
+      mode === "whiteboard"
+        ? "Whiteboard: no editor and no test runner. You explain by drawing, and Jim sees the board as you go."
+        : "";
+    note.hidden = mode !== "whiteboard";
+  });
+}
+
 const start = document.querySelector("#start");
 
 let signInFirst = false;
@@ -281,6 +302,7 @@ start.addEventListener("click", async () => {
   destination.searchParams.set("problem", problem.id);
   destination.searchParams.set("duration", String(duration));
   destination.searchParams.set("loop", interviewLoop);
+  destination.searchParams.set("mode", mode);
   const profile = {
     role: nodes.profileRole.value.trim(),
     seniority: nodes.profileSeniority.value,
