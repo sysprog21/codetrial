@@ -519,12 +519,26 @@ p {
 .turn-row {
   display: flex;
   align-items: center;
+  /* Wrapped so #turn-shortcut can take a line of its own below the status. */
+  flex-wrap: wrap;
   gap: 0.4rem;
   margin-top: 0.35rem;
 }
 
 .turn-row p {
   margin: 0;
+}
+
+/* Zero basis so the sentence never measures as too wide for the line: the ring
+   has to stay beside the text that explains it, at either stage width. */
+#turn-status {
+  flex: 1 1 0;
+}
+
+/* A line of its own. Left at its content width the hint fits beside the status
+   on the 260px stage and squeezes it to a few characters. */
+#turn-shortcut {
+  flex-basis: 100%;
 }
 
 .turn-ring {
