@@ -89,6 +89,7 @@ pub(crate) use prompts::{
 };
 pub(crate) use report::{
     MAX_ERROR_CHARS, Sanitized, sanitize_example_drawing_candidate, sanitize_report_candidate,
+    snap_plan_weaknesses,
 };
 pub use report::{
     MAX_SUMMARY_TEXT, ReportRounds, fallback_report, final_report, names_published_problem,
@@ -228,9 +229,9 @@ pub const THINKING_CHECK_IN_S: u64 = 120;
 pub(crate) const THINKING_RELEASE_COOLDOWN: std::time::Duration =
     std::time::Duration::from_secs(10);
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 45;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 46;
 pub const LIVE_PROMPT_VERSION: u32 = 34;
-pub const REPORT_PROMPT_VERSION: u32 = 25;
+pub const REPORT_PROMPT_VERSION: u32 = 26;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 4;
 

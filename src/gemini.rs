@@ -78,8 +78,9 @@ use {
         ReportAttemptFailure, ReportAttemptObserver, ReportAttempts, ReportCalls, ReportOutcome,
         ReportStep, ReportTransport, ReportTransportFailure, bounded_errors,
         compact_report_repair_echo, generate_report_request, generate_report_with_keys_at,
-        is_retryable, parse_report_text, repair_prompt, report_attempt_failure, report_attempts,
-        report_key_after_backoff, report_retry_backoff, salvage_report,
+        improvement_plan_guidance, is_retryable, parse_report_text, repair_prompt,
+        report_attempt_failure, report_attempts, report_key_after_backoff, report_retry_backoff,
+        salvage_report,
     },
 };
 
