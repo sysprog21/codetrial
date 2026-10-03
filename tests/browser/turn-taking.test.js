@@ -277,10 +277,11 @@ test("the page names the yield control and its shortcut the way the handler read
     button.indexOf("</button>"),
   );
   assert.equal(label.trim(), "Your turn is done");
-  assert.match(
-    button.slice(0, button.indexOf(">")),
-    /aria-keyshortcuts="Alt\+Enter"/,
-  );
+  const attributes = button.slice(0, button.indexOf(">"));
+  assert.match(attributes, /aria-keyshortcuts="Alt\+Enter"/);
+  // Apple keyboards print the modifier as the option sign, so the tooltip
+  // names the Mac chord the way the Run tests button names Command.
+  assert.match(attributes, /title="Alt\+Enter \/ &#8997;Enter"/);
   const ring = html.slice(html.indexOf('id="turn-ring"'));
   assert.match(
     ring.slice(0, ring.indexOf(">")),
@@ -290,8 +291,26 @@ test("the page names the yield control and its shortcut the way the handler read
   const copy = status
     .slice(status.indexOf(">") + 1, status.indexOf("</p>"))
     .replace(/\s+/g, " ");
-  assert.match(copy, /Your turn is done \(Alt\+Enter\)/);
-  // The shortcut the copy names is the one the handler takes.
+  assert.match(copy, /Choose Your turn is done to let Jim reply early\./);
+
+  // #turn-status is a live region, so a chord named there is read out again on
+  // every Thinking toggle, to a listener who may be on the other platform.
+  // The hint carries it instead, from an element nothing rewrites.
+  assert.doesNotMatch(copy, /Enter/);
+  const shortcut = html.slice(html.indexOf('id="turn-shortcut"'));
+  assert.doesNotMatch(
+    shortcut.slice(0, shortcut.indexOf(">")),
+    /role=|aria-live=/,
+  );
+  assert.equal(
+    shortcut
+      .slice(shortcut.indexOf(">") + 1, shortcut.indexOf("</p>"))
+      .replace(/\s+/g, " ")
+      .trim(),
+    "Alt+Enter, or &#8997;Enter on a Mac.",
+  );
+
+  // The shortcut the page names is the one the handler takes.
   const editor = { tagName: "TEXTAREA" };
   assert.equal(
     isYieldShortcut(
@@ -300,9 +319,10 @@ test("the page names the yield control and its shortcut the way the handler read
     ),
     true,
   );
-  // The status line the page restores after a hold says the same.
+  // The line the page restores after a hold goes into the same live region,
+  // so it carries no chord either.
   assert.match(
     read("web/interview.js"),
-    /Choose Your turn is done \(Alt\+Enter\) to let Jim reply early\./,
+    /: "Take your time\. Choose Your turn is done to let Jim reply early\.";/,
   );
 });

@@ -61,7 +61,7 @@
               id="yield-turn"
               class="pill-button"
               type="button"
-              title="Alt+Enter"
+              title="Alt+Enter / &#8997;Enter"
               aria-keyshortcuts="Alt+Enter"
             >
               Your turn is done
@@ -470,8 +470,16 @@
             hidden
           ></button>
           <p id="turn-status" class="muted small" role="status">
-            Take your time. Choose Your turn is done (Alt+Enter) to let Jim
-            reply early.
+            Take your time. Choose Your turn is done to let Jim reply early.
+          </p>
+          <!-- Outside the live region on purpose. A shortcut is reference, not
+               a status change, and naming it in #turn-status read both chords
+               out again on every Thinking toggle, telling a Windows listener
+               about a Mac key and the reverse. Nothing writes this element, so
+               it is announced once, as ordinary text. The same reasoning gave
+               #jim-avatar-status a span of its own. -->
+          <p id="turn-shortcut" class="muted small">
+            Alt+Enter, or &#8997;Enter on a Mac.
           </p>
         </div>
         <div

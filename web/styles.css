@@ -519,6 +519,9 @@ p {
 .turn-row {
   display: flex;
   align-items: center;
+  /* The shortcut hint sits beside the status line and drops below it rather
+     than squeezing both into two narrow columns when the panel is thin. */
+  flex-wrap: wrap;
   gap: 0.4rem;
   margin-top: 0.35rem;
 }

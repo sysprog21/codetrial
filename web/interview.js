@@ -2085,7 +2085,7 @@ function applyThinking(thinking) {
   nodes.thinking.setAttribute("aria-pressed", String(thinking));
   nodes.turnStatus.textContent = thinking
     ? "Jim will wait. Speak again or choose Continue when ready. The timer keeps running."
-    : "Take your time. Choose Your turn is done (Alt+Enter) to let Jim reply early.";
+    : "Take your time. Choose Your turn is done to let Jim reply early.";
   recordReplay("lifecycle", {
     state: thinking ? "thinking_started" : "thinking_ended",
   });
