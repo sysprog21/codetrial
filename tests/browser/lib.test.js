@@ -3209,13 +3209,16 @@ test("an agent report leaves the room only after its receipt had its chance", ()
     receive.match(/flushed\.then\(\(\) => room\??\.disconnect\(\)\)/g)?.length,
     2,
   );
-  assert.ok(
-    receive.indexOf("Promise.all([saving, flushed])") <
-      receive.indexOf("renderReportSaveStatus("),
-  );
-  assert.ok(
-    receive.indexOf("await flushed;") < receive.indexOf("reportRenderFailed("),
-  );
+  // Each pair is found before it is ordered, since a missing string's -1
+  // would otherwise sort first and pass.
+  for (const [first, then] of [
+    ["Promise.all([saving, flushed])", "renderReportSaveStatus("],
+    ["await flushed;", "reportRenderFailed("],
+  ]) {
+    const at = receive.indexOf(first);
+    assert.ok(at !== -1, first);
+    assert.ok(receive.indexOf(then, at) !== -1, `${then} after ${first}`);
+  }
 });
 
 test("a retry is recognised whether or not each copy could be hashed", async (t) => {

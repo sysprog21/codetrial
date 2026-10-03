@@ -1848,3 +1848,37 @@ async fn a_candidate_gone_when_the_wait_begins_gets_only_the_rejoin_grace() {
         drop(tx);
     }
 }
+
+/// The receipt that arrives unattributed because its sender just left is
+/// itself the event that reveals the departure, so presence is read before the
+/// receipt is judged rather than only for the events behind it.
+#[tokio::test(start_paused = true)]
+async fn an_unattributed_receipt_that_reveals_the_departure_is_acknowledged() {
+    let payload = br#"{"codingScore":80}"#.to_vec();
+    let id = crate::sha256_hex(&[&payload]);
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    sender
+        .send(RoomEvent::DataReceived {
+            payload: std::sync::Arc::new(receipt_bytes(&id)),
+            topic: Some("control".to_string()),
+            kind: ::livekit::prelude::DataPacketKind::Reliable,
+            participant: None,
+        })
+        .unwrap();
+    let presence_reads = std::cell::Cell::new(0);
+    let result = deliver_report(
+        |_| std::future::ready(Ok::<(), std::io::Error>(())),
+        &mut events,
+        "candidate",
+        "room",
+        || {
+            let reads = presence_reads.get();
+            presence_reads.set(reads + 1);
+            // Present when the wait starts, gone once the receipt is read.
+            reads == 0
+        },
+        delivery_test_packet(payload),
+    )
+    .await;
+    assert!(result.unwrap());
+}

@@ -190,10 +190,13 @@ where
         let wait = if candidate_present() {
             tokio::time::timeout_at(deadline, async {
                 while let Some(event) = events.recv().await {
-                    if event.acknowledges(candidate, &id, false) {
+                    // Presence first: the receipt that arrives unattributed
+                    // because its sender just left is this very event.
+                    let candidate_gone = event.disconnected() || !candidate_present();
+                    if event.acknowledges(candidate, &id, candidate_gone) {
                         return Wait::Acknowledged;
                     }
-                    if event.disconnected() || !candidate_present() {
+                    if candidate_gone {
                         return gone(events);
                     }
                 }
