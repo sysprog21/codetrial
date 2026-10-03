@@ -427,6 +427,18 @@
            at while the candidate works, so he goes where their eyes already
            are, and the stage never takes pointer events off the editor. -->
       <aside id="jim-stage" class="jim-stage">
+        <!-- The candidate's own camera, so a screen recorder captures their
+             face without opening the camera a second time. Hidden until the
+             media check passes and whenever there is no live camera. -->
+        <video
+          id="self-view"
+          class="self-view"
+          muted
+          playsinline
+          autoplay
+          hidden
+          aria-label="Your camera"
+        ></video>
         <!-- data-avatar-state is the fallback contract: only "ready" shows
              the canvas, every other value shows the neutral panel below it.
              web/avatar/avatar.js owns the value; the CSS owns what it looks

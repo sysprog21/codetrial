@@ -22,6 +22,7 @@ import {
 } from "./editor.js";
 import { createDevicePool } from "./devices.js";
 import { createFaceCheck } from "./face-check.js";
+import { attachSelfView } from "./self-view.js";
 import { createMicMeter, startMediaMeter } from "./mic-meter.js";
 import {
   createTranscriptView,
@@ -394,6 +395,7 @@ const nodes = {
   cameraNameDisclosure: document.querySelector("#camera-name-disclosure"),
   cameraSkip: document.querySelector("#camera-skip"),
   cameraIntegrityVideo: document.querySelector("#camera-integrity-video"),
+  selfView: document.querySelector("#self-view"),
   audioJoin: document.querySelector("#audio-check-join"),
   audioLeave: document.querySelector("#audio-check-leave"),
   meetPresentation: document.querySelector("#meet-presentation"),
@@ -472,6 +474,8 @@ async function init() {
   // track that is about to vanish is what made this a special case everywhere.
   const presenting = nodes.meetPresentation.checked && !preflight.cameraSkipped;
   if (presenting) releaseCameraToPresenter(preflight.userStream);
+  // After the release, so a camera handed to Meet is simply absent here too.
+  detachSelfView = attachSelfView(nodes.selfView, preflight.userStream);
   // Now that the preflight holds a grant, the browser reports real device ids
   // and labels. Before this point the list is empty or a blank placeholder.
   void refreshAudioOutputs();
@@ -1351,8 +1355,14 @@ function setLocalAudioEnabled(enabled) {
   }
 }
 
+// Stopping a track fires no `ended`, so the teardown has to take the self view
+// down itself or it would sit on the report frozen on the last frame.
+let detachSelfView = () => {};
+
 function stopLocalMedia() {
   stopIntegrityWorker();
+  detachSelfView();
+  detachSelfView = () => {};
   stopPreflight({ userStream: state.localUserStream });
   state.localUserStream = null;
   clearInterval(state.integrityHeartbeatTimer);
