@@ -75,8 +75,14 @@ test("interview history routes through the shared persistence helper", () => {
   for (const name of ["receiveReport", "showReport"]) {
     const body = functionBody(script, name);
     assert.match(body, /renderReport\(\)/);
-    assert.match(body, /renderReportSaveStatus\(await saving\)/);
-    assert.ok(body.indexOf("renderReport()") < body.indexOf("await saving"));
+    // An agent report also waits on its receipt before Done may navigate.
+    const awaited = body.search(/await (saving|Promise\.all\(\[saving\b)/);
+    assert.ok(awaited !== -1, `${name} awaits the history save`);
+    assert.match(
+      body,
+      /renderReportSaveStatus\(await saving\)|await Promise\.all\(\[saving, flushed\]\)[\s\S]*renderReportSaveStatus\(/,
+    );
+    assert.ok(body.indexOf("renderReport()") < awaited);
   }
   assert.match(functionBody(script, "renderReport"), /saveResult: null/);
   assert.match(

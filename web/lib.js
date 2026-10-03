@@ -293,6 +293,70 @@ export function acceptsReport(topic, participant) {
   return topic === topics.report && isAgent(participant);
 }
 
+/// Claims a report copy, synchronously, so the caller can decide before its
+/// first await whether this copy is the one that renders. Keyed on the bytes
+/// rather than the digest, so a copy whose digest failed and one whose digest
+/// worked are still the same delivery.
+export function claimReport(payload, received) {
+  const key = new TextDecoder().decode(payload);
+  const first = !received.has(key);
+  received.add(key);
+  return first;
+}
+
+/// Receipts name the exact packet bytes, leaving the report schema unchanged.
+/// Null where Web Crypto is unavailable; display does not depend on it.
+export async function reportReceipt(payload) {
+  try {
+    return reportReceiptPayload(await sha256Hex(payload));
+  } catch {
+    return null;
+  }
+}
+
+/// Renders a first copy without waiting on its receipt, not even on hashing
+/// it. `receive` is handed a promise that settles once the receipt has had its
+/// chance to leave, which is the earliest the page may disconnect or navigate;
+/// a retransmitted copy only needs its receipt.
+export async function receiveReportDelivery(
+  payload,
+  first,
+  publishReceipt,
+  receive,
+) {
+  const flushed = sendReportReceipt(payload, publishReceipt);
+  if (first) await receive(payload, flushed);
+  await flushed;
+}
+
+/// Hashing and publication share one bound, so neither can hold the page.
+async function sendReportReceipt(payload, publishReceipt) {
+  let timer;
+  let queued;
+  try {
+    queued = await Promise.race([
+      reportReceipt(payload)
+        .then(async (receipt) => {
+          if (!receipt) return false;
+          await publishReceipt(receipt);
+          return true;
+        })
+        .catch(() => false),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(false), 1000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  // Publication queues the receipt; let it leave before the page disconnects.
+  if (queued) await new Promise((resolve) => setTimeout(resolve, 250));
+}
+
+export function reportReceiptPayload(deliveryId) {
+  return { type: "report_received", deliveryId };
+}
+
 // Data-channel payload builders. The agent decodes these by key, so they are
 // a wire contract; web/tests/lib.test.js pins the exact shapes.
 
@@ -465,12 +529,16 @@ export async function integrityEventPayload(
     detail: event.detail,
   };
   if (event.sourceEventIds.length) body.sourceEventIds = event.sourceEventIds;
-  const bytes = new TextEncoder().encode(canonicalJson(body));
+  event.hash = await sha256Hex(new TextEncoder().encode(canonicalJson(body)));
+  return event;
+}
+
+/// Lowercase hex, the spelling `sha256_hex` produces on the agent side.
+async function sha256Hex(bytes) {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
-  event.hash = [...new Uint8Array(digest)]
+  return [...new Uint8Array(digest)]
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
-  return event;
 }
 
 /// The two frameworks, kept apart on purpose.

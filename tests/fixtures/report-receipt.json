@@ -1,0 +1,12 @@
+{
+  "topic": "control",
+  "cases": [
+    {
+      "name": "received report",
+      "payload": {
+        "type": "report_received",
+        "deliveryId": "a6eb5f83ac3b057d6ca883e4c844bb990c1047e8b42bd05fae824424c042a93f"
+      }
+    }
+  ]
+}

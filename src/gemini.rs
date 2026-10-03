@@ -44,7 +44,7 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Bounds the close handshake the same way. The socket being closed is most
 /// often the one that stopped answering, and a close that waits on it held up
 /// the reconnect and the agent's exit behind a peer that was already gone.
-const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 /// How often the room loop pings. A socket nobody is writing to cannot fail a
 /// write, and a paused interview writes nothing, so without a ping a peer that
 /// went away there would not be noticed until something was finally said.
