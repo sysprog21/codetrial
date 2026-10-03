@@ -17,15 +17,12 @@ const {
   listRoomParticipants,
   removeParticipant,
 } = require("./livekit-room-service.cjs");
+const { problemPages, judgeCaseCount } = require("./judge-case-counts.cjs");
 
 // The browser loads scenario names, while the checks stay keyed by the stable
 // bank ids that identify their judges and candidate programs. Reading the
 // generated map makes that boundary explicit instead of letting a removed
 // problem file decide which scenario each flow happens to exercise.
-const problemPages = JSON.parse(
-  fs.readFileSync(`${__dirname}/../web/problem-pages.json`, "utf8"),
-);
-
 function scenario(problemId) {
   const entry = problemPages[problemId];
   if (!entry) throw new Error(`no scenario page for ${problemId}`);
@@ -832,7 +829,8 @@ async function isolateRustAgent(
       // instead of the agent output above.
       agentFailure.catch(() => {});
     }
-    async function runAndExpectPassing(expected, timeout = 30000) {
+    async function runAndExpectPassing(problemId, timeout = 30000) {
+      const expected = judgeCaseCount(problemId);
       await page.getByRole("button", { name: /Run tests/ }).click();
       await page
         .getByRole("button", { name: "Run tests" })
@@ -1052,7 +1050,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
     return out;
 }
 `);
-        await runAndExpectPassing(5, 120000);
+        await runAndExpectPassing("two-sum", 120000);
         await page.goto(interviewUrl("min-stack"), {
           waitUntil: "domcontentloaded",
         });
@@ -1081,7 +1079,7 @@ public:
     int getMin() { return minimums.back(); }
 };
 `);
-        await runAndExpectPassing(5, 120000);
+        await runAndExpectPassing("min-stack", 120000);
         await page.goto(interviewUrl("binary-search-tree-iterator"), {
           waitUntil: "domcontentloaded",
         });
@@ -1111,7 +1109,7 @@ public:
     public boolean hasNext() { return !stack.isEmpty(); }
 }
 `);
-        await runAndExpectPassing(5, 120000);
+        await runAndExpectPassing("binary-search-tree-iterator", 120000);
         return;
       }
       if (compilerExplorerBaseUrl !== "__default__") {
@@ -1143,7 +1141,9 @@ function matchDisputedCharge() {
 `);
       await page.getByRole("button", { name: /Run tests/ }).click();
       await page.getByRole("button", { name: "Run tests" }).waitFor();
-      await page.getByText("Test results · 0/5").waitFor();
+      await page
+        .getByText(`Test results · 0/${judgeCaseCount("two-sum")}`)
+        .waitFor();
       await page.getByLabel("Code editor")
         .fill(`function matchDisputedCharge(nums, target) {
   const seen = new Map();
@@ -1155,7 +1155,7 @@ function matchDisputedCharge() {
   return [];
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("two-sum");
       await page.getByRole("button", { name: "C++" }).click();
       await page.getByLabel("Code editor").fill(`class Solution {
 public:
@@ -1170,7 +1170,7 @@ public:
     }
 };
 `);
-      await runAndExpectPassing(5, 120000);
+      await runAndExpectPassing("two-sum", 120000);
       await page.getByLabel("Code editor").fill(`class Solution {
 public:
     vector<int> matchDisputedCharge(vector<int>& nums, int target) {
@@ -1207,7 +1207,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
     return out;
 }
 `);
-      await runAndExpectPassing(5, 120000);
+      await runAndExpectPassing("two-sum", 120000);
       await page.getByRole("button", { name: "Python" }).click();
       await page.getByLabel("Code editor").fill(`class Solution:
     def matchDisputedCharge(self, nums, target):
@@ -1219,7 +1219,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
             seen[value] = i
         return []
 `);
-      await runAndExpectPassing(5, 120000);
+      await runAndExpectPassing("two-sum", 120000);
       await page.getByRole("button", { name: "Transcript" }).click();
       await page.locator("p").filter({ hasText: /^Jim$/ }).first().waitFor();
       await page.locator("p").filter({ hasText: /^You$/ }).first().waitFor();
@@ -1250,7 +1250,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
   }
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("merge-sorted-array");
 
       await page.goto(interviewUrl("remove-duplicates-from-sorted-array-ii"), {
         waitUntil: "domcontentloaded",
@@ -1277,7 +1277,11 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
 `);
       await page.getByRole("button", { name: /Run tests/ }).click();
       await page.getByRole("button", { name: "Run tests" }).waitFor();
-      await page.getByText("Test results · 0/5").waitFor();
+      await page
+        .getByText(
+          `Test results · 0/${judgeCaseCount("remove-duplicates-from-sorted-array-ii")}`,
+        )
+        .waitFor();
       await page.getByLabel("Code editor")
         .fill(`function capRepeatsAtTwo(nums) {
   let write = 0;
@@ -1289,7 +1293,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
   return write;
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("remove-duplicates-from-sorted-array-ii");
 
       await page.goto(interviewUrl("merge-two-sorted-lists"), {
         waitUntil: "domcontentloaded",
@@ -1321,7 +1325,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
   return dummy.next;
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("merge-two-sorted-lists");
 
       await page.goto(interviewUrl("copy-list-with-random-pointer"), {
         waitUntil: "domcontentloaded",
@@ -1347,7 +1351,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
   return copies.get(head);
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("copy-list-with-random-pointer");
 
       await page.goto(interviewUrl("rotate-list"), {
         waitUntil: "domcontentloaded",
@@ -1377,7 +1381,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
   return next;
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("rotate-list");
 
       await page.goto(interviewUrl("invert-binary-tree"), {
         waitUntil: "domcontentloaded",
@@ -1399,7 +1403,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
   return root;
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("invert-binary-tree");
 
       await page.goto(
         interviewUrl(
@@ -1434,7 +1438,9 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
   return build(0, inorder.length - 1);
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing(
+        "construct-binary-tree-from-preorder-and-inorder-traversal",
+      );
 
       await page.goto(
         interviewUrl("populating-next-right-pointers-in-each-node-ii"),
@@ -1464,7 +1470,9 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
   return root;
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing(
+        "populating-next-right-pointers-in-each-node-ii",
+      );
 
       await page.goto(interviewUrl("binary-search-tree-iterator"), {
         waitUntil: "domcontentloaded",
@@ -1501,7 +1509,7 @@ OrderedCursor.prototype.hasNext = function() {
   return this.stack.length > 0;
 };
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("binary-search-tree-iterator");
 
       await page.goto(interviewUrl("lowest-common-ancestor-of-a-binary-tree"), {
         waitUntil: "domcontentloaded",
@@ -1524,7 +1532,7 @@ OrderedCursor.prototype.hasNext = function() {
   return left || right;
 }
 `);
-      await runAndExpectPassing(6);
+      await runAndExpectPassing("lowest-common-ancestor-of-a-binary-tree");
 
       await page.goto(
         interviewUrl("binary-tree-zigzag-level-order-traversal"),
@@ -1561,7 +1569,7 @@ OrderedCursor.prototype.hasNext = function() {
   return rows;
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("binary-tree-zigzag-level-order-traversal");
 
       await page.goto(interviewUrl("validate-binary-search-tree"), {
         waitUntil: "domcontentloaded",
@@ -1585,7 +1593,7 @@ OrderedCursor.prototype.hasNext = function() {
   return valid(root, -Infinity, Infinity);
 }
 `);
-      await runAndExpectPassing(7);
+      await runAndExpectPassing("validate-binary-search-tree");
 
       await page.goto(interviewUrl("clone-graph"), {
         waitUntil: "domcontentloaded",
@@ -1610,7 +1618,7 @@ OrderedCursor.prototype.hasNext = function() {
   return clone(node);
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("clone-graph");
 
       await page.goto(interviewUrl("course-schedule-ii"), {
         waitUntil: "domcontentloaded",
@@ -1647,7 +1655,7 @@ OrderedCursor.prototype.hasNext = function() {
   return order.length === migrationCount ? order : [];
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("course-schedule-ii");
 
       await page.goto(interviewUrl("implement-trie-prefix-tree"), {
         waitUntil: "domcontentloaded",
@@ -1693,7 +1701,7 @@ CommandIndex.prototype.find = function(text) {
   return node;
 };
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("implement-trie-prefix-tree");
 
       await page.goto(
         interviewUrl("design-add-and-search-words-data-structure"),
@@ -1739,7 +1747,7 @@ PatternLexicon.prototype.search = function(word) {
   return dfs(this, 0);
 };
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("design-add-and-search-words-data-structure");
 
       await page.goto(interviewUrl("combination-sum"), {
         waitUntil: "domcontentloaded",
@@ -1772,7 +1780,7 @@ PatternLexicon.prototype.search = function(word) {
   return results;
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("combination-sum");
 
       await page.goto(interviewUrl("permutations"), {
         waitUntil: "domcontentloaded",
@@ -1804,7 +1812,7 @@ PatternLexicon.prototype.search = function(word) {
   return results;
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("permutations");
 
       await page.goto(interviewUrl("generate-parentheses"), {
         waitUntil: "domcontentloaded",
@@ -1833,7 +1841,7 @@ PatternLexicon.prototype.search = function(word) {
   return results;
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("generate-parentheses");
 
       await page.goto(interviewUrl("n-queens-ii"), {
         waitUntil: "domcontentloaded",
@@ -1869,7 +1877,7 @@ PatternLexicon.prototype.search = function(word) {
   return count;
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("n-queens-ii");
 
       await page.goto(interviewUrl("word-search"), {
         waitUntil: "domcontentloaded",
@@ -1903,7 +1911,7 @@ PatternLexicon.prototype.search = function(word) {
   return false;
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("word-search");
 
       await page.goto(
         interviewUrl("convert-sorted-array-to-binary-search-tree"),
@@ -1928,7 +1936,7 @@ PatternLexicon.prototype.search = function(word) {
   return build(0, nums.length - 1);
 }
 `);
-      await runAndExpectPassing(5);
+      await runAndExpectPassing("convert-sorted-array-to-binary-search-tree");
 
       await page.getByRole("button", { name: "End interview" }).click();
       await page

@@ -10,8 +10,9 @@ cleanup()
 trap cleanup EXIT INT TERM
 
 if [ "${REPORT_PARITY_CHECK_VALIDATE_FIXTURES_ONLY:-}" ]; then
-    PY_CAPTURE="$ROOT/tests/golden/report-python.json" node << 'NODE'
+    PY_CAPTURE="$ROOT/tests/golden/report-python.json" CASE_COUNTS_MODULE="$ROOT/scripts/judge-case-counts.cjs" node << 'NODE'
 const fs = require("fs");
+const { validateReportCaseCount } = require(process.env.CASE_COUNTS_MODULE);
 const capture = JSON.parse(fs.readFileSync(process.env.PY_CAPTURE, "utf8"));
 function assert(condition, message) {
   if (!condition) {
@@ -20,7 +21,7 @@ function assert(condition, message) {
   }
 }
 assert(capture.problemTitle === "Two Sum", "report reference problem mismatch");
-assert(capture.testResultText && capture.testResultText !== "Couldn't run your code", "report reference missing test result");
+validateReportCaseCount(capture.testResultText, "two-sum");
 assert(Array.isArray(capture.reportKeys), "report reference missing keys");
 for (const key of ["codingScore", "communicationScore", "decision", "summary", "codingFeedback", "communicationFeedback", "hintsUsed"]) {
   assert(capture.reportKeys.includes(key), `report reference missing ${key}`);
