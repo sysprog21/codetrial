@@ -2196,7 +2196,7 @@ fn tool_ack_pcm(
 /// No `?key=` here on purpose. A `reqwest` error Displays the URL it was built
 /// from, and this call's errors reach the candidate's browser in the report
 /// failure note, so the credential travels in a header instead.
-fn gemini_generate_content_url(model: &str) -> String {
+pub fn gemini_generate_content_url(model: &str) -> String {
     format!(
         "{}/v1beta/models/{}:generateContent",
         rest_base(),
