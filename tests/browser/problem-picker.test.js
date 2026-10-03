@@ -145,6 +145,22 @@ test("a due review at a level the lobby moved past is still recommended", () => 
   assert.equal(choice.review.intervalDays, 1);
 });
 
+test("a due review outside an opt-in filter stays the first priority", () => {
+  const now = 10 * day;
+  const filtered = bank.filter((problem) => problem.id !== "passed");
+  const choice = pickProblem(
+    filtered,
+    new Set(["Easy"]),
+    [completed("passed", now - day)],
+    first,
+    now,
+    undefined,
+    bank,
+  );
+  assert.equal(choice.picked.id, "passed");
+  assert.equal(choice.review.intervalDays, 1);
+});
+
 test("a failed review resets the interval", () => {
   const now = 10 * day;
   const choice = pickProblem(

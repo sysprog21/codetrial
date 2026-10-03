@@ -46,7 +46,6 @@ const SIGNED_OUT = {
   start: "Start interview",
   "progress-summary": "Could not load progress saved on this device.",
 };
-
 test("the lobby page loads outside a browser and says what it was given", () => {
   for (const [id, expected] of Object.entries(SIGNED_OUT)) {
     assert.deepEqual(dom.node(id).spoken(), [expected], `#${id}`);

@@ -49,7 +49,13 @@ body {
   margin: 0;
   background: var(--page);
   color: var(--ink);
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
 }
 
 button {
@@ -227,6 +233,40 @@ p {
   margin: 0.5rem 0;
 }
 
+.practice-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding: 0;
+  border: 0;
+}
+
+.practice-filters legend {
+  width: 100%;
+  color: var(--sub);
+  font-weight: 700;
+}
+
+.practice-filters select,
+.practice-filters button {
+  min-height: 2.5rem;
+}
+
+.practice-filters select {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.practice-filters p {
+  width: 100%;
+  margin: 0;
+}
+
 .interview-kicker {
   margin-bottom: 0.5rem;
   color: var(--sub);
@@ -289,6 +329,23 @@ p {
 
 .start-row {
   margin-top: 1rem;
+}
+
+.recent-performance {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.recent-performance h2,
+.recent-performance p {
+  margin: 0;
+}
+
+.recent-performance p + p {
+  margin-top: 0.5rem;
 }
 
 .interview-context {

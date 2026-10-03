@@ -61,6 +61,7 @@ register("./dom-hooks.js", pathToFileURL(`${import.meta.dirname}/`));
 /// properties that put a string on the page without going through `textContent`.
 const SPOKEN_ATTRIBUTES = ["title", "ariaLabel", "alt", "placeholder", "value"];
 const MARKUP = ["innerHTML", "innerText", "outerHTML"];
+const FORM_CONTROLS = new Set(["button", "input", "select", "textarea"]);
 
 class Element {
   #text = "";
@@ -334,7 +335,20 @@ export function installDocument(markup) {
   // `#start` and `button#start` render into two different places, which is a
   // page a browser cannot produce.
   const node = (element) => {
-    if (!nodes.has(element)) nodes.set(element, new Element(element.tag));
+    if (!nodes.has(element)) {
+      const created = new Element(element.tag);
+      for (const [name, value] of Object.entries(element.attributes)) {
+        if (name.startsWith("data-")) {
+          const key = name
+            .slice(5)
+            .replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+          created.dataset[key] = value;
+        }
+      }
+      if (FORM_CONTROLS.has(element.tag) && "value" in element.attributes)
+        created.value = element.attributes.value;
+      nodes.set(element, created);
+    }
     return nodes.get(element);
   };
   globalThis.document = {

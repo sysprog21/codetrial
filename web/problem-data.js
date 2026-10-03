@@ -17,6 +17,7 @@
 // those links without restoring duplicate problem files, and is fetched only
 // after the scenario-name lookup misses.
 let pageMap;
+let topicMap;
 
 const judges = new Map();
 
@@ -96,6 +97,17 @@ export function loadPageMap() {
     throw error;
   });
   return pageMap;
+}
+
+/// The page-to-topic lookup is absent from the initial lobby HTML because it
+/// gives away the techniques behind every scenario. It arrives only after the
+/// candidate opens the problem picker to filter by topic.
+export function loadTopicMap() {
+  topicMap ??= fetchJson("/problem-topics.json").catch((error) => {
+    topicMap = undefined;
+    throw error;
+  });
+  return topicMap;
 }
 
 /// `page` is the problem's page name, the only name the browser uses for it.

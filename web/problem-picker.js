@@ -147,6 +147,8 @@ function step(level, by) {
 ///
 /// The optional clock keeps the scheduling rule deterministic in its tests.
 /// An explicit redraw avoids the current problem whenever another is available.
+/// `reviewProblems` stays broader than `problems` when an opt-in filter narrows
+/// new practice: a due review remains the first priority across those filters.
 export function pickProblem(
   problems,
   difficulties,
@@ -154,6 +156,7 @@ export function pickProblem(
   random = Math.random,
   now = Date.now(),
   avoid,
+  reviewProblems = problems,
 ) {
   const eligible = problems.filter((problem) =>
     difficulties.has(problem.difficulty),
@@ -165,7 +168,7 @@ export function pickProblem(
       .filter((entry) => entry?.report?.decision === "HIRE")
       .map((entry) => entry.problemId),
   );
-  const due = problems.filter((problem) => reviews.get(problem.id)?.due);
+  const due = reviewProblems.filter((problem) => reviews.get(problem.id)?.due);
   const fresh = eligible.filter((problem) => !passed.has(problem.id));
   const choices =
     [due, fresh, eligible]

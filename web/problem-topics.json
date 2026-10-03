@@ -1,0 +1,755 @@
+{
+  "template-delimiter-audit": [
+    "String",
+    "Stack"
+  ],
+  "chargeback-pair-match": [
+    "Array",
+    "Hash Table"
+  ],
+  "firmware-buffer-splice": [
+    "Array",
+    "Two Pointers",
+    "Sorting"
+  ],
+  "muted-alert-filter": [
+    "Array",
+    "Two Pointers"
+  ],
+  "telemetry-reading-dedupe": [
+    "Array",
+    "Two Pointers"
+  ],
+  "alert-digest-trimming": [
+    "Array",
+    "Two Pointers"
+  ],
+  "replica-quorum-version": [
+    "Array",
+    "Hash Table",
+    "Divide and Conquer",
+    "Counting"
+  ],
+  "carousel-slot-shift": [
+    "Array",
+    "Math",
+    "Two Pointers"
+  ],
+  "single-resale-window": [
+    "Array",
+    "Dynamic Programming"
+  ],
+  "single-slot-reseller": [
+    "Array",
+    "Dynamic Programming",
+    "Greedy"
+  ],
+  "relay-chain-reachability": [
+    "Array",
+    "Dynamic Programming",
+    "Greedy"
+  ],
+  "drone-pad-hopping": [
+    "Array",
+    "Dynamic Programming",
+    "Greedy"
+  ],
+  "package-impact-score": [
+    "Array",
+    "Sorting",
+    "Counting Sort"
+  ],
+  "backend-pool-sampler": [
+    "Array",
+    "Hash Table",
+    "Math",
+    "Design",
+    "Randomized"
+  ],
+  "pipeline-stage-gains": [
+    "Array",
+    "Prefix Sum"
+  ],
+  "circular-route-charging": [
+    "Array",
+    "Greedy"
+  ],
+  "shift-crew-bonus-points": [
+    "Array",
+    "Greedy"
+  ],
+  "terrain-runoff-pooling": [
+    "Array",
+    "Two Pointers",
+    "Dynamic Programming",
+    "Stack",
+    "Monotonic Stack"
+  ],
+  "archive-volume-numbers": [
+    "Hash Table",
+    "Math",
+    "String"
+  ],
+  "film-credits-year-stamp": [
+    "Hash Table",
+    "Math",
+    "String"
+  ],
+  "autocomplete-token-width": [
+    "String"
+  ],
+  "metric-namespace-root": [
+    "String",
+    "Trie"
+  ],
+  "backwards-caption-repair": [
+    "String",
+    "Two Pointers"
+  ],
+  "bouncing-print-head": [
+    "String"
+  ],
+  "firmware-signature-scan": [
+    "Two Pointers",
+    "String",
+    "String Matching"
+  ],
+  "thermal-receipt-layout": [
+    "Array",
+    "String",
+    "Simulation"
+  ],
+  "mirror-phrase-contest-filter": [
+    "Two Pointers",
+    "String"
+  ],
+  "ordered-event-trace-check": [
+    "Two Pointers",
+    "String",
+    "Dynamic Programming"
+  ],
+  "billboard-pole-banner": [
+    "Array",
+    "Two Pointers",
+    "Greedy"
+  ],
+  "gift-card-bundle-pair": [
+    "Array",
+    "Two Pointers",
+    "Binary Search"
+  ],
+  "ledger-cancellation-groups": [
+    "Array",
+    "Two Pointers",
+    "Sorting"
+  ],
+  "firmware-checksum-settling": [
+    "Hash Table",
+    "Math",
+    "Two Pointers"
+  ],
+  "distinct-keystroke-stretch": [
+    "Hash Table",
+    "String",
+    "Sliding Window"
+  ],
+  "required-marker-span": [
+    "Hash Table",
+    "String",
+    "Sliding Window"
+  ],
+  "packet-chunk-block-offsets": [
+    "Hash Table",
+    "String",
+    "Sliding Window"
+  ],
+  "shortest-upload-batch": [
+    "Array",
+    "Binary Search",
+    "Sliding Window",
+    "Prefix Sum"
+  ],
+  "puzzle-grid-save-check": [
+    "Array",
+    "Hash Table",
+    "Matrix"
+  ],
+  "led-panel-ring-scan": [
+    "Array",
+    "Matrix",
+    "Simulation"
+  ],
+  "sensor-frame-quarter-turn": [
+    "Array",
+    "Math",
+    "Matrix"
+  ],
+  "faulty-sensor-grid-blanking": [
+    "Array",
+    "Hash Table",
+    "Matrix"
+  ],
+  "microbe-culture-tick": [
+    "Array",
+    "Matrix",
+    "Simulation"
+  ],
+  "marquee-letter-tiles": [
+    "Hash Table",
+    "String",
+    "Counting"
+  ],
+  "anonymizer-substitution-audit": [
+    "Hash Table",
+    "String"
+  ],
+  "log-line-shape-template": [
+    "Hash Table",
+    "String"
+  ],
+  "scrambled-label-match": [
+    "Hash Table",
+    "String",
+    "Sorting"
+  ],
+  "letter-rack-clusters": [
+    "Array",
+    "Hash Table",
+    "String",
+    "Sorting"
+  ],
+  "recent-card-repeat-alert": [
+    "Array",
+    "Hash Table",
+    "Sliding Window"
+  ],
+  "allocated-port-block": [
+    "Array",
+    "Hash Table",
+    "Union Find"
+  ],
+  "rack-slot-range-labels": [
+    "Array"
+  ],
+  "room-booking-busy-blocks": [
+    "Array"
+  ],
+  "batch-health-check-windows": [
+    "Array",
+    "Greedy",
+    "Sorting"
+  ],
+  "upload-location-normalizer": [
+    "String",
+    "Stack"
+  ],
+  "tentative-bid-ledger": [
+    "Stack",
+    "Design"
+  ],
+  "pricing-rule-bytecode": [
+    "Array",
+    "Math",
+    "Stack"
+  ],
+  "budget-sheet-formulas": [
+    "Math",
+    "String",
+    "Stack",
+    "Recursion"
+  ],
+  "workflow-handoff-loop": [
+    "Hash Table",
+    "Linked List",
+    "Two Pointers"
+  ],
+  "odometer-digit-chains": [
+    "Linked List",
+    "Math",
+    "Recursion"
+  ],
+  "replica-event-interleave": [
+    "Linked List",
+    "Recursion"
+  ],
+  "outline-snapshot-duplicator": [
+    "Hash Table",
+    "Linked List"
+  ],
+  "playlist-segment-flip": [
+    "Linked List"
+  ],
+  "radio-frame-batching": [
+    "Linked List",
+    "Recursion"
+  ],
+  "activity-feed-retraction": [
+    "Linked List",
+    "Two Pointers"
+  ],
+  "single-scan-badge-filter": [
+    "Linked List",
+    "Two Pointers"
+  ],
+  "playlist-tail-wraparound": [
+    "Linked List",
+    "Two Pointers"
+  ],
+  "print-queue-triage": [
+    "Linked List",
+    "Two Pointers"
+  ],
+  "edge-thumbnail-store": [
+    "Hash Table",
+    "Linked List",
+    "Design"
+  ],
+  "fraud-rule-worst-case": [
+    "Tree",
+    "DFS",
+    "BFS",
+    "Binary Tree"
+  ],
+  "staging-drift-check": [
+    "Tree",
+    "DFS",
+    "BFS",
+    "Binary Tree"
+  ],
+  "right-to-left-layout": [
+    "Tree",
+    "DFS",
+    "BFS",
+    "Binary Tree"
+  ],
+  "kiosk-panel-mirror-audit": [
+    "Tree",
+    "DFS",
+    "BFS",
+    "Binary Tree"
+  ],
+  "crash-dump-index-rebuild": [
+    "Array",
+    "Hash Table",
+    "Divide and Conquer",
+    "Tree",
+    "Binary Tree"
+  ],
+  "query-parse-cache-restore": [
+    "Array",
+    "Hash Table",
+    "Divide and Conquer",
+    "Tree",
+    "Binary Tree"
+  ],
+  "org-chart-row-navigation": [
+    "Linked List",
+    "Tree",
+    "DFS",
+    "BFS",
+    "Binary Tree"
+  ],
+  "screen-reader-menu-chain": [
+    "Linked List",
+    "Stack",
+    "Tree",
+    "DFS",
+    "Binary Tree"
+  ],
+  "dungeon-route-budget": [
+    "Tree",
+    "DFS",
+    "BFS",
+    "Binary Tree"
+  ],
+  "menu-extension-checksum": [
+    "Tree",
+    "DFS",
+    "Binary Tree"
+  ],
+  "grid-segment-net-yield": [
+    "Dynamic Programming",
+    "Tree",
+    "DFS",
+    "Binary Tree"
+  ],
+  "ordered-index-cursor": [
+    "Stack",
+    "Tree",
+    "Design",
+    "Binary Search Tree",
+    "Binary Tree",
+    "Iterator"
+  ],
+  "heap-slot-census": [
+    "Binary Search",
+    "Bit Manipulation",
+    "Tree",
+    "Binary Tree"
+  ],
+  "shared-approver-lookup": [
+    "Tree",
+    "DFS",
+    "Binary Tree"
+  ],
+  "collapsed-panel-labels": [
+    "Tree",
+    "DFS",
+    "BFS",
+    "Binary Tree"
+  ],
+  "hop-depth-signal-means": [
+    "Tree",
+    "DFS",
+    "BFS",
+    "Binary Tree"
+  ],
+  "rollout-wave-planner": [
+    "Tree",
+    "BFS",
+    "Binary Tree"
+  ],
+  "serpentine-tier-sweep": [
+    "Tree",
+    "BFS",
+    "Binary Tree"
+  ],
+  "tightest-channel-spacing": [
+    "Tree",
+    "DFS",
+    "BFS",
+    "Binary Search Tree",
+    "Binary Tree"
+  ],
+  "latency-rank-query": [
+    "Tree",
+    "DFS",
+    "Binary Search Tree",
+    "Binary Tree"
+  ],
+  "restored-index-integrity": [
+    "Tree",
+    "DFS",
+    "BFS",
+    "Binary Search Tree",
+    "Binary Tree"
+  ],
+  "copper-pad-continuity": [
+    "Matrix",
+    "DFS",
+    "BFS",
+    "Union Find"
+  ],
+  "sealed-air-pocket-backfill": [
+    "Matrix",
+    "DFS",
+    "BFS",
+    "Union Find"
+  ],
+  "sandbox-topology-replica": [
+    "Hash Table",
+    "DFS",
+    "BFS",
+    "Graph"
+  ],
+  "lab-unit-converter": [
+    "Array",
+    "String",
+    "DFS",
+    "BFS",
+    "Union Find",
+    "Graph"
+  ],
+  "onboarding-track-feasibility": [
+    "DFS",
+    "BFS",
+    "Graph",
+    "Topological Sort"
+  ],
+  "migration-run-order": [
+    "DFS",
+    "BFS",
+    "Graph",
+    "Topological Sort"
+  ],
+  "portal-dice-race": [
+    "Array",
+    "BFS",
+    "Matrix"
+  ],
+  "approved-sequence-edits": [
+    "Hash Table",
+    "String",
+    "BFS"
+  ],
+  "hostname-rename-chain": [
+    "Hash Table",
+    "String",
+    "BFS"
+  ],
+  "command-palette-index": [
+    "Hash Table",
+    "String",
+    "Design",
+    "Trie"
+  ],
+  "crossword-pattern-matcher": [
+    "String",
+    "DFS",
+    "Design",
+    "Trie"
+  ],
+  "letter-grid-tracer": [
+    "Array",
+    "String",
+    "Backtracking",
+    "Trie",
+    "Matrix"
+  ],
+  "vanity-dial-expansion": [
+    "Hash Table",
+    "String",
+    "Backtracking"
+  ],
+  "canary-host-selection": [
+    "Backtracking"
+  ],
+  "startup-order-sweep": [
+    "Array",
+    "Backtracking"
+  ],
+  "freight-pallet-loadouts": [
+    "Array",
+    "Backtracking"
+  ],
+  "interference-free-towers": [
+    "Backtracking"
+  ],
+  "nesting-fuzzer-corpus": [
+    "String",
+    "Dynamic Programming",
+    "Backtracking"
+  ],
+  "letter-panel-tracing": [
+    "Array",
+    "String",
+    "Backtracking",
+    "Matrix"
+  ],
+  "sensor-calibration-index": [
+    "Array",
+    "Divide and Conquer",
+    "Tree",
+    "Binary Search Tree",
+    "Binary Tree"
+  ],
+  "maintenance-window-consolidation": [
+    "Array",
+    "Sorting"
+  ],
+  "mirrored-tag-segment": [
+    "String",
+    "Dynamic Programming",
+    "Two Pointers"
+  ],
+  "sorted-schedule-slot": [
+    "Array",
+    "Binary Search"
+  ],
+  "serial-counter-advance": [
+    "Array",
+    "Math"
+  ],
+  "wide-register-arithmetic": [
+    "Math",
+    "String",
+    "Bit Manipulation",
+    "Simulation"
+  ],
+  "unmatched-badge-scan": [
+    "Array",
+    "Bit Manipulation"
+  ],
+  "symmetric-lottery-tickets": [
+    "Math"
+  ],
+  "robot-stride-plans": [
+    "Math",
+    "Dynamic Programming",
+    "Memoization"
+  ],
+  "integer-magnitude-estimator": [
+    "Math",
+    "Binary Search"
+  ],
+  "arrangement-count-suffix": [
+    "Math"
+  ],
+  "highway-billboard-leasing": [
+    "Array",
+    "Dynamic Programming"
+  ],
+  "trading-streak-report": [
+    "Array",
+    "Divide and Conquer",
+    "Dynamic Programming"
+  ],
+  "kiosk-token-payout": [
+    "Array",
+    "Dynamic Programming",
+    "Breadth-First Search"
+  ],
+  "benchmark-progress-chain": [
+    "Array",
+    "Binary Search",
+    "Dynamic Programming"
+  ],
+  "paged-catalog-lookup": [
+    "Array",
+    "Binary Search",
+    "Matrix"
+  ],
+  "signal-crest-locator": [
+    "Array",
+    "Binary Search"
+  ],
+  "shifted-price-snapshot": [
+    "Array",
+    "Binary Search"
+  ],
+  "conveyor-grid-routing": [
+    "Array",
+    "Dynamic Programming",
+    "Matrix"
+  ],
+  "picking-robot-floor-plan": [
+    "Array",
+    "Dynamic Programming",
+    "Matrix"
+  ],
+  "hashtag-vocabulary-splitter": [
+    "Array",
+    "Hash Table",
+    "String",
+    "Dynamic Programming",
+    "Trie",
+    "Memoization"
+  ],
+  "permission-flag-counter": [
+    "Divide and Conquer",
+    "Bit Manipulation"
+  ],
+  "replica-write-audit": [
+    "Array",
+    "Bit Manipulation"
+  ],
+  "address-block-shared-bits": [
+    "Bit Manipulation"
+  ],
+  "mine-level-descent": [
+    "Array",
+    "Dynamic Programming"
+  ],
+  "scanner-code-reconciliation": [
+    "String",
+    "Dynamic Programming"
+  ],
+  "rooftop-panel-footprint": [
+    "Array",
+    "Dynamic Programming",
+    "Matrix"
+  ],
+  "orbital-energy-window": [
+    "Array",
+    "Divide and Conquer",
+    "Dynamic Programming",
+    "Queue",
+    "Monotonic Queue"
+  ],
+  "ring-buffer-dump-lookup": [
+    "Array",
+    "Binary Search"
+  ],
+  "rating-leaderboard-cutoff": [
+    "Array",
+    "Divide and Conquer",
+    "Sorting",
+    "Heap",
+    "Quickselect"
+  ],
+  "log-timestamp-span": [
+    "Array",
+    "Binary Search"
+  ],
+  "compound-growth-factor": [
+    "Math",
+    "Recursion"
+  ],
+  "shared-buffer-keystroke-audit": [
+    "String",
+    "Dynamic Programming"
+  ],
+  "spot-capacity-round-trips": [
+    "Array",
+    "Dynamic Programming"
+  ],
+  "freight-slot-trading-limit": [
+    "Array",
+    "Dynamic Programming"
+  ],
+  "firmware-event-chain-ordering": [
+    "Linked List",
+    "Two Pointers",
+    "Divide and Conquer",
+    "Sorting",
+    "Merge Sort"
+  ],
+  "twin-sensor-midpoint-reading": [
+    "Array",
+    "Binary Search",
+    "Divide and Conquer"
+  ],
+  "survey-stake-alignment": [
+    "Array",
+    "Hash Table",
+    "Math",
+    "Geometry"
+  ],
+  "serial-link-word-mirror": [
+    "Divide and Conquer",
+    "Bit Manipulation"
+  ],
+  "studio-contract-bankroll": [
+    "Array",
+    "Greedy",
+    "Sorting",
+    "Heap"
+  ],
+  "flight-combo-fare-shortlist": [
+    "Array",
+    "Heap",
+    "Priority Queue"
+  ],
+  "shard-result-consolidation": [
+    "Linked List",
+    "Divide and Conquer",
+    "Heap",
+    "Merge Sort"
+  ],
+  "live-clock-offset-monitor": [
+    "Two Pointers",
+    "Design",
+    "Sorting",
+    "Heap",
+    "Data Stream"
+  ],
+  "terrain-mask-tiling": [
+    "Array",
+    "Divide and Conquer",
+    "Matrix"
+  ],
+  "bounded-event-queue": [
+    "Array",
+    "Design"
+  ]
+}
