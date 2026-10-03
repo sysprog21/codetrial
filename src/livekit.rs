@@ -165,6 +165,38 @@ const NOTABLE_PLAYOUT_BACKLOG: Duration = Duration::from_millis(500);
 /// sentence that used to give the count here was already naming a budget
 /// `src/gemini.rs` no longer had.
 pub(super) const REPORT_TIMEOUT: Duration = Duration::from_secs(125);
+/// `REPORT_TIMEOUT` for a report written by a local model, whose attempts are
+/// given longer in `src/gemini.rs` for the same reason. The same test holds it
+/// to paying for every call and every backoff it hands out.
+pub(super) const LOCAL_REPORT_TIMEOUT: Duration = Duration::from_secs(250);
+
+/// The report deadline in force: the local one when the report calls go to a
+/// self-hosted base, the hosted one otherwise.
+pub fn report_timeout() -> Duration {
+    if crate::gemini::report_endpoint_is_local() {
+        LOCAL_REPORT_TIMEOUT
+    } else {
+        REPORT_TIMEOUT
+    }
+}
+
+/// How long the page waits for the report before offering a way out: the
+/// report's own deadline, the wrap-up spent before it, and two seconds for the
+/// packet to cross the room. Offered any sooner, a candidate walks out on a
+/// report that is still coming, and leaving never saves it. The server says
+/// this to the page in `/runtime-config.js`, because only the server knows
+/// which of the two deadlines is in force.
+pub fn report_escape_wait(report_timeout: Duration) -> Duration {
+    report_timeout + WRAP_UP_WAIT + Duration::from_secs(2)
+}
+
+/// How long the page waits on a regenerated report before giving up on it:
+/// the deadline the regeneration runs under, plus the fifteen seconds of
+/// delivery grace `web/report-recovery.js` has always allowed on top of the
+/// hosted 125. Sent the same way, for the same reason.
+pub fn report_retry_wait(report_timeout: Duration) -> Duration {
+    report_timeout + Duration::from_secs(15)
+}
 /// Whether the candidate is in the room, and since when they have not been.
 ///
 /// The departure, the return and the grace check happen in three different
