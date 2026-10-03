@@ -57,14 +57,17 @@ export function createReportRecovery({
     report = null;
     ready = false;
   }
-  // The agent gives regeneration its own 125-second deadline. Delivery gets
-  // the same grace as the ordinary report path.
+  // The agent gives regeneration its own deadline, 125 seconds against Gemini
+  // and longer against a local model, and the server says which in
+  // /runtime-config.js. Delivery gets the same grace as the ordinary report
+  // path. The limit here is a floor the server can only raise.
   function waitForReport() {
     if (wait) timers.clearTimeout(wait);
-    wait = timers.setTimeout(
-      finish,
-      reportRecoveryLimits.retryWaitSeconds * 1000,
+    const seconds = Math.max(
+      reportRecoveryLimits.retryWaitSeconds,
+      Number(globalThis.CODETRIAL_REPORT_RETRY_WAIT_SECONDS) || 0,
     );
+    wait = timers.setTimeout(finish, seconds * 1000);
   }
   function offerAfter(seconds) {
     ready = false;

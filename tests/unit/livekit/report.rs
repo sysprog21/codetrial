@@ -1079,7 +1079,19 @@ fn recovery_offer_matches_browser_limits_and_generation_deadline() {
         recovery_metadata(crate::gemini::QUOTA_COOLDOWN)["retryAfterSeconds"],
         limits["quotaRetryAfterSeconds"]
     );
-    assert!(limits["retryWaitSeconds"].as_u64().unwrap() > REPORT_TIMEOUT.as_secs() + 3);
+
+    // The page's floor is the hosted wait, and what the server sends in its
+    // place outlasts whichever deadline is in force.
+    assert_eq!(
+        limits["retryWaitSeconds"].as_u64().unwrap(),
+        crate::livekit::report_retry_wait(crate::livekit::REPORT_TIMEOUT).as_secs()
+    );
+    for deadline in [
+        crate::livekit::REPORT_TIMEOUT,
+        crate::livekit::LOCAL_REPORT_TIMEOUT,
+    ] {
+        assert!(crate::livekit::report_retry_wait(deadline).as_secs() > deadline.as_secs() + 3);
+    }
 }
 
 #[tokio::test]
@@ -1168,7 +1180,7 @@ async fn a_report_lost_to_503s_is_regenerated_from_the_frozen_interview() {
         let prompt = prompt.to_string();
         async move {
             tokio::time::timeout(
-                REPORT_TIMEOUT,
+                crate::livekit::REPORT_TIMEOUT,
                 crate::gemini::tests::generate_report_at(
                     keys,
                     &url,

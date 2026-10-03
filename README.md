@@ -241,7 +241,9 @@ The report and the quiet-pause reviews can be written by a model on your own
 hardware instead. Point `CODETRIAL_GEMINI_REST_BASE` at a server that answers
 Gemini's `generateContent`, such as `scripts/gemini-shim.py` in front of
 llama.cpp's `llama-server`; the shim's docstring has the commands. The live
-interviewer still talks to Gemini.
+interviewer still talks to Gemini. Any base other than Google's gets longer
+report deadlines, 45 seconds a call and 250 in all instead of 20 and 125, since
+a 12B model on one 16 GB GPU takes 14 to 32 seconds per report.
 
 ## Recording
 
