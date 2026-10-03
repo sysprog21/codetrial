@@ -1319,15 +1319,39 @@ fn report_network_budget_covers_every_repair_and_retry_per_generation() {
     // The deadline has to pay for the pool it hands out. A budget the clock
     // cannot fund is calls that are promised and then cut off mid-flight. The
     // last call has no wait after it, so the backoffs are the ones before it.
-    let worst_case = REPORT_ATTEMPT_TIMEOUT * MAX_REPORT_HTTP_ATTEMPTS as u32
-        + (1..MAX_REPORT_HTTP_ATTEMPTS)
-            .map(|failure| report_retry_backoff(REPORT_RETRY_BACKOFF, failure as u32))
-            .sum::<Duration>();
-    assert!(
-        worst_case < crate::livekit::REPORT_TIMEOUT,
-        "{worst_case:?} of calls against a {:?} deadline",
-        crate::livekit::REPORT_TIMEOUT
-    );
+    // Both pairs, because the local one is the one nobody runs by default.
+    let backoffs = (1..MAX_REPORT_HTTP_ATTEMPTS)
+        .map(|failure| report_retry_backoff(REPORT_RETRY_BACKOFF, failure as u32))
+        .sum::<Duration>();
+    for (attempt, deadline) in [
+        (REPORT_ATTEMPT_TIMEOUT, crate::livekit::REPORT_TIMEOUT),
+        (
+            LOCAL_REPORT_ATTEMPT_TIMEOUT,
+            crate::livekit::LOCAL_REPORT_TIMEOUT,
+        ),
+    ] {
+        let worst_case = attempt * MAX_REPORT_HTTP_ATTEMPTS as u32 + backoffs;
+        assert!(
+            worst_case < deadline,
+            "{worst_case:?} of calls against a {deadline:?} deadline"
+        );
+    }
+}
+
+/// Whichever base this process has, the report attempt gets that base's
+/// deadline, and neither is zero: a zero cancels every call before it is sent.
+/// The local branch is reached by
+/// `binary_web_gives_a_local_report_base_the_longer_wait` in tests/cli.rs,
+/// which starts a process that has one.
+#[test]
+fn the_report_attempt_deadline_follows_the_base() {
+    let expected = if report_endpoint_is_local() {
+        LOCAL_REPORT_ATTEMPT_TIMEOUT
+    } else {
+        REPORT_ATTEMPT_TIMEOUT
+    };
+    assert_eq!(report_attempt_timeout(), expected);
+    assert!(REPORT_ATTEMPT_TIMEOUT < LOCAL_REPORT_ATTEMPT_TIMEOUT);
 }
 
 /// Doubling, from the flat wait the tests that race the first retry measure
@@ -4999,3 +5023,49 @@ fn every_failing_path_is_named_before_a_second_error_on_one() {
 }
 
 include!("gemini_parts/tool_policy_and_reader_pressure.rs");
+
+/// One real report through `CODETRIAL_GEMINI_REST_BASE`, against a local
+/// model behind `scripts/gemini-shim.py`. Not part of the gate.
+///
+/// `REPORT_PROMPT_FILE` swaps in another prompt and `REPORT_PROBLEM` names the
+/// problem it was written for, which is what the report is validated against:
+/// the published title it must not name, among other things. Both default to
+/// the Two Sum golden prompt. `find_problem` rather than `get_problem`, which
+/// opens the default for a name it does not know, so a typo cannot validate
+/// against Two Sum and pass a report that names the real problem.
+#[tokio::test]
+#[ignore = "needs a generateContent server at CODETRIAL_GEMINI_REST_BASE"]
+async fn a_local_model_writes_a_report() {
+    let prompt = match std::env::var("REPORT_PROMPT_FILE") {
+        Ok(path) => std::fs::read_to_string(path).unwrap(),
+        Err(_) => {
+            let golden: Value = serde_json::from_str(
+                &std::fs::read_to_string("tests/golden/prompts.json").unwrap(),
+            )
+            .unwrap();
+            golden["report"].as_str().unwrap().to_string()
+        }
+    };
+    let id = std::env::var("REPORT_PROBLEM").unwrap_or_else(|_| "two-sum".to_string());
+    let problem = crate::agent::find_problem(&id)
+        .unwrap_or_else(|| panic!("REPORT_PROBLEM names no problem: {id}"));
+    let started = std::time::Instant::now();
+    let refused = std::sync::atomic::AtomicBool::default();
+    let report = generate_report_with_keys(
+        &GeminiKeys::single("local"),
+        "local",
+        &prompt,
+        EDITOR,
+        problem,
+        rounds(false),
+        ReportRun {
+            scope: "local-report",
+            seed: GENERATION_SEED,
+            refused: &refused,
+        },
+    )
+    .await
+    .expect("report");
+    println!("elapsed {:.1}s", started.elapsed().as_secs_f64());
+    println!("{}", serde_json::to_string_pretty(&report).unwrap());
+}
