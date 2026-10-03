@@ -424,7 +424,7 @@ pub(super) async fn generate_report_transport(
             observer.before()?;
         }
         let response =
-            post_generate_content(&api_key, url, request, REPORT_ATTEMPT_TIMEOUT, &what).await;
+            post_generate_content(&api_key, url, request, report_attempt_timeout(), &what).await;
         if let Some(observer) = observer.as_deref_mut() {
             observer.after(response.as_ref().ok(), report_attempt_failure(&response))?;
         }

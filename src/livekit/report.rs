@@ -22,7 +22,7 @@ use crate::gemini::{GeminiKeys, ReportMaterial, generate_report_with_keys};
 use crate::runtime::{RuntimeBootstrap, TOPIC_REPORT};
 
 use super::board::ReportBoard;
-use super::{REPORT_TIMEOUT, browser_packet};
+use super::{browser_packet, report_timeout};
 
 /// What the report call returned, or the deadline it missed.
 pub(super) type GeneratedReport = Result<
@@ -110,7 +110,7 @@ pub(super) fn freeze_assessment(
     }
 }
 
-/// The report call under `REPORT_TIMEOUT`. Borrows nothing of the interview
+/// The report call under `report_timeout()`. Borrows nothing of the interview
 /// state, which is what lets it run beside the farewell that still needs it.
 ///
 /// `boards` are the whiteboard phase checkpoints and final state. An editor
@@ -128,7 +128,7 @@ pub(super) async fn generate_report_bounded(
     #[cfg(test)]
     crate::gemini::tests::note_bounded_report(boot.room_name, seed);
     tokio::time::timeout(
-        REPORT_TIMEOUT,
+        report_timeout(),
         generate_report_with_keys(
             api_key,
             boot.report_model,
@@ -498,7 +498,7 @@ enum RecoveryEvent {
 /// A full LiveKit rejoin after a network drop leaves and returns under the same
 /// identity, and treating the leave as final spent the one retry on a candidate
 /// who never went anywhere.
-const REJOIN_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+pub(super) const REJOIN_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The agent's answer to a retry, and its word that the window closed. Without
 /// them the page had to guess both from its own clock, which starts later than
@@ -989,7 +989,7 @@ fn report_value(
                     std::io::ErrorKind::TimedOut,
                     format!(
                         "Report generation did not finish within {}s",
-                        REPORT_TIMEOUT.as_secs()
+                        report_timeout().as_secs()
                     ),
                 ),
                 api_key,
