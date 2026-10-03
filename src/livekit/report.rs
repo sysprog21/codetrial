@@ -10,7 +10,8 @@
 //!
 //! Split out of `livekit.rs` along the line its module doc already drew.
 
-use ::livekit::prelude::{DataPacket, Room};
+use ::livekit::prelude::{DataPacket, Room, RoomEvent};
+use std::time::Duration;
 
 use crate::agent::{
     ModelInputKind, ReportPromptInput, RuntimeState, final_report, format_test_run,
@@ -81,6 +82,177 @@ pub(super) async fn generate_report_bounded(
         ),
     )
     .await
+}
+
+pub(super) const DELIVERY_ATTEMPTS: usize = 3;
+pub(super) const DELIVERY_WAIT: Duration = Duration::from_secs(5);
+
+fn is_report_receipt(
+    topic: Option<&str>,
+    sender: Option<&str>,
+    candidate: &str,
+    payload: &[u8],
+    id: &str,
+    candidate_gone: bool,
+) -> bool {
+    // LiveKit resolves the sender against its current roster, so a receipt that
+    // lands after the candidate's departure arrives with no participant. The
+    // report is broadcast, so any peer could echo its digest; an unattributed
+    // receipt counts only once the candidate is gone and no retry could reach
+    // them anyway.
+    topic == Some(crate::runtime::TOPIC_CONTROL)
+        && (sender.is_none() && candidate_gone
+            || super::is_interview_participant(sender, candidate))
+        && serde_json::from_slice::<serde_json::Value>(payload)
+            .is_ok_and(|value| value["type"] == "report_received" && value["deliveryId"] == id)
+}
+
+pub(super) trait DeliveryEvent {
+    fn acknowledges(&self, candidate: &str, id: &str, candidate_gone: bool) -> bool;
+    fn disconnected(&self) -> bool {
+        false
+    }
+}
+
+impl DeliveryEvent for RoomEvent {
+    fn acknowledges(&self, candidate: &str, id: &str, candidate_gone: bool) -> bool {
+        if let Self::DataReceived {
+            payload,
+            topic,
+            participant,
+            ..
+        } = self
+        {
+            let sender = participant
+                .as_ref()
+                .map(|participant| participant.identity().0);
+            is_report_receipt(
+                topic.as_deref(),
+                sender.as_deref(),
+                candidate,
+                payload,
+                id,
+                candidate_gone,
+            )
+        } else {
+            false
+        }
+    }
+    fn disconnected(&self) -> bool {
+        matches!(self, Self::Disconnected { .. })
+    }
+}
+
+/// A successful SDK publish only queues the packet. Keep the room alive until
+/// the candidate acknowledges it, retransmitting the immutable bytes on loss.
+/// Neither retries nor receipt timeouts call the report model again.
+pub(super) async fn deliver_report<F, Fut, E, Event>(
+    mut publish: F,
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
+    candidate: &str,
+    room_name: &str,
+    candidate_present: impl Fn() -> bool,
+    packet: DataPacket,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>>
+where
+    F: FnMut(DataPacket) -> Fut,
+    Fut: std::future::Future<Output = Result<(), E>>,
+    Event: DeliveryEvent,
+{
+    let id = crate::sha256_hex(&[&packet.payload]);
+    let mut published = false;
+    for attempt in 1..=DELIVERY_ATTEMPTS {
+        let deadline = tokio::time::Instant::now() + DELIVERY_WAIT;
+        let failure = match tokio::time::timeout_at(deadline, publish(packet.clone())).await {
+            Ok(Ok(())) => {
+                published = true;
+                None
+            }
+            Ok(Err(_)) => Some("publish_error"),
+            Err(_) => Some("timeout"),
+        };
+        if let Some(cause) = failure {
+            eprintln!(
+                "codetrial report_publish_failed room={room_name} attempt={attempt} cause={cause}"
+            );
+        }
+
+        // A failed publish waits out the rest of its window. The wait also
+        // accepts a late receipt for an earlier attempt and observes
+        // departures.
+        let gone = |events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>| {
+            if queued_receipt(events, candidate, &id) {
+                Wait::Acknowledged
+            } else {
+                Wait::Gone
+            }
+        };
+        let wait = if candidate_present() {
+            tokio::time::timeout_at(deadline, async {
+                while let Some(event) = events.recv().await {
+                    // Presence first: the receipt that arrives unattributed
+                    // because its sender just left is this very event.
+                    let candidate_gone = event.disconnected() || !candidate_present();
+                    if event.acknowledges(candidate, &id, candidate_gone) {
+                        return Wait::Acknowledged;
+                    }
+                    if candidate_gone {
+                        return gone(events);
+                    }
+                }
+                Wait::Gone
+            })
+            .await
+            .unwrap_or(Wait::TimedOut)
+        } else {
+            gone(events)
+        };
+        match wait {
+            Wait::Acknowledged => {
+                eprintln!(
+                    "codetrial report_delivery room={room_name} attempt={attempt} outcome=acknowledged"
+                );
+                return Ok(true);
+            }
+            Wait::Gone => break,
+            Wait::TimedOut => (),
+        }
+        if published {
+            eprintln!("codetrial report_receipt_missing room={room_name} attempt={attempt}");
+        }
+    }
+    if published {
+        eprintln!("codetrial report_delivery room={room_name} outcome=unconfirmed");
+        Ok(false)
+    } else {
+        eprintln!("codetrial report_delivery room={room_name} outcome=failed");
+        Err("report_delivery_failed: all publication attempts failed or timed out".into())
+    }
+}
+
+/// How one attempt's receipt wait ended. `Gone` covers the candidate leaving,
+/// the room disconnecting and the event stream closing: nobody is left to
+/// retransmit to.
+enum Wait {
+    Acknowledged,
+    Gone,
+    TimedOut,
+}
+
+/// The roster drops the candidate when LiveKit handles the departure, not when
+/// this loop reads the queue, so a receipt the page sent just before leaving
+/// can still be waiting behind events the loop has not reached.
+fn queued_receipt<Event: DeliveryEvent>(
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
+    candidate: &str,
+    id: &str,
+) -> bool {
+    while let Ok(event) = events.try_recv() {
+        if event.acknowledges(candidate, id, true) {
+            return true;
+        }
+    }
+    false
 }
 
 const REPORT_RECOVERY_WINDOW: std::time::Duration = std::time::Duration::from_secs(300);
@@ -204,6 +376,7 @@ trait RecoveryRoom {
 
 struct LiveRecoveryRoom<'a> {
     room: &'a Room,
+    room_name: &'a str,
     candidate: &'a str,
     events: &'a mut tokio::sync::mpsc::UnboundedReceiver<::livekit::RoomEvent>,
 }
@@ -250,8 +423,9 @@ impl RecoveryRoom for LiveRecoveryRoom<'_> {
     fn candidate_present(&self) -> bool {
         self.room
             .remote_participants()
-            .values()
-            .any(|participant| participant.identity().0 == self.candidate)
+            .contains_key(&::livekit::id::ParticipantIdentity(
+                self.candidate.to_string(),
+            ))
     }
 
     async fn next(&mut self) -> RecoveryEvent {
@@ -260,22 +434,48 @@ impl RecoveryRoom for LiveRecoveryRoom<'_> {
 
     async fn notify(&mut self, notice: RecoveryNotice) {
         // A notice that cannot be sent leaves the page on its own fallback
-        // timers, which is no worse than before notices existed.
-        let sent = match browser_packet(crate::runtime::TOPIC_CONTROL, &recovery_notice(notice)) {
-            Ok(packet) => self.publish(packet).await,
-            Err(error) => Err(error.into()),
-        };
+        // timers, which is no worse than before notices existed, so it is
+        // published once and never waits for a receipt.
+        let sent: Result<(), Box<dyn std::error::Error + Send + Sync>> =
+            match browser_packet(crate::runtime::TOPIC_CONTROL, &recovery_notice(notice)) {
+                Ok(packet) => self
+                    .room
+                    .local_participant()
+                    .publish_data(packet)
+                    .await
+                    .map_err(Into::into),
+                Err(error) => Err(error.into()),
+            };
         if let Err(error) = sent {
             eprintln!("codetrial report_recovery_notice_failed notice={notice:?} error={error}");
         }
     }
 
+    /// Reports only. Retry requests and departures that arrive during the
+    /// receipt wait are consumed by it; `recover_report` reads presence from
+    /// the room again when its own wait begins.
     async fn publish(
         &mut self,
         packet: DataPacket,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.room.local_participant().publish_data(packet).await?;
-        Ok(())
+        let Self {
+            room,
+            room_name,
+            candidate,
+            events,
+        } = self;
+        let participant = room.local_participant();
+        let identity = ::livekit::id::ParticipantIdentity(candidate.to_string());
+        deliver_report(
+            |packet| participant.publish_data(packet),
+            events,
+            candidate,
+            room_name,
+            || room.remote_participants().contains_key(&identity),
+            packet,
+        )
+        .await
+        .map(|_| ())
     }
 }
 
@@ -316,7 +516,13 @@ async fn recover_report(
     started: tokio::time::Instant,
     readiness: impl Fn() -> Readiness,
 ) -> Option<GeneratedReport> {
+    // A departure the provisional report's receipt wait consumed is not
+    // replayed, so absence starts the rejoin grace here instead of the wait
+    // holding the slot for a retry from nobody.
     let mut presence = super::CandidatePresence::default();
+    if !events.candidate_present() {
+        presence.left(tokio::time::Instant::now().into_std());
+    }
     loop {
         let event = tokio::select! {
             biased;
@@ -402,6 +608,7 @@ pub(super) async fn publish_with_recovery(
     let FrozenAssessment { prompt, mut state } = assessment;
     let mut room = LiveRecoveryRoom {
         room,
+        room_name: boot.room_name,
         candidate,
         events,
     };
@@ -449,26 +656,29 @@ async fn run_recovery(
         keys,
     } = report;
 
-    // The Live session is closed once, after the report it would otherwise
-    // delay by up to its close timeout, and before a recovery wait that must
-    // not hold it open for minutes.
+    // The Live session is closed once, beside the first report's delivery:
+    // waiting for it would delay the report by up to its close timeout, and
+    // closing after it would hold Live open through the receipt retries and a
+    // recovery wait of minutes.
     let Some(cooldown) =
         regeneration_cooldown(&generated, keys).filter(|_| room.candidate_present())
     else {
-        let published: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
-            room.publish(report_packet(boot, state, reason, keys, generated)?)
-                .await
-        }
-        .await;
-        close_live.await;
+        let (published, ()) = tokio::join!(
+            async {
+                room.publish(report_packet(boot, state, reason, keys, generated)?)
+                    .await
+            },
+            close_live
+        );
         return published;
     };
     let mut provisional = report_value(boot, state, reason, keys, generated);
     provisional["reportRecovery"] = recovery_metadata(cooldown);
     let started = clock();
-    let published: Result<(), Box<dyn std::error::Error + Send + Sync>> =
-        async { room.publish(report_data_packet(provisional)?).await }.await;
-    close_live.await;
+    let (published, ()): (Result<(), Box<dyn std::error::Error + Send + Sync>>, ()) = tokio::join!(
+        async { room.publish(report_data_packet(provisional)?).await },
+        close_live
+    );
     published?;
     if let Some(generated) = recover_report(
         room,

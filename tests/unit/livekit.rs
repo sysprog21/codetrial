@@ -1211,11 +1211,51 @@ fn the_browser_escape_hatch_outlasts_the_report_deadline() {
             .expect("REPORT_ESCAPE_WAIT_MS is a number"),
     );
 
+    // The Gemini close sits between the frozen report and its first publish.
+    let close = crate::gemini::CLOSE_TIMEOUT;
+    let delivery = report::DELIVERY_WAIT * report::DELIVERY_ATTEMPTS as u32;
     assert!(
-        wait >= REPORT_TIMEOUT + WRAP_UP_WAIT,
-        "a report bounded at {REPORT_TIMEOUT:?} after a {WRAP_UP_WAIT:?} wrap-up cannot land \
-         before the page offers to leave at {wait:?}"
+        wait > REPORT_TIMEOUT + WRAP_UP_WAIT + close + delivery,
+        "a report bounded at {REPORT_TIMEOUT:?} after a {WRAP_UP_WAIT:?} wrap-up and a \
+         {close:?} Gemini close cannot land with up to {delivery:?} delivery time before \
+         the page offers to leave at {wait:?}"
     );
+}
+
+/// A publish only queues the packet, so leaving right behind it can drop the
+/// report. The ending leaves once delivery settles, with no fixed sleep
+/// standing in for it, and a report goes out only through the receipt wait.
+#[test]
+fn the_ending_leaves_only_after_the_report_delivery_settles() {
+    let source = include_str!("../../src/livekit.rs");
+    // To the next item at column zero, as the source tests above read a body.
+    let ending = source
+        .split("async fn handle_data_packet(")
+        .nth(1)
+        .expect("handle_data_packet is still defined here")
+        .split("\n}\n")
+        .next()
+        .unwrap_or_default();
+    let publish = ending
+        .find("publish_with_recovery(")
+        .expect("the ending publishes through recovery");
+    let leave = ending.find("leave_room(").expect("the ending leaves");
+    assert!(publish < leave);
+    assert!(!ending[publish..leave].contains("sleep("));
+
+    let report = include_str!("../../src/livekit/report.rs");
+    let live = report
+        .split("impl RecoveryRoom for LiveRecoveryRoom")
+        .nth(1)
+        .expect("the live recovery room is still defined here")
+        .split("\n}\n")
+        .next()
+        .unwrap_or_default();
+    let publish = live
+        .split("async fn publish(")
+        .nth(1)
+        .expect("the live room publishes reports");
+    assert!(publish.contains("deliver_report("));
 }
 
 /// Each pause reads the stretch since the last one, and never that stretch

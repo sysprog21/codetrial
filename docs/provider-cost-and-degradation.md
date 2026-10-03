@@ -107,8 +107,8 @@ it. A candidate who leaves has 30 seconds to rejoin under the same identity,
 which is how a full LiveKit reconnect looks, and a regeneration under way keeps
 running through it and is published once they are back; a candidate already
 gone when the interview ends gets the failure at once with no window. The
-Live session is closed after the report is published, or right after the
-provisional report when a window opens. While the offer is open the agent
+Live session is closed while the report, or the provisional report when a
+window opens, is being delivered. While the offer is open the agent
 answers each request on the control topic, `report_retry` with status
 `accepted` or `early` (with the seconds still to wait, which does not spend the
 regeneration), and announces `closed` at expiry or when no key can ever answer;
@@ -118,6 +118,16 @@ request or the acceptance, whichever came last, so neither a reconnect nor a
 lost answer cuts off a regeneration still in progress. A transient
 burst followed by a schema failure offers no regeneration: the terminal failure
 determines eligibility. Reloads and process restarts cannot recover the inputs.
+
+Every report packet, provisional, regenerated or final, is delivered the same
+way. The agent publishes those same bytes at most three times, each with a
+five-second publication and receipt window, without another Gemini call. The
+Live session closes beside the first delivery, so retries spend no Live time.
+Each delivery keeps the room open for at most fifteen extra seconds and stops
+waiting when the candidate leaves or the room disconnects. A candidate receipt
+names the SHA-256 digest of the packet bytes. Missing receipts mean delivery is
+unconfirmed, not that the candidate received no report; only publication
+attempts that all fail or time out produce `report_delivery_failed`.
 
 Quiet-pause interim reviews use that same report model and quota. A review is
 eligible after 8 seconds of candidate quiet and 150 seconds from interview start,
@@ -190,10 +200,12 @@ Watch `codetrial dispatch_refused ... reason=at_capacity` and
 `reason=finalizing`, `livekit quota:` transitions, token HTTP 429 with
 `Retry-After`, `gemini report transport_failed call=... retry=...`, `gemini
 report retry_unavailable` (a key rotation lost during backoff, without another
-HTTP call), `codetrial report_recovery_notice_failed`, `codetrial live_usage
-... outcome=billing`, and the bounded incomplete-report categories. Each
-recovery window also keeps the agent and the candidate connected to LiveKit for
-up to about seven minutes after the interview, which counts against
+HTTP call), `codetrial report_recovery_notice_failed`, `codetrial
+report_publish_failed`, `codetrial report_receipt_missing`, `codetrial
+report_delivery ... outcome=acknowledged|unconfirmed|failed`, `codetrial
+live_usage ... outcome=billing`, and the bounded incomplete-report categories.
+Each recovery window also keeps the agent and the candidate connected to
+LiveKit for up to about seven minutes after the interview, which counts against
 connection-minute quota like interview time.
 
 Raise concurrency only after checking provider minutes, Gemini limits, CPU and

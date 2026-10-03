@@ -3088,3 +3088,240 @@ test("requested thinking time marks response windows until a release or intervie
     [true, true, false],
   );
 });
+
+test("report retries are claimed once and every copy receives a receipt", async () => {
+  const { claimReport, reportReceipt, reportReceiptPayload } =
+    await import("../../web/lib.js");
+  const received = new Set();
+  const packet = new TextEncoder().encode(JSON.stringify({ codingScore: 80 }));
+  // Synchronous, so the page decides before its first await.
+  assert.equal(claimReport(packet, received), true);
+  assert.equal(claimReport(packet, received), false);
+  const receipt = await reportReceipt(packet);
+  assert.deepEqual(receipt, reportReceiptPayload(receipt.deliveryId));
+  assert.deepEqual(await reportReceipt(packet), receipt);
+  const { createHash } = await import("node:crypto");
+  assert.equal(
+    receipt.deliveryId,
+    createHash("sha256").update(packet).digest("hex"),
+  );
+});
+
+test("concurrent report retries publish receipts and render once even when a receipt throws", async (t) => {
+  const { claimReport, receiveReportDelivery } =
+    await import("../../web/lib.js");
+  const delays = [];
+  const originalTimeout = globalThis.setTimeout;
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+    delays.push(delay);
+    return originalTimeout(callback, delay, ...args);
+  });
+  const packet = new TextEncoder().encode('{"codingScore":80}');
+  const received = new Set();
+  let receipts = 0;
+  let renders = 0;
+  const publish = () => {
+    receipts++;
+    throw new Error("disconnected");
+  };
+  const render = (bytes) => {
+    assert.equal(bytes, packet);
+    renders++;
+  };
+  await Promise.all([
+    receiveReportDelivery(
+      packet,
+      claimReport(packet, received),
+      publish,
+      render,
+    ),
+    receiveReportDelivery(
+      packet,
+      claimReport(packet, received),
+      publish,
+      render,
+    ),
+  ]);
+  assert.equal(receipts, 2);
+  assert.equal(renders, 1);
+  assert.deepEqual(delays, [1000, 1000]);
+});
+
+test(
+  "a stalled receipt cannot keep a delivered report off screen",
+  { timeout: 3000 },
+  async () => {
+    const { receiveReportDelivery } = await import("../../web/lib.js");
+    let displayed = false;
+    let published = false;
+    let flushed = null;
+    await receiveReportDelivery(
+      new TextEncoder().encode('{"codingScore":80}'),
+      true,
+      () => {
+        published = true;
+        return new Promise(() => {});
+      },
+      (_bytes, receipt) => {
+        // Drawn before the receipt has even been handed to the room.
+        assert.equal(published, false);
+        displayed = true;
+        flushed = receipt;
+      },
+    );
+    assert.equal(displayed, true);
+    assert.equal(published, true);
+    // The disconnect waits on this, and a stalled publish must not hold it.
+    assert.equal(await flushed, undefined);
+  },
+);
+
+test(
+  "a hash that never finishes holds neither the report nor the disconnect",
+  { timeout: 3000 },
+  async (t) => {
+    const { receiveReportDelivery } = await import("../../web/lib.js");
+    t.mock.method(crypto.subtle, "digest", () => new Promise(() => {}));
+    let flushed = null;
+    let published = false;
+    await receiveReportDelivery(
+      new TextEncoder().encode('{"codingScore":80}'),
+      true,
+      () => {
+        published = true;
+      },
+      (_bytes, receipt) => {
+        flushed = receipt;
+      },
+    );
+    assert.notEqual(flushed, null);
+    assert.equal(await flushed, undefined);
+    assert.equal(published, false);
+  },
+);
+
+test("an agent report leaves the room only after its receipt had its chance", () => {
+  const receive = functionBody(read("web/interview.js"), "receiveReport");
+  // Disconnecting, Done and the render-failure exits all drop a receipt
+  // still leaving.
+  assert.doesNotMatch(receive, /void room\??\.disconnect\(/);
+  assert.equal(
+    receive.match(/flushed\.then\(\(\) => room\??\.disconnect\(\)\)/g)?.length,
+    2,
+  );
+  // Each pair is found before it is ordered, since a missing string's -1
+  // would otherwise sort first and pass.
+  for (const [first, then] of [
+    ["Promise.all([saving, flushed])", "renderReportSaveStatus("],
+    ["await flushed;", "reportRenderFailed("],
+  ]) {
+    const at = receive.indexOf(first);
+    assert.ok(at !== -1, first);
+    assert.ok(receive.indexOf(then, at) !== -1, `${then} after ${first}`);
+  }
+});
+
+test("a retry is recognised whether or not each copy could be hashed", async (t) => {
+  const { claimReport, receiveReportDelivery } =
+    await import("../../web/lib.js");
+  const digest = crypto.subtle.digest.bind(crypto.subtle);
+  // Hashing never works, or fails for the first copy only.
+  for (const hashes of [() => false, (call) => call > 0]) {
+    let calls = 0;
+    const mock = t.mock.method(crypto.subtle, "digest", async (...args) => {
+      if (!hashes(calls++)) throw new Error("unavailable");
+      return digest(...args);
+    });
+    const packet = new TextEncoder().encode('{"codingScore":80}');
+    const received = new Set();
+    let receipts = 0;
+    let renders = 0;
+    for (let copy = 0; copy < 2; copy++) {
+      await receiveReportDelivery(
+        packet,
+        claimReport(packet, received),
+        () => receipts++,
+        () => renders++,
+      );
+    }
+    mock.mock.restore();
+    assert.equal(calls, 2);
+    assert.equal(renders, 1);
+    assert.equal(receipts, hashes(0) + hashes(1));
+  }
+});
+
+test("only the first report copy claims the page, before its receipt is handed off", () => {
+  const connect = functionBody(read("web/interview.js"), "connectLiveKit");
+  const accepted = connect.indexOf(
+    "if (!acceptsReport(topic, participant)) return;",
+  );
+  const claim = connect.indexOf(
+    "const first = claimReport(payload, receivedReports);",
+    accepted,
+  );
+  const guarded = connect.indexOf("if (first) {", claim);
+  const handoff = connect.indexOf("await receiveReportDelivery(", guarded);
+  assert.ok(accepted >= 0 && claim > accepted && guarded > claim);
+  // Everything that hides the ways out sits inside the first-copy branch.
+  const branch = connect.slice(
+    guarded,
+    connect.indexOf("\n      }\n", guarded),
+  );
+  for (const step of [
+    "state.reportReceiving = true;",
+    "nodes.forceReport.hidden = true;",
+    "nodes.leaveRoom.hidden = true;",
+    "stopEndingEscape();",
+  ]) {
+    assert.ok(branch.includes(step), step);
+    assert.equal(
+      connect.indexOf(step, accepted),
+      connect.indexOf(step, guarded),
+    );
+  }
+  assert.ok(branch.length < handoff - guarded);
+  assert.match(
+    connect.slice(handoff),
+    /^await receiveReportDelivery\(\s*payload,\s*first,/,
+  );
+});
+
+test("an arriving report holds the offline summary and leaving until it fails to draw", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const page = read("web/interview.js");
+  const state = { phase: "ending", reportReceiving: true };
+  let navigated = false;
+  const context = {
+    state,
+    window: {
+      location: {
+        set href(_value) {
+          navigated = true;
+        },
+      },
+    },
+  };
+  runInNewContext(
+    `${functionBody(page, "showReport")}\n}\n` +
+      `${functionBody(page, "leaveRoom")}\n}\n` +
+      "void showReport(); leaveRoom();",
+    context,
+  );
+  assert.equal(state.phase, "ending");
+  assert.equal(navigated, false);
+  const failed = functionBody(page, "reportRenderFailed");
+  assert.match(failed, /state\.reportReceiving = false;/);
+});
+
+test("an accepted report prevents a later End click from changing replay provenance", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const page = read("web/interview.js");
+  const state = { phase: "live", reportReceiving: true };
+  runInNewContext(
+    functionBody(page, "endInterview") +
+      '\n}\nendInterview("candidate_ended");',
+    { state },
+  );
+  assert.equal(state.phase, "live");
+});

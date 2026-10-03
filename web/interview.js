@@ -36,6 +36,7 @@ import {
 import {
   acceptsReport,
   CANDIDATE_CASE_LIMIT,
+  claimReport,
   clamp,
   codeUpdatePayload,
   codingLoop,
@@ -49,6 +50,7 @@ import {
   integrityEventPayload,
   isAgent,
   providerUiState,
+  receiveReportDelivery,
   roomInterviewer,
   sanitizeReport,
   sessionReport,
@@ -301,6 +303,7 @@ const state = {
   /// worked examples are hidden: it is a worked case in its own right.
   candidateCaseHint: "",
   report: null,
+  reportReceiving: false,
   /// Set when the interviewer's report reached this page and could not be
   /// rendered. The offline summary that follows is written from what this page
   /// holds either way; what this changes is the sentence explaining why the
@@ -1153,15 +1156,38 @@ async function connectLiveKit(connection, preflight, presenting = false) {
   if (!livekit?.Room) throw new Error("LiveKit browser SDK is unavailable.");
   const room = new livekit.Room({ adaptiveStream: true, dynacast: true });
 
+  const receivedReports = new Set();
   room.on(
     livekit.RoomEvent.DataReceived,
-    (payload, participant, kind, topic) => {
+    async (payload, participant, kind, topic) => {
       if (topic === topics.control && isAgent(participant)) {
         receiveControl(payload);
         return;
       }
       if (!acceptsReport(topic, participant)) return;
-      void receiveReport(room, payload);
+      // The report has arrived. Nothing may offer the offline summary or a way
+      // out while it is drawn, or the candidate could save an unscored summary
+      // beside it; `reportRenderFailed` gives the ways out back. Only the copy
+      // that renders claims this: a retransmission landing after a failed draw
+      // would otherwise hide the ways out again with nothing to restore them.
+      const first = claimReport(payload, receivedReports);
+      if (first) {
+        state.reportReceiving = true;
+        nodes.end.disabled = true;
+        nodes.forceReport.hidden = true;
+        nodes.leaveRoom.hidden = true;
+        stopEndingEscape();
+      }
+      await receiveReportDelivery(
+        payload,
+        first,
+        (receipt) =>
+          room.localParticipant.publishData(
+            new TextEncoder().encode(JSON.stringify(receipt)),
+            { reliable: true, topic: topics.control },
+          ),
+        (report, flushed) => receiveReport(room, report, flushed),
+      );
     },
   );
   room.on(livekit.RoomEvent.ParticipantAttributesChanged, updateAgentState);
@@ -1453,7 +1479,10 @@ function finalizeRecoveryOnPageHide() {
 
 window.addEventListener("pagehide", finalizeRecoveryOnPageHide);
 
-async function receiveReport(room, payload) {
+/// `flushed` settles once the report receipt has had its chance to leave; the
+/// room stays up until then so the agent can stop retransmitting. Recovery's
+/// own finalize has no receipt to wait for.
+async function receiveReport(room, payload, flushed = Promise.resolve()) {
   // The wait ended when this packet arrived, whatever becomes of it below.
   stopEndingEscape();
   let rendered = false;
@@ -1466,6 +1495,9 @@ async function receiveReport(room, payload) {
     // into an incomplete report rather than a throw.
     if (raw?.incomplete && raw?.reportRecovery) {
       const live = state.phase === "live";
+      // Recovery owns the ways out from here, its retry and its "save and
+      // leave", so the claim that held them for a report being drawn ends.
+      state.reportReceiving = false;
       if (reportRecovery.start(raw)) {
         // Only once the offer is taken: one that is refused falls through to
         // the ordinary path below, which writes this frame itself.
@@ -1513,10 +1545,12 @@ async function receiveReport(room, payload) {
     renderAttempted = true;
     renderReport();
     rendered = true;
-    void room?.disconnect().catch(() => {});
+    void flushed.then(() => room?.disconnect()).catch(() => {});
     state.room = null;
     state.connected = false;
-    renderReportSaveStatus(await saving);
+    // Done navigates away, which would drop a receipt still leaving.
+    const [saved] = await Promise.all([saving, flushed]);
+    renderReportSaveStatus(saved);
   } catch (error) {
     reportRecovery.stop();
     restoreEndingOverlay();
@@ -1534,7 +1568,7 @@ async function receiveReport(room, payload) {
     // shown, until the candidate pressed something.
     stopAvatar();
     stopLocalMedia();
-    void room?.disconnect().catch(() => {});
+    void flushed.then(() => room?.disconnect()).catch(() => {});
     state.room = null;
     state.connected = false;
     // The interviewer closed this one itself, and the `ended` row for it sits
@@ -1558,6 +1592,10 @@ async function receiveReport(room, payload) {
     // It draws through the same `renderReport`, so a throw from inside that
     // one is a throw the click reproduces, and the guard around the second
     // attempt can do no more than say so again.
+    //
+    // Both ways out it offers disconnect, so they wait for the receipt that
+    // stops the agent's retries.
+    await flushed;
     reportRenderFailed(error, { offlineSummary: !renderAttempted });
   }
 }
@@ -2405,8 +2443,9 @@ function flushPendingLanguagePublish() {
 /// the agent's own deadline by
 /// the_browser_escape_hatch_outlasts_the_report_deadline, which reads this
 /// declaration: the value lives here, and Rust checks that it clears
-/// REPORT_TIMEOUT plus WRAP_UP_WAIT rather than keeping a copy of it.
-const REPORT_ESCAPE_WAIT_MS = 135000;
+/// the generation, wrap-up, Gemini close and delivery bounds rather than
+/// keeping copies.
+const REPORT_ESCAPE_WAIT_MS = 155000;
 
 /// The two timers that speak for a report nobody has seen yet, held so that a
 /// report which arrives can take them back. Both say a wait is still running,
@@ -2415,14 +2454,10 @@ const REPORT_ESCAPE_WAIT_MS = 135000;
 /// "preparing your report" and then with an offer to retry the provider.
 let endingEscape = [];
 
-/// How long a report published just before the interviewer left has to arrive.
-///
-/// The agent publishes and then leaves, so the moment it goes is also the
-/// moment its report may be one packet away: `publish_report` in
-/// src/livekit.rs is followed by a sleep and then `leave_room`. Offering the
-/// offline summary inside that window offers to replace an evaluation that
-/// exists with an unscored one, and the click disconnects the room that was
-/// about to deliver it.
+/// A final packet can arrive after the participant's departure notification,
+/// particularly from an older agent that leaves without waiting for a receipt.
+/// Offering the offline summary immediately lets the candidate disconnect
+/// before an evaluation already in transit reaches the page.
 const REPORT_DELIVERY_GRACE_MS = 3000;
 
 /// Armed when the interviewer leaves while the page is still waiting, so a
@@ -2437,7 +2472,7 @@ function stopEndingEscape() {
 }
 
 function endInterview(reason) {
-  if (state.phase !== "live") return;
+  if (state.phase !== "live" || state.reportReceiving) return;
   state.phase = "ending";
   // The hint outranks the ending overlay in the stacking order, so a candidate
   // who ends while it is still up would read the report status through it.
@@ -2476,12 +2511,10 @@ function endInterview(reason) {
   nodes.forceReport.hidden = reportComing;
   startEndingClock();
   if (reportComing) {
-    // Longer than the agent's worst case, not shorter: the report is bounded
-    // by REPORT_TIMEOUT in src/livekit.rs and a timer-driven end spends
-    // WRAP_UP_WAIT ahead of it. Offering "leave the room" before that elapses
-    // invites the candidate to walk out on a report that is still coming, and
-    // leaving never saves it. REPORT_ESCAPE_WAIT_MS has to clear both, and
-    // says where that is checked.
+    // The wait clears report generation, the timer-driven wrap-up, the Gemini
+    // close, and all delivery retries, summed as if none overlapped. An
+    // earlier escape can disconnect a packet still in transit; the Rust
+    // deadline test holds this number against those bounds.
     endingEscape = [
       setTimeout(() => {
         if (state.phase === "ending")
@@ -2539,6 +2572,7 @@ function leaveRoom() {
     reportRecovery.finish();
     return;
   }
+  if (state.reportReceiving) return;
   stopEndingClock();
   void state.room?.disconnect?.();
   stopAvatar();
@@ -2547,13 +2581,15 @@ function leaveRoom() {
 }
 
 async function showReport() {
-  if (state.phase === "report") return;
+  // An arrived report outranks the offline summary, including from the timer
+  // `endInterview` sets when no report is expected.
+  if (state.phase === "report" || state.reportReceiving) return;
   state.phase = "report";
   // The offline summary is now offered while a room is still up -- it used to
   // be hidden for the whole life of one -- so this is the one report path that
-  // can leave the agent in an interview nobody is attending. `receiveReport`
-  // disconnects because the agent published and left; here nothing has, and a
-  // candidate reading a local summary is still paying for a Gemini session.
+  // can leave the agent in an interview nobody is attending. Receiving an
+  // agent report ends assessment; a local summary cannot do that, and the
+  // candidate would otherwise still be paying for a Gemini session.
   void state.room?.disconnect?.().catch?.(() => {});
   state.room = null;
   state.connected = false;
@@ -2617,6 +2653,9 @@ async function showReport() {
 function reportRenderFailed(error, { offlineSummary }) {
   console.warn("codetrial report_render_failed", error);
   state.reportUnreadable = true;
+  // The ways out below are the fallback for the report that failed, so they
+  // have to work again.
+  state.reportReceiving = false;
   state.phase = "ending";
   stopEndingClock();
   // Both of these speak for a report still on its way, and nothing is on its
@@ -2807,15 +2846,14 @@ function updateAgentState() {
         "The interviewer disconnected. Nothing you typed is lost; end the interview to get your report.",
       );
     }
-    // `endInterview` decides once whether a report is coming, and the
-    // interviewer can leave a moment later: the agent leaves the room right
-    // after publishing, and the failure behind issue 77 is the one where it
-    // leaves without publishing at all. The overlay covers the banner above,
-    // so a candidate already waiting learns none of this and sits out the
-    // whole escape wait for a report with nobody left to send it.
+    // An interviewer can leave after endInterview starts waiting, including
+    // after exhausting delivery retries. The overlay covers the banner above,
+    // so it must offer an exit once no sender remains, after allowing packets
+    // already in transit to arrive.
     if (
       state.sawAgent &&
       state.phase === "ending" &&
+      !state.reportReceiving &&
       !state.reportUnreadable &&
       !deliveryGrace
     ) {

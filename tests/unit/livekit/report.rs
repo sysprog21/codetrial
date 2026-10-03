@@ -1399,3 +1399,486 @@ async fn a_retry_waits_for_keys_that_went_out_after_the_offer() {
     assert_eq!(notices, [RecoveryNotice::Closed]);
     assert!(started.elapsed() < std::time::Duration::from_secs(1));
 }
+
+#[test]
+fn report_receipt_requires_the_candidate_and_matching_delivery() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../fixtures/report-receipt.json")).unwrap();
+    let cases = fixture["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 1);
+    let payload = serde_json::to_vec(&cases[0]["payload"]).unwrap();
+    let id = cases[0]["payload"]["deliveryId"].as_str().unwrap();
+    // The fixture holds the page's digest; the agent must compute the same.
+    assert_eq!(id, crate::sha256_hex(&[br#"{"codingScore":80}"#]));
+    let valid = |topic, sender, id, payload: &[u8]| {
+        is_report_receipt(topic, sender, "candidate", payload, id, false)
+    };
+    assert!(valid(Some("control"), Some("candidate"), id, &payload));
+    assert!(!valid(Some("report"), Some("candidate"), id, &payload));
+    assert!(!valid(Some("control"), Some("peer"), id, &payload));
+
+    // LiveKit drops the sender of a packet that lands after its departure. Any
+    // peer could echo the digest, so that counts only once the candidate is
+    // gone.
+    assert!(!valid(Some("control"), None, id, &payload));
+    assert!(is_report_receipt(
+        Some("control"),
+        None,
+        "candidate",
+        &payload,
+        id,
+        true
+    ));
+    assert!(!valid(
+        Some("control"),
+        Some("candidate"),
+        "old-report",
+        &payload
+    ));
+    assert!(!valid(
+        Some("control"),
+        Some("candidate"),
+        "malformed",
+        b"invalid"
+    ));
+}
+
+#[tokio::test(start_paused = true)]
+async fn report_delivery_retries_identical_bytes_after_a_publish_failure() {
+    let (_sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    let payload = br#"{"codingScore":80}"#.to_vec();
+    let mut published = Vec::new();
+    let started = tokio::time::Instant::now();
+    let result = deliver_report(
+        |packet| {
+            assert_eq!(packet.topic.as_deref(), Some(TOPIC_REPORT));
+            assert!(packet.reliable);
+            published.push(packet.payload);
+            std::future::ready(if published.len() == 1 {
+                Err("transport")
+            } else {
+                Ok(())
+            })
+        },
+        &mut events,
+        "candidate",
+        "room",
+        || true,
+        delivery_test_packet(payload.clone()),
+    )
+    .await;
+    assert!(!result.unwrap());
+    assert_eq!(published, vec![payload; DELIVERY_ATTEMPTS]);
+    assert_eq!(started.elapsed(), DELIVERY_WAIT * DELIVERY_ATTEMPTS as u32);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_hung_report_publish_is_bounded_and_retried() {
+    let (_sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    let mut attempts = 0;
+    let started = tokio::time::Instant::now();
+    let result = deliver_report(
+        |_| {
+            attempts += 1;
+            std::future::pending::<Result<(), std::io::Error>>()
+        },
+        &mut events,
+        "candidate",
+        "room",
+        || true,
+        delivery_test_packet(br#"{"codingScore":80}"#.to_vec()),
+    )
+    .await;
+    assert!(result.is_err());
+    assert_eq!(attempts, DELIVERY_ATTEMPTS);
+    assert_eq!(started.elapsed(), DELIVERY_WAIT * DELIVERY_ATTEMPTS as u32);
+}
+
+struct ReceiptTestEvent {
+    sender: &'static str,
+    payload: Vec<u8>,
+}
+
+impl DeliveryEvent for ReceiptTestEvent {
+    fn acknowledges(&self, candidate: &str, id: &str, candidate_gone: bool) -> bool {
+        is_report_receipt(
+            Some("control"),
+            Some(self.sender),
+            candidate,
+            &self.payload,
+            id,
+            candidate_gone,
+        )
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn delivery_stops_on_the_candidate_receipt_after_retry() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../fixtures/report-receipt.json")).unwrap();
+    let receipt = serde_json::to_vec(&fixture["cases"][0]["payload"]).unwrap();
+    sender
+        .send(ReceiptTestEvent {
+            sender: "peer",
+            payload: receipt.clone(),
+        })
+        .unwrap();
+    sender
+        .send(ReceiptTestEvent {
+            sender: "candidate",
+            payload: receipt_bytes("old"),
+        })
+        .unwrap();
+    let mut attempts = 0;
+    let result = deliver_report(
+        |_| {
+            attempts += 1;
+            if attempts == 2 {
+                sender
+                    .send(ReceiptTestEvent {
+                        sender: "candidate",
+                        payload: receipt.clone(),
+                    })
+                    .unwrap();
+            }
+            std::future::ready(if attempts == 1 {
+                Err("transport")
+            } else {
+                Ok(())
+            })
+        },
+        &mut events,
+        "candidate",
+        "room",
+        || true,
+        delivery_test_packet(br#"{"codingScore":80}"#.to_vec()),
+    )
+    .await;
+    assert!(result.unwrap());
+    assert_eq!(attempts, 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lost_packet_is_retransmitted_until_receipt() {
+    for acknowledged_on in [1, 2] {
+        let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+        let payload = br#"{"codingScore":80}"#.to_vec();
+        let id = crate::sha256_hex(&[&payload]);
+        let mut published = Vec::new();
+        let started = tokio::time::Instant::now();
+        let result = deliver_report(
+            |packet| {
+                published.push(packet.payload);
+                if published.len() == acknowledged_on {
+                    sender
+                        .send(ReceiptTestEvent {
+                            sender: "candidate",
+                            payload: receipt_bytes(&id),
+                        })
+                        .unwrap();
+                }
+                std::future::ready(Ok::<(), std::io::Error>(()))
+            },
+            &mut events,
+            "candidate",
+            "room",
+            || true,
+            delivery_test_packet(payload.clone()),
+        )
+        .await;
+        assert!(result.unwrap());
+        assert_eq!(published, vec![payload; acknowledged_on]);
+        assert_eq!(
+            started.elapsed(),
+            DELIVERY_WAIT * (acknowledged_on - 1) as u32
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_disconnected_room_stops_waiting_without_claiming_delivery_failure() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    sender
+        .send(RoomEvent::Disconnected {
+            reason: ::livekit::DisconnectReason::ClientInitiated,
+        })
+        .unwrap();
+    let mut attempts = 0;
+    let started = tokio::time::Instant::now();
+    let result = deliver_report(
+        |_| {
+            attempts += 1;
+            std::future::ready(Ok::<(), std::io::Error>(()))
+        },
+        &mut events,
+        "candidate",
+        "room",
+        || true,
+        delivery_test_packet(b"{}".to_vec()),
+    )
+    .await;
+    assert!(!result.unwrap());
+    assert_eq!(attempts, 1);
+    assert_eq!(started.elapsed(), Duration::ZERO);
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_report_publishes_are_retried_and_reported_as_failure() {
+    let (_sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    let mut attempts = 0;
+    let result = deliver_report(
+        |_| {
+            attempts += 1;
+            std::future::ready(Err::<(), _>("transport"))
+        },
+        &mut events,
+        "candidate",
+        "room",
+        || true,
+        delivery_test_packet(b"{}".to_vec()),
+    )
+    .await;
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("report_delivery_failed")
+    );
+    assert_eq!(attempts, DELIVERY_ATTEMPTS);
+}
+
+/// What the page sends back for a report whose bytes hash to `id`.
+fn receipt_bytes(id: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "type": "report_received", "deliveryId": id,
+    }))
+    .unwrap()
+}
+
+/// Built by the same `report_data_packet` the agent sends, so the topic and
+/// reliability under test cannot drift from the real packet's.
+fn delivery_test_packet(payload: Vec<u8>) -> DataPacket {
+    let packet = report_data_packet(serde_json::from_slice(&payload).unwrap()).unwrap();
+    assert_eq!(packet.payload, payload, "the test bytes are the bytes sent");
+    packet
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_candidate_already_absent_gets_one_publish_without_a_receipt_wait() {
+    let (_sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    let started = tokio::time::Instant::now();
+    let mut attempts = 0;
+    let result = deliver_report(
+        |_| {
+            attempts += 1;
+            std::future::ready(Ok::<(), std::io::Error>(()))
+        },
+        &mut events,
+        "candidate",
+        "room",
+        || false,
+        delivery_test_packet(b"{}".to_vec()),
+    )
+    .await;
+    assert!(!result.unwrap());
+    assert_eq!(attempts, 1);
+    assert_eq!(started.elapsed(), Duration::ZERO);
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_publication_followed_by_disconnect_is_a_delivery_failure() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    sender
+        .send(RoomEvent::Disconnected {
+            reason: ::livekit::DisconnectReason::ClientInitiated,
+        })
+        .unwrap();
+    let result = deliver_report(
+        |_| std::future::ready(Err::<(), _>("transport")),
+        &mut events,
+        "candidate",
+        "room",
+        || true,
+        delivery_test_packet(b"{}".to_vec()),
+    )
+    .await;
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("report_delivery_failed")
+    );
+}
+
+// LiveKit constructs RemoteParticipant internally, so the real room's
+// participant map is supplied through the presence probe rather than faked.
+#[tokio::test(start_paused = true)]
+async fn a_candidate_leaving_during_the_receipt_wait_stops_retries() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    sender
+        .send(ReceiptTestEvent {
+            sender: "peer",
+            payload: b"{}".to_vec(),
+        })
+        .unwrap();
+    let presence_reads = std::cell::Cell::new(0);
+    let mut attempts = 0;
+    let started = tokio::time::Instant::now();
+    let result = deliver_report(
+        |_| {
+            attempts += 1;
+            std::future::ready(Ok::<(), std::io::Error>(()))
+        },
+        &mut events,
+        "candidate",
+        "room",
+        || {
+            let reads = presence_reads.get();
+            presence_reads.set(reads + 1);
+
+            // Present after publication, gone when the queued event is
+            // consumed.
+            reads == 0
+        },
+        delivery_test_packet(b"{}".to_vec()),
+    )
+    .await;
+    assert!(!result.unwrap());
+    assert_eq!(attempts, 1);
+    assert_eq!(presence_reads.get(), 2);
+    assert_eq!(started.elapsed(), Duration::ZERO);
+}
+
+#[test]
+fn an_unattributed_receipt_counts_only_once_the_candidate_is_gone() {
+    let payload = br#"{"codingScore":80}"#;
+    let id = crate::sha256_hex(&[payload]);
+    let receipt = |topic: &str| RoomEvent::DataReceived {
+        payload: std::sync::Arc::new(receipt_bytes(&id)),
+        topic: Some(topic.to_string()),
+        kind: ::livekit::prelude::DataPacketKind::Reliable,
+        participant: None,
+    };
+    assert!(receipt("control").acknowledges("candidate", &id, true));
+    assert!(!receipt("control").acknowledges("candidate", &id, false));
+    assert!(!receipt("report").acknowledges("candidate", &id, true));
+    assert!(!receipt("control").disconnected());
+    assert!(
+        RoomEvent::Disconnected {
+            reason: ::livekit::DisconnectReason::ClientInitiated,
+        }
+        .disconnected()
+    );
+}
+
+/// The page sends its receipt and then disconnects, and the roster can lose the
+/// candidate before this loop reads the receipt queued ahead of that.
+#[tokio::test(start_paused = true)]
+async fn a_receipt_queued_before_the_candidate_left_is_still_acknowledged() {
+    let payload = br#"{"codingScore":80}"#.to_vec();
+    let id = crate::sha256_hex(&[&payload]);
+    let receipt = || ReceiptTestEvent {
+        sender: "candidate",
+        payload: receipt_bytes(&id),
+    };
+    // Gone before the wait starts, and gone while an unrelated event is read.
+    for unrelated_first in [false, true] {
+        let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+        if unrelated_first {
+            sender
+                .send(ReceiptTestEvent {
+                    sender: "peer",
+                    payload: b"{}".to_vec(),
+                })
+                .unwrap();
+        }
+        sender.send(receipt()).unwrap();
+        let presence_reads = std::cell::Cell::new(0);
+        let result = deliver_report(
+            |_| std::future::ready(Ok::<(), std::io::Error>(())),
+            &mut events,
+            "candidate",
+            "room",
+            || {
+                let reads = presence_reads.get();
+                presence_reads.set(reads + 1);
+                unrelated_first && reads == 0
+            },
+            delivery_test_packet(payload.clone()),
+        )
+        .await;
+        assert!(result.unwrap(), "unrelated_first={unrelated_first}");
+    }
+}
+
+/// The provisional report's receipt wait reads the same event stream, so a
+/// departure during it never reaches `recover_report`. Absence at the start
+/// begins the rejoin grace instead of a five-minute wait for nobody, and a
+/// rejoin within it keeps the offer.
+#[tokio::test(start_paused = true)]
+async fn a_candidate_gone_when_the_wait_begins_gets_only_the_rejoin_grace() {
+    for rejoins in [false, true] {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        if rejoins {
+            tx.send(RecoveryEvent::Back).unwrap();
+        }
+        let mut fixture = RecoveryFixture::new(rx);
+        fixture.3 = false;
+        let started = tokio::time::Instant::now();
+        let result = recover_report(
+            &mut fixture,
+            async { Ok(Ok(serde_json::json!({}))) },
+            REPORT_RECOVERY_WINDOW,
+            REPORT_RETRY_COOLDOWN,
+            started,
+            || Readiness::Ready,
+        )
+        .await;
+        assert!(result.is_none());
+        let waited = started.elapsed();
+        if rejoins {
+            // Back in time, so only the window's own expiry ends the wait.
+            assert_eq!(waited, REPORT_RECOVERY_WINDOW);
+            assert_eq!(fixture.1, vec![RecoveryNotice::Closed]);
+        } else {
+            assert_eq!(waited, REJOIN_GRACE);
+            assert!(fixture.1.is_empty());
+        }
+        drop(tx);
+    }
+}
+
+/// The receipt that arrives unattributed because its sender just left is
+/// itself the event that reveals the departure, so presence is read before the
+/// receipt is judged rather than only for the events behind it.
+#[tokio::test(start_paused = true)]
+async fn an_unattributed_receipt_that_reveals_the_departure_is_acknowledged() {
+    let payload = br#"{"codingScore":80}"#.to_vec();
+    let id = crate::sha256_hex(&[&payload]);
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    sender
+        .send(RoomEvent::DataReceived {
+            payload: std::sync::Arc::new(receipt_bytes(&id)),
+            topic: Some("control".to_string()),
+            kind: ::livekit::prelude::DataPacketKind::Reliable,
+            participant: None,
+        })
+        .unwrap();
+    let presence_reads = std::cell::Cell::new(0);
+    let result = deliver_report(
+        |_| std::future::ready(Ok::<(), std::io::Error>(())),
+        &mut events,
+        "candidate",
+        "room",
+        || {
+            let reads = presence_reads.get();
+            presence_reads.set(reads + 1);
+            // Present when the wait starts, gone once the receipt is read.
+            reads == 0
+        },
+        delivery_test_packet(payload),
+    )
+    .await;
+    assert!(result.unwrap());
+}

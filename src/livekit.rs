@@ -3009,8 +3009,8 @@ async fn handle_data_packet(
     )
     .await?;
 
-    // Give the report packet a moment to leave before the agent goes.
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    // Every report went out through a receipt wait, so leaving now drops
+    // nothing the candidate has not acknowledged or stopped listening for.
     leave_room(room).await;
     Ok(ControlFlow::Break(()))
 }

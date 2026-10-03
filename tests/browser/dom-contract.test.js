@@ -938,14 +938,15 @@ test("runner progress statuses stay wired to each execution path", () => {
 test("a report that never lands still offers the offline summary", () => {
   const ending = functionBody(interviewSource(), "endInterview");
 
-  // Ordering, not a byte window: both reveals live in the escape timeout, and
-  // the only thing worth pinning is that the offline summary is revealed there
-  // too rather than left hidden behind "leave the room".
-  const escape = ending.indexOf("REPORT_ESCAPE_WAIT_MS");
-  assert.ok(escape !== -1, "the escape timeout left endInterview");
-  assert.ok(ending.indexOf("nodes.leaveRoom.hidden = false") > escape);
+  // Inspect the timeout callback rather than a mention in its comment.
+  const deadline = ending.search(/\},\s*REPORT_ESCAPE_WAIT_MS\s*\)/);
+  assert.ok(deadline !== -1, "the escape timeout left endInterview");
+  const callback = ending.lastIndexOf("setTimeout(() => {", deadline);
+  assert.ok(callback !== -1 && callback < deadline);
+  const escape = ending.slice(callback, deadline);
+  assert.ok(escape.includes("nodes.leaveRoom.hidden = false"));
   assert.ok(
-    ending.indexOf("nodes.forceReport.hidden = false") > escape,
+    escape.includes("nodes.forceReport.hidden = false"),
     "past the escape deadline the offline summary is offered beside leaving, not instead of it",
   );
 });

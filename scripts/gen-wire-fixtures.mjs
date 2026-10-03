@@ -384,6 +384,19 @@ const files = {
     cases: codeUpdateCases(languages),
   },
   "control.json": { topic: lib.topics.control, cases: controlCases() },
+  "report-receipt.json": {
+    topic: lib.topics.control,
+    cases: [
+      {
+        name: "received report",
+        // The page's own digest, so the agent test that rehashes these
+        // bytes checks the browser's hashing and not a copy of it.
+        payload: await lib.reportReceipt(
+          new TextEncoder().encode('{"codingScore":80}'),
+        ),
+      },
+    ],
+  },
   "test-results.json": { topic: lib.topics.tests, cases: testResultsCases() },
   "integrity-chain.json": await integrityChain(),
 };
