@@ -154,6 +154,17 @@ pub struct GeminiLiveSession {
     pub(crate) input_cause: Option<&'static str>,
 }
 
+/// A session dropped without `shutdown` would leave its reader detached,
+/// parked on a read and holding the socket and its provider slot open; a
+/// `JoinHandle` going away does not cancel its task. Every path that lets one
+/// go, an early return included, stops the reader here. `shutdown` remains
+/// the orderly close.
+impl Drop for GeminiLiveSession {
+    fn drop(&mut self) {
+        self.reader.abort();
+    }
+}
+
 impl GeminiLiveSession {
     /// Whether Gemini closed this socket because its project cannot pay, and
     /// no other key can take over: nothing a replacement tries can work.
