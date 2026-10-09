@@ -164,6 +164,9 @@ struct StoredResult {
 pub struct Preparation {
     pub rules_acknowledged_at: String,
     pub calibration: Value,
+    /// The language the learner chose, one the task allows; fixed for the
+    /// attempt.
+    pub language: String,
 }
 
 #[derive(Clone)]
@@ -185,6 +188,11 @@ pub struct PinnedTask {
 }
 
 impl PinnedTask {
+    /// The language the attempt is worked in.
+    pub fn language(&self) -> &str {
+        &self.preparation.language
+    }
+
     /// Keeps the attempt's result, final code included, for the learner's
     /// page to collect after it lost its room or was reloaded. Only the latest
     /// result is kept.
@@ -208,8 +216,9 @@ impl PinnedTask {
 
 struct PendingAdmission {
     claim_id: u64,
-    /// Assignment and task: a replayed request key must name the same.
+    /// A replayed request key must keep the assignment, task and language.
     assignment: (Assignment, String),
+    language: String,
     expires_at: u64,
     response: Option<Value>,
 }
@@ -351,12 +360,18 @@ impl TaskService {
             .get(task_id)
             .ok_or_else(|| AccessError::new("task_not_found"))?;
         let exercise = Exercise(record.clone());
-        let projection = exercise.live_projection();
+        // The brief and contract read the same in every language.
+        let projection = exercise.live_projection(&exercise.languages()[0]);
         let config = &set.config;
+        let starters: serde_json::Map<String, Value> = exercise
+            .languages()
+            .iter()
+            .map(|language| (language.clone(), json!(exercise.starter(language))))
+            .collect();
         Ok(
             json!({"setId": assignment.set_id, "version": config.version, "taskId": task_id,
             "title": exercise.title(), "brief": projection["brief"], "contract": projection["contract"],
-            "starterCode": {"python": exercise.starter("python")}, "publicCases": record.judge(),
+            "languages": exercise.languages(), "starterCode": starters, "publicCases": record.judge(),
             "completionTargets": record.sidecar().completion_targets, "understandingChecks": record.sidecar().understanding_checks,
             "rules": config.rules_json(),
             "setupTimeoutSeconds": default_number("pendingAdmissionSeconds"),
@@ -385,7 +400,7 @@ impl TaskService {
         let key = (owner_id, request_key.to_owned());
         let named = (assignment.clone(), task_id.to_owned());
         if let Some(admission) = state.admissions.get(&key) {
-            if admission.assignment != named {
+            if admission.assignment != named || admission.language != preparation.language {
                 return Err(AccessError::new("client_override"));
             }
             if admission.expires_at <= now
@@ -421,6 +436,9 @@ impl TaskService {
             .get(task_id)
             .ok_or_else(|| AccessError::new("task_not_found"))?
             .clone();
+        if !record.sidecar().languages.contains(&preparation.language) {
+            return Err(AccessError::new("language_unsupported"));
+        }
         let claim_id = state.next_claim_id + 1;
         state.next_claim_id = claim_id;
         let ordinal = state
@@ -439,6 +457,7 @@ impl TaskService {
             PendingAdmission {
                 claim_id,
                 assignment: named,
+                language: preparation.language.clone(),
                 expires_at: now.saturating_add(default_number("pendingAdmissionSeconds")),
                 response: None,
             },

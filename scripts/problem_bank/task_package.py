@@ -20,7 +20,7 @@ from .bank import (
 from .emit import candidate_problem
 from .rules import validated_variant
 from .task_structure import structural
-from .tasks import DEFAULTS, VARIABLE, identifier, validated_sidecars
+from .tasks import DEFAULTS, VARIABLE, identifier, task_languages, validated_sidecars
 
 PACKAGE_KEYS = {
     "packageVersion",
@@ -208,7 +208,9 @@ def load_bank(directory, set_id, version):
     return package
 
 
-def projection(entry, sidecar):
+def projection(entry, sidecar, language):
+    """What an attempt in `language` is told about the task: its targets in
+    that language and none marked in another."""
     variant = entry["variant"]
     return {
         "title": variant["title"],
@@ -216,7 +218,12 @@ def projection(entry, sidecar):
         "contract": variant["contract"],
         "clarifications": variant["clarifications"],
         "hints": variant["hints"][: sidecar["maxHintRungs"]],
-        "completionTargets": sidecar["completionTargets"],
+        "language": language,
+        "completionTargets": [
+            target
+            for target in sidecar["completionTargets"]
+            if target["language"] == language
+        ],
         "understandingChecks": sidecar["understandingChecks"],
     }
 
@@ -251,23 +258,29 @@ def validated_task(package, task_id):
     return entries[task_id], sidecar
 
 
-def render_prompt(package, task_id):
+def render_prompt(package, task_id, language=None):
+    """The prompt an attempt in `language`, by default the task's first,
+    starts with."""
     entry, sidecar = validated_task(package, task_id)
+    language = language or task_languages(sidecar)[0]
+    if language not in task_languages(sidecar):
+        raise ValueError("language is not one of the task's")
     values = {
         "title": entry["variant"]["title"],
-        "language": "python",
+        "language": language,
         "target": "",
         "phase": "ready",
     }
     instructor = VARIABLE.sub(
         lambda match: values[match.group(1)], sidecar["interactionPrompt"]
     )
-    public = projection(entry, sidecar)
+    public = projection(entry, sidecar, language)
     public.pop("hints")
     public["hintRungsMax"] = sidecar["maxHintRungs"]
     template = (ROOT / "problem-bank/task-prompt.txt").read_text()
     substitutions = {
         "phase": "ready",
+        "language": language,
         "instructorPrompt": instructor,
         "publicProjection": compact(public).decode(),
         "code": json.dumps("", ensure_ascii=False),

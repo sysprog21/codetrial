@@ -42,6 +42,20 @@ impl Exercise {
         &self.0.sidecar.completion_targets
     }
 
+    /// The languages the learner may choose from, the first offered first.
+    pub fn languages(&self) -> &[String] {
+        &self.0.sidecar.languages
+    }
+
+    /// The targets marked in `language`'s starter, the only ones an attempt
+    /// in it can complete.
+    pub fn targets_in(&self, language: &str) -> Vec<&CompletionTarget> {
+        self.completion_targets()
+            .iter()
+            .filter(|target| target.language == language)
+            .collect()
+    }
+
     /// The question of the check named `id`.
     pub fn check_question(&self, id: &str) -> Option<&str> {
         self.understanding_checks()
@@ -58,12 +72,15 @@ impl Exercise {
         (&self.0.optimal, &self.0.pitfalls)
     }
 
-    /// Constructed by field selection, so new private bank fields cannot leak.
-    pub fn live_projection(&self) -> Value {
+    /// What an attempt in `language` is told about the task: its targets in
+    /// that language and nothing marked in another. Constructed by field
+    /// selection, so new private bank fields cannot leak.
+    pub fn live_projection(&self, language: &str) -> Value {
         let record = &self.0;
         json!({"title": record.title, "brief": record.brief,
             "contract": record.contract, "clarifications": record.clarifications,
-            "hints": self.hints(), "completionTargets": record.sidecar.completion_targets,
+            "hints": self.hints(), "language": language,
+            "completionTargets": self.targets_in(language),
             "understandingChecks": record.sidecar.understanding_checks})
     }
 
@@ -72,8 +89,9 @@ impl Exercise {
         phase: Phase,
         target: Option<&str>,
         code: &str,
+        language: &str,
     ) -> Result<String, TaskError> {
-        self.task_prompt_with_hint_limit(phase, target, code, self.hints().len())
+        self.task_prompt_with_hint_limit(phase, target, code, language, self.hints().len())
     }
 
     pub fn task_prompt_with_hint_limit(
@@ -81,15 +99,15 @@ impl Exercise {
         phase: Phase,
         target: Option<&str>,
         code: &str,
+        language: &str,
         hint_limit: usize,
     ) -> Result<String, TaskError> {
         let record = &self.0;
         let instructor = record.sidecar.interaction_prompt.clone();
         let target_goal = match target {
-            Some(id) => record
-                .sidecar
-                .completion_targets
-                .iter()
+            Some(id) => self
+                .targets_in(language)
+                .into_iter()
                 .find(|row| row.id == id)
                 .map(|row| row.goal.as_str())
                 .ok_or_else(|| invalid("unknown completion target"))?,
@@ -99,12 +117,12 @@ impl Exercise {
             &instructor,
             &BTreeMap::from([
                 ("title", self.title()),
-                ("language", "python"),
+                ("language", language),
                 ("target", target_goal),
                 ("phase", phase.as_str()),
             ]),
         )?;
-        let mut projection = self.live_projection();
+        let mut projection = self.live_projection(language);
         projection.as_object_mut().unwrap().remove("hints");
         projection["hintRungsMax"] = json!(hint_limit.min(self.hints().len()));
         let projection = projection.to_string();
@@ -112,6 +130,7 @@ impl Exercise {
             include_str!("../../problem-bank/task-prompt.txt"),
             &BTreeMap::from([
                 ("phase", phase.as_str()),
+                ("language", language),
                 ("instructorPrompt", instructor.as_str()),
                 ("publicProjection", projection.as_str()),
                 ("code", serde_json::to_string(code).unwrap().as_str()),
@@ -146,6 +165,14 @@ pub struct Sidecar {
     pub required_cases: Vec<String>,
     pub max_hint_rungs: usize,
     pub rubric_profile: String,
+    /// The languages the learner may choose from, the first offered first.
+    /// A sidecar that names none allows the default language alone.
+    #[serde(default = "default_languages")]
+    pub languages: Vec<String>,
+}
+
+fn default_languages() -> Vec<String> {
+    vec![default_value("language").as_str().unwrap().to_owned()]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -273,15 +300,22 @@ impl TaskRecord {
                 required_cases: Vec::new(),
                 max_hint_rungs: (default_number("maxHintRungs") as usize).min(hints.len()),
                 rubric_profile: "task-engagement-v1".to_owned(),
+                languages: default_languages(),
             },
         };
         validate_sidecar(&sidecar, &starters, &hints)?;
+        if sidecar.languages.iter().any(|language| language == "c")
+            && judge["kind"].as_str() == Some("class")
+        {
+            return Err(invalid("C runs only function judges"));
+        }
 
         // The starter is the attempt's first revision; one the capture limit
         // refuses could never be run, discussed or kept.
-        if starters
-            .get("python")
-            .is_some_and(|code| code.len() > super::session::MAX_CODE_BYTES)
+        if sidecar
+            .languages
+            .iter()
+            .any(|language| starters[language].len() > super::session::MAX_CODE_BYTES)
         {
             return Err(invalid("starter exceeds the code byte limit"));
         }
@@ -431,12 +465,22 @@ fn validate_sidecar(
     {
         return Err(invalid("invalid target or check count"));
     }
+    let mut languages = HashSet::new();
+    if sidecar.languages.is_empty()
+        || sidecar.languages.iter().any(|language| {
+            !super::LANGUAGES.contains(&language.as_str())
+                || !languages.insert(language)
+                || !starters.contains_key(language)
+        })
+    {
+        return Err(invalid("unknown, repeated or starterless task language"));
+    }
     let mut ids = HashSet::new();
     let mut markers = HashSet::new();
     for target in &sidecar.completion_targets {
         if !identifier(&target.id)
             || !ids.insert(&target.id)
-            || target.language != "python"
+            || !languages.contains(&target.language)
             || !bounded_text(&target.goal, 1024)
         {
             return Err(invalid("invalid completion target"));
@@ -448,8 +492,8 @@ fn validate_sidecar(
             || !marker
                 .bytes()
                 .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
-            || !markers.insert(marker)
-            || token_count(&starters["python"], marker) != 1
+            || !markers.insert((&target.language, marker))
+            || token_count(&starters[&target.language], marker) != 1
         {
             return Err(invalid("missing, invalid or duplicate completion marker"));
         }

@@ -426,5 +426,101 @@
         }
       }
     ]
+  },
+  {
+    "name": "no task language",
+    "path": [
+      "sidecar",
+      "languages"
+    ],
+    "value": []
+  },
+  {
+    "name": "unknown task language",
+    "path": [
+      "sidecar",
+      "languages"
+    ],
+    "value": [
+      "rust"
+    ]
+  },
+  {
+    "name": "repeated task language",
+    "path": [
+      "sidecar",
+      "languages"
+    ],
+    "value": [
+      "python",
+      "python"
+    ]
+  },
+  {
+    "name": "task language without a starter",
+    "patches": [
+      {
+        "path": [
+          "sidecar",
+          "languages"
+        ],
+        "value": [
+          "python",
+          "java"
+        ]
+      },
+      {
+        "path": [
+          "problem",
+          "starterCode"
+        ],
+        "value": {
+          "python": "class Solution:\n    def isValid(self, s: str) -> bool:\n        # TASK_COMPLETE_CLOSER\n        return True\n"
+        }
+      }
+    ]
+  },
+  {
+    "name": "target in a language the task does not allow",
+    "path": [
+      "sidecar",
+      "completionTargets",
+      "0",
+      "language"
+    ],
+    "value": "javascript"
+  },
+  {
+    "name": "C for a class judge",
+    "fixture": "class-renamed-method",
+    "path": [
+      "sidecar"
+    ],
+    "value": {
+      "promptVersion": 1,
+      "interactionPrompt": "Ask about {{title}} in {{language}}.",
+      "completionTargets": [],
+      "understandingChecks": [
+        {
+          "id": "trace",
+          "question": "Trace a worked input."
+        },
+        {
+          "id": "contract",
+          "question": "What must stay true?"
+        },
+        {
+          "id": "revision",
+          "question": "What changed?"
+        }
+      ],
+      "requiredCases": [],
+      "maxHintRungs": 0,
+      "rubricProfile": "task-engagement-v1",
+      "languages": [
+        "cpp",
+        "c"
+      ]
+    }
   }
 ]

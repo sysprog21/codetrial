@@ -257,6 +257,7 @@ fn stamped(
             "taskId": task.exercise.id(), "sessionId": session_id, "sessionOrdinal": task.session_ordinal,
             "rubricProfile": "task-engagement-v1",
             "githubLogin": task.github_login, "githubId": task.github_id,
+            "language": task.language(),
             "rulesAcknowledgedAt": task.preparation.rules_acknowledged_at,
             "rules": config.rules_json(),
             "calibration": task.preparation.calibration})
@@ -329,7 +330,10 @@ fn assessed_turns(session: &TaskSession) -> Vec<Value> {
 }
 
 pub fn prompt(session: &TaskSession) -> String {
-    let mut requirements = session.task.exercise.live_projection();
+    let mut requirements = session
+        .task
+        .exercise
+        .live_projection(session.task.language());
     requirements.as_object_mut().unwrap().remove("hints");
     requirements
         .as_object_mut()

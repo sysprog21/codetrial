@@ -124,6 +124,18 @@ async fn a_retried_start_replays_one_attempt_and_a_second_start_is_refused() {
         )
     };
     assert_eq!(replay("start-1", 101).err().unwrap().code, "setup_pending");
+    let mut changed = preparation();
+    changed.language = "javascript".to_owned();
+    let mismatch = service.begin_admission(
+        1,
+        ("learner", 42),
+        &assignment("classroom", 7),
+        "delimiter-closer",
+        "start-1",
+        changed,
+        101,
+    );
+    assert_eq!(mismatch.err().unwrap().code, "client_override");
     service.finish_admission(
         1,
         "start-1",
@@ -502,4 +514,46 @@ fn a_failed_setup_forgets_its_own_key_and_no_other() {
         [&(1, "earlier".to_owned())]
     );
     assert!(!state.admissions.contains_key(&(1, "failing".to_owned())));
+}
+
+#[test]
+fn an_attempt_is_admitted_only_in_a_language_its_task_allows() {
+    let service = unlocked_service();
+    let loaded = service
+        .load_task(1, &assignment("classroom", 7), "delimiter-closer")
+        .unwrap();
+
+    // A sidecar naming no languages allows Python alone, and the page is given
+    // the starter for each language it may choose, no other.
+    assert_eq!(loaded["languages"], json!(["python"]));
+    let exercise = &SET.records["delimiter-closer"];
+    assert_eq!(loaded["title"], json!(Exercise(exercise.clone()).title()));
+    assert!(
+        loaded["contract"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty())
+    );
+    assert!(loaded["brief"].is_array());
+    assert_eq!(
+        loaded["starterCode"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>(),
+        ["python"]
+    );
+    let mut elsewhere = preparation();
+    elsewhere.language = "javascript".to_owned();
+    let refused = service.begin_admission(
+        1,
+        ("learner", 42),
+        &assignment("classroom", 7),
+        "delimiter-closer",
+        "javascript-key",
+        elsewhere,
+        100,
+    );
+    assert_eq!(refused.err().unwrap().code, "language_unsupported");
+    // Refused before anything was claimed, so the Python attempt may begin.
+    assert_eq!(admit(&service, "python-key", 100).language(), "python");
 }

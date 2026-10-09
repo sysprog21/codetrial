@@ -700,7 +700,7 @@ async fn a_refused_discuss_changes_nothing_but_the_overflow_flag() {
     let before = session.snapshot();
     let mut discuss = action("discuss-full", "discuss", Some("unsaved"));
     discuss.target_id = Some(
-        session.task.exercise.live_projection()["completionTargets"][0]["id"]
+        session.task.exercise.live_projection("python")["completionTargets"][0]["id"]
             .as_str()
             .unwrap()
             .to_owned(),
@@ -1666,4 +1666,57 @@ async fn a_returning_page_restarts_the_interviewer_only_after_start() {
     session.page_left();
     assert!(session.page_returned());
     assert!(session.page_present());
+}
+
+/// An attempt admitted in JavaScript, at a task that allows it.
+async fn in_javascript() -> TaskSession {
+    let mut row: Value =
+        serde_json::from_str(include_str!("../../fixtures/task-mode/customized.json")).unwrap();
+    row["sidecar"]["languages"] = json!(["python", "javascript"]);
+    let record = crate::tasks::TaskRecord::from_bank(
+        &row["problem"],
+        &row["judge"],
+        &row["variant"],
+        row.get("sidecar"),
+    )
+    .unwrap();
+    let mut task = admitted().await;
+    task.exercise = crate::tasks::Exercise(std::sync::Arc::new(record));
+    task.preparation.language = "javascript".to_owned();
+    let mut session = TaskSession::new(task, 100);
+    session.start(100);
+    session
+}
+
+#[tokio::test]
+async fn an_attempt_is_worked_in_the_language_it_was_admitted_in() {
+    let mut session = in_javascript().await;
+    assert_eq!(
+        Some(session.current.code.as_str()),
+        session.task.exercise.starter("javascript")
+    );
+    assert!(session.provider_context().contains("language=javascript;"));
+    let edit = |language: &str| {
+        json!({"code": "function isValid(s) { return true; }", "language": language,
+            "revisionId": format!("{language}-edit")})
+    };
+    assert_eq!(
+        send(
+            &mut session,
+            crate::runtime::TOPIC_CODE_UPDATE,
+            edit("python"),
+            101
+        ),
+        Some(Err(invalid("invalid task language")))
+    );
+    assert_eq!(
+        send(
+            &mut session,
+            crate::runtime::TOPIC_CODE_UPDATE,
+            edit("javascript"),
+            101
+        ),
+        Some(Ok(None))
+    );
+    assert_eq!(session.current.id, "javascript-edit");
 }

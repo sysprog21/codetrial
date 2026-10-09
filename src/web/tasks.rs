@@ -5,7 +5,7 @@ use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::response::Response;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::net::SocketAddr;
 
 use crate::tasks::access::{
@@ -70,7 +70,12 @@ pub(crate) fn task_error(error: AccessError) -> Response {
         "language_unsupported" => (
             StatusCode::BAD_REQUEST,
             false,
-            "Select Python for this task.",
+            "Choose one of this task's languages.",
+        ),
+        "language_unavailable" => (
+            StatusCode::PRECONDITION_FAILED,
+            false,
+            "This task's languages compile on Compiler Explorer, which CODETRIAL_COMPILER_EXPLORER_ENABLED has turned off.",
         ),
         "platform_unsupported" => (
             StatusCode::BAD_REQUEST,
@@ -346,9 +351,36 @@ pub(crate) async fn task_load_handler(
         Err(error) => return task_error(error),
     };
     match service.load_task(owner.user.id, &assignment, &task_id) {
-        Ok(value) => json_response(StatusCode::OK, value),
+        Ok(mut value) => {
+            let languages =
+                offered_languages(&value["languages"], state.config.compiler_explorer_enabled);
+            if languages.is_empty() {
+                return task_error(AccessError::new("language_unavailable"));
+            }
+            value["languages"] = json!(languages);
+            json_response(StatusCode::OK, value)
+        }
         Err(error) => task_error(error),
     }
+}
+
+/// Whether this server's page can run `language`: C, C++ and Java compile on
+/// Compiler Explorer, which a server may turn off.
+fn runnable(language: &str, compiler_explorer: bool) -> bool {
+    crate::tasks::LANGUAGES.contains(&language)
+        && (compiler_explorer || !crate::tasks::COMPILED_LANGUAGES.contains(&language))
+}
+
+/// A task's languages this server can run, in the instructor's order, which
+/// is the order the page offers them in.
+fn offered_languages(languages: &Value, compiler_explorer: bool) -> Vec<&str> {
+    languages
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|language| runnable(language, compiler_explorer))
+        .collect()
 }
 
 /// Bytes of the calibration a page reports with its Start.
@@ -363,7 +395,7 @@ struct AdmissionRequest {
     language: String,
     supported_platform: bool,
     rules_acknowledged_at: Option<String>,
-    calibration: Option<serde_json::Value>,
+    calibration: Option<Value>,
 }
 
 /// Starts an attempt at one task: the room, the agent and the token the page
@@ -398,7 +430,7 @@ pub(crate) async fn task_start_handler(
     let Ok(body) = serde_json::from_slice::<AdmissionRequest>(&bytes) else {
         return error("client_override");
     };
-    if body.language != "python" {
+    if !runnable(&body.language, state.config.compiler_explorer_enabled) {
         return error("language_unsupported");
     }
     if !body.supported_platform {
@@ -434,6 +466,7 @@ pub(crate) async fn task_start_handler(
         Preparation {
             rules_acknowledged_at: acknowledged,
             calibration,
+            language: body.language,
         },
         crate::current_epoch_seconds(),
     ) {

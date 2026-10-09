@@ -34,12 +34,15 @@ import {
 import { evaluate } from "./calculator.js";
 import { CONSTRAINTS } from "./devices.js";
 import { videoTrackReady } from "./audio-check.js";
+import { COMPILED_LANGUAGES } from "./compiler-explorer.js";
 import {
+  LANGUAGE_LABELS,
   NOT_DETECTED,
   acceptTaskState,
   outcomeSentence,
   rulesInWords,
   taskLocked,
+  taskCodeFileName,
   taskRecovery,
   taskReviewForDisplay,
 } from "./task-controller.js";
@@ -53,6 +56,9 @@ const site = query.get("site") ?? "";
 const version = Number(query.get("version"));
 let task, state, room, review;
 let revisionId = "initial";
+// The language chosen for this attempt: the task's first until the learner
+// picks another, and fixed once a room is joined for it.
+let language = "python";
 let admissionKey = crypto.randomUUID();
 let pendingRevision;
 // Where the attempt stands; every guard asks this rather than a flag of its
@@ -317,13 +323,18 @@ async function loadTask() {
       return p;
     }),
   );
-  $("code").value = task.starterCode.python;
-  $("target").replaceChildren(
-    new Option("Whole task", ""),
-    ...task.completionTargets.map(
-      (target) => new Option(target.goal, target.id),
+  // The server offers only the languages it can run, in the instructor's
+  // order.
+  $("language").replaceChildren(
+    ...task.languages.map(
+      (value) => new Option(LANGUAGE_LABELS[value] ?? value, value),
     ),
   );
+  $("language-choice").hidden = task.languages.length < 2;
+  $("language-note").hidden = !task.languages.some((value) =>
+    COMPILED_LANGUAGES.includes(value),
+  );
+  chooseLanguage(task.languages[0]);
   const rules = rulesInWords(task.rules);
   for (const list of [$("rules"), $("rules-reminder")])
     list.replaceChildren(
@@ -335,6 +346,35 @@ async function loadTask() {
     );
   $("not-detected").textContent = NOT_DETECTED;
 }
+
+/// Shows the editor as `value` is worked in: its starter, its targets, and
+/// whether a run leaves this computer.
+function chooseLanguage(value) {
+  language = value;
+  $("language").value = value;
+  $("code").value = task.starterCode[value];
+  $("code-label").textContent =
+    `${LANGUAGE_LABELS[value] ?? value} implementation`;
+  $("compiled-note").hidden = !COMPILED_LANGUAGES.includes(value);
+  $("target").replaceChildren(
+    new Option("Whole task", ""),
+    ...task.completionTargets
+      .filter((target) => target.language === value)
+      .map((target) => new Option(target.goal, target.id)),
+  );
+}
+
+/// The task and its language name the admission: once a room is joined for
+/// them, neither can change.
+function lockChoices(locked) {
+  $("task-picker").disabled = locked;
+  $("language").disabled = locked;
+}
+
+$("language").onchange = () => {
+  if (hasStarted() || room || !task) return;
+  chooseLanguage($("language").value);
+};
 
 $("task-picker").onchange = () => {
   // The admission names one task: once a room is joined for it, the page
@@ -448,7 +488,7 @@ async function samplesFor(ms) {
 $("calibrate").onclick = async () => {
   if (!task || task.taskId !== taskId || !acknowledgedAt || calibrating) return;
   calibrating = true;
-  $("task-picker").disabled = true;
+  lockChoices(true);
   $("calibrate").disabled = true;
   $("start").disabled = true;
   try {
@@ -490,7 +530,7 @@ $("calibrate").onclick = async () => {
     calibrating = false;
     $("calibrate").disabled =
       !task || !acknowledgedAt || Boolean(calibration && room);
-    $("task-picker").disabled = Boolean(room);
+    lockChoices(Boolean(room));
   }
 };
 
@@ -517,13 +557,13 @@ async function connect() {
       site,
       version,
       requestKey: admissionKey,
-      language: "python",
+      language,
       supportedPlatform: supported,
       rulesAcknowledgedAt: acknowledgedAt,
       calibration,
     },
   );
-  $("task-picker").disabled = true;
+  lockChoices(true);
   room = new Room();
   const thisRoom = room;
   const agentIdentity = `task-agent-${token.roomName}`;
@@ -640,7 +680,7 @@ function dropConnection() {
   state = null;
   calibration = null;
   $("start").disabled = true;
-  $("task-picker").disabled = false;
+  lockChoices(false);
   $("calibrate").disabled = !media || !acknowledgedAt;
   $("calibration-result").textContent = "";
 }
@@ -1014,7 +1054,10 @@ function sendCurrentEdit() {
   if (!room || editorLocked()) return;
   // The server refuses it anyway; saying so here beats a silent drop.
   if (taskCodeTooLarge($("code").value)) return error(CODE_TOO_LARGE);
-  send(topics.code, taskEditPayload(revisionId, $("code").value)).catch(error);
+  send(
+    topics.code,
+    taskEditPayload(revisionId, $("code").value, language),
+  ).catch(error);
 }
 $("code").onkeydown = (event) => {
   if (!["Enter", "Tab"].includes(event.key)) return;
@@ -1026,7 +1069,7 @@ $("code").onkeydown = (event) => {
           editor.value,
           editor.selectionStart,
           editor.selectionEnd,
-          "python",
+          language,
         )
       : indentSelection(
           editor.value,
@@ -1083,7 +1126,7 @@ $("run").onclick = async () => {
     const results = await runBrowserTests(
       taskId,
       captured.code,
-      "python",
+      language,
       (text) => {
         $("results").textContent = text;
       },
@@ -1188,7 +1231,7 @@ $("new-attempt").onclick = () => {
 $("export-code").onclick = () =>
   downloadText(
     review?.taskAssessment?.finalCode ?? $("code").value,
-    `${taskId}.py`,
+    taskCodeFileName(taskId, review?.taskAssessment?.language ?? language),
     "text/plain",
   );
 /// What the exported file says about itself, so it is not passed along as

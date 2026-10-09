@@ -281,7 +281,7 @@ async fn review_prompt_contains_public_assignment_requirements_only() {
         .find(|line| line.starts_with("PUBLIC TASK REQUIREMENTS"))
         .unwrap();
     let projection: Value = serde_json::from_str(line.split_once(": ").unwrap().1).unwrap();
-    let public = session.task.exercise.live_projection();
+    let public = session.task.exercise.live_projection("python");
     for field in [
         "brief",
         "contract",

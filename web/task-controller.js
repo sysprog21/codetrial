@@ -43,7 +43,8 @@ export function taskRecovery(code) {
     calibration_required: "Run calibration",
     fullscreen_required: "Retry Start",
     client_override: "Reload",
-    language_unsupported: "Select Python",
+    language_unsupported: "Choose one of the task's languages",
+    language_unavailable: "Restart CodeTrial with Compiler Explorer on",
     platform_unsupported: "Open a supported desktop browser",
     request_key_expired: "Start again",
     setup_failed: "Retry",
@@ -55,6 +56,30 @@ export function taskRecovery(code) {
     action_rejected: "Retry action",
   };
   return actions[code] ?? "Reload";
+}
+
+/// How the page names each language a task may allow, in the editor label
+/// and the language choice.
+export const LANGUAGE_LABELS = Object.freeze({
+  python: "Python",
+  javascript: "JavaScript",
+  c: "C",
+  cpp: "C++",
+  java: "Java",
+});
+
+const EXTENSIONS = {
+  python: "py",
+  javascript: "js",
+  c: "c",
+  cpp: "cpp",
+  java: "java",
+};
+
+/// The name an exported attempt's code is saved under, by the language it
+/// was written in.
+export function taskCodeFileName(taskId, language) {
+  return `${taskId}.${EXTENSIONS[language] ?? "txt"}`;
 }
 
 /// The set's rules as the learner reads them, before the PIN on the

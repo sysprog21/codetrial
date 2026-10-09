@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from copy import deepcopy
 
-from .bank import ROOT, named, read_json
+from .bank import ROOT, STARTER_LANGS, named, read_json
 from .rules import posed
 
 PROMPT_VERSION = 1
@@ -24,8 +24,15 @@ SIDECAR_KEYS = {
     "maxHintRungs",
     "rubricProfile",
 }
+# Optional: a sidecar without it allows the default language alone.
+OPTIONAL_SIDECAR_KEYS = {"languages"}
 IDENTIFIER = re.compile(r"[a-z][a-z0-9-]{0,63}\Z")
 VARIABLE = re.compile(r"\{\{([^{}]*)\}\}")
+
+
+def task_languages(sidecar: dict) -> list[str]:
+    """The languages a validated sidecar lets the learner choose from."""
+    return sidecar.get("languages", [DEFAULTS["language"]])
 
 
 def hint_ceiling(variant: dict) -> int:
@@ -78,7 +85,10 @@ def validated_sidecar(
             "maxHintRungs": hint_ceiling(variant),
             "rubricProfile": RUBRIC_PROFILE,
         }
-    exact_object(sidecar, SIDECAR_KEYS, "sidecar")
+    if not isinstance(sidecar, dict) or not (
+        SIDECAR_KEYS <= set(sidecar) <= SIDECAR_KEYS | OPTIONAL_SIDECAR_KEYS
+    ):
+        raise ValueError(f"sidecar: expected exactly {sorted(SIDECAR_KEYS)}")
     if (
         type(sidecar["promptVersion"]) is not int
         or sidecar["promptVersion"] != PROMPT_VERSION
@@ -98,10 +108,23 @@ def validated_sidecar(
     if type(hint_limit) is not int or not 0 <= hint_limit <= (hint_ceiling(variant)):
         raise ValueError("maxHintRungs exceeds the variant ladder")
     shipped, _ = posed(problem, judge, variant)
-    # The starter is the attempt's first revision, held to the runtime's
+    starters = shipped.get("starterCode", {})
+    languages = rows(task_languages(sidecar), "languages", 1, len(STARTER_LANGS))
+    if (
+        any(not isinstance(language, str) for language in languages)
+        or any(language not in STARTER_LANGS for language in languages)
+        or len(set(languages)) != len(languages)
+        or any(language not in starters for language in languages)
+    ):
+        raise ValueError("unknown, repeated or starterless task language")
+    if "c" in languages and judge["kind"] == "class":
+        raise ValueError("C runs only function judges")
+    # Each starter is an attempt's first revision, held to the runtime's
     # capture limit.
-    python_starter = shipped.get("starterCode", {}).get("python", "")
-    if len(python_starter.encode("utf-8")) > DEFAULTS["codeBytes"]:
+    if any(
+        len(starters[language].encode("utf-8")) > DEFAULTS["codeBytes"]
+        for language in languages
+    ):
         raise ValueError("starter exceeds the code byte limit")
     seen = set()
     markers = set()
@@ -109,18 +132,19 @@ def validated_sidecar(
         exact_object(target, {"id", "language", "marker", "goal"}, "completionTarget")
         target_id = identifier(target["id"], "completionTarget.id")
         first_time(seen, target_id, "duplicate completion target id")
-        if target["language"] != DEFAULTS["language"]:
-            raise ValueError("completion target language must be python")
+        if target["language"] not in languages:
+            raise ValueError("completion target language is not one of the task's")
         marker = text(target["marker"], "marker", 128)
         if not re.fullmatch(r"[A-Z][A-Z0-9_]*", marker):
             raise ValueError("invalid completion marker")
-        starter = shipped.get("starterCode", {}).get(target["language"], "")
-        if (
-            marker in markers
-            or len(re.findall(rf"\b{re.escape(marker)}\b", starter)) != 1
-        ):
+        starter = starters[target["language"]]
+        # A marker names one place in one language's starter; the same name
+        # may mark the matching place in another language's.
+        if (target["language"], marker) in markers or len(
+            re.findall(rf"\b{re.escape(marker)}\b", starter)
+        ) != 1:
             raise ValueError("missing or duplicated completion marker")
-        markers.add(marker)
+        markers.add((target["language"], marker))
         text(target["goal"], "goal")
     seen = set()
     for check in rows(

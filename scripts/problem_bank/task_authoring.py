@@ -8,7 +8,7 @@ import shutil
 from copy import deepcopy
 from pathlib import Path
 
-from .bank import ROOT, read_json, write_json
+from .bank import ROOT, STARTER_LANGS, read_json, write_json
 from .task_package import load_bank
 from .tasks import DEFAULTS, PROMPT_VERSION, RUBRIC_PROFILE, hint_ceiling
 
@@ -66,7 +66,7 @@ def reference(reference_id):
     }
 
 
-def default_sidecar(variant):
+def default_sidecar(variant, languages):
     """The sidecar a task gets when it names none, written out in full so
     every field is there to edit."""
     return {
@@ -77,6 +77,7 @@ def default_sidecar(variant):
         "requiredCases": [],
         "maxHintRungs": hint_ceiling(variant),
         "rubricProfile": RUBRIC_PROFILE,
+        "languages": languages,
     }
 
 
@@ -135,13 +136,14 @@ def _existing(bank):
     }
 
 
-def new_task(bank, reference_id, task_id=None):
+def new_task(bank, reference_id, task_id=None, languages=None):
     """Adds a copy of `reference_id` to `bank`, creating the bank if needed.
     Returns the new task's id and notes on what the instructor should check.
 
     The copy keeps the reference's origin, so the checks that keep a catalog
     problem's source out of what the learner reads still hold as the
-    instructor edits it. The whole bank is
+    instructor edits it. `languages` replaces the reference's list, dropping
+    targets marked in a language no longer offered. The whole bank is
     validated before any file changes, an id already in it is refused, and
     files `new` does not change are left as they are. Not meant for two runs
     at once on one bank."""
@@ -155,7 +157,40 @@ def new_task(bank, reference_id, task_id=None):
             " not starting with a dash"
         )
     notes = []
-    sidecar = row["sidecar"] or default_sidecar(row["variant"])
+    sidecar = row["sidecar"] or default_sidecar(row["variant"], ["python"])
+    starters = row["problem"].get("starterCode", {})
+    if languages is not None:
+        if not languages:
+            raise ValueError("--languages names no language")
+        for language in languages:
+            if language not in STARTER_LANGS:
+                raise ValueError(
+                    f"unknown language {language!r}; choose from"
+                    f" {', '.join(STARTER_LANGS)}"
+                )
+            if language not in starters:
+                raise ValueError(f"{reference_id} has no {language} starter")
+        kept = [
+            target
+            for target in sidecar["completionTargets"]
+            if target["language"] in languages
+        ]
+        dropped = len(sidecar["completionTargets"]) - len(kept)
+        if dropped:
+            notes.append(
+                f"dropped {dropped} completion target(s) marked in a language"
+                " no longer offered"
+            )
+        marked = {target["language"] for target in kept}
+        unmarked = [lang for lang in languages if lang not in marked]
+        if sidecar["completionTargets"] and unmarked:
+            notes.append(
+                f"no completion target is marked in {', '.join(unmarked)}; add"
+                " a marker to its starter and a target, or the interaction"
+                " prompt should not ask for one"
+            )
+        sidecar["completionTargets"] = kept
+        sidecar["languages"] = list(languages)
     row["problem"]["id"] = task_id
     if (
         task_id != reference_id

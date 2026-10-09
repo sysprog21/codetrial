@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CodeTrial task</title>
     <link rel="stylesheet" href="/task.css" />
+    <script src="/runtime-config.js"></script>
   </head>
   <body>
     <main id="workspace">
@@ -55,6 +56,15 @@
           >Task
           <select id="task-picker"></select
         ></label>
+        <label id="language-choice" hidden
+          >Language
+          <select id="language"></select
+        ></label>
+        <p id="language-note" hidden>
+          C, C++ and Java runs are compiled on Compiler Explorer, so your code
+          and the task's public test cases leave this computer when you run
+          tests.
+        </p>
         <h2>Rules</h2>
         <ul id="rules"></ul>
         <p id="not-detected"></p>
@@ -93,13 +103,17 @@
             <option value="">Whole task</option>
           </select></label
         >
-        <label for="code">Python implementation</label
+        <label for="code" id="code-label">Python implementation</label
         ><textarea
           id="code"
           maxlength="32000"
           spellcheck="false"
           disabled
         ></textarea>
+        <p id="compiled-note" hidden>
+          Runs are compiled on Compiler Explorer; your code and the public test
+          cases leave this computer.
+        </p>
         <nav aria-label="Task controls">
           <button id="run" disabled>Run public tests</button
           ><button id="hint" disabled>Hint</button

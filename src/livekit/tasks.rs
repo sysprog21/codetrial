@@ -990,7 +990,8 @@ impl<'a> TaskLive<'a> {
                 .task_prompt_with_hint_limit(
                     Phase::Ready,
                     None,
-                    task.exercise.starter("python").unwrap_or(""),
+                    task.exercise.starter(task.language()).unwrap_or(""),
+                    task.language(),
                     task.hint_limit,
                 )
                 .expect("validated task prompt"),

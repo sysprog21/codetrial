@@ -76,6 +76,33 @@ class TaskPackageTests(unittest.TestCase):
             ).read_text()
             self.assertEqual(render_prompt(package(), task_id), expected)
 
+    def test_a_task_names_its_languages_and_each_attempt_sees_its_own(self):
+        value = package()
+        problem = value["problems"][0]
+        problem["starterCode"]["javascript"] = (
+            "function isValid(s) {\n  // TASK_COMPLETE_CLOSER\n}\n"
+        )
+        sidecar = value["sidecars"]["delimiter-closer"]
+        sidecar["languages"] = ["javascript", "python"]
+        sidecar["completionTargets"].append(
+            dict(
+                sidecar["completionTargets"][0],
+                id="closer-js",
+                language="javascript",
+            )
+        )
+        validate_package(value)
+        # The first language is the one the preview shows by default.
+        first = render_prompt(value, "delimiter-closer")
+        self.assertIn("language=javascript;", first)
+        self.assertIn('"closer-js"', first)
+        self.assertNotIn('"closer-branch"', first)
+        python = render_prompt(value, "delimiter-closer", "python")
+        self.assertIn("language=python;", python)
+        self.assertNotIn('"closer-js"', python)
+        with self.assertRaises(ValueError):
+            render_prompt(value, "delimiter-closer", "java")
+
     def test_cli_build_reads_the_pin_without_echo_and_never_overwrites(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

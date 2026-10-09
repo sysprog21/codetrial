@@ -21,6 +21,7 @@
           "rubricProfile": "task-engagement-v1",
           "githubLogin": "learner",
           "githubId": 42,
+          "language": "python",
           "rulesAcknowledgedAt": "2026-10-07T00:00:00Z",
           "rules": {
             "durationMin": 15,
@@ -105,6 +106,7 @@
           "rubricProfile": "task-engagement-v1",
           "githubLogin": "learner",
           "githubId": 42,
+          "language": "python",
           "rulesAcknowledgedAt": "2026-10-07T00:00:00Z",
           "rules": {
             "durationMin": 15,
@@ -147,6 +149,7 @@
           "rubricProfile": "task-engagement-v1",
           "githubLogin": "learner",
           "githubId": 42,
+          "language": "python",
           "rulesAcknowledgedAt": "2026-10-07T00:00:00Z",
           "rules": {
             "durationMin": 15,

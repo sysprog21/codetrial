@@ -38,8 +38,8 @@ a declared proxy (`CODETRIAL_TRUSTED_PROXY_HOPS`), and set up neither to record
 nor to share one fixed room. Its routes then also refuse a request whose `Host`
 does not name `localhost`, `127.0.0.1` or `[::1]`, which keeps out a DNS name
 rebound to the machine. Otherwise they answer `loopback_required`. One
-CodeTrial process serves one learner and runs one attempt at a time. Python is
-the only admitted language.
+CodeTrial process serves one learner and runs one attempt at a time, in the
+one language the learner chose for it.
 
 ## Versions and ownership
 
@@ -88,22 +88,39 @@ below and rejects unknown fields; nested objects are closed too.
 | `requiredCases`       | Array of 0..20 distinct exact source judge labels   |
 | `maxHintRungs`        | Integer 0..min(default maximum, variant hint count) |
 | `rubricProfile`       | Literal `task-engagement-v1`                        |
+| `languages`           | Optional; 1..5 distinct languages, default `python` |
 
 Set, target and check IDs match `[a-z][a-z0-9-]{0,63}`. Task record IDs also
 permit an initial digit, preserving catalog IDs such as `3sum`. Target IDs and
 check IDs are independently unique. A target has exactly `id`, `language`,
-`marker`, `goal`; language is `python`, marker is 1..128 UTF-8 bytes matching
-`[A-Z][A-Z0-9_]*`, and goal is 1..1024 bytes of nonblank text. A marker occurs
-exactly once as a whole token in the shipped Python starter after variant
-renames and cannot be shared by two targets. Check objects have exactly `id`,
-`question`; question is nonblank and at most 1024 UTF-8 bytes.
+`marker`, `goal`; language is one of the task's languages, marker is 1..128
+UTF-8 bytes matching `[A-Z][A-Z0-9_]*`, and goal is 1..1024 bytes of nonblank
+text. A marker occurs exactly once as a whole token in its language's shipped
+starter after variant renames, and two targets in one language cannot share it;
+the same marker may name the matching place in another language's starter.
+Check objects have exactly `id`, `question`; question is nonblank and at most
+1024 UTF-8 bytes.
+
+`languages` lists what the learner may choose from, in the order offered, from
+`python`, `javascript`, `c`, `cpp` and `java`. Each needs a shipped starter, and
+each starter is held to the code byte limit, since it is an attempt's first
+revision. C runs only function judges, so a class task cannot list it. The
+learner chooses before calibration connects the room, the admission names the
+choice, and it holds for the attempt: the starter, the targets offered, the
+editor, the runs and the interviewer's projection all follow it. C, C++ and Java
+runs compile on Compiler Explorer, as in interviews, so the learner's code and
+the public cases leave the machine for them and the page says so before the
+choice; reference material never does. A server with
+`CODETRIAL_COMPILER_EXPLORER_ENABLED` off offers only the task's other
+languages, and refuses a task with none as `language_unavailable`.
 
 Required cases resolve by exact **source judge label**, before variant renames,
 not by index or fuzzy matching. Each label must resolve to exactly one case.
 Validation binds the resulting case index in the immutable package; the public
 projection uses the renamed display label.
 
-Variables are exactly `{{title}}`, `{{language}}`, `{{target}}`, `{{phase}}`.
+Variables are exactly `{{title}}`, `{{language}}`, `{{target}}`, `{{phase}}`;
+`language` is the attempt's.
 Whitespace inside braces, unknown names and unmatched double braces are errors.
 A single brace is literal. Values are substituted once, never recursively.
 `target` is the currently requested target's goal, or the empty string; phase
@@ -115,7 +132,9 @@ never unreleased ones, and the platform serves one requested rung at a time.
 
 Task records keep the existing bank format and structural validation, and
 packaging additionally refuses unknown judge/case fields, unsupported checkers
-or languages, missing Python starters and text over 32 KiB. Custom records
+or languages, missing Python starters and text over 32 KiB. The instructor's
+`render-prompt --language` previews the prompt in any of a task's languages,
+the first by default. Custom records
 declare `origin: "original"` and omit published `title` and `examples`; the
 variant supplies them. Catalog or study-plan membership is not required.
 
@@ -194,27 +213,31 @@ uploads, and finds its own Python, as
 ```bash
 scripts/task-package.py references
 scripts/task-package.py new --bank course --from delimiter-closer
-scripts/task-package.py new --bank course --from two-sum --id pair-sum
+scripts/task-package.py new --bank course --from two-sum --id pair-sum \
+    --languages python,javascript,cpp
 scripts/task-package.py preview --bank course --task-id pair-sum
-scripts/task-package.py render-prompt --bank course --task-id pair-sum
+scripts/task-package.py render-prompt --bank course --task-id pair-sum \
+    --language cpp
 scripts/task-package.py build --bank course \
     --site https://teacher.github.io/course --output publish
 ```
 
 `references` lists what a task can start from: the shipped examples under
-`problem-bank/task-examples/`, which show completion targets, required cases and
-custom checks, then every catalog problem. `new` copies one into the bank,
-creating the bank if needed, and writes the task's sidecar out in full, and a
-new bank's set rules, so each field can be edited in place. `--id` gives the
-copy its own id; it keeps the reference's origin, so the checks that keep a
-catalog problem's source out of what the learner reads still apply while the
-instructor rewrites it. `new` refuses a bank that is already invalid and an id
-the bank holds, validates the whole bank with the task in it before changing any
-file, and leaves files it does not change as they are. It stages the bank in
-`.task-new` and moves it into place once it validates. If it stops after the
-bank validated, the next `new` completes the move; if it stops before, the bank
-is unchanged and the next `new` asks for `.task-new` to be deleted. It is not
-meant for two runs at once on one bank.
+`problem-bank/task-examples/`, which show completion targets, required cases,
+custom checks and several languages, then every catalog problem. `new` copies
+one into the bank, creating the bank if needed, and writes the task's sidecar
+out in full, and a new bank's set rules, so each field can be edited in place.
+`--id` gives the copy its own id; it keeps the reference's origin, so the checks
+that keep a catalog problem's source out of what the learner reads still apply
+while the instructor rewrites it. `--languages` sets what the learner may choose
+from, dropping targets marked in a language no longer offered. `new` refuses a
+bank that is already invalid and an id the bank holds, validates the whole bank
+with the task in it before changing any file, and leaves files it does not
+change as they are. It stages the bank in `.task-new` and moves it into place
+once it validates. If it stops after the bank validated, the next `new`
+completes the move; if it stops before, the bank is unchanged and the next `new`
+asks for `.task-new` to be deleted. It is not meant for two runs at once on one
+bank.
 
 `preview` shows what the learner sees and `render-prompt` what Jim is told; both
 are for authoring and neither is required. `build` names the set after the
@@ -411,7 +434,7 @@ fullscreen synchronously from the click. A second Start while an attempt runs
 is `active_task_session`. A request key deduplicates a retried Start: a replay
 returns the same admission, and a key older than `pendingAdmissionSeconds` is
 refused rather than starting a second attempt; a replay naming a different
-site, set, version or task is `client_override`. Each assignment (site, set and
+site, set, version, task or language is `client_override`. Each assignment (site, set and
 version) is unlocked on its own, so links for two versions of one set, or two
 sites that happen to use the same set name, never replace each other. Room
 metadata carries IDs and versions only. The clock starts exactly once, at
@@ -427,34 +450,35 @@ Errors contain exactly `code`, `retryable`, `message`; no secrets. An HTTP
 status of `page` marks an error the page raises itself, before or without any
 request, and `wire` one the room sends on the data channel.
 
-| Code                      | HTTP | Retryable | Recovery action                  |
-| ------------------------- | ---- | --------- | -------------------------------- |
-| `credentials_missing`     | 412  | false     | Add the Gemini key and restart   |
-| `loopback_required`       | 403  | false     | Read the setup notes             |
-| `authentication_required` | 401  | false     | Sign in                          |
-| `csrf_rejected`           | 403  | false     | Reload                           |
-| `site_invalid`            | 400  | false     | Check the assignment link        |
-| `invalid_pin`             | 403  | true      | Retry PIN                        |
-| `unlock_required`         | 403  | false     | Enter PIN                        |
-| `package_unavailable`     | 503  | true      | Retry load                       |
-| `package_invalid`         | 422  | false     | Ask the instructor               |
-| `set_closed`              | 410  | false     | Return to task list              |
-| `task_not_found`          | 404  | false     | Return to task list              |
-| `rules_unacknowledged`    | 403  | false     | Read and accept the rules        |
-| `devices_required`        | page | true      | Allow microphone and camera      |
-| `calibration_required`    | 403  | true      | Run calibration                  |
-| `fullscreen_required`     | page | true      | Retry Start                      |
-| `client_override`         | 400  | false     | Reload                           |
-| `request_too_large`       | 413  | false     | Reload                           |
-| `language_unsupported`    | 400  | false     | Select Python                    |
-| `platform_unsupported`    | 400  | false     | Open a supported desktop browser |
-| `request_key_expired`     | 409  | false     | Start again                      |
-| `setup_failed`            | 503  | true      | Retry Start                      |
-| `setup_pending`           | 409  | true      | Retry                            |
-| `admission_throttled`     | 429  | true      | Wait, then retry Start           |
-| `active_task_session`     | 409  | false     | Finish in original open tab      |
-| `result_unavailable`      | 404  | false     | Start a new attempt              |
-| `action_rejected`         | wire | true      | Retry after acknowledged state   |
+| Code                      | HTTP | Retryable | Recovery action                    |
+| ------------------------- | ---- | --------- | ---------------------------------- |
+| `credentials_missing`     | 412  | false     | Add the Gemini key and restart     |
+| `loopback_required`       | 403  | false     | Read the setup notes               |
+| `authentication_required` | 401  | false     | Sign in                            |
+| `csrf_rejected`           | 403  | false     | Reload                             |
+| `site_invalid`            | 400  | false     | Check the assignment link          |
+| `invalid_pin`             | 403  | true      | Retry PIN                          |
+| `unlock_required`         | 403  | false     | Enter PIN                          |
+| `package_unavailable`     | 503  | true      | Retry load                         |
+| `package_invalid`         | 422  | false     | Ask the instructor                 |
+| `set_closed`              | 410  | false     | Return to task list                |
+| `task_not_found`          | 404  | false     | Return to task list                |
+| `rules_unacknowledged`    | 403  | false     | Read and accept the rules          |
+| `devices_required`        | page | true      | Allow microphone and camera        |
+| `calibration_required`    | 403  | true      | Run calibration                    |
+| `fullscreen_required`     | page | true      | Retry Start                        |
+| `client_override`         | 400  | false     | Reload                             |
+| `request_too_large`       | 413  | false     | Reload                             |
+| `language_unsupported`    | 400  | false     | Choose one of the task's languages |
+| `language_unavailable`    | 412  | false     | Restart with Compiler Explorer on  |
+| `platform_unsupported`    | 400  | false     | Open a supported desktop browser   |
+| `request_key_expired`     | 409  | false     | Start again                        |
+| `setup_failed`            | 503  | true      | Retry Start                        |
+| `setup_pending`           | 409  | true      | Retry                              |
+| `admission_throttled`     | 429  | true      | Wait, then retry Start             |
+| `active_task_session`     | 409  | false     | Finish in original open tab        |
+| `result_unavailable`      | 404  | false     | Start a new attempt                |
+| `action_rejected`         | wire | true      | Retry after acknowledged state     |
 
 ## Phase wire contract
 
@@ -517,7 +541,8 @@ explicit, never silently truncated. No client message may cover a check.
 A result is a closed object with `assessmentMode: "task"`, `taskContract` and
 `taskAssessment`. The server stamps `setId`, `setVersion`, `taskId`,
 `sessionId`, `sessionOrdinal`, `rubricProfile`, `githubLogin`, `githubId`,
-`rulesAcknowledgedAt`, `rules`, `calibration`, `outcome`, `captureOverflow`,
+`language`, `rulesAcknowledgedAt`, `rules`, `calibration`, `outcome`,
+`captureOverflow`,
 `finalRevisionId` and `finalCode`. A completed attempt adds `dimensions`, `gaps`
 and `nextActions`, or `feedbackUnavailable: true` when no review could be
 generated. An invalid or interrupted attempt adds its cause, time and
@@ -559,8 +584,8 @@ leaves fullscreen itself at the end of an attempt.
 
 ## Runtime and delivery bounds
 
-Editor drafts use the `code_update` topic with exactly `code`,
-`language: "python"` and an opaque `revisionId`; they are not captures. A
+Editor drafts use the `code_update` topic with exactly `code`, the attempt's
+`language` and an opaque `revisionId`; they are not captures. A
 message over the task message bound is answered with `action_rejected` rather
 than dropped. Only one Run capture awaits its summary, for at most
 `runCaptureSeconds`; late results stay bound to the captured revision.

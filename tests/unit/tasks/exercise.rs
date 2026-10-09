@@ -41,13 +41,13 @@ fn sessions_use_their_own_exercise_and_release_it() {
     );
     assert!(
         first
-            .task_prompt(Phase::Work, Some("closer-branch"), "draft")
+            .task_prompt(Phase::Work, Some("closer-branch"), "draft", "python")
             .unwrap()
             .contains("complete the marked branch")
     );
     assert!(
         !second
-            .task_prompt(Phase::Work, None, "draft")
+            .task_prompt(Phase::Work, None, "draft", "python")
             .unwrap()
             .contains("complete the marked branch")
     );
@@ -129,17 +129,17 @@ fn task_prompt_recovers_custom_instructions_and_substitutes_once() {
     data["sidecar"]["interactionPrompt"] = json!("{ {{title}} { {{language}} {{target}} {{phase}}");
     let exercise = Exercise(Arc::new(record(&data).unwrap()));
     let initial = exercise
-        .task_prompt(Phase::Work, Some("closer-branch"), "draft")
+        .task_prompt(Phase::Work, Some("closer-branch"), "draft", "python")
         .unwrap();
     let recovery = exercise
-        .task_prompt(Phase::WrapUp, Some("closer-branch"), "revision")
+        .task_prompt(Phase::WrapUp, Some("closer-branch"), "revision", "python")
         .unwrap();
     assert!(initial.contains("Template Delimiter Audit"));
     assert!(recovery.contains("Complete the branch without changing the surrounding contract."));
     assert!(recovery.contains("wrap-up"));
     assert!(
         exercise
-            .task_prompt(Phase::Work, Some("missing"), "")
+            .task_prompt(Phase::Work, Some("missing"), "", "python")
             .is_err()
     );
     assert_eq!(
@@ -163,8 +163,12 @@ fn task_bank_prompts_have_only_allowlisted_material_and_match_golden() {
         let exercise = Exercise(Arc::new(
             TaskRecord::from_bank(problem, &judges[id], &variants[id], None).unwrap(),
         ));
-        let initial = exercise.task_prompt(Phase::Work, None, "").unwrap();
-        let recovery = exercise.task_prompt(Phase::WrapUp, None, "").unwrap();
+        let initial = exercise
+            .task_prompt(Phase::Work, None, "", "python")
+            .unwrap();
+        let recovery = exercise
+            .task_prompt(Phase::WrapUp, None, "", "python")
+            .unwrap();
         for prompt in [&initial, &recovery] {
             assert!(
                 !prompt.contains(problem["optimal"].as_str().unwrap()),
@@ -213,7 +217,9 @@ fn instructor_rendered_prompts_match_the_runtime_composition() {
         let expected =
             std::fs::read_to_string(format!("tests/golden/task-preview/{id}.txt")).unwrap();
         assert_eq!(
-            exercise.task_prompt(Phase::Ready, None, "").unwrap(),
+            exercise
+                .task_prompt(Phase::Ready, None, "", "python")
+                .unwrap(),
             expected
         );
     }
@@ -680,15 +686,144 @@ fn a_task_may_mark_eight_targets_and_must_ask_the_core_checks() {
     );
 }
 
-/// The reference task the instructor tool starts banks from is one the
-/// learner's CodeTrial accepts.
+/// A task names the languages its learners may choose from; each rule on it
+/// refuses on its own, and a sidecar naming none allows Python alone.
 #[test]
-fn the_shipped_example_task_is_a_valid_record() {
+fn a_task_names_the_languages_a_learner_may_choose() {
+    let languages = |value: Value| {
+        let mut row = fixture("customized");
+        row["sidecar"]["languages"] = value;
+        record(&row).map(|record| record.sidecar().languages.clone())
+    };
+    assert_eq!(
+        record(&fixture("customized")).unwrap().sidecar().languages,
+        ["python"]
+    );
+    // C included: this task's judge is a function.
+    assert_eq!(
+        languages(json!(["javascript", "python", "c", "java"])).unwrap(),
+        ["javascript", "python", "c", "java"]
+    );
+    let refused = Err(invalid("unknown, repeated or starterless task language"));
+    for bad in [
+        json!([]),
+        json!(["python", "python"]),
+        json!(["rust"]),
+        json!(["Python"]),
+    ] {
+        assert_eq!(languages(bad.clone()), refused, "{bad}");
+    }
+    let mut row = fixture("customized");
+    row["sidecar"]["languages"] = json!(["python", "java"]);
+    row["problem"]["starterCode"]
+        .as_object_mut()
+        .unwrap()
+        .remove("java");
+    assert_eq!(record(&row).map(|_| ()), refused.map(|_: Vec<String>| ()));
+    // Each chosen starter is held to the code limit, not just Python's.
+    let mut row = fixture("customized");
+    row["sidecar"]["languages"] = json!(["python", "javascript"]);
+    row["problem"]["starterCode"]["javascript"] =
+        json!("x".repeat(crate::tasks::session::MAX_CODE_BYTES + 1));
+    assert_eq!(
+        record(&row).map(|_| ()).unwrap_err().0,
+        "starter exceeds the code byte limit"
+    );
+    // A starter for a language the task does not allow is not held to it.
+    row["sidecar"]["languages"] = json!(["python"]);
+    assert!(record(&row).is_ok());
+}
+
+#[test]
+fn c_is_offered_only_for_a_function_judge() {
+    let mut row = fixture("class-renamed-method");
+    row["sidecar"] = fixture("customized")["sidecar"].clone();
+    row["sidecar"]["completionTargets"] = json!([]);
+    row["sidecar"]["requiredCases"] = json!([]);
+    row["sidecar"]["languages"] = json!(["cpp", "java"]);
+    assert!(record(&row).is_ok());
+    row["sidecar"]["languages"] = json!(["cpp", "c"]);
+    assert_eq!(
+        record(&row).map(|_| ()).unwrap_err().0,
+        "C runs only function judges"
+    );
+}
+
+/// A target belongs to one of the task's languages and is marked in that
+/// language's starter; the same marker may mark the same place in another.
+#[test]
+fn a_target_is_marked_in_its_own_language() {
+    let mut row = fixture("customized");
+    row["sidecar"]["languages"] = json!(["python", "javascript"]);
+    row["problem"]["starterCode"]["javascript"] =
+        json!("function isValid(s) {\n  // TASK_COMPLETE_CLOSER\n}\n");
+    let mut javascript = row["sidecar"]["completionTargets"][0].clone();
+    javascript["id"] = json!("closer-js");
+    javascript["language"] = json!("javascript");
+    row["sidecar"]["completionTargets"]
+        .as_array_mut()
+        .unwrap()
+        .push(javascript);
+    let exercise = Exercise(Arc::new(record(&row).unwrap()));
+    let ids = |language| {
+        exercise
+            .targets_in(language)
+            .iter()
+            .map(|target| target.id.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids("python"), ["closer-branch"]);
+    assert_eq!(ids("javascript"), ["closer-js"]);
+    // An attempt is told about its own language and its targets alone.
+    let prompt = exercise
+        .task_prompt(Phase::Work, Some("closer-js"), "", "javascript")
+        .unwrap();
+    assert!(prompt.contains("language=javascript;"));
+    assert!(prompt.contains("\"closer-js\""));
+    assert!(!prompt.contains("\"closer-branch\""));
+    assert!(
+        exercise
+            .task_prompt(Phase::Work, Some("closer-branch"), "", "javascript")
+            .is_err()
+    );
+
+    let refused = |patch: &dyn Fn(&mut Value)| {
+        let mut bad = row.clone();
+        patch(&mut bad);
+        record(&bad).map(|_| ()).unwrap_err().0
+    };
+    assert_eq!(
+        refused(&|bad| bad["sidecar"]["languages"] = json!(["python"])),
+        "invalid completion target"
+    );
+    assert_eq!(
+        refused(&|bad| {
+            bad["problem"]["starterCode"]["javascript"] = json!("function isValid(s) {}\n");
+        }),
+        "missing, invalid or duplicate completion marker"
+    );
+    assert_eq!(
+        refused(&|bad| bad["sidecar"]["completionTargets"][1]["language"] = json!("python")),
+        "missing, invalid or duplicate completion marker"
+    );
+}
+
+/// The reference task the instructor tool starts banks from is one the
+/// learner's CodeTrial accepts, with a target in each language it offers.
+#[test]
+fn the_shipped_example_task_is_a_valid_record_in_both_its_languages() {
     let row: Value = serde_json::from_str(include_str!(
         "../../../problem-bank/task-examples/delimiter-closer.json"
     ))
     .unwrap();
     let exercise = Exercise(Arc::new(record(&row).unwrap()));
-    assert_eq!(exercise.completion_targets().len(), 1);
-    assert!(exercise.task_prompt(Phase::Ready, None, "").is_ok());
+    assert_eq!(exercise.languages(), ["python", "javascript"]);
+    for language in exercise.languages() {
+        assert_eq!(exercise.targets_in(language).len(), 1, "{language}");
+        assert!(
+            exercise
+                .task_prompt(Phase::Ready, None, "", language)
+                .is_ok()
+        );
+    }
 }

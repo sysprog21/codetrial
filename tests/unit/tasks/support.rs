@@ -34,6 +34,7 @@ pub fn preparation() -> Preparation {
     Preparation {
         rules_acknowledged_at: "2026-10-07T00:00:00Z".to_owned(),
         calibration: json!({"ok": true, "metric": "keypoints", "baseline": 0.5, "keyboard": 0.7, "limit": 0.75}),
+        language: "python".to_owned(),
     }
 }
 

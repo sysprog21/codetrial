@@ -103,10 +103,7 @@ pub(super) fn bank(problem: &Value, judge: &Value, variant: &Value) -> Result<()
         .as_object()
         .ok_or_else(|| invalid("invalid starters"))?;
     for (language, starter) in starters {
-        if !matches!(
-            language.as_str(),
-            "python" | "javascript" | "c" | "cpp" | "java"
-        ) {
+        if !super::LANGUAGES.contains(&language.as_str()) {
             return Err(invalid("unsupported starter language"));
         }
         text(starter)?;

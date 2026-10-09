@@ -55,6 +55,12 @@ def main():
     arg.add_argument("--bank", type=Path, required=True)
     arg.add_argument("--from", dest="reference", required=True, metavar="REF")
     arg.add_argument("--id", help="the new task's id; the reference's by default")
+    arg.add_argument(
+        "--languages",
+        type=lambda text: [part.strip() for part in text.split(",") if part.strip()],
+        help="comma-separated, the first offered first; the reference's by"
+        " default (python for a catalog problem)",
+    )
     for command in ("validate", "render-prompt", "preview", "build"):
         arg = sub.add_parser(command)
         arg.add_argument("--bank", type=Path, required=True)
@@ -66,6 +72,9 @@ def main():
         arg.add_argument("--version", type=int, default=None if building else 1)
         if command in {"render-prompt", "preview"}:
             arg.add_argument("--task-id", required=True)
+        if command == "render-prompt":
+            # One of the task's languages; the first it lists by default.
+            arg.add_argument("--language")
         if building:
             arg.add_argument("--site", required=True)
             arg.add_argument("--output", type=Path, required=True)
@@ -84,7 +93,9 @@ def main():
                 # Read by `head` or a pager that has seen enough.
                 os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         elif args.command == "new":
-            task_id, notes = new_task(args.bank, args.reference, args.id)
+            task_id, notes = new_task(
+                args.bank, args.reference, args.id, args.languages
+            )
             preview_command = shlex.join(
                 [sys.executable, sys.argv[0], "preview", "--bank", str(args.bank)]
                 + ["--task-id", task_id]
@@ -137,7 +148,7 @@ def main():
             if args.command == "validate":
                 print(f"Validated {len(package['problems'])} tasks")
             elif args.command == "render-prompt":
-                print(render_prompt(package, args.task_id))
+                print(render_prompt(package, args.task_id, args.language))
             else:
                 print(json.dumps(preview(package, args.task_id), indent=2))
     except (

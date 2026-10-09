@@ -13,7 +13,7 @@
     ],
     "starterCode": {
       "python": "class Solution:\n    def isValid(self, s: str) -> bool:\n        stack = []\n        pairs = {\")\": \"(\", \"]\": \"[\", \"}\": \"{\"}\n        for char in s:\n            if char in pairs:\n                # TASK_COMPLETE_CLOSER\n                pass\n            else:\n                stack.append(char)\n        return not stack\n",
-      "javascript": "/**\n * @param {string} s\n * @return {boolean}\n */\nfunction isValid(s) {\n  // Think out loud as you go!\n}\n",
+      "javascript": "/**\n * @param {string} s\n * @return {boolean}\n */\nfunction isValid(s) {\n  const stack = [];\n  const pairs = { \")\": \"(\", \"]\": \"[\", \"}\": \"{\" };\n  for (const char of s) {\n    if (char in pairs) {\n      // TASK_COMPLETE_CLOSER\n    } else {\n      stack.push(char);\n    }\n  }\n  return stack.length === 0;\n}\n",
       "c": "bool isValid(char* s) {\n    // Think out loud as you go!\n    return false;\n}\n",
       "cpp": "class Solution {\npublic:\n    bool isValid(string s) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
       "java": "class Solution {\n    public boolean isValid(String s) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
@@ -123,6 +123,12 @@
         "language": "python",
         "marker": "TASK_COMPLETE_CLOSER",
         "goal": "Complete the branch without changing the surrounding contract."
+      },
+      {
+        "id": "closer-branch-js",
+        "language": "javascript",
+        "marker": "TASK_COMPLETE_CLOSER",
+        "goal": "Complete the branch without changing the surrounding contract."
       }
     ],
     "understandingChecks": [
@@ -145,6 +151,7 @@
       "unclosed: s=\"(\""
     ],
     "maxHintRungs": 3,
-    "rubricProfile": "task-engagement-v1"
+    "rubricProfile": "task-engagement-v1",
+    "languages": ["python", "javascript"]
   }
 }

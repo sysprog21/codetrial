@@ -322,6 +322,9 @@ async fn task_admission_needs_the_rules_and_calibration_replays_one_room_and_tak
             "rules_unacknowledged",
         ),
         ("calibration", Value::Null, "calibration_required"),
+        // A language no task may name, and one this task does not.
+        ("language", json!("rust"), "language_unsupported"),
+        ("language", json!("java"), "language_unsupported"),
         // Each limit on its own: a short value that is no object, and an object
         // past the size limit.
         ("calibration", json!("calibrated"), "calibration_required"),

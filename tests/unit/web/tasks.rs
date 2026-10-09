@@ -93,3 +93,28 @@ fn a_return_path_is_refused_for_any_one_reason() {
     assert!(task_return_path(&at_length(4096)).is_some());
     assert_eq!(task_return_path(&at_length(4097)), None);
 }
+
+#[test]
+fn a_task_is_offered_in_the_languages_this_server_can_run() {
+    let languages = json!(["cpp", "python", "java", "javascript"]);
+    assert_eq!(
+        offered_languages(&languages, true),
+        ["cpp", "python", "java", "javascript"]
+    );
+    // With Compiler Explorer off, C, C++ and Java cannot be run here.
+    assert_eq!(
+        offered_languages(&languages, false),
+        ["python", "javascript"]
+    );
+    assert!(offered_languages(&json!(["c", "java"]), false).is_empty());
+    for language in ["python", "javascript"] {
+        assert!(runnable(language, false), "{language}");
+    }
+    for language in ["c", "cpp", "java"] {
+        assert!(
+            runnable(language, true) && !runnable(language, false),
+            "{language}"
+        );
+    }
+    assert!(!runnable("rust", true));
+}

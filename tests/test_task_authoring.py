@@ -83,8 +83,9 @@ class TaskAuthoringTests(unittest.TestCase):
     def test_a_new_task_is_written_out_whole_and_ready_to_edit(self):
         with tempfile.TemporaryDirectory() as temporary:
             bank = Path(temporary) / "bank"
-            new_task(bank, "two-sum")
+            new_task(bank, "two-sum", languages=["javascript", "python"])
             sidecar = bank_file(bank, "task-mode")["two-sum"]
+            self.assertEqual(sidecar["languages"], ["javascript", "python"])
             # Every field there to change, the defaults included.
             self.assertEqual(
                 set(sidecar),
@@ -96,6 +97,7 @@ class TaskAuthoringTests(unittest.TestCase):
                     "requiredCases",
                     "maxHintRungs",
                     "rubricProfile",
+                    "languages",
                 },
             )
             self.assertEqual(
@@ -130,20 +132,39 @@ class TaskAuthoringTests(unittest.TestCase):
             new_task(bank, "valid-parentheses")
             self.assertEqual((bank / "task-set.json").read_text(), rules)
 
+    def test_narrowing_the_languages_drops_the_targets_they_marked(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bank = Path(temporary) / "bank"
+            _, notes = new_task(bank, "delimiter-closer", languages=["javascript"])
+            sidecar = bank_file(bank, "task-mode")["delimiter-closer"]
+            self.assertEqual(sidecar["languages"], ["javascript"])
+            self.assertEqual(
+                [target["language"] for target in sidecar["completionTargets"]],
+                ["javascript"],
+            )
+            self.assertTrue(any("dropped 1" in note for note in notes))
+            # A language with no target in a task that has them is pointed out.
+            _, notes = new_task(bank, "delimiter-closer", "with-cpp", ["python", "cpp"])
+            self.assertTrue(any("cpp" in note for note in notes))
+
     def test_nothing_is_written_for_a_task_the_bank_would_refuse(self):
         with tempfile.TemporaryDirectory() as temporary:
             bank = Path(temporary) / "bank"
             new_task(bank, "two-sum")
             before = snapshot(bank)
-            for reference_id, task_id, message in (
-                ("two-sum", None, "already in"),
-                ("missing-problem", None, "unknown reference"),
-                ("two-sum", "Bad_Id", "invalid task id"),
-                ("two-sum", "-dash", "invalid task id"),
+            for reference_id, task_id, languages, message in (
+                ("two-sum", None, None, "already in"),
+                ("missing-problem", None, None, "unknown reference"),
+                ("two-sum", "Bad_Id", None, "invalid task id"),
+                ("two-sum", "-dash", None, "invalid task id"),
+                ("two-sum", "pair-sum", ["python", "rust"], "unknown language"),
+                ("two-sum", "pair-sum", [], "names no language"),
+                # Known, but this class judge cannot run in C.
+                ("min-stack", None, ["c"], "C runs only function judges"),
             ):
                 with self.subTest(reference=reference_id, task_id=task_id):
                     with self.assertRaisesRegex(ValueError, message):
-                        new_task(bank, reference_id, task_id)
+                        new_task(bank, reference_id, task_id, languages)
                     self.assertEqual(snapshot(bank), before)
                     self.assertFalse((bank / STAGING).exists())
 
@@ -345,9 +366,20 @@ class TaskAuthoringTests(unittest.TestCase):
             listed = run("references")
             self.assertEqual(listed.returncode, 0, listed.stderr)
             self.assertTrue(listed.stdout.startswith("delimiter-closer"))
-            added = run("new", "--bank", bank, "--from", "two-sum")
+            added = run(
+                "new",
+                "--bank",
+                bank,
+                "--from",
+                "two-sum",
+                "--languages",
+                "python, cpp",
+            )
             self.assertEqual(added.returncode, 0, added.stderr)
-            self.assertIn("two-sum", bank_file(bank, "task-mode"))
+            self.assertEqual(
+                bank_file(bank, "task-mode")["two-sum"]["languages"],
+                ["python", "cpp"],
+            )
             # The command it suggests runs as printed.
             suggested = added.stdout.splitlines()[1].strip()
             shown = subprocess.run(

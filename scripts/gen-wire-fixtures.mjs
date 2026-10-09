@@ -432,6 +432,7 @@ function taskStamps(overrides = {}) {
     rubricProfile: "task-engagement-v1",
     githubLogin: "learner",
     githubId: 42,
+    language: "python",
     rulesAcknowledgedAt: "2026-10-07T00:00:00Z",
     rules: {
       durationMin: 15,
@@ -478,7 +479,10 @@ const files = {
   "task-edit.json": {
     topic: lib.topics.code,
     cases: [
-      { name: "task draft", payload: lib.taskEditPayload("revision-1", CODE) },
+      {
+        name: "task draft",
+        payload: lib.taskEditPayload("revision-1", CODE, "python"),
+      },
     ],
   },
   "task-error.json": {
