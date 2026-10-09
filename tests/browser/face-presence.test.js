@@ -7,6 +7,7 @@ import {
   createFacePresenceDetector,
   createFacePresenceTracker,
   faceAssetUrl,
+  faceGeometry,
   facePresenceVerdict,
   normalizeFaceResults,
 } from "../../web/face-presence.js";
@@ -92,7 +93,12 @@ test("face detector wrapper loads, configures, and normalizes results", async ()
   const sample = await detector.detect({});
 
   assert.equal(detector.available, true);
-  assert.deepEqual(sample, { available: true, count: 1, confidence: 0.75 });
+  assert.deepEqual(sample, {
+    available: true,
+    count: 1,
+    confidence: 0.75,
+    face: null,
+  });
   assert.deepEqual(calls, [
     ["ctor", "/vendor/face-detection/face_detection_short.binarypb"],
     ["options", "short", 0.5],
@@ -238,10 +244,79 @@ test("a gap in sampling is not an absence", () => {
 });
 
 test("face normalization handles empty and multi-face results", () => {
-  assert.deepEqual(normalizeFaceResults({}), { count: 0, confidence: 0 });
+  assert.deepEqual(normalizeFaceResults({}), {
+    count: 0,
+    confidence: 0,
+    face: null,
+  });
   assert.deepEqual(
     normalizeFaceResults({ detections: [{ score: [0.4] }, { score: [0.8] }] }),
-    { count: 2, confidence: 0.8 },
+    { count: 2, confidence: 0.8, face: null },
+  );
+});
+
+test("face normalization keeps the most confident face's box and keypoints", () => {
+  const detection = (score, yCenter) => ({
+    score: [score],
+    boundingBox: { xCenter: 0.5, yCenter, width: 0.2, height: 0.3 },
+    landmarks: [
+      { x: 0.45, y: yCenter - 0.05 },
+      { x: 0.55, y: yCenter - 0.05 },
+      { x: 0.5, y: yCenter },
+      { x: 0.5, y: yCenter + 0.06 },
+    ],
+  });
+  const result = normalizeFaceResults({
+    detections: [detection(0.6, 0.7), detection(0.9, 0.4)],
+  });
+  assert.equal(result.count, 2);
+  assert.deepEqual(result.face.box, [0.5, 0.4, 0.2, 0.3]);
+  assert.equal(result.face.landmarks.length, 4);
+  assert.ok(Math.abs(result.face.landmarks[2][1] - 0.4) < 1e-9);
+});
+
+test("face geometry is whole or absent, never shifted", () => {
+  const score = () => 1;
+  const box = { xCenter: 0.5, yCenter: 0.4, width: 0.2, height: 0.3 };
+  const points = [
+    { x: 0.45, y: 0.35 },
+    { x: 0.55, y: 0.35 },
+    { x: 0.5, y: 0.4 },
+    { x: 0.5, y: 0.46 },
+  ];
+  assert.equal(
+    faceGeometry([{ boundingBox: box, landmarks: points }], score).landmarks
+      .length,
+    4,
+  );
+  // One bad point would move the nose into the mouth's place if dropped; the
+  // set is refused instead and the measure falls back to the box.
+  const broken = [...points];
+  broken[1] = { x: 0.55, y: Number.NaN };
+  assert.deepEqual(
+    faceGeometry([{ boundingBox: box, landmarks: broken }], score).landmarks,
+    [],
+  );
+  for (const key of ["xCenter", "yCenter", "width", "height"])
+    assert.equal(
+      faceGeometry(
+        [{ boundingBox: { ...box, [key]: undefined }, landmarks: points }],
+        score,
+      ),
+      null,
+      key,
+    );
+});
+
+test("the worker measures faces with the same code as the page", () => {
+  const body = (file) => {
+    const source = readFileSync(new URL(file, import.meta.url), "utf8");
+    const start = source.indexOf("function faceGeometry(");
+    return source.slice(start, source.indexOf("\n}\n", start));
+  };
+  assert.equal(
+    body("../../web/face-worker.js"),
+    body("../../web/face-presence.js"),
   );
 });
 

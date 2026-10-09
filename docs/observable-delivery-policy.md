@@ -37,6 +37,13 @@ transcript that notes, reports and recovery read; the interviewer hears the
 audio itself. None of this is a guarantee that provider-generated transcripts
 are accurate.
 
+In [task mode](task-mode.md), an attempt that breaks one of the set's announced
+rules (fullscreen, page visibility, or a sustained look-away measured against
+the learner's own calibration) ends and is marked invalid, with no ratings.
+That is the rule's consequence, stated as a fact about the session; it is not
+an assessment of the learner and never a claim about intent. Everything else
+above applies to task reviews unchanged.
+
 ## What enforces it
 
 The report prompt states the boundary, and the server independently scans every

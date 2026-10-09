@@ -1077,7 +1077,18 @@ fn setup_page_renders_a_form_with_all_four_credential_fields() {
         &addr,
         &format!("GET / HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
     );
+
+    // An assignment link opened before any config exists gets the same form,
+    // which reloads into the link once saved.
+    let assignment = http_request(
+        &addr,
+        &format!(
+            "GET /t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io%2Fc&version=1 HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        ),
+    );
     let _ = std::fs::remove_dir_all(&dir);
+    assert!(assignment.starts_with("HTTP/1.1 200 OK"), "{assignment}");
+    assert!(assignment.contains("name=\"googleApiKey\""), "{assignment}");
 
     assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
     for field in [

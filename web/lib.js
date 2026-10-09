@@ -2033,3 +2033,89 @@ export function isYieldShortcut(event, editor) {
 export function retryReportPayload() {
   return { type: "retry_report" };
 }
+
+export const TASK_TOPICS = Object.freeze({
+  connected: "task_connected",
+  start: "task_start",
+  end: "task_end",
+  thinking: "task_thinking",
+  error: "task_error",
+  action: "task_action",
+  revision: "task_revision",
+  run: "task_run",
+  state: "task_state",
+  review: "task_review",
+});
+
+/// The most UTF-8 bytes of code the server accepts in one revision; its
+/// `codeBytes` in problem-bank/task-defaults.json; a Rust test holds this,
+/// and `MAX_CODE_BYTES` in src/tasks/session.rs, to it.
+export const TASK_MAX_CODE_BYTES = 32000;
+
+export function taskCodeTooLarge(code) {
+  // A UTF-16 unit is one to three UTF-8 bytes, so most buffers are decided by
+  // their length alone and only the ones in between are encoded.
+  if (code.length > TASK_MAX_CODE_BYTES) return true;
+  if (code.length * 3 <= TASK_MAX_CODE_BYTES) return false;
+  return textEncoder.encode(code).length > TASK_MAX_CODE_BYTES;
+}
+
+export function taskEditPayload(revisionId, code) {
+  return { code, language: "python", revisionId };
+}
+
+export function taskConnectedPayload() {
+  return { version: 1 };
+}
+export function taskThinkingPayload(thinking) {
+  return { version: 1, thinking };
+}
+
+export function taskActionPayload(
+  requestId,
+  action,
+  revisionId = null,
+  targetId = null,
+) {
+  return { version: 1, requestId, action, revisionId, targetId };
+}
+
+export function taskStartPayload() {
+  return { version: 1 };
+}
+
+/// The page ending an attempt: `invalid` for a rule it watches
+/// (`fullscreen`, `visibility`, `look_away`), `interrupted` for a failure that
+/// stopped it watching (`camera`, `detector`, `reload`).
+export function taskEndPayload(requestId, outcome, cause, durationMs) {
+  return {
+    version: 1,
+    requestId,
+    outcome,
+    cause,
+    durationMs: Math.max(0, Math.round(durationMs)),
+  };
+}
+
+export function taskRevisionPayload(requestId, revisionId, code, trigger) {
+  return { version: 1, requestId, revisionId, code, trigger };
+}
+
+export function taskRunPayload(
+  requestId,
+  runId,
+  revisionId,
+  passed,
+  total,
+  diagnostics,
+) {
+  return {
+    version: 1,
+    requestId,
+    runId,
+    revisionId,
+    passed,
+    total,
+    diagnostics,
+  };
+}

@@ -1,0 +1,19 @@
+{
+  "topic": "task_thinking",
+  "cases": [
+    {
+      "name": "thinking",
+      "payload": {
+        "version": 1,
+        "thinking": true
+      }
+    },
+    {
+      "name": "ready to discuss",
+      "payload": {
+        "version": 1,
+        "thinking": false
+      }
+    }
+  ]
+}

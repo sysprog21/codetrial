@@ -1,0 +1,45 @@
+{
+  "topic": "task_action",
+  "cases": [
+    {
+      "name": "hint",
+      "payload": {
+        "version": 1,
+        "requestId": "hint-1",
+        "action": "hint",
+        "revisionId": null,
+        "targetId": null
+      }
+    },
+    {
+      "name": "finish",
+      "payload": {
+        "version": 1,
+        "requestId": "finish-1",
+        "action": "finish",
+        "revisionId": "revision-1",
+        "targetId": null
+      }
+    },
+    {
+      "name": "hint about one target",
+      "payload": {
+        "version": 1,
+        "requestId": "hint-2",
+        "action": "hint",
+        "revisionId": null,
+        "targetId": "closer-branch"
+      }
+    },
+    {
+      "name": "discuss",
+      "payload": {
+        "version": 1,
+        "requestId": "discuss-1",
+        "action": "discuss",
+        "revisionId": "revision-1",
+        "targetId": null
+      }
+    }
+  ]
+}

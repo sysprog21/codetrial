@@ -3,6 +3,9 @@
 // the interview is on.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   DEFAULT_RUNTIME_CONFIG,
@@ -258,13 +261,40 @@ const runButtonReady = (page) =>
 /// interview, and a press taken then is refused as ended, not as paused.
 async function mediaBrowser(t) {
   const { chromium } = await import("playwright");
+  const directory = await mkdtemp(join(tmpdir(), "codetrial-shortcut-audio-"));
+  const audioFile = join(directory, "microphone.wav");
+  const sampleRate = 16000;
+  const samples = sampleRate * 3;
+  const wav = Buffer.alloc(44 + samples * 2);
+  wav.write("RIFF", 0);
+  wav.writeUInt32LE(wav.length - 8, 4);
+  wav.write("WAVEfmt ", 8);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(sampleRate, 24);
+  wav.writeUInt32LE(sampleRate * 2, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write("data", 36);
+  wav.writeUInt32LE(samples * 2, 40);
+  for (let sample = 0; sample < samples; sample++)
+    wav.writeInt16LE(
+      Math.round(12000 * Math.sin((2 * Math.PI * 440 * sample) / sampleRate)),
+      44 + sample * 2,
+    );
+  await writeFile(audioFile, wav);
   const media = await chromium.launch({
     args: [
       "--use-fake-device-for-media-stream",
       "--use-fake-ui-for-media-stream",
+      `--use-file-for-fake-audio-capture=${audioFile}`,
     ],
   });
-  t.after(() => media.close());
+  t.after(async () => {
+    await media.close();
+    await rm(directory, { recursive: true, force: true });
+  });
   return media;
 }
 
@@ -273,9 +303,16 @@ async function mediaBrowser(t) {
 async function clearPreflight(page) {
   await page.getByRole("button", { name: "Play test tone" }).click();
   await page.getByRole("button", { name: "I heard it" }).click();
-  await page.waitForFunction(
-    () => !document.querySelector("#audio-check-join").disabled,
-  );
+  await page
+    .waitForFunction(
+      () => !document.querySelector("#audio-check-join").disabled,
+    )
+    .catch(async (error) => {
+      throw new Error(
+        `Media preflight blocked: ${await page.locator("#audio-check-status").textContent()}`,
+        { cause: error },
+      );
+    });
   await page.click("#audio-check-join");
   await page.waitForFunction(
     () => document.querySelector("#timer").textContent !== "00:00",

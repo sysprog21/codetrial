@@ -19,7 +19,7 @@ const RETRY_MS = 2000;
 // abandoned mid-sentence. Every engine enables echo cancellation for a bare
 // `audio: true` today, which is exactly why asking for it costs nothing and
 // stops a future default from moving under us.
-const CONSTRAINTS = {
+export const CONSTRAINTS = {
   audio: {
     echoCancellation: true,
     noiseSuppression: true,

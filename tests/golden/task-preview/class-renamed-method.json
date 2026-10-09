@@ -1,0 +1,195 @@
+{
+  "judge": {
+    "cases": [
+      {
+        "expected": [
+          null,
+          null,
+          null,
+          null,
+          -3,
+          null,
+          0,
+          -2
+        ],
+        "input": [
+          [
+            "BidLedger",
+            "push",
+            "push",
+            "push",
+            "smallest",
+            "pop",
+            "top",
+            "smallest"
+          ],
+          [
+            [],
+            [
+              -2
+            ],
+            [
+              0
+            ],
+            [
+              -3
+            ],
+            [],
+            [],
+            [],
+            []
+          ]
+        ],
+        "label": "classic negative minimum sequence"
+      },
+      {
+        "expected": [
+          null,
+          null,
+          null,
+          null,
+          1,
+          null,
+          1,
+          null,
+          2
+        ],
+        "input": [
+          [
+            "BidLedger",
+            "push",
+            "push",
+            "push",
+            "smallest",
+            "pop",
+            "smallest",
+            "pop",
+            "smallest"
+          ],
+          [
+            [],
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              1
+            ],
+            [],
+            [],
+            [],
+            [],
+            []
+          ]
+        ],
+        "label": "duplicate minimum survives one pop"
+      },
+      {
+        "expected": [
+          null,
+          null,
+          null,
+          3,
+          3,
+          null,
+          5,
+          5
+        ],
+        "input": [
+          [
+            "BidLedger",
+            "push",
+            "push",
+            "top",
+            "smallest",
+            "pop",
+            "top",
+            "smallest"
+          ],
+          [
+            [],
+            [
+              5
+            ],
+            [
+              3
+            ],
+            [],
+            [],
+            [],
+            [],
+            []
+          ]
+        ],
+        "label": "top after decreasing pushes"
+      },
+      {
+        "expected": [
+          null,
+          null,
+          null,
+          null,
+          -1,
+          -1
+        ],
+        "input": [
+          [
+            "BidLedger",
+            "push",
+            "push",
+            "push",
+            "smallest",
+            "top"
+          ],
+          [
+            [],
+            [
+              4
+            ],
+            [
+              6
+            ],
+            [
+              -1
+            ],
+            [],
+            []
+          ]
+        ],
+        "label": "negative minimum after positive values"
+      },
+      {
+        "expected": [
+          null
+        ],
+        "input": [
+          [
+            "BidLedger"
+          ],
+          [
+            []
+          ]
+        ],
+        "label": "new stack"
+      }
+    ],
+    "checker": "exact",
+    "className": "BidLedger",
+    "kind": "class",
+    "methodReturnTypes": {
+      "pop": "void",
+      "push": "void",
+      "smallest": "value",
+      "top": "value"
+    }
+  },
+  "starterCode": {
+    "c": "typedef struct {\n    // Think out loud as you go!\n} BidLedger;\n\nBidLedger* bidLedgerCreate() {\n    return NULL;\n}\n\nvoid bidLedgerPush(BidLedger* obj, int value) {\n}\n\nvoid bidLedgerPop(BidLedger* obj) {\n}\n\nint bidLedgerTop(BidLedger* obj) {\n    return 0;\n}\n\nint bidLedgerGetMin(BidLedger* obj) {\n    return 0;\n}\n\nvoid bidLedgerFree(BidLedger* obj) {\n}\n",
+    "cpp": "class BidLedger {\npublic:\n    BidLedger() {\n    }\n\n    void push(int value) {\n    }\n\n    void pop() {\n    }\n\n    int top() {\n        return 0;\n    }\n\n    int smallest() {\n        return 0;\n    }\n};\n",
+    "java": "class BidLedger {\n    public BidLedger() {\n    }\n\n    public void push(int value) {\n    }\n\n    public void pop() {\n    }\n\n    public int top() {\n        return 0;\n    }\n\n    public int smallest() {\n        return 0;\n    }\n}\n",
+    "javascript": "class BidLedger {\n  constructor() {\n  }\n\n  /** @param {number} value @return {void} */\n  push(value) {\n  }\n\n  /** @return {void} */\n  pop() {\n  }\n\n  /** @return {number} */\n  top() {\n  }\n\n  /** @return {number} */\n  smallest() {\n  }\n}\n",
+    "python": "class BidLedger:\n    def __init__(self):\n        pass\n\n    def push(self, value: int) -> None:\n        pass\n\n    def pop(self) -> None:\n        pass\n\n    def top(self) -> int:\n        pass\n\n    def smallest(self) -> int:\n        pass\n"
+  }
+}

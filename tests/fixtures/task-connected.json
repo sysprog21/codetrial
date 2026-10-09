@@ -1,0 +1,11 @@
+{
+  "topic": "task_connected",
+  "cases": [
+    {
+      "name": "connected",
+      "payload": {
+        "version": 1
+      }
+    }
+  ]
+}

@@ -9,6 +9,7 @@ use super::*;
 #[tokio::test]
 async fn static_home_markup_matches_frontend_contract() {
     let (base, server) = spawn_web_server(WebServerConfig {
+        tasks: None,
         web_dir: Path::new("web").to_path_buf(),
         github_client_id: None,
         github_client_secret: None,
@@ -63,6 +64,7 @@ async fn static_home_markup_matches_frontend_contract() {
 #[tokio::test]
 async fn static_interview_markup_exposes_offline_surface() {
     let (base, server) = spawn_web_server(WebServerConfig {
+        tasks: None,
         web_dir: Path::new("web").to_path_buf(),
         github_client_id: None,
         github_client_secret: None,

@@ -797,6 +797,9 @@ def validated_variant(problem: dict, judge: dict, variant: object) -> dict:
     Returns the posed problem, the posed judge and the examples as the page
     shows them.
     """
+    from .task_structure import judge_options
+
+    judge_options(judge)
     problem_id = problem["id"]
     text = checked_text(problem_id, variant)
     check_new_names(problem, judge, variant)

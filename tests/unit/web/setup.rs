@@ -176,3 +176,37 @@ impl Drop for AccountsScratch {
         std::fs::remove_dir_all(&self.dir).ok();
     }
 }
+
+#[tokio::test]
+async fn assignment_links_land_on_setup_before_configuration_exists() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = super::setup_service(
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+        false,
+        addr.port(),
+        "unused-test-config".into(),
+    );
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let response = reqwest::get(format!("http://{addr}/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io%2Fcourse&version=7")).await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(response.text().await.unwrap().contains("codetrial Setup"));
+    server.abort();
+}
+
+#[test]
+fn assignment_setup_refuses_missing_or_whitespace_google_keys() {
+    for key in [
+        serde_json::Value::Null,
+        serde_json::json!(""),
+        serde_json::json!("   "),
+    ] {
+        let submission = serde_json::json!({"taskMode":true,"livekitUrl":"wss://example.org","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":key});
+        let response = super::validated_fields(&submission)
+            .err()
+            .expect("assignment requires a Google key");
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+}

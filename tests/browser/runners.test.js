@@ -657,3 +657,74 @@ test("execution infrastructure failures allow tracing but candidate failures do 
     });
   }
 });
+
+test("task-mode JavaScript candidate errors are distinct from worker infrastructure outages", async (t) => {
+  const spec = {
+    kind: "function",
+    entry: "sum",
+    paramNames: ["value"],
+    paramTypes: ["integer"],
+    returnType: "integer",
+    checker: "exact",
+    cases: [{ label: "ordinary", input: [1], expected: 1 }],
+  };
+  for (const scenario of ["syntax", "timeout", "platform"]) {
+    await t.test(scenario, async (t) => {
+      const restoreFetch = failFetchWith(async () => Response.json(spec));
+      t.mock.method(URL, "createObjectURL", () => "blob:test");
+      t.mock.method(URL, "revokeObjectURL", () => {});
+      const originalWorker = globalThis.Worker;
+      globalThis.Worker = class {
+        constructor() {
+          if (scenario === "platform") throw new Error("Worker unavailable");
+        }
+        postMessage() {
+          if (scenario === "syntax")
+            queueMicrotask(() =>
+              this.onerror({ message: "SyntaxError: invalid code" }),
+            );
+        }
+        terminate() {}
+      };
+      if (scenario === "timeout") {
+        const originalTimeout = globalThis.setTimeout;
+        t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+          if (delay === 5000) {
+            queueMicrotask(callback);
+            return originalTimeout(() => {}, 0);
+          }
+          return originalTimeout(callback, delay, ...args);
+        });
+      }
+      try {
+        const summary = await runBrowserTests(
+          `worker-${scenario}`,
+          "candidate code",
+          "javascript",
+          null,
+          [],
+          spec,
+        );
+        assert.equal(
+          Boolean(summary.runnerUnavailable),
+          scenario === "platform",
+        );
+        assert.ok(summary.setupError);
+        assert.equal(summary.total, 1);
+        // An interview keeps its contract: a runner that threw is a setup
+        // error, never an outage that would let a hand trace stand for Test.
+        const interview = await runBrowserTests(
+          `worker-${scenario}-interview`,
+          "candidate code",
+          "javascript",
+        );
+        assert.equal(interview.runnerUnavailable, undefined);
+        assert.ok(interview.setupError);
+      } finally {
+        restoreFetch();
+        if (originalWorker === undefined) delete globalThis.Worker;
+        else globalThis.Worker = originalWorker;
+      }
+    });
+  }
+});

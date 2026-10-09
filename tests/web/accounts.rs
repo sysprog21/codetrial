@@ -128,7 +128,7 @@ async fn account_routes_record_interviewee_github_login() {
 
     assert_eq!(
         session.json::<Value>().await.unwrap(),
-        json!({"signedIn": false, "loginRequired": true, "maxDurationMin": MAX_DURATION_MIN})
+        json!({"signedIn": false, "loginRequired": true, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN})
     );
 
     let signed_in = client
@@ -249,7 +249,7 @@ async fn an_unmigratable_account_database_refuses_rather_than_disabling_login() 
         .unwrap();
     assert_eq!(
         session,
-        json!({"signedIn": false, "loginRequired": true, "maxDurationMin": MAX_DURATION_MIN}),
+        json!({"signedIn": false, "loginRequired": true, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN}),
         "a database this binary cannot migrate still requires a login"
     );
 
@@ -289,7 +289,7 @@ async fn an_unopenable_account_database_refuses_rather_than_disabling_login() {
         .unwrap();
     assert_eq!(
         session,
-        json!({"signedIn": false, "loginRequired": true, "maxDurationMin": MAX_DURATION_MIN}),
+        json!({"signedIn": false, "loginRequired": true, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN}),
         "a broken database still requires a login; it cannot serve one"
     );
 
@@ -345,7 +345,7 @@ async fn an_unopenable_account_database_refuses_rather_than_disabling_login() {
         .unwrap();
     assert_eq!(
         session,
-        json!({"signedIn": false, "loginRequired": false, "maxDurationMin": MAX_DURATION_MIN}),
+        json!({"signedIn": false, "loginRequired": false, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN}),
         "nothing to sign in to, and the lobby has to be told so"
     );
 
@@ -446,6 +446,60 @@ async fn github_callback_sets_session_and_clears_oauth_state() {
         .build()
         .unwrap();
 
+    let assignment =
+        "/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io%2Fcourse&version=7";
+    for (return_to, expected) in [
+        (assignment, assignment),
+        (
+            "/t/classroom/delimiter-closer?site=https://teacher.github.io/a;b,c%20d&version=7",
+            "/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io%2Fa%3Bb%2Cc%20d&version=7",
+        ),
+        (
+            "/t/classroom/delimiter-closer?site=https://teacher.github.io/course&version=7&ref=x",
+            "/",
+        ),
+        ("//attacker.example/t/set/task", "/"),
+        (
+            "/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io&version=7&version=8",
+            "/",
+        ),
+        (
+            "/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io&version=0",
+            "/",
+        ),
+    ] {
+        let login = client
+            .get(format!("{base}/api/login"))
+            .query(&[("returnTo", return_to)])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(login.status(), 302);
+        let authorize = reqwest::Url::parse(login.headers()["location"].to_str().unwrap()).unwrap();
+        let state = authorize
+            .query_pairs()
+            .find(|(key, _)| key == "state")
+            .unwrap()
+            .1
+            .into_owned();
+        let cookies = login
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .map(|cookie| cookie.to_str().unwrap().split(';').next().unwrap())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let callback = client
+            .get(format!("{base}/api/callback"))
+            .query(&[("code", "ok"), ("state", state.as_str())])
+            .header("cookie", cookies)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(callback.status(), 302);
+        assert_eq!(callback.headers()["location"], expected);
+    }
+
     let response = client
         .get(format!("{base}/api/callback?code=ok&state=state-token"))
         .header(
@@ -466,7 +520,10 @@ async fn github_callback_sets_session_and_clears_oauth_state() {
         .iter()
         .map(|value| value.to_str().unwrap().to_string())
         .collect::<Vec<_>>();
-    assert_eq!(cookies.len(), 2);
+    assert_eq!(cookies.len(), 3);
+    assert!(cookies.iter().any(
+        |cookie| cookie.starts_with("codetrial_oauth_return=") && cookie.contains("Max-Age=0")
+    ));
     let session_cookie = cookies
         .iter()
         .find(|cookie| cookie.starts_with("codetrial_session="))
@@ -493,6 +550,56 @@ async fn github_callback_sets_session_and_clears_oauth_state() {
         .unwrap();
     assert_eq!(session["signedIn"], true);
     assert_eq!(session["user"]["login"], "octocat");
+
+    let task_return = client
+        .get(format!("{base}/api/callback?code=ok&state=task-state"))
+        .header(
+            "cookie",
+            format!(
+                "codetrial_oauth_state={}; codetrial_oauth_return={}",
+                signed_cookie("task-state", "session-secret"),
+                signed_cookie("task-state:/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io%2Fcourse&version=7", "session-secret")
+            ),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(task_return.status(), 302);
+    assert_eq!(
+        task_return.headers()["location"],
+        "/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io%2Fcourse&version=7"
+    );
+    // Bank ids such as `3sum` start with a digit and still return.
+    let digit_return = client
+        .get(format!("{base}/api/callback?code=ok&state=digit-state"))
+        .header(
+            "cookie",
+            format!(
+                "codetrial_oauth_state={}; codetrial_oauth_return={}",
+                signed_cookie("digit-state", "session-secret"),
+                signed_cookie("digit-state:/t/classroom/3sum", "session-secret")
+            ),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(digit_return.status(), 302);
+    assert_eq!(digit_return.headers()["location"], "/t/classroom/3sum");
+    let mismatched = client
+        .get(format!("{base}/api/callback?code=ok&state=other-state"))
+        .header(
+            "cookie",
+            format!(
+                "codetrial_oauth_state={}; codetrial_oauth_return={}",
+                signed_cookie("other-state", "session-secret"),
+                signed_cookie("task-state:/t/classroom/delimiter-closer", "session-secret")
+            ),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(mismatched.status(), 302);
+    assert_eq!(mismatched.headers()["location"], "/");
 
     server.shutdown().await;
     github_server.shutdown().await;
@@ -848,7 +955,7 @@ async fn account_reports_are_scoped_to_the_signed_in_user() {
         .unwrap();
     assert_eq!(
         signed_out,
-        json!({"signedIn": false, "loginRequired": true, "maxDurationMin": MAX_DURATION_MIN}),
+        json!({"signedIn": false, "loginRequired": true, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN}),
         "accounts exist here, so the browser has to know to demand a sign-in"
     );
 
@@ -1347,6 +1454,16 @@ async fn every_owner_scoped_route_refuses_an_anonymous_request() {
         // `/api/token` minted the room for. It sat in the anonymous list below
         // for want of anywhere else, which said the opposite.
         (reqwest::Method::POST, "/api/observer-token"),
+        (reqwest::Method::GET, "/api/task-reviews/{room}"),
+        (
+            reqwest::Method::GET,
+            "/api/task-sets/{set_id}/tasks/{task_id}",
+        ),
+        (reqwest::Method::POST, "/api/task-sets/{set_id}/unlock"),
+        (
+            reqwest::Method::POST,
+            "/api/task-sets/{set_id}/tasks/{task_id}/attempts",
+        ),
         (reqwest::Method::GET, "/api/reports"),
         (reqwest::Method::POST, "/api/reports"),
         (reqwest::Method::DELETE, "/api/reports"),
@@ -1383,6 +1500,9 @@ async fn every_owner_scoped_route_refuses_an_anonymous_request() {
         "/api/token",
         "/api/login",
         "/api/callback",
+        // A device sign-in creates the session these routes would ask for.
+        "/api/github/device",
+        "/api/github/device/poll",
         "/api/session",
         "/api/logout",
         "/runtime-config.js",

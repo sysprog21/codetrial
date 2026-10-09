@@ -16,6 +16,13 @@ python_ok()
 {
     "$1" -c 'import sys; sys.exit(sys.version_info < (3, 9))' > /dev/null 2>&1
 }
+
+# The instructor tool's own environment comes first when it is there: it holds
+# the `cryptography` the packaging tests need, and `task-package.py build` sets
+# it up.
+if [ -z "${PYTHON:-}" ] && python_ok "$ROOT/target/task-tools/bin/python"; then
+    PYTHON=$ROOT/target/task-tools/bin/python
+fi
 if [ -z "${PYTHON:-}" ]; then
     for candidate in python3 python3.14 python3.13 python3.12 python3.11 \
         python3.10 python3.9; do
@@ -308,6 +315,9 @@ unittest_gate()
 }
 
 gate gen-problems-tests unittest_gate "$ROOT/tests/test_gen_problems.py"
+gate task-mode-tests unittest_gate "$ROOT/tests/test_task_mode.py"
+gate task-package-tests unittest_gate "$ROOT/tests/test_task_package.py"
+gate task-authoring-tests unittest_gate "$ROOT/tests/test_task_authoring.py"
 gate gen-problem-cards "$PYTHON" "$ROOT/scripts/gen-problem-cards.py" --check
 gate wire-fixtures node "$ROOT/scripts/gen-wire-fixtures.mjs" --check
 gate recording-fixtures node "$ROOT/scripts/gen-recording-fixtures.mjs" --check

@@ -28,7 +28,7 @@ the camera required, because the recording notice describes a video recording.
 
 ## Response windows
 
-The replay page lists a *response window* for each turn the interviewer took:
+The replay page lists a _response window_ for each turn the interviewer took:
 the time between the interviewer finishing that turn and the interviewer
 speaking again, taken from the `avatar` state rows the browser recorded. A
 window no candidate transcript turn was attributed to says so; the turn itself
@@ -117,6 +117,37 @@ A window is a place in the recording to go and watch. It is not a finding: a
 candidate who is thinking is slow too, and the number cannot tell the two
 apart. It also cannot separate the silence before an answer from the answer
 itself, because a transcript turn is recorded when it ends.
+
+## Task mode rules
+
+Everything above holds for interviews. [Task mode](task-mode.md) is a learning
+exercise with rules the instructor publishes and the learner accepts before it
+starts, and there two things change.
+
+First, breaking an announced rule ends the attempt and marks it invalid. The
+rules are observable facts: the workspace left fullscreen, the page became
+hidden, or the learner's face was out of frame or tilted down past their own
+calibrated limit for longer than the set allows. The first two have no grace;
+the third warns with a countdown and a sound before it ends anything. All of
+them are listed on the instructor's page and again before Start, with what is
+not detected.
+
+Second, the camera rule reads more than a count. Task mode estimates head pitch
+from where the nose sits between the eyes and the mouth, as the detector's
+keypoints place them (or from the face box when it gives none), against a calibration the learner
+runs before the attempt, because the rule's purpose is sustained attention
+somewhere below the screen, such as a phone in the lap. It still does not read
+eye gaze, expression, or anything that would support a claim about what a
+person is thinking, and the reasons in the next section are why: an overlay
+below the webcam or a phone held at screen height defeats it, so it deters
+rather than detects. A detector that stops answering is a technical
+interruption, never a violation.
+
+What does not change is the claim. An invalid attempt records which rule ended
+it, when and the measurement, and says the attempt ended under the announced
+rules; it never says or implies that the learner cheated, and it scores
+nothing. Task mode runs on the learner's own machine, so all of this is a
+deterrent the learner could disable, and the task contract says so.
 
 ## What CodeTrial does not look for
 

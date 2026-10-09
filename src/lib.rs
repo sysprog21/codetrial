@@ -7,6 +7,7 @@ pub mod gemini;
 pub mod livekit;
 pub mod recording;
 pub mod runtime;
+pub mod tasks;
 pub mod token;
 pub mod web;
 
