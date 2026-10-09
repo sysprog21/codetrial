@@ -369,9 +369,9 @@ jobs:
   # one runner testing eight. `--list` parses the tree without building it, one
   # second here, so the count is cheap to ask for and the width can follow it.
   #
-  # One shard per 25 mutants, capped at four. The cap is not about arithmetic:
-  # past that the setup cost of another runner stops paying for itself against
-  # the mutants it would take.
+  # One shard per 25 mutants, under the ceiling the step explains. The ceiling
+  # is not about arithmetic: past it the setup cost of another runner stops
+  # paying for itself against the mutants it would take.
   #
   # A pull request from a fork's main is refused in `check`, and this job does
   # not wait on that one, so it repeats the condition rather than plan and fan
@@ -433,8 +433,12 @@ jobs:
           # shard is what the line above asks for and what fits the job's
           # timeout; a ceiling of four turned a 764-mutant diff into 191 a
           # shard, which is seven times the design load and forty-five minutes
-          # of work reported as nothing at all.
-          [ "$width" -gt 16 ] && width=16
+          # of work reported as nothing at all. Sixteen did the same to a diff
+          # that adds a whole subsystem: every shard ran out of its budget
+          # before reporting. Forty-eight keeps the design load up to twelve
+          # hundred mutants; shards beyond the account's concurrent jobs queue
+          # rather than fail.
+          [ "$width" -gt 48 ] && width=48
           {
             echo "count=$count"
             echo "width=$width"
