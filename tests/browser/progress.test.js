@@ -639,3 +639,43 @@ test("progress retains whether a verdict was actually stored for export", () => 
     }
   }
 });
+
+for (const account of [false, true]) {
+  test(`retry settings survive ${account ? "account" : "device"} history normalization`, () => {
+    const saved = {
+      date: "2026-01-01",
+      durationMin: 60,
+      interviewLoop: "coding_only",
+      interviewMode: "whiteboard",
+      report: {},
+    };
+    const attempt = normalizeProgressEntry(
+      account ? { payload: saved } : saved,
+    );
+    assert.equal(attempt.durationMin, 60);
+    assert.equal(attempt.interviewLoop, "coding_only");
+    assert.equal(attempt.interviewMode, "whiteboard");
+    assert.equal(saved.interviewMode, "whiteboard");
+  });
+}
+
+test("retry mode metadata falls back to the original report and defaults safely", () => {
+  const older = normalizeProgressEntry({
+    report: { interviewLoop: "coding_only", interviewMode: "whiteboard" },
+  });
+  assert.equal(older.interviewLoop, "coding_only");
+  assert.equal(older.interviewMode, "whiteboard");
+  const legacy = normalizeProgressEntry({ report: {} });
+  assert.equal(legacy.durationMin, null);
+  assert.equal(legacy.interviewLoop, "coding_behavioral");
+  assert.equal(legacy.interviewMode, "coding");
+  const invalid = normalizeProgressEntry({
+    interviewLoop: "invalid",
+    interviewMode: "invalid",
+    durationMin: "60",
+    report: {},
+  });
+  assert.equal(invalid.durationMin, null);
+  assert.equal(invalid.interviewLoop, "coding_behavioral");
+  assert.equal(invalid.interviewMode, "coding");
+});

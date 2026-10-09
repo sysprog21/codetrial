@@ -253,6 +253,7 @@ test("only the newest overlapping report save can release the warning", async ()
     "whiteboard",
     "durationMin",
     "interviewLoop",
+    "mode",
     "saveReportHistory",
     "reportIsPersisted",
     "updateBeforeUnloadGuard",
@@ -264,6 +265,7 @@ test("only the newest overlapping report save can release the warning", async ()
     false,
     45,
     "coding_only",
+    "whiteboard",
     saveReportHistory,
     reportIsPersisted,
     updateBeforeUnloadGuard,
@@ -272,6 +274,9 @@ test("only the newest overlapping report save can release the warning", async ()
   const provisional = saveHistory({ summary: "provisional" });
   const final = saveHistory({ summary: "final" });
   assert.equal(pending.length, 2);
+  assert.equal(pending[0].entry.interviewMode, "whiteboard");
+  assert.equal(pending[0].entry.interviewLoop, "coding_only");
+  assert.equal(pending[0].entry.durationMin, 45);
   assert.equal(state.reportPersisted, false);
 
   // The older provisional save finishes successfully after the final save has
