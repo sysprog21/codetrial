@@ -4447,3 +4447,200 @@ lobbyTest(
     }
   },
 );
+
+for (const account of [false, true]) {
+  for (const interviewMode of ["coding", "whiteboard"]) {
+    lobbyTest(
+      `retry restores ${interviewMode} settings from ${account ? "account" : "device"} history`,
+      async (page) => {
+        const attempt = {
+          ...savedAttempt(EASY[0]).payload,
+          durationMin: 60,
+          interviewLoop: "coding_only",
+          interviewMode,
+        };
+        if (account) reports = [{ payload: attempt }];
+        else {
+          session = { signedIn: false };
+          await page.addInitScript(
+            (saved) =>
+              localStorage.setItem(
+                "codetrial_history",
+                JSON.stringify([saved]),
+              ),
+            attempt,
+          );
+        }
+        await lobby(page);
+        await page.click('[data-duration="30"]');
+        await page
+          .getByRole("button", { name: "Try again", exact: true })
+          .click();
+        assert.equal((await snapshot(page)).duration, "60");
+        assert.equal(
+          await page
+            .locator('[data-loop="coding_only"]')
+            .getAttribute("aria-pressed"),
+          "true",
+        );
+        assert.equal(
+          await page
+            .locator(`[data-mode="${interviewMode}"]`)
+            .getAttribute("aria-pressed"),
+          "true",
+        );
+        assert.equal(
+          await page.locator("#mode-note").isVisible(),
+          interviewMode === "whiteboard",
+        );
+        await page.click("#start");
+        await page.waitForURL("**/interview?**");
+        const query = new URL(page.url()).searchParams;
+        assert.equal(query.get("problem"), EASY[0]);
+        assert.equal(query.get("duration"), "60");
+        assert.equal(query.get("loop"), "coding_only");
+        assert.equal(query.get("mode"), interviewMode);
+      },
+    );
+  }
+}
+
+lobbyTest(
+  "retry restores the saved loop over the current choice and explains a capped duration",
+  async (page) => {
+    session.maxDurationMin = 45;
+    reports = [
+      {
+        payload: {
+          ...savedAttempt(EASY[0]).payload,
+          durationMin: 60,
+          interviewLoop: "coding_behavioral",
+          interviewMode: "coding",
+        },
+      },
+    ];
+    await lobby(page);
+    await page.click('[data-loop="coding_only"]');
+    await page.click('[data-mode="whiteboard"]');
+    await page.getByRole("button", { name: "Try again", exact: true }).click();
+    const state = await snapshot(page);
+    assert.equal(state.duration, "45");
+    assert.match(state.note, /60 minutes; adjusted to 45 minutes/);
+    assert.equal(
+      await page
+        .locator('[data-loop="coding_behavioral"]')
+        .getAttribute("aria-pressed"),
+      "true",
+    );
+    assert.equal(
+      await page.locator('[data-mode="coding"]').getAttribute("aria-pressed"),
+      "true",
+    );
+  },
+);
+
+lobbyTest(
+  "lobby settings survive reload and a later recording cap",
+  async (page) => {
+    await lobby(page);
+    await page.click('[data-duration="60"]');
+    await page.click('[data-loop="coding_only"]');
+    await page.click('[data-mode="whiteboard"]');
+    await lobby(page);
+    assert.equal((await snapshot(page)).duration, "60");
+    assert.equal(
+      await page
+        .locator('[data-loop="coding_only"]')
+        .getAttribute("aria-pressed"),
+      "true",
+    );
+    assert.equal(
+      await page
+        .locator('[data-mode="whiteboard"]')
+        .getAttribute("aria-pressed"),
+      "true",
+    );
+    session.maxDurationMin = 45;
+    await lobby(page);
+    const state = await snapshot(page);
+    assert.equal(state.duration, "45");
+    assert.match(state.durationNote, /at most 45 minutes/);
+    assert.equal(
+      await page
+        .locator('[data-loop="coding_only"]')
+        .getAttribute("aria-pressed"),
+      "true",
+    );
+    assert.equal(
+      await page
+        .locator('[data-mode="whiteboard"]')
+        .getAttribute("aria-pressed"),
+      "true",
+    );
+  },
+);
+
+for (const stored of [
+  '{"durationMin":-1,"interviewLoop":"invalid","interviewMode":"invalid"}',
+  "not json",
+]) {
+  lobbyTest(
+    `invalid preferences do not stop the lobby: ${stored}`,
+    async (page) => {
+      await page.addInitScript(
+        (value) => localStorage.setItem("codetrial.interviewSettings", value),
+        stored,
+      );
+      const state = await lobby(page);
+      assert.equal(state.startDisabled, false);
+      assert.equal(
+        await page
+          .locator('[data-loop="coding_behavioral"]')
+          .getAttribute("aria-pressed"),
+        "true",
+      );
+      assert.equal(
+        await page.locator('[data-mode="coding"]').getAttribute("aria-pressed"),
+        "true",
+      );
+    },
+  );
+}
+
+lobbyTest(
+  "blocked preference storage still allows settings to be changed and retried",
+  async (page) => {
+    reports = [
+      {
+        payload: {
+          ...savedAttempt(EASY[0]).payload,
+          durationMin: 60,
+          interviewLoop: "coding_only",
+          interviewMode: "whiteboard",
+        },
+      },
+    ];
+    await page.addInitScript(() => {
+      const get = Storage.prototype.getItem;
+      const set = Storage.prototype.setItem;
+      Storage.prototype.getItem = function (key) {
+        if (key === "codetrial.interviewSettings") throw new Error("blocked");
+        return get.call(this, key);
+      };
+      Storage.prototype.setItem = function (key, value) {
+        if (key === "codetrial.interviewSettings") throw new Error("blocked");
+        return set.call(this, key, value);
+      };
+    });
+    await lobby(page);
+    await page.click('[data-duration="30"]');
+    await page.getByRole("button", { name: "Try again", exact: true }).click();
+    assert.equal((await snapshot(page)).duration, "60");
+    assert.equal(
+      await page
+        .locator('[data-mode="whiteboard"]')
+        .getAttribute("aria-pressed"),
+      "true",
+    );
+  },
+);

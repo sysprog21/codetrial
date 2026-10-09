@@ -31,6 +31,9 @@ import {
   storeGroundingPacket,
 } from "./document-grounding.js";
 
+import { readStored, writeStored } from "./audio-output.js";
+
+const SETTINGS_KEY = "codetrial.interviewSettings";
 const requestTimeoutMs = 10_000;
 
 let problem;
@@ -320,8 +323,8 @@ for (const button of durations) {
 
 for (const button of document.querySelectorAll("[data-loop]")) {
   button.addEventListener("click", () => {
-    interviewLoop = codingLoop(button.dataset.loop);
-    select("[data-loop]", button);
+    setInterviewLoop(button.dataset.loop);
+    rememberSettings();
   });
 }
 
@@ -330,17 +333,8 @@ for (const button of document.querySelectorAll("[data-mode]")) {
     // A start already on its way out has read the mode it will open, so a
     // click now would light a surface the interview is not going to use.
     if (starting) return;
-    mode = interviewMode(button.dataset.mode);
-    select("[data-mode]", button);
-    // Said once, here, because every other difference the candidate will meet
-    // follows from it: no editor, no test runner, and a board the interviewer
-    // is sent as they draw.
-    const note = document.querySelector("#mode-note");
-    note.textContent =
-      mode === "whiteboard"
-        ? "Whiteboard: no editor and no test runner. You explain by drawing, and Jim sees the board as you go."
-        : "";
-    note.hidden = mode !== "whiteboard";
+    setInterviewMode(button.dataset.mode);
+    rememberSettings();
   });
 }
 
@@ -354,6 +348,8 @@ let signInFirst = false;
 /// disabled state. Without this a card click re-armed a button that was already
 /// leaving and bought a second navigation out of one start.
 let starting = false;
+
+restoreSettings();
 
 // The button by name, not by asking the event which element it was dispatched
 // to: the browser clears that property when dispatch ends, so every line after
@@ -1119,6 +1115,62 @@ function suggestedDuration(difficulties) {
   return difficulties.has("Medium") || difficulties.has("Hard") ? 45 : 30;
 }
 
+function setInterviewLoop(value) {
+  interviewLoop = codingLoop(value);
+  select(
+    "[data-loop]",
+    document.querySelector(`[data-loop="${interviewLoop}"]`),
+  );
+}
+
+function setInterviewMode(value) {
+  mode = interviewMode(value);
+  select("[data-mode]", document.querySelector(`[data-mode="${mode}"]`));
+  const note = document.querySelector("#mode-note");
+  note.textContent =
+    mode === "whiteboard"
+      ? "Whiteboard: no editor and no test runner. You explain by drawing, and Jim sees the board as you go."
+      : "";
+  note.hidden = mode !== "whiteboard";
+}
+
+function rememberSettings() {
+  writeStored(
+    SETTINGS_KEY,
+    JSON.stringify({
+      durationMin: duration,
+      interviewLoop,
+      interviewMode: mode,
+    }),
+  );
+}
+
+function restoreSettings() {
+  setInterviewLoop(interviewLoop);
+  setInterviewMode(mode);
+  let settings;
+  try {
+    settings = JSON.parse(readStored(SETTINGS_KEY));
+  } catch {
+    return;
+  }
+  if (!settings || typeof settings !== "object") return;
+  if (
+    durations.some(
+      (button) => Number(button.dataset.duration) === settings.durationMin,
+    )
+  ) {
+    setDuration(settings.durationMin, true);
+  }
+  if (["coding_only", "coding_behavioral"].includes(settings.interviewLoop)) {
+    setInterviewLoop(settings.interviewLoop);
+  }
+  if (["coding", "whiteboard"].includes(settings.interviewMode)) {
+    setInterviewMode(settings.interviewMode);
+  }
+  rememberSettings();
+}
+
 /// A suggestion unless `chosen` says the candidate picked it out loud, and once
 /// they have, nothing suggests over it again. The latch never releases: someone
 /// who asks for sixty minutes keeps it even if their history later moves them
@@ -1134,6 +1186,7 @@ function setDuration(minutes, chosen = false) {
     "[data-duration]",
     document.querySelector(`[data-duration="${duration}"]`),
   );
+  if (chosen) rememberSettings();
 }
 
 /// Snapped to a length the row actually offers, not to the cap itself: a cap
@@ -1304,8 +1357,25 @@ function renderAttemptHistory(attempts) {
       manualProblem = true;
       card.button.hidden = false;
       setProblem(card);
-      setDuration(suggestedDuration(new Set([card.difficulty])));
-      nodes.recommendation.textContent = `Selected problem: ${title(card)}.`;
+      const savedDuration = attempt.durationMin;
+      const offered = durations.map((button) =>
+        Number(button.dataset.duration),
+      );
+      const minutes =
+        savedDuration === null
+          ? suggestedDuration(new Set([card.difficulty]))
+          : (offered
+              .filter((value) => value <= savedDuration)
+              .sort((a, b) => b - a)[0] ?? Math.min(...offered));
+      setDuration(minutes, savedDuration !== null);
+      setInterviewLoop(attempt.interviewLoop);
+      setInterviewMode(attempt.interviewMode);
+      rememberSettings();
+      const adjustment =
+        savedDuration !== null && duration !== savedDuration
+          ? ` Previous duration: ${savedDuration} minutes; adjusted to ${duration} minutes for the available lengths and current limit.`
+          : "";
+      nodes.recommendation.textContent = `Selected problem: ${title(card)}.${adjustment}`;
     });
     item.append(label, open, download, retry);
     // A row with no id has nothing both stores and the account agree on, and
