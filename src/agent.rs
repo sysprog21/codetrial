@@ -74,7 +74,7 @@ pub use prompts::{
 pub(crate) use prompts::{editor_tool_continuity, end_interview_refusal, report_transcript_lines};
 pub(crate) use report::{MAX_ERROR_CHARS, Sanitized, sanitize_report_candidate};
 pub use report::{
-    MAX_SUMMARY_TEXT, fallback_report, final_report, names_published_problem,
+    MAX_SUMMARY_TEXT, ReportRounds, fallback_report, final_report, names_published_problem,
     report_response_schema, spelled_words, validate_report, validate_report_candidate,
     validate_report_for_round,
 };
@@ -171,11 +171,11 @@ pub const THINKING_CHECK_IN_S: u64 = 120;
 pub(crate) const THINKING_RELEASE_COOLDOWN: std::time::Duration =
     std::time::Duration::from_secs(10);
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 31;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 32;
 pub const LIVE_PROMPT_VERSION: u32 = 23;
-pub const REPORT_PROMPT_VERSION: u32 = 18;
+pub const REPORT_PROMPT_VERSION: u32 = 19;
 pub const RUBRIC_VERSION: u32 = 1;
-pub const REPORT_SCHEMA_VERSION: u32 = 2;
+pub const REPORT_SCHEMA_VERSION: u32 = 3;
 
 pub fn interview_contract_json() -> serde_json::Value {
     serde_json::json!({
@@ -2693,6 +2693,13 @@ pub const MAX_TRANSCRIPT_BYTES: usize = 60_000;
 /// entries when the whole thing would not fit.
 pub fn transcript_for_report(lines: &[String]) -> String {
     transcript_tail(&mark_unrecognized_turns(lines), MAX_TRANSCRIPT_BYTES)
+}
+
+/// Whether `transcript_for_report` leaves out the opening of these lines.
+/// Asked of the lines rather than of the text it returns, which carries the
+/// candidate's own words and so can spell the omission notice itself.
+pub(crate) fn report_transcript_cut(lines: &[String]) -> bool {
+    tail_start(&mark_unrecognized_turns(lines), MAX_TRANSCRIPT_BYTES) > 0
 }
 
 /// What an assessment reads in place of a candidate turn the recognizer did

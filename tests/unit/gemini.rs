@@ -826,6 +826,14 @@ fn report_problem() -> &'static crate::agent::Problem {
     crate::agent::get_problem(Some("two-sum"))
 }
 
+/// The rounds a report is judged under, with the follow-ups released.
+fn rounds(behavioral_opened: bool) -> crate::agent::ReportRounds {
+    crate::agent::ReportRounds {
+        behavioral_opened,
+        follow_ups_released: true,
+    }
+}
+
 /// The size limit is checked before the parse, and at the size it names.
 ///
 /// It exists so a runaway response is refused without being parsed, so the
@@ -981,7 +989,7 @@ pub(crate) async fn generate_report_at(
         backoff,
         run,
     };
-    generate_report_with_keys_at(calls, prompt, problem, true).await
+    generate_report_with_keys_at(calls, prompt, problem, rounds(true)).await
 }
 
 pub(crate) fn valid_report() -> Value {
@@ -1022,7 +1030,7 @@ fn report_with_self_review(item: usize, checks: Value) -> String {
 fn attempt_for(output: &str, attempt: usize, problem: &crate::agent::Problem) -> ReportStep {
     ReportAttempts {
         held: None,
-        behavioral_round_opened: true,
+        rounds: rounds(true),
     }
     .step("original", output, attempt, problem)
 }
@@ -1070,7 +1078,7 @@ fn run_for_round(
         .block_on(report_attempts(
             "original",
             problem,
-            behavioral_round_opened,
+            rounds(behavioral_round_opened),
             &mut Scripted(outputs.iter()),
         ))
 }
@@ -1131,7 +1139,7 @@ fn a_repair_call_that_fails_after_a_refusal_keeps_its_retry_policy() {
             .block_on(report_attempts(
                 "original",
                 report_problem(),
-                true,
+                rounds(true),
                 &mut transport,
             ))
             .expect_err("nothing was held");
@@ -1208,7 +1216,7 @@ fn star_content_in_a_round_that_never_opened_is_repaired() {
 
     let repair = match (ReportAttempts {
         held: None,
-        behavioral_round_opened: false,
+        rounds: rounds(false),
     })
     .step("original", &star, 0, report_problem())
     {
@@ -1282,7 +1290,7 @@ fn a_self_review_the_last_attempt_emptied_gets_a_replacement_safe_for_every_prob
     let mut raw = valid_report();
     raw["improvementPlan"][0]["selfReview"] = json!(["Your personality seemed introverted."]);
     for problem in crate::agent::PROBLEMS {
-        let salvage = salvage_report(raw.clone(), 0, problem, true)
+        let salvage = salvage_report(raw.clone(), 0, problem, rounds(true))
             .unwrap_or_else(|| panic!("rejected for {}", problem.id));
         assert_eq!(
             salvage.report["improvementPlan"][0]["selfReview"],
@@ -1378,7 +1386,7 @@ fn unsafe_checks_across_plan_items_are_all_dropped_and_counted() {
         json!(["Uses evidence", "Your body language was closed."]);
     report["improvementPlan"][3]["selfReview"] = json!(["Mind your accent."]);
 
-    let salvage = salvage_report(report, 0, report_problem(), true)
+    let salvage = salvage_report(report, 0, report_problem(), rounds(true))
         .expect("every item is safe once its unsafe checks are gone");
     assert_eq!(salvage.removed.checks, 3);
     let lists = salvage.report["improvementPlan"]
@@ -1390,6 +1398,36 @@ fn unsafe_checks_across_plan_items_are_all_dropped_and_counted() {
     let replaced = json!([crate::agent::SELF_REVIEW_REPLACEMENT]);
     assert_eq!(lists.iter().filter(|list| **list == replaced).count(), 2);
     assert!(lists.contains(&json!(["Uses evidence"])));
+}
+
+/// A follow-up assessment judging delivery is dropped the way a self-review
+/// check is, and the follow-up still says it was raised: whether it was asked
+/// is not a judgment of anyone.
+#[test]
+fn an_unsafe_follow_up_assessment_is_dropped_and_counted() {
+    let mut report = valid_report();
+    report["followUps"] = json!([
+        {"index": 1, "raised": true, "assessment": "You sounded nervous answering it."},
+        {"index": 2, "raised": true, "assessment": "You bounded the memory."},
+    ]);
+
+    let salvage = salvage_report(report, 0, report_problem(), rounds(true))
+        .expect("the report is valid once the unsafe assessment is gone");
+    assert_eq!(
+        salvage.removed,
+        crate::agent::Sanitized {
+            checks: 0,
+            criteria: 0,
+            assessments: 1
+        }
+    );
+    assert_eq!(
+        salvage.report["followUps"],
+        json!([
+            {"index": 1, "raised": true, "assessment": null},
+            {"index": 2, "raised": true, "assessment": "You bounded the memory."},
+        ])
+    );
 }
 
 /// The case the last-attempt salvage alone missed: the one fault was an
@@ -1437,7 +1475,7 @@ fn a_used_salvage_logs_the_checks_it_dropped_and_the_attempt_it_came_from() {
     assert_eq!(
         line.as_deref(),
         Some(
-            "gemini report salvaged problem=two-sum checks=2 criteria=0 attempt=0 \
+            "gemini report salvaged problem=two-sum checks=2 criteria=0 assessments=0 attempt=0 \
              after=transport_error error=\"no answer\""
         )
     );
@@ -1450,7 +1488,7 @@ fn a_used_salvage_logs_the_checks_it_dropped_and_the_attempt_it_came_from() {
     assert_eq!(
         line,
         Some(format!(
-            "gemini report salvaged problem=two-sum checks=2 criteria=0 attempt=0 \
+            "gemini report salvaged problem=two-sum checks=2 criteria=0 assessments=0 attempt=0 \
              after=no_repair_left error=\"Gemini report failed schema validation \
              after {MAX_REPORT_REPAIRS} repairs: $.x\\nforged: unknown field\""
         ))
@@ -1571,6 +1609,7 @@ async fn a_misrecognized_turn_neither_appears_in_nor_decides_the_report() {
         practice_level: None,
         evidence: "",
         behavioral_round: crate::agent::BehavioralRound::NeverOpened,
+        follow_ups_released: false,
     });
     let key = std::env::var("CODETRIAL_ENV")
         .ok()
@@ -1592,7 +1631,7 @@ async fn a_misrecognized_turn_neither_appears_in_nor_decides_the_report() {
         &prompt,
         EDITOR,
         problem,
-        false,
+        rounds(false),
         ReportRun {
             scope: "report-probe",
             seed: GENERATION_SEED,
@@ -3722,7 +3761,7 @@ fn a_success_criterion_still_unsafe_after_both_repairs_is_replaced_and_scored() 
     let line = line.expect("a used salvage is logged");
     assert!(
         line.starts_with(
-            "gemini report salvaged problem=two-sum checks=0 criteria=1 attempt=2 \
+            "gemini report salvaged problem=two-sum checks=0 criteria=1 assessments=0 attempt=2 \
              after=no_repair_left error="
         ),
         "{line}"
@@ -3733,7 +3772,7 @@ fn a_success_criterion_still_unsafe_after_both_repairs_is_replaced_and_scored() 
 /// one that would pass validation as it stands.
 #[test]
 fn a_response_with_nothing_to_remove_is_never_a_salvage() {
-    assert!(salvage_report(valid_report(), 0, report_problem(), true).is_none());
+    assert!(salvage_report(valid_report(), 0, report_problem(), rounds(true)).is_none());
 }
 
 /// Fixed text, so checked once against every title it could be shown under.
@@ -3742,13 +3781,14 @@ fn the_success_criterion_replacement_is_safe_for_every_problem() {
     let mut raw = valid_report();
     raw["improvementPlan"][0]["successCriterion"] = json!("Never appear nervous.");
     for problem in crate::agent::PROBLEMS {
-        let salvage = salvage_report(raw.clone(), 0, problem, true)
+        let salvage = salvage_report(raw.clone(), 0, problem, rounds(true))
             .unwrap_or_else(|| panic!("rejected for {}", problem.id));
         assert_eq!(
             salvage.removed,
             crate::agent::Sanitized {
                 checks: 0,
-                criteria: 1
+                criteria: 1,
+                assessments: 0
             }
         );
     }
@@ -3763,8 +3803,8 @@ fn every_rule_one_field_breaks_reaches_the_repair() {
     let ReportStep::Repair(repair) = attempt_for(&output, 0, report_problem()) else {
         panic!("both policy rules must trigger a repair");
     };
-    let errors =
-        crate::agent::validate_report_for_round(&report, report_problem(), true).unwrap_err();
+    let errors = crate::agent::validate_report_for_round(&report, report_problem(), rounds(true))
+        .unwrap_err();
     assert_eq!(errors.len(), 2);
     for error in errors {
         assert!(repair.contains(&serde_json::to_string(&error).unwrap()));
@@ -3778,8 +3818,8 @@ fn a_long_phrase_list_is_counted_rather_than_cut_midway() {
         "Mind accent, dialect, typing speed, speech rate, filler words, disfluency, eye contact, \
          posture, body language, facial expression, voice tone and physical appearance."
     );
-    let errors =
-        crate::agent::validate_report_for_round(&report, report_problem(), true).unwrap_err();
+    let errors = crate::agent::validate_report_for_round(&report, report_problem(), rounds(true))
+        .unwrap_err();
     let [error] = errors.as_slice() else {
         panic!("one rule, one error: {errors:?}");
     };
@@ -3841,7 +3881,7 @@ fn a_self_review_check_with_multiple_policy_violations_is_dropped_once() {
         "Speak clearly in English without nervous filler words.",
         "Verify the loop invariant"
     ]);
-    let salvage = salvage_report(report, 0, report_problem(), true).unwrap();
+    let salvage = salvage_report(report, 0, report_problem(), rounds(true)).unwrap();
     assert_eq!(salvage.removed.checks, 1);
     assert_eq!(
         salvage.report["improvementPlan"][0]["selfReview"],

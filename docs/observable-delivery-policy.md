@@ -47,10 +47,11 @@ the shared five-call report budget. The repair prompt bounds the number and
 length of errors it carries: an error names as many phrases as fit and counts
 the rest, and every failing path gets one error before any path gets a second.
 When the repairs run out, the latest response that becomes a valid report
-once its prohibited self-review checks are dropped and its prohibited success
-criteria replaced is kept, even if a later response broke something else: a
-list left empty gets one fixed, neutral check, and a criterion is replaced with
-fixed text that judges no one. Without such a response, a claim that remains
+once its prohibited self-review checks and follow-up assessments are dropped
+and its prohibited success criteria replaced is kept, even if a later response
+broke something else: a list left empty gets one fixed, neutral check, a
+criterion is replaced with fixed text that judges no one, and a follow-up keeps
+whether it was raised without an assessment. Without such a response, a claim that remains
 after the last repair leaves the report incomplete, with no score or verdict,
 and the candidate may request the one regeneration that
 [provider cost and degradation](provider-cost-and-degradation.md) describes.

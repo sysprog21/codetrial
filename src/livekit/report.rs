@@ -67,8 +67,8 @@ pub(super) struct FrozenAssessment {
 }
 
 impl FrozenAssessment {
-    pub(super) fn behavioral_round_opened(&self) -> bool {
-        crate::agent::BehavioralRound::of(&self.state).opened()
+    pub(super) fn rounds(&self) -> crate::agent::ReportRounds {
+        crate::agent::ReportRounds::of(&self.state)
     }
 
     pub(super) fn report_boards(&self) -> Vec<(&str, &[u8])> {
@@ -108,7 +108,7 @@ pub(super) async fn generate_report_bounded(
     boot: &RuntimeBootstrap<'_>,
     prompt: &str,
     boards: &[(&str, &[u8])],
-    behavioral_round_opened: bool,
+    rounds: crate::agent::ReportRounds,
     api_key: &GeminiKeys,
     seed: i64,
     refused: &std::sync::atomic::AtomicBool,
@@ -124,7 +124,7 @@ pub(super) async fn generate_report_bounded(
                 boards,
             },
             boot.problem,
-            behavioral_round_opened,
+            rounds,
             crate::gemini::ReportRun {
                 scope: boot.room_name,
                 seed,
@@ -708,7 +708,7 @@ pub(super) async fn publish_with_recovery(
     } = assessment;
     let refused = refused.into_inner() || refused_report(&generated);
     let again = std::sync::atomic::AtomicBool::new(false);
-    let behavioral_round_opened = crate::agent::BehavioralRound::of(&state).opened();
+    let rounds = crate::agent::ReportRounds::of(&state);
     let boards = labeled_boards(&boards);
     let mut room = LiveRecoveryRoom {
         room,
@@ -730,7 +730,7 @@ pub(super) async fn publish_with_recovery(
             boot,
             &prompt,
             &boards,
-            behavioral_round_opened,
+            rounds,
             keys,
             regeneration_seed(refused),
             &again,
@@ -930,10 +930,48 @@ fn stamp_report_debrief(
             })
         })
         .collect::<Vec<_>>();
+
+    // What the reviewer judged, taken off the top level, where validation left
+    // it, and kept only beside the follow-up it names. `raised` is false
+    // without asking when the interviewer was never handed the follow-ups, and
+    // null when they were but nothing judged them: a report that never came, or
+    // one that left the entry out, has not shown that the follow-up went
+    // unasked. Nor has a "not raised" read from a transcript whose opening was
+    // cut, since the follow-up may have been asked in the part left out.
+    let judged = report
+        .as_object_mut()
+        .and_then(|object| object.remove("followUps"));
+    let released = crate::agent::coding_round_complete(state);
+    let cut = crate::agent::report_transcript_cut(&crate::agent::report_transcript_lines(state));
+    let judgment = |number: usize| {
+        judged
+            .as_ref()
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|entry| entry["index"].as_u64() == Some(number as u64))
+    };
     let follow_ups = variant
         .follow_ups
         .iter()
-        .filter_map(|follow_up| safe("followUps", follow_up))
+        .enumerate()
+        .filter_map(|(index, follow_up)| {
+            safe("followUps", follow_up).map(|text| {
+                let (raised, assessment) = match released.then(|| judgment(index + 1)) {
+                    Some(Some(entry)) if cut && entry["raised"] == false => {
+                        (serde_json::Value::Null, serde_json::Value::Null)
+                    }
+                    Some(Some(entry)) => (entry["raised"].clone(), entry["assessment"].clone()),
+                    Some(None) => (serde_json::Value::Null, serde_json::Value::Null),
+                    None => (serde_json::json!(false), serde_json::Value::Null),
+                };
+                serde_json::json!({
+                    "text": text,
+                    "raised": raised,
+                    "assessment": assessment,
+                })
+            })
+        })
         .collect::<Vec<_>>();
     let debrief = serde_json::json!({
         "scenarioContract": safe("scenarioContract", variant.contract),
@@ -1095,6 +1133,7 @@ fn report_prompt_text(
         practice_level: boot.profile.seniority.map(crate::agent::Seniority::as_str),
         evidence: &evidence,
         behavioral_round: crate::agent::BehavioralRound::of(state),
+        follow_ups_released: crate::agent::coding_round_complete(state),
     })
 }
 

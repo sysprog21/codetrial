@@ -699,7 +699,13 @@ test("the report shows the debrief collapsed", () => {
           { text: "What should the map remember?", given: true },
           { text: "Check before inserting.", given: false },
         ],
-        followUps: ["How would repeated queries change the design?"],
+        followUps: [
+          {
+            text: "How would repeated queries change the design?",
+            raised: null,
+            assessment: null,
+          },
+        ],
       },
     },
     problemTitle: "Scenario",
@@ -715,6 +721,43 @@ test("the report shows the debrief collapsed", () => {
   assert.match(body, /Given:<\/strong> What should the map remember\?/);
   assert.match(body, /Held back:<\/strong> Check before inserting\./);
   assert.match(body, /Follow-ups this problem offers/);
+});
+
+test("the report says which follow-ups were raised and how they went", () => {
+  const session = {
+    report: {
+      incomplete: true,
+      summary: "Unavailable",
+      debrief: {
+        followUps: [
+          {
+            text: "What if the input is a stream?",
+            raised: true,
+            assessment: "You kept a running map but did not bound its memory.",
+          },
+          { text: "What if memory is tight?", raised: false, assessment: null },
+        ],
+      },
+    },
+    problemTitle: "Scenario",
+    language: "python",
+    code: "pass",
+    transcript: [],
+    at: "now",
+  };
+  const html = reportMarkup(session);
+  assert.match(
+    html,
+    /<li><strong>Raised:<\/strong> What if the input is a stream\?<p>You kept a running map but did not bound its memory\.<\/p><\/li>/,
+  );
+  assert.match(
+    html,
+    /<li><strong>Not reached:<\/strong> What if memory is tight\?<\/li>/,
+  );
+  assert.match(
+    reportMarkdown(session),
+    /- \*\*Raised:\*\* What if the input is a stream\?\n\n {2}You kept a running map but did not bound its memory\./,
+  );
 });
 
 test("the report shows the hint rung reached", () => {
@@ -794,7 +837,13 @@ test("the markdown report carries the debrief", () => {
         approach: "Use one pass and a map in O(n) time.",
         pitfalls: "Do not reuse a position.",
         hints: [{ text: "What should the map remember?", given: true }],
-        followUps: ["How would repeated queries change the design?"],
+        followUps: [
+          {
+            text: "How would repeated queries change the design?",
+            raised: null,
+            assessment: null,
+          },
+        ],
       },
     },
     problemTitle: "Scenario",

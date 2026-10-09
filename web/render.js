@@ -43,6 +43,14 @@ function phaseName(phase, atBoard) {
   return index < 0 ? phase : BOARD_STEPS[index].label;
 }
 
+/// A follow-up nobody judged, from before they were judged or from a report
+/// that never came, carries no label rather than one claiming either answer.
+function followUpLabel(followUp) {
+  if (followUp.raised === true) return "Raised";
+  if (followUp.raised === false) return "Not reached";
+  return "";
+}
+
 /// A board image this card may put in a `src`.
 ///
 /// The images come from the page's own canvas rather than from anything a
@@ -303,7 +311,7 @@ export function reportMarkup({
       ${report.debrief.approach ? `<p><strong>Approach and complexity:</strong> ${escapeHtml(report.debrief.approach)}</p>` : ""}
       ${report.debrief.pitfalls ? `<p><strong>Common pitfalls:</strong> ${escapeHtml(report.debrief.pitfalls)}</p>` : ""}
       ${report.debrief.hints?.length ? `<h3>Hint ladder</h3><p>Reached hint ${report.debrief.hints.filter((hint) => hint.given).length} of ${report.debrief.hints.length}.</p><ol>${report.debrief.hints.map((hint) => `<li><strong>${hint.given ? "Given" : "Held back"}:</strong> ${escapeHtml(hint.text)}</li>`).join("")}</ol>` : ""}
-      ${report.debrief.followUps?.length ? `<h3>Follow-ups this problem offers</h3><ul>${report.debrief.followUps.map((followUp) => `<li>${escapeHtml(followUp)}</li>`).join("")}</ul>` : ""}
+      ${report.debrief.followUps?.length ? `<h3>Follow-ups this problem offers</h3><ul>${report.debrief.followUps.map((followUp) => `<li>${followUpLabel(followUp) ? `<strong>${followUpLabel(followUp)}:</strong> ` : ""}${escapeHtml(followUp.text)}${followUp.assessment ? `<p>${escapeHtml(followUp.assessment)}</p>` : ""}</li>`).join("")}</ul>` : ""}
     </details>`
     : "";
   const frameworkTimeline = frameworkEvidenceMarkup(
@@ -568,9 +576,12 @@ export function reportMarkdown({
               "",
               "### Follow-ups this problem offers",
               "",
-              ...report.debrief.followUps.map(
-                (followUp) => `- ${mdText(followUp)}`,
-              ),
+              ...report.debrief.followUps.flatMap((followUp) => [
+                `- ${followUpLabel(followUp) ? `**${followUpLabel(followUp)}:** ` : ""}${mdText(followUp.text)}`,
+                ...(followUp.assessment
+                  ? ["", `  ${mdText(followUp.assessment)}`]
+                  : []),
+              ]),
             ]
           : []),
         "",

@@ -9,6 +9,14 @@
 
 use super::*;
 
+/// The rounds a report is judged under, with the follow-ups released.
+fn rounds(behavioral_opened: bool) -> ReportRounds {
+    ReportRounds {
+        behavioral_opened,
+        follow_ups_released: true,
+    }
+}
+
 #[test]
 fn strict_report_validation_is_atomic_and_server_owns_hints() {
     let valid = valid_strict_report();
@@ -45,10 +53,10 @@ fn strict_report_validation_is_atomic_and_server_owns_hints() {
 fn a_round_that_never_opened_refuses_star_plan_items_and_clears_star_scores() {
     let problem = get_problem(Some("two-sum"));
     let star = valid_strict_report();
-    let opened =
-        validate_report_for_round(&star, problem, true).expect("an opened round keeps STAR");
+    let opened = validate_report_for_round(&star, problem, rounds(true))
+        .expect("an opened round keeps STAR");
     assert_eq!(opened["frameworkAssessment"]["phases"][9]["score"], 75);
-    let errors = validate_report_for_round(&star, problem, false).unwrap_err();
+    let errors = validate_report_for_round(&star, problem, rounds(false)).unwrap_err();
     assert_eq!(errors.len(), 2, "{errors:?}");
     for path in ["$.improvementPlan[2].phase", "$.improvementPlan[3].phase"] {
         assert!(
@@ -69,7 +77,7 @@ fn a_round_that_never_opened_refuses_star_plan_items_and_clears_star_scores() {
         coding["improvementPlan"][index]["phase"] = json!(phase);
         coding["improvementPlan"][index]["weakness"] = json!(weakness);
     }
-    let accepted = validate_report_for_round(&coding, problem, false)
+    let accepted = validate_report_for_round(&coding, problem, rounds(false))
         .expect("STAR scores alone are settled, not refused");
     let rows = accepted["frameworkAssessment"]["phases"]
         .as_array()
@@ -80,7 +88,7 @@ fn a_round_that_never_opened_refuses_star_plan_items_and_clears_star_scores() {
 
     let mut both = star;
     both["codingScore"] = json!(120);
-    let errors = validate_report_for_round(&both, problem, false).unwrap_err();
+    let errors = validate_report_for_round(&both, problem, rounds(false)).unwrap_err();
     assert!(
         errors
             .iter()
@@ -804,4 +812,55 @@ fn phase_rows_need_no_tags_from_the_model() {
             .get("weaknessTags")
             .is_none()
     );
+}
+
+/// A follow-up judgment is mended rather than refused: an entry the debrief
+/// cannot place beside a follow-up costs that entry, not the report, and
+/// nothing in it is checked. A kept one is held to the length limit and scans
+/// every other narrative field is, under the path the model wrote it at.
+#[test]
+fn follow_up_judgments_are_mended_but_their_text_is_scanned() {
+    let problem = get_problem(Some("two-sum"));
+    let long = "x".repeat(601);
+    let mut raw = valid_strict_report();
+    raw["followUps"] = json!([
+        {"index": 1, "raised": true, "assessment": "You kept a running map."},
+        {"index": 1, "raised": false, "assessment": null},
+        {"index": 9, "raised": true, "assessment": "Dropped, so LeetCode here is fine."},
+        {"index": 2, "raised": false, "assessment": format!("Dropped: you sounded nervous. {long}")},
+    ]);
+    let report = validate_report_candidate(&raw, problem).expect("shape is mended, not refused");
+    assert_eq!(
+        report["followUps"],
+        json!([
+            {"index": 1, "raised": true, "assessment": "You kept a running map."},
+            {"index": 2, "raised": false, "assessment": null},
+        ])
+    );
+
+    // Never handed to the interviewer, so nothing is judged or scanned.
+    let unreleased = ReportRounds {
+        behavioral_opened: true,
+        follow_ups_released: false,
+    };
+    let report = validate_report_for_round(&raw, problem, unreleased).expect("nothing is judged");
+    assert_eq!(report["followUps"], json!([]));
+
+    raw["followUps"] = json!([
+        {"index": 9, "raised": true, "assessment": null},
+        {"index": 1, "raised": true, "assessment": "You sounded nervous."},
+        {"index": 2, "raised": true, "assessment": long},
+    ]);
+    let errors = validate_report_candidate(&raw, problem)
+        .unwrap_err()
+        .join("\n");
+    assert!(errors.contains("$.followUps[1].assessment: "), "{errors}");
+    assert!(
+        errors.contains("$.followUps[2].assessment: expected non-empty string of at most 600"),
+        "{errors}"
+    );
+
+    raw["followUps"] = json!([{"index": 1, "raised": true, "assessment": "x".repeat(600)}]);
+    let report = validate_report_candidate(&raw, problem).expect("the limit itself is allowed");
+    assert_eq!(report["followUps"][0]["assessment"], "x".repeat(600));
 }
