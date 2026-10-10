@@ -9,11 +9,11 @@
 //! queued behind it, so what the loop sees here is a channel of finished
 //! boards and nothing else.
 //!
-//! Gemini sees a board the way it sees a camera frame: a realtime image on the
-//! live socket. That is the only way an image can reach it mid-session, and it
-//! is why `read_board` cannot answer with the picture itself -- a tool
-//! response is JSON. The tool asks for the board to be sent again instead, and
-//! `resend` is what answers.
+//! Drawings reach Gemini through its realtime image input. Whiteboard mode
+//! disables camera forwarding from the start; coding disables it after the
+//! first example drawing arrives, so camera frames cannot replace that drawing.
+//! `read_board` asks for the image to be sent again because its tool response
+//! carries only JSON.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -108,6 +108,7 @@ pub(super) struct ReportBoard {
 /// The latest board, and when one last went out.
 pub(super) struct Board {
     latest: Option<Vec<u8>>,
+    example: bool,
     /// Whether `latest` is newer than the last board Gemini was shown. Set by
     /// every board that arrives and cleared by every send, so a board the
     /// interval held back is still owed and goes out once it lapses.
@@ -131,6 +132,7 @@ impl Board {
         let (tx, rx) = channel(BOARD_QUEUE);
         Self {
             latest: None,
+            example: false,
             unsent: false,
             checkpoints: Vec::new(),
             last_sent: None,
@@ -138,6 +140,12 @@ impl Board {
             rx,
             readers: Arc::new(Semaphore::new(MAX_BOARD_READERS)),
         }
+    }
+
+    /// Once a drawing owns the realtime image input, camera forwarding stays
+    /// off until the interview ends, including reconnects and cleared drawings.
+    pub(super) fn allows_camera(&self, configured: bool) -> bool {
+        configured && self.latest.is_none()
     }
 
     /// The end the reader tasks write finished boards to.
@@ -180,6 +188,11 @@ impl Board {
     /// live board and the report runs beside it. Six ordinary JPEGs are still
     /// well below the memory bound the byte-stream ceiling establishes.
     pub(super) fn report_boards(&self) -> Vec<ReportBoard> {
+        // Auxiliary drawings are displayed by the browser, never sent to the
+        // assessment model. Whiteboard work remains assessable.
+        if self.example {
+            return Vec::new();
+        }
         let mut images = self
             .checkpoints
             .iter()
@@ -205,13 +218,10 @@ impl Board {
 
 /// Whether a stream that just opened is a board this interview wants.
 ///
-/// Written apart from the event it answers so all four refusals can be tested
-/// without a room. Three of them are ordinary -- another topic, another
-/// sender, a board in an interview that has no whiteboard -- and the fourth is
-/// the one worth having: a header that declares more bytes than a board can
-/// be, refused before a single chunk is read.
+/// Coding interviews use the same bounded stream for auxiliary example
+/// drawings. Identity, topic and byte limits apply to both surfaces.
 pub(super) fn board_stream_refusal(
-    mode: InterviewMode,
+    _mode: InterviewMode,
     topic: &str,
     sender: &str,
     candidate_identity: &str,
@@ -219,9 +229,6 @@ pub(super) fn board_stream_refusal(
 ) -> Option<&'static str> {
     if topic != TOPIC_BOARD_IMAGE {
         return Some("not the board topic");
-    }
-    if !mode.is_whiteboard() {
-        return Some("this interview has no whiteboard");
     }
     if sender != candidate_identity {
         return Some("not the candidate");
@@ -406,6 +413,7 @@ where
 /// The counts land in the interview state whether or not the image ever
 /// reaches the socket, because they are what the candidate drew.
 pub(super) fn record(board: &mut Board, state: &mut RuntimeState, snapshot: BoardSnapshot) {
+    board.example = !state.interview_mode.is_whiteboard();
     state.board_snapshots = state.board_snapshots.saturating_add(1);
     state.board_strokes = snapshot.strokes;
     state.board_drawn |= snapshot.strokes >= crate::agent::MIN_BOARD_STROKES;
@@ -415,7 +423,7 @@ pub(super) fn record(board: &mut Board, state: &mut RuntimeState, snapshot: Boar
     // send is still the one `read_board` answers with. Dropping it here would
     // mean asking for the board during a busy stretch of drawing returns the
     // one before it.
-    if let Some(label) = snapshot.checkpoint {
+    if let Some(label) = snapshot.checkpoint.filter(|_| !board.example) {
         if let Some((_, bytes)) = board
             .checkpoints
             .iter_mut()
@@ -459,6 +467,21 @@ fn too_soon(last_sent: Option<Instant>, now: Instant) -> bool {
 /// Not throttled: this is an explicit ask rather than the drawing arriving on
 /// its own, and answering it with silence leaves the model looking at a board
 /// several minutes old while the tool has told it the current one is there.
+/// Deliver pending ink before a drawing handover, without letting a failed
+/// image write abort the room loop or prevent its eventual report delivery.
+pub(super) async fn resend_for_handover(
+    board: &mut Board,
+    state: &mut RuntimeState,
+    gemini: &mut GeminiLiveSession,
+) {
+    board.settle_for_report(state).await;
+    if let Err(error) = resend(board, gemini).await {
+        eprintln!(
+            "example-drawing handover image failed ({error}); waiting for the close to be reported"
+        );
+    }
+}
+
 pub(super) async fn resend(
     board: &mut Board,
     gemini: &mut GeminiLiveSession,

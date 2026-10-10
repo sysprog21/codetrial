@@ -27,7 +27,11 @@ body {
   margin: 0;
   background: #0d1117;
   color: var(--ink);
-  font: 16px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font:
+    16px/1.5 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
 }
 
 .stage {
@@ -74,6 +78,16 @@ body {
   border-radius: 8px;
   white-space: pre;
   font-size: 15px;
+}
+
+.board.example {
+  max-height: 30vh;
+  width: auto;
+  max-width: 100%;
+}
+
+.work:has(.board.example) {
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
 }
 
 .tests {

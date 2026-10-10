@@ -313,13 +313,11 @@ test("recording-bootstrap ordering", () => {
     "and the editor panel is written as text",
   );
 
-  // The two surfaces are exclusive, and the first board event is what says
-  // which interview this is: a recording that showed both would have an empty
-  // panel in every frame of it.
+  // Whiteboards replace the editor; auxiliary examples keep it visible.
   assert.ok(
     apply.includes("nodes.board.hidden = false") &&
-      apply.includes("nodes.code.hidden = true"),
-    "the first board event swaps the panels",
+      apply.includes('nodes.code.hidden = payload.surface !== "example"'),
+    "only the standalone whiteboard replaces the code panel",
   );
   assert.ok(
     apply.includes("applyOp(board, op)") && apply.includes("drawBoard("),

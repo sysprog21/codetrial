@@ -254,6 +254,7 @@ export function reportMarkup({
   code,
   board,
   boardPhases,
+  exampleDrawing,
   saveResult,
 }) {
   const atBoard = heldAtBoard(report, board);
@@ -363,6 +364,7 @@ export function reportMarkup({
       ${frameworkTimeline}
       ${integrityEvidenceMarkup(report)}
       ${atBoard ? "" : finalCodeMarkup(language, code)}
+      ${!atBoard && boardImage(exampleDrawing) ? `<figure class="board-final"><figcaption>Example drawing</figcaption><p class="muted small">Saved from your interview. Example drawings do not affect coding or communication scores.</p><img class="report-board" src="${exampleDrawing}" alt="Your final example drawing"></figure>` : ""}
       ${saveStatus ? `<p id="report-save-status" class="${saveStatus.className}" role="status">${saveStatus.message}</p>` : ""}
       <div class="report-actions"><button id="download-report" type="button">Download report (.md)</button><button id="done" type="button"${saveResult === null ? " disabled" : ""}>Done - back to lobby</button></div>
     </div>

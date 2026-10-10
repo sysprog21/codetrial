@@ -776,7 +776,10 @@ test("a dropped connection is visible and recovers its state", () => {
   assert.match(connect, /providerUiState\("reconnecting"\)/);
   // Nothing published during the gap arrived, so the buffer is resent rather
   // than left to drift until the next keystroke.
-  assert.match(connect, /Reconnected[\s\S]*?publishCode\(/);
+  assert.match(
+    connect,
+    /Reconnected[\s\S]*?reconnectCodingInterview\([\s\S]*?publishCode,/,
+  );
   // The board too, or one that settled during the gap waits for a stroke a
   // candidate who has stopped drawing never makes. It goes ahead of the queue
   // the gap held, because an `end_interview` in that queue freezes the report.

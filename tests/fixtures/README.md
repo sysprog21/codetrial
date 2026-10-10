@@ -14,7 +14,7 @@ only thing in the repo that crosses that boundary.
 |---|---|---|
 | `code-update.json` | `codeUpdatePayload` | `apply_code_update` |
 | `report-recovery.json` | `reportRecoveryLimits` in `web/report-recovery.js` | `recovery_metadata`, `recovery_notice`, `REPORT_TIMEOUT` |
-| `control.json` | `thinkingPayload`, `yieldTurnPayload`, `timeWarningPayload`, `endInterviewPayload`, `retryReportPayload` | `apply_control`, `recovery_request` |
+| `control.json` | `drawingActivityPayload`, `thinkingPayload`, `yieldTurnPayload`, `timeWarningPayload`, `endInterviewPayload`, `retryReportPayload` | `apply_control`, `recovery_request` |
 | `test-results.json` | `testPayload` | `apply_test_results` |
 | `integrity-chain.json` | `integrityEventPayload` | `apply_integrity` |
 

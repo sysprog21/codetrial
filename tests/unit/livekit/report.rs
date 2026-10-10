@@ -2527,3 +2527,58 @@ fn a_frozen_assessment_keeps_its_boards_for_every_generation() {
     assert!(bare.report_boards().is_empty());
     assert!(bare.prompt.contains("no board reached this review"));
 }
+
+#[test]
+fn coding_assessment_excludes_auxiliary_images_even_if_supplied() {
+    let config = report_test_config();
+    let boot = crate::runtime::bootstrap(&config, "interview-example", Some("two-sum"), 45);
+    let mut state = RuntimeState::default();
+    let frozen = freeze_assessment(
+        &boot,
+        &mut state,
+        20.0,
+        vec![ReportBoard {
+            label: "Example drawing",
+            bytes: vec![0xff, 0xd8, 0xff],
+        }],
+    );
+    assert!(frozen.report_boards().is_empty());
+    assert!(
+        !frozen
+            .prompt
+            .contains("The labeled images attached to this message")
+    );
+}
+
+#[test]
+fn frozen_drawing_receipt_uses_received_snapshots_even_without_report_images() {
+    let config = report_test_config();
+    let boot = bootstrap(&config, "interview-example", Some("two-sum"), 45);
+    for count in [0, 1, 2] {
+        let mut state = RuntimeState {
+            board_snapshots: count,
+            ..RuntimeState::default()
+        };
+        let frozen = freeze_assessment(
+            &boot,
+            &mut state,
+            20.0,
+            vec![ReportBoard {
+                label: "Example drawing",
+                bytes: vec![0xff, 0xd8, 7],
+            }],
+        );
+        assert!(frozen.report_boards().is_empty());
+        assert_eq!(
+            frozen.drawing_received(),
+            count != 0,
+            "snapshot count {count}"
+        );
+        state.board_snapshots = if count == 0 { 1 } else { 0 };
+        assert_eq!(
+            frozen.drawing_received(),
+            count != 0,
+            "later live state must not change the frozen receipt"
+        );
+    }
+}

@@ -171,9 +171,9 @@ pub const THINKING_CHECK_IN_S: u64 = 120;
 pub(crate) const THINKING_RELEASE_COOLDOWN: std::time::Duration =
     std::time::Duration::from_secs(10);
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 31;
-pub const LIVE_PROMPT_VERSION: u32 = 23;
-pub const REPORT_PROMPT_VERSION: u32 = 18;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 32;
+pub const LIVE_PROMPT_VERSION: u32 = 24;
+pub const REPORT_PROMPT_VERSION: u32 = 19;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 2;
 
@@ -2144,14 +2144,12 @@ fn record_evidence(
         );
     }
 
-    // A source this interview has no surface for. The declaration offers only
-    // the one it runs on, so reaching here is the model recording what it read
-    // in an editor nobody opened, or on a board nobody drew on, and a report
-    // that carries such a row tells a reviewer the observation was made
-    // somewhere it cannot have been.
+    // The evidence declaration offers only assessable work: code and tests in
+    // coding, drawn work in whiteboard. Coding example drawings remain optional
+    // explanation aids even after an image arrives.
     match state.interview_mode {
         InterviewMode::Coding if source == EvidenceSource::BoardSnapshot => {
-            return Err("this interview has no whiteboard; board_snapshot is not a source here");
+            return Err("example drawings are explanation aids, not coding assessment evidence");
         }
         InterviewMode::Whiteboard
             if matches!(

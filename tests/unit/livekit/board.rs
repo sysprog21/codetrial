@@ -41,9 +41,7 @@ fn accepts_a_board_from_the_candidate() {
 }
 
 #[test]
-fn refuses_a_board_no_interview_asked_for() {
-    // The editor's own interview has no board, so a stream on this topic is a
-    // client sending one anyway.
+fn accepts_an_example_drawing_in_a_coding_interview() {
     assert_eq!(
         refusal(
             InterviewMode::Coding,
@@ -51,7 +49,7 @@ fn refuses_a_board_no_interview_asked_for() {
             CANDIDATE,
             Some(4_096)
         ),
-        Some("this interview has no whiteboard")
+        None
     );
     assert_eq!(
         refusal(
@@ -62,6 +60,20 @@ fn refuses_a_board_no_interview_asked_for() {
         ),
         Some("not the board topic")
     );
+}
+
+#[test]
+fn a_coding_drawing_is_auxiliary_and_has_no_whiteboard_checkpoints() {
+    let mut board = Board::new();
+    let mut state = RuntimeState::default();
+    let mut drawing = snapshot(1);
+    drawing.checkpoint = Some("Example");
+    record(&mut board, &mut state, drawing);
+    assert_eq!(state.interview_mode, InterviewMode::Coding);
+    assert_eq!(state.board_snapshots, 1);
+    assert!(board.checkpoints.is_empty());
+    let images = board.report_boards();
+    assert!(images.is_empty());
 }
 
 #[test]
@@ -531,4 +543,179 @@ async fn asking_for_a_board_before_one_arrived_sends_nothing() {
     resend(&mut board, &mut gemini).await.unwrap();
     assert_eq!(board.last_sent, None);
     assert!(frames.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn a_coding_drawing_owns_realtime_images_until_the_interview_ends() {
+    let (mut gemini, mut frames) = live_session().await;
+    let mut board = Board::new();
+    let mut state = RuntimeState::default();
+    assert!(board.allows_camera(true));
+    assert!(!board.allows_camera(false));
+
+    record(&mut board, &mut state, snapshot(1));
+    assert!(!board.allows_camera(true));
+    send_if_due(&mut board, &mut gemini, Instant::now())
+        .await
+        .unwrap();
+    let drawing: serde_json::Value = serde_json::from_str(&next_frame(&mut frames).await).unwrap();
+    assert!(drawing.get("clientContent").is_none());
+    assert_eq!(drawing["realtimeInput"]["video"]["mimeType"], "image/jpeg");
+    assert_eq!(drawing["realtimeInput"]["video"]["data"], "/9gB");
+    assert!(!board.unsent);
+
+    resend(&mut board, &mut gemini).await.unwrap();
+    let resent: serde_json::Value = serde_json::from_str(&next_frame(&mut frames).await).unwrap();
+    assert_eq!(resent, drawing);
+    assert!(!board.allows_camera(true));
+
+    let mut cleared = snapshot(0);
+    cleared.strokes = 0;
+    record(&mut board, &mut state, cleared);
+    assert!(
+        !board.allows_camera(true),
+        "clearing does not restore the camera input"
+    );
+    assert!(board.report_boards().is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_handover_image_keeps_the_drawing_and_does_not_abort() {
+    let (mut gemini, _frames) = live_session().await;
+    gemini.shutdown().await.unwrap();
+    let mut board = Board::new();
+    let mut state = RuntimeState::default();
+    board.sender().try_send(snapshot(7)).unwrap();
+    resend_for_handover(&mut board, &mut state, &mut gemini).await;
+    assert_eq!(state.board_snapshots, 1);
+    assert_eq!(state.board_strokes, 7);
+    assert_eq!(board.latest.as_deref(), Some(&[0xff, 0xd8, 7][..]));
+    assert!(board.unsent, "a failed write must leave the drawing owed");
+    assert!(
+        resend(&mut board, &mut gemini).await.is_err(),
+        "the socket really refuses writes"
+    );
+}
+
+#[tokio::test]
+async fn a_handover_sends_queued_ink_even_inside_the_throttle_interval() {
+    let (mut gemini, mut frames) = live_session().await;
+    let mut board = Board::new();
+    let mut state = RuntimeState::default();
+    record(&mut board, &mut state, snapshot(1));
+    send_if_due(&mut board, &mut gemini, Instant::now())
+        .await
+        .unwrap();
+    next_frame(&mut frames).await;
+    board.sender().try_send(snapshot(7)).unwrap();
+    resend_for_handover(&mut board, &mut state, &mut gemini).await;
+    let frame = next_frame(&mut frames).await;
+    assert!(
+        frame.contains("/9gH"),
+        "the newest image precedes the reply: {frame}"
+    );
+    assert!(!board.unsent);
+    assert_eq!(state.board_snapshots, 2);
+}
+
+use super::super::{media, settle_example_handover};
+
+fn camera_for_drawing_handover() -> media::CandidateMedia {
+    use ::livekit::webrtc::video_source::native::NativeVideoSource;
+    use ::livekit::webrtc::video_source::{RtcVideoSource, VideoResolution};
+    use ::livekit::webrtc::video_stream::native::NativeVideoStream;
+    let source = NativeVideoSource::new(
+        VideoResolution {
+            width: 4,
+            height: 4,
+        },
+        false,
+    );
+    let track = ::livekit::prelude::LocalVideoTrack::create_video_track(
+        "test-camera",
+        RtcVideoSource::Native(source),
+    );
+    let mut media = media::CandidateMedia::new();
+    media.video = Some(NativeVideoStream::new(track.rtc_track()));
+    media
+}
+
+#[tokio::test]
+async fn example_handover_only_consumes_ink_and_replaces_the_camera_in_coding() {
+    for yielded in [false, true] {
+        for surface in [None, Some("speech"), Some("example")] {
+            for mode in [InterviewMode::Coding, InterviewMode::Whiteboard] {
+                for behavioral in [false, true] {
+                    let eligible = yielded
+                        && surface == Some("example")
+                        && mode == InterviewMode::Coding
+                        && !behavioral;
+                    let label = format!(
+                        "yield={yielded}, surface={surface:?}, mode={mode:?}, behavioral={behavioral}"
+                    );
+                    let (mut gemini, mut received) = live_session().await;
+                    let mut state = RuntimeState {
+                        interview_mode: mode,
+                        behavioral_round_started: behavioral,
+                        ..RuntimeState::default()
+                    };
+                    let mut board = Board::new();
+                    board
+                        .sender()
+                        .try_send(BoardSnapshot {
+                            bytes: vec![0xff, 0xd8, 7],
+                            strokes: 7,
+                            checkpoint: None,
+                        })
+                        .unwrap();
+                    let mut media = camera_for_drawing_handover();
+                    settle_example_handover(
+                        yielded,
+                        surface,
+                        &mut state,
+                        &mut board,
+                        &mut media,
+                        &mut gemini,
+                    )
+                    .await;
+                    assert_eq!(state.board_snapshots, u32::from(eligible), "{label}");
+                    assert_eq!(media.video.is_none(), eligible, "{label}");
+                    if !eligible {
+                        gemini.send_context("ordinary turn", false).await.unwrap();
+                    }
+                    let message =
+                        serde_json::from_str::<serde_json::Value>(&next_frame(&mut received).await)
+                            .unwrap();
+                    assert_eq!(
+                        message.get("realtimeInput").is_some(),
+                        eligible,
+                        "{label}: {message:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_empty_drawing_handover_preserves_the_camera() {
+    let (mut gemini, mut received) = live_session().await;
+    let mut state = RuntimeState::default();
+    let mut board = Board::new();
+    let mut media = camera_for_drawing_handover();
+    settle_example_handover(
+        true,
+        Some("example"),
+        &mut state,
+        &mut board,
+        &mut media,
+        &mut gemini,
+    )
+    .await;
+    assert!(media.video.is_some());
+    assert_eq!(state.board_snapshots, 0);
+    gemini.send_context("ordinary turn", false).await.unwrap();
+    let message =
+        serde_json::from_str::<serde_json::Value>(&next_frame(&mut received).await).unwrap();
+    assert!(message.get("realtimeInput").is_none());
 }

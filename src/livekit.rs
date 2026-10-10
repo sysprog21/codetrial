@@ -780,10 +780,7 @@ async fn replace_gemini_session(
     // A cold session remembers none of the drawing, and the briefing's text
     // cannot carry it. Sent whether or not the briefing itself was held for a
     // pause, so the session that eventually speaks has seen the board.
-    if !resumed
-        && context.state.interview_mode.is_whiteboard()
-        && let Err(error) = board::resend(context.board, context.gemini).await
-    {
+    if !resumed && let Err(error) = board::resend(context.board, context.gemini).await {
         eprintln!("cold-restart board failed ({error}); waiting for the close to be reported");
     }
     if spoke {
@@ -2425,7 +2422,7 @@ pub(crate) async fn run_room_with_slot(
                             &mut media,
                             &mut gemini,
                             &candidate_identity,
-                            boot.candidate_video,
+                            board.allows_camera(boot.candidate_video),
                             &event,
                         )
                         .await
@@ -2512,6 +2509,10 @@ pub(crate) async fn run_room_with_slot(
                     // candidate cannot make. It waits to be shown until the
                     // interview resumes, through the watch tick.
                     board::record(&mut board, &mut turn.state, snapshot);
+
+                    // Stop an existing camera stream too; refusing future
+                    // attachments alone leaves this one overwriting drawings.
+                    media.video = None;
                     if !turn.state.paused {
                         // The candidate is working, even while silent. Without
                         // this the silence nudge counts a candidate who is
@@ -3163,6 +3164,29 @@ async fn handle_data_packet(
     apply_data_packet(room, context, interview, topic, payload, received).await
 }
 
+/// Only a coding drawing handover may replace the camera with pending ink.
+/// Keep this decision beside its effects so invalid or unrelated controls
+/// cannot consume queued images or disable the candidate's camera.
+async fn settle_example_handover(
+    yield_turn: bool,
+    surface: Option<&str>,
+    state: &mut RuntimeState,
+    board: &mut board::Board,
+    media: &mut media::CandidateMedia,
+    gemini: &mut GeminiLiveSession,
+) {
+    if yield_turn
+        && surface == Some("example")
+        && !state.interview_mode.is_whiteboard()
+        && !state.behavioral_round_started
+    {
+        board::resend_for_handover(board, state, gemini).await;
+        if !board.allows_camera(true) {
+            media.video = None;
+        }
+    }
+}
+
 /// Applies a packet after any judgment wait has been settled. Released round
 /// transitions enter here so new speech or a slow judge cannot renew the hold.
 async fn apply_data_packet(
@@ -3213,6 +3237,15 @@ async fn apply_data_packet(
     // the page without waiting on that write.
     session::flush_framework_progress(room, context.state).await;
     let mut reply = result.generate_reply.take();
+    settle_example_handover(
+        result.yield_turn,
+        payload.get("surface").and_then(serde_json::Value::as_str),
+        context.state,
+        context.board,
+        context.media,
+        context.gemini,
+    )
+    .await;
     let grace = thinking_transcript_grace(interview.boot.silence_ms);
     let effects = settle_hold(context, &result, &mut reply, packet_at, grace).await;
     if effects.cut_off {
@@ -3413,7 +3446,10 @@ async fn apply_data_packet(
             interview.boot,
             &assessment.prompt,
             &report_boards,
-            assessment.behavioral_round_opened(),
+            (
+                assessment.behavioral_round_opened(),
+                assessment.drawing_received()
+            ),
             api_key,
             crate::gemini::GENERATION_SEED,
             &assessment.refused,

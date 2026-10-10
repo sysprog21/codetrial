@@ -1175,6 +1175,81 @@ p {
   background: var(--surface);
 }
 
+.example-board {
+  border-top: 1px solid var(--hairline);
+  padding: 0.75rem 1rem;
+}
+
+.example-board summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.example-board [data-tools] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.example-board .example-tool-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0.5rem;
+}
+
+.example-tool-icon svg {
+  width: 1.5rem;
+  height: 1.5rem;
+  flex-shrink: 0;
+}
+
+.example-surface {
+  height: 16rem;
+  overflow: auto;
+  background: #ffffff;
+}
+
+.example-surface canvas {
+  display: block;
+  width: 100%;
+  min-width: 32rem;
+  aspect-ratio: 1600 / 1000;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.editor-panel:has(.example-board) .editor-stack {
+  flex: 1;
+  min-height: 8rem;
+}
+
+.editor-panel:has(.example-board) {
+  height: max(34rem, calc(100dvh - 2rem));
+}
+
+.editor-panel:has(.example-board) .test-drawer {
+  flex: none;
+  overflow: auto;
+  min-height: 0;
+}
+
+.drawer-resizer {
+  flex: none;
+  height: 8px;
+  cursor: ns-resize;
+  touch-action: none;
+  background: var(--hairline);
+}
+
+.drawer-resizer:hover,
+.drawer-resizer:focus-visible {
+  background: var(--accent);
+  outline: none;
+}
+
 #results-toggle {
   display: flex;
   width: 100%;

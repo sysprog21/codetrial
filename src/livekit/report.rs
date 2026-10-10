@@ -67,6 +67,10 @@ pub(super) struct FrozenAssessment {
 }
 
 impl FrozenAssessment {
+    pub(super) fn drawing_received(&self) -> bool {
+        self.state.board_snapshots > 0
+    }
+
     pub(super) fn behavioral_round_opened(&self) -> bool {
         crate::agent::BehavioralRound::of(&self.state).opened()
     }
@@ -89,6 +93,11 @@ pub(super) fn freeze_assessment(
     elapsed_min: f64,
     boards: Vec<ReportBoard>,
 ) -> FrozenAssessment {
+    let boards = if boot.interview_mode.is_whiteboard() {
+        boards
+    } else {
+        Vec::new()
+    };
     let prompt = freeze_report_prompt(boot, state, elapsed_min, !boards.is_empty());
     FrozenAssessment {
         prompt,
@@ -108,7 +117,7 @@ pub(super) async fn generate_report_bounded(
     boot: &RuntimeBootstrap<'_>,
     prompt: &str,
     boards: &[(&str, &[u8])],
-    behavioral_round_opened: bool,
+    (behavioral_round_opened, drawing_received): (bool, bool),
     api_key: &GeminiKeys,
     seed: i64,
     refused: &std::sync::atomic::AtomicBool,
@@ -121,6 +130,7 @@ pub(super) async fn generate_report_bounded(
             prompt,
             ReportMaterial {
                 mode: boot.interview_mode,
+                drawing_received,
                 boards,
             },
             boot.problem,
@@ -709,6 +719,7 @@ pub(super) async fn publish_with_recovery(
     let refused = refused.into_inner() || refused_report(&generated);
     let again = std::sync::atomic::AtomicBool::new(false);
     let behavioral_round_opened = crate::agent::BehavioralRound::of(&state).opened();
+    let drawing_received = state.board_snapshots > 0;
     let boards = labeled_boards(&boards);
     let mut room = LiveRecoveryRoom {
         room,
@@ -730,7 +741,7 @@ pub(super) async fn publish_with_recovery(
             boot,
             &prompt,
             &boards,
-            behavioral_round_opened,
+            (behavioral_round_opened, drawing_received),
             keys,
             regeneration_seed(refused),
             &again,

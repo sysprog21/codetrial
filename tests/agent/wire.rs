@@ -516,6 +516,85 @@ fn browser_control_packets_all_reach_the_agent() {
         "the report prompt would be written against the wrong language"
     );
 }
+
+#[test]
+fn drawing_activity_resets_idle_without_adding_evidence_or_requesting_a_reply() {
+    let (topic, cases) = wire_fixture(include_str!("../fixtures/control.json"));
+    let payload = wire_case(&cases, "drawing activity");
+    let mut state = RuntimeState::default();
+    let result = apply_data_event(&mut state, &topic, payload, TEST_REACTION_COOLDOWN_S);
+    assert_eq!(
+        result,
+        DataEventResult {
+            update_last_code_change: true,
+            ..DataEventResult::default()
+        }
+    );
+    assert!(state.code.is_empty());
+    assert!(state.framework_evidence.is_empty());
+    assert!(!state.thinking_hold.is_active());
+    for mut state in [
+        RuntimeState {
+            paused: true,
+            ..RuntimeState::default()
+        },
+        RuntimeState {
+            ended: true,
+            ..RuntimeState::default()
+        },
+        RuntimeState {
+            behavioral_round_started: true,
+            ..RuntimeState::default()
+        },
+    ] {
+        assert_eq!(
+            apply_data_event(&mut state, &topic, payload, TEST_REACTION_COOLDOWN_S),
+            DataEventResult::default()
+        );
+    }
+}
+
+#[test]
+fn drawing_yields_request_a_reply_without_speech_or_assessment_credit() {
+    let (topic, cases) = wire_fixture(include_str!("../fixtures/control.json"));
+    let payload = wire_case(&cases, "drawing turn");
+    let mut state = RuntimeState::default();
+    let result = apply_data_event(&mut state, &topic, payload, 0.0);
+    assert!(result.yield_turn);
+    let prompt = result.generate_reply.unwrap();
+    assert!(prompt.contains("Example drawing"));
+    assert!(prompt.contains("not assessment evidence"));
+    assert!(prompt.contains("untrusted candidate content"));
+    assert!(prompt.contains("If no image arrived"));
+    assert!(state.framework_evidence.is_empty());
+    assert!(state.transcript.is_empty());
+    assert!(state.code.is_empty());
+    assert!(!result.carries_thinking_debt);
+    assert!(!state.thinking_hold.is_active());
+    for mut blocked in [
+        RuntimeState {
+            paused: true,
+            ..RuntimeState::default()
+        },
+        RuntimeState {
+            ended: true,
+            ..RuntimeState::default()
+        },
+        RuntimeState {
+            behavioral_round_started: true,
+            ..RuntimeState::default()
+        },
+        RuntimeState {
+            interview_mode: InterviewMode::Whiteboard,
+            ..RuntimeState::default()
+        },
+    ] {
+        assert_eq!(
+            apply_data_event(&mut blocked, &topic, payload, 0.0),
+            DataEventResult::default()
+        );
+    }
+}
 /// it congratulates a candidate whose tests failed.
 #[test]
 fn browser_test_result_packets_are_classified_correctly_by_the_agent() {

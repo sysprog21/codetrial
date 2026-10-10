@@ -426,6 +426,7 @@ test("the response window panel says what the number is worth, in words a test c
       "Moments",
       prose,
       "Code",
+      "Code",
       "Report",
     ],
     "every word this page says without being told one by the server",
@@ -486,6 +487,7 @@ test("the response window panel says what the number is worth, in words a test c
       "#replay-list",
       "#replay-media",
       "#replay-moment-label",
+      "#replay-code-label",
       "#replay-more",
       "#replay-report",
       "#replay-status",
@@ -525,6 +527,7 @@ test("the response window panel says what the number is worth, in words a test c
       "Not available",
       "Code",
       "Whiteboard",
+      "Example drawing",
       // And the window panel, spread from the set pinned above rather than
       // retyped: the narrower assertion catches a word relocated out of
       // `WINDOW_WORDS`, and this one catches a word added anywhere, so they are

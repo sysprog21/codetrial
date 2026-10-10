@@ -81,7 +81,34 @@ Every Live turn is billed on the whole context it runs in, retained audio and
 images included, so what stays in the context costs again on every later turn.
 Candidate video, off by default, therefore sends one frame in five seconds and
 asks for the low media resolution; the camera is there for presence, and the
-code reaches the model as text.
+code reaches the model as text. Coding example drawings use the same realtime
+image input as Whiteboard mode. After the first drawing arrives, coding stops
+forwarding camera frames for the rest of the interview, including reconnects
+and cleared drawings. The browser camera and its presence checks remain active.
+Settled drawings are sent no more than once per second, except for an explicit
+`read_board` or cold-recovery resend. Images remain in the live context and are
+billed there; auxiliary drawings are excluded from final report requests.
+Coding and communication retain their original rubric and conversation evidence;
+there is no drawing-related credit or deduction. The report must not infer
+understanding from an image or the interviewer's account of one, including
+rolling notes that paraphrase visual observations as an explanation. References
+to drawings in assessment feedback enter the existing bounded repair loop;
+the same guard applies to a salvaged response. The final image is displayed
+separately as a session artifact. This changes no call budget and no Whiteboard
+scoring rule.
+Whiteboard mode keeps its existing image input with camera forwarding disabled
+from the start.
+
+Coding drawing activity restarts the browser's turn ring using the published
+speech silence window. New ink or concurrent speech resets the countdown;
+after silence, the page waits at most two seconds to share the visible drawing
+and sends one explicit drawing yield. A failed upload still yields, and new
+activity, a pause, thinking time or a disconnected interviewer cancels a yield
+that is waiting on the upload. A drawing-only yield requests a brief response
+even without an audio turn. With a spoken turn still open, the note is delivered
+as context and the audio turn is ended, allowing the existing reply fallback
+to recover silence instead of asking for two replies. Drawings still grant no
+assessment evidence. Whiteboard turn taking is unchanged.
 
 Final reporting has a shared hard budget of five Gemini HTTP calls across
 initial generation, up to two semantic repairs, and transient retries. The

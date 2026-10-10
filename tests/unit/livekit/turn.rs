@@ -767,6 +767,45 @@ fn thinking_suppresses_silence_and_editor_prompts_until_released() {
 }
 
 #[test]
+fn drawing_activity_defers_the_idle_nudge_like_typing() {
+    let start = Instant::now();
+    let now = start + Duration::from_secs(300);
+    let mut state = RuntimeState::default();
+    let mut idle = RuntimeActivity::new(start);
+    assert!(idle.watch_prompt(&mut state, now).is_some());
+    let mut state = RuntimeState::default();
+    let payload: serde_json::Value =
+        serde_json::from_str(include_str!("../../fixtures/control.json")).unwrap();
+    let activity_packet = payload["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "drawing activity")
+        .unwrap();
+    let result = crate::agent::apply_data_event(
+        &mut state,
+        crate::runtime::TOPIC_CONTROL,
+        &activity_packet["payload"],
+        0.0,
+    );
+    assert!(result.update_last_code_change);
+    let mut activity = RuntimeActivity::new(start);
+    if result.update_last_code_change {
+        activity.last_code_change = now;
+    }
+    assert!(
+        activity
+            .watch_prompt(&mut state, now + CODE_SETTLE + Duration::from_secs(1))
+            .is_none()
+    );
+    assert!(
+        activity
+            .watch_prompt(&mut state, now + Duration::from_secs(60))
+            .is_some()
+    );
+}
+
+#[test]
 fn tentative_spoken_holds_leave_no_declared_gaps_or_reply_over_continued_speech() {
     let mut state = RuntimeState::default();
     let mut activity = RuntimeActivity::new(Instant::now());

@@ -9,7 +9,7 @@
 //! The strictness is deliberate. A report reaches a candidate, so a field that
 //! quietly defaults is a verdict nobody wrote.
 
-use super::{Problem, RUBRIC_VERSION};
+use super::{InterviewMode, Problem, RUBRIC_VERSION};
 
 /// Lowercase ASCII words, split on anything that is not a letter or a digit
 /// and inside identifiers where their case changes, the way `spelled_words` in
@@ -316,7 +316,8 @@ pub fn validate_report_candidate(
     Ok(report)
 }
 
-/// `validate_report_candidate`, which also refuses any STAR plan item when
+/// `validate_report_candidate`, which refuses picture-only credit in coding
+/// reports and any STAR plan item when
 /// the platform never opened the behavioral round, and clears the STAR scores
 /// of the report it accepts.
 ///
@@ -334,8 +335,17 @@ pub fn validate_report_for_round(
     raw: &serde_json::Value,
     problem: &Problem,
     behavioral_round_opened: bool,
+    mode: InterviewMode,
+    drawing_received: bool,
 ) -> Result<serde_json::Value, Vec<String>> {
-    let report = validate_report_candidate(raw, problem);
+    let report = validate_report_candidate(raw, problem).and_then(|report| {
+        let errors = example_drawing_judgments(&report, problem, mode, drawing_received);
+        if errors.is_empty() {
+            Ok(report)
+        } else {
+            Err(errors)
+        }
+    });
     if behavioral_round_opened {
         return report;
     }
@@ -351,6 +361,85 @@ pub fn validate_report_for_round(
             Err(errors)
         }
     }
+}
+
+// Coding assessment describes code and conversation. The optional drawing is
+// shown separately, so references to it belong in neither score's feedback.
+fn example_drawing_judgments(
+    raw: &serde_json::Value,
+    problem: &Problem,
+    mode: InterviewMode,
+    drawing_received: bool,
+) -> Vec<String> {
+    if mode.is_whiteboard() || !drawing_received {
+        return Vec::new();
+    }
+    let variant = problem.variant();
+    let problem_words = spelled_words(&format!(
+        "{} {} {} {} {} {}",
+        problem.title,
+        problem.summary,
+        variant.title,
+        variant.brief_text(),
+        variant.contract,
+        variant.constraints.join(" ")
+    ));
+    let mut errors = Vec::new();
+    for key in [
+        "summary",
+        "codingFeedback",
+        "communicationFeedback",
+        "improvementPlan",
+    ] {
+        let Some(value) = raw.get(key) else {
+            continue;
+        };
+        visit_strings(value, &format!("$.{key}"), &mut |path, text| {
+            let words = spelled_words(text);
+            let visual_reference = words.iter().enumerate().any(|(index, word)| {
+                if problem_words.contains(word) {
+                    return false;
+                }
+
+                // References to exercise input are not references to an
+                // optional drawing. Apply this exception to each mention, so an
+                // input image cannot excuse a drawing in the same item.
+                if matches!(
+                    word.as_str(),
+                    "picture" | "pictures" | "diagram" | "diagrams"
+                ) && index
+                    .checked_sub(1)
+                    .and_then(|previous| words.get(previous))
+                    .is_some_and(|previous| matches!(previous.as_str(), "input" | "source"))
+                {
+                    return false;
+                }
+                matches!(
+                    word.as_str(),
+                    "drawing"
+                        | "drawings"
+                        | "diagram"
+                        | "diagrams"
+                        | "sketch"
+                        | "sketches"
+                        | "picture"
+                        | "pictures"
+                        | "whiteboard"
+                )
+            });
+
+            // An image may be the exercise's input, rather than the candidate's
+            // optional drawing. Keep ordinary reasoning about that input.
+            let normalized = format!(" {} ", words.join(" "));
+            let candidate_image = ["your image", "provided an image", "uploaded an image"]
+                .iter()
+                .any(|phrase| normalized.contains(&format!(" {phrase} ")));
+            if visual_reference || candidate_image {
+                errors.push(format!("{path}: example drawings are outside coding and communication assessment; remove the visual reference and any credit or deduction based on it. Use only code, tests or the candidate's actual conversation under the original rubric, never the interviewer's interpretation of a picture"));
+            }
+        });
+    }
+    errors
 }
 
 fn unopened_round_errors(raw: &serde_json::Value) -> Vec<String> {

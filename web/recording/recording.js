@@ -196,12 +196,12 @@ export function applyReplayEvent(event) {
       break;
     case "board":
       // The drawing arrives as the operations that made it, so the panel is
-      // redrawn rather than replaced. The first one swaps the panels: the two
-      // surfaces are exclusive and nothing else says which interview this is.
+      // redrawn rather than replaced. Example drawings accompany the editor.
       if (nodes.board.hidden) {
         nodes.board.hidden = false;
-        nodes.code.hidden = true;
+        nodes.code.hidden = payload.surface !== "example";
       }
+      nodes.board.classList.toggle("example", payload.surface === "example");
       for (const op of Array.isArray(payload.ops) ? payload.ops : [])
         applyOp(board, op);
       drawBoard(

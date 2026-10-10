@@ -38,6 +38,7 @@ const nodes = {
   timeline: document.querySelector("#replay-timeline"),
   windowNote: document.querySelector("#replay-window-note"),
   momentLabel: document.querySelector("#replay-moment-label"),
+  codeLabel: document.querySelector("#replay-code-label"),
   board: document.querySelector("#replay-board"),
   code: document.querySelector("#replay-code"),
   tests: document.querySelector("#replay-tests"),
@@ -68,13 +69,11 @@ let selected = null;
 /// time in the report: the replay already has every version of it, and a copy
 /// in two places is a copy that can disagree.
 let latest = { code: "", language: "" };
-/// Whether this recording is of a whiteboard interview, which decides which of
-/// the two panels the moment is shown in.
+/// Whether the recording contains a drawing, including coding examples.
 ///
 /// Read off the events rather than off the report: a replay is loaded before
 /// the report is fetched and may be shown without one at all, and an interview
-/// that drew nothing has neither a board nor anything to put in the code panel
-/// either way.
+/// that drew nothing still starts with an empty board event in whiteboard mode.
 let drawn = false;
 
 /// A recording whose media is gone, in the words the server used.
@@ -225,6 +224,8 @@ function clearDetail() {
   // page did not keep.
   nodes.windowNote.hidden = true;
   nodes.momentLabel.textContent = "Code";
+  nodes.codeLabel.hidden = true;
+  nodes.codeLabel.textContent = "Code";
   nodes.status.textContent = "";
   nodes.media.textContent = "";
   nodes.transcript.replaceChildren();
@@ -322,13 +323,14 @@ export function render(events) {
   // timeline because that is where a reader looks for both.
   const { moments, windows, timeline } = replayTimeline(rows);
 
-  // The two panels are exclusive: a whiteboard interview publishes no editor
-  // snapshot at all, so its code panel would be an empty box under a heading
-  // that says Code.
+  // Coding interviews can carry both editor snapshots and example drawings.
   drawn = moments.some((moment) => moment.kind === "board");
   nodes.board.hidden = !drawn;
-  nodes.code.hidden = drawn;
+  nodes.code.hidden =
+    drawn && !moments.some((moment) => moment.kind === "editor");
 
+  nodes.codeLabel.hidden = nodes.code.hidden;
+  nodes.momentLabel.hidden = !drawn;
   nodes.windowNote.hidden = windows.length === 0;
   // Appended once. Interleaving the windows roughly quadruples this list, and a
   // node at a time is a layout pass at a time.
@@ -423,13 +425,16 @@ function showMoment(moments, index) {
     }
   }
   latest = { code, language };
+  nodes.codeLabel.textContent = language ? `Code · ${language}` : "Code";
   if (drawn) {
     const checkpoint = whiteboardPhaseLabel(
       moments[index]?.payload?.checkpoint,
     );
-    nodes.momentLabel.textContent = checkpoint
-      ? `${checkpoint} board checkpoint`
-      : "Whiteboard";
+    nodes.momentLabel.textContent = !nodes.code.hidden
+      ? "Example drawing"
+      : checkpoint
+        ? `${checkpoint} board checkpoint`
+        : "Whiteboard";
     drawBoard(
       nodes.board.getContext("2d"),
       board.strokes(),
@@ -455,9 +460,16 @@ async function loadReport(interviewId, recordingId) {
   // panel and moves `latest`, so the card would call an earlier board or an
   // earlier buffer the final one.
   const final = {
+    exampleDrawing:
+      drawn && !nodes.code.hidden
+        ? nodes.board.toDataURL("image/jpeg", 0.72)
+        : undefined,
     language: latest.language,
     code: latest.code,
-    board: drawn ? nodes.board.toDataURL("image/jpeg", 0.72) : undefined,
+    board:
+      drawn && nodes.code.hidden
+        ? nodes.board.toDataURL("image/jpeg", 0.72)
+        : undefined,
   };
   const response = await fetch("/api/reports");
   if (selected !== recordingId) return;

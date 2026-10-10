@@ -10,6 +10,123 @@
 use super::*;
 
 #[test]
+fn coding_reports_exclude_drawings_and_keep_the_original_conversation_rubric() {
+    let problem = get_problem(Some("two-sum"));
+    let valid = valid_strict_report();
+    for (field, text) in [
+        (
+            "codingFeedback",
+            "You provided a clear example drawing to illustrate the tree structure.",
+        ),
+        ("communicationFeedback", "You provided an example drawing."),
+        (
+            "communicationFeedback",
+            "Your picture made the explanation clear.",
+        ),
+        (
+            "codingFeedback",
+            "Your pictures demonstrate a correct solution.",
+        ),
+        (
+            "codingFeedback",
+            "The image shows a correct solution in your drawing.",
+        ),
+        (
+            "codingFeedback",
+            "You interpreted the input image correctly and drew a useful picture.",
+        ),
+        (
+            "communicationFeedback",
+            "Your drawing quality demonstrated understanding.",
+        ),
+        (
+            "communicationFeedback",
+            "You explained your diagram clearly.",
+        ),
+        (
+            "codingFeedback",
+            "You demonstrated understanding by providing a valid sketch with a root and two children.",
+        ),
+    ] {
+        let mut image_credit = valid.clone();
+        image_credit[field]["strengths"][0] = json!(text);
+        let errors =
+            validate_report_for_round(&image_credit, problem, true, InterviewMode::Coding, true)
+                .unwrap_err();
+        assert!(
+            errors.iter().any(
+                |error| error.starts_with(&format!("$.{field}.strengths[0]"))
+                    && error.contains("original rubric")
+            ),
+            "{errors:?}"
+        );
+        validate_report_for_round(
+            &image_credit,
+            problem,
+            true,
+            InterviewMode::Whiteboard,
+            true,
+        )
+        .expect("whiteboard assessment still evaluates its own board work");
+    }
+    let mut explained = valid;
+    explained["communicationFeedback"]["strengths"][0] = json!(
+        "You told Jim that each tree level has its own mean and explained how to add its values and divide by its node count."
+    );
+    let accepted =
+        validate_report_for_round(&explained, problem, true, InterviewMode::Coding, true).unwrap();
+    assert_eq!(
+        accepted["communicationFeedback"]["strengths"],
+        explained["communicationFeedback"]["strengths"]
+    );
+    assert_eq!(
+        accepted["communicationScore"], explained["communicationScore"],
+        "no automatic picture bonus"
+    );
+    assert_eq!(accepted["codingScore"], explained["codingScore"]);
+    explained["codingFeedback"]["strengths"][0] = json!(
+        "You explained how to scan the input image pixel by pixel and track connected regions."
+    );
+    validate_report_for_round(&explained, problem, true, InterviewMode::Coding, true)
+        .expect("reasoning about an exercise's image input is ordinary conversation");
+    for text in [
+        "You explained that the input image shows two connected regions.",
+        "You described how the image shows connected regions in the exercise input.",
+        "You traced the pixels in the input picture accurately.",
+        "You identified the regions in the source pictures.",
+    ] {
+        explained["codingFeedback"]["strengths"][0] = json!(text);
+        validate_report_for_round(&explained, problem, true, InterviewMode::Coding, true)
+            .expect("exercise input imagery remains assessable");
+    }
+}
+
+#[test]
+fn coding_feedback_cannot_deduct_for_drawings_or_recommend_them_for_points() {
+    let problem = get_problem(Some("two-sum"));
+    for (field, item) in [
+        ("codingFeedback", "Your drawing was incorrect."),
+        (
+            "communicationFeedback",
+            "Draw a diagram to earn more communication points.",
+        ),
+    ] {
+        let mut report = valid_strict_report();
+        report[field]["improvements"][0] = json!(item);
+        let plan_index = if field == "codingFeedback" { 0 } else { 2 };
+        report["improvementPlan"][plan_index]["weakness"] = json!(item);
+        let errors = validate_report_for_round(&report, problem, true, InterviewMode::Coding, true)
+            .unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.starts_with(&format!("$.{field}.improvements[0]"))),
+            "{errors:?}"
+        );
+    }
+}
+
+#[test]
 fn strict_report_validation_is_atomic_and_server_owns_hints() {
     let valid = valid_strict_report();
     let report =
@@ -45,10 +162,11 @@ fn strict_report_validation_is_atomic_and_server_owns_hints() {
 fn a_round_that_never_opened_refuses_star_plan_items_and_clears_star_scores() {
     let problem = get_problem(Some("two-sum"));
     let star = valid_strict_report();
-    let opened =
-        validate_report_for_round(&star, problem, true).expect("an opened round keeps STAR");
+    let opened = validate_report_for_round(&star, problem, true, InterviewMode::Coding, true)
+        .expect("an opened round keeps STAR");
     assert_eq!(opened["frameworkAssessment"]["phases"][9]["score"], 75);
-    let errors = validate_report_for_round(&star, problem, false).unwrap_err();
+    let errors =
+        validate_report_for_round(&star, problem, false, InterviewMode::Coding, true).unwrap_err();
     assert_eq!(errors.len(), 2, "{errors:?}");
     for path in ["$.improvementPlan[2].phase", "$.improvementPlan[3].phase"] {
         assert!(
@@ -69,7 +187,7 @@ fn a_round_that_never_opened_refuses_star_plan_items_and_clears_star_scores() {
         coding["improvementPlan"][index]["phase"] = json!(phase);
         coding["improvementPlan"][index]["weakness"] = json!(weakness);
     }
-    let accepted = validate_report_for_round(&coding, problem, false)
+    let accepted = validate_report_for_round(&coding, problem, false, InterviewMode::Coding, true)
         .expect("STAR scores alone are settled, not refused");
     let rows = accepted["frameworkAssessment"]["phases"]
         .as_array()
@@ -80,7 +198,8 @@ fn a_round_that_never_opened_refuses_star_plan_items_and_clears_star_scores() {
 
     let mut both = star;
     both["codingScore"] = json!(120);
-    let errors = validate_report_for_round(&both, problem, false).unwrap_err();
+    let errors =
+        validate_report_for_round(&both, problem, false, InterviewMode::Coding, true).unwrap_err();
     assert!(
         errors
             .iter()
@@ -803,5 +922,35 @@ fn phase_rows_need_no_tags_from_the_model() {
             ["items"]["properties"]
             .get("weaknessTags")
             .is_none()
+    );
+}
+
+#[test]
+fn drawing_guard_requires_a_received_drawing() {
+    let mut report = valid_strict_report();
+    report["codingFeedback"]["strengths"][0] = json!("Picture traversal was explained correctly.");
+    let problem = get_problem(Some("two-sum"));
+    validate_report_for_round(&report, problem, true, InterviewMode::Coding, false)
+        .expect("without a received drawing, ordinary words must not activate the guard");
+    let errors =
+        validate_report_for_round(&report, problem, true, InterviewMode::Coding, true).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("example drawings"))
+    );
+}
+
+#[test]
+fn drawing_guard_keeps_the_exercises_own_diagram_vocabulary() {
+    let mut problem = *get_problem(Some("two-sum"));
+    problem.summary = "The input diagram contains labeled nodes.";
+    let mut report = valid_strict_report();
+    report["codingFeedback"]["strengths"][0] = json!("You traversed the diagram correctly.");
+    validate_report_for_round(&report, &problem, true, InterviewMode::Coding, true)
+        .expect("the exercise's own diagram is assessable");
+    report["codingFeedback"]["strengths"][0] = json!("Your drawing explained the diagram clearly.");
+    assert!(
+        validate_report_for_round(&report, &problem, true, InterviewMode::Coding, true).is_err()
     );
 }

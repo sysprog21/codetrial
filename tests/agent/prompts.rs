@@ -127,6 +127,31 @@ fn disabled_execution_prompts_request_traces_across_recovery_and_editor_events()
 }
 
 #[test]
+fn coding_assessment_excludes_drawings_and_keeps_the_original_rubric() {
+    let rules = report_system_instruction(InterviewMode::Coding)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for rule in [
+        "Example drawings are outside assessment entirely",
+        "Keep the original rubric",
+        "with no special credit",
+        "never facts inferred from a picture",
+        "The interviewer's description, agreement or praise",
+        "A picture cannot",
+        "paraphrases them as a valid example or demonstrated understanding",
+    ] {
+        assert!(rules.contains(rule), "missing {rule}");
+    }
+    let live = instructions(get_problem(Some("two-sum")), 45);
+    assert!(live.contains("Keep the original assessment rules"));
+    assert!(live.contains("no drawing-related assessment criterion"));
+    let board_rules = report_system_instruction(InterviewMode::Whiteboard);
+    assert!(!board_rules.contains("CODING EXAMPLE DRAWINGS:"));
+    assert!(board_rules.contains("the solution the candidate worked out at the board"));
+}
+
+#[test]
 fn prompt_golden_digest_matches_versions() {
     let expected: Value = serde_json::from_str(include_str!("../golden/prompts.json"))
         .expect("prompt fixture should parse");
@@ -140,8 +165,8 @@ fn prompt_golden_digest_matches_versions() {
     // its hash is a string nothing checks. The pair is still asserted, because
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
-    let recorded_versions = (23, 18);
-    let recorded_digest = "c7512b1e525ba0a73636601ed667e731b58fdb1d64b16418560b8ae18f212ec6";
+    let recorded_versions = (24, 19);
+    let recorded_digest = "f0eec546d2d91f42d3ce2e54a4fdd481b9ed01fe9d8dd0fc92d2a5f6f0a32c4f";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -1266,17 +1291,17 @@ fn interview_contract_versions_are_one_closed_bundle() {
         "the bundle table has no row for {INTERVIEW_CONTRACT_BUNDLE_VERSION}"
     );
 
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 31);
-    assert_eq!(LIVE_PROMPT_VERSION, 23);
-    assert_eq!(REPORT_PROMPT_VERSION, 18);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 32);
+    assert_eq!(LIVE_PROMPT_VERSION, 24);
+    assert_eq!(REPORT_PROMPT_VERSION, 19);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 2);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 31,
-            "livePromptVersion": 23,
-            "reportPromptVersion": 18,
+            "bundleVersion": 32,
+            "livePromptVersion": 24,
+            "reportPromptVersion": 19,
             "rubricVersion": 1,
             "reportSchemaVersion": 2,
         })

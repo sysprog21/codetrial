@@ -3499,6 +3499,72 @@ fn hold_turn(state: RuntimeState) -> TurnState {
 }
 
 #[tokio::test]
+async fn drawing_yields_finish_audio_and_ask_once_with_or_without_speech() {
+    for speaking in [false, true] {
+        let mut turn = hold_turn(RuntimeState::default());
+        if speaking {
+            turn.turns.candidate.record(
+                &mut turn.state.transcript,
+                crate::agent::CANDIDATE_SPEAKER,
+                "this box is one connected region",
+            );
+        }
+        let (mut output_audio, _frames) = test_output_audio();
+        let (mut gemini, server) = fake_recording_socket(None, 2).await;
+        let mut media = CandidateMedia::new();
+        let result = crate::agent::apply_data_event(
+            &mut turn.state,
+            crate::runtime::TOPIC_CONTROL,
+            &serde_json::json!({"type":"yield_turn","surface":"example"}),
+            0.0,
+        );
+        let mut reply = result.generate_reply.clone();
+        let effects = settle(
+            &mut turn,
+            &mut output_audio,
+            &mut gemini,
+            &mut media,
+            &result,
+            &mut reply,
+        )
+        .await;
+        assert_eq!(effects, HoldEffects::default());
+        if speaking {
+            assert!(
+                reply.is_none(),
+                "the spoken turn carries the drawing context"
+            );
+            assert!(turn.activity.thinking_reply_fallback.is_some());
+        } else {
+            let prompt = reply.expect("drawing alone still needs an explicit reply");
+            send_model_text(
+                &mut gemini,
+                &mut turn.state,
+                ModelInputKind::Turn,
+                TurnCause::Turn,
+                &prompt,
+            )
+            .await
+            .unwrap();
+        }
+        let sent = server.await.unwrap();
+        if speaking {
+            assert_eq!(sent[0]["clientContent"]["turnComplete"], false);
+            assert!(sent[0].to_string().contains("Example drawing"));
+            assert_eq!(sent[1], crate::gemini::realtime_audio_end_message());
+        } else {
+            assert_eq!(sent[0], crate::gemini::realtime_audio_end_message());
+            assert!(
+                sent[1]["realtimeInput"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Example drawing")
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn yielding_flushes_buffered_speech_then_ends_the_stream() {
     let mut turn = hold_turn(RuntimeState::default());
     let (mut output_audio, _frames) = test_output_audio();

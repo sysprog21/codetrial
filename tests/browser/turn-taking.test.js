@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { functionBody, read } from "./source.js";
+import { createDrawingTurn } from "../../web/example-board.js";
 import {
   TURN_RING_LINGER_MS,
   TURN_SPEECH_PEAK,
@@ -97,6 +98,7 @@ test("the turn controls publish only in a live, connected, unpaused interview", 
     thinkingPayload,
     yieldTurnPayload,
     isYieldShortcut,
+    drawingTurn: null,
   };
   const { toggleThinking, yieldTurn, onTurnKey } = loadInterview(
     ["canTakeTurnAction", "toggleThinking", "yieldTurn", "onTurnKey"],
@@ -203,6 +205,84 @@ test("the silence window is read from the agent's attribute and never guessed", 
   assert.equal(turnWindowMs({ [TURN_WINDOW_ATTRIBUTE]: "soon" }), null);
   assert.equal(turnWindowMs({}), null);
   assert.equal(turnWindowMs(undefined), null);
+});
+
+test("drawing handover cannot restart the old speech ring and Jim thinking clears it", async () => {
+  let at = 0;
+  let frame;
+  const properties = [];
+  const scope = {
+    state: {
+      micEnabled: true,
+      turnWindowMs: 3000,
+      candidateThinking: false,
+      agentSpeaking: false,
+      agentThinking: false,
+    },
+    nodes: {
+      turnRing: {
+        hidden: true,
+        style: { setProperty: (_, value) => properties.push(value) },
+      },
+    },
+    turnSpokeAt: null,
+    turnRingProgress: null,
+    drawingTurn: null,
+    TURN_SPEECH_PEAK,
+    turnCountdown,
+    canTakeTurnAction: () => true,
+    performance: { now: () => at },
+  };
+  const { paintTurnRing, paintDrawingTurnProgress } = loadInterview(
+    ["paintTurnRing", "paintDrawingTurnProgress", "paintTurnProgress"],
+    scope,
+  );
+  paintTurnRing(TURN_SPEECH_PEAK);
+  assert.equal(scope.turnSpokeAt, 0);
+  scope.drawingTurn = createDrawingTurn({
+    now: () => at,
+    requestFrame: (next) => (frame = next),
+    windowMs: () => 3000,
+    blocked: () => scope.state.agentThinking || scope.state.agentSpeaking,
+    paint: paintDrawingTurnProgress,
+    flush: async () => {},
+    yieldTurn: async () => {},
+  });
+  at = 1000;
+  scope.drawingTurn.activity();
+  assert.equal(scope.turnSpokeAt, null);
+  at = 4000;
+  frame();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(scope.nodes.turnRing.hidden, true);
+  const afterDrawing = properties.length;
+  for (at = 4100; at < 10000; at += 100) paintTurnRing(0);
+  assert.equal(scope.nodes.turnRing.hidden, true);
+  assert.equal(
+    properties.length,
+    afterDrawing,
+    "silence cannot resurrect the completed ring",
+  );
+  paintTurnRing(TURN_SPEECH_PEAK);
+  assert.equal(
+    scope.nodes.turnRing.hidden,
+    false,
+    "new candidate speech can start it",
+  );
+  scope.state.agentThinking = true;
+  paintTurnRing(TURN_SPEECH_PEAK);
+  assert.equal(
+    scope.nodes.turnRing.hidden,
+    true,
+    "Jim preparing a reply ends the ring",
+  );
+  scope.state.agentThinking = false;
+  paintTurnRing(0);
+  assert.equal(
+    scope.nodes.turnRing.hidden,
+    true,
+    "listening waits for new activity",
+  );
 });
 
 test("the ring meters one microphone at a time and stops with its track", () => {

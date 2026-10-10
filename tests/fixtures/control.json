@@ -2,6 +2,12 @@
   "topic": "control",
   "cases": [
     {
+      "name": "drawing activity",
+      "payload": {
+        "type": "drawing_activity"
+      }
+    },
+    {
       "name": "retry report",
       "payload": {
         "type": "retry_report"
@@ -25,6 +31,13 @@
       "name": "yield turn",
       "payload": {
         "type": "yield_turn"
+      }
+    },
+    {
+      "name": "drawing turn",
+      "payload": {
+        "type": "yield_turn",
+        "surface": "example"
       }
     },
     {

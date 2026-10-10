@@ -239,7 +239,15 @@
             aria-label="Code editor"
           ></textarea>
         </div>
-        <section class="test-drawer">
+        <div
+          class="drawer-resizer"
+          role="separator"
+          tabindex="0"
+          aria-label="Resize drawing and test panel"
+          aria-orientation="horizontal"
+          aria-controls="interview-drawer"
+        ></div>
+        <section id="interview-drawer" class="test-drawer">
           <details id="candidate-case">
             <summary>Add a case</summary>
             <label
@@ -260,11 +268,47 @@
             <p id="candidate-case-status" class="muted small" role="status"></p>
             <ol id="candidate-case-list" class="small"></ol>
           </details>
+          <details id="example-board" class="example-board">
+            <summary>Example drawing</summary>
+            <div
+              class="board-toolbar"
+              role="toolbar"
+              aria-label="Example drawing tools"
+            >
+              <div data-tools role="group" aria-label="Drawing tool"></div>
+              <div
+                data-colors
+                class="board-pens"
+                role="group"
+                aria-label="Pen colour"
+              ></div>
+              <button type="button" data-action="undo">Undo</button>
+              <button type="button" data-action="redo">Redo</button>
+              <button
+                type="button"
+                data-action="clear"
+                title="Undo restores a cleared drawing"
+              >
+                Clear
+              </button>
+            </div>
+            <div class="example-surface">
+              <canvas
+                width="1600"
+                height="1000"
+                aria-label="Example drawing"
+              ></canvas>
+            </div>
+            <p class="muted small" role="status">
+              Sketch an example while explaining it. Jim sees it after you pause
+              drawing.
+            </p>
+          </details>
           <button id="results-toggle" type="button">
             <span id="results-label">Test results</span>
             <span id="results-chevron">v</span>
           </button>
-          <div id="results-body" class="results-body">
+          <div id="results-body" class="results-body" hidden>
             <p class="muted small">
               Run the test cases any time - Jim sees your results too.
             </p>

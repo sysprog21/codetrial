@@ -665,7 +665,7 @@ test("the report card this page renders names no finding either", () => {
       "100",
       "2",
       "2.",
-      "31",
+      "32",
       "2;",
       "3",
       "3.",
@@ -989,6 +989,38 @@ test("an untouched whiteboard still replays as a board", () => {
   assert.equal(dom.node("replay-code").hidden, true);
 });
 
+test("an example drawing replays beside the coding editor", () => {
+  dom.node("replay-timeline").replaceChildren();
+  render([
+    editor(BASE),
+    {
+      kind: "board",
+      at: BASE + 500,
+      payload: {
+        surface: "example",
+        ops: [
+          {
+            op: "stroke",
+            color: "#101418",
+            width: 3,
+            points: [10, 20, 30, 40],
+          },
+        ],
+      },
+    },
+  ]);
+  assert.equal(dom.node("replay-board").hidden, false);
+  assert.equal(dom.node("replay-code").hidden, false);
+  assert.notEqual(dom.node("replay-code").textContent, "");
+  assert.equal(dom.node("replay-code-label").hidden, false);
+  assert.ok(
+    dom
+      .node("replay-board")
+      .getContext("2d")
+      .calls.some(([name, x, y]) => name === "moveTo" && x === 10 && y === 20),
+  );
+});
+
 test("a whiteboard recording replays the drawing, not an empty code panel", () => {
   // The two surfaces are exclusive: a whiteboard interview publishes no editor
   // snapshot, so the panel that would hold code holds nothing, and the one
@@ -1075,4 +1107,56 @@ test("a whiteboard recording replays the drawing, not an empty code panel", () =
   render([stage(BASE, 0), editor(BASE + 1000)]);
   assert.equal(dom.node("replay-board").hidden, true);
   assert.equal(dom.node("replay-code").hidden, false);
+});
+
+test("a coding report keeps the final code beside its example drawing", () => {
+  const report = sanitizeReport({
+    interviewMode: "coding",
+    codingScore: 50,
+    communicationScore: 50,
+    decision: "NO_HIRE",
+    summary: "Example discussion",
+    strengths: [],
+    improvements: [],
+  });
+  const image = "data:image/jpeg;base64,/9j/AA==";
+  const markup = reportMarkup({
+    report,
+    problemTitle: "Example",
+    language: "python",
+    code: "print(42)",
+    exampleDrawing: image,
+  });
+  assert.match(markup, /Your final code/);
+  assert.match(markup, /<figcaption>Example drawing<\/figcaption>/);
+  assert.match(
+    markup,
+    /Example drawings do not affect coding or communication scores/,
+  );
+  assert.ok(markup.includes(image));
+  const unsafe = reportMarkup({
+    report,
+    problemTitle: "Example",
+    language: "python",
+    code: "print(42)",
+    exampleDrawing: '" onerror="alert(1)',
+  });
+  assert.doesNotMatch(unsafe, /onerror/);
+});
+
+test("replay headings precede their own surfaces", () => {
+  const html = read("web/replay.html");
+  assert.ok(
+    html.indexOf('id="replay-code-label"') < html.indexOf('id="replay-code"'),
+  );
+  assert.ok(
+    html.indexOf('id="replay-code"') < html.indexOf('id="replay-moment-label"'),
+  );
+  assert.ok(
+    html.indexOf('id="replay-moment-label"') <
+      html.indexOf('id="replay-board"'),
+  );
+  render([editor(BASE)]);
+  assert.equal(dom.node("replay-code-label").hidden, false);
+  assert.equal(dom.node("replay-moment-label").hidden, true);
 });

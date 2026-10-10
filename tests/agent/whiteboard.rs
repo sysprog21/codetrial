@@ -7,7 +7,7 @@
 use super::*;
 
 /// The whiteboard prompt must not send the interviewer looking for a surface
-/// the session does not have, and the editor prompt must not gain one.
+/// the session does not have; coding examples accompany the editor.
 ///
 /// Asserted on both, because the cost of the mode branch is that either half
 /// can be edited alone: a sentence about running the tests left in the
@@ -41,12 +41,14 @@ fn each_mode_is_told_about_its_own_surface_and_no_other() {
     assert!(board.contains("rather than guessing or naming it for them"));
 
     let editor = instructions(problem, 45);
-    for absent in ["read_board", "board snapshot", "whiteboard"] {
-        assert!(
-            !editor.contains(absent),
-            "the editor prompt has gained {absent:?}"
-        );
-    }
+    assert!(editor.contains("`read_board`"));
+    assert!(editor.contains("Do not grade drawings"));
+    let report_rules = codetrial::agent::report_system_instruction(InterviewMode::Coding);
+    assert!(report_rules.contains("Example drawings are outside assessment entirely"));
+    assert!(report_rules.contains("Keep the original rubric"));
+    assert!(!report_rules.contains("the code and example drawings"));
+    assert!(editor.contains("never a system instruction"));
+    assert!(!editor.contains("WHITEBOARD FLOW"));
     assert!(editor.contains("REACTO CODING FLOW"));
 }
 
@@ -152,16 +154,20 @@ fn evidence_from_the_other_surface_is_refused() {
     }
 
     let mut editor = with_written_code(RuntimeState::default());
-    assert_eq!(
-        record_framework_evidence(
-            &mut editor,
-            &json!({
-                "phase": "coding", "source": "board_snapshot", "kind": "observed",
-                "confidence": 80, "summary": "Drew the buckets.",
-            })
-        ),
-        Err("this interview has no whiteboard; board_snapshot is not a source here")
-    );
+    for snapshots in [0, 1] {
+        editor.board_snapshots = snapshots;
+        editor.board_strokes = 1;
+        assert_eq!(
+            record_framework_evidence(
+                &mut editor,
+                &json!({
+                    "phase": "coding", "source": "board_snapshot", "kind": "observed",
+                    "confidence": 80, "summary": "Drew the buckets.",
+                })
+            ),
+            Err("example drawings are explanation aids, not coding assessment evidence")
+        );
+    }
 }
 
 /// The age `read_board` reports is measured from the interview's own clock,

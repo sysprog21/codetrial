@@ -840,7 +840,7 @@ so a producer from a later deploy does not stop a recording.
 |---|---|---|
 | `stage` | `{title, meta, remainingSeconds}` | the problem heading and the clock |
 | `editor` | `{code, language}` | the code panel, as text |
-| `board` | `{ops, checkpoint?}`, each op `{op: "stroke", color, width, points}` or `{op: "undo" \| "redo" \| "clear"}`; `checkpoint` is a completed REACTO phase id | the whiteboard, redrawn from every op so far, with completed phases named in the replay |
+| `board` | `{ops, checkpoint?, surface?}`, each op `{op: "stroke", color, width, points}` or `{op: "undo" \| "redo" \| "clear"}`; `checkpoint` is a completed REACTO phase id; `surface: "example"` accompanies the coding editor | the drawing, redrawn from every op so far, with completed phases named in the replay |
 | `tests` | `{passed, failed, total}` | one line, red if anything failed |
 | `avatar` | `{state}`, one of `speaking`, `thinking`, `listening` | Jim's expression and label |
 | `transcript` | `{speaker, text}` | nothing here; the replay page renders it |

@@ -61,10 +61,12 @@ function codeUpdateCases(languages) {
 
 function controlCases() {
   return [
+    { name: "drawing activity", payload: lib.drawingActivityPayload() },
     { name: "retry report", payload: lib.retryReportPayload() },
     { name: "thinking start", payload: lib.thinkingPayload(true) },
     { name: "thinking end", payload: lib.thinkingPayload(false) },
     { name: "yield turn", payload: lib.yieldTurnPayload() },
+    { name: "drawing turn", payload: lib.drawingTurnPayload() },
     { name: "time warning five minutes", payload: lib.timeWarningPayload(300) },
     { name: "time warning one minute", payload: lib.timeWarningPayload(60) },
     {
