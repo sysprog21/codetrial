@@ -394,11 +394,296 @@ function boardCases() {
 // given judge offers is a UX choice and this is the whole set src/agent.rs has
 // to recognize.
 const languages = ALL_LANGUAGES;
+// A task-mode state snapshot as the server publishes it. The Rust tests build
+// the same session and compare, so a renamed field fails on both sides.
+function taskState(overrides = {}) {
+  return {
+    version: 1,
+    seq: 0,
+    phase: "ready",
+    deadlineAt: null,
+    interviewer: "available",
+    outcome: null,
+    checks: ["contract", "revision", "trace"].map((id) => ({
+      id,
+      state: "open",
+      support: "none",
+    })),
+    hintRungsUsed: 0,
+    hintRungsMax: 3,
+    finalRevisionId: null,
+    acknowledgedCaptureRequestId: null,
+    captureOverflow: false,
+    activeTargetId: null,
+    ...overrides,
+  };
+}
+
+// What the server stamps on every task result, for the session the Rust
+// report tests build: account 1 signed in as `learner`, calibrated, first
+// attempt at the customized fixture task.
+function taskStamps(overrides = {}) {
+  return {
+    setId: "classroom",
+    setVersion: 7,
+    taskId: "delimiter-closer",
+    sessionId: "room-1",
+    sessionOrdinal: 1,
+    rubricProfile: "task-engagement-v1",
+    githubLogin: "learner",
+    githubId: 42,
+    language: "python",
+    rulesAcknowledgedAt: "2026-10-07T00:00:00Z",
+    rules: {
+      durationMin: 15,
+      maxHintRungs: 3,
+      lookAwaySeconds: 8,
+      closesAt: null,
+      rulesNote: null,
+    },
+    calibration: {
+      ok: true,
+      metric: "keypoints",
+      baseline: 0.5,
+      keyboard: 0.7,
+      limit: 0.75,
+    },
+    outcome: null,
+    captureOverflow: false,
+    finalRevisionId: null,
+    finalCode: null,
+    ...overrides,
+  };
+}
+
+// The customized fixture task's starter after its variant renames.
+const DELIMITER_STARTER =
+  'class Solution:\n    def delimitersNestCleanly(self, s: str) -> bool:\n        stack = []\n        pairs = {")": "(", "]": "[", "}": "{"}\n        for char in s:\n            if char in pairs:\n                # TASK_COMPLETE_CLOSER\n                pass\n            else:\n                stack.append(char)\n        return not stack\n';
+
+function unratedDimension() {
+  return {
+    rating: null,
+    reason: "No reliable opportunity was captured.",
+    insufficientReason: "missing_turns",
+    support: "none",
+    evidence: [],
+  };
+}
+
 const files = {
   "report-recovery.json": reportRecoveryLimits,
   "code-update.json": {
     topic: lib.topics.code,
     cases: codeUpdateCases(languages),
+  },
+  "task-edit.json": {
+    topic: lib.topics.code,
+    cases: [
+      {
+        name: "task draft",
+        payload: lib.taskEditPayload("revision-1", CODE, "python"),
+      },
+    ],
+  },
+  "task-error.json": {
+    topic: lib.TASK_TOPICS.error,
+    cases: [
+      {
+        name: "capture rejection",
+        payload: {
+          version: 1,
+          code: "action_rejected",
+          requestId: "capture-1",
+          retryable: true,
+          message: "Wait for the acknowledged task state before retrying.",
+        },
+      },
+      {
+        name: "uncorrelated rejection",
+        payload: {
+          version: 1,
+          code: "action_rejected",
+          requestId: null,
+          retryable: true,
+          message: "Wait for the acknowledged task state before retrying.",
+        },
+      },
+    ],
+  },
+  "task-review.json": {
+    topic: lib.TASK_TOPICS.review,
+    cases: [
+      {
+        name: "unavailable stamped review",
+        payload: {
+          assessmentMode: "task",
+          taskContract: {
+            package: 1,
+            prompt: 1,
+            wire: 1,
+            reportSchema: 1,
+            rubric: 1,
+          },
+          taskAssessment: taskStamps({
+            finalRevisionId: "initial",
+            finalCode: DELIMITER_STARTER,
+          }),
+          feedbackUnavailable: true,
+        },
+      },
+      {
+        name: "validated review",
+        payload: {
+          assessmentMode: "task",
+          taskContract: {
+            package: 1,
+            prompt: 1,
+            wire: 1,
+            reportSchema: 1,
+            rubric: 1,
+          },
+          taskAssessment: {
+            dimensions: {
+              reasoningParticipation: {
+                rating: 3,
+                reason: "The learner traced the loop state before any hint.",
+                insufficientReason: null,
+                support: "none",
+                evidence: [{ kind: "turn", id: "turn-1" }],
+              },
+              implementationOwnership: unratedDimension(),
+              testingAndDiagnosis: unratedDimension(),
+              revisionAndImprovement: unratedDimension(),
+            },
+            gaps: ["No practice run was captured."],
+            nextActions: [
+              "Run the public cases and predict each result first.",
+            ],
+            ...taskStamps(),
+          },
+        },
+      },
+      {
+        name: "invalid attempt",
+        payload: {
+          assessmentMode: "task",
+          taskContract: {
+            package: 1,
+            prompt: 1,
+            wire: 1,
+            reportSchema: 1,
+            rubric: 1,
+          },
+          taskAssessment: taskStamps({
+            outcome: {
+              outcome: "invalid",
+              cause: "visibility",
+              at: 120,
+              durationMs: 0,
+            },
+            finalRevisionId: "draft",
+            finalCode: "print('so far')",
+          }),
+        },
+      },
+    ],
+  },
+  "task-state.json": {
+    topic: lib.TASK_TOPICS.state,
+    cases: [
+      { name: "fresh session", payload: taskState() },
+      {
+        name: "attempt ended under a rule",
+        payload: taskState({
+          seq: 2,
+          phase: "feedback",
+          deadlineAt: "1970-01-01T00:16:40Z",
+          finalRevisionId: "initial",
+          outcome: {
+            outcome: "invalid",
+            cause: "visibility",
+            at: 192,
+            durationMs: 8000,
+          },
+        }),
+      },
+    ],
+  },
+  "task-action.json": {
+    topic: lib.TASK_TOPICS.action,
+    cases: [
+      { name: "hint", payload: lib.taskActionPayload("hint-1", "hint") },
+      {
+        name: "finish",
+        payload: lib.taskActionPayload("finish-1", "finish", "revision-1"),
+      },
+      {
+        name: "hint about one target",
+        payload: lib.taskActionPayload("hint-2", "hint", null, "closer-branch"),
+      },
+      {
+        name: "discuss",
+        payload: lib.taskActionPayload("discuss-1", "discuss", "revision-1"),
+      },
+    ],
+  },
+  "task-start.json": {
+    topic: lib.TASK_TOPICS.start,
+    cases: [{ name: "start", payload: lib.taskStartPayload() }],
+  },
+  "task-end.json": {
+    topic: lib.TASK_TOPICS.end,
+    cases: [
+      {
+        name: "look-away rule",
+        payload: lib.taskEndPayload("end-1", "invalid", "look_away", 8000),
+      },
+      {
+        name: "detector stopped",
+        payload: lib.taskEndPayload("end-2", "interrupted", "detector", 0),
+      },
+    ],
+  },
+  "task-connected.json": {
+    topic: lib.TASK_TOPICS.connected,
+    cases: [{ name: "connected", payload: lib.taskConnectedPayload() }],
+  },
+  "task-thinking.json": {
+    topic: lib.TASK_TOPICS.thinking,
+    cases: [
+      { name: "thinking", payload: lib.taskThinkingPayload(true) },
+      { name: "ready to discuss", payload: lib.taskThinkingPayload(false) },
+    ],
+  },
+  "task-revision.json": {
+    topic: lib.TASK_TOPICS.revision,
+    cases: [
+      {
+        name: "run snapshot",
+        payload: lib.taskRevisionPayload(
+          "capture-1",
+          "revision-1",
+          CODE,
+          "run",
+        ),
+      },
+    ],
+  },
+  "task-run.json": {
+    topic: lib.TASK_TOPICS.run,
+    cases: [
+      {
+        name: "practice result",
+        payload: lib.taskRunPayload(
+          "result-1",
+          "run-1",
+          "revision-1",
+          1,
+          2,
+          "practice evidence",
+        ),
+      },
+    ],
   },
   "control.json": { topic: lib.topics.control, cases: controlCases() },
   "report-receipt.json": {

@@ -146,3 +146,15 @@ pub fn bootstrap_with_rounds<'a>(
 pub fn agent_identity(room_name: &str) -> String {
     format!("interviewer-{room_name}")
 }
+
+pub const TOPIC_TASK_ACTION: &str = "task_action";
+pub const TOPIC_TASK_REVISION: &str = "task_revision";
+pub const TOPIC_TASK_RUN: &str = "task_run";
+pub const TOPIC_TASK_STATE: &str = "task_state";
+pub const TOPIC_TASK_REVIEW: &str = "task_review";
+
+pub const TOPIC_TASK_CONNECTED: &str = "task_connected";
+pub const TOPIC_TASK_START: &str = "task_start";
+pub const TOPIC_TASK_END: &str = "task_end";
+pub const TOPIC_TASK_THINKING: &str = "task_thinking";
+pub const TOPIC_TASK_ERROR: &str = "task_error";

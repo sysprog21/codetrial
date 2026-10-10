@@ -26,7 +26,11 @@ use super::{
 use crate::percent_encode_component;
 
 pub(crate) const SESSION_COOKIE: &str = "codetrial_session";
+const OAUTH_RETURN_COOKIE: &str = "codetrial_oauth_return";
 const OAUTH_STATE_COOKIE: &str = "codetrial_oauth_state";
+/// The pending device authorization's code, signed, between the start and
+/// the polls that redeem it.
+const DEVICE_COOKIE: &str = "codetrial_device";
 const OAUTH_STATE_TTL_SECONDS: i64 = 60 * 10;
 
 /// `read:user` alone returns whatever address the person made public, which is
@@ -89,7 +93,10 @@ pub fn login_config(config: &WebServerConfig) -> Option<GitHubLoginConfig> {
     })
 }
 
-pub(crate) async fn login_handler(State(state): State<AppState>) -> Response {
+pub(crate) async fn login_handler(
+    State(state): State<AppState>,
+    request: Request<Body>,
+) -> Response {
     let Some(accounts) = state.accounts.clone() else {
         return state.accounts_error();
     };
@@ -120,9 +127,28 @@ pub(crate) async fn login_handler(State(state): State<AppState>) -> Response {
         percent_encode_component(github_oauth_scope(state.config.recording.is_some()))
     );
 
+    let return_path = query_pairs(request.uri().query().unwrap_or(""))
+        .get("returnTo")
+        .and_then(|path| super::tasks::task_return_path(path))
+        .unwrap_or_else(|| "/".to_owned());
     (
         StatusCode::FOUND,
-        [(header::LOCATION, location), (header::SET_COOKIE, cookie)],
+        [(header::LOCATION, location)],
+        AppendHeaders([
+            (header::SET_COOKIE, cookie),
+            (
+                header::SET_COOKIE,
+                set_cookie(
+                    OAUTH_RETURN_COOKIE,
+                    &signed_cookie_value(
+                        &format!("{state_token}:{return_path}"),
+                        &accounts.config().session_secret,
+                    ),
+                    OAUTH_STATE_TTL_SECONDS,
+                    state.config.production,
+                ),
+            ),
+        ]),
     )
         .into_response()
 }
@@ -242,41 +268,227 @@ pub(crate) async fn callback_handler(
             json!({ "error": "GitHub token exchange failed." }),
         );
     };
-    let Ok(profile) = github_profile(
+    let return_path = cookie_value(request.headers(), OAUTH_RETURN_COOKIE)
+        .and_then(|value| verified_cookie_value(&value, &accounts.config().session_secret))
+        .and_then(|value| {
+            value
+                .strip_prefix(&format!("{state_token}:"))
+                .map(str::to_owned)
+        })
+        .and_then(|path| super::tasks::task_return_path(&path))
+        .unwrap_or_else(|| "/".to_owned());
+    let session = match sign_in(&state, accounts, &access_token).await {
+        Ok(session) => session,
+        Err(refusal) => return refusal,
+    };
+
+    (
+        StatusCode::FOUND,
+        [(header::LOCATION, return_path)],
+        AppendHeaders([
+            (header::SET_COOKIE, session),
+            (
+                header::SET_COOKIE,
+                clear_cookie(OAUTH_STATE_COOKIE, state.config.production),
+            ),
+            (
+                header::SET_COOKIE,
+                clear_cookie(OAUTH_RETURN_COOKIE, state.config.production),
+            ),
+        ]),
+    )
+        .into_response()
+}
+
+/// The GitHub app id the device flow signs in with: the configured
+/// `GITHUB_CLIENT_ID`, or the one a release was built with. The device flow
+/// needs no client secret, so a learner's machine holds none.
+///
+/// Only where task mode is on, which is a server reachable from this computer
+/// alone. Anywhere else a device code is a phishing lure: whoever starts the
+/// flow there and talks someone into approving it gets their session.
+fn device_client_id(config: &WebServerConfig) -> Option<String> {
+    config.tasks.as_ref()?;
+
+    // The configured id first, then the one a release build carries. Either may
+    // be blank: a release workflow without the variable compiles it in empty.
+    [
+        config.github_client_id.as_deref(),
+        option_env!("CODETRIAL_GITHUB_CLIENT_ID"),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .find(|id| !id.is_empty())
+    .map(str::to_owned)
+}
+
+/// Starts a GitHub device authorization: the page shows the user code and
+/// sends the learner to github.com to approve it.
+pub(crate) async fn device_start_handler(
+    State(state): State<AppState>,
+    request: Request<Body>,
+) -> Response {
+    let Some(accounts) = state.accounts.clone() else {
+        return state.accounts_error();
+    };
+    if let Some(refusal) = super::tasks::device_refusal(request.headers()) {
+        return refusal;
+    }
+    let Some(client_id) = device_client_id(&state.config) else {
+        return oauth_not_configured_response();
+    };
+    let Ok(body) = github_oauth_post(
         accounts.config(),
-        &access_token,
-        state.config.recording.is_some(),
+        "login/device/code",
+        &json!({"client_id": client_id,
+            "scope": github_oauth_scope(state.config.recording.is_some())}),
     )
     .await
     else {
         return json_response(
             StatusCode::BAD_GATEWAY,
-            json!({ "error": "GitHub profile request failed." }),
+            json!({ "error": "GitHub did not start a sign-in." }),
         );
+    };
+    let (Some(device_code), Some(user_code), Some(uri)) = (
+        body["device_code"].as_str(),
+        body["user_code"].as_str(),
+        body["verification_uri"].as_str(),
+    ) else {
+        return json_response(
+            StatusCode::BAD_GATEWAY,
+            json!({ "error": "GitHub did not start a sign-in." }),
+        );
+    };
+    let expires_in = body["expires_in"].as_i64().unwrap_or(900).clamp(60, 1800);
+    let cookie = set_cookie(
+        DEVICE_COOKIE,
+        &signed_cookie_value(device_code, &accounts.config().session_secret),
+        expires_in,
+        state.config.production,
+    );
+    (
+        StatusCode::OK,
+        [(header::SET_COOKIE, cookie)],
+        axum::Json(json!({
+            "userCode": user_code,
+            "verificationUri": uri,
+            "interval": body["interval"].as_u64().unwrap_or(5).max(5),
+            "expiresIn": expires_in,
+        })),
+    )
+        .into_response()
+}
+
+/// Asks GitHub whether the learner approved the device code yet; once they
+/// have, signs them in exactly as the web flow's callback does.
+pub(crate) async fn device_poll_handler(
+    State(state): State<AppState>,
+    request: Request<Body>,
+) -> Response {
+    let Some(accounts) = state.accounts.clone() else {
+        return state.accounts_error();
+    };
+    if let Some(refusal) = super::tasks::device_refusal(request.headers()) {
+        return refusal;
+    }
+    let Some(client_id) = device_client_id(&state.config) else {
+        return oauth_not_configured_response();
+    };
+    let Some(device_code) = cookie_value(request.headers(), DEVICE_COOKIE)
+        .and_then(|value| verified_cookie_value(&value, &accounts.config().session_secret))
+    else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "Start the sign-in again.", "restart": true }),
+        );
+    };
+    let Ok(body) = github_oauth_post(
+        accounts.config(),
+        "login/oauth/access_token",
+        &json!({
+            "client_id": client_id,
+            "device_code": device_code,
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        }),
+    )
+    .await
+    else {
+        return json_response(
+            StatusCode::BAD_GATEWAY,
+            json!({ "error": "GitHub did not answer." }),
+        );
+    };
+    let Some(access_token) = body["access_token"]
+        .as_str()
+        .filter(|token| !token.is_empty())
+    else {
+        return match body["error"].as_str() {
+            Some("authorization_pending") => {
+                json_response(StatusCode::ACCEPTED, json!({ "pending": true }))
+            }
+            Some("slow_down") => json_response(
+                StatusCode::ACCEPTED,
+                json!({ "pending": true, "interval": body["interval"].as_u64().unwrap_or(10) }),
+            ),
+            _ => json_response(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": "The sign-in expired or was declined.", "restart": true }),
+            ),
+        };
+    };
+    let session = match sign_in(&state, accounts, access_token).await {
+        Ok(session) => session,
+        Err(refusal) => return refusal,
+    };
+    (
+        StatusCode::OK,
+        AppendHeaders([
+            (header::SET_COOKIE, session),
+            (
+                header::SET_COOKIE,
+                clear_cookie(DEVICE_COOKIE, state.config.production),
+            ),
+        ]),
+        axum::Json(json!({ "signedIn": true })),
+    )
+        .into_response()
+}
+
+/// Where the browser and the device sign-ins both end: GitHub's profile for
+/// `access_token`, recorded as a signed-in account. The session cookie to
+/// set, or the response saying why there is none.
+#[allow(clippy::result_large_err)] // Responses are immediately returned by HTTP handlers.
+async fn sign_in(
+    state: &AppState,
+    accounts: Arc<Accounts>,
+    access_token: &str,
+) -> Result<String, Response> {
+    let Ok(profile) = github_profile(
+        accounts.config(),
+        access_token,
+        state.config.recording.is_some(),
+    )
+    .await
+    else {
+        return Err(json_response(
+            StatusCode::BAD_GATEWAY,
+            json!({ "error": "GitHub profile request failed." }),
+        ));
     };
     let session_secret = accounts.config().session_secret.clone();
     let Ok(session_id) = blocking(move || create_session(&accounts, &profile)).await else {
-        return json_response(
+        return Err(json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             json!({ "error": "Could not create account session." }),
-        );
+        ));
     };
-
-    (
-        StatusCode::FOUND,
-        [(header::LOCATION, "/".to_string())],
-        AppendHeaders([
-            (
-                header::SET_COOKIE,
-                session_cookie(&session_id, &session_secret, state.config.production),
-            ),
-            (
-                header::SET_COOKIE,
-                clear_cookie(OAUTH_STATE_COOKIE, state.config.production),
-            ),
-        ]),
-    )
-        .into_response()
+    Ok(session_cookie(
+        &session_id,
+        &session_secret,
+        state.config.production,
+    ))
 }
 
 pub(crate) async fn session_handler(
@@ -299,6 +511,7 @@ pub(crate) async fn session_handler(
             json!({
                 "signedIn": true,
                 "loginRequired": login_required,
+                "deviceLogin": device_client_id(&state.config).is_some(),
                 "maxDurationMin": max_duration_min,
                 "user": {
                     "login": user.login,
@@ -311,6 +524,7 @@ pub(crate) async fn session_handler(
             json!({
                 "signedIn": false,
                 "loginRequired": login_required,
+                "deviceLogin": device_client_id(&state.config).is_some(),
                 "maxDurationMin": max_duration_min,
             }),
         ),
@@ -385,25 +599,41 @@ impl FromRequestParts<AppState> for Owner {
 
 /// Takes the credentials rather than the whole config, so posting empty ones
 /// to GitHub is not something a caller can express.
+/// One POST to GitHub's OAuth endpoints, answered as JSON: the browser
+/// sign-in's code exchange and both steps of the device flow.
+async fn github_oauth_post(
+    config: &GitHubLoginConfig,
+    path: &str,
+    body: &Value,
+) -> Result<Value, reqwest::Error> {
+    crate::http_client()
+        .post(format!(
+            "{}/{path}",
+            config.oauth_base_url.trim_end_matches('/')
+        ))
+        .header(header::ACCEPT, "application/json")
+        .json(body)
+        .send()
+        .await?
+        .json::<Value>()
+        .await
+}
+
 pub(crate) async fn github_access_token(
     config: &GitHubLoginConfig,
     oauth: &GitHubOauth,
     code: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let response = crate::http_client()
-        .post(format!(
-            "{}/login/oauth/access_token",
-            config.oauth_base_url.trim_end_matches('/')
-        ))
-        .header(header::ACCEPT, "application/json")
-        .json(&json!({
+    let body = github_oauth_post(
+        config,
+        "login/oauth/access_token",
+        &json!({
             "client_id": oauth.client_id,
             "client_secret": oauth.client_secret,
             "code": code,
-        }))
-        .send()
-        .await?;
-    let body = response.json::<Value>().await?;
+        }),
+    )
+    .await?;
     body.get("access_token")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())

@@ -14,6 +14,144 @@ const EDITOR: ReportMaterial<'static> = ReportMaterial {
 };
 
 #[tokio::test]
+async fn task_feedback_exhausts_repairs_without_reusing_rejected_provider_content() {
+    let session =
+        crate::tasks::session::TaskSession::new(crate::tasks::test_support::admitted().await, 100);
+    let observed = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let captured = Arc::clone(&observed);
+    let app = axum::Router::new().route("/", axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
+        let captured = Arc::clone(&captured);
+        async move {
+            captured.lock().unwrap().push(request);
+            axum::Json(json!({"candidates":[{"content":{"parts":[{"text":"{\"hire\":true,\"private\":\"REJECTED_PROVIDER_IMPLEMENTATION\"}"}]}}]}))
+        }
+    }));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let keys =
+        GeminiKeys::from_config(&live_config(&[("GOOGLE_API_KEYS", "task-repair-test-key")]));
+    assert!(
+        generate_task_feedback_at(
+            &keys,
+            &url,
+            &session,
+            "private reference",
+            "task-repair-room"
+        )
+        .await
+        .is_none()
+    );
+    let observed = observed.lock().unwrap();
+    assert_eq!(observed.len(), 1 + MAX_REPORT_REPAIRS);
+    assert!(observed.iter().all(|request| {
+        !request
+            .to_string()
+            .contains("REJECTED_PROVIDER_IMPLEMENTATION")
+    }));
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_rejected_task_review_is_asked_for_again_with_the_repair_note() {
+    let mut session =
+        crate::tasks::session::TaskSession::new(crate::tasks::test_support::admitted().await, 100);
+    session.start(100);
+    let dimension = json!({"rating": null, "reason": "No reliable opportunity was captured.",
+        "insufficientReason": "missing_turns", "support": "none", "evidence": []});
+
+    // Named here rather than read from the validator, which is what is being
+    // exercised.
+    let dimensions: serde_json::Map<_, _> = [
+        "reasoningParticipation",
+        "implementationOwnership",
+        "testingAndDiagnosis",
+        "revisionAndImprovement",
+    ]
+    .into_iter()
+    .map(|name| (name.to_owned(), dimension.clone()))
+    .collect();
+    let review = json!({"dimensions": dimensions,
+        "gaps": [], "nextActions": ["Trace a boundary input and explain the state."]});
+    let answers = Arc::new(std::sync::Mutex::new(vec![
+        review.to_string(),
+        json!({"hire": true}).to_string(),
+    ]));
+    let observed = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let captured = Arc::clone(&observed);
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
+            let captured = Arc::clone(&captured);
+            let answers = Arc::clone(&answers);
+            async move {
+                captured.lock().unwrap().push(request.to_string());
+                let text = answers.lock().unwrap().pop().unwrap();
+                axum::Json(json!({"candidates":[{"content":{"parts":[{"text": text}]}}]}))
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let keys = GeminiKeys::from_config(&live_config(&[("GOOGLE_API_KEYS", "task-review-key")]));
+    let result = generate_task_feedback_at(&keys, &url, &session, "", "task-review-room")
+        .await
+        .expect("the repaired review is accepted");
+    assert_eq!(
+        result,
+        crate::tasks::report::stamp(&session, &review, "task-review-room")
+    );
+    let observed = observed.lock().unwrap();
+    assert_eq!(observed.len(), 2);
+    let note = "A prior response failed the schema";
+    assert!(!observed[0].contains(note));
+    assert!(observed[1].contains(note));
+    server.abort();
+}
+
+/// Every tool the task interviewer is offered is one its session answers, and
+/// the interview's own tools are not offered.
+#[tokio::test]
+async fn the_task_interviewer_is_offered_exactly_the_tools_its_session_answers() {
+    let mut session =
+        crate::tasks::session::TaskSession::new(crate::tasks::test_support::admitted().await, 100);
+    session.start(100);
+    let declarations = task_tool_declarations();
+    let names: Vec<&str> = declarations
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "read_editor",
+            "record_task_check",
+            "request_targeted_followup"
+        ]
+    );
+    for tool in declarations.as_array().unwrap() {
+        let parameters = &tool["parameters"];
+        for required in parameters["required"].as_array().into_iter().flatten() {
+            assert!(
+                parameters["properties"]
+                    .get(required.as_str().unwrap())
+                    .is_some(),
+                "{tool}"
+            );
+        }
+        let answer = session.answer_tool(tool["name"].as_str().unwrap(), &json!({}));
+        assert_ne!(answer, json!({"error": "tool unavailable in task mode"}));
+    }
+}
+
+#[tokio::test]
 async fn interim_failures_update_shared_cooldowns_without_retrying() {
     for status in [429, 401, 503, 400] {
         let first = format!("interim-{status}-first");

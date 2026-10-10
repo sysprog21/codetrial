@@ -1,0 +1,25 @@
+{
+  "topic": "task_error",
+  "cases": [
+    {
+      "name": "capture rejection",
+      "payload": {
+        "version": 1,
+        "code": "action_rejected",
+        "requestId": "capture-1",
+        "retryable": true,
+        "message": "Wait for the acknowledged task state before retrying."
+      }
+    },
+    {
+      "name": "uncorrelated rejection",
+      "payload": {
+        "version": 1,
+        "code": "action_rejected",
+        "requestId": null,
+        "retryable": true,
+        "message": "Wait for the acknowledged task state before retrying."
+      }
+    }
+  ]
+}

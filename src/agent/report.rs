@@ -633,6 +633,14 @@ fn sort_improvement_plan(report: &mut serde_json::Value) {
     });
 }
 
+/// Whether a Learning review narrative passes the judgments an interview
+/// report is held to. `improvement` marks a gap or next action, which also
+/// gets the rules for advice, such as never coaching a learner to speak so a
+/// recognizer understands them.
+pub(crate) fn task_narrative_permitted(text: &str, improvement: bool) -> bool {
+    refused_judgments(text, improvement).is_empty()
+}
+
 fn validate_observable_judgments(value: &serde_json::Value, path: &str, errors: &mut Vec<String>) {
     visit_strings(value, path, &mut |path, text| {
         let improvement = IMPROVEMENT_PATHS

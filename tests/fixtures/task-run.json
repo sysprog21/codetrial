@@ -1,0 +1,17 @@
+{
+  "topic": "task_run",
+  "cases": [
+    {
+      "name": "practice result",
+      "payload": {
+        "version": 1,
+        "requestId": "result-1",
+        "runId": "run-1",
+        "revisionId": "revision-1",
+        "passed": 1,
+        "total": 2,
+        "diagnostics": "practice evidence"
+      }
+    }
+  ]
+}

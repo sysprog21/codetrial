@@ -8,9 +8,11 @@ export function reportFilename(problemId, at) {
 }
 
 export function downloadMarkdown(markdown, filename) {
-  const url = URL.createObjectURL(
-    new Blob([markdown], { type: "text/markdown" }),
-  );
+  downloadText(markdown, filename, "text/markdown");
+}
+
+export function downloadText(content, filename, type) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = filename;

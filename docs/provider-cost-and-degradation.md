@@ -210,6 +210,25 @@ saves it on arrival like any report, and the final outcome replaces it under
 the same report id, so a tab lost during the window keeps the failure rather
 than nothing.
 
+Two exceptions cover [task mode](task-mode.md), which runs on the learner's
+own machine for that learner alone.
+
+The latest attempt's result (a Learning review, an unavailable envelope, or an
+invalid or interrupted record) stays in process memory with the attempt's final
+code and revision ID, so the learner's page can collect it after a room
+disconnect or a reload. It is returned only to the signed-in learner with
+`Cache-Control: no-store`, bounded by `reviewBytes`, and dropped once
+`reviewRetentionSeconds` has passed (at the next task request, so an idle
+process can hold it until then), when the next attempt ends, or on process
+exit. It is
+never persisted and never an input to another attempt or a later review. The
+attempt's other revisions, turns, runs and review prompt are not kept with it.
+
+The instructor's package is static problem data. Its manifest and encrypted
+`tasks.enc` are downloaded at unlock and decoded in process memory; nothing
+from it, encrypted or not, is written to disk, and the PIN and the key derived
+from it are discarded once the set is decoded.
+
 ## What the candidate sees
 
 The browser exposes distinct accessible states for connecting, live,
@@ -376,19 +395,19 @@ editor arm typed code and the whiteboard arm drew eight figures, 30 seconds
 apart. The counts are the server's own `live_turn_usage` lines, read with
 `scripts/analyze-gemini-usage.py`.
 
-| Opening | Prompt tokens, first generation | Runs |
-|---|---|---|
-| Editor | 5,431 | 3 of 3 identical |
-| Whiteboard | 5,408 | 3 of 3 identical |
+| Opening    | Prompt tokens, first generation | Runs             |
+| ---------- | ------------------------------- | ---------------- |
+| Editor     | 5,431                           | 3 of 3 identical |
+| Whiteboard | 5,408                           | 3 of 3 identical |
 
 Per text, counted with `countTokens` on `gemini-3.1-flash-lite`. The parts sum
 to the live difference exactly (47 - 56 - 14 = -23):
 
-| Text | Editor | Whiteboard | Difference | Billed |
-|---|---|---|---|---|
-| System instructions | 4,408 | 4,455 | +47 | every generation |
-| Tool declarations | 429 | 373 | -56 | every generation |
-| Greeting | 170 | 156 | -14 | every generation |
+| Text                | Editor | Whiteboard | Difference | Billed           |
+| ------------------- | ------ | ---------- | ---------- | ---------------- |
+| System instructions | 4,408  | 4,455      | +47        | every generation |
+| Tool declarations   | 429    | 373        | -56        | every generation |
+| Greeting            | 170    | 156        | -14        | every generation |
 
 The fixed overhead is therefore 23 tokens below the editor's: the whiteboard
 instructions are longer, and `read_board` is declared in fewer tokens than

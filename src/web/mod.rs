@@ -25,6 +25,7 @@ mod policy;
 mod pool;
 mod recordings;
 mod setup;
+mod tasks;
 mod token;
 
 // Flattened back into one namespace so the split is a file boundary and not an
@@ -59,6 +60,7 @@ pub const MAX_WEBHOOK_BODY_BYTES: usize = 64 * 1024;
 #[derive(Clone, PartialEq, Eq)]
 pub struct WebServerConfig {
     pub web_dir: PathBuf,
+    pub tasks: Option<crate::tasks::access::TaskService>,
     pub github_client_id: Option<String>,
     pub github_client_secret: Option<String>,
     pub session_secret: Option<String>,
@@ -116,6 +118,7 @@ impl fmt::Debug for WebServerConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self {
             web_dir,
+            tasks,
             github_client_id,
             github_client_secret,
             session_secret,
@@ -134,6 +137,7 @@ impl fmt::Debug for WebServerConfig {
         formatter
             .debug_struct("WebServerConfig")
             .field("web_dir", web_dir)
+            .field("task_mode", &tasks.is_some())
             .field("github_client_id", github_client_id)
             .field(
                 "github_client_secret",
@@ -423,10 +427,31 @@ pub(crate) fn web_router(
     Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/api/token", post(token_handler))
+        .route(
+            "/api/task-sets/{set_id}/unlock",
+            post(tasks::task_unlock_handler),
+        )
+        .route(
+            "/api/task-sets/{set_id}/tasks/{task_id}",
+            get(tasks::task_load_handler),
+        )
+        .route(
+            "/api/task-sets/{set_id}/tasks/{task_id}/attempts",
+            post(tasks::task_start_handler),
+        )
         .route("/api/observer-token", post(observer_token_handler))
+        .route("/api/task-reviews/{room}", get(tasks::task_result_handler))
         .route("/api/login", get(login_handler).post(record_login_handler))
         .route("/api/callback", get(callback_handler))
         .route("/api/session", get(session_handler))
+        .route(
+            "/api/github/device",
+            axum::routing::post(auth::device_start_handler),
+        )
+        .route(
+            "/api/github/device/poll",
+            axum::routing::post(auth::device_poll_handler),
+        )
         .route("/api/logout", post(logout_handler))
         .route("/api/interviews", post(create_interview_handler))
         .route(
@@ -538,7 +563,20 @@ pub trait RoomDispatcher: Send + Sync + 'static {
         &self,
         room_name: &str,
         provider: &crate::config::Provider,
+        job: AgentJob,
     ) -> Result<(), DispatchRefusal>;
+}
+
+/// What the agent a room is reserved for does there. One reservation, one
+/// capacity count and one refusal log for both.
+pub enum AgentJob {
+    Interview,
+    /// A task attempt: the learner's identity in the room, and the task the
+    /// admission pinned.
+    Task {
+        candidate: String,
+        task: crate::tasks::access::PinnedTask,
+    },
 }
 
 /// Why no interviewer will come. The two answer the candidate differently: a

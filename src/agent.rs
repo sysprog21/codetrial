@@ -27,9 +27,9 @@ mod problem_guides;
 mod problem_rubrics;
 mod problem_topics;
 mod problem_variants;
-mod problems;
+pub(crate) mod problems;
 mod prompts;
-mod report;
+pub(crate) mod report;
 mod value;
 
 #[cfg(test)]
@@ -2737,6 +2737,24 @@ pub(crate) fn has_recognized_candidate_turn(lines: &[String]) -> bool {
     lines
         .iter()
         .any(|line| candidate_speech(line).is_some_and(|speech| !mostly_non_latin(speech)))
+}
+
+/// Whether a learner's speech, without a speaker prefix, is one
+/// `mark_unrecognized_turns` would hide. Task mode keeps its turns by id rather
+/// than as transcript lines, so it asks of the text alone.
+pub(crate) fn is_unrecognized_speech(speech: &str) -> bool {
+    mostly_non_latin(speech)
+}
+
+/// What an assessment reads for a learner's speech without a speaker prefix:
+/// the speech itself, or `UNRECOGNIZED_TURN` for one `mark_unrecognized_turns`
+/// would hide.
+pub(crate) fn assessed_speech(speech: &str) -> &str {
+    if mostly_non_latin(speech) {
+        UNRECOGNIZED_TURN
+    } else {
+        speech
+    }
 }
 
 /// Whether `line` is a candidate turn `mark_unrecognized_turns` hides.

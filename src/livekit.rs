@@ -97,6 +97,7 @@ mod media;
 mod report;
 mod rooms;
 mod session;
+pub(crate) mod tasks;
 mod turn;
 
 // The room half reaches back for these on every inbound event, which is what

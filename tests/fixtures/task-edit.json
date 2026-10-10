@@ -1,0 +1,13 @@
+{
+  "topic": "code_update",
+  "cases": [
+    {
+      "name": "task draft",
+      "payload": {
+        "code": "def match_pair(amounts, total):\n    return []\n",
+        "language": "python",
+        "revisionId": "revision-1"
+      }
+    }
+  ]
+}

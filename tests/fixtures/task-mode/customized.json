@@ -1,0 +1,171 @@
+{
+  "problem": {
+    "id": "delimiter-closer",
+    "difficulty": "Easy",
+    "topics": [
+      "String",
+      "Stack"
+    ],
+    "statement": [
+      "Given a string s containing just the characters '(', ')', '{', '}', '[' and ']', determine if the input string is valid.",
+      "An input string is valid if open brackets are closed by the same type of bracket, open brackets are closed in the correct order, and every close bracket has a corresponding open bracket of the same type."
+    ],
+    "constraints": [
+      "1 <= s.length <= 10^4",
+      "s consists of parentheses only: '()[]{}'."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def isValid(self, s: str) -> bool:\n        stack = []\n        pairs = {\")\": \"(\", \"]\": \"[\", \"}\": \"{\"}\n        for char in s:\n            if char in pairs:\n                # TASK_COMPLETE_CLOSER\n                pass\n            else:\n                stack.append(char)\n        return not stack\n",
+      "javascript": "/**\n * @param {string} s\n * @return {boolean}\n */\nfunction isValid(s) {\n  // Think out loud as you go!\n}\n",
+      "c": "bool isValid(char* s) {\n    // Think out loud as you go!\n    return false;\n}\n",
+      "cpp": "class Solution {\npublic:\n    bool isValid(string s) {\n        // Think out loud as you go!\n        return false;\n    }\n};\n",
+      "java": "class Solution {\n    public boolean isValid(String s) {\n        // Think out loud as you go!\n        return false;\n    }\n}\n"
+    },
+    "summary": "Given a string of only '()[]{}', return whether the brackets are valid: every open bracket is closed by the same type, in the correct order.",
+    "optimal": "Single pass with a stack: push open brackets, and on a close bracket check the top of the stack matches; valid iff the stack is empty at the end. O(n) time, O(n) space.",
+    "pitfalls": "Popping from an empty stack on a leading close bracket like ')('; forgetting the final stack-empty check for unclosed brackets like '('; only counting bracket totals (fails '([)]'); slow repeated string replacement of '()' pairs instead of a stack.",
+    "origin": "original"
+  },
+  "variant": {
+    "title": "Template Delimiter Audit",
+    "entry": "delimitersNestCleanly",
+    "brief": [
+      "Our templating engine lets authors wrap expressions in three kinds of delimiters: round, square and curly. Before a template is saved, a lint step strips everything except the delimiters and checks that the author opened and closed them properly.",
+      "Implement delimitersNestCleanly(s), where s is the stripped string made up only of the characters ( ) [ ] { }, and return true if every opening delimiter is closed by one of the same kind with the pairs properly nested, or false otherwise."
+    ],
+    "contract": "delimitersNestCleanly(s) receives a string of only the characters ( ) [ ] { } and returns true exactly when every closing delimiter matches the most recently opened unclosed delimiter of the same kind and nothing is left open at the end; a stray closer, a mismatched or overlapping pair, or an unclosed opener returns false.",
+    "examples": [
+      {
+        "case": 4
+      }
+    ],
+    "clarifications": [
+      {
+        "question": "Can pairs overlap, like a round pair that starts inside a square pair but ends outside it?",
+        "answer": "No. Overlapping pairs such as ([)] are invalid; a pair must close entirely inside the pair that contains it."
+      },
+      {
+        "question": "What if a closing delimiter shows up with nothing open?",
+        "answer": "The template is invalid, so return false."
+      },
+      {
+        "question": "What if something is still open when the string ends?",
+        "answer": "That is also invalid; return false."
+      },
+      {
+        "question": "Could there be other characters mixed in?",
+        "answer": "No. The lint step has already removed everything except the six delimiter characters."
+      },
+      {
+        "question": "How long can the string be?",
+        "answer": "Between 1 and 10^4 characters."
+      }
+    ],
+    "followUps": [
+      "Authors now want the error message to point at the position of the first offending delimiter. What would you change?",
+      "Suppose string literals in the template can contain delimiters that should be ignored, escaped with a backslash. How does that affect your check?",
+      "If only one kind of delimiter were allowed, could you do this with less memory?"
+    ],
+    "hints": [
+      "Walk through {[]} by hand. When you reach the first closing delimiter, which opening delimiter does it have to match?",
+      "Of all the delimiters still open at any moment, which one is the only one allowed to be closed next?",
+      "What do you need to remember about the open delimiters so each closer can be checked, and what must be true of that memory once you reach the end?"
+    ]
+  },
+  "judge": {
+    "kind": "function",
+    "entry": "isValid",
+    "checker": "exact",
+    "cases": [
+      {
+        "label": "s=\"()\"",
+        "input": [
+          "()"
+        ],
+        "expected": true
+      },
+      {
+        "label": "s=\"()[]{}\"",
+        "input": [
+          "()[]{}"
+        ],
+        "expected": true
+      },
+      {
+        "label": "mismatched type: s=\"(]\"",
+        "input": [
+          "(]"
+        ],
+        "expected": false
+      },
+      {
+        "label": "interleaved: s=\"([)]\"",
+        "input": [
+          "([)]"
+        ],
+        "expected": false
+      },
+      {
+        "label": "nested: s=\"{[]}\"",
+        "input": [
+          "{[]}"
+        ],
+        "expected": true
+      },
+      {
+        "label": "unclosed: s=\"(\"",
+        "input": [
+          "("
+        ],
+        "expected": false
+      },
+      {
+        "label": "close first: s=\")(\"",
+        "input": [
+          ")("
+        ],
+        "expected": false
+      }
+    ],
+    "paramNames": [
+      "s"
+    ],
+    "paramTypes": [
+      "string"
+    ],
+    "returnType": "boolean"
+  },
+  "sidecar": {
+    "promptVersion": 1,
+    "interactionPrompt": "Ask {{title}} learners to trace the supplied loop, explain its state, complete the marked branch, predict a test result, and revise. Ask one question at a time; never provide completed code.",
+    "completionTargets": [
+      {
+        "id": "closer-branch",
+        "language": "python",
+        "marker": "TASK_COMPLETE_CLOSER",
+        "goal": "Complete the branch without changing the surrounding contract."
+      }
+    ],
+    "understandingChecks": [
+      {
+        "id": "trace",
+        "question": "Trace a worked input and explain the state."
+      },
+      {
+        "id": "contract",
+        "question": "What must remain true as the loop advances?"
+      },
+      {
+        "id": "revision",
+        "question": "Which assumption changed, and how will you verify it?"
+      }
+    ],
+    "requiredCases": [
+      "nested: s=\"{[]}\"",
+      "mismatched type: s=\"(]\"",
+      "unclosed: s=\"(\""
+    ],
+    "maxHintRungs": 3,
+    "rubricProfile": "task-engagement-v1"
+  }
+}

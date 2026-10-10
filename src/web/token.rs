@@ -333,7 +333,9 @@ pub(crate) fn token_duration_min(value: Option<&Value>, recording_max_min: Optio
 /// never finished setting up, and every provider spent is a server that worked
 /// until this morning.
 #[allow(clippy::result_large_err)] // Responses are immediately returned by HTTP handlers.
-async fn reserved_room(state: &AppState) -> Result<(String, &crate::config::Provider), Response> {
+pub(crate) async fn reserved_room(
+    state: &AppState,
+) -> Result<(String, &crate::config::Provider), Response> {
     match room_and_available_provider(state).await {
         ProviderChoice::Ready(room_name, provider) => Ok((room_name, provider)),
         ProviderChoice::NoneConfigured => Err(json_response(
@@ -450,7 +452,8 @@ async fn dispatch_or_release_consent(
     let Some(dispatcher) = &state.dispatcher else {
         return None;
     };
-    let Err(refusal) = dispatcher.ensure_agent(room_name, provider) else {
+    let Err(refusal) = dispatcher.ensure_agent(room_name, provider, super::AgentJob::Interview)
+    else {
         return None;
     };
     if let Some(interview) = interview {

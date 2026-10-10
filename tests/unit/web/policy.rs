@@ -11,6 +11,7 @@ use super::*;
 /// proves the string reaches a response as a header.
 fn policy_for(url: &str) -> String {
     content_security_policy(&WebServerConfig {
+        tasks: None,
         web_dir: std::path::PathBuf::new(),
         github_client_id: None,
         github_client_secret: None,

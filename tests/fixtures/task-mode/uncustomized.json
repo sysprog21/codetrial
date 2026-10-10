@@ -1,0 +1,186 @@
+{
+  "problem": {
+    "id": "two-sum",
+    "title": "Two Sum",
+    "difficulty": "Easy",
+    "topics": [
+      "Array",
+      "Hash Table"
+    ],
+    "statement": [
+      "Given an array of integers nums and an integer target, return the indices of the two numbers such that they add up to target.",
+      "You may assume that each input has exactly one solution, and you may not use the same element twice.",
+      "You can return the answer in any order."
+    ],
+    "examples": [
+      {
+        "input": "nums = [2,7,11,15], target = 9",
+        "output": "[0,1]",
+        "explanation": "nums[0] + nums[1] == 9, so we return [0, 1]."
+      },
+      {
+        "input": "nums = [3,2,4], target = 6",
+        "output": "[1,2]"
+      },
+      {
+        "input": "nums = [3,3], target = 6",
+        "output": "[0,1]"
+      }
+    ],
+    "constraints": [
+      "2 <= nums.length <= 10^4",
+      "-10^9 <= nums[i] <= 10^9",
+      "-10^9 <= target <= 10^9",
+      "Exactly one valid answer exists."
+    ],
+    "starterCode": {
+      "python": "class Solution:\n    def twoSum(self, nums: list[int], target: int) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
+      "javascript": "/**\n * @param {number[]} nums\n * @param {number} target\n * @return {number[]}\n */\nfunction twoSum(nums, target) {\n  // Think out loud as you go!\n}\n",
+      "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* twoSum(int* nums, int numsSize, int target, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+      "cpp": "class Solution {\npublic:\n    vector<int> twoSum(vector<int>& nums, int target) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
+      "java": "class Solution {\n    public int[] twoSum(int[] nums, int target) {\n        // Think out loud as you go!\n        return new int[]{};\n    }\n}\n"
+    },
+    "summary": "Given an array of integers `nums` and an integer `target`, return the indices of the two numbers that add up to `target`. Exactly one solution exists and the same element may not be used twice.",
+    "optimal": "One-pass hash map: for each value, check whether (target - value) was already seen; O(n) time, O(n) space. Brute force is O(n^2).",
+    "pitfalls": "Using the same element twice; returning values instead of indices; breaking on duplicate values (e.g. [3,3] target 6); claiming sorting + two pointers works without noticing it destroys the original indices."
+  },
+  "variant": {
+    "title": "Chargeback Pair Match",
+    "entry": "matchDisputedCharge",
+    "brief": [
+      "Our payments team handles disputes where a customer says two separate transactions on their statement together make up one disputed charge. Support needs to locate those two transactions quickly.",
+      "Implement matchDisputedCharge(nums, target), where nums holds the transaction amounts in statement order and target is the disputed total, and return the positions of the two transactions whose amounts add up to target."
+    ],
+    "contract": "matchDisputedCharge(nums, target) returns a list of two distinct zero-based positions i and j into nums with nums[i] + nums[j] == target, in either order; exactly one such pair of positions exists, and equal amounts at different positions may form the pair.",
+    "examples": [
+      {
+        "case": 3
+      }
+    ],
+    "clarifications": [
+      {
+        "question": "Are positions zero-based, and does the order of the two positions matter?",
+        "answer": "Positions are zero-based, and either order is accepted."
+      },
+      {
+        "question": "Can I use the same transaction twice?",
+        "answer": "No. The two positions must be different, although two different transactions may have the same amount."
+      },
+      {
+        "question": "What if several pairs match, or none do?",
+        "answer": "Every statement we give you has exactly one matching pair."
+      },
+      {
+        "question": "Can amounts be negative, like refunds?",
+        "answer": "Yes. Amounts and the target range from -10^9 to 10^9."
+      },
+      {
+        "question": "How many transactions can a statement have?",
+        "answer": "Between 2 and 10^4."
+      }
+    ],
+    "followUps": [
+      "Now the disputed total might be made of three transactions. How would you extend this?",
+      "What if the statement is already sorted by amount and memory is tight?",
+      "Transactions arrive as a live feed and we want to flag a matching pair as soon as it appears. What would you keep around?"
+    ],
+    "hints": [
+      "Take one transaction of amount 4 with a target of 0. What exact amount would its partner need to have?",
+      "As you move through the statement, what could you remember about earlier transactions so you can tell immediately whether the partner you need already went by?",
+      "When you look up the partner you need, what should the lookup give back so you can report positions, and how do you avoid matching a transaction with itself?"
+    ]
+  },
+  "judge": {
+    "kind": "function",
+    "entry": "twoSum",
+    "checker": "indexPair",
+    "cases": [
+      {
+        "label": "nums=[2,7,11,15], target=9",
+        "input": [
+          [
+            2,
+            7,
+            11,
+            15
+          ],
+          9
+        ],
+        "expected": [
+          0,
+          1
+        ]
+      },
+      {
+        "label": "nums=[3,2,4], target=6",
+        "input": [
+          [
+            3,
+            2,
+            4
+          ],
+          6
+        ],
+        "expected": [
+          1,
+          2
+        ]
+      },
+      {
+        "label": "duplicates: nums=[3,3], target=6",
+        "input": [
+          [
+            3,
+            3
+          ],
+          6
+        ],
+        "expected": [
+          0,
+          1
+        ]
+      },
+      {
+        "label": "negatives: nums=[-3,4,3,90], target=0",
+        "input": [
+          [
+            -3,
+            4,
+            3,
+            90
+          ],
+          0
+        ],
+        "expected": [
+          0,
+          2
+        ]
+      },
+      {
+        "label": "zero pair: nums=[0,5,-5,1], target=0",
+        "input": [
+          [
+            0,
+            5,
+            -5,
+            1
+          ],
+          0
+        ],
+        "expected": [
+          1,
+          2
+        ]
+      }
+    ],
+    "paramNames": [
+      "nums",
+      "target"
+    ],
+    "paramTypes": [
+      "integer[]",
+      "integer"
+    ],
+    "returnType": "integer[]"
+  }
+}

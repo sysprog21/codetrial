@@ -31,7 +31,7 @@ pub fn variant_for(problem_id: &str) -> Option<&'static ProblemVariant> {
 /// The reviewer's solution notes, for the report prompt only. A live
 /// interviewer holding a written walkthrough paraphrases it, and a hint becomes
 /// the answer.
-pub(super) fn guide_for(problem_id: &str) -> Option<&'static str> {
+pub(crate) fn guide_for(problem_id: &str) -> Option<&'static str> {
     lookup(super::problem_guides::PROBLEM_GUIDES, problem_id).copied()
 }
 

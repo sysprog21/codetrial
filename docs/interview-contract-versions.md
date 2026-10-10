@@ -85,3 +85,12 @@ migration; refresh the prompt and report goldens; add this bundle's table row;
 cover successful, incomplete, legacy, malformed, and future reports; verify
 HTML, Markdown, history and progress, and replay provenance; then run the
 complete local test suite.
+
+## Task mode
+
+[Task mode](task-mode.md) owns a separate versioned task package, sidecar,
+wire protocol, rubric and Learning review. Its design version is 1, revised
+before any distribution for learner-local execution; the pilot implementation
+is under code and release-run verification. The active interview tuple
+and its prompt/report goldens are unchanged. Task reviews use an explicit
+assessment mode and never pass through the interview scorer.

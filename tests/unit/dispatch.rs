@@ -60,7 +60,8 @@ async fn the_configured_cap_is_the_one_enforced() {
     };
 
     assert!(
-        dispatcher.ensure_agent("interview-second", &provider) == Err(DispatchRefusal::AtCapacity),
+        dispatcher.ensure_agent("interview-second", &provider, AgentJob::Interview)
+            == Err(DispatchRefusal::AtCapacity),
         "a second room must be refused at a cap of one"
     );
 
@@ -68,7 +69,7 @@ async fn the_configured_cap_is_the_one_enforced() {
     // same room and refusing it would break the page that is open.
     assert!(
         dispatcher
-            .ensure_agent("interview-first", &provider)
+            .ensure_agent("interview-first", &provider, AgentJob::Interview)
             .is_ok()
     );
 }

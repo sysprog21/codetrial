@@ -1,0 +1,25 @@
+{
+  "topic": "task_end",
+  "cases": [
+    {
+      "name": "look-away rule",
+      "payload": {
+        "version": 1,
+        "requestId": "end-1",
+        "outcome": "invalid",
+        "cause": "look_away",
+        "durationMs": 8000
+      }
+    },
+    {
+      "name": "detector stopped",
+      "payload": {
+        "version": 1,
+        "requestId": "end-2",
+        "outcome": "interrupted",
+        "cause": "detector",
+        "durationMs": 0
+      }
+    }
+  ]
+}

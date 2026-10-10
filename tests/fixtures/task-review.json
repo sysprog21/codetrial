@@ -1,0 +1,181 @@
+{
+  "topic": "task_review",
+  "cases": [
+    {
+      "name": "unavailable stamped review",
+      "payload": {
+        "assessmentMode": "task",
+        "taskContract": {
+          "package": 1,
+          "prompt": 1,
+          "wire": 1,
+          "reportSchema": 1,
+          "rubric": 1
+        },
+        "taskAssessment": {
+          "setId": "classroom",
+          "setVersion": 7,
+          "taskId": "delimiter-closer",
+          "sessionId": "room-1",
+          "sessionOrdinal": 1,
+          "rubricProfile": "task-engagement-v1",
+          "githubLogin": "learner",
+          "githubId": 42,
+          "language": "python",
+          "rulesAcknowledgedAt": "2026-10-07T00:00:00Z",
+          "rules": {
+            "durationMin": 15,
+            "maxHintRungs": 3,
+            "lookAwaySeconds": 8,
+            "closesAt": null,
+            "rulesNote": null
+          },
+          "calibration": {
+            "ok": true,
+            "metric": "keypoints",
+            "baseline": 0.5,
+            "keyboard": 0.7,
+            "limit": 0.75
+          },
+          "outcome": null,
+          "captureOverflow": false,
+          "finalRevisionId": "initial",
+          "finalCode": "class Solution:\n    def delimitersNestCleanly(self, s: str) -> bool:\n        stack = []\n        pairs = {\")\": \"(\", \"]\": \"[\", \"}\": \"{\"}\n        for char in s:\n            if char in pairs:\n                # TASK_COMPLETE_CLOSER\n                pass\n            else:\n                stack.append(char)\n        return not stack\n"
+        },
+        "feedbackUnavailable": true
+      }
+    },
+    {
+      "name": "validated review",
+      "payload": {
+        "assessmentMode": "task",
+        "taskContract": {
+          "package": 1,
+          "prompt": 1,
+          "wire": 1,
+          "reportSchema": 1,
+          "rubric": 1
+        },
+        "taskAssessment": {
+          "dimensions": {
+            "reasoningParticipation": {
+              "rating": 3,
+              "reason": "The learner traced the loop state before any hint.",
+              "insufficientReason": null,
+              "support": "none",
+              "evidence": [
+                {
+                  "kind": "turn",
+                  "id": "turn-1"
+                }
+              ]
+            },
+            "implementationOwnership": {
+              "rating": null,
+              "reason": "No reliable opportunity was captured.",
+              "insufficientReason": "missing_turns",
+              "support": "none",
+              "evidence": []
+            },
+            "testingAndDiagnosis": {
+              "rating": null,
+              "reason": "No reliable opportunity was captured.",
+              "insufficientReason": "missing_turns",
+              "support": "none",
+              "evidence": []
+            },
+            "revisionAndImprovement": {
+              "rating": null,
+              "reason": "No reliable opportunity was captured.",
+              "insufficientReason": "missing_turns",
+              "support": "none",
+              "evidence": []
+            }
+          },
+          "gaps": [
+            "No practice run was captured."
+          ],
+          "nextActions": [
+            "Run the public cases and predict each result first."
+          ],
+          "setId": "classroom",
+          "setVersion": 7,
+          "taskId": "delimiter-closer",
+          "sessionId": "room-1",
+          "sessionOrdinal": 1,
+          "rubricProfile": "task-engagement-v1",
+          "githubLogin": "learner",
+          "githubId": 42,
+          "language": "python",
+          "rulesAcknowledgedAt": "2026-10-07T00:00:00Z",
+          "rules": {
+            "durationMin": 15,
+            "maxHintRungs": 3,
+            "lookAwaySeconds": 8,
+            "closesAt": null,
+            "rulesNote": null
+          },
+          "calibration": {
+            "ok": true,
+            "metric": "keypoints",
+            "baseline": 0.5,
+            "keyboard": 0.7,
+            "limit": 0.75
+          },
+          "outcome": null,
+          "captureOverflow": false,
+          "finalRevisionId": null,
+          "finalCode": null
+        }
+      }
+    },
+    {
+      "name": "invalid attempt",
+      "payload": {
+        "assessmentMode": "task",
+        "taskContract": {
+          "package": 1,
+          "prompt": 1,
+          "wire": 1,
+          "reportSchema": 1,
+          "rubric": 1
+        },
+        "taskAssessment": {
+          "setId": "classroom",
+          "setVersion": 7,
+          "taskId": "delimiter-closer",
+          "sessionId": "room-1",
+          "sessionOrdinal": 1,
+          "rubricProfile": "task-engagement-v1",
+          "githubLogin": "learner",
+          "githubId": 42,
+          "language": "python",
+          "rulesAcknowledgedAt": "2026-10-07T00:00:00Z",
+          "rules": {
+            "durationMin": 15,
+            "maxHintRungs": 3,
+            "lookAwaySeconds": 8,
+            "closesAt": null,
+            "rulesNote": null
+          },
+          "calibration": {
+            "ok": true,
+            "metric": "keypoints",
+            "baseline": 0.5,
+            "keyboard": 0.7,
+            "limit": 0.75
+          },
+          "outcome": {
+            "outcome": "invalid",
+            "cause": "visibility",
+            "at": 120,
+            "durationMs": 0
+          },
+          "captureOverflow": false,
+          "finalRevisionId": "draft",
+          "finalCode": "print('so far')"
+        }
+      }
+    }
+  ]
+}
