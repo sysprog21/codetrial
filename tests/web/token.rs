@@ -888,6 +888,45 @@ async fn token_api_rejects_malformed_body_and_defaults_an_empty_one() {
 }
 
 #[tokio::test]
+async fn token_api_accepts_interviewer_selections() {
+    let (config, cookie, db_path) = signed_in_web_config("interviewer-selections");
+    let (base, server) = spawn_web_server(config).await;
+    let client = http_client();
+
+    for (field, choices) in [
+        ("interviewerVoice", codetrial::agent::INTERVIEWER_VOICES),
+        ("interviewerAccent", codetrial::agent::INTERVIEWER_ACCENTS),
+    ] {
+        for selected in ["", "Default", "Random"]
+            .into_iter()
+            .chain(choices.iter().copied())
+        {
+            let request = json!({(field): selected});
+            let response = client
+                .post(format!("{base}/api/token"))
+                .header("cookie", &cookie)
+                .json(&request)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200, "{request}");
+            let body: Value = response.json().await.unwrap();
+            let token_claims = claims(body["token"].as_str().unwrap());
+            let metadata: Value =
+                serde_json::from_str(token_claims["metadata"].as_str().unwrap()).unwrap();
+            match selected {
+                "" | "Default" => assert!(metadata.get(field).is_none(), "{request}"),
+                "Random" => assert!(choices.contains(&metadata[field].as_str().unwrap())),
+                _ => assert_eq!(metadata[field], selected),
+            }
+        }
+    }
+
+    server.shutdown().await;
+    remove_database(db_path).await;
+}
+
+#[tokio::test]
 async fn token_api_ignores_empty_and_production_fixed_room() {
     let (mut empty_config, empty_cookie, empty_db_path) = signed_in_web_config("empty-room");
     empty_config.fixed_room_name = Some(String::new());
