@@ -3301,6 +3301,15 @@ function paintEditor(showMatch = document.activeElement === nodes.editor) {
     editorPaintFrame = null;
   }
   const code = currentCode();
+  const activeLine =
+    showMatch && nodes.editor.selectionStart === nodes.editor.selectionEnd
+      ? code.slice(0, nodes.editor.selectionStart).split("\n").length - 1
+      : -1;
+  if (activeLine >= 0) {
+    nodes.editorStack?.style.setProperty("--active-line", String(activeLine));
+  } else {
+    nodes.editorStack?.style.removeProperty("--active-line");
+  }
   const brackets = showMatch
     ? matchingBrackets(
         code,

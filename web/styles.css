@@ -23,6 +23,7 @@
   --code-gutter: #181816;
   --code-caret: #f4f4f0;
   --code-selection: #264f78;
+  --code-active-line: #ffffff0f;
   /* Selected text needs its own color: --ink is a light page color that would
      stay light on a light selection background in the light theme. */
   --code-selection-ink: var(--ink);
@@ -1001,6 +1002,7 @@ p {
   --code-gutter-ink: #595959;
   --code-gutter-border: #dddddd;
   --code-guide: #d3d3d3;
+  --code-active-line: #0000000d;
   --tok-keyword: #0000ff;
   --tok-string: #a31515;
   --tok-comment: #008000;
@@ -1026,6 +1028,7 @@ p {
     --code-gutter-ink: #595959;
     --code-gutter-border: #dddddd;
     --code-guide: #d3d3d3;
+    --code-active-line: #0000000d;
     --tok-keyword: #0000ff;
     --tok-string: #a31515;
     --tok-comment: #008000;
@@ -1069,6 +1072,19 @@ p {
   box-shadow: inset 1px 0 0 var(--code-guide);
 }
 
+#editor-highlight,
+#editor-lines {
+  background-image: linear-gradient(
+    var(--code-active-line),
+    var(--code-active-line)
+  );
+  background-repeat: no-repeat;
+  background-size: 100% calc(var(--editor-font-size) * 1.5);
+  background-position: 0
+    calc(1rem + var(--active-line, -100) * var(--editor-font-size) * 1.5);
+  background-attachment: local;
+}
+
 /* The user-agent stylesheet gives <code> its own monospace family, which
    beats the inherited stack and paints the overlay in a different font from
    the textarea, so the text drifts from the caret line by line. */
@@ -1084,7 +1100,7 @@ p {
   padding: 1rem 0.5rem;
   overflow: hidden;
   color: var(--code-gutter-ink);
-  background: var(--code-gutter);
+  background-color: var(--code-active-line);
   border-right: 1px solid var(--code-gutter-border);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: var(--editor-font-size);

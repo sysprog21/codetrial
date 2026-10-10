@@ -222,3 +222,73 @@ test("a scroll before the repaint leaves the overlay on its rows", async (t) => 
     await page.close();
   }
 });
+
+test("the active line highlight tracks the caret and clears on blur or selection", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${base}/interview.html`, {
+      waitUntil: "domcontentloaded",
+    });
+    await openEditor(page);
+    await fillLongBuffer(page);
+
+    const activeLine = () =>
+      page.evaluate(() =>
+        document
+          .querySelector("#editor")
+          .parentElement.style.getPropertyValue("--active-line"),
+      );
+
+    const expectActiveLine = async (expected, message) => {
+      await page.waitForFunction(
+        (exp) =>
+          document
+            .querySelector("#editor")
+            .parentElement.style.getPropertyValue("--active-line") === exp,
+        expected,
+      );
+
+      assert.equal(await activeLine(), expected, message);
+    };
+
+    await page.focus("#editor");
+    await page.evaluate(() => {
+      const editor = document.querySelector("#editor");
+      editor.setSelectionRange(0, 0);
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    await expectActiveLine("0", "highlight initializes at line 0");
+
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await expectActiveLine(
+      "2",
+      "highlight tracks a collapsed caret moved by the keyboard",
+    );
+
+    await page.evaluate(() => {
+      document.querySelector("#editor").scrollBy(0, 200);
+    });
+    await expectActiveLine(
+      "2",
+      "highlight stays anchored to its row when scrolled natively",
+    );
+
+    await page.keyboard.down("Shift");
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.up("Shift");
+    await expectActiveLine("", "highlight clears on a range selection");
+
+    await page.keyboard.press("ArrowRight");
+    await expectActiveLine("2", "highlight restores when selection collapses");
+
+    await page.evaluate(() => {
+      document.querySelector("#editor").blur();
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    await expectActiveLine("", "highlight clears when the editor loses focus");
+  } finally {
+    await page.close();
+  }
+});
