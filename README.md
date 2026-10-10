@@ -148,6 +148,15 @@ with tab audio enabled. Meet owns the shared tab after that, and face-presence
 analysis is disabled for the session. See the
 [manual check](docs/meet-tab-audio-manual-check.md) for the supported flow.
 
+To record a practice interview without Meet, capture the screen and system
+audio with any screen recorder, such as OBS or Clipchamp, and leave the
+recorder's own camera off. The interview page shows the candidate's camera
+above Jim, so the screen capture already includes it. Turning the recorder's
+camera on as well is what fails: on Windows a second application usually cannot
+open a camera the browser already holds, and the preflight camera check then
+cannot pass. Select the microphone in the recorder too, since the page never
+plays the candidate's voice back and system audio carries only Jim.
+
 The lobby offers 30, 45, and 60 minutes and the endpoints accept 10 to 90.
 Recording lowers that ceiling to `CODETRIAL_RECORDING_MAX_MINUTES`, and the
 lobby is told the ceiling rather than left to discover it. The rules, and why

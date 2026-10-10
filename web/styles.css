@@ -622,6 +622,24 @@ p {
   overflow: hidden;
 }
 
+/* Mirrored like every other video call's self view: an unmirrored one moves
+   the wrong way when the candidate leans, which reads as lag. */
+.self-view {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  margin-bottom: 0.35rem;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--float-surface);
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
+.self-view[hidden] {
+  display: none;
+}
+
 /* Under the avatar, and only as wide as it. It grows to fit the turn instead of
    clamping: a fixed max-height cut sentences in half behind a scrollbar nobody
    in an interview is going to reach for. `CAPTION_MAX_CHARS` already bounds the
@@ -704,6 +722,13 @@ p {
     top: auto;
     bottom: 1.5rem;
     width: 260px;
+  }
+
+  /* Kept, unlike the avatar: it is what a screen recording of this window
+     shows of the candidate. Kept small, because it now sits over code. */
+  .self-view {
+    width: 120px;
+    margin-left: auto;
   }
 }
 
