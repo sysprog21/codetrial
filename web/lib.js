@@ -2003,20 +2003,32 @@ export function turnCountdown(spokeAt, { peak, at, silenceMs, blocked }) {
   return { spokeAt, progress: Math.min(1, elapsed / silenceMs) };
 }
 
-/// Alt+Enter hands the turn over from anywhere on the page except a text
-/// field that is not the code editor, where the key belongs to the field. The
-/// editor is included on purpose: it is where the candidate is while they talk
-/// through their code, and it binds nothing to Alt+Enter.
+/// The chord that hands the turn over, named once because three strings on the
+/// page spell it out and nothing else would keep them honest if this changed.
+/// Only what the event carries lives here: which key a keyboard prints on its
+/// modifier is a fact about keycaps, so the spellings stay with the copy.
+export const YIELD_SHORTCUT = Object.freeze({
+  modifier: "altKey",
+  key: "Enter",
+});
+
+/// Matched against all of them rather than one accepted and three refused by
+/// name, so the chord above is the only place a modifier is decided.
+const EVENT_MODIFIERS = ["altKey", "ctrlKey", "metaKey", "shiftKey"];
+
+/// `YIELD_SHORTCUT` hands the turn over from anywhere on the page except a
+/// text field that is not the code editor, where the key belongs to the field.
+/// The editor is included on purpose: it is where the candidate is while they
+/// talk through their code, and it binds nothing to this chord.
 export function isYieldShortcut(event, editor) {
   if (
-    !event.altKey ||
-    event.key !== "Enter" ||
+    event.key !== YIELD_SHORTCUT.key ||
     event.repeat ||
     event.isComposing ||
     event.defaultPrevented ||
-    event.ctrlKey ||
-    event.metaKey ||
-    event.shiftKey
+    EVENT_MODIFIERS.some(
+      (name) => Boolean(event[name]) !== (name === YIELD_SHORTCUT.modifier),
+    )
   )
     return false;
   const target = event.target;
