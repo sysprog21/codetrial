@@ -25,6 +25,52 @@ const completed = (problemId, at) => ({
 const first = () => 0;
 const day = 24 * 60 * 60 * 1000;
 
+test("explicit random draws reach every eligible problem despite overdue reviews", () => {
+  const problems = [
+    { id: "due-a", difficulty: "Easy" },
+    { id: "due-b", difficulty: "Easy" },
+    { id: "unseen", difficulty: "Easy" },
+    { id: "outside", difficulty: "Hard" },
+  ];
+  const reports = ["due-a", "due-b", "outside"].map((id) => completed(id, 0));
+  for (const avoid of [undefined, "due-a", "due-b", "unseen"]) {
+    const expected = problems.filter(
+      (problem) => problem.difficulty === "Easy" && problem.id !== avoid,
+    );
+    for (let index = 0; index < expected.length; index++) {
+      const choice = pickProblem(
+        problems,
+        new Set(["Easy"]),
+        reports,
+        () => (index + 0.5) / expected.length,
+        10 * day,
+        avoid,
+        undefined,
+        "random",
+      );
+      assert.equal(choice.picked.id, expected[index].id);
+      assert.equal(choice.review, null);
+      assert.equal(choice.repeat, false);
+    }
+  }
+});
+
+test("explicit random draws retain a sole eligible problem and respect empty filters", () => {
+  const draw = (levels) =>
+    pickProblem(
+      bank,
+      new Set(levels),
+      [completed("passed", 0)],
+      first,
+      10 * day,
+      "medium",
+      undefined,
+      "random",
+    );
+  assert.equal(draw(["Medium"]).picked.id, "medium");
+  assert.equal(draw([]), null);
+});
+
 test("a problem already passed is not what gets recommended next", () => {
   const choice = pickProblem(bank, new Set(["Easy"]), [hired("passed")], first);
   assert.equal(choice.picked.id, "fresh");
@@ -613,4 +659,22 @@ test("the interview reads the focus from session storage, never from its address
   assert.doesNotMatch(source, /params\.get\("focus"\)/);
   assert.match(source, /practiceFocus: consumeSharedFocus\(tabStorage\)/);
   assert.match(source, /const tabStorage = storageArea\("sessionStorage"\);/);
+});
+
+test("random draws respect narrowed practice while reviews keep their broader pool", () => {
+  const reports = [completed("passed", 0)];
+  const practice = bank.filter((problem) => problem.id === "fresh");
+  const draw = (mode) =>
+    pickProblem(
+      practice,
+      new Set(["Easy"]),
+      reports,
+      first,
+      10 * day,
+      undefined,
+      bank,
+      mode,
+    );
+  assert.equal(draw("recommend").picked.id, "passed");
+  assert.equal(draw("random").picked.id, "fresh");
 });

@@ -4,6 +4,7 @@ import {
   createBeforeUnloadGuard,
   shouldWarnBeforeUnload,
 } from "../../web/before-unload.js";
+import { completeRandomDraw } from "../../web/random-draw.js";
 import { reportIsPersisted } from "../../web/history.js";
 import { functionBody, read } from "./source.js";
 
@@ -84,7 +85,7 @@ test("the unload listener can be disposed without leaving a stale handler", () =
 });
 
 test("interview wiring starts after preflight and only persistence releases it", () => {
-  const page = read("web/interview.js");
+  const page = read("web/interview.js").replace(/\r\n/g, "\n");
   const init = functionBody(page, "init");
   const preflight = init.indexOf("const preflight = await runAudioCheck()");
   const connect = init.indexOf("await connect(preflight, presenting)");
@@ -116,7 +117,10 @@ test("interview wiring starts after preflight and only persistence releases it",
 });
 
 test("LiveKit stays connected while the native leave warning is pending", () => {
-  const connect = functionBody(read("web/interview.js"), "connectLiveKit");
+  const connect = functionBody(
+    read("web/interview.js").replace(/\r\n/g, "\n"),
+    "connectLiveKit",
+  );
   const roomOptions = /new livekit\.Room\(\{([\s\S]*?)\}\)/.exec(connect)?.[1];
 
   assert.ok(roomOptions, "the interview creates its LiveKit room here");
@@ -126,7 +130,7 @@ test("LiveKit stays connected while the native leave warning is pending", () => 
 });
 
 test("the room disconnects on actual pagehide, not when beforeunload is cancelled", () => {
-  const source = read("web/interview.js");
+  const source = read("web/interview.js").replace(/\r\n/g, "\n");
   assert.match(
     source,
     /window\.addEventListener\("pagehide", finalizeRecoveryOnPageHide\)/,
@@ -168,7 +172,7 @@ test("the room disconnects on actual pagehide, not when beforeunload is cancelle
 });
 
 test("the Leave button releases the warning before tearing down the session", () => {
-  const source = read("web/interview.js");
+  const source = read("web/interview.js").replace(/\r\n/g, "\n");
   const calls = [];
   const target = new CountingTarget();
   const guard = createBeforeUnloadGuard(target);
@@ -232,7 +236,7 @@ test("the Leave button releases the warning before tearing down the session", ()
 });
 
 test("only the newest overlapping report save can release the warning", async () => {
-  const source = read("web/interview.js");
+  const source = read("web/interview.js").replace(/\r\n/g, "\n");
   const pending = [];
   const guardStates = [];
   const state = {
@@ -256,6 +260,9 @@ test("only the newest overlapping report save can release the warning", async ()
     "saveReportHistory",
     "reportIsPersisted",
     "updateBeforeUnloadGuard",
+    "completeRandomDraw",
+    "randomDrawTicket",
+    "tabStorage",
     `let saveGeneration = 0;\n${body}\n}\nreturn saveHistory;`,
   )(
     state,
@@ -267,6 +274,9 @@ test("only the newest overlapping report save can release the warning", async ()
     saveReportHistory,
     reportIsPersisted,
     updateBeforeUnloadGuard,
+    completeRandomDraw,
+    null,
+    null,
   );
 
   const provisional = saveHistory({ summary: "provisional" });
@@ -287,7 +297,7 @@ test("only the newest overlapping report save can release the warning", async ()
 });
 
 test("pagehide finalizes recovery before disconnecting the room", () => {
-  const source = read("web/interview.js");
+  const source = read("web/interview.js").replace(/\r\n/g, "\n");
   const body = functionBody(source, "finalizeRecoveryOnPageHide");
   const calls = [];
   const handler = new Function(

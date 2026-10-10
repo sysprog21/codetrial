@@ -137,6 +137,7 @@ import {
   createBeforeUnloadGuard,
   shouldWarnBeforeUnload,
 } from "./before-unload.js";
+import { completeRandomDraw, readRandomDraw } from "./random-draw.js";
 import {
   createFacePresenceDetector,
   facePresenceVerdict,
@@ -360,6 +361,9 @@ function renderRoundPlan() {
 /// Read once, through `storageArea`: at module scope a blocked `sessionStorage`
 /// would otherwise stop the whole page from loading.
 const tabStorage = storageArea("sessionStorage");
+const randomDrawTicket = params.get("draw")
+  ? { id: params.get("draw"), problemId: params.get("problem") }
+  : readRandomDraw(params.get("problem"), tabStorage);
 const interviewProfile = {
   role: params.get("role") || "",
   seniority: params.get("seniority") || "",
@@ -3016,6 +3020,7 @@ async function saveHistory(report = state.report) {
     id: state.reportId,
     date: new Date().toISOString(),
     interviewId: state.interviewId,
+    randomDrawId: randomDrawTicket?.id ?? null,
     problemId: problem.page,
     problemTitle: problem.title,
     difficulty: problem.difficulty,
@@ -3027,6 +3032,7 @@ async function saveHistory(report = state.report) {
   // A later save may replace an earlier report under this same id. Keep the
   // warning active until this save itself confirms that Past attempts can
   // reopen the current copy.
+  completeRandomDraw(randomDrawTicket, entry, tabStorage);
   const generation = ++saveGeneration;
   state.reportPersisted = false;
   updateBeforeUnloadGuard();

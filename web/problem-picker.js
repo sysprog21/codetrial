@@ -149,6 +149,8 @@ function step(level, by) {
 /// An explicit redraw avoids the current problem whenever another is available.
 /// `reviewProblems` stays broader than `problems` when an opt-in filter narrows
 /// new practice: a due review remains the first priority across those filters.
+/// `random` mode draws uniformly from the selected levels instead of giving
+/// overdue reviews or unseen problems priority.
 export function pickProblem(
   problems,
   difficulties,
@@ -157,10 +159,19 @@ export function pickProblem(
   now = Date.now(),
   avoid,
   reviewProblems = problems,
+  mode = "recommend",
 ) {
   const eligible = problems.filter((problem) =>
     difficulties.has(problem.difficulty),
   );
+  // Explicit random draws give every problem at the selected levels a chance,
+  // regardless of its attempt history or review schedule.
+  if (mode === "random") {
+    const alternatives = eligible.filter((problem) => problem.id !== avoid);
+    const choices = alternatives.length ? alternatives : eligible;
+    const picked = choices[Math.floor(random() * choices.length)];
+    return picked ? { picked, repeat: false, review: null } : null;
+  }
   const reportList = Array.isArray(reports) ? reports : [];
   const reviews = reviewStatus(reportList, now);
   const passed = new Set(
