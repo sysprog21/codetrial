@@ -158,6 +158,18 @@ export function generateHarness(language, spec, candidateCode) {
     : javaHarness(spec, candidateCode);
 }
 
+const CANDIDATE_MARKER = "CODETRIAL_CANDIDATE_CODE";
+
+/// How many harness lines come before the candidate's first line. Measured on
+/// a harness built around a marker rather than counted by hand, so a line added
+/// to a prelude moves the remap with it.
+export function harnessLineOffset(language, spec) {
+  const source = generateHarness(language, spec, CANDIDATE_MARKER);
+  return (
+    source.slice(0, source.indexOf(CANDIDATE_MARKER)).split("\n").length - 1
+  );
+}
+
 export function parseCompilerResults(stdout) {
   const text = compilerText(stdout);
   for (
@@ -176,7 +188,9 @@ export function parseCompilerResults(stdout) {
   return { setupError: "The run produced no JSON results." };
 }
 
-export function mapCompilerResponse(response) {
+/// `editor` is `{ offset, lineCount }` for remapping compile errors to the
+/// candidate's lines; without it the compiler's text passes through as is.
+export function mapCompilerResponse(response, editor = null) {
   if (!response)
     return { setupError: "Compiler Explorer did not return a response." };
   if (response.timedOut)
@@ -185,9 +199,8 @@ export function mapCompilerResponse(response) {
       diagnostic: DIAGNOSTIC.timeout,
     };
   if (response.didExecute === false) {
-    const diagnostics = compilerText(
-      response.buildResult?.stderr || response.stderr,
-    );
+    const text = compilerText(response.buildResult?.stderr || response.stderr);
+    const diagnostics = editor ? remapDiagnostics(text, editor) : text;
     return {
       setupError:
         diagnostics || "Compilation failed before the tests could run.",
@@ -203,6 +216,74 @@ export function mapCompilerResponse(response) {
     };
   }
   return parseCompilerResults(response.stdout);
+}
+
+// clang, g++ and javac on Compiler Explorer all name the file `<source>`;
+// javac leaves the column out. g++ 16 indents the location of each candidate
+// it lists under a failed call, with its own excerpt below it.
+const SOURCE_LOCATION = /^(\s*)<source>:(\d+):(?:\d+:)?/;
+// The `  56 |     }` excerpt clang and g++ print under a location, and the
+// `     |     ^` caret line, which has no number.
+const EXCERPT_GUTTER = /^(\s*)(\d*)\s*\|/;
+// javac's excerpt is the bare source line followed by a line holding a caret.
+const JAVAC_CARET = /^\s*\^\s*$/;
+
+export const HARNESS_SIGNATURE_NOTE =
+  "The tests call the original function signature; check that it is unchanged.";
+
+/// A position outside the candidate's code has no editor line to give, so it
+/// is named as the harness and its excerpt, code they never wrote, is
+/// dropped. A renamed or retyped function is the usual way there, and the note
+/// says so once, for the candidate and for Jim, who reads it via setupError.
+function remapDiagnostics(text, { offset, lineCount }) {
+  const lines = [];
+  const outside = (editorLine) => editorLine < 1 || editorLine > lineCount;
+  let inHarness = false;
+  // An excerpt can run past the code its location names: clang's "declared
+  // here" under a renamed C function prints every line from that function down
+  // to the harness call. Each numbered line is judged on its own, and the
+  // unnumbered marker lines under it go with it.
+  let hidingExcerpt = false;
+  let harnessError = false;
+  for (const line of text.split("\n")) {
+    const location = line.match(SOURCE_LOCATION);
+    if (location) {
+      const [prefix, indent, number] = location;
+      const editorLine = Number(number) - offset;
+      inHarness = outside(editorLine);
+      hidingExcerpt = inHarness;
+      // Only an error earns the note. A harness `note:` is the prelude's side
+      // of an error in the candidate's code, such as the first definition of
+      // a ListNode they redefined, which no signature check would fix.
+      harnessError ||= inHarness && line.includes(" error: ");
+      lines.push(
+        inHarness
+          ? `${indent}<test harness>:${line.slice(prefix.length)}`
+          : `${indent}<source>:${editorLine}${line.slice(`${indent}<source>:${number}`.length)}`,
+      );
+      continue;
+    }
+    const gutter = line.match(EXCERPT_GUTTER);
+    if (gutter) {
+      const width = gutter[1].length + gutter[2].length;
+      const editorLine = Number(gutter[2]) - offset;
+      if (gutter[2]) hidingExcerpt = inHarness || outside(editorLine);
+      if (hidingExcerpt) continue;
+      lines.push(
+        gutter[2]
+          ? String(editorLine).padStart(width) + line.slice(width)
+          : line,
+      );
+      continue;
+    }
+    if (inHarness && JAVAC_CARET.test(line)) {
+      lines.pop();
+      continue;
+    }
+    lines.push(line);
+  }
+  if (harnessError) lines.push(HARNESS_SIGNATURE_NOTE);
+  return lines.join("\n");
 }
 
 function cHarness(spec, candidateCode) {

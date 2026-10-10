@@ -657,3 +657,35 @@ test("execution infrastructure failures allow tracing but candidate failures do 
     });
   }
 });
+
+test("a compile error reaches the summary on the candidate's line", async () => {
+  const restoreFetch = failFetchWith(async (url, request) => {
+    if (String(url).startsWith("/judges/")) {
+      return Response.json({
+        kind: "function",
+        entry: "sum",
+        paramNames: ["value"],
+        paramTypes: ["integer"],
+        returnType: "integer",
+        checker: "exact",
+        cases: [{ label: "judge", input: [1], expected: 1 }],
+      });
+    }
+    const { source } = JSON.parse(request.body);
+    const line = source.split("\n").indexOf("  return value") + 1;
+    return Response.json({
+      didExecute: false,
+      stderr: [{ text: `<source>:${line}:15: error: expected ';'` }],
+    });
+  });
+  try {
+    const summary = await runBrowserTests(
+      "compile-error-line",
+      "int sum(int value) {\n  return value\n}",
+      "cpp",
+    );
+    assert.equal(summary.setupError, "<source>:2:15: error: expected ';'");
+  } finally {
+    restoreFetch();
+  }
+});

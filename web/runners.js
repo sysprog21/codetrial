@@ -9,6 +9,7 @@ import {
   compilerExplorerBaseUrl,
   generateHarness,
   harnessGap,
+  harnessLineOffset,
   mapCompilerResponse,
 } from "./compiler-explorer.js";
 import { DIAGNOSTIC, checkAnswer, renderValue } from "./lib.js";
@@ -438,7 +439,10 @@ async function runCompilerExplorer(language, code, spec, reportStatus = null) {
         setupError: `Compiler Explorer rejected this run with HTTP ${response.status}.`,
       };
     }
-    return mapCompilerResponse(await response.json());
+    return mapCompilerResponse(await response.json(), {
+      offset: harnessLineOffset(language, spec),
+      lineCount: code.split("\n").length,
+    });
   } catch (error) {
     if (error?.name === "AbortError") {
       return {
