@@ -1138,7 +1138,7 @@ function rememberSettings() {
   writeStored(
     SETTINGS_KEY,
     JSON.stringify({
-      durationMin: duration,
+      durationMin: manualDuration ? duration : undefined,
       interviewLoop,
       interviewMode: mode,
     }),
@@ -1191,13 +1191,14 @@ function setDuration(minutes, chosen = false) {
 
 /// Snapped to a length the row actually offers, not to the cap itself: a cap
 /// of forty would otherwise leave `duration` at forty with no button to show
-/// for it, and the candidate reading a row where nothing is selected.
+/// for it, and the candidate reading a row where nothing is selected. When no
+/// offered length fits, use the ceiling and explain it in the duration note.
 function underCeiling(minutes) {
   if (minutes <= durationCeiling) return minutes;
   const offered = durations
     .map((button) => Number(button.dataset.duration))
     .filter((value) => value <= durationCeiling);
-  return offered.length ? Math.max(...offered) : minutes;
+  return offered.length ? Math.max(...offered) : durationCeiling;
 }
 
 /// What the server said it can record, turned into a row that says so. The
@@ -1210,15 +1211,16 @@ function applyDurationCeiling(minutes) {
   const over = durations.filter(
     (button) => Number(button.dataset.duration) > minutes,
   );
-  // A cap under every length on offer is a misconfigured deployment, not a
-  // lobby with nothing to press. Leave the row alone and let the server's own
-  // floor decide, rather than handing back a page that cannot start anything.
+  // Keep the row usable when no offered length fits, but show and request
+  // the effective limit instead of promising a length the server will shorten.
   const capped = over.length < durations.length ? over : [];
   for (const button of durations) button.disabled = capped.includes(button);
   nodes.durationNote.textContent = capped.length
     ? `Interviews here are recorded for at most ${minutes} minutes, so longer ones are not offered.`
-    : "";
-  nodes.durationNote.hidden = !capped.length;
+    : over.length
+      ? `Interviews here are limited to ${minutes} minutes; all duration choices use this limit.`
+      : "";
+  nodes.durationNote.hidden = !over.length;
   // The cap outranks a length the candidate chose out loud, which nothing else
   // here does: it is not a second opinion about what suits them, it is what
   // this server can record.
@@ -1350,6 +1352,7 @@ function renderAttemptHistory(attempts) {
       open.textContent = "Collapse report";
     });
     retry.addEventListener("click", () => {
+      if (starting) return;
       const card = cards.find(
         (candidate) => candidate.id === attempt.problemId,
       );
@@ -1367,7 +1370,7 @@ function renderAttemptHistory(attempts) {
           : (offered
               .filter((value) => value <= savedDuration)
               .sort((a, b) => b - a)[0] ?? Math.min(...offered));
-      setDuration(minutes, savedDuration !== null);
+      setDuration(minutes, true);
       setInterviewLoop(attempt.interviewLoop);
       setInterviewMode(attempt.interviewMode);
       rememberSettings();
