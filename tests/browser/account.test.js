@@ -218,7 +218,10 @@ test("the lobby offers an editor or a whiteboard and carries the choice into the
     interview,
     "JSON.stringify({ problemId: problem.page, durationMin, interviewId, interviewLoop, interviewMode: mode, interviewProfile, ...(interviewGrounding",
   );
-  assertIncludesCompact(interview, "durationMin, interviewLoop, report, };");
+  assertIncludesCompact(
+    interview,
+    "durationMin, interviewLoop, interviewMode: mode, report, };",
+  );
 });
 
 test("interview loop is explicit, budgeted, gated, and carried into artifacts", () => {

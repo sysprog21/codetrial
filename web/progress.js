@@ -1,4 +1,10 @@
-import { FRAMEWORKS, frameworkPhases, sanitizeReport } from "./lib.js";
+import {
+  FRAMEWORKS,
+  codingLoop,
+  interviewMode,
+  frameworkPhases,
+  sanitizeReport,
+} from "./lib.js";
 import { LEVELS } from "./problem-picker.js";
 
 export const progressPhases = frameworkPhases;
@@ -85,6 +91,12 @@ export function normalizeProgressEntry(raw) {
       : null,
     language: allowedLanguages.has(entry.language) ? entry.language : null,
     durationMin,
+    interviewLoop: codingLoop(
+      entry.interviewLoop ?? entry.report?.interviewLoop,
+    ),
+    interviewMode: interviewMode(
+      entry.interviewMode ?? entry.report?.interviewMode,
+    ),
     recordedDecision: ["HIRE", "NO_HIRE"].includes(entry.report?.decision)
       ? entry.report.decision
       : null,

@@ -1501,7 +1501,7 @@ lobbyTest(
 );
 
 lobbyTest(
-  "a random draw hides an out-of-filter retry and updates its suggested duration",
+  "a random draw hides an out-of-filter retry and preserves its chosen duration",
   async (page) => {
     reports = [savedAttempt(EASY[0])];
     reports[0].payload.date = new Date().toISOString();
@@ -1515,7 +1515,7 @@ lobbyTest(
     assert.equal((await cardInfo(page, EASY[0])).hidden, true);
     assert.equal((await cardInfo(page, after.card)).level, "Medium");
     assert.deepEqual(after.levels, before.levels);
-    assert.equal(after.duration, "45");
+    assert.equal(after.duration, "30");
   },
 );
 
@@ -3174,12 +3174,9 @@ lobbyTest(
 );
 
 lobbyTest(
-  "a cap under every length on offer leaves the row alone",
+  "a cap under every length keeps the row usable and explains the effective limit",
   async (page) => {
-    // A deployment that records less than the shortest interview it offers is
-    // misconfigured, and `recording_config` refuses that pairing at startup. If
-    // one reaches the browser anyway, a row with every button dead is a lobby
-    // nobody can start; the server's own floor decides instead.
+    // Keep the page usable even when the server limit fits no duration button.
     session = {
       signedIn: true,
       user: { login: "candidate" },
@@ -3189,7 +3186,8 @@ lobbyTest(
     const state = await lobby(page);
 
     assert.deepEqual(state.durationsOff, []);
-    assert.equal(state.durationNote, "");
+    assert.equal(state.duration, null);
+    assert.match(state.durationNote, /limited to 15 minutes/);
   },
 );
 
@@ -4445,5 +4443,339 @@ lobbyTest(
         window.releaseAccount?.();
       });
     }
+  },
+);
+
+for (const account of [false, true]) {
+  for (const interviewMode of ["coding", "whiteboard"]) {
+    lobbyTest(
+      `retry restores ${interviewMode} settings from ${account ? "account" : "device"} history`,
+      async (page) => {
+        const attempt = {
+          ...savedAttempt(EASY[0]).payload,
+          durationMin: 60,
+          interviewLoop: "coding_only",
+          interviewMode,
+        };
+        if (account) reports = [{ payload: attempt }];
+        else {
+          session = { signedIn: false };
+          await page.addInitScript(
+            (saved) =>
+              localStorage.setItem(
+                "codetrial_history",
+                JSON.stringify([saved]),
+              ),
+            attempt,
+          );
+        }
+        await lobby(page);
+        await page.click('[data-duration="30"]');
+        await page
+          .getByRole("button", { name: "Try again", exact: true })
+          .click();
+        assert.equal((await snapshot(page)).duration, "60");
+        assert.equal(
+          await page
+            .locator('[data-loop="coding_only"]')
+            .getAttribute("aria-pressed"),
+          "true",
+        );
+        assert.equal(
+          await page
+            .locator(`[data-mode="${interviewMode}"]`)
+            .getAttribute("aria-pressed"),
+          "true",
+        );
+        assert.equal(
+          await page.locator("#mode-note").isVisible(),
+          interviewMode === "whiteboard",
+        );
+        await page.click("#start");
+        await page.waitForURL("**/interview?**");
+        const query = new URL(page.url()).searchParams;
+        assert.equal(query.get("problem"), EASY[0]);
+        assert.equal(query.get("duration"), "60");
+        assert.equal(query.get("loop"), "coding_only");
+        assert.equal(query.get("mode"), interviewMode);
+      },
+    );
+  }
+}
+
+lobbyTest(
+  "retry restores the saved loop over the current choice and explains a capped duration",
+  async (page) => {
+    session.maxDurationMin = 45;
+    reports = [
+      {
+        payload: {
+          ...savedAttempt(EASY[0]).payload,
+          durationMin: 60,
+          interviewLoop: "coding_behavioral",
+          interviewMode: "coding",
+        },
+      },
+    ];
+    await lobby(page);
+    await page.click('[data-loop="coding_only"]');
+    await page.click('[data-mode="whiteboard"]');
+    await page.getByRole("button", { name: "Try again", exact: true }).click();
+    const state = await snapshot(page);
+    assert.equal(state.duration, "45");
+    assert.match(state.note, /60 minutes; adjusted to 45 minutes/);
+    assert.equal(
+      await page
+        .locator('[data-loop="coding_behavioral"]')
+        .getAttribute("aria-pressed"),
+      "true",
+    );
+    assert.equal(
+      await page.locator('[data-mode="coding"]').getAttribute("aria-pressed"),
+      "true",
+    );
+  },
+);
+
+lobbyTest(
+  "lobby settings survive reload and a later recording cap",
+  async (page) => {
+    await lobby(page);
+    await page.click('[data-duration="60"]');
+    await page.click('[data-loop="coding_only"]');
+    await page.click('[data-mode="whiteboard"]');
+    await lobby(page);
+    assert.equal((await snapshot(page)).duration, "60");
+    assert.equal(
+      await page
+        .locator('[data-loop="coding_only"]')
+        .getAttribute("aria-pressed"),
+      "true",
+    );
+    assert.equal(
+      await page
+        .locator('[data-mode="whiteboard"]')
+        .getAttribute("aria-pressed"),
+      "true",
+    );
+    session.maxDurationMin = 45;
+    await lobby(page);
+    const state = await snapshot(page);
+    assert.equal(state.duration, "45");
+    assert.match(state.durationNote, /at most 45 minutes/);
+    assert.equal(
+      await page
+        .locator('[data-loop="coding_only"]')
+        .getAttribute("aria-pressed"),
+      "true",
+    );
+    assert.equal(
+      await page
+        .locator('[data-mode="whiteboard"]')
+        .getAttribute("aria-pressed"),
+      "true",
+    );
+  },
+);
+
+for (const stored of [
+  '{"durationMin":-1,"interviewLoop":"invalid","interviewMode":"invalid"}',
+  "not json",
+]) {
+  lobbyTest(
+    `invalid preferences do not stop the lobby: ${stored}`,
+    async (page) => {
+      await page.addInitScript(
+        (value) => localStorage.setItem("codetrial.interviewSettings", value),
+        stored,
+      );
+      const state = await lobby(page);
+      assert.equal(state.startDisabled, false);
+      assert.equal(
+        await page
+          .locator('[data-loop="coding_behavioral"]')
+          .getAttribute("aria-pressed"),
+        "true",
+      );
+      assert.equal(
+        await page.locator('[data-mode="coding"]').getAttribute("aria-pressed"),
+        "true",
+      );
+    },
+  );
+}
+
+lobbyTest(
+  "blocked preference storage still allows settings to be changed and retried",
+  async (page) => {
+    reports = [
+      {
+        payload: {
+          ...savedAttempt(EASY[0]).payload,
+          durationMin: 60,
+          interviewLoop: "coding_only",
+          interviewMode: "whiteboard",
+        },
+      },
+    ];
+    await page.addInitScript(() => {
+      const get = Storage.prototype.getItem;
+      const set = Storage.prototype.setItem;
+      Storage.prototype.getItem = function (key) {
+        if (key === "codetrial.interviewSettings") throw new Error("blocked");
+        return get.call(this, key);
+      };
+      Storage.prototype.setItem = function (key, value) {
+        if (key === "codetrial.interviewSettings") throw new Error("blocked");
+        return set.call(this, key, value);
+      };
+    });
+    await lobby(page);
+    await page.click('[data-duration="30"]');
+    await page.getByRole("button", { name: "Try again", exact: true }).click();
+    assert.equal((await snapshot(page)).duration, "60");
+    assert.equal(
+      await page
+        .locator('[data-mode="whiteboard"]')
+        .getAttribute("aria-pressed"),
+      "true",
+    );
+  },
+);
+
+for (const selector of [
+  '[data-loop="coding_only"]',
+  '[data-mode="whiteboard"]',
+]) {
+  lobbyTest(
+    `changing ${selector} does not persist a suggested duration`,
+    async (page) => {
+      await lobby(page);
+      await page.evaluate(
+        (id) => document.querySelector(`[data-problem="${id}"]`).click(),
+        EASY[0],
+      );
+      assert.equal((await snapshot(page)).duration, "30");
+      await page.click(selector);
+      const settings = await page.evaluate(() =>
+        JSON.parse(localStorage.getItem("codetrial.interviewSettings")),
+      );
+      assert.equal(Object.hasOwn(settings, "durationMin"), false);
+      await lobby(page);
+      await page.evaluate(
+        (id) => document.querySelector(`[data-problem="${id}"]`).click(),
+        MEDIUM[0],
+      );
+      assert.equal((await snapshot(page)).duration, "45");
+      assert.equal(
+        await page.locator(selector).getAttribute("aria-pressed"),
+        "true",
+      );
+    },
+  );
+}
+
+lobbyTest(
+  "retrying a legacy attempt replaces an earlier explicit duration",
+  async (page) => {
+    reports = [
+      {
+        payload: {
+          ...savedAttempt(MEDIUM[0]).payload,
+          date: "2026-01-02T00:00:00Z",
+          durationMin: 60,
+        },
+      },
+      savedAttempt(EASY[0]),
+    ];
+    await lobby(page);
+    const retries = page.getByRole("button", {
+      name: "Try again",
+      exact: true,
+    });
+    await retries.nth(0).click();
+    assert.equal((await snapshot(page)).duration, "60");
+    await retries.nth(1).click();
+    assert.equal((await snapshot(page)).duration, "30");
+  },
+);
+
+lobbyTest(
+  "retry cannot change settings while an interview start is pending",
+  async (page) => {
+    session = { signedIn: false, loginRequired: true };
+    await page.addInitScript(
+      (attempt) =>
+        localStorage.setItem("codetrial_history", JSON.stringify([attempt])),
+      {
+        ...savedAttempt(EASY[0]).payload,
+        durationMin: 60,
+        interviewLoop: "coding_only",
+        interviewMode: "whiteboard",
+      },
+    );
+    let release;
+    holdLogin = new Promise((resolve) => (release = resolve));
+    try {
+      await lobby(page);
+      await page.fill("#github-login", "candidate");
+      const pending = page.waitForRequest((request) =>
+        request.url().endsWith("/api/login"),
+      );
+      const before = await snapshot(page);
+      const settings = await page.evaluate(() =>
+        localStorage.getItem("codetrial.interviewSettings"),
+      );
+      await page.click("#start");
+      await pending;
+      const startingState = await snapshot(page);
+      await page
+        .getByRole("button", { name: "Try again", exact: true })
+        .click();
+      assert.deepEqual(await snapshot(page), startingState);
+      assert.equal(
+        await page.locator('[data-mode="coding"]').getAttribute("aria-pressed"),
+        "true",
+      );
+      assert.equal(
+        await page
+          .locator('[data-loop="coding_behavioral"]')
+          .getAttribute("aria-pressed"),
+        "true",
+      );
+      assert.equal(
+        await page.evaluate(() =>
+          localStorage.getItem("codetrial.interviewSettings"),
+        ),
+        settings,
+      );
+      release();
+      await page.waitForURL("**/interview?**");
+      const query = new URL(page.url()).searchParams;
+      assert.equal(query.get("problem"), before.card);
+      assert.equal(query.get("mode"), "coding");
+      assert.equal(query.get("duration"), before.duration);
+    } finally {
+      release();
+    }
+  },
+);
+
+lobbyTest(
+  "retry uses the server limit when no offered duration fits",
+  async (page) => {
+    session.maxDurationMin = 10;
+    reports = [
+      { payload: { ...savedAttempt(EASY[0]).payload, durationMin: 15 } },
+    ];
+    await lobby(page);
+    await page.getByRole("button", { name: "Try again", exact: true }).click();
+    const state = await snapshot(page);
+    assert.equal(state.duration, null);
+    assert.match(state.durationNote, /limited to 10 minutes/);
+    assert.match(state.note, /15 minutes; adjusted to 10 minutes/);
+    await page.click("#start");
+    await page.waitForURL("**/interview?**");
+    assert.equal(new URL(page.url()).searchParams.get("duration"), "10");
   },
 );
