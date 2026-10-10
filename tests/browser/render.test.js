@@ -486,7 +486,7 @@ for (const missing of [null, undefined]) {
     });
     assert.match(
       unsaved,
-      /## Final code \(python\)\n\(final code was not saved\)\n/,
+      /## Final code \(Python\)\n\(final code was not saved\)\n/,
     );
     assert.match(
       unsaved,
@@ -498,6 +498,15 @@ for (const missing of [null, undefined]) {
     assert.match(empty, /```python\n\(editor was empty\)\n```/);
     assert.match(empty, /## Conversation transcript\n\(no speech captured\)/);
     assert.doesNotMatch(empty, /was not saved/);
+
+    const emptyCpp = reportMarkdown({
+      ...session,
+      language: "cpp",
+      code: "",
+      transcript: [],
+    });
+    assert.match(emptyCpp, /## Final code \(C\+\+\)/);
+    assert.match(emptyCpp, /```cpp\n\(editor was empty\)\n```/);
   });
 
   test(`markdown leaves unknown language (${missing}) fences untagged`, () => {
@@ -1300,7 +1309,7 @@ test("markdown export cannot be restructured by the text inside it", () => {
       "### Coding feedback",
       "### Communication feedback",
       "## Integrity Evidence",
-      "## Final code (python)",
+      "## Final code (Python)",
       "## Conversation transcript",
     ],
     "the report has exactly the headings it writes itself",
@@ -1948,7 +1957,7 @@ test("a whiteboard report shows the board where the code block would be", () => 
   // Without a board this is the editor interview it has always been, and the
   // empty editor says so rather than claiming a board nobody drew on.
   const editor = reportMarkup(session);
-  assert.match(editor, /Your final code \(python\)/);
+  assert.match(editor, /Your final code \(Python\)/);
   assert.match(editor, /\(editor was empty\)/);
   assert.doesNotMatch(editor, /final board/);
 
@@ -1986,7 +1995,7 @@ test("a whiteboard report shows the board where the code block would be", () => 
   assert.match(markdown, /If this interview was recorded/);
   assert.doesNotMatch(markdown, /## Final code/);
   assert.doesNotMatch(markdown, /base64/);
-  assert.match(reportMarkdown(session), /## Final code \(python\)/);
+  assert.match(reportMarkdown(session), /## Final code \(Python\)/);
 });
 
 test("a whiteboard report walks the board step by step under the names the candidate saw", () => {

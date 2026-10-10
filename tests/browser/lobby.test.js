@@ -1933,13 +1933,13 @@ for (const storage of ["account", "device"]) {
           report: { decision: "HIRE", codingScore: 81 },
           language: "python",
           verdict: "HIRE",
-          heading: "python",
+          heading: "Python",
         },
         {
           report: { decision: "NO_HIRE", codingScore: 42 },
           language: "javascript",
           verdict: "NO HIRE",
-          heading: "javascript",
+          heading: "JavaScript",
         },
         {
           report: {},

@@ -13,6 +13,7 @@ import {
   modeLabel,
   orPlaceholder,
   surfaceLabel,
+  languageLabel,
 } from "./lib.js";
 
 /// The six coding steps as a whiteboard candidate was shown them, in REACTO
@@ -371,7 +372,7 @@ export function reportMarkup({
 
 /// The candidate's code, at the foot of an editor interview's card.
 function finalCodeMarkup(language, code) {
-  return `<details><summary>Your final code (${escapeHtml(language)})</summary><pre>${escapeHtml(code.trimEnd() || "(editor was empty)")}</pre></details>`;
+  return `<details><summary>Your final code (${escapeHtml(languageLabel(language) || "not recorded")})</summary><pre>${escapeHtml(code.trimEnd() || "(editor was empty)")}</pre></details>`;
 }
 
 /// A whiteboard interview's work, step by step: the board when each step was
@@ -715,7 +716,7 @@ export function reportMarkdown({
     ...(atBoard
       ? boardStepsMarkdown(report, mdText)
       : [
-          `## Final code (${mdText(language ?? "not recorded")})`,
+          `## Final code (${mdText(languageLabel(language) || "not recorded")})`,
           ...(code == null ? [body] : [fence + info, body, fence]),
           "",
         ]),

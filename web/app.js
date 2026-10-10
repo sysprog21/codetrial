@@ -1,4 +1,4 @@
-import { FRAMEWORKS, codingLoop, interviewMode } from "./lib.js";
+import { FRAMEWORKS, codingLoop, interviewMode, languageLabel } from "./lib.js";
 import {
   clearReportHistory,
   deleteReport,
@@ -1504,18 +1504,6 @@ function syncFilter(select, values, label) {
   select.value = [...select.options].some((option) => option.value === selected)
     ? selected
     : "all";
-}
-
-function languageLabel(value) {
-  return (
-    {
-      cpp: "C++",
-      c: "C",
-      java: "Java",
-      javascript: "JavaScript",
-      python: "Python",
-    }[value] || value
-  );
 }
 
 async function fetchJson(url) {
