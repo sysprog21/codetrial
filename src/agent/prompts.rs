@@ -2317,6 +2317,11 @@ pub struct ReportPromptInput<'a> {
     /// question without one, and the transcript then holds an answer the round
     /// status says never happened.
     pub behavioral_round: BehavioralRound,
+    /// Whether the interviewer was handed the problem's follow-ups, which
+    /// happens when the coding round completes. A follow-up it never held
+    /// cannot have been raised, so the brief lists none and the debrief says
+    /// none was reached without asking the model.
+    pub follow_ups_released: bool,
 }
 
 /// Where the behavioral round stood when the interview ended, in the three
@@ -2497,6 +2502,7 @@ fn report_brief(input: &ReportPromptInput<'_>) -> String {
     // the contract is measured by, what the candidate produced, and what
     // account there is of it running. The editor's wording is what it always
     // was; a whiteboard's is its own paragraphs, above.
+    let follow_ups = report_follow_ups(input);
     let whiteboard = input.interview_mode.is_whiteboard();
     let graded_by = if whiteboard {
         "Contract a correct answer meets"
@@ -2548,6 +2554,8 @@ HINTS THE INTERVIEWER GAVE: {} total; the candidate reached hint rung {} of 3.
 the interviewer helped, but weaker evidence than a requested hint that the
 candidate depended on; treat both as context, never as a numeric deduction.
 
+{follow_ups}
+
 {execution}
 
 {behavioral_round}
@@ -2566,6 +2574,21 @@ candidate depended on; treat both as context, never as a numeric deduction.
         input.hints_used,
         input.hint_rung,
         volunteered_hints,
+    )
+}
+
+/// The follow-ups the interviewer was handed, numbered as `followUps` cites
+/// them, or the instruction to judge none. They are listed on the condition
+/// the live prompt hands them over, so the reviewer is never asked whether a
+/// follow-up the interviewer did not hold was raised.
+fn report_follow_ups(input: &ReportPromptInput<'_>) -> String {
+    let follow_ups = input.problem.variant().follow_ups;
+    if !input.follow_ups_released || follow_ups.is_empty() {
+        return "FOLLOW-UPS: None were released to the interviewer in this interview. Return `followUps` as an empty array.".to_string();
+    }
+    format!(
+        "FOLLOW-UPS: Once the coding round completed, the interviewer was given these, to raise at most two of them in order:\n{}\nReturn one `followUps` entry for each, with its number as `index`. Set `raised` to true only when an Interviewer line in the transcript poses that follow-up, in any wording; the candidate bringing up the same idea unprompted does not raise it. For a raised follow-up, `assessment` is one to three sentences written to the candidate as \"you\": what the answer covered and what a stronger answer would have added, citing what was said. Interviewer agreement does not show the answer was correct. Use null for `assessment` when `raised` is false.",
+        numbered_list(follow_ups)
     )
 }
 
@@ -2698,7 +2721,8 @@ impact (high, medium or low), frequency (a positive count of observations in
 this session), drill, durationMin (1-30), successCriterion and selfReview; and
 frameworkAssessment with rubricVersion {rubric_version} and one phase entry each
 for Repeat, Example, Algorithm, Coding, Test, Optimizations, Situation, Task,
-Action and Result in that order, each with a score (integer 0-100 or null).
+Action and Result in that order, each with a score (integer 0-100 or null); and
+followUps, one entry per follow-up the brief lists, as it describes.
 Each strengths/improvements list must contain 2 to 4 concrete, specific items
 grounded in the rolling assessment, the transcript, and {material}, never generic
 filler, and no item may repeat another in the same list. A session with little to praise still holds two

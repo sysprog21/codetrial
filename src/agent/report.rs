@@ -168,9 +168,18 @@ pub fn report_response_schema() -> serde_json::Value {
         },
         "required": ["phase", "score"]
     });
+    let follow_up = serde_json::json!({
+        "type": "OBJECT", "propertyOrdering": ["index", "raised", "assessment"],
+        "properties": {
+            "index": { "type": "INTEGER", "minimum": 1, "maximum": MAX_FOLLOW_UPS },
+            "raised": { "type": "BOOLEAN" },
+            "assessment": { "type": "STRING", "nullable": true }
+        },
+        "required": ["index", "raised", "assessment"]
+    });
     serde_json::json!({
         "type": "OBJECT",
-        "propertyOrdering": ["codingScore", "communicationScore", "decision", "summary", "codingFeedback", "communicationFeedback", "improvementPlan", "frameworkAssessment"],
+        "propertyOrdering": ["codingScore", "communicationScore", "decision", "summary", "codingFeedback", "communicationFeedback", "improvementPlan", "frameworkAssessment", "followUps"],
         "properties": {
             "codingScore": { "type": "INTEGER", "minimum": 0, "maximum": 100 },
             "communicationScore": { "type": "INTEGER", "minimum": 0, "maximum": 100 },
@@ -192,9 +201,10 @@ pub fn report_response_schema() -> serde_json::Value {
                     "phases": { "type": "ARRAY", "minItems": 10, "maxItems": 10, "items": assessment_row }
                 },
                 "required": ["rubricVersion", "phases"]
-            }
+            },
+            "followUps": { "type": "ARRAY", "minItems": 0, "maxItems": MAX_FOLLOW_UPS, "items": follow_up }
         },
-        "required": ["codingScore", "communicationScore", "decision", "summary", "codingFeedback", "communicationFeedback", "improvementPlan", "frameworkAssessment"]
+        "required": ["codingScore", "communicationScore", "decision", "summary", "codingFeedback", "communicationFeedback", "improvementPlan", "frameworkAssessment", "followUps"]
     })
 }
 
@@ -223,27 +233,42 @@ pub fn validate_report_candidate(
     raw: &serde_json::Value,
     problem: &Problem,
 ) -> Result<serde_json::Value, Vec<String>> {
+    validate_report_judging(raw, problem, problem.variant().follow_ups.len())
+}
+
+/// `validate_report_candidate`, judging only the first `judged` follow-ups:
+/// none when the interviewer was never handed them, so an entry the debrief
+/// will discard is never scanned and cannot cost a repair.
+fn validate_report_judging(
+    raw: &serde_json::Value,
+    problem: &Problem,
+    judged: usize,
+) -> Result<serde_json::Value, Vec<String>> {
     let snapped = snap_plan_weaknesses(raw);
     let raw = &snapped;
     let mut errors = Vec::new();
     let Some(object) = raw.as_object() else {
         return Err(vec!["$: expected object".to_string()]);
     };
-    exact_keys(
-        object,
-        &[
-            "codingScore",
-            "communicationScore",
-            "decision",
-            "summary",
-            "codingFeedback",
-            "communicationFeedback",
-            "improvementPlan",
-            "frameworkAssessment",
-        ],
-        "$",
-        &mut errors,
-    );
+
+    // `followUps` is allowed rather than required. The response schema asks for
+    // it, but a report that leaves it out has judged no follow-up, which the
+    // debrief can say, and refusing it would spend a repair on the one field
+    // nothing else in the report depends on.
+    let mut keys = vec![
+        "codingScore",
+        "communicationScore",
+        "decision",
+        "summary",
+        "codingFeedback",
+        "communicationFeedback",
+        "improvementPlan",
+        "frameworkAssessment",
+    ];
+    if object.contains_key("followUps") {
+        keys.push("followUps");
+    }
+    exact_keys(object, &keys, "$", &mut errors);
     strict_integer(
         object.get("codingScore"),
         0,
@@ -296,6 +321,7 @@ pub fn validate_report_candidate(
     // An original problem has no published title to leak, and an empty one
     // matches nothing, so the same walk covers both kinds.
     let source_title = problem.source_title().unwrap_or("");
+
     for key in [
         "summary",
         "codingFeedback",
@@ -307,13 +333,105 @@ pub fn validate_report_candidate(
             validate_published_problem_names(value, &format!("$.{key}"), source_title, &mut errors);
         }
     }
+
+    // Mended before it is checked: an entry that is dropped never reaches the
+    // candidate, so nothing in it is a reason to refuse the report. A kept one
+    // is named by its place in the model's own response, which is what the
+    // repair prompt shows it, rather than by its place among those kept.
+    let follow_ups = object
+        .get("followUps")
+        .map(|entries| kept_follow_ups(entries, judged));
+    for (position, entry) in follow_ups.iter().flatten() {
+        let path = format!("$.followUps[{position}]");
+        if entry["assessment"]
+            .as_str()
+            .is_some_and(|text| text.chars().count() > MAX_FOLLOW_UP_TEXT)
+        {
+            errors.push(format!(
+                "{path}.assessment: expected non-empty string of at most {MAX_FOLLOW_UP_TEXT} characters"
+            ));
+        }
+        validate_observable_judgments(entry, &path, &mut errors);
+        validate_published_problem_names(entry, &path, source_title, &mut errors);
+    }
     if !errors.is_empty() {
         return Err(errors);
     }
     let mut report = raw.clone();
     sort_improvement_plan(&mut report);
     apply_weakness_tags(&mut report);
+    if let Some(follow_ups) = follow_ups {
+        report["followUps"] =
+            serde_json::Value::Array(follow_ups.into_iter().map(|(_, entry)| entry).collect());
+    }
     Ok(report)
+}
+
+/// The follow-ups the brief numbered, judged at most once each, and never
+/// more of them than the problem has.
+pub const MAX_FOLLOW_UPS: usize = 3;
+/// What one follow-up's assessment may hold: a few sentences, as the brief
+/// asks for.
+const MAX_FOLLOW_UP_TEXT: usize = 600;
+
+/// The `followUps` entries that can stand beside a follow-up the brief listed,
+/// each with its position in the response: an index in range, judged once,
+/// `raised` a boolean, and an assessment only where the follow-up was raised.
+///
+/// Shape is mended here rather than refused. An entry is a judgment about one
+/// follow-up, not part of the verdict, so a malformed one costs only that
+/// entry, which the debrief then shows as unjudged. The text it keeps then
+/// faces the same length limit and scans as every other narrative field,
+/// which do refuse.
+fn kept_follow_ups(entries: &serde_json::Value, judged: usize) -> Vec<(usize, serde_json::Value)> {
+    let mut seen = std::collections::HashSet::new();
+    entries
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(position, entry)| {
+            let index = entry
+                .get("index")
+                .and_then(serde_json::Value::as_u64)
+                .filter(|index| (1..=judged as u64).contains(index))?;
+            let raised = entry.get("raised").and_then(serde_json::Value::as_bool)?;
+            if !seen.insert(index) {
+                return None;
+            }
+            let assessment = entry
+                .get("assessment")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|text| raised && !text.is_empty());
+            Some((
+                position,
+                serde_json::json!({
+                    "index": index,
+                    "raised": raised,
+                    "assessment": assessment,
+                }),
+            ))
+        })
+        .collect()
+}
+
+/// Where the interview's rounds stood when its report was asked for, which
+/// decides what the report may judge. Taken from the state the brief was
+/// built from, so the brief, the validator and the debrief agree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReportRounds {
+    pub behavioral_opened: bool,
+    pub follow_ups_released: bool,
+}
+
+impl ReportRounds {
+    pub fn of(state: &super::RuntimeState) -> Self {
+        Self {
+            behavioral_opened: super::BehavioralRound::of(state).opened(),
+            follow_ups_released: super::coding_round_complete(state),
+        }
+    }
 }
 
 /// `validate_report_candidate`, which also refuses any STAR plan item when
@@ -333,10 +451,15 @@ pub fn validate_report_candidate(
 pub fn validate_report_for_round(
     raw: &serde_json::Value,
     problem: &Problem,
-    behavioral_round_opened: bool,
+    rounds: ReportRounds,
 ) -> Result<serde_json::Value, Vec<String>> {
-    let report = validate_report_candidate(raw, problem);
-    if behavioral_round_opened {
+    let judged = if rounds.follow_ups_released {
+        problem.variant().follow_ups.len()
+    } else {
+        0
+    };
+    let report = validate_report_judging(raw, problem, judged);
+    if rounds.behavioral_opened {
         return report;
     }
     let mut unopened = unopened_round_errors(raw);
@@ -407,6 +530,8 @@ pub(crate) struct Sanitized {
     pub checks: usize,
     /// Success criteria replaced.
     pub criteria: usize,
+    /// Follow-up assessments dropped.
+    pub assessments: usize,
 }
 
 impl Sanitized {
@@ -416,14 +541,17 @@ impl Sanitized {
 }
 
 /// Remove the self-review checks that judge delivery or personality, replace
-/// a success criterion that does, and say how many of each.
+/// a success criterion that does, drop a follow-up assessment that does, and
+/// say how many of each.
 ///
 /// A self-review check is optional coaching text, unlike a score, decision, or
 /// feedback improvement, and a success criterion only says when its drill is
 /// done. Keeping the rest of a report when one of them judges delivery or
 /// personality is more useful than turning an otherwise complete interview
 /// into an incomplete one: a criterion asking for eye contact, refused through
-/// both repairs, cost a candidate every score. This is the provider's fallback
+/// both repairs, cost a candidate every score. A follow-up assessment is the
+/// same kind of text, and its follow-up still says whether it was raised
+/// without it. This is the provider's fallback
 /// for when its repairs run out or its calls stop answering, not part of
 /// validation: while a repair can still be asked for, the model rewriting the
 /// text gives the candidate something specific, and `validate_report` stays
@@ -436,22 +564,19 @@ impl Sanitized {
 /// this emptied is refilled, and a refused criterion replaced, because the
 /// schema requires one, not because the line is worth reading; both are fixed
 /// text rather than model-authored evidence, so neither can smuggle the same
-/// judgment back.
+/// judgment back. A dropped assessment becomes null, which the schema allows.
 pub(crate) fn sanitize_report_candidate(
     mut report: serde_json::Value,
 ) -> (serde_json::Value, Sanitized) {
-    let Some(items) = report
-        .get_mut("improvementPlan")
-        .and_then(serde_json::Value::as_array_mut)
-    else {
-        return (report, Sanitized::default());
-    };
     let refused = |text: &serde_json::Value| {
         text.as_str()
             .is_some_and(|text| !refused_judgments(text, true).is_empty())
     };
     let mut sanitized = Sanitized::default();
-    for item in items {
+    let items = report
+        .get_mut("improvementPlan")
+        .and_then(serde_json::Value::as_array_mut);
+    for item in items.into_iter().flatten() {
         if let Some(criterion) = item.get_mut("successCriterion")
             && refused(criterion)
         {
@@ -472,11 +597,23 @@ pub(crate) fn sanitize_report_candidate(
             checks.push(serde_json::json!(SELF_REVIEW_REPLACEMENT));
         }
     }
+    let entries = report
+        .get_mut("followUps")
+        .and_then(serde_json::Value::as_array_mut);
+    for entry in entries.into_iter().flatten() {
+        if let Some(assessment) = entry.get_mut("assessment")
+            && refused(assessment)
+        {
+            *assessment = serde_json::Value::Null;
+            sanitized.assessments += 1;
+        }
+    }
     (report, sanitized)
 }
 
 /// Reject published-problem names from candidate-facing `summary`,
-/// `codingFeedback`, `communicationFeedback`, and `improvementPlan` fields.
+/// `codingFeedback`, `communicationFeedback`, `improvementPlan`, and
+/// `followUps` fields.
 ///
 /// The validator receives the complete fields, rather than a copied list of
 /// strings, so a newly nested strength, improvement, drill, or self-review is
@@ -497,7 +634,7 @@ fn validate_published_problem_names(
 /// Call `visit` with every string in a report field and the path that names it.
 ///
 /// One recursion rather than one per rule. The two validators here are driven
-/// from the same four fields over the same tree, so a fifth candidate-facing
+/// from the same five fields over the same tree, so a sixth candidate-facing
 /// field, or any change to how a path is spelled, used to be two edits that had
 /// to agree: the paths reach the candidate through the repair prompt, so a
 /// disagreement is not caught by either validator failing.
@@ -674,11 +811,13 @@ fn judgment_error(path: &str, reason: &str, phrases: &[&str]) -> String {
 }
 
 /// Where a report tells the candidate what to fix: the two improvement lists
-/// and the plan copied from them, self-review checks included.
-const IMPROVEMENT_PATHS: [&str; 3] = [
+/// and the plan copied from them, self-review checks included, and what a
+/// follow-up answer missed.
+const IMPROVEMENT_PATHS: [&str; 4] = [
     "$.codingFeedback.improvements",
     "$.communicationFeedback.improvements",
     "$.improvementPlan",
+    "$.followUps",
 ];
 
 /// A class of claim a report may not make about a person, the reason the

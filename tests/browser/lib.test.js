@@ -1431,7 +1431,7 @@ test("report contract migration preserves legacy and rejects unknown provenance"
       reportPromptVersion: 3,
     },
     { ...previous, rubricVersion: 2 },
-    { ...active, reportSchemaVersion: 3 },
+    { ...active, reportSchemaVersion: 4 },
     { ...active, rubricVersion: "1" },
     { ...active, extra: 1 },
     null,
@@ -1467,6 +1467,41 @@ test("sanitizeReport keeps the stamped fields on a normal report", () => {
   ]);
   assert.deepEqual(report.topics, ["Array", "Hash Table"]);
   assert.equal(report.practiceLevel, "staff");
+});
+
+test("sanitizeReport reads judged follow-ups and the bare text schema 2 stored", () => {
+  const report = sanitizeReport({
+    incomplete: true,
+    debrief: {
+      followUps: [
+        { text: "Raised one", raised: true, assessment: "Covered it." },
+        { text: "Missed one", raised: false, assessment: "Should be dropped" },
+      ],
+    },
+  });
+  assert.deepEqual(report.debrief.followUps, [
+    { text: "Raised one", raised: true, assessment: "Covered it." },
+    { text: "Missed one", raised: false, assessment: null },
+  ]);
+
+  // Bundle 31 was the last to store bare text; its report keeps its scores.
+  const schema2 = sanitizeReport({
+    codingScore: 70,
+    communicationScore: 60,
+    decision: "NO_HIRE",
+    interviewContract: {
+      bundleVersion: 31,
+      livePromptVersion: 23,
+      reportPromptVersion: 18,
+      rubricVersion: 1,
+      reportSchemaVersion: 2,
+    },
+    debrief: { followUps: ["Schema 2 text"] },
+  });
+  assert.equal(schema2.codingScore, 70);
+  assert.deepEqual(schema2.debrief.followUps, [
+    { text: "Schema 2 text", raised: null, assessment: null },
+  ]);
 });
 
 test("sanitizeReport keeps the stamped fields on an incomplete report", () => {

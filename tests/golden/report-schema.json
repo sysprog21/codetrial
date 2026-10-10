@@ -75,6 +75,38 @@
       ],
       "type": "STRING"
     },
+    "followUps": {
+      "items": {
+        "properties": {
+          "assessment": {
+            "nullable": true,
+            "type": "STRING"
+          },
+          "index": {
+            "maximum": 3,
+            "minimum": 1,
+            "type": "INTEGER"
+          },
+          "raised": {
+            "type": "BOOLEAN"
+          }
+        },
+        "propertyOrdering": [
+          "index",
+          "raised",
+          "assessment"
+        ],
+        "required": [
+          "index",
+          "raised",
+          "assessment"
+        ],
+        "type": "OBJECT"
+      },
+      "maxItems": 3,
+      "minItems": 0,
+      "type": "ARRAY"
+    },
     "frameworkAssessment": {
       "properties": {
         "phases": {
@@ -224,7 +256,8 @@
     "codingFeedback",
     "communicationFeedback",
     "improvementPlan",
-    "frameworkAssessment"
+    "frameworkAssessment",
+    "followUps"
   ],
   "required": [
     "codingScore",
@@ -234,7 +267,8 @@
     "codingFeedback",
     "communicationFeedback",
     "improvementPlan",
-    "frameworkAssessment"
+    "frameworkAssessment",
+    "followUps"
   ],
   "type": "OBJECT"
 }

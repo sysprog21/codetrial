@@ -1049,7 +1049,7 @@ fn the_report_is_told_where_the_behavioral_round_stood() {
     ] {
         let mut live = state;
         let frozen = freeze_assessment(&boot, &mut live, 12.0, Vec::new());
-        assert_eq!(frozen.behavioral_round_opened(), opened, "{line}");
+        assert_eq!(frozen.rounds().behavioral_opened, opened, "{line}");
         assert!(frozen.prompt.contains(line), "{line}");
         assert_eq!(
             frozen.prompt.matches("BEHAVIORAL ROUND:").count(),
@@ -2526,4 +2526,80 @@ fn a_frozen_assessment_keeps_its_boards_for_every_generation() {
     let bare = freeze_assessment(&boot, &mut live, 20.0, Vec::new());
     assert!(bare.report_boards().is_empty());
     assert!(bare.prompt.contains("no board reached this review"));
+}
+
+/// What the reviewer said about each follow-up lands beside it, and the
+/// server decides what the reviewer cannot: a follow-up never handed to the
+/// interviewer was not reached, whatever the response claims, and one handed
+/// over that no report judged is unknown rather than missed.
+#[test]
+fn the_debrief_places_each_follow_up_judgment_beside_its_follow_up() {
+    use crate::agent::{
+        EvidenceKind, EvidenceSource, FRAMEWORK_VERSION, FrameworkEvidence, FrameworkPhase,
+    };
+    let config = report_test_config();
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let texts = boot.problem.variant().follow_ups;
+    assert_eq!(texts.len(), 3);
+    let judged = || {
+        serde_json::json!({
+            "codingScore": 80,
+            "followUps": [
+                {"index": 1, "raised": true, "assessment": "You extended the map to three."},
+                {"index": 2, "raised": false, "assessment": null},
+            ],
+        })
+    };
+
+    let mut released = RuntimeState::default();
+    for phase in [FrameworkPhase::Test, FrameworkPhase::Optimizations] {
+        released.framework_evidence.push(FrameworkEvidence {
+            at_ms: 0,
+            phase,
+            source: EvidenceSource::CandidateSpeech,
+            kind: EvidenceKind::Observed,
+            confidence: 100,
+            summary: "Synthetic testing and complexity.".into(),
+            framework_version: FRAMEWORK_VERSION,
+        });
+    }
+    let mut report = judged();
+    stamp_report_debrief(&mut report, &boot, &released);
+    assert!(
+        report.get("followUps").is_none(),
+        "the judgment moved into the debrief"
+    );
+    assert_eq!(
+        report["debrief"]["followUps"],
+        serde_json::json!([
+            {"text": texts[0], "raised": true, "assessment": "You extended the map to three."},
+            {"text": texts[1], "raised": false, "assessment": null},
+            {"text": texts[2], "raised": null, "assessment": null},
+        ])
+    );
+
+    let mut early = judged();
+    stamp_report_debrief(&mut early, &boot, &RuntimeState::default());
+    for entry in early["debrief"]["followUps"].as_array().unwrap() {
+        assert_eq!(entry["raised"], false, "{entry}");
+        assert!(entry["assessment"].is_null(), "{entry}");
+    }
+
+    // A transcript cut at its opening cannot show a follow-up went unasked.
+    let mut cut = released.clone();
+    cut.transcript = vec![format!(
+        "Candidate: {}",
+        "a".repeat(crate::agent::MAX_TRANSCRIPT_BYTES)
+    )];
+    let mut report = judged();
+    stamp_report_debrief(&mut report, &boot, &cut);
+    assert_eq!(report["debrief"]["followUps"][0]["raised"], true);
+    assert!(report["debrief"]["followUps"][1]["raised"].is_null());
+
+    let mut lost = final_report(None, 0, Some("model unavailable"), boot.problem);
+    stamp_report_debrief(&mut lost, &boot, &released);
+    for entry in lost["debrief"]["followUps"].as_array().unwrap() {
+        assert!(entry["raised"].is_null(), "{entry}");
+        assert!(entry["assessment"].is_null(), "{entry}");
+    }
 }

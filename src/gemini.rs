@@ -717,7 +717,7 @@ pub(crate) async fn generate_report_with_keys(
     prompt: &str,
     material: ReportMaterial<'_>,
     problem: &crate::agent::Problem,
-    behavioral_round_opened: bool,
+    rounds: crate::agent::ReportRounds,
     run: ReportRun<'_>,
 ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
     generate_report_with_keys_at(
@@ -731,7 +731,7 @@ pub(crate) async fn generate_report_with_keys(
         },
         prompt,
         problem,
-        behavioral_round_opened,
+        rounds,
     )
     .await
 }
@@ -744,10 +744,9 @@ async fn generate_report_with_keys_at(
     mut calls: ReportCalls<'_>,
     prompt: &str,
     problem: &crate::agent::Problem,
-    behavioral_round_opened: bool,
+    rounds: crate::agent::ReportRounds,
 ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-    let (report, salvaged) =
-        report_attempts(prompt, problem, behavioral_round_opened, &mut calls).await?;
+    let (report, salvaged) = report_attempts(prompt, problem, rounds, &mut calls).await?;
     if let Some(line) = salvaged {
         eprintln!("{}", calls.keys.redact(&line));
     }
@@ -831,14 +830,11 @@ type ReportOutcome = Result<(Value, Option<String>), Box<dyn std::error::Error +
 async fn report_attempts(
     prompt: &str,
     problem: &crate::agent::Problem,
-    behavioral_round_opened: bool,
+    rounds: crate::agent::ReportRounds,
     transport: &mut impl ReportTransport,
 ) -> ReportOutcome {
     let mut request_prompt = prompt.to_string();
-    let mut attempts = ReportAttempts {
-        held: None,
-        behavioral_round_opened,
-    };
+    let mut attempts = ReportAttempts { held: None, rounds };
     for semantic_attempt in 0..=MAX_REPORT_REPAIRS {
         let output = match transport.call(&request_prompt).await {
             Ok(output) => output,
@@ -893,7 +889,7 @@ impl ReportCallBudget {
 /// an earlier attempt had.
 struct ReportAttempts {
     held: Option<Salvage>,
-    behavioral_round_opened: bool,
+    rounds: crate::agent::ReportRounds,
 }
 
 enum ReportStep {
@@ -912,15 +908,11 @@ impl ReportAttempts {
     ) -> ReportStep {
         let errors = match parse_report_text(output) {
             Err(errors) => errors,
-            Ok(raw) => match crate::agent::validate_report_for_round(
-                &raw,
-                problem,
-                self.behavioral_round_opened,
-            ) {
+            Ok(raw) => match crate::agent::validate_report_for_round(&raw, problem, self.rounds) {
                 Ok(report) => return ReportStep::Complete(report),
                 Err(errors) => {
                     if let Some(salvage) =
-                        salvage_report(raw, semantic_attempt, problem, self.behavioral_round_opened)
+                        salvage_report(raw, semantic_attempt, problem, self.rounds)
                     {
                         self.held = Some(salvage);
                     }
@@ -966,10 +958,11 @@ impl ReportAttempts {
             return Err(error);
         };
         let line = format!(
-            "gemini report salvaged problem={} checks={} criteria={} attempt={} after={after} error={:?}",
+            "gemini report salvaged problem={} checks={} criteria={} assessments={} attempt={} after={after} error={:?}",
             problem.id,
             salvage.removed.checks,
             salvage.removed.criteria,
+            salvage.removed.assessments,
             salvage.attempt,
             error.to_string()
         );
@@ -977,31 +970,30 @@ impl ReportAttempts {
     }
 }
 
-/// A response that is a report once its unsafe self-review checks are
-/// dropped and its unsafe success criteria replaced.
+/// A response that is a report once its unsafe self-review checks and
+/// follow-up assessments are dropped and its unsafe success criteria replaced.
 struct Salvage {
     report: Value,
     removed: crate::agent::Sanitized,
     attempt: usize,
 }
 
-/// A response whose only fault is a self-review check or success criterion
-/// judging delivery or personality, with that check dropped or that criterion
-/// replaced. Anything else wrong with it, and it is not a salvage: the report
-/// it returns has passed the whole validation.
+/// A response whose only fault is a self-review check, success criterion or
+/// follow-up assessment judging delivery or personality, with that check or
+/// assessment dropped or that criterion replaced. Anything else wrong with it,
+/// and it is not a salvage: the report it returns has passed the whole
+/// validation.
 fn salvage_report(
     raw: Value,
     attempt: usize,
     problem: &crate::agent::Problem,
-    behavioral_round_opened: bool,
+    rounds: crate::agent::ReportRounds,
 ) -> Option<Salvage> {
     let (sanitized, removed) = crate::agent::sanitize_report_candidate(raw);
     if removed.is_empty() {
         return None;
     }
-    let report =
-        crate::agent::validate_report_for_round(&sanitized, problem, behavioral_round_opened)
-            .ok()?;
+    let report = crate::agent::validate_report_for_round(&sanitized, problem, rounds).ok()?;
     Some(Salvage {
         report,
         removed,

@@ -698,6 +698,7 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
             } else {
                 BehavioralRound::NeverOpened
             },
+            follow_ups_released: false,
         }));
 
         assert!(prompt.contains(transcript), "{name}: transcript was lost");

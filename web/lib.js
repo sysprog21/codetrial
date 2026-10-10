@@ -808,17 +808,17 @@ const textEncoder = new TextEncoder();
 /// function-local, moving it left the whole suite green with the supported-card
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
-  bundleVersion: 31,
+  bundleVersion: 32,
   livePromptVersion: 23,
-  reportPromptVersion: 18,
-  reportSchemaVersion: 2,
+  reportPromptVersion: 19,
+  reportSchemaVersion: 3,
   rubricVersion: 1,
 };
 
 /// Report schemas this build can compare with the active rubric. Prompt-only
 /// bundle bumps retain the same score meaning, so compatibility is a predicate
 /// over provenance rather than a list that every prompt edit can forget.
-export const SCORABLE_SCHEMAS = [1, 2];
+export const SCORABLE_SCHEMAS = [1, 2, 3];
 
 /// The report's contract bundle, and whether this build can score against it.
 ///
@@ -1048,10 +1048,26 @@ function reportDebrief(raw) {
     followUps: Array.isArray(debrief.followUps)
       ? debrief.followUps
           .slice(0, 3)
-          .filter((item) => typeof item === "string")
-          .map((item) => boundedText(item, 400))
-          .filter(Boolean)
+          .map(reportFollowUp)
+          .filter((item) => item.text)
       : [],
+  };
+}
+
+/// One follow-up and what the reviewer made of it. Schema 2 reports stored the
+/// bare text, which is a follow-up nobody judged, so it reads as one with
+/// `raised` null rather than as one the interviewer never reached.
+function reportFollowUp(item) {
+  if (typeof item === "string")
+    return { text: boundedText(item, 400), raised: null, assessment: null };
+  const raised = typeof item?.raised === "boolean" ? item.raised : null;
+  return {
+    text: typeof item?.text === "string" ? boundedText(item.text, 400) : "",
+    raised,
+    assessment:
+      raised === true && typeof item?.assessment === "string"
+        ? boundedText(item.assessment, 600).trim() || null
+        : null,
   };
 }
 

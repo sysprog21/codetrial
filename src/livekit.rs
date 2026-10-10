@@ -3413,7 +3413,7 @@ async fn apply_data_packet(
             interview.boot,
             &assessment.prompt,
             &report_boards,
-            assessment.behavioral_round_opened(),
+            assessment.rounds(),
             api_key,
             crate::gemini::GENERATION_SEED,
             &assessment.refused,
