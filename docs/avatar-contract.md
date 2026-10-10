@@ -318,22 +318,37 @@ in the cost column for a borrowed mascot.
 
 ### Captions
 
-`#captions-bar` lives inside `#jim-stage`, under the avatar. It sizes to the
-turn rather than clamping: a fixed `max-height` cut sentences in half behind a
-scrollbar nobody reaches for mid-interview. `CAPTION_MAX_CHARS` already bounds
-the text, so the remaining `min(40vh, 20rem)` cap is a backstop, not the normal
-case.
+`#captions-bar` lives inside `#jim-stage`, under the avatar. It grows to fit
+its text, with `max-height: min(40vh, 20rem)` and scrolling as a backstop.
 
-It is a live subtitle, not a log. The transcript tab keeps every turn, so the
-bar hides after `CAPTION_IDLE_HIDE_MS` (12 s) with nobody speaking and returns
-on the next word. `init` arms the timer for the "Listening..." placeholder too,
-or it would sit over the editor for the whole interview having said nothing.
+A completed Jim turn is displayed in full, without `CAPTION_MAX_CHARS`
+truncation or an idle timeout. It stays until the candidate's next transcribed
+speech or an edit that changes the code text. Speech replaces it with the
+candidate's caption; a code text change hides the bar. Clicking or focusing
+the editor and switching languages preserve Jim's caption. A new Jim turn
+replaces the previous one.
+
+Keeping the last turn lets the candidate reread a hint or follow-up question
+while thinking, without switching away from the problem. The Transcript tab
+still keeps every turn.
+
+Interim Jim captions still reveal gradually. They and candidate captions keep
+the `CAPTION_MAX_CHARS` (160-character) window and `CAPTION_IDLE_HIDE_MS` (12 s)
+timeout. The "Listening..." placeholder also keeps the 12 s timeout.
+
+Jim's turn is marked complete only after a stream with `lk.transcription_final`
+set to `"true"` has been read successfully to its end. An interrupted stream
+does not mark its partial text as complete. Updates for already dismissed or
+replaced Jim segment IDs are ignored. Final copies of earlier candidate turns
+do not dismiss Jim's current turn.
 
 ## Checks
 
-`node --test tests/browser/avatar.test.js` covers the behavior with a fake
-clock, a fake mount, and a fake model. It cannot see WebGL, a canvas, or a
-layout, and no assertion in it should claim to.
+`node --test tests/browser/avatar.test.js tests/browser/captions.test.js`
+covers avatar behavior with a fake clock, a fake mount, and a fake model.
+Caption tests use a fake clock and actual page functions to cover retention,
+dismissal, final-stream handling, and editor input. These checks cannot see
+WebGL, a canvas, or a layout, and no assertion in them should claim to.
 
 `BROWSER_CHECK_FLOW=avatar ./scripts/browser-check.sh` is the only check that
 runs the renderer. It asserts the mount leaves `loading` and then asserts

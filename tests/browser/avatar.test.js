@@ -720,59 +720,23 @@ test("avatar blink and breath stay inside their envelope", () => {
   assert.ok(Math.abs(breathOffset(1234)) <= BREATH_AMPLITUDE);
 });
 
-// What the executable tests cannot see: which track the analyser is pointed at.
-// Getting this wrong is not a rendering bug, it is the avatar watching the
-// candidate, so it is worth a text assertion.
-// Captions are a live subtitle under Jim's face, not a log; the transcript tab
-// keeps every turn. Two properties, both invisible to a node test at runtime,
-// so they are pinned where they are decided.
-test("captions size to the turn and retire when nobody is speaking", () => {
+// Caption timing is covered by executable tests in captions.test.js.
+// These source assertions pin CSS rules; Node does not render the layout.
+test("caption CSS keeps a viewport cap and scrolling", () => {
   const css = read("web/styles.css");
-  const bar = css.slice(css.indexOf(".jim-stage .captions-bar"));
+  const start = css.indexOf(".jim-stage .captions-bar");
+  assert.ok(start >= 0, "the caption sizing rule must exist");
+  const bar = css.slice(start);
   const rule = bar.slice(0, bar.indexOf("}"));
-  // A fixed max-height cut sentences in half behind a scrollbar. The cap that
-  // remains is viewport-relative, a backstop rather than the normal case.
+
   assert.doesNotMatch(
     rule,
     /max-height:\s*\d+(\.\d+)?rem;/,
-    "a fixed max-height truncates the turn instead of fitting it",
+    "captions must retain a viewport-relative height cap",
   );
   assert.match(rule, /max-height:\s*min\(40vh/);
-
-  // Shown on every new caption, hidden after an idle stretch, and the
-  // placeholder is armed too or it would sit there for the whole interview.
-  assert.match(script, /const CAPTION_IDLE_HIDE_MS = \d+;/);
-  const show = functionBody(script, "showCaptions");
-  assert.match(show, /nodes\.captionsBar\.hidden = false;/);
-  assert.match(
-    show,
-    /clearTimeout\(captionIdleTimer\)/,
-    "a new turn must reset the countdown, not stack timers",
-  );
-  assert.match(
-    show,
-    /setTimeout\([\s\S]*?nodes\.captionsBar\.hidden = true;[\s\S]*?CAPTION_IDLE_HIDE_MS\)/,
-  );
-  assert.match(
-    script,
-    /nodes\.captionsText\.textContent = `\[\$\{speaker[^`]*`;\n\s*showCaptions\(\);/,
-    "every caption update must un-hide the bar",
-  );
-
-  // The reveal has to keep asking for the next tick while there is more of the
-  // turn to show. Dropping the re-arm leaves Jim's line frozen part-way through
-  // a sentence, which reads as a stall rather than as a bug.
-  const pace = functionBody(script, "paceInterviewerCaption");
-  assert.match(
-    pace,
-    /caption\.timer = setTimeout\(paceInterviewerCaption, CAPTION_TICK_MS\);/,
-    "an unfinished turn must schedule its next tick",
-  );
-  assert.match(
-    pace,
-    /caption\.shown < caption\.text\.length/,
-    "and stop scheduling once the whole turn is on screen",
-  );
+  assert.match(rule, /overflow-y:\s*auto;/);
+  assert.match(rule, /pointer-events:\s*auto;/);
 });
 
 // A node test has no layout engine, so it cannot see whether the stage

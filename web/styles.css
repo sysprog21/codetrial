@@ -600,10 +600,8 @@ p {
   overflow: hidden;
 }
 
-/* Under the avatar, and only as wide as it. It grows to fit the turn instead of
-   clamping: a fixed max-height cut sentences in half behind a scrollbar nobody
-   in an interview is going to reach for. `CAPTION_MAX_CHARS` already bounds the
-   text, and the viewport cap is a backstop, not the normal case. */
+/* Completed Jim turns keep their full text. The viewport cap bounds the bar's
+   height while scrolling keeps longer turns readable. */
 .jim-stage .captions-bar {
   margin: 0.35rem 0 0;
   max-height: min(40vh, 20rem);
