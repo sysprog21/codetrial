@@ -1373,11 +1373,23 @@ fn recovery_offer_matches_browser_limits_and_generation_deadline() {
     );
 
     // The regenerated report goes through the same receipt wait, so a page that
-    // stops waiting before every attempt could land drops one in flight.
+    // stops waiting before every attempt could land drops one in flight. The
+    // page's floor is the hosted wait, and what the server sends in its place
+    // outlasts whichever deadline is in force.
     let delivery = DELIVERY_WAIT * DELIVERY_ATTEMPTS as u32;
-    assert!(
-        limits["retryWaitSeconds"].as_u64().unwrap() > (REPORT_TIMEOUT + delivery).as_secs() + 3
+    assert_eq!(
+        limits["retryWaitSeconds"].as_u64().unwrap(),
+        crate::livekit::report_retry_wait(crate::livekit::REPORT_TIMEOUT).as_secs()
     );
+    for deadline in [
+        crate::livekit::REPORT_TIMEOUT,
+        crate::livekit::LOCAL_REPORT_TIMEOUT,
+    ] {
+        assert!(
+            crate::livekit::report_retry_wait(deadline).as_secs()
+                > (deadline + delivery).as_secs() + 3
+        );
+    }
 }
 
 #[tokio::test]
@@ -1425,7 +1437,7 @@ async fn generate_at(
     refused: &std::sync::atomic::AtomicBool,
 ) -> GeneratedReport {
     tokio::time::timeout(
-        REPORT_TIMEOUT,
+        crate::livekit::REPORT_TIMEOUT,
         crate::gemini::tests::generate_report_at(
             keys,
             url,

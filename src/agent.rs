@@ -72,7 +72,9 @@ pub use prompts::{
     uncredited_test_results_reaction, unrecorded_earlier_phases, with_owed_reply, wrap_up,
 };
 pub(crate) use prompts::{editor_tool_continuity, end_interview_refusal, report_transcript_lines};
-pub(crate) use report::{MAX_ERROR_CHARS, Sanitized, sanitize_report_candidate};
+pub(crate) use report::{
+    MAX_ERROR_CHARS, Sanitized, sanitize_report_candidate, snap_plan_weaknesses,
+};
 pub use report::{
     MAX_SUMMARY_TEXT, fallback_report, final_report, names_published_problem,
     report_response_schema, spelled_words, validate_report, validate_report_candidate,

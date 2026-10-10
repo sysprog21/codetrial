@@ -567,7 +567,7 @@ fn apply_weakness_tags(report: &mut serde_json::Value) {
 /// repaired; so the copy stays, and only what cannot change its meaning is
 /// forgiven. A match against two improvements, or a paraphrase, is left for
 /// validation to refuse.
-fn snap_plan_weaknesses(raw: &serde_json::Value) -> serde_json::Value {
+pub(crate) fn snap_plan_weaknesses(raw: &serde_json::Value) -> serde_json::Value {
     let normal = |text: &str| {
         text.split_whitespace()
             .collect::<Vec<_>>()

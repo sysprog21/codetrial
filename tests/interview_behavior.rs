@@ -240,9 +240,14 @@ fn the_rules_catch_a_named_source_and_a_volunteered_limit() {
 }
 
 /// Who plays the interviewer. Gemini is the model production runs; a local
-/// OpenAI-compatible server (llama.cpp's `llama-server`) plays it for free,
-/// which makes it a fair stand-in for comparing candidates against one
-/// another and a poor one for judging Gemini.
+/// model plays it for free, which makes it a fair stand-in for comparing
+/// candidates against one another and a poor one for judging Gemini.
+///
+/// A local model is reached one of two ways. `Gemini` follows
+/// `CODETRIAL_GEMINI_REST_BASE` the way the report does, so pointed at
+/// `scripts/gemini-shim.py` it exercises the same request shape and the same
+/// shim the report uses. `Local` skips both and talks to an OpenAI-compatible
+/// server directly, translating here.
 #[derive(Clone)]
 enum Backend {
     Gemini { key: String, model: String },
@@ -396,10 +401,7 @@ impl Conversation {
         for _ in 0..8 {
             let response: Value = self
                 .client
-                .post(format!(
-                    "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-                    model
-                ))
+                .post(codetrial::gemini::gemini_generate_content_url(model))
                 .header("x-goog-api-key", key)
                 .json(&json!({
                     "systemInstruction": { "parts": [{ "text": self.instructions }] },
@@ -1598,9 +1600,7 @@ async fn judge_phases(state: &mut RuntimeState, problem: &'static Problem) -> Ve
         .filter(|model| !model.is_empty())
         .unwrap_or_else(|| codetrial::config::DEFAULT_GEMINI_REPORT_MODEL.to_string());
     let response: Value = reqwest::Client::new()
-        .post(format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        ))
+        .post(codetrial::gemini::gemini_generate_content_url(&model))
         .header("x-goog-api-key", gemini_key())
         .json(&json!({
             "systemInstruction": { "parts": [{ "text": phase_judge_system_instruction() }] },
@@ -1613,13 +1613,14 @@ async fn judge_phases(state: &mut RuntimeState, problem: &'static Problem) -> Ve
         }))
         .send()
         .await
-        .expect("Gemini is reachable")
+        .expect("the report model is reachable")
         .json()
         .await
         .expect("Gemini answers JSON");
     let text = response["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
         .unwrap_or_else(|| panic!("no judgment: {response}"));
+    println!("judgment: {text}");
     apply_phase_judgment(state, text);
     framework_progress(state)
 }

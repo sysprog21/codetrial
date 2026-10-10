@@ -1242,29 +1242,41 @@ fn observer_is_not_the_candidate() {
 #[test]
 fn the_browser_escape_hatch_outlasts_the_report_deadline() {
     let page = std::fs::read_to_string("web/interview.js").expect("the page is readable");
-    let declaration = "const REPORT_ESCAPE_WAIT_MS = ";
+    let declaration = "const DEFAULT_REPORT_ESCAPE_WAIT_MS = ";
     let start = page
         .find(declaration)
-        .expect("web/interview.js declares REPORT_ESCAPE_WAIT_MS")
+        .expect("web/interview.js declares DEFAULT_REPORT_ESCAPE_WAIT_MS")
         + declaration.len();
     let rest = &page[start..];
     let end = rest.find(';').expect("the declaration ends in a semicolon");
-    let wait = Duration::from_millis(
+    let default = Duration::from_millis(
         rest[..end]
             .trim()
             .parse()
-            .expect("REPORT_ESCAPE_WAIT_MS is a number"),
+            .expect("DEFAULT_REPORT_ESCAPE_WAIT_MS is a number"),
     );
 
-    // The Gemini close sits between the frozen report and its first publish.
+    // The page's own default covers the hosted deadline, so a page that never
+    // got its runtime config still waits long enough for Gemini. The Gemini
+    // close sits between the frozen report and its first publish.
     let close = crate::gemini::CLOSE_TIMEOUT;
     let delivery = report::DELIVERY_WAIT * report::DELIVERY_ATTEMPTS as u32;
     assert!(
-        wait > REPORT_TIMEOUT + WRAP_UP_WAIT + close + delivery,
+        default > REPORT_TIMEOUT + WRAP_UP_WAIT + close + delivery,
         "a report bounded at {REPORT_TIMEOUT:?} after a {WRAP_UP_WAIT:?} wrap-up and a \
          {close:?} Gemini close cannot land with up to {delivery:?} delivery time before \
-         the page offers to leave at {wait:?}"
+         the page offers to leave at {default:?}"
     );
+
+    // And what the server sends in its place covers whichever deadline is in
+    // force, local included.
+    for deadline in [REPORT_TIMEOUT, LOCAL_REPORT_TIMEOUT] {
+        let wait = report_escape_wait(deadline);
+        assert!(
+            wait >= deadline + WRAP_UP_WAIT,
+            "a report bounded at {deadline:?} cannot land before the page offers to leave at {wait:?}"
+        );
+    }
 }
 
 /// A publish only queues the packet, so leaving right behind it can drop the

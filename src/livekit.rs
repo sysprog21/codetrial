@@ -176,6 +176,48 @@ const NOTABLE_PLAYOUT_BACKLOG: Duration = Duration::from_millis(500);
 /// sentence that used to give the count here was already naming a budget
 /// `src/gemini.rs` no longer had.
 pub(super) const REPORT_TIMEOUT: Duration = Duration::from_secs(125);
+/// `REPORT_TIMEOUT` for a report written by a local model, whose attempts are
+/// given longer in `src/gemini.rs` for the same reason. The same test holds it
+/// to paying for every call and every backoff it hands out.
+pub(super) const LOCAL_REPORT_TIMEOUT: Duration = Duration::from_secs(250);
+
+/// The report deadline in force: the local one when the report calls go to a
+/// self-hosted base, the hosted one otherwise.
+pub fn report_timeout() -> Duration {
+    if crate::gemini::report_endpoint_is_local() {
+        LOCAL_REPORT_TIMEOUT
+    } else {
+        REPORT_TIMEOUT
+    }
+}
+
+/// How long the page waits for the report before offering a way out: the
+/// report's own deadline, the wrap-up spent before it, the Gemini close between
+/// the frozen report and its first publish, every delivery attempt, and five
+/// seconds for the packet to cross the room. Offered any sooner, a candidate
+/// walks out on a report that is still coming, and leaving never saves it. The
+/// server says this to the page in `/runtime-config.js`, because only the
+/// server knows which of the two deadlines is in force.
+pub fn report_escape_wait(report_timeout: Duration) -> Duration {
+    report_timeout
+        + WRAP_UP_WAIT
+        + crate::gemini::CLOSE_TIMEOUT
+        + report_delivery()
+        + Duration::from_secs(5)
+}
+
+/// How long the page waits on a regenerated report before giving up on it:
+/// the deadline the regeneration runs under, every delivery attempt, and five
+/// seconds of slack, which is the hosted 145 `web/report-recovery.js` keeps.
+/// Sent the same way, for the same reason.
+pub fn report_retry_wait(report_timeout: Duration) -> Duration {
+    report_timeout + report_delivery() + Duration::from_secs(5)
+}
+
+fn report_delivery() -> Duration {
+    report::DELIVERY_WAIT * report::DELIVERY_ATTEMPTS as u32
+}
+
 /// Whether the candidate is in the room, and since when they have not been.
 ///
 /// The departure, the return and the grace check happen in three different

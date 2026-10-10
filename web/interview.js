@@ -2727,13 +2727,19 @@ function flushPendingLanguagePublish() {
   publishCode(undefined, pending.code, pending.language);
 }
 
-/// When the page stops waiting for the report and offers to leave. Held against
-/// the agent's own deadline by
-/// the_browser_escape_hatch_outlasts_the_report_deadline, which reads this
-/// declaration: the value lives here, and Rust checks that it clears
-/// the generation, wrap-up, Gemini close and delivery bounds rather than
-/// keeping copies.
-const REPORT_ESCAPE_WAIT_MS = 155000;
+/// When the page stops waiting for the report and offers to leave. The server
+/// says how long in /runtime-config.js, because the deadline depends on where
+/// reports are written: a local model is given longer than Gemini. The default
+/// is the hosted wait, held against the agent's own deadline by
+/// the_browser_escape_hatch_outlasts_the_report_deadline, which reads it here
+/// and checks that it clears the generation, wrap-up, Gemini close and
+/// delivery bounds. It is a floor: a config that is missing or says less never
+/// shortens it.
+const DEFAULT_REPORT_ESCAPE_WAIT_MS = 155000;
+const REPORT_ESCAPE_WAIT_MS = Math.max(
+  DEFAULT_REPORT_ESCAPE_WAIT_MS,
+  Number(globalThis.CODETRIAL_REPORT_ESCAPE_WAIT_MS) || 0,
+);
 
 /// The two timers that speak for a report nobody has seen yet, held so that a
 /// report which arrives can take them back. Both say a wait is still running,
