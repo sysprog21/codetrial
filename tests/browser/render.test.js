@@ -2107,3 +2107,56 @@ test("a whiteboard report walks the board step by step under the names the candi
   );
   assert.doesNotMatch(markdown, /## Final code/);
 });
+
+test("report and replay cards and Markdown retain the resolved interviewer style", () => {
+  for (const incomplete of [false, true]) {
+    const report = sanitizeReport({
+      incomplete,
+      interviewerVoice: "Charon",
+      interviewerAccent: "British",
+    });
+    const options = {
+      report,
+      problemTitle: "Exercise",
+      language: "python",
+      code: "",
+      transcript: [],
+      at: "2026-10-09",
+    };
+    assert.match(
+      reportMarkup(options),
+      /Voice: Charon; English accent: British/,
+    );
+    assert.match(
+      reportMarkdown(options),
+      /Voice: Charon; English accent: British/,
+    );
+    const legacy = { ...options, report: sanitizeReport({ incomplete }) };
+    assert.doesNotMatch(reportMarkup(legacy), /Voice:|English accent:/);
+    assert.doesNotMatch(reportMarkdown(legacy), /Voice:|English accent:/);
+  }
+  for (const [style, expected, absent] of [
+    [{ interviewerVoice: "Orus" }, /Voice: Orus/, /English accent:/],
+    [
+      { interviewerAccent: "Australian" },
+      /English accent: Australian/,
+      /Voice:/,
+    ],
+  ]) {
+    const report = sanitizeReport(style);
+    const card = reportMarkup({ report, problemTitle: "Exercise", code: "" });
+    assert.match(card, expected);
+    assert.doesNotMatch(card, absent);
+  }
+  const untrusted = sanitizeReport({
+    interviewerVoice: "<img src=x onerror=alert(1)>",
+    interviewerAccent: "British",
+  });
+  const card = reportMarkup({
+    report: untrusted,
+    problemTitle: "Exercise",
+    code: "",
+  });
+  assert.doesNotMatch(card, /<img src=x/);
+  assert.match(card, /&lt;img src=x/);
+});

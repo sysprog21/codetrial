@@ -43,6 +43,7 @@ pub struct RuntimeBootstrap<'a> {
     pub live_model: &'a str,
     pub report_model: &'a str,
     pub voice: &'a str,
+    pub accent: Option<&'static str>,
     pub silence_ms: u32,
     pub context_compression: Option<crate::config::GeminiContextCompression>,
     /// Whether candidate video frames go to Gemini, which is what makes the
@@ -63,6 +64,8 @@ pub struct RuntimeBootstrap<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RuntimeOptions {
+    pub voice: Option<&'static str>,
+    pub accent: Option<&'static str>,
     pub profile: InterviewProfile,
     pub grounding: InterviewGrounding,
     pub interview_loop: InterviewLoop,
@@ -94,6 +97,8 @@ pub fn bootstrap_with_rounds<'a>(
     options: RuntimeOptions,
 ) -> RuntimeBootstrap<'a> {
     let RuntimeOptions {
+        voice,
+        accent,
         profile,
         grounding,
         interview_loop,
@@ -108,6 +113,23 @@ pub fn bootstrap_with_rounds<'a>(
     let behavioral_minutes = interview_loop.behavioral_minutes().min(duration_min);
     let coding_minutes = duration_min.saturating_sub(behavioral_minutes);
 
+    let mut instructions = build_instructions_for_plan(
+        problem,
+        duration_min,
+        &RuntimeOptions {
+            profile: profile.clone(),
+            grounding: grounding.clone(),
+            interview_loop,
+            examples_hidden,
+            interview_mode,
+            code_execution_disabled,
+            ..Default::default()
+        },
+    );
+    if let Some(direction) = accent.and_then(crate::agent::interviewer_accent_instruction) {
+        instructions.push_str(&direction);
+    }
+
     RuntimeBootstrap {
         room_name,
         problem,
@@ -117,23 +139,13 @@ pub fn bootstrap_with_rounds<'a>(
         code_execution_disabled,
         coding_minutes,
         behavioral_minutes,
-        instructions: build_instructions_for_plan(
-            problem,
-            duration_min,
-            &RuntimeOptions {
-                profile: profile.clone(),
-                grounding: grounding.clone(),
-                interview_loop,
-                examples_hidden,
-                interview_mode,
-                code_execution_disabled,
-            },
-        ),
+        instructions,
         profile,
         grounding,
         live_model: &config.gemini_live_model,
         report_model: &config.gemini_report_model,
-        voice: &config.gemini_voice,
+        voice: voice.unwrap_or(&config.gemini_voice),
+        accent,
         silence_ms: config.gemini_silence_ms,
         context_compression: config.gemini_context_compression,
         candidate_video: config.gemini_candidate_video_enabled && !interview_mode.is_whiteboard(),

@@ -3920,3 +3920,40 @@ async fn a_rate_limited_phase_judge_does_not_cool_the_report_key() {
         assert_eq!(&keys.select_report().unwrap(), expected, "judge={judge}");
     }
 }
+
+#[test]
+fn reconnect_setup_preserves_resolved_voice_and_accent() {
+    let config = live_config(&[("GEMINI_VOICE", "Aoede")]);
+    for voice in crate::agent::INTERVIEWER_VOICES {
+        for accent in crate::agent::INTERVIEWER_ACCENTS {
+            let boot = crate::runtime::bootstrap_with_rounds(
+                &config,
+                "room",
+                Some("two-sum"),
+                45,
+                crate::runtime::RuntimeOptions {
+                    voice: Some(voice),
+                    accent: Some(accent),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(boot.accent, Some(*accent));
+            for resume in [None, Some("resume-handle"), None] {
+                let setup = live_setup_message(&boot, resume);
+                assert_eq!(
+                    setup["setup"]["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]
+                        ["voiceName"],
+                    *voice
+                );
+                assert_eq!(
+                    setup["setup"]["systemInstruction"]["parts"][0]["text"],
+                    boot.instructions
+                );
+                assert!(
+                    boot.instructions
+                        .contains(&format!("natural {accent} accent"))
+                );
+            }
+        }
+    }
+}

@@ -71,6 +71,8 @@ fn disabled_execution_prompts_request_traces_across_recovery_and_editor_events()
             get_problem(Some("two-sum")),
             45,
             &codetrial::runtime::RuntimeOptions {
+                voice: None,
+                accent: None,
                 profile: InterviewProfile::default(),
                 grounding: InterviewGrounding::default(),
                 interview_loop,
@@ -140,8 +142,8 @@ fn prompt_golden_digest_matches_versions() {
     // its hash is a string nothing checks. The pair is still asserted, because
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
-    let recorded_versions = (23, 18);
-    let recorded_digest = "c7512b1e525ba0a73636601ed667e731b58fdb1d64b16418560b8ae18f212ec6";
+    let recorded_versions = (24, 18);
+    let recorded_digest = "70542235b4c326a5527cce491656e4ba5419c6f53bf13e05d4e9b9d287679ee1";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -548,6 +550,8 @@ fn document_grounding_requires_consent_and_is_bounded_as_untrusted_prompt_data()
         problem,
         45,
         &codetrial::runtime::RuntimeOptions {
+            voice: None,
+            accent: None,
             profile: InterviewProfile::default(),
             grounding: grounding.clone(),
             interview_loop: InterviewLoop::CodingBehavioral,
@@ -865,6 +869,8 @@ fn profile_text_is_bounded_and_prompt_context_cannot_change_the_coding_rubric() 
         problem,
         45,
         &codetrial::runtime::RuntimeOptions {
+            voice: None,
+            accent: None,
             profile: profile.clone(),
             grounding: InterviewGrounding::default(),
             interview_loop: InterviewLoop::CodingBehavioral,
@@ -911,6 +917,8 @@ fn hidden_examples_are_not_on_screen_for_the_interviewer() {
             get_problem(Some("surrounded-regions")),
             45,
             &codetrial::runtime::RuntimeOptions {
+                voice: None,
+                accent: None,
                 profile: InterviewProfile::default(),
                 grounding: InterviewGrounding::default(),
                 interview_loop: InterviewLoop::CodingBehavioral,
@@ -946,6 +954,8 @@ fn coding_only_prompt_removes_the_behavioral_round_contract() {
         get_problem(Some("two-sum")),
         45,
         &codetrial::runtime::RuntimeOptions {
+            voice: None,
+            accent: None,
             profile: InterviewProfile::default(),
             grounding: InterviewGrounding::default(),
             interview_loop: InterviewLoop::CodingOnly,
@@ -966,6 +976,8 @@ fn coding_only_prompt_removes_the_behavioral_round_contract() {
             get_problem(Some("two-sum")),
             45,
             &codetrial::runtime::RuntimeOptions {
+                voice: None,
+                accent: None,
                 profile: InterviewProfile::default(),
                 grounding: InterviewGrounding::default(),
                 interview_loop: InterviewLoop::CodingBehavioral,
@@ -984,6 +996,8 @@ fn coding_only_prompt_removes_the_behavioral_round_contract() {
         get_problem(Some("two-sum")),
         45,
         &codetrial::runtime::RuntimeOptions {
+            voice: None,
+            accent: None,
             profile: InterviewProfile::default(),
             grounding: (InterviewGrounding {
                 requirements: vec!["Owns incident response".to_string()],
@@ -1266,19 +1280,19 @@ fn interview_contract_versions_are_one_closed_bundle() {
         "the bundle table has no row for {INTERVIEW_CONTRACT_BUNDLE_VERSION}"
     );
 
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 31);
-    assert_eq!(LIVE_PROMPT_VERSION, 23);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 32);
+    assert_eq!(LIVE_PROMPT_VERSION, 24);
     assert_eq!(REPORT_PROMPT_VERSION, 18);
     assert_eq!(RUBRIC_VERSION, 1);
-    assert_eq!(REPORT_SCHEMA_VERSION, 2);
+    assert_eq!(REPORT_SCHEMA_VERSION, 3);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 31,
-            "livePromptVersion": 23,
+            "bundleVersion": 32,
+            "livePromptVersion": 24,
             "reportPromptVersion": 18,
             "rubricVersion": 1,
-            "reportSchemaVersion": 2,
+            "reportSchemaVersion": 3,
         })
     );
 }

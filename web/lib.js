@@ -808,17 +808,17 @@ const textEncoder = new TextEncoder();
 /// function-local, moving it left the whole suite green with the supported-card
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
-  bundleVersion: 31,
-  livePromptVersion: 23,
+  bundleVersion: 32,
+  livePromptVersion: 24,
   reportPromptVersion: 18,
-  reportSchemaVersion: 2,
+  reportSchemaVersion: 3,
   rubricVersion: 1,
 };
 
 /// Report schemas this build can compare with the active rubric. Prompt-only
 /// bundle bumps retain the same score meaning, so compatibility is a predicate
 /// over provenance rather than a list that every prompt edit can forget.
-export const SCORABLE_SCHEMAS = [1, 2];
+export const SCORABLE_SCHEMAS = [1, 2, 3];
 
 /// The report's contract bundle, and whether this build can score against it.
 ///
@@ -1075,6 +1075,12 @@ function reportPracticeLevel(raw) {
     : null;
 }
 
+function reportInterviewerStyle(value) {
+  const text =
+    typeof value === "string" ? boundedText(value.trim(), 128).trim() : "";
+  return text && text !== "Random" ? text : undefined;
+}
+
 export function sanitizeReport(raw) {
   const { interviewContract, unsupported: unsupportedContract } =
     reportContract(raw);
@@ -1259,6 +1265,8 @@ export function sanitizeReport(raw) {
   const debrief = reportDebrief(raw);
   const topics = reportTopics(raw);
   const practiceLevel = reportPracticeLevel(raw);
+  const interviewerVoice = reportInterviewerStyle(raw?.interviewerVoice);
+  const interviewerAccent = reportInterviewerStyle(raw?.interviewerAccent);
 
   // A report with nothing in it must survive normalization as a report with
   // nothing in it. Falling through to the fields below would score the missing
@@ -1286,6 +1294,8 @@ export function sanitizeReport(raw) {
       debrief,
       topics,
       practiceLevel,
+      interviewerVoice,
+      interviewerAccent,
       improvementPlan: [],
       frameworkAssessment: null,
       frameworkEvidence,
@@ -1319,6 +1329,8 @@ export function sanitizeReport(raw) {
     debrief,
     topics,
     practiceLevel,
+    interviewerVoice,
+    interviewerAccent,
   };
 }
 

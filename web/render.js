@@ -240,6 +240,17 @@ export function reportSaveStatus(result) {
   return { message: "Report was not saved", className: "critical small" };
 }
 
+function interviewerStyle(report) {
+  return [
+    report.interviewerVoice ? `Voice: ${report.interviewerVoice}` : "",
+    report.interviewerAccent
+      ? `English accent: ${report.interviewerAccent}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("; ");
+}
+
 /// Only the verdict and the scores differ between an evaluated session and one
 /// that produced nothing. Forking the whole card duplicated the header, the
 /// evidence section, the code block and the actions row, including the
@@ -350,7 +361,7 @@ export function reportMarkup({
   return `
     <div class="report-card">
       <div class="report-header">
-        <div><p>${report.mode ? `${modeLabel(report.mode)} ` : ""}interview report${loop}${surface} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p>${practiceLevel ? `<p class="muted small">${practiceLevel}</p>` : ""}<h2>${heading}</h2></div>
+        <div><p>${report.mode ? `${modeLabel(report.mode)} ` : ""}interview report${loop}${surface} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p>${interviewerStyle(report) ? `<p class="muted small">${escapeHtml(interviewerStyle(report))}</p>` : ""}${practiceLevel ? `<p class="muted small">${practiceLevel}</p>` : ""}<h2>${heading}</h2></div>
         ${badge}
       </div>${scores}
       <section><h3>${report.incomplete ? "What happened" : "Committee summary"}</h3><p>${escapeHtml(report.summary)}</p></section>
@@ -686,6 +697,7 @@ export function reportMarkdown({
     report.interviewContract
       ? `Contract: bundle ${report.interviewContract.bundleVersion}; live prompt ${report.interviewContract.livePromptVersion}; report prompt ${report.interviewContract.reportPromptVersion}; rubric ${report.interviewContract.rubricVersion}; report schema ${report.interviewContract.reportSchemaVersion}`
       : "Contract: legacy/unversioned",
+    ...(interviewerStyle(report) ? [mdText(interviewerStyle(report))] : []),
     ...(report.rounds?.length
       ? [
           "Rounds: " +

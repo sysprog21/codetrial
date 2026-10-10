@@ -364,6 +364,7 @@ pub fn build_instructions_for_plan(
         examples_hidden,
         interview_mode,
         code_execution_disabled,
+        ..
     } = options;
     let metadata = problem.question_metadata();
     let [_, optimal_point, pitfalls_point] = metadata.expected_discussion_points;

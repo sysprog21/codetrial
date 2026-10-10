@@ -171,11 +171,11 @@ pub const THINKING_CHECK_IN_S: u64 = 120;
 pub(crate) const THINKING_RELEASE_COOLDOWN: std::time::Duration =
     std::time::Duration::from_secs(10);
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 31;
-pub const LIVE_PROMPT_VERSION: u32 = 23;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 32;
+pub const LIVE_PROMPT_VERSION: u32 = 24;
 pub const REPORT_PROMPT_VERSION: u32 = 18;
 pub const RUBRIC_VERSION: u32 = 1;
-pub const REPORT_SCHEMA_VERSION: u32 = 2;
+pub const REPORT_SCHEMA_VERSION: u32 = 3;
 
 pub fn interview_contract_json() -> serde_json::Value {
     serde_json::json!({
@@ -2595,6 +2595,8 @@ pub fn record_hint(state: &mut RuntimeState, requested: bool) -> String {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetadataConfig {
+    pub voice: Option<&'static str>,
+    pub accent: Option<&'static str>,
     pub problem: &'static Problem,
     pub duration_min: u32,
     pub interview_loop: InterviewLoop,
@@ -2895,6 +2897,27 @@ pub fn with_timer(state: &RuntimeState, prompt: String) -> String {
     format!("{prompt} {}", timer_line(minutes_left(state)))
 }
 
+pub const INTERVIEWER_VOICES: &[&str] = &["Puck", "Charon", "Kore", "Orus"];
+pub const INTERVIEWER_ACCENTS: &[&str] =
+    &["American", "British", "Australian", "Canadian", "Indian"];
+
+pub(crate) fn sanitize_interviewer_choice(
+    value: Option<&serde_json::Value>,
+    choices: &[&'static str],
+) -> Option<&'static str> {
+    let value = value?.as_str()?;
+    choices.iter().copied().find(|choice| *choice == value)
+}
+
+/// Fixed speaking directions, never candidate-authored prompt text.
+pub fn interviewer_accent_instruction(accent: &str) -> Option<String> {
+    INTERVIEWER_ACCENTS.contains(&accent).then(|| {
+        format!(
+            "\n\n[INTERVIEWER SPEAKING STYLE]\nSpeak English with a natural {accent} accent. Apply this only to pronunciation; keep the interview content, assessment rules, and professional tone unchanged."
+        )
+    })
+}
+
 pub fn parse_participant_metadata(metadata: Option<&str>) -> MetadataConfig {
     let value = metadata
         .and_then(|metadata| serde_json::from_str::<serde_json::Value>(metadata).ok())
@@ -2918,6 +2941,8 @@ pub fn parse_participant_metadata(metadata: Option<&str>) -> MetadataConfig {
         value.get("codeExecution") == Some(&serde_json::Value::Bool(false));
 
     MetadataConfig {
+        voice: sanitize_interviewer_choice(value.get("interviewerVoice"), INTERVIEWER_VOICES),
+        accent: sanitize_interviewer_choice(value.get("interviewerAccent"), INTERVIEWER_ACCENTS),
         problem,
         duration_min,
         interview_loop,

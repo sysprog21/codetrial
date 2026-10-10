@@ -608,6 +608,8 @@ fn a_played_candidate_is_read_by_what_it_asks() {
         three_sum,
         45,
         &codetrial::runtime::RuntimeOptions {
+            voice: None,
+            accent: None,
             profile: InterviewProfile::default(),
             grounding: InterviewGrounding::default(),
             interview_loop: InterviewLoop::CodingBehavioral,
@@ -889,6 +891,8 @@ async fn uncertain_speech_is_clarified_without_crediting_or_correcting_it() {
                     problem,
                     45,
                     &codetrial::runtime::RuntimeOptions {
+                        voice: None,
+                        accent: None,
                         profile: InterviewProfile::default(),
                         grounding: InterviewGrounding::default(),
                         interview_loop,
@@ -990,6 +994,8 @@ async fn live_interviewer_poses_the_variant_and_serves_hints_in_order() {
                     problem,
                     45,
                     &codetrial::runtime::RuntimeOptions {
+                        voice: None,
+                        accent: None,
                         profile: InterviewProfile::default(),
                         grounding: InterviewGrounding::default(),
                         interview_loop: InterviewLoop::CodingBehavioral,
@@ -1462,6 +1468,8 @@ async fn played_candidates_are_held_to_the_same_rules() {
                 problem,
                 45,
                 &codetrial::runtime::RuntimeOptions {
+                    voice: None,
+                    accent: None,
                     profile: InterviewProfile::default(),
                     grounding: InterviewGrounding::default(),
                     interview_loop: InterviewLoop::CodingBehavioral,
@@ -1539,6 +1547,8 @@ async fn conversational_reacto_answers_are_recorded_in_the_same_reply() {
             problem,
             45,
             &codetrial::runtime::RuntimeOptions {
+                voice: None,
+                accent: None,
                 profile: InterviewProfile::default(),
                 grounding: InterviewGrounding::default(),
                 interview_loop: InterviewLoop::CodingOnly,

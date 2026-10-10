@@ -183,10 +183,10 @@ export function memoryStorage() {
 /// working the browser tests go on passing while running nothing and a green
 /// build is the only evidence. `.github/workflows/check.yml` installs it before
 /// the gate, so there is no legitimate skip there.
-export async function launchChromium() {
+export async function launchChromium(options = {}) {
   try {
     const { chromium } = await import("playwright");
-    return await chromium.launch();
+    return await chromium.launch(options);
   } catch (error) {
     // `cause` rather than the message alone: when CI does break, the frame that
     // names what went wrong is the launcher's, not this one's.

@@ -158,6 +158,7 @@ fn bootstrap_preserves_python_gemini_defaults_and_prompts() {
     assert_eq!(bootstrap.live_model, DEFAULT_GEMINI_LIVE_MODEL);
     assert_eq!(bootstrap.report_model, DEFAULT_GEMINI_REPORT_MODEL);
     assert_eq!(bootstrap.voice, DEFAULT_GEMINI_VOICE);
+    assert_eq!(bootstrap.accent, None);
     assert!(
         bootstrap
             .instructions

@@ -881,7 +881,7 @@ fn report_value(
         ),
     };
     stamp_report_debrief(&mut report, boot, state);
-    stamp_report_contract(&mut report);
+    stamp_report_contract(&mut report, boot);
     report_with_integrity_events(report, state, reason)
 }
 
@@ -955,9 +955,17 @@ fn stamp_report_debrief(
     }
 }
 
-fn stamp_report_contract(report: &mut serde_json::Value) {
+fn stamp_report_contract(report: &mut serde_json::Value, boot: &RuntimeBootstrap<'_>) {
     if let Some(object) = report.as_object_mut() {
         object.insert("interviewContract".to_string(), interview_contract_json());
+        object.insert(
+            "interviewerVoice".to_string(),
+            serde_json::json!(boot.voice),
+        );
+        object.insert(
+            "interviewerAccent".to_string(),
+            serde_json::json!(boot.accent.unwrap_or("Default")),
+        );
     }
 }
 

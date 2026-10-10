@@ -20,6 +20,8 @@ fn instructions(problem: &Problem, duration_min: u32) -> String {
         problem,
         duration_min,
         &codetrial::runtime::RuntimeOptions {
+            voice: None,
+            accent: None,
             profile: InterviewProfile::default(),
             grounding: InterviewGrounding::default(),
             interview_loop: InterviewLoop::CodingBehavioral,
@@ -36,6 +38,8 @@ fn board_instructions(problem: &Problem, duration_min: u32) -> String {
         problem,
         duration_min,
         &codetrial::runtime::RuntimeOptions {
+            voice: None,
+            accent: None,
             profile: InterviewProfile::default(),
             grounding: InterviewGrounding::default(),
             interview_loop: InterviewLoop::CodingBehavioral,
@@ -291,10 +295,13 @@ fn prompt_samples() -> Value {
             ..RuntimeState::default()
         }),
         "timeBehavioral": behavioral_time_warning(),
+        "interviewerAccents": INTERVIEWER_ACCENTS.iter().map(|accent| (*accent, interviewer_accent_instruction(accent).unwrap())).collect::<std::collections::BTreeMap<_, _>>(),
         "instructions": instructions(problem, 45),
         "instructionsProfile": build_instructions_for_plan(problem,
             45,
             &codetrial::runtime::RuntimeOptions {
+                voice: None,
+                accent: None,
                 profile: full_profile.clone(),
                 grounding: InterviewGrounding::default(),
                 interview_loop: InterviewLoop::CodingBehavioral,
@@ -306,6 +313,8 @@ fn prompt_samples() -> Value {
         "instructionsExamplesHidden": build_instructions_for_plan(problem,
             45,
             &codetrial::runtime::RuntimeOptions {
+                voice: None,
+                accent: None,
                 profile: InterviewProfile::default(),
                 grounding: InterviewGrounding::default(),
                 interview_loop: InterviewLoop::CodingBehavioral,
@@ -596,6 +605,8 @@ fn prompt_samples() -> Value {
         problem,
         45,
         &codetrial::runtime::RuntimeOptions {
+            voice: None,
+            accent: None,
             profile: InterviewProfile::default(),
             grounding: InterviewGrounding::default(),
             interview_loop: InterviewLoop::CodingBehavioral,

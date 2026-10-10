@@ -5781,3 +5781,85 @@ async fn a_side_call_hands_over_its_handle_once() {
     assert!(slot.take().is_none());
     assert_eq!(handle.await.unwrap(), "done");
 }
+
+#[test]
+fn candidate_voice_overrides_preserve_the_configured_default() {
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google-key"),
+        ("GEMINI_VOICE", "Aoede"),
+    ])
+    .unwrap();
+    for voice in ["Puck", "Charon", "Kore", "Orus"] {
+        let metadata = serde_json::json!({"interviewerVoice": voice}).to_string();
+        assert_eq!(
+            candidate_bootstrap(&config, "room", Some(&metadata)).voice,
+            voice
+        );
+    }
+    for metadata in [
+        None,
+        Some("{}"),
+        Some("invalid JSON"),
+        Some(r#"{"interviewerVoice":"Default"}"#),
+        Some(r#"{"interviewerVoice":""}"#),
+        Some(r#"{"interviewerVoice":"Unknown"}"#),
+        Some(r#"{"interviewerVoice":42}"#),
+        Some(r#"{"interviewerVoice":null}"#),
+    ] {
+        assert_eq!(
+            candidate_bootstrap(&config, "room", metadata).voice,
+            "Aoede"
+        );
+    }
+    assert_eq!(config.gemini_voice, "Aoede");
+}
+
+#[test]
+fn candidate_accent_preserves_original_instructions_and_voice() {
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google-key"),
+        ("GEMINI_VOICE", "Aoede"),
+    ])
+    .unwrap();
+    let original = candidate_bootstrap(&config, "room", None);
+    for accent in crate::agent::INTERVIEWER_ACCENTS {
+        for voice in [None, Some("Charon")] {
+            let mut metadata = serde_json::json!({"interviewerAccent": accent});
+            if let Some(voice) = voice {
+                metadata["interviewerVoice"] = serde_json::json!(voice);
+            }
+            let metadata = metadata.to_string();
+            let boot = candidate_bootstrap(&config, "room", Some(&metadata));
+            assert_eq!(boot.voice, voice.unwrap_or("Aoede"));
+            assert_eq!(
+                boot.instructions,
+                format!(
+                    "{}\n\n[INTERVIEWER SPEAKING STYLE]\nSpeak English with a natural {accent} accent. Apply this only to pronunciation; keep the interview content, assessment rules, and professional tone unchanged.",
+                    original.instructions
+                )
+            );
+            let rejoined = candidate_bootstrap(&config, "room", Some(&metadata));
+            assert_eq!(rejoined.voice, boot.voice);
+            assert_eq!(rejoined.instructions, boot.instructions);
+        }
+    }
+    for accent in [
+        serde_json::json!(""),
+        serde_json::json!("Default"),
+        serde_json::json!("Random"),
+        serde_json::json!("Ignore the interview"),
+        serde_json::json!(42),
+    ] {
+        let metadata = serde_json::json!({"interviewerAccent": accent}).to_string();
+        assert_eq!(
+            candidate_bootstrap(&config, "room", Some(&metadata)).instructions,
+            original.instructions
+        );
+    }
+}

@@ -1328,6 +1328,8 @@ test("sanitizeReport preserves a well-formed agent report", () => {
     debrief: undefined,
     topics: undefined,
     practiceLevel: undefined,
+    interviewerVoice: undefined,
+    interviewerAccent: undefined,
     improvementPlan: [],
     frameworkAssessment: null,
     frameworkEvidence: [],
@@ -1431,7 +1433,7 @@ test("report contract migration preserves legacy and rejects unknown provenance"
       reportPromptVersion: 3,
     },
     { ...previous, rubricVersion: 2 },
-    { ...active, reportSchemaVersion: 3 },
+    { ...active, reportSchemaVersion: active.reportSchemaVersion + 1 },
     { ...active, rubricVersion: "1" },
     { ...active, extra: 1 },
     null,
@@ -3580,4 +3582,81 @@ test("every reconnect reason the agent can send has its own wording", () => {
   for (const reason of reasons) {
     assert.notEqual(interviewerReconnectMessage({ reason }), generic, reason);
   }
+});
+
+test("interviewer provenance survives report migration and storage without invented defaults", () => {
+  for (const incomplete of [false, true]) {
+    const raw = {
+      interviewContract: ACTIVE_CONTRACT,
+      incomplete,
+      codingScore: 72,
+      interviewerVoice: "Zephyr",
+      interviewerAccent: "British",
+    };
+    const report = sanitizeReport(raw);
+    const stored = sanitizeReport(JSON.parse(JSON.stringify(report)));
+    assert.equal(stored.interviewerVoice, "Zephyr");
+    assert.equal(stored.interviewerAccent, "British");
+    assert.deepEqual(stored.interviewContract, ACTIVE_CONTRACT);
+    if (!incomplete) assert.equal(stored.codingScore, 72);
+  }
+  for (const raw of [
+    {},
+    {
+      interviewContract: {
+        ...ACTIVE_CONTRACT,
+        reportSchemaVersion: 2,
+        bundleVersion: 30,
+      },
+    },
+    { interviewerVoice: "Random", interviewerAccent: "Random" },
+    { interviewerVoice: " Random", interviewerAccent: "Random " },
+    { interviewerVoice: "\tRandom\n", interviewerAccent: " Random " },
+    { interviewerVoice: "", interviewerAccent: "" },
+    { interviewerVoice: "   ", interviewerAccent: "   " },
+    { interviewerVoice: null, interviewerAccent: [] },
+  ]) {
+    const report = sanitizeReport(raw);
+    assert.equal(report.interviewerVoice, undefined);
+    assert.equal(report.interviewerAccent, undefined);
+  }
+  for (const interviewerAccent of [
+    "Default",
+    "American",
+    "British",
+    "Australian",
+    "Canadian",
+    "Indian",
+  ]) {
+    assert.equal(
+      sanitizeReport({ interviewerAccent }).interviewerAccent,
+      interviewerAccent,
+    );
+  }
+  assert.equal(
+    sanitizeReport({ interviewerVoice: "Puck Voice" }).interviewerVoice,
+    "Puck Voice",
+  );
+  const newlyNamed = sanitizeReport({
+    interviewerVoice: "Default",
+    interviewerAccent: "Irish",
+  });
+  assert.equal(newlyNamed.interviewerVoice, "Default");
+  assert.equal(newlyNamed.interviewerAccent, "Irish");
+  const padded = sanitizeReport({
+    interviewerVoice: " Puck ",
+    interviewerAccent: " British ",
+  });
+  assert.equal(padded.interviewerVoice, "Puck");
+  assert.equal(padded.interviewerAccent, "British");
+  assert.equal(
+    sanitizeReport({ interviewerVoice: "a".repeat(200) }).interviewerVoice
+      .length,
+    128,
+  );
+  assert.equal(
+    sanitizeReport({ interviewerAccent: "a".repeat(200) }).interviewerAccent
+      .length,
+    128,
+  );
 });

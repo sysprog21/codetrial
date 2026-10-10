@@ -136,6 +136,15 @@ responses stop when the candidate interrupts. Say "can I get a hint?" when
 needed. In a coding-only session Jim never ends the interview early: only the
 timer or the candidate's End interview button closes it.
 
+The media preflight offers independent choices for Jim's voice and English
+accent. Voices are Puck, Charon, Kore and Orus; accents are American, British,
+Australian, Canadian and Indian. Default voice uses `GEMINI_VOICE` (Puck when
+unset), and Default accent leaves the interview instructions unchanged. Random
+selects one of the named options independently for each control, once before
+the interview token is issued. The selections stay fixed through reconnects.
+Accent selection adds a speaking direction to Gemini Live; it does not change
+the interview content or assessment rules.
+
 The media preflight always requires confirmed output and a working microphone,
 and its Back to lobby button releases every device without starting. For an
 interview that is not recorded, a candidate may continue without a camera when

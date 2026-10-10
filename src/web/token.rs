@@ -209,6 +209,49 @@ impl RoomAuthorizations {
     }
 }
 
+fn interviewer_choices() -> [(&'static str, &'static [&'static str]); 2] {
+    [
+        ("interviewerVoice", crate::agent::INTERVIEWER_VOICES),
+        ("interviewerAccent", crate::agent::INTERVIEWER_ACCENTS),
+    ]
+}
+
+fn validate_interviewer_selections(request: &Value) -> Result<(), String> {
+    for (field, choices) in interviewer_choices() {
+        match request.get(field) {
+            None => {}
+            Some(Value::String(value))
+                if value.is_empty()
+                    || value == "Default"
+                    || value == "Random"
+                    || choices.contains(&value.as_str()) => {}
+            _ => return Err(format!("Unsupported {field} selection.")),
+        }
+    }
+    Ok(())
+}
+
+fn resolve_interviewer_choice(
+    value: Option<&Value>,
+    choices: &[&'static str],
+    mut draw: impl FnMut() -> Result<u8, &'static str>,
+) -> Result<Option<&'static str>, Box<dyn std::error::Error + Send + Sync>> {
+    if value.and_then(Value::as_str) != Some("Random") {
+        return Ok(crate::agent::sanitize_interviewer_choice(value, choices));
+    }
+
+    // Reject the incomplete bucket so every named option has equal weight.
+    // Resolve here only: the signed metadata carries a concrete choice through
+    // participant reconnects and every subsequent Gemini setup.
+    let limit = 256 - 256 % choices.len();
+    loop {
+        let byte = usize::from(draw()?);
+        if byte < limit {
+            return Ok(Some(choices[byte % choices.len()]));
+        }
+    }
+}
+
 pub fn token_response(
     config: &TokenConfig<'_>,
     body: &[u8],
@@ -265,6 +308,17 @@ pub fn token_response(
             .as_object_mut()
             .expect("metadata is an object")
             .insert("codeExecution".to_string(), Value::Bool(false));
+    }
+    for (field, choices) in interviewer_choices() {
+        if let Some(choice) = resolve_interviewer_choice(request.get(field), choices, || {
+            let mut byte = [0u8];
+            ring::rand::SystemRandom::new()
+                .fill(&mut byte)
+                .map_err(|_| "Could not select an interviewer style.")?;
+            Ok(byte[0])
+        })? {
+            metadata[field] = json!(choice);
+        }
     }
     let metadata = metadata.to_string();
 
@@ -555,6 +609,14 @@ pub(crate) async fn token_handler(
             StatusCode::BAD_REQUEST,
             json!({ "error": "Session request must be JSON." }),
         );
+    }
+    let selection_request = if body.is_empty() {
+        json!({})
+    } else {
+        serde_json::from_slice::<Value>(&body).expect("JSON was checked above")
+    };
+    if let Err(error) = validate_interviewer_selections(&selection_request) {
+        return json_response(StatusCode::BAD_REQUEST, json!({ "error": error }));
     }
     let interview = match checked_consent(&state, &accounts, &user, body.as_ref()).await {
         Ok(interview) => interview,

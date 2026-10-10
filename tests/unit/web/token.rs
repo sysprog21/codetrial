@@ -248,3 +248,82 @@ fn a_suffix_is_drawn_fresh_from_the_alphabet_it_documents() {
         "the alphabet drifted: a room name is lowercase alphanumeric and all of it is reachable"
     );
 }
+
+#[test]
+fn random_style_accepts_the_last_complete_bucket_without_redrawing() {
+    for (choices, byte, expected) in [
+        (crate::agent::INTERVIEWER_VOICES, 255, "Orus"),
+        (crate::agent::INTERVIEWER_ACCENTS, 254, "Indian"),
+    ] {
+        let mut draws = 0;
+        let selected = resolve_interviewer_choice(Some(&json!("Random")), choices, || {
+            draws += 1;
+            if draws == 1 {
+                Ok(byte)
+            } else {
+                Err("a valid boundary byte must not be rejected")
+            }
+        })
+        .unwrap();
+        assert_eq!(selected, Some(expected));
+        assert_eq!(draws, 1);
+    }
+}
+
+#[test]
+fn random_style_draws_only_for_random_and_can_choose_every_option() {
+    for (_, choices) in interviewer_choices() {
+        for selection in [
+            None,
+            Some(json!("")),
+            Some(json!("Default")),
+            Some(json!(choices[0])),
+        ] {
+            let selected = resolve_interviewer_choice(selection.as_ref(), choices, || {
+                panic!("explicit choices must not draw")
+            })
+            .unwrap();
+            assert_eq!(
+                selected,
+                selection
+                    .as_ref()
+                    .and_then(|value| crate::agent::sanitize_interviewer_choice(
+                        Some(value),
+                        choices
+                    ))
+            );
+        }
+        for (index, expected) in choices.iter().enumerate() {
+            let mut draws = 0;
+            let selected = resolve_interviewer_choice(Some(&json!("Random")), choices, || {
+                draws += 1;
+                Ok(index as u8)
+            })
+            .unwrap();
+            assert_eq!(selected, Some(*expected));
+            assert_eq!(draws, 1);
+        }
+    }
+    let mut draws = [255, 4].into_iter();
+    assert_eq!(
+        resolve_interviewer_choice(
+            Some(&json!("Random")),
+            crate::agent::INTERVIEWER_ACCENTS,
+            || Ok(draws.next().unwrap())
+        )
+        .unwrap(),
+        Some("Indian")
+    );
+    assert!(
+        draws.next().is_none(),
+        "the incomplete bucket must be rejected"
+    );
+    assert!(
+        resolve_interviewer_choice(
+            Some(&json!("Random")),
+            crate::agent::INTERVIEWER_VOICES,
+            || Err("entropy unavailable")
+        )
+        .is_err()
+    );
+}

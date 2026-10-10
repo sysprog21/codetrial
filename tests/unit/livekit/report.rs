@@ -559,16 +559,59 @@ fn an_interview_past_the_evidence_cap_still_reports_every_phase_it_reached() {
 
 #[test]
 fn the_server_overwrites_model_selected_contract_provenance() {
+    let config = report_test_config();
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
     let mut report = serde_json::json!({
         "decision": "HIRE",
         "interviewContract": {"bundleVersion": 999}
     });
-    stamp_report_contract(&mut report);
+    stamp_report_contract(&mut report, &boot);
     assert_eq!(report["interviewContract"], interview_contract_json());
 
     let mut incomplete = serde_json::json!({"incomplete": true});
-    stamp_report_contract(&mut incomplete);
+    stamp_report_contract(&mut incomplete, &boot);
     assert_eq!(incomplete["interviewContract"], interview_contract_json());
+}
+
+#[test]
+fn reports_stamp_the_resolved_interviewer_style_even_when_generation_fails() {
+    let mut config = report_test_config();
+    config.gemini_voice = "Zephyr".to_string();
+    for (voice, accent, expected_voice, expected_accent) in [
+        (None, None, "Zephyr", "Default"),
+        (Some("Charon"), None, "Charon", "Default"),
+        (None, Some("British"), "Zephyr", "British"),
+        (Some("Charon"), Some("British"), "Charon", "British"),
+    ] {
+        let boot = crate::runtime::bootstrap_with_rounds(
+            &config,
+            "interview-fixed",
+            Some("two-sum"),
+            45,
+            crate::runtime::RuntimeOptions {
+                voice,
+                accent,
+                ..Default::default()
+            },
+        );
+        let mut forged = serde_json::json!({
+            "interviewerVoice": "Random", "interviewerAccent": "Australian"
+        });
+        stamp_report_contract(&mut forged, &boot);
+        let failed = report_value(
+            &boot,
+            &mut RuntimeState::default(),
+            "candidate_ended",
+            &GeminiKeys::single("test"),
+            Ok(Err(std::io::Error::other("unavailable").into())),
+        );
+        for report in [&forged, &failed] {
+            assert_eq!(report["interviewerVoice"], expected_voice);
+            assert_eq!(report["interviewerAccent"], expected_accent);
+            assert_eq!(report["interviewContract"], interview_contract_json());
+        }
+        assert_eq!(failed["incomplete"], true);
+    }
 }
 
 #[test]
@@ -607,8 +650,15 @@ fn report_carries_the_debrief() {
         ..RuntimeState::default()
     };
 
-    let mut generated = final_report(Some(&valid), 0, None, boot.problem);
-    stamp_report_debrief(&mut generated, &boot, &state);
+    let generated = report_value(
+        &boot,
+        &mut state.clone(),
+        "candidate_ended",
+        &GeminiKeys::single("test"),
+        Ok(Ok(valid)),
+    );
+    assert_eq!(generated["interviewerVoice"], config.gemini_voice);
+    assert_eq!(generated["interviewerAccent"], "Default");
     let mut fallback = final_report(None, 0, Some("model unavailable"), boot.problem);
     stamp_report_debrief(&mut fallback, &boot, &state);
 

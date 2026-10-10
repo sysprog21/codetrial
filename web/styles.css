@@ -1965,3 +1965,26 @@ table.phase-scores {
 #star-grounding {
   margin: 0.4rem 0 0.6rem;
 }
+
+.interviewer-style-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.interviewer-style-controls > div {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.875rem;
+}
+
+.interviewer-style-controls select {
+  width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 480px) {
+  .interviewer-style-controls {
+    grid-template-columns: 1fr;
+  }
+}
