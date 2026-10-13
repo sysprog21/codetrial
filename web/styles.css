@@ -771,7 +771,7 @@ p {
 .board-panel,
 .editor-panel {
   min-width: 0;
-  overflow: hidden;
+  overflow: auto;
   border: 1px solid var(--hairline);
   border-radius: 8px;
   background: var(--surface);
@@ -814,7 +814,7 @@ p {
   margin-top: 1rem;
 }
 
-/* Floating, not docked. Fixed to the editor's top-right, so it never
+/* Floating, not docked. Placed at the editor's top-right, so it never
    competes with the sidebar for width. Its top is the measured bottom of the
    toolbar on show (the editor's, or the whiteboard's), which interview.js
    keeps in --jim-stage-top: a toolbar that wraps to two rows pushes the stage
@@ -926,7 +926,7 @@ p {
   .jim-stage {
     top: auto;
     bottom: 1.5rem;
-    width: 260px;
+    width: min(260px, calc(100vw - 3rem));
   }
 }
 
@@ -942,7 +942,15 @@ p {
 .jim-stage.compact {
   top: auto;
   bottom: 1.5rem;
-  width: 260px;
+  width: min(260px, calc(100vw - 3rem));
+}
+
+/* A fixed stage outside the viewport cannot be reached by page scrolling.
+   interview.js keeps the usual floating position whenever it fits. */
+.jim-stage.scrollable {
+  position: absolute;
+  top: var(--jim-stage-top, 4.25rem);
+  bottom: auto;
 }
 
 .jim-avatar-canvas {

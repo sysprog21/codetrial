@@ -3560,20 +3560,34 @@ function compactJimStageBesideNarrowPanel(panel) {
 /// after that, because an observed toolbar that leaves the page measures as
 /// zero and would pull the stage to the top. Either toolbar can wrap to a
 /// second row, and a fixed `top` cleared only the first, so Run tests ended up
-/// under the avatar. The stage is `position: fixed`, so the toolbar's viewport
-/// bottom is the offset it needs. Observed rather than read per frame; the
-/// fallback is the resize listener it replaces, as in `initAvatarStage`.
+/// under the avatar. A stage that cannot fit becomes page-positioned instead:
+/// fixing it outside the viewport makes its controls unreachable by scrolling.
+/// Its height is observed too, because captions can change the fit mid-turn.
 function placeJimStageBelowToolbar(toolbar) {
   if (!toolbar) return;
+  const panel = toolbar.closest(".editor-panel, .board-panel");
   const place = () => {
-    const bottom = Math.ceil(toolbar.getBoundingClientRect().bottom);
+    // Keep the anchor at rest when either scrolling surface moves the toolbar.
+    const bottom = Math.ceil(
+      toolbar.getBoundingClientRect().bottom + window.scrollY + panel.scrollTop,
+    );
     document.documentElement.style.setProperty(
       "--jim-stage-top",
       `${bottom + JIM_STAGE_TOOLBAR_GAP_PX}px`,
     );
+    // Measure the floating position even after a short window made the stage
+    // scrollable, so widening or shortening its contents can restore it.
+    nodes.jimStage.classList.remove("scrollable");
+    const stage = nodes.jimStage.getBoundingClientRect();
+    nodes.jimStage.classList.toggle(
+      "scrollable",
+      stage.top < 0 || stage.bottom > window.innerHeight,
+    );
   };
-  if (window.ResizeObserver) new window.ResizeObserver(place).observe(toolbar);
-  else window.addEventListener("resize", place);
+  const observer = new window.ResizeObserver(place);
+  observer.observe(toolbar);
+  observer.observe(nodes.jimStage);
+  window.addEventListener("resize", place);
   place();
 }
 
