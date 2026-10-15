@@ -220,7 +220,7 @@ test("the lobby offers an editor or a whiteboard and carries the choice into the
   );
   assertIncludesCompact(
     interview,
-    "durationMin, interviewLoop, interviewMode: mode, report, };",
+    "durationMin, interviewLoop, interviewMode: mode, code: whiteboard ? null : currentCode(), report, };",
   );
 });
 
@@ -460,6 +460,67 @@ test("review inputs survive the full-report cap", async () => {
     date: "2026-01-01T00:00:00Z",
     report: { decision: "NO_HIRE", incomplete: false, improvementPlan: [] },
   });
+});
+
+test("final code stays in the short history and out of reviews and the account", async () => {
+  // Ten kilobytes each, so twenty-one of them would not fit the review budget:
+  // a review store that kept the code would also hold fewer attempts.
+  const code = (index) => `// attempt ${index}\n${"x".repeat(10_000)}`;
+  const run = async (withCode) => {
+    const storage = memoryStorage();
+    const posted = [];
+    const fetcher = async (url, options) => {
+      if (url === "/api/session") return response({ signedIn: true });
+      posted.push(JSON.parse(options.body));
+      return response({ id: "saved" });
+    };
+    for (let index = 0; index < 21; index += 1) {
+      const entry = {
+        id: `attempt-${index}`,
+        problemId: "two-sum",
+        date: `2026-01-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
+        report: { decision: "HIRE" },
+      };
+      if (withCode) entry.code = code(index);
+      await saveReportHistory(entry, { storage, fetcher });
+    }
+    return { storage, posted };
+  };
+  const kept = await run(true);
+  const plain = await run(false);
+
+  const history = readLocalHistory(kept.storage);
+  assert.equal(history.length, 20);
+  assert.deepEqual(
+    history.map((row) => row.code),
+    Array.from({ length: 20 }, (_, index) => code(20 - index)),
+  );
+  assert.equal(
+    kept.storage.getItem(reviewHistoryKey),
+    plain.storage.getItem(reviewHistoryKey),
+  );
+  assert.equal(readReviewHistory(kept.storage).length, 21);
+  assert.equal(kept.posted.length, 21);
+  assert.deepEqual(kept.posted, plain.posted);
+});
+
+test("leaving the code out keeps every other stored field, __proto__ included", async () => {
+  const storage = memoryStorage();
+  const posted = [];
+  const fetcher = async (url, options) => {
+    if (url === "/api/session") return response({ signedIn: true });
+    posted.push(options.body);
+    return response({ id: "saved" });
+  };
+  // Parsed, as a stored row is, so `__proto__` is an own field of it.
+  const entry = JSON.parse(
+    '{"id":"odd","problemId":"two-sum","__proto__":{"kept":true},"code":"x","report":{"decision":"HIRE"}}',
+  );
+  await saveReportHistory(entry, { storage, fetcher });
+  const expected =
+    '{"id":"odd","problemId":"two-sum","__proto__":{"kept":true},"report":{"decision":"HIRE"}}';
+  assert.equal(storage.getItem(reviewHistoryKey), `[${expected}]`);
+  assert.deepEqual(posted, [expected]);
 });
 
 test("a rebuilt review history keeps the local-storage budget", () => {

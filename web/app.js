@@ -1370,7 +1370,7 @@ function renderAttemptHistory(attempts) {
       report: attempt.report,
       problemTitle: attempt.problemTitle,
       language: languageLabel(attempt.language ?? "not recorded"),
-      code: "(final code was not saved)",
+      code: attempt.code ?? "(final code was not saved)",
     });
     report.querySelector(".report-actions")?.remove();
     report.hidden = true;
@@ -1451,7 +1451,7 @@ function downloadSavedReport(attempt) {
     },
     problemTitle: attempt.problemTitle,
     language: attempt.language,
-    code: null,
+    code: attempt.code,
     transcript: null,
     at: new Date(attempt.at).toLocaleString(),
   });

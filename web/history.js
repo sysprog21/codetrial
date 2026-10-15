@@ -413,13 +413,17 @@ function saveLocalReport(entry, storage) {
 // hundred times over on a single save. A review too large for what is left is
 // skipped and the walk carries on, so one outsized report costs itself and not
 // the older attempts behind it.
+//
+// Without the final code. It stays in the short history, so the newest twenty
+// reopen with it, while the budget here buys as many older attempts as before.
 function boundedReviews(reviews) {
   const encoder = new TextEncoder();
   const retained = [];
   const texts = [];
   // The brackets the array itself serializes to, before any element.
   let bytes = 2;
-  for (const review of reviews.slice(0, REVIEW_HISTORY_CAP)) {
+  for (const row of reviews.slice(0, REVIEW_HISTORY_CAP)) {
+    const review = withoutCode(row);
     const text = JSON.stringify(review);
     // A separator for every element after the first.
     const size = encoder.encode(text).length + (retained.length ? 1 : 0);
@@ -434,6 +438,28 @@ function boundedReviews(reviews) {
   return { retained, json: `[${texts.join(",")}]` };
 }
 
+/// A stored row with its final code left out, and any other row as it is.
+/// Copied field by field for the reason `legacyKey` gives, and defined rather
+/// than assigned: assigning a stored `__proto__` field would set the copy's
+/// prototype instead and drop the field from the row written back. Not a
+/// null-prototype object as there, because these rows go on to the lobby.
+function withoutCode(entry) {
+  if (!pairable(entry) || !Object.hasOwn(entry, "code")) return entry;
+  const copy = {};
+  for (const field of Object.keys(entry)) {
+    if (field === "code") continue;
+    Object.defineProperty(copy, field, {
+      value: entry[field],
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return copy;
+}
+
+/// The account copy carries no code: README.md says code snapshots stay in
+/// memory unless recording is enabled, and the server keeps this body as sent.
 async function saveAccountReport(entry, fetcher) {
   const session = await sessionState(fetcher);
   if (session === "out") return "skipped";
@@ -442,7 +468,7 @@ async function saveAccountReport(entry, fetcher) {
     const saved = await fetcher("/api/reports", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(entry),
+      body: JSON.stringify(withoutCode(entry)),
       signal: AbortSignal.timeout(requestTimeoutMs),
     });
     return saved.ok ? "saved" : "failed";
