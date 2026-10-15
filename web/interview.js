@@ -3936,6 +3936,11 @@ async function saveHistory(report = state.report) {
   // No language at a whiteboard: nothing is compiled, the tabs are not on
   // screen, and `state.language` is the default nobody chose. Recorded as one,
   // it would filter the candidate's own history by a choice they never made.
+  //
+  // The code for the same reason: there is none, and an empty string would be
+  // shown as an empty editor. history.js keeps it in the short history only,
+  // so it joins after the unclear lines are bounded: they are cut to fit the
+  // account body, which never carries the code.
   const base = {
     id: state.reportId,
     date: new Date().toISOString(),
@@ -3949,7 +3954,10 @@ async function saveHistory(report = state.report) {
     interviewMode: mode,
     report,
   };
-  const entry = withUnclearLines(base, unclearLines());
+  const entry = {
+    ...withUnclearLines(base, unclearLines()),
+    code: whiteboard ? null : currentCode(),
+  };
   // A later save may replace an earlier report under this same id. Keep the
   // warning active until this save itself confirms that Past attempts can
   // reopen the current copy.

@@ -4017,6 +4017,73 @@ lobbyTest(
   },
 );
 
+for (const storage of ["device", "account"]) {
+  lobbyTest(
+    `${storage} attempts reopen and download with the code this device kept`,
+    async (page) => {
+      const code = "def solve():\n    return 42";
+      const entries = [
+        { title: "Kept code", code },
+        { title: "No code kept", code: undefined },
+      ].map((item, index) => ({
+        id: `attempt-${index}`,
+        problemId: EASY[0],
+        problemTitle: item.title,
+        date: `2026-01-0${2 - index}T00:00:00Z`,
+        language: "python",
+        code: item.code,
+        report: { decision: "HIRE", codingScore: 81 },
+      }));
+      if (storage === "account") {
+        // The account copy never carries the code; only this device does.
+        reports = entries.map((entry) => ({
+          id: entry.id,
+          payload: { ...entry, code: undefined },
+        }));
+      } else {
+        session = { signedIn: false };
+      }
+      await page.addInitScript((entries) => {
+        localStorage.setItem("codetrial_history", JSON.stringify(entries));
+      }, entries);
+      await lobby(page);
+      const history = page.locator("#attempt-history");
+      assert.match(
+        await page.locator("#progress-summary").textContent(),
+        storage === "account"
+          ? /saved to your account/
+          : /saved on this device/,
+      );
+      for (const [title, shown, exported] of [
+        ["Kept code", code, "```python\n" + code + "\n```"],
+        [
+          "No code kept",
+          "(final code was not saved)",
+          "## Final code (Python)\n(final code was not saved)\n",
+        ],
+      ]) {
+        const row = history.locator("li").filter({ hasText: title });
+        await row.getByRole("button", { name: "Open report" }).click();
+        const finalCode = row
+          .locator(".report-card details")
+          .filter({ hasText: "Your final code" });
+        assert.equal(await finalCode.locator("pre").textContent(), shown);
+
+        const downloading = page.waitForEvent("download");
+        await row.getByRole("button", { name: /^Download report/ }).click();
+        const chunks = [];
+        for await (const chunk of await (await downloading).createReadStream())
+          chunks.push(chunk);
+        assert.ok(
+          Buffer.concat(chunks).toString("utf8").includes(exported),
+          title,
+        );
+      }
+    },
+    { acceptDownloads: true },
+  );
+}
+
 lobbyTest("try again selects the problem", async (page) => {
   reports = [savedAttempt(EASY[0])];
   await lobby(page);

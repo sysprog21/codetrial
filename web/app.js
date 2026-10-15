@@ -12,6 +12,7 @@ import {
   deleteReport,
   readDeviceHistory,
   renameLocalHistory,
+  withLocalCode,
 } from "./history.js";
 import {
   pickProblem,
@@ -1022,8 +1023,9 @@ async function renderServerHistory(generation) {
     // The picker needs the account row's timestamp for review scheduling and
     // the verdict as it was saved; the progress panel normalizes its own.
     // The server reads its rows back under page names, so no map is needed.
-    reports = data.reports.map(pickerEntry);
-    showProgress(data.reports, "saved to your account");
+    const rows = withLocalCode(data.reports);
+    reports = rows.map(pickerEntry);
+    showProgress(rows, "saved to your account");
   } catch {
     if (generation !== historyLoad) return;
     showProgressError("Could not load saved account progress.");
@@ -1758,7 +1760,7 @@ function renderAttemptHistory(attempts) {
       report: attempt.report,
       problemTitle: attempt.problemTitle,
       language: languageLabel(attempt.language ?? "not recorded"),
-      code: "(final code was not saved)",
+      code: attempt.code ?? "(final code was not saved)",
       unclearLines: attempt.unclearLines,
     });
     report.querySelector(".report-actions")?.remove();
@@ -1837,7 +1839,7 @@ function downloadSavedReport(attempt) {
     },
     problemTitle: attempt.problemTitle,
     language: attempt.language,
-    code: null,
+    code: attempt.code,
     transcript: null,
     at: new Date(attempt.at).toLocaleString(),
     unclearLines: attempt.unclearLines,
