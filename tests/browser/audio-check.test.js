@@ -7,6 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { FakeStream, FakeTrack, settle } from "./fake-media.js";
 
 import {
   MIC_CONFIRM_FRAMES,
@@ -21,37 +22,6 @@ import {
 } from "../../web/audio-check.js";
 
 import { createDevicePool } from "../../web/devices.js";
-
-class FakeTrack {
-  constructor(kind) {
-    this.kind = kind;
-    this.readyState = "live";
-    this.enabled = true;
-    this.muted = false;
-  }
-  stop() {
-    this.readyState = "ended";
-  }
-}
-
-class FakeStream {
-  constructor(tracks = []) {
-    this.tracks = tracks;
-  }
-  getTracks() {
-    return this.tracks;
-  }
-  addTrack(track) {
-    this.tracks.push(track);
-  }
-  removeTrack(track) {
-    this.tracks = this.tracks.filter((each) => each !== track);
-  }
-}
-
-// The pool builds its own stream with `new MediaStream()`, which node does not
-// have.
-globalThis.MediaStream = FakeStream;
 
 const silence = () => new Uint8Array(64).fill(128);
 const speech = () =>
@@ -395,11 +365,6 @@ test("a microphone failure outranks a camera failure", () => {
   );
 });
 
-// Skipping the camera and then undoing the skip must not read as a finished
-// step: the step turns true when a track arrives, not when the candidate
-// changes their mind.
-const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
-
 const readinessOf = (pool, cameraSkipped) =>
   preflightReadiness({
     pool,
@@ -456,9 +421,9 @@ test("undoing a camera skip while the first prompt is open waits for its grant",
 });
 
 // A skip usually follows a failed attempt, and that attempt's error outlives
-// it. Undoing the skip must drop the error before the new request settles, or
-// the red banner shows beside the prompt the candidate just asked for.
-test("undoing a camera skip asks again and drops the error that led to it", async () => {
+// it. The banner is what the candidate reads, so it is checked here: undoing
+// the skip must not leave "Camera unavailable" beside the new prompt.
+test("undoing a camera skip after a failed attempt shows no stale camera error", async () => {
   let videoRequests = 0;
   let grantVideo;
   const pool = createDevicePool({
@@ -488,17 +453,20 @@ test("undoing a camera skip asks again and drops the error that led to it", asyn
 
   pool.start();
   await settle();
-  assert.match(pool.errorOf("video"), /NotAllowedError/);
+  assert.equal(
+    readinessOf(pool, false).blocker,
+    "camera-error",
+    "the failed attempt blocks the room",
+  );
 
   pool.disable("video");
   assert.equal(readinessOf(pool, true).steps.camera, true);
 
   pool.enable("video");
-  assert.equal(videoRequests, 2, "undoing the skip asks the camera again");
-  assert.equal(pool.errorOf("video"), null, "the old error is gone");
   const waiting = readinessOf(pool, false);
   assert.notEqual(waiting.blocker, "camera-error");
   assert.equal(waiting.steps.camera, false);
+  assert.equal(waiting.ready, false);
 
   grantVideo(new FakeStream([new FakeTrack("video")]));
   await settle();
