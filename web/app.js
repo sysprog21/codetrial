@@ -1,4 +1,12 @@
 import {
+  consumeRandomDraw,
+  createRandomDraw,
+  randomDrawCompleted,
+  readRandomDrawSnapshot,
+  storeRandomDraw,
+  storeRandomDrawSnapshot,
+} from "./random-draw.js";
+import {
   FRAMEWORKS,
   SHOW_SOURCES_KEY,
   codingLoop,
@@ -96,6 +104,10 @@ let durationCeiling = Infinity;
 let roll = Math.random();
 // Keep the exclusion with the roll so restoring the page repeats the same draw.
 let avoidedProblem;
+// Keep the draw policy until its filters change or its interview completes.
+let pickerMode = "recommend";
+// Only a new graded attempt at the drawn problem ends the random choice.
+let randomDraw = null;
 
 const nodes = {
   editorOptions: document.querySelector(".editor-options-row"),
@@ -243,6 +255,9 @@ function selectedEditorOptions() {
 // has not already chosen one.
 for (const card of cards) {
   card.button.addEventListener("click", () => {
+    pickerMode = "recommend";
+    randomDraw = null;
+    storeRandomDraw(null);
     manualProblem = true;
     setProblem(card);
     setDuration(suggestedDuration(new Set([card.difficulty])));
@@ -256,8 +271,11 @@ nodes.randomProblem.addEventListener("click", () => {
   keptDraw = null;
   roll = Math.random();
   avoidedProblem = problem?.id;
+  pickerMode = "random";
+  randomDraw = null;
+  storeRandomDraw(null);
   applyDifficulties();
-  recommend("", "random");
+  recommend();
 });
 
 for (const input of levels) {
@@ -286,6 +304,9 @@ for (const input of levels) {
     keptDraw = null;
     roll = Math.random();
     avoidedProblem = undefined;
+    pickerMode = "recommend";
+    randomDraw = null;
+    storeRandomDraw(null);
     // Not before the reports are in. Recommending from an empty history here
     // would offer a problem the candidate has already passed and then swap it
     // when the fetch lands. `settle` makes the pick for this level instead, and
@@ -371,6 +392,8 @@ let signInFirst = false;
 /// disabled state. Without this a card click re-armed a button that was already
 /// leaving and bought a second navigation out of one start.
 let starting = false;
+let departureSnapshot;
+let restoredLobbyOptions;
 
 restoreSettings();
 
@@ -386,6 +409,8 @@ start.addEventListener("click", async () => {
   // Reading them afterwards shipped an interview that was 45 minutes when the
   // button was pressed and 60 by the time it was answered, and the same for
   // the round plan and the profile beside them. One read, then go.
+  const startDraw = manualProblem ? null : randomDraw;
+  const startSnapshot = lobbyDrawSnapshot();
   const destination = new URL("/interview", window.location.origin);
   // The scenario's page name, not the id: the address bar is on screen for the
   // whole interview, and the id is the published problem's slug.
@@ -394,6 +419,7 @@ start.addEventListener("click", async () => {
   destination.searchParams.set("loop", interviewLoop);
   destination.searchParams.set("mode", mode);
   setEditorOptions(destination.searchParams, selectedEditorOptions());
+  if (startDraw !== null) destination.searchParams.set("draw", startDraw.id);
   const profile = {
     role: nodes.profileRole.value.trim(),
     seniority: nodes.profileSeniority.value,
@@ -449,6 +475,8 @@ start.addEventListener("click", async () => {
     setStartGate(signInFirst);
     return;
   }
+  storeRandomDraw(startDraw);
+  departureSnapshot = startSnapshot;
   window.location.href = destination.toString();
 });
 
@@ -532,7 +560,20 @@ window.addEventListener("pageshow", (event) => {
   // Only the restore. A normal load fires this too, after `load`, which is
   // late enough to re-enable a button the candidate already pressed and hand
   // them a second navigation.
-  if (!event.persisted) return;
+  if (!event.persisted) {
+    if (restoredLobbyOptions) {
+      // Form restoration can run after the module restores the captured choice.
+      nodes.problemTopic.value = "";
+      restoreLobbyOptions(restoredLobbyOptions);
+      if (historyReady && pickerMode === "recommend") recommend();
+    }
+    return;
+  }
+  if (departureSnapshot !== undefined) {
+    restoreLobbyDraw();
+    departureSnapshot = undefined;
+  }
+  const resetDraw = nodes.problemTopic.value !== "";
   nodes.problemTopic.value = "";
   applyProblemFilters();
   // The cache holds the page as it was before the candidate left, and a login
@@ -544,6 +585,7 @@ window.addEventListener("pageshow", (event) => {
   // out did not happen, and a latch left set here disables the button for good.
   starting = false;
   refreshHistory();
+  if (resetDraw) filterSelectionChanged();
 });
 
 nodes.githubLogin.addEventListener("keydown", (event) => {
@@ -616,7 +658,99 @@ nodes.logout.addEventListener("click", async () => {
   }
 });
 
+function lobbyDrawSnapshot() {
+  return pickerMode === "random" && randomDraw !== null
+    ? {
+        draw: randomDraw,
+        difficulties: [...selectedDifficulties()],
+        topic: nodes.problemTopic.value,
+        roll,
+        avoidedProblem,
+        manualDifficulty,
+        duration,
+        manualDuration,
+        note: nodes.recommendation.textContent,
+      }
+    : null;
+}
+
+// The departure snapshot and URL must describe the same pre-login choice.
+window.addEventListener("pagehide", () => {
+  const state = { ...window.history.state };
+  const saved =
+    departureSnapshot === undefined ? lobbyDrawSnapshot() : departureSnapshot;
+  if (saved) state.codetrialRandomDraw = saved;
+  else delete state.codetrialRandomDraw;
+  storeRandomDrawSnapshot(saved);
+  window.history.replaceState(state, "");
+});
+
+function restoreLobbyOptions(saved) {
+  for (const input of levels)
+    input.checked = saved.difficulties.includes(input.value);
+  manualDifficulty = saved.manualDifficulty === true;
+  if (
+    durations.some(
+      (button) => Number(button.dataset.duration) === saved.duration,
+    )
+  )
+    setDuration(saved.duration, saved.manualDuration === true);
+  applyDifficulties();
+}
+
+function restoreLobbyDraw() {
+  const state = { ...window.history.state };
+  const saved = state.codetrialRandomDraw ?? readRandomDrawSnapshot();
+  if (!saved) return;
+  storeRandomDrawSnapshot(null);
+  delete state.codetrialRandomDraw;
+  window.history.replaceState(state, "");
+  if (
+    !Array.isArray(saved.difficulties) ||
+    !saved.difficulties.length ||
+    !saved.difficulties.every((value) =>
+      levels.some((input) => input.value === value),
+    )
+  )
+    return;
+  restoredLobbyOptions = saved;
+  restoreLobbyOptions(saved);
+  // Topic filters reset on every return, including one without a cached page.
+  if (saved.topic) {
+    pickerMode = "recommend";
+    manualProblem = false;
+    keptDraw = null;
+    randomDraw = null;
+    avoidedProblem = undefined;
+    storeRandomDraw(null);
+    return;
+  }
+  const card = cards.find(
+    (candidate) => candidate.id === saved.draw?.problemId,
+  );
+  if (
+    !card ||
+    typeof saved.draw.id !== "string" ||
+    !saved.draw.id ||
+    !saved.difficulties.includes(card.difficulty) ||
+    !Number.isFinite(saved.roll) ||
+    saved.roll < 0 ||
+    saved.roll >= 1
+  )
+    return;
+  pickerMode = "random";
+  manualProblem = false;
+  keptDraw = null;
+  randomDraw = saved.draw;
+  roll = saved.roll;
+  avoidedProblem = saved.avoidedProblem;
+  setProblem(card);
+  nodes.recommendation.textContent =
+    typeof saved.note === "string" ? saved.note : "";
+}
+
 applyDifficulties();
+restoreLobbyDraw();
 // Nothing is recommended before the reports arrive, because they choose the
 // level as well as the problem. The button ships disabled and `setProblem` is
 // what enables it, so the gap is a button that cannot be pressed rather than
@@ -650,6 +784,20 @@ function refreshHistory() {
 /// describing history the page had already replaced.
 function settle() {
   historyReady = true;
+  if (
+    pickerMode === "random" &&
+    randomDraw !== null &&
+    (consumeRandomDraw(randomDraw) || randomDrawCompleted(randomDraw, reports))
+  ) {
+    pickerMode = "recommend";
+    avoidedProblem = undefined;
+    randomDraw = null;
+    storeRandomDraw(null);
+    keptDraw = null;
+  } else if (pickerMode === "random" && randomDraw !== null) {
+    // Deletion and account-history merges do not revoke a displayed draw.
+    keptDraw = JSON.stringify(reports);
+  }
   // Refreshed reports that differ from the ones a kept draw came from may have
   // just recorded it as passed, so the lobby draws again.
   if (keptDraw !== null && keptDraw !== JSON.stringify(reports))
@@ -657,7 +805,10 @@ function settle() {
   // The level suggestion only applies when the candidate has not already said
   // what they want. Moving their checkboxes would also hide the card they just
   // picked.
-  const note = manualDifficulty || manualProblem ? "" : applySuggestedLevel();
+  const note =
+    manualDifficulty || manualProblem || randomDraw !== null
+      ? ""
+      : applySuggestedLevel();
   recommend(note);
   // `recommend` returns without touching anything when the candidate's own pick
   // still stands, so the button the account refresh held down needs releasing
@@ -1018,6 +1169,9 @@ function filterSelectionChanged() {
   keptDraw = null;
   roll = Math.random();
   avoidedProblem = undefined;
+  pickerMode = "recommend";
+  randomDraw = null;
+  storeRandomDraw(null);
   if (historyReady) recommend();
   else {
     setProblem(null);
@@ -1027,7 +1181,7 @@ function filterSelectionChanged() {
 
 /// `note` is the sentence explaining a level the reports chose, empty when the
 /// candidate chose it themselves and so already knows.
-function recommend(note = "", mode = "recommend") {
+function recommend(note = "") {
   // A candidate who picked a card has answered the question this line asks, so
   // it stays answered. Naming a different problem here contradicted the card
   // they had just selected. A kept draw stands the same way until `settle`
@@ -1041,7 +1195,7 @@ function recommend(note = "", mode = "recommend") {
     undefined,
     avoidedProblem,
     cards,
-    mode,
+    pickerMode,
   );
   // Nothing to offer is still an answer, and it has to go through `setProblem`
   // like every other one. Returning here left whatever was picked for the
@@ -1053,8 +1207,11 @@ function recommend(note = "", mode = "recommend") {
     return;
   }
   setProblem(choice.picked);
-  // A random draw names the level rather than a review interval or streak.
-  if (mode === "random") {
+  // A random draw is not explained by the reports, so its line names the
+  // level instead of a review interval or a streak.
+  if (pickerMode === "random") {
+    randomDraw = createRandomDraw(choice.picked.id);
+    storeRandomDraw(randomDraw);
     nodes.recommendation.textContent = `${note}Selected problem: ${title(choice.picked)} (${choice.picked.difficulty}).`;
     return;
   }
@@ -1389,6 +1546,9 @@ function renderAttemptHistory(attempts) {
         (candidate) => candidate.id === attempt.problemId,
       );
       if (!card) return;
+      pickerMode = "recommend";
+      randomDraw = null;
+      storeRandomDraw(null);
       manualProblem = true;
       card.button.hidden = false;
       setProblem(card);

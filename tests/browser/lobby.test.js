@@ -2087,6 +2087,205 @@ lobbyTest(
   },
 );
 
+async function recordSavedDraw(page, draw, report) {
+  await page.evaluate(
+    async ([draw, report]) => {
+      const { beginRandomDrawSave, completeRandomDraw } =
+        await import("/random-draw.js");
+      const blocked = {
+        getItem() {
+          throw new Error("blocked");
+        },
+      };
+      beginRandomDrawSave(draw, blocked);
+      completeRandomDraw(draw, report, blocked);
+    },
+    [draw, report],
+  );
+}
+
+async function finishRandomDraw(page, decision = "HIRE") {
+  await page.evaluate(async (decision) => {
+    const { readRandomDraw, completeRandomDraw } =
+      await import("/random-draw.js");
+    const problemId = document.querySelector(".problem-card.selected").dataset
+      .problem;
+    const draw = readRandomDraw(problemId, sessionStorage);
+    completeRandomDraw(
+      draw,
+      { id: "completed-interview", problemId, report: { decision } },
+      sessionStorage,
+    );
+  }, decision);
+}
+lobbyTest(
+  "random selection escapes overdue reviews and survives page restoration",
+  async (page) => {
+    reports = [savedAttempt(EASY[0]), savedAttempt(EASY[1])];
+    const initial = await lobby(page);
+    assert.match(initial.note, /Review due/);
+    await page.evaluate(() => {
+      Math.random = () => 0;
+    });
+    await page.click("#random-problem");
+    const drawn = await snapshot(page);
+    assert.equal((await cardInfo(page, drawn.card)).level, "Medium");
+    assert.doesNotMatch(drawn.note, /Review due/);
+    await restore(page);
+    await awaitReady(page);
+    assert.equal((await snapshot(page)).card, drawn.card);
+
+    await finishRandomDraw(page);
+    reports = [
+      { ...hired(drawn.card), createdAt: Date.now() / 1000 },
+      ...reports,
+    ];
+    await restore(page);
+    await awaitReady(page);
+    const refreshed = await snapshot(page);
+    assert.notEqual(refreshed.card, drawn.card);
+    assert.match(refreshed.note, /Review due/);
+  },
+);
+
+lobbyTest(
+  "deleting an unrelated report preserves a random draw",
+  async (page) => {
+    reports = [
+      { ...savedAttempt(EASY[0]), id: "due" },
+      {
+        ...savedAttempt(EASY[1]),
+        id: "old",
+        payload: {
+          ...savedAttempt(EASY[1]).payload,
+          date: "2025-12-01T00:00:00Z",
+        },
+      },
+    ];
+    await lobby(page);
+    await page.click("#random-problem");
+    const drawn = await snapshot(page);
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("#attempt-history [data-delete-report]").nth(1).click();
+    await settles(
+      page,
+      () => document.querySelector("#report-delete-status").textContent !== "",
+    );
+    assert.deepEqual(deletedIds, ["old"]);
+    const refreshed = await snapshot(page);
+    assert.equal(refreshed.card, drawn.card);
+    assert.equal(refreshed.note, drawn.note);
+    assert.deepEqual(refreshed.levels, drawn.levels);
+  },
+);
+
+lobbyTest(
+  "merging older account attempts preserves a random draw",
+  async (page) => {
+    await lobby(page);
+    await page.click("#random-problem");
+    const drawn = await snapshot(page);
+    reports = [savedAttempt(drawn.card), savedAttempt(EASY[0])];
+    session = { signedIn: true, user: { login: "another-account" } };
+    await restore(page);
+    await awaitReady(page);
+    const refreshed = await snapshot(page);
+    assert.equal(refreshed.card, drawn.card);
+    assert.equal(refreshed.note, drawn.note);
+    assert.deepEqual(refreshed.levels, drawn.levels);
+  },
+);
+
+lobbyTest(
+  "restoring a topic-filtered random draw resets its policy with the topic",
+  async (page) => {
+    const due = pageOf("valid-parentheses");
+    reports = [savedAttempt(due)];
+    await lobby(page);
+    await openTopicFilter(page);
+    await page.selectOption("#problem-topic", "Array");
+    await page.click("#random-problem");
+    const drawn = await snapshot(page);
+    assert.ok(TOPICS_BY_PAGE[drawn.card].includes("Array"));
+    assert.doesNotMatch(drawn.note, /Review due/);
+    await restore(page);
+    await awaitReady(page);
+    const refreshed = await snapshot(page);
+    assert.equal(await page.locator("#problem-topic").inputValue(), "");
+    assert.equal(refreshed.card, due);
+    assert.match(refreshed.note, /Review due/);
+    assert.equal((await cardInfo(page, due)).hidden, false);
+  },
+);
+
+lobbyTest(
+  "a difficulty change from a fresh lobby retains review priority",
+  async (page) => {
+    reports = [savedAttempt(EASY[0]), savedAttempt(EASY[1])];
+    const initial = await lobby(page);
+    assert.deepEqual(initial.levels, ["Medium"]);
+    assert.equal((await cardInfo(page, initial.card)).level, "Easy");
+    assert.match(initial.note, /Review due/);
+    await page.evaluate(() => {
+      Math.random = () => 0;
+    });
+    await setLevel(page, "Hard", true);
+    await setLevel(page, "Medium", false);
+    const changed = await snapshot(page);
+    assert.deepEqual(changed.levels, ["Hard"]);
+    assert.ok(EASY.includes(changed.card));
+    assert.match(changed.note, /Review due/);
+    assert.equal((await cardInfo(page, changed.card)).hidden, false);
+  },
+);
+
+lobbyTest(
+  "a topic change after a random draw restores review priority",
+  async (page) => {
+    const due = pageOf("valid-parentheses");
+    reports = [savedAttempt(due)];
+    await lobby(page);
+    await page.click("#random-problem");
+    assert.doesNotMatch((await snapshot(page)).note, /Review due/);
+    await openTopicFilter(page);
+    await page.selectOption("#problem-topic", "Array");
+    const changed = await snapshot(page);
+    assert.equal(changed.card, due);
+    assert.match(changed.note, /Review due/);
+    assert.equal((await cardInfo(page, due)).hidden, false);
+  },
+);
+
+lobbyTest(
+  "a difficulty change during restored history returns to recommendations",
+  async (page) => {
+    reports = [savedAttempt(EASY[0])];
+    await lobby(page);
+    await page.click("#random-problem");
+    const drawn = await snapshot(page);
+    assert.doesNotMatch(drawn.note, /Review due/);
+    await finishRandomDraw(page);
+    reports = [
+      { ...hired(drawn.card), createdAt: Date.now() / 1000 },
+      ...reports,
+    ];
+    const release = holdHistory();
+    const pending = page.waitForRequest("**/api/reports");
+    await restore(page);
+    await pending;
+    await setLevel(page, "Hard", true);
+    await setLevel(page, "Medium", false);
+    assert.equal((await snapshot(page)).card, null);
+    release();
+    await awaitReady(page);
+    const refreshed = await snapshot(page);
+    assert.deepEqual(refreshed.levels, ["Hard"]);
+    assert.equal(refreshed.card, EASY[0]);
+    assert.match(refreshed.note, /Review due/);
+    assert.notEqual(refreshed.card, drawn.card);
+  },
+);
+
 lobbyTest(
   "two passes move the candidate up a level, and the lobby says why",
   async (page) => {
@@ -4593,43 +4792,298 @@ lobbyTest(
   },
 );
 
+for (const decision of ["HIRE", "NO_HIRE"]) {
+  lobbyTest(
+    `a completed ${decision} draw survives a backward clock adjustment`,
+    async (page) => {
+      reports = [savedAttempt(EASY[0])];
+      await lobby(page);
+      await page.evaluate(() => {
+        const now = Date.now;
+        Date.now = () => now() + 300000;
+      });
+      await page.click("#random-problem");
+      const drawn = await snapshot(page);
+      await page.evaluate(() => {
+        Date.now = () => new Date().getTime();
+      });
+      await finishRandomDraw(page, decision);
+      reports = [
+        {
+          ...hired(drawn.card),
+          createdAt: Date.now() / 1000,
+          payload: { report: { decision } },
+        },
+        ...reports,
+      ];
+      await restore(page);
+      await awaitReady(page);
+      assert.notEqual((await snapshot(page)).card, drawn.card);
+      assert.match((await snapshot(page)).note, /Review due/);
+    },
+  );
+}
+
 lobbyTest(
-  "a difficulty change from a fresh lobby retains review priority",
+  "starting a random interview carries its draw identity in the destination",
   async (page) => {
-    reports = [savedAttempt(EASY[0]), savedAttempt(EASY[1])];
-    const initial = await lobby(page);
-    assert.deepEqual(initial.levels, ["Medium"]);
-    assert.equal((await cardInfo(page, initial.card)).level, "Easy");
-    assert.match(initial.note, /Review due/);
-    await page.evaluate(() => {
-      Math.random = () => 0;
-    });
-    await setLevel(page, "Hard", true);
-    await setLevel(page, "Medium", false);
-    const changed = await snapshot(page);
-    assert.deepEqual(changed.levels, ["Hard"]);
-    assert.ok(EASY.includes(changed.card));
-    assert.match(changed.note, /Review due/);
-    assert.equal((await cardInfo(page, changed.card)).hidden, false);
+    await lobby(page);
+    await page.click("#random-problem");
+    const drawn = await snapshot(page);
+    const draw = await page.evaluate(async (problemId) => {
+      const { readRandomDraw } = await import("/random-draw.js");
+      return readRandomDraw(problemId, sessionStorage);
+    }, drawn.card);
+    await page.click("#start");
+    await page.waitForURL(/\/interview/);
+    const destination = new URL(page.url());
+    assert.equal(destination.searchParams.get("problem"), drawn.card);
+    assert.equal(destination.searchParams.get("draw"), draw.id);
   },
 );
 
+for (const decision of ["HIRE", "NO_HIRE"]) {
+  lobbyTest(
+    `a completed ${decision} draw returns to reviews with blocked sessionStorage`,
+    async (page) => {
+      reports = [savedAttempt(EASY[0])];
+      await lobby(page);
+      await page.click("#random-problem");
+      const drawn = await snapshot(page);
+      const draw = await page.evaluate(async (problemId) => {
+        const { readRandomDraw } = await import("/random-draw.js");
+        const ticket = readRandomDraw(problemId, sessionStorage);
+        Object.defineProperty(window, "sessionStorage", {
+          configurable: true,
+          get() {
+            throw new Error("blocked");
+          },
+        });
+        return ticket;
+      }, drawn.card);
+      const completed = {
+        ...hired(drawn.card),
+        payload: {
+          id: "completed-interview",
+          problemId: drawn.card,
+          randomDrawId: draw.id,
+          report: { decision },
+        },
+      };
+      reports = [
+        {
+          ...completed,
+          payload: { ...completed.payload, randomDrawId: "older-draw" },
+        },
+        ...reports,
+      ];
+      await restore(page);
+      await awaitReady(page);
+      assert.equal((await snapshot(page)).card, drawn.card);
+      reports = [
+        {
+          ...completed,
+          payload: {
+            ...completed.payload,
+            report: { decision, incomplete: true },
+          },
+        },
+        ...reports,
+      ];
+      await restore(page);
+      await awaitReady(page);
+      assert.equal((await snapshot(page)).card, drawn.card);
+      reports = [completed, ...reports];
+      await recordSavedDraw(page, draw, completed.payload);
+      await restore(page);
+      await awaitReady(page);
+      const refreshed = await snapshot(page);
+      assert.notEqual(refreshed.card, drawn.card);
+      assert.match(refreshed.note, /Review due/);
+    },
+  );
+}
+
+for (const blockedStorage of [false, true]) {
+  lobbyTest(
+    `an unfinished random interview keeps its draw after a real Back navigation with storage ${blockedStorage ? "blocked" : "available"}`,
+    async (page) => {
+      reports = [savedAttempt(EASY[0])];
+      await lobby(page);
+      await page.click("#random-problem");
+      const drawn = await snapshot(page);
+      await page.evaluate(() => {
+        window.beforeInterviewNavigation = true;
+      });
+      await page.click("#start");
+      await page.waitForURL(/\/interview/);
+      if (blockedStorage)
+        await page.addInitScript(() => {
+          Object.defineProperty(window, "sessionStorage", {
+            configurable: true,
+            get() {
+              throw new Error("blocked");
+            },
+          });
+        });
+      await page.goBack({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("#recommendation").textContent !== "",
+      );
+      await awaitReady(page);
+      assert.equal(
+        await page.evaluate(() => window.beforeInterviewNavigation),
+        undefined,
+      );
+      const returned = await snapshot(page);
+      assert.equal(returned.card, drawn.card);
+      assert.deepEqual(returned.levels, drawn.levels);
+      assert.doesNotMatch(returned.note, /Review due/);
+    },
+  );
+}
+
+for (const blockedStorage of [false, true]) {
+  lobbyTest(
+    `a graded random interview resumes reviews after real Back with storage ${blockedStorage ? "blocked" : "available"}`,
+    async (page) => {
+      reports = [savedAttempt(EASY[0])];
+      await lobby(page);
+      await page.click("#random-problem");
+      const drawn = await snapshot(page);
+      await page.click("#start");
+      await page.waitForURL(/\/interview/);
+      const drawId = new URL(page.url()).searchParams.get("draw");
+      reports = [
+        {
+          ...hired(drawn.card),
+          payload: {
+            id: "completed-interview",
+            problemId: drawn.card,
+            randomDrawId: drawId,
+            report: { decision: "HIRE" },
+          },
+        },
+        ...reports,
+      ];
+      await page.evaluate(
+        async ([id, problemId]) => {
+          const { beginRandomDrawSave, completeRandomDraw } =
+            await import("/random-draw.js");
+          const draw = { id, problemId };
+          const blocked = {
+            getItem() {
+              throw new Error("blocked");
+            },
+          };
+          beginRandomDrawSave(draw, blocked);
+          completeRandomDraw(
+            draw,
+            {
+              id: "completed-interview",
+              problemId,
+              report: { decision: "HIRE" },
+            },
+            blocked,
+          );
+        },
+        [drawId, drawn.card],
+      );
+      if (blockedStorage)
+        await page.addInitScript(() => {
+          Object.defineProperty(window, "sessionStorage", {
+            configurable: true,
+            get() {
+              throw new Error("blocked");
+            },
+          });
+        });
+      await page.goBack({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => !document.querySelector("#start").disabled,
+      );
+      const returned = await snapshot(page);
+      assert.notEqual(returned.card, drawn.card);
+      assert.match(returned.note, /Review due/);
+    },
+  );
+}
+
 lobbyTest(
-  "a topic change after a random draw restores review priority",
+  "real Back resets a topic-filtered random draw with its topic",
   async (page) => {
     const due = pageOf("valid-parentheses");
     reports = [savedAttempt(due)];
     await lobby(page);
-    await page.click("#random-problem");
-    assert.doesNotMatch((await snapshot(page)).note, /Review due/);
     await openTopicFilter(page);
     await page.selectOption("#problem-topic", "Array");
-    const changed = await snapshot(page);
-    assert.equal(changed.card, due);
-    assert.match(changed.note, /Review due/);
-    assert.equal((await cardInfo(page, due)).hidden, false);
+    await page.click("#random-problem");
+    await page.click("#start");
+    await page.waitForURL(/\/interview/);
+    await page.goBack({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      () => !document.querySelector("#start").disabled,
+    );
+    const returned = await snapshot(page);
+    assert.equal(await page.locator("#problem-topic").inputValue(), "");
+    assert.equal(returned.card, due);
+    assert.match(returned.note, /Review due/);
   },
 );
+
+lobbyTest(
+  "real Back keeps explicit difficulties when resetting a topic draw",
+  async (page) => {
+    reports = [hired(EASY[0]), hired(EASY[1])];
+    await lobby(page);
+    await setLevel(page, "Hard", true);
+    await setLevel(page, "Medium", false);
+    await openTopicFilter(page);
+    await page.selectOption("#problem-topic", "Array");
+    await page.click("#random-problem");
+    const drawn = await snapshot(page);
+    assert.deepEqual(drawn.levels, ["Hard"]);
+    await page.click("#start");
+    await page.waitForURL(/\/interview/);
+    await page.goBack({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      () => !document.querySelector("#start").disabled,
+    );
+    assert.equal(await page.locator("#problem-topic").inputValue(), "");
+    assert.deepEqual((await snapshot(page)).levels, ["Hard"]);
+    assert.equal(
+      (await cardInfo(page, (await snapshot(page)).card)).level,
+      "Hard",
+    );
+    await restore(page);
+    await awaitReady(page);
+    assert.deepEqual((await snapshot(page)).levels, ["Hard"]);
+  },
+);
+
+for (const topic of ["", "Array"]) {
+  lobbyTest(
+    `real Back retains a manual duration and its latch with topic ${topic || "All"}`,
+    async (page) => {
+      await lobby(page);
+      if (topic) {
+        await openTopicFilter(page);
+        await page.selectOption("#problem-topic", topic);
+      }
+      await page.click("#random-problem");
+      await page.click('[data-duration="60"]');
+      await page.click("#start");
+      await page.waitForURL(/\/interview/);
+      await page.goBack({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => !document.querySelector("#start").disabled,
+      );
+      assert.equal((await snapshot(page)).duration, "60");
+      await setLevel(page, "Hard", true);
+      assert.equal((await snapshot(page)).duration, "60");
+    },
+  );
+}
 
 lobbyTest(
   "an explicit random draw escapes overdue reviews at the selected level",
@@ -5055,5 +5509,215 @@ lobbyTest(
       MEDIUM[0],
     );
     assert.equal((await snapshot(page)).duration, "45");
+  },
+);
+
+for (const topic of ["", "Array"]) {
+  lobbyTest(
+    `a fresh lobby return retains random options with topic ${topic || "All"}`,
+    async (page) => {
+      await lobby(page);
+      await setLevel(page, "Hard", true);
+      await setLevel(page, "Medium", false);
+      if (topic) {
+        await openTopicFilter(page);
+        await page.selectOption("#problem-topic", topic);
+      }
+      await page.click("#random-problem");
+      await page.click('[data-duration="60"]');
+      const drawn = await snapshot(page);
+      await page.click("#start");
+      await page.waitForURL(/\/interview/);
+      await page.goto(base + "/", { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => !document.querySelector("#start").disabled,
+      );
+      assert.equal(
+        await page.evaluate(() => history.state?.codetrialRandomDraw),
+        undefined,
+      );
+      const returned = await snapshot(page);
+      assert.deepEqual(returned.levels, ["Hard"]);
+      assert.equal(returned.duration, "60");
+      assert.equal(await page.locator("#problem-topic").inputValue(), "");
+      if (!topic) {
+        assert.equal(returned.card, drawn.card);
+        assert.equal(returned.note, drawn.note);
+      }
+      await setLevel(page, "Medium", true);
+      assert.equal((await snapshot(page)).duration, "60");
+    },
+  );
+}
+
+lobbyTest(
+  "a fresh lobby return after grading consumes the saved draw",
+  async (page) => {
+    reports = [savedAttempt(EASY[0])];
+    await lobby(page);
+    await page.click("#random-problem");
+    const drawn = await snapshot(page);
+    await page.click("#start");
+    await page.waitForURL(/\/interview/);
+    const drawId = new URL(page.url()).searchParams.get("draw");
+    reports = [
+      {
+        ...hired(drawn.card),
+        payload: {
+          id: "completed-interview",
+          problemId: drawn.card,
+          randomDrawId: drawId,
+          report: { decision: "HIRE" },
+        },
+      },
+      ...reports,
+    ];
+    await recordSavedDraw(
+      page,
+      { id: drawId, problemId: drawn.card },
+      {
+        id: "completed-interview",
+        problemId: drawn.card,
+        report: { decision: "HIRE" },
+      },
+    );
+    await page.goto(base + "/", { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      () => !document.querySelector("#start").disabled,
+    );
+    const returned = await snapshot(page);
+    assert.notEqual(returned.card, drawn.card);
+    assert.match(returned.note, /Review due/);
+    assert.equal(
+      await page.evaluate(() =>
+        sessionStorage.getItem("codetrial.random-draw.lobby"),
+      ),
+      null,
+    );
+    await page.reload();
+    await page.waitForFunction(
+      () => !document.querySelector("#start").disabled,
+    );
+    assert.match((await snapshot(page)).note, /Review due/);
+  },
+);
+
+for (const change of ["card", "difficulty", "topic"]) {
+  lobbyTest(
+    `a random start retains its captured draw after a ${change} change during login`,
+    async (page) => {
+      session = { signedIn: false, loginRequired: true };
+      await lobby(page);
+      await setLevel(page, "Hard", true);
+      await setLevel(page, "Medium", false);
+      await page.click("#random-problem");
+      await page.click('[data-duration="60"]');
+      const drawn = await snapshot(page);
+      let release;
+      holdLogin = new Promise((done) => {
+        release = done;
+      });
+      try {
+        await page.fill("#github-login", "candidate");
+        const pending = page.waitForRequest("**/api/login");
+        await page.click("#start");
+        await pending;
+        if (change === "card") {
+          await page.click("details.problem-picker summary");
+          const other = await page
+            .locator(".problem-card:not([hidden])")
+            .evaluateAll(
+              (cards) =>
+                cards.find((card) => !card.classList.contains("selected"))
+                  .dataset.problem,
+            );
+          await page.click(`[data-problem="${other}"]`);
+        } else if (change === "difficulty") {
+          await setLevel(page, "Medium", true);
+          await setLevel(page, "Hard", false);
+        } else {
+          await openTopicFilter(page);
+          await page.selectOption("#problem-topic", "Array");
+        }
+        release();
+        await page.waitForURL(/\/interview/);
+        const destination = new URL(page.url());
+        const ticket = await page.evaluate(() =>
+          JSON.parse(sessionStorage.getItem("codetrial.random-draw")),
+        );
+        assert.equal(ticket?.id, destination.searchParams.get("draw"));
+        assert.equal(ticket?.problemId, drawn.card);
+        await page.goBack({ waitUntil: "domcontentloaded" });
+        await page.waitForFunction(
+          () => !document.querySelector("#start").disabled,
+        );
+        const returned = await snapshot(page);
+        assert.equal(returned.card, drawn.card);
+        assert.deepEqual(returned.levels, drawn.levels);
+        assert.equal(returned.duration, drawn.duration);
+      } finally {
+        release();
+      }
+    },
+  );
+}
+
+lobbyTest(
+  "blocked tab storage keeps the draw after a later save fails despite an older graded report",
+  async (page) => {
+    reports = [savedAttempt(EASY[0])];
+    await lobby(page);
+    await page.click("#random-problem");
+    const drawn = await snapshot(page);
+    await page.click("#start");
+    await page.waitForURL(/\/interview/);
+    const id = new URL(page.url()).searchParams.get("draw");
+    reports = [
+      {
+        ...hired(drawn.card),
+        payload: {
+          id: "report",
+          problemId: drawn.card,
+          randomDrawId: id,
+          report: { decision: "HIRE" },
+        },
+      },
+      ...reports,
+    ];
+    await page.evaluate(
+      async ([id, problemId]) => {
+        const { beginRandomDrawSave, completeRandomDraw } =
+          await import("/random-draw.js");
+        const draw = { id, problemId };
+        const blocked = {
+          getItem() {
+            throw new Error("blocked");
+          },
+        };
+        beginRandomDrawSave(draw, blocked);
+        completeRandomDraw(
+          draw,
+          { id: "report", problemId, report: { decision: "HIRE" } },
+          blocked,
+        );
+        beginRandomDrawSave(draw, blocked);
+      },
+      [id, drawn.card],
+    );
+    await page.addInitScript(() =>
+      Object.defineProperty(window, "sessionStorage", {
+        configurable: true,
+        get() {
+          throw new Error("blocked");
+        },
+      }),
+    );
+    await page.goBack({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      () => !document.querySelector("#start").disabled,
+    );
+    const returned = await snapshot(page);
+    assert.equal(returned.card, drawn.card);
+    assert.doesNotMatch(returned.note, /Review due/);
   },
 );

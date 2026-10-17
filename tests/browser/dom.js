@@ -403,6 +403,12 @@ export function installDocument(markup) {
   // somebody reads `window.location.href` back, and one that does not is not
   // made to care.
   globalThis.window = {
+    history: {
+      state: null,
+      replaceState(state) {
+        this.state = structuredClone(state);
+      },
+    },
     location: {
       origin: "https://codetrial.test",
       href: "",
