@@ -453,9 +453,7 @@ p {
   opacity: 0.6;
 }
 
-/* A tab the judge cannot run, dimmed rather than removed: the row stays the
-   same five tabs everywhere, and the title says which one is out and why. */
-.language-button:disabled,
+/* A font-size control at its bound, dimmed but still readable. */
 .font-size-button[aria-disabled="true"] {
   opacity: 0.6;
   cursor: not-allowed;
@@ -799,7 +797,6 @@ p {
 .board-toolbar,
 .editor-options-row,
 .editor-toolbar,
-.language-tabs,
 .font-size-control,
 .report-header,
 .report-actions,
@@ -1001,7 +998,6 @@ p {
 .timer,
 .pill-button,
 .tab-button,
-.language-button,
 .font-size-button,
 .run-button {
   border: 1px solid var(--hairline);
@@ -1113,9 +1109,20 @@ p {
   font: inherit;
 }
 
+.language-select {
+  width: 11rem;
+  max-width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--hairline);
+  border-radius: 0.375rem;
+  background: var(--surface);
+  color: var(--sub);
+  font: inherit;
+  cursor: pointer;
+}
+
 .pill-button,
 .tab-button,
-.language-button,
 .font-size-button,
 .run-button {
   padding: 0.4rem 0.75rem;
@@ -1136,8 +1143,7 @@ p {
   border-bottom: 1px solid var(--hairline);
 }
 
-.tab-button.selected,
-.language-button.selected {
+.tab-button.selected {
   background: #2f2f29;
   color: var(--ink);
 }

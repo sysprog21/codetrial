@@ -510,6 +510,7 @@ const nodes = {
   withdrawConsent: document.querySelector("#withdraw-consent"),
   recordingState: document.querySelector("#recording-state"),
   editor: document.querySelector("#editor"),
+  languageSelect: document.querySelector("#language-select"),
   editorHighlight: document.querySelector("#editor-highlight"),
   editorLines: document.querySelector("#editor-lines"),
   editorStack: document.querySelector(".editor-stack"),
@@ -871,11 +872,10 @@ function bindEvents() {
       nodes.hidePassedTests.checked,
     ).body;
   });
-  for (const button of document.querySelectorAll("[data-language]")) {
-    button.addEventListener("click", () =>
-      setLanguage(button.dataset.language),
-    );
-  }
+  nodes.languageSelect.addEventListener("change", () => {
+    setLanguage(nodes.languageSelect.value);
+    nodes.languageSelect.value = state.language;
+  });
   for (const [button, step] of [
     [nodes.editorFontSmaller, -1],
     [nodes.editorFontLarger, 1],
@@ -2099,21 +2099,27 @@ function selectTab(tab) {
   nodes.transcriptTab.classList.toggle("selected", transcript);
 }
 
-/// Both the row and its tooltips come from `harnessGap`, so a tab is never
-/// dead for a reason it does not state. An already-active buffer stays
-/// visible: hiding it would replace the candidate's final submission with a
-/// starter buffer when the judge response arrives late.
+/// Unavailable labels and the active selector's title come from `harnessGap`,
+/// so a language is never withheld for a reason the candidate cannot find. An
+/// already-active buffer stays visible: hiding it would replace the candidate's
+/// final submission with a starter buffer when the judge response arrives late.
 function applyLanguages(spec) {
   languages = languagesFor(spec, editorOptions.execution);
-  for (const button of document.querySelectorAll("[data-language]")) {
+  for (const option of nodes.languageSelect.options) {
+    const label = option.dataset.label ?? option.textContent;
     const gap = harnessGap(
-      button.dataset.language,
+      option.dataset.language,
       spec,
       editorOptions.execution,
     );
-    button.disabled = gap !== null;
-    button.title = gap ?? "";
+    option.dataset.label = label.replace(/ \(unavailable\)$/, "");
+    option.textContent = gap
+      ? `${option.dataset.label} (unavailable)`
+      : option.dataset.label;
+    option.disabled = gap !== null;
   }
+  nodes.languageSelect.title =
+    harnessGap(state.language, spec, editorOptions.execution) ?? "";
   updateRunAvailability();
 }
 
@@ -2148,9 +2154,7 @@ function setLanguage(language) {
   nodes.editor.value = state.codeByLanguage[language];
   paintEditor();
   editorInitialized = true;
-  for (const button of document.querySelectorAll("[data-language]")) {
-    button.classList.toggle("selected", button.dataset.language === language);
-  }
+  nodes.languageSelect.value = language;
   updateRunAvailability();
   // Debounced like a keystroke, and for the same reason. Publishing on every
   // click meant a candidate trying three tabs in a row produced three language

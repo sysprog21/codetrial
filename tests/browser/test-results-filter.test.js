@@ -44,9 +44,9 @@ async function openInterview(t) {
   await page.waitForFunction(
     () => document.querySelector("#candidate-case-input").placeholder !== "",
   );
+  await page.locator("#language-select").selectOption("javascript");
   await page.evaluate(() => {
     document.querySelector("#audio-check").hidden = true;
-    document.querySelector('[data-language="javascript"]').click();
     const post = Worker.prototype.postMessage;
     globalThis.testRuns = 0;
     Worker.prototype.postMessage = function (...args) {

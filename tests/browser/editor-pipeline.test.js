@@ -264,8 +264,8 @@ test("nested matching ignores quoted brackets and tracks programmatic selection"
   const { page, errors } = ctx;
   const code = '{ call("}", items[0]); /* ] */ }';
   try {
+    await page.locator("#language-select").selectOption("javascript");
     await page.evaluate(() => {
-      document.querySelector('[data-language="javascript"]').click();
       document.querySelector("#editor").focus();
     });
     await page.keyboard.press("ControlOrMeta+A");
@@ -352,8 +352,8 @@ test("caret and focus changes reuse ranges until code or language changes", asyn
   if (!ctx) return;
   const { page, errors } = ctx;
   try {
+    await page.locator("#language-select").selectOption("javascript");
     await page.evaluate(async () => {
-      document.querySelector('[data-language="javascript"]').click();
       await (await import("/syntax-parser.js")).prepareLanguage("javascript");
       document.querySelector("#editor").focus();
     });
@@ -391,8 +391,8 @@ test("caret and focus changes reuse ranges until code or language changes", asyn
     await page.locator(".matching-bracket").first().waitFor();
     await page.evaluate(() => new Promise(requestAnimationFrame));
     assert.equal(await page.evaluate(() => window.overlayPaints), 1);
+    await page.locator("#language-select").selectOption("python");
     await page.evaluate(async () => {
-      document.querySelector('[data-language="python"]').click();
       await (await import("/syntax-parser.js")).prepareLanguage("python");
       document.querySelector("#editor").focus();
     });
@@ -467,8 +467,8 @@ test("a loaded grammar replaces cached fallback ranges without an edit", async (
   const { page, errors } = ctx;
   const code = "class A {} /[()]/.test(value);";
   try {
+    await page.locator("#language-select").selectOption("javascript");
     await page.evaluate(() => {
-      document.querySelector('[data-language="javascript"]').click();
       document.querySelector("#editor").focus();
     });
     await page.keyboard.press("ControlOrMeta+A");
@@ -518,8 +518,8 @@ test("a parse cut off by its time budget is retried without an edit", async (t) 
   if (!ctx) return;
   const { page, errors } = ctx;
   try {
+    await page.locator("#language-select").selectOption("javascript");
     await page.evaluate(async () => {
-      document.querySelector('[data-language="javascript"]').click();
       await (await import("/syntax-parser.js")).prepareLanguage("javascript");
       document.querySelector("#editor").focus();
     });
@@ -624,9 +624,7 @@ test("disabled auto indentation retains parsed bracket highlighting", async (t) 
   if (!ctx) return;
   const { page, errors } = ctx;
   try {
-    await page.evaluate(() =>
-      document.querySelector('[data-language="javascript"]').click(),
-    );
+    await page.locator("#language-select").selectOption("javascript");
     await page.waitForFunction(async () => {
       const { parseSyntax } = await import("/syntax-parser.js");
       const tree = parseSyntax("", "javascript");
@@ -687,7 +685,7 @@ test("Jim captions survive editor navigation and language switches", async (t) =
       (await import("/avatar/stage.js")).setStageCovered(false);
     });
 
-    await page.locator('[data-language="javascript"]').click();
+    await page.locator("#language-select").selectOption("javascript");
     await editor.fill(code);
     await page.locator("#problem-tab").click();
     assert.equal(
@@ -738,11 +736,11 @@ test("Jim captions survive editor navigation and language switches", async (t) =
     });
     await assertJim("moving the caret must preserve Jim");
 
-    const python = page.locator('[data-language="python"]');
-    await python.click();
+    const languageSelect = page.locator("#language-select");
+    await languageSelect.selectOption("python");
     assert.equal(
-      await python.evaluate((button) => button.classList.contains("selected")),
-      true,
+      await languageSelect.inputValue(),
+      "python",
       "the language switch must run",
     );
     assert.notEqual(
@@ -752,7 +750,7 @@ test("Jim captions survive editor navigation and language switches", async (t) =
     );
     await assertJim("switching languages must preserve Jim");
 
-    await page.locator('[data-language="javascript"]').click();
+    await page.locator("#language-select").selectOption("javascript");
     assert.equal(await editor.inputValue(), code);
     await assertJim("returning to the saved buffer must preserve Jim");
 
@@ -847,15 +845,11 @@ test("disabled syntax-aware editor features invoke neither classifier nor parser
     await page.keyboard.press("Enter");
     const python = (await caretState(page)).value;
     assert.equal(python, "    if ready:\n");
-    await page.evaluate(() =>
-      document.querySelector('[data-language="javascript"]').click(),
-    );
+    await page.locator("#language-select").selectOption("javascript");
     await setCode(page, "if (ready) {");
     await page.keyboard.press("Enter");
     assert.equal((await caretState(page)).value, "if (ready) {\n");
-    await page.evaluate(() =>
-      document.querySelector('[data-language="python"]').click(),
-    );
+    await page.locator("#language-select").selectOption("python");
     assert.equal((await caretState(page)).value, python);
     assert.equal(await page.locator("#editor-lines").textContent(), "1\n2");
     assert.deepEqual(ctx.parserRequests, []);
@@ -1113,10 +1107,10 @@ for (const { name, before, start = before.length } of cppLiteralBracketCases) {
       if (!ctx) return;
       const { page, errors } = ctx;
       try {
-        await page.evaluate(() =>
-          document.querySelector('[data-language="cpp"]').click(),
+        await page.locator("#language-select").selectOption("cpp");
+        await page.waitForFunction(
+          () => document.querySelector("#language-select").value === "cpp",
         );
-        await page.waitForSelector('[data-language="cpp"].selected');
         await setCode(page, before, start);
         await page.keyboard.type(opener);
         assert.deepEqual(await caretState(page), {
@@ -1170,12 +1164,12 @@ for (const parserReady of [false, true]) {
       // The same text is a comment in C++ and JS, but division in Python.
       // Replacing the buffer after switching also catches stale token ranges.
       for (const language of ["cpp", "python", "javascript"]) {
-        await page.evaluate(
+        await page.locator("#language-select").selectOption(language);
+        await page.waitForFunction(
           (language) =>
-            document.querySelector(`[data-language="${language}"]`).click(),
+            document.querySelector("#language-select").value === language,
           language,
         );
-        await page.waitForSelector(`[data-language="${language}"].selected`);
         if (parserReady) await waitForParser(page, language);
         const before = "// note ";
         await setCode(page, before);

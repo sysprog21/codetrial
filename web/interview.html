@@ -170,31 +170,21 @@
 
       <section class="editor-panel">
         <div class="editor-toolbar">
-          <div class="language-tabs" aria-label="Language">
-            <button
-              class="language-button selected"
-              type="button"
-              data-language="python"
-            >
+          <select
+            id="language-select"
+            class="language-select"
+            aria-label="Programming language"
+          >
+            <option value="python" data-language="python" selected>
               Python 3
-            </button>
-            <button
-              class="language-button"
-              type="button"
-              data-language="javascript"
-            >
+            </option>
+            <option value="javascript" data-language="javascript">
               JavaScript
-            </button>
-            <button class="language-button" type="button" data-language="c">
-              C
-            </button>
-            <button class="language-button" type="button" data-language="cpp">
-              C++
-            </button>
-            <button class="language-button" type="button" data-language="java">
-              Java
-            </button>
-          </div>
+            </option>
+            <option value="c" data-language="c">C</option>
+            <option value="cpp" data-language="cpp">C++</option>
+            <option value="java" data-language="java">Java</option>
+          </select>
           <div
             class="font-size-control"
             role="group"

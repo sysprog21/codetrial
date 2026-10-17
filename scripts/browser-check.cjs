@@ -69,6 +69,20 @@ function scenarioTitle(problemId) {
   return scenario(problemId).title;
 }
 
+async function selectLanguage(page, language) {
+  const values = {
+    "Python 3": "python",
+    Python: "python",
+    JavaScript: "javascript",
+    C: "c",
+    "C++": "cpp",
+    Java: "java",
+  };
+  await page
+    .locator("#language-select")
+    .selectOption(values[language] ?? language);
+}
+
 function interviewUrl(problemId, mode) {
   const surface = mode ? `&mode=${mode}` : "";
   return `${process.env.BASE_URL}/interview?problem=${scenario(problemId).page}&duration=20${surface}`;
@@ -309,7 +323,7 @@ async function checkEditorNewlines(page) {
     expected,
     caret = expected.length,
   } of cases) {
-    await page.getByRole("button", { name: language, exact: true }).click();
+    await selectLanguage(page, language);
     await editor.fill(value);
     await editor.evaluate(
       (node, range) => node.setSelectionRange(...range),
@@ -352,10 +366,8 @@ async function checkEditorNewlines(page) {
     assert.equal(await editor.inputValue(), expected, `${name}: redo`);
 
     const otherLanguage = language === "Python 3" ? "JavaScript" : "Python 3";
-    await page
-      .getByRole("button", { name: otherLanguage, exact: true })
-      .click();
-    await page.getByRole("button", { name: language, exact: true }).click();
+    await selectLanguage(page, otherLanguage);
+    await selectLanguage(page, language);
     assert.equal(
       await editor.inputValue(),
       expected,
@@ -1159,7 +1171,7 @@ async function isolateRustAgent(
       // global set to "" and asserts every compiled language reports itself not
       // wired up. Neither has a load order to lose.
       if (compilerExplorerMock) {
-        await page.getByRole("button", { name: "C", exact: true }).click();
+        await selectLanguage(page, "C");
         await page.getByLabel("Code editor").fill(`#include <stdlib.h>
 int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
     int* out = malloc(sizeof(int) * 2);
@@ -1189,7 +1201,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
           })
           .waitFor();
         await page.getByText("Offline", { exact: true }).waitFor();
-        await page.getByRole("button", { name: "C++" }).click();
+        await selectLanguage(page, "C++");
         await page.getByLabel("Code editor").fill(`#include <vector>
 using namespace std;
 class BidLedger {
@@ -1221,7 +1233,7 @@ public:
           })
           .waitFor();
         await page.getByText("Offline", { exact: true }).waitFor();
-        await page.getByRole("button", { name: "Java", exact: true }).click();
+        await selectLanguage(page, "Java");
         await page.getByLabel("Code editor").fill(`class OrderedCursor {
     private final ArrayDeque<TreeNode> stack = new ArrayDeque<>();
     public OrderedCursor(TreeNode root) { pushLeft(root); }
@@ -1243,7 +1255,7 @@ public:
         return;
       }
       if (compilerExplorerBaseUrl !== "__default__") {
-        await page.getByRole("button", { name: "C++" }).click();
+        await selectLanguage(page, "C++");
         await page.getByLabel("Code editor").fill(`class Solution {
 public:
     vector<int> matchDisputedCharge(vector<int>& nums, int target) {
@@ -1263,7 +1275,7 @@ public:
           .waitFor({ timeout: 120000 });
         return;
       }
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor").fill(`let i = 0;
 function matchDisputedCharge() {
   return spec.cases[i++].expected;
@@ -1286,7 +1298,7 @@ function matchDisputedCharge() {
 }
 `);
       await runAndExpectPassing(PROBLEM_IDS.twoSum);
-      await page.getByRole("button", { name: "C++" }).click();
+      await selectLanguage(page, "C++");
       await page.getByLabel("Code editor").fill(`class Solution {
 public:
     vector<int> matchDisputedCharge(vector<int>& nums, int target) {
@@ -1319,7 +1331,7 @@ public:
         .locator("#results-body pre")
         .filter({ hasText: /Compilation failed|expected|error/i })
         .waitFor({ timeout: 120000 });
-      await page.getByRole("button", { name: "C", exact: true }).click();
+      await selectLanguage(page, "C");
       await page.getByLabel("Code editor").fill(`#include <stdlib.h>
 int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
     int* out = malloc(sizeof(int) * 2);
@@ -1338,7 +1350,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
 }
 `);
       await runAndExpectPassing(PROBLEM_IDS.twoSum, 120000);
-      await page.getByRole("button", { name: "Python" }).click();
+      await selectLanguage(page, "Python");
       await page.getByLabel("Code editor").fill(`class Solution:
     def matchDisputedCharge(self, nums, target):
         seen = {}
@@ -1365,7 +1377,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function spliceReadings(nums1, m, nums2, n) {
   let write = m + n - 1;
@@ -1393,7 +1405,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function capRepeatsAtTwo(nums) {
   let write = 0;
@@ -1436,7 +1448,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function interleaveEvents(list1, list2) {
   const dummy = new ListNode();
@@ -1468,7 +1480,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function snapshotOutline(head) {
   if (!head) return null;
@@ -1494,7 +1506,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function wrapPlaylistTail(head, k) {
   if (!head || !head.next) return head;
@@ -1527,7 +1539,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor").fill(`function mirrorLayout(root) {
   if (!root) return null;
   const left = mirrorLayout(root.left);
@@ -1549,7 +1561,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function rebuildFromDumps(preorder, inorder) {
   const positions = new Map(inorder.map((value, index) => [value, index]));
@@ -1579,7 +1591,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function linkRowNeighbors(root) {
   let level = root;
@@ -1608,7 +1620,7 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`var OrderedCursor = function(root) {
   this.stack = [];
@@ -1645,7 +1657,7 @@ OrderedCursor.prototype.hasNext = function() {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function nearestSharedApprover(root, p, q) {
   if (!root || root === p || root === q) return root;
@@ -1668,7 +1680,7 @@ OrderedCursor.prototype.hasNext = function() {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function serpentineSweep(root) {
   if (!root) return [];
@@ -1704,7 +1716,7 @@ OrderedCursor.prototype.hasNext = function() {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function indexOrderingHolds(root) {
   function valid(node, low, high) {
@@ -1728,7 +1740,7 @@ OrderedCursor.prototype.hasNext = function() {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function replicateTopology(node) {
   if (!node) return null;
@@ -1756,7 +1768,7 @@ OrderedCursor.prototype.hasNext = function() {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function planMigrationOrder(migrationCount, dependencies) {
   const graph = Array.from({ length: migrationCount }, () => []);
@@ -1793,7 +1805,7 @@ OrderedCursor.prototype.hasNext = function() {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor").fill(`var CommandIndex = function() {
   this.children = new Map();
   this.word = false;
@@ -1839,7 +1851,7 @@ CommandIndex.prototype.find = function(text) {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`var PatternLexicon = function() {
   this.children = new Map();
@@ -1884,7 +1896,7 @@ PatternLexicon.prototype.search = function(word) {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function listPalletLoadouts(candidates, target) {
   candidates.sort((a, b) => a - b);
@@ -1917,7 +1929,7 @@ PatternLexicon.prototype.search = function(word) {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function allStartupOrders(nums) {
   const results = [];
@@ -1952,7 +1964,7 @@ PatternLexicon.prototype.search = function(word) {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function wellNestedSequences(n) {
   const results = [];
@@ -1981,7 +1993,7 @@ PatternLexicon.prototype.search = function(word) {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor").fill(`function countSafeLayouts(n) {
   let count = 0;
   const cols = new Set();
@@ -2020,7 +2032,7 @@ PatternLexicon.prototype.search = function(word) {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function canTraceWord(board, word) {
   function dfs(row, col, index) {
@@ -2057,7 +2069,7 @@ PatternLexicon.prototype.search = function(word) {
         })
         .waitFor();
       await page.getByText("Offline", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "JavaScript" }).click();
+      await selectLanguage(page, "JavaScript");
       await page.getByLabel("Code editor")
         .fill(`function buildBalancedIndex(nums) {
   function build(left, right) {

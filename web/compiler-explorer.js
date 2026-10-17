@@ -114,10 +114,10 @@ export const compiledTestsEnabled = () =>
   Boolean(compilerExplorerBaseUrl());
 
 /// Why this judge cannot be run in this language, in a sentence a candidate can
-/// read, or null when it can. The tab row disables from it and shows it as the
-/// tooltip, so the reason a tab is dead cannot drift from the rule that killed
-/// it; a second withheld pair is a second case here rather than a second place
-/// to remember.
+/// read, or null when it can. The language selector disables from it and shows
+/// unavailable options, so the reason a language is withheld cannot drift from
+/// the rule that withheld it; a second case belongs here rather than in another
+/// place to remember.
 ///
 /// C has no classes, so `generateHarness` refuses a class judge for it and a
 /// candidate would otherwise find that out by writing a whole solution and

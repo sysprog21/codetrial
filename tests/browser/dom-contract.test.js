@@ -321,7 +321,7 @@ test("the interview page keeps the structure the script drives", () => {
   assert.match(
     page,
     /data-language="python"/,
-    "the language tabs drive setLanguage",
+    "the language selector drives setLanguage",
   );
   assert.match(
     page,

@@ -118,7 +118,7 @@ test("the comment marker follows the language tab", async (t) => {
       ["javascript", "//"],
       ["python", "#"],
     ]) {
-      await page.locator(`[data-language="${language}"]`).click();
+      await page.locator("#language-select").selectOption(language);
       await setBuffer(page, "x", 0);
       await page.keyboard.press("Control+/");
       assert.equal(await buffer(page), `${marker} x`, language);

@@ -80,8 +80,8 @@ async function interviewPage(
   await page.waitForFunction(
     () => document.querySelector("#candidate-case-input").placeholder !== "",
   );
+  await page.locator("#language-select").selectOption("javascript");
   await page.evaluate((started) => {
-    document.querySelector('[data-language="javascript"]').click();
     if (started) document.querySelector("#audio-check").hidden = true;
     globalThis.runs = 0;
     const run = document.querySelector("#run-tests");
@@ -116,9 +116,11 @@ test("disabled execution blocks button and shortcut runs across language switche
     assert.equal(await page.locator("#candidate-case").isVisible(), false);
     assert.equal(await page.locator("#results-toggle").isVisible(), false);
     for (const language of ["python", "javascript", "c", "cpp", "java"]) {
-      const button = page.locator(`[data-language="${language}"]`);
-      assert.equal(await button.isDisabled(), false, language);
-      await button.evaluate((button) => button.click());
+      const option = page.locator(
+        `#language-select option[value="${language}"]`,
+      );
+      assert.equal(await option.isDisabled(), false, language);
+      await page.locator("#language-select").selectOption(language);
       assert.equal(
         await page.locator("#run-tests").isDisabled(),
         true,
@@ -161,18 +163,25 @@ test("disabled execution keeps C unavailable for class problems", async (t) => {
   if (!ctx) return;
   const { page, errors } = ctx;
   try {
-    const c = page.locator('[data-language="c"]');
-    await page.waitForFunction(() =>
-      document.querySelector('[data-language="c"]').title.includes("class"),
+    const c = page.locator('#language-select option[value="c"]');
+    await page.waitForFunction(
+      () =>
+        document.querySelector('#language-select option[value="c"]').disabled,
     );
     assert.equal(await c.isDisabled(), true);
-    const before = await page.locator("#editor").inputValue();
-    await c.evaluate((button) => button.click());
-    assert.equal(await page.locator("#editor").inputValue(), before);
+    assert.match(await c.textContent(), /unavailable/);
+    await page.locator("#language-select").selectOption("python");
+    assert.equal(await page.locator("#language-select").inputValue(), "python");
+    assert.match(
+      await page.locator("#editor").inputValue(),
+      /^class EventQueue:/,
+    );
     for (const language of ["python", "javascript", "cpp", "java"]) {
-      const button = page.locator(`[data-language="${language}"]`);
-      assert.equal(await button.isDisabled(), false, language);
-      await button.click();
+      const option = page.locator(
+        `#language-select option[value="${language}"]`,
+      );
+      assert.equal(await option.isDisabled(), false, language);
+      await page.locator("#language-select").selectOption(language);
       const code = await page.locator("#editor").inputValue();
       assert.notEqual(code, "undefined", language);
       assert.ok(code.trim(), language);
@@ -209,6 +218,26 @@ test("offline reports apply execution preferences only to editor interviews", as
     } finally {
       await page.close();
     }
+  }
+});
+
+test("the language selector stays on the submitted language in a report", async (t) => {
+  const ctx = await interviewPage(t);
+  if (!ctx) return;
+  const { page, errors } = ctx;
+  try {
+    await page.evaluate(() => document.querySelector("#end").click());
+    await page.locator("#report-modal").waitFor({ state: "visible" });
+    const code = await page.locator("#editor").inputValue();
+    await page.locator("#language-select").selectOption("python");
+    assert.equal(
+      await page.locator("#language-select").inputValue(),
+      "javascript",
+    );
+    assert.equal(await page.locator("#editor").inputValue(), code);
+    assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
   }
 });
 
