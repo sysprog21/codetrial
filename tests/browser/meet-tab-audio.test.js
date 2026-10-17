@@ -103,9 +103,11 @@ test("meet-mode getusermedia allowlist", () => {
     [...read(name).matchAll(capture)].map(() => name),
   );
 
+  // The task page is a page of its own that never runs Meet mode; it asks
+  // once, for the preview its calibration needs.
   assert.deepEqual(
     sites,
-    ["devices.js"],
+    ["devices.js", "task.js"],
     "a new getUserMedia call site appeared; Meet mode must not capture audio for Meet",
   );
 });

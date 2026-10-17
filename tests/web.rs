@@ -16,7 +16,9 @@ use codetrial::config::{
 };
 use codetrial::livekit::candidate_identity_matches;
 use codetrial::runtime::{
-    TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_REPORT, TOPIC_TEST_RESULTS,
+    TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_REPORT, TOPIC_TASK_ACTION,
+    TOPIC_TASK_CONNECTED, TOPIC_TASK_END, TOPIC_TASK_ERROR, TOPIC_TASK_REVIEW, TOPIC_TASK_REVISION,
+    TOPIC_TASK_RUN, TOPIC_TASK_START, TOPIC_TASK_STATE, TOPIC_TASK_THINKING, TOPIC_TEST_RESULTS,
     TOPIC_TRANSCRIPTION,
 };
 use codetrial::token::{
@@ -24,9 +26,9 @@ use codetrial::token::{
     livekit_token,
 };
 use codetrial::web::{
-    DispatchRefusal, MAX_BODY_BYTES, MAX_REPORT_BYTES, READ_RATE_LIMIT, REPLAY_RATE_LIMIT,
-    RoomDispatcher, TOKEN_RATE_LIMIT, TokenConfig, WebServerConfig, initialize_account_database,
-    login_config, static_file_meta, token_response,
+    AgentJob, DispatchRefusal, MAX_BODY_BYTES, MAX_REPORT_BYTES, READ_RATE_LIMIT,
+    REPLAY_RATE_LIMIT, RoomDispatcher, TOKEN_RATE_LIMIT, TokenConfig, WebServerConfig,
+    initialize_account_database, login_config, static_file_meta, token_response,
 };
 
 #[path = "common/http.rs"]
@@ -121,6 +123,7 @@ fn provider(id: &str, host: &str) -> codetrial::config::Provider {
 
 fn web_config() -> WebServerConfig {
     WebServerConfig {
+        tasks: None,
         web_dir: std::env::temp_dir(),
         github_client_id: None,
         github_client_secret: None,
@@ -358,7 +361,14 @@ impl RoomDispatcher for RecordingDispatcher {
         &self,
         room_name: &str,
         provider: &codetrial::config::Provider,
+        job: AgentJob,
     ) -> Result<(), DispatchRefusal> {
+        // `/api/token` starts interviews only; a task attempt has its own
+        // route.
+        assert!(
+            matches!(job, AgentJob::Interview),
+            "an interview start dispatched a task"
+        );
         if self.at_capacity.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(DispatchRefusal::AtCapacity);
         }
@@ -1274,3 +1284,6 @@ mod accounts;
 
 #[path = "web/routes.rs"]
 mod routes;
+
+#[path = "web/tasks.rs"]
+mod tasks;

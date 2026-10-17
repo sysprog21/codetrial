@@ -1,0 +1,43 @@
+{
+  "durationMin": 15,
+  "language": "python",
+  "maxHintRungs": 3,
+  "extraChecks": 2,
+  "wrapUpSeconds": 120,
+  "wrapUpChecks": 3,
+  "nudgeIdleSeconds": 90,
+  "nudgeIntervalSeconds": 180,
+  "pinDigits": 6,
+  "taskBytes": 1048576,
+  "setBytes": 8388608,
+  "revisionSnapshots": 10,
+  "publicRunSummaries": 20,
+  "evidenceRevisions": 8,
+  "pendingAdmissionSeconds": 120,
+  "promptBytes": 4096,
+  "fetchSeconds": 15,
+  "coreChecks": 3,
+  "understandingChecks": [
+    {
+      "id": "trace",
+      "question": "Trace a worked input and explain the state."
+    },
+    {
+      "id": "contract",
+      "question": "What must remain true as the loop advances?"
+    },
+    {
+      "id": "revision",
+      "question": "Which assumption changed, and how will you verify it?"
+    }
+  ],
+  "interactionPrompt": "Ask the learner to trace, explain, predict tests and revise their work. Ask one question at a time; never provide completed code.",
+  "runCaptureSeconds": 150,
+  "wrapUpAnswerSeconds": 30,
+  "reviewBytes": 65536,
+  "reviewRetentionSeconds": 7200,
+  "reviewDeliverySeconds": 300,
+  "lookAwaySeconds": 8,
+  "kdfIterations": 600000,
+  "codeBytes": 32000
+}

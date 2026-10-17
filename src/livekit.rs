@@ -99,6 +99,7 @@ mod report;
 mod room_service;
 mod rooms;
 mod session;
+pub(crate) mod tasks;
 mod timing;
 mod turn;
 

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::config::{AgentConfig, Provider};
-use crate::web::{DispatchRefusal, RoomDispatcher};
+use crate::web::{AgentJob, DispatchRefusal, RoomDispatcher};
 
 /// Runs the interviewer for rooms this process just named, in this process.
 ///
@@ -33,7 +33,12 @@ pub struct LocalDispatcher {
 }
 
 impl RoomDispatcher for LocalDispatcher {
-    fn ensure_agent(&self, room_name: &str, provider: &Provider) -> Result<(), DispatchRefusal> {
+    fn ensure_agent(
+        &self,
+        room_name: &str,
+        provider: &Provider,
+        job: AgentJob,
+    ) -> Result<(), DispatchRefusal> {
         let slot = match self.reserve(room_name) {
             Reservation::Existing => return Ok(()),
             Reservation::Full => {
@@ -52,17 +57,25 @@ impl RoomDispatcher for LocalDispatcher {
         let config = agent_config_for(&self.config, provider);
 
         // Spawned, not awaited: this runs on the request path, and the task
-        // outlives the response by the length of the interview.
+        // outlives the response by the length of the interview or attempt.
         self.runtime.spawn(async move {
             eprintln!("codetrial dispatch room={}", slot.room_name);
-            if let Err(error) = crate::livekit::run_room_with_slot(
-                &config,
-                &slot.room_name,
-                crate::web::current_epoch_seconds(),
-                Some(&slot),
-            )
-            .await
-            {
+            let outcome = match job {
+                AgentJob::Interview => {
+                    crate::livekit::run_room_with_slot(
+                        &config,
+                        &slot.room_name,
+                        crate::web::current_epoch_seconds(),
+                        Some(&slot),
+                    )
+                    .await
+                }
+                AgentJob::Task { candidate, task } => {
+                    crate::livekit::tasks::run(&config, &slot.room_name, &candidate, task, &slot)
+                        .await
+                }
+            };
+            if let Err(error) = outcome {
                 eprintln!("codetrial agent_failed room={}: {error}", slot.room_name);
             }
         });

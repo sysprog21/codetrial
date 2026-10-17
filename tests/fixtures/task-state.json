@@ -1,0 +1,78 @@
+{
+  "topic": "task_state",
+  "cases": [
+    {
+      "name": "fresh session",
+      "payload": {
+        "version": 1,
+        "seq": 0,
+        "phase": "ready",
+        "deadlineAt": null,
+        "interviewer": "available",
+        "outcome": null,
+        "checks": [
+          {
+            "id": "contract",
+            "state": "open",
+            "support": "none"
+          },
+          {
+            "id": "revision",
+            "state": "open",
+            "support": "none"
+          },
+          {
+            "id": "trace",
+            "state": "open",
+            "support": "none"
+          }
+        ],
+        "hintRungsUsed": 0,
+        "hintRungsMax": 3,
+        "finalRevisionId": null,
+        "acknowledgedCaptureRequestId": null,
+        "captureOverflow": false,
+        "activeTargetId": null
+      }
+    },
+    {
+      "name": "attempt ended under a rule",
+      "payload": {
+        "version": 1,
+        "seq": 2,
+        "phase": "feedback",
+        "deadlineAt": "1970-01-01T00:16:40Z",
+        "interviewer": "available",
+        "outcome": {
+          "outcome": "invalid",
+          "cause": "visibility",
+          "at": 192,
+          "durationMs": 8000
+        },
+        "checks": [
+          {
+            "id": "contract",
+            "state": "open",
+            "support": "none"
+          },
+          {
+            "id": "revision",
+            "state": "open",
+            "support": "none"
+          },
+          {
+            "id": "trace",
+            "state": "open",
+            "support": "none"
+          }
+        ],
+        "hintRungsUsed": 0,
+        "hintRungsMax": 3,
+        "finalRevisionId": "initial",
+        "acknowledgedCaptureRequestId": null,
+        "captureOverflow": false,
+        "activeTargetId": null
+      }
+    }
+  ]
+}

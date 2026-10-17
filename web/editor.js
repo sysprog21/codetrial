@@ -331,3 +331,52 @@ export function toggleLineComment(value, start, end, language) {
   // marker goes in still ends before it.
   return { value, start: map(start, true), end: map(end, start === end) };
 }
+
+// Set for exactly the duration of an `applyEditorEdit` call, and checked
+// first thing in a beforeinput listener, so the synthetic beforeinput the
+// edit fires is recognized by when it happens rather than by a property of
+// dubious reliability.
+let applyingProgrammatic = false;
+
+/// Whether the beforeinput being handled is `applyEditorEdit`'s own.
+export function applyingEditorEdit() {
+  return applyingProgrammatic;
+}
+
+/// Every edit an editor makes on the writer's behalf -- indentation, bracket
+/// pairs, closer type-over, paired deletion -- lands here. Assigning `value`
+/// wipes the native undo stack, so one such edit would cost the writer their
+/// whole editing history. The change goes through the browser's editing
+/// command instead, over just the span that actually changed.
+export function applyEditorEdit(editor, next) {
+  const previous = editor.value;
+  if (next.value === previous) {
+    editor.setSelectionRange(next.start, next.end);
+    return;
+  }
+  let head = 0;
+  while (previous[head] === next.value[head]) head += 1;
+  let tail = 0;
+  while (
+    tail < Math.min(previous.length, next.value.length) - head &&
+    previous[previous.length - 1 - tail] ===
+      next.value[next.value.length - 1 - tail]
+  )
+    tail += 1;
+  const inserted = next.value.slice(head, next.value.length - tail);
+  editor.setSelectionRange(head, previous.length - tail);
+  let rewritten;
+  applyingProgrammatic = true;
+  try {
+    rewritten = inserted
+      ? document.execCommand?.("insertText", false, inserted)
+      : document.execCommand?.("delete");
+  } finally {
+    applyingProgrammatic = false;
+  }
+  if (!rewritten) {
+    editor.value = next.value;
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  editor.setSelectionRange(next.start, next.end);
+}

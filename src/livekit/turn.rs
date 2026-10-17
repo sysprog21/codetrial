@@ -462,13 +462,14 @@ impl RuntimeActivity {
         compression: Option<crate::config::GeminiContextCompression>,
         usage: crate::gemini::TokenUsage,
     ) -> String {
-        let line = format!(
-            "codetrial live_turn_usage room={room} session={} at={clock} socket={} usage_event={} cause={} {}",
+        let line = live_turn_usage_line(
+            room,
             self.live_session_id,
+            clock,
             self.live_socket,
             self.live_usage.samples + 1,
             cause.unwrap_or("candidate"),
-            usage.log_fields()
+            &usage,
         );
         if cause == Some("tool") {
             self.mark_tool_usage();
@@ -2003,6 +2004,24 @@ fn reserves_for_behavioral(state: &RuntimeState) -> bool {
 /// silence before the report the candidate is waiting for.
 pub(super) fn should_send_wrap_up(reason: &str) -> bool {
     reason != "candidate_ended" && reason != INTERVIEWER_UNAVAILABLE
+}
+
+/// One usage observation's log line, in the one spelling
+/// `scripts/analyze-gemini-usage.py` reads, for interviews and task rooms
+/// alike.
+pub(super) fn live_turn_usage_line(
+    room: &str,
+    session: u64,
+    clock: &str,
+    socket: u64,
+    event: u64,
+    cause: &str,
+    usage: &crate::gemini::TokenUsage,
+) -> String {
+    format!(
+        "codetrial live_turn_usage room={room} session={session} at={clock} socket={socket} usage_event={event} cause={cause} {}",
+        usage.log_fields()
+    )
 }
 
 #[cfg(test)]

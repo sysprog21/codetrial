@@ -1,7 +1,7 @@
 # Functions the mutation gate cannot judge, because `cargo test` cannot reach
 # them. Matched against the mutant names that `cargo mutants --list` prints.
 #
-# EXCLUSIONS: 74
+# EXCLUSIONS: 91
 #
 # That number is checked by `scripts/test.sh`, so adding an entry means editing
 # this line too. The point is not the count, it is that the list only ever grows
@@ -112,7 +112,9 @@
 # `publish_framework_progress`, `send_wrap_up_and_wait`, `drop_stale_playout`,
 # `close_turns`, `set_agent_state` and `publish_transcript` publish;
 # `generate_report` and the two transport functions under it post to Google
-# and would need an API key to reach a single line. The last two joined this
+# and would need an API key to reach a single line. `generate_task_feedback` is
+# task mode's and only names Google's URL; `generate_task_feedback_at`, which
+# takes the URL, is tested against a local server. The last two joined this
 # list when they moved into livekit/session.rs: never in a diff before, they
 # had never been scored, and the move made every line of them new. What they
 # decide before they write is tested on its own: `close_turn`,
@@ -317,6 +319,22 @@
 # line holds is built and tested apart from the printing: the trace's own
 # records, and `first_frame_record`.
 #
+# The task room in src/livekit/tasks.rs is `run_room`'s counterpart for task
+# mode, and its I/O is excluded for the same reason: `run` joins a LiveKit room,
+# and the `TaskRoom` handlers listed below (`on_data`, `on_room_event`,
+# `on_tick`, `recover`, `ask_wrap_up`, `on_audio_frame`, `publish_state`,
+# `settle_page_loss`, `serve`, `send_or_queue`, `deliver_review`, `close`) each
+# take the room or the Gemini socket and answer by publishing or sending, so
+# none of them runs without a LiveKit server. `fail_setup` is `run`'s two
+# setup failures lifted into one helper, so it shares `run`'s entry. `publish`,
+# `publish_error`, `silence_output` and `LiveUsage::drain` are the same, one
+# layer down. Its `on_gemini_event` and `on_turn_complete` were already matched
+# by the entries above. What these handlers decide is not excluded: it was moved
+# out of the room so `cargo test` reaches it, into `TaskSession::receive` and
+# `TaskSession::answer_tool` (every page message and tool call),
+# `TaskSession::page_left` and `page_returned` (the page leaving and joining),
+# `page_loss`, `wrap_up_due` and `speaking`, each tested in tests/unit.
+#
 # Keep this list short and each entry justified. An entry that is really "we
 # never got around to testing this" belongs in a test, not here.
 exclude_re = [
@@ -357,6 +375,7 @@ exclude_re = [
     "set_agent_state",
     "publish_transcript",
     "generate_report",
+    "replace generate_task_feedback -> ",
     "report_packet",
     "publish_with_recovery",
     "LiveRecoveryRoom",
@@ -394,4 +413,20 @@ exclude_re = [
     "replace tool_ack_clip ->",
     "livekit/latency\\.rs:.*replace log with \\(\\)$",
     "replace log_first_frame with \\(\\)$",
+    "TaskRoom<'_>::on_data",
+    "TaskRoom<'_>::on_room_event",
+    "TaskRoom<'_>::on_tick",
+    "TaskRoom<'_>::recover",
+    "TaskRoom<'_>::ask_wrap_up",
+    "TaskRoom<'_>::on_audio_frame",
+    "TaskRoom<'_>::publish_state",
+    "TaskRoom<'_>::settle_page_loss",
+    "TaskRoom<'_>::serve",
+    "TaskRoom<'_>::send_or_queue",
+    "TaskRoom<'_>::deliver_review",
+    "TaskRoom<'_>::close",
+    "^src/livekit/tasks\\.rs:\\d+:\\d+: (replace (run|fail_setup) |.* in (run|fail_setup)$)",
+    "^src/livekit/tasks\\.rs:\\d+:\\d+: (replace publish(_error)? |.* in publish(_error)?$)",
+    "^src/livekit/tasks\\.rs:\\d+:\\d+: replace silence_output ",
+    "LiveUsage::drain",
 ]

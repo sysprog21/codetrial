@@ -1,0 +1,15 @@
+{
+  "topic": "task_revision",
+  "cases": [
+    {
+      "name": "run snapshot",
+      "payload": {
+        "version": 1,
+        "requestId": "capture-1",
+        "revisionId": "revision-1",
+        "code": "def match_pair(amounts, total):\n    return []\n",
+        "trigger": "run"
+      }
+    }
+  ]
+}

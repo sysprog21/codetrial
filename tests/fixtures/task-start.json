@@ -1,0 +1,11 @@
+{
+  "topic": "task_start",
+  "cases": [
+    {
+      "name": "start",
+      "payload": {
+        "version": 1
+      }
+    }
+  ]
+}

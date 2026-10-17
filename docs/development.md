@@ -290,3 +290,26 @@ Checks that need credentials or a running service stay out of the gate and are
 run on their own: `scripts/server-check.sh`, `gemini-check.sh`,
 `parity-check.sh`, `report-parity-check.sh`, `visual-parity-check.sh`,
 `recording-integration.sh`, and `recording-provision-check.sh`.
+
+## Instructor task packaging
+
+The instructor tool and its acceptance tests use the pinned Python dependency in
+`scripts/requirements-task.txt`. `scripts/task-package.py` finds its own
+interpreter: it needs Python 3.9 or newer, and reruns itself under a newer
+`python3.x` on PATH when started on an older one; `build` also needs the
+dependency, and reruns under `target/task-tools` (`CODETRIAL_TASK_TOOLS` names
+another place), which it sets up from that file the first time. It creates that
+directory and never clears one, so a broken one has to be removed by hand.
+`./scripts/test.sh` uses the same environment and sets it up the same way. Given
+a `PYTHON` without the dependency, it skips the packaging tests instead. To set
+it up by hand:
+
+```sh
+python3 -m venv target/task-tools
+target/task-tools/bin/pip install -r scripts/requirements-task.txt
+```
+
+`scripts/task-package.py --help` lists references, new, validate,
+render-prompt, preview, build and publish-scan;
+[task-mode.md](task-mode.md#instructor-workflow) says what each does. The
+tooling never uploads or pushes files.

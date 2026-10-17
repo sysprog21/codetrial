@@ -37,6 +37,8 @@ import {
   matchingBrackets,
   isToggleCommentKeystroke,
   toggleLineComment,
+  applyEditorEdit,
+  applyingEditorEdit,
 } from "./editor.js";
 import { createDevicePool } from "./devices.js";
 import { createFaceCheck } from "./face-check.js";
@@ -703,51 +705,6 @@ function renderRuntimeConfig() {
       : "C, C++ and Java test runs are disabled by this server.";
 }
 
-// This flag is the actual guard: set for exactly the duration of the call,
-// and checked first thing in the listener, so the synthetic beforeinput is
-// recognized by when it happens rather than by a property of
-// dubious reliability.
-let applyingProgrammaticEdit = false;
-
-// Every edit the editor makes on the candidate's behalf -- indentation, bracket
-// pairs, closer type-over, paired deletion -- lands here. Assigning `value`
-// wipes the native undo stack, so one such edit would cost the candidate their
-// whole editing history. Route the change through the browser's editing
-// command instead, over just the span that actually changed.
-function applyEditorEdit(next) {
-  const editor = nodes.editor;
-  const previous = editor.value;
-  if (next.value === previous) {
-    editor.setSelectionRange(next.start, next.end);
-    return;
-  }
-  let head = 0;
-  while (previous[head] === next.value[head]) head += 1;
-  let tail = 0;
-  while (
-    tail < Math.min(previous.length, next.value.length) - head &&
-    previous[previous.length - 1 - tail] ===
-      next.value[next.value.length - 1 - tail]
-  )
-    tail += 1;
-  const inserted = next.value.slice(head, next.value.length - tail);
-  editor.setSelectionRange(head, previous.length - tail);
-  let rewritten;
-  applyingProgrammaticEdit = true;
-  try {
-    rewritten = inserted
-      ? document.execCommand?.("insertText", false, inserted)
-      : document.execCommand?.("delete");
-  } finally {
-    applyingProgrammaticEdit = false;
-  }
-  if (!rewritten) {
-    editor.value = next.value;
-    editor.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-  editor.setSelectionRange(next.start, next.end);
-}
-
 function bindEvents() {
   renderRoundPlan();
   nodes.problemTab.addEventListener("click", () => selectTab("problem"));
@@ -922,12 +879,13 @@ function bindEvents() {
       event.preventDefault();
       // A held chord repeats. Each repeat would flip the block back, and leave
       // an undo step of its own behind.
-      if (!event.repeat) applyEditorEdit(toggled);
+      if (!event.repeat) applyEditorEdit(nodes.editor, toggled);
       return;
     }
     if (!indents) return;
     event.preventDefault();
     applyEditorEdit(
+      nodes.editor,
       indentSelection(
         nodes.editor.value,
         nodes.editor.selectionStart,
@@ -937,12 +895,12 @@ function bindEvents() {
     );
   });
   nodes.editor.addEventListener("beforeinput", (event) => {
-    if (applyingProgrammaticEdit || event.isComposing || !event.cancelable)
-      return;
+    if (applyingEditorEdit() || event.isComposing || !event.cancelable) return;
     if (event.inputType === "insertLineBreak") {
       if (!editorOptions.autoIndent) return;
       event.preventDefault();
       applyEditorEdit(
+        nodes.editor,
         indentNewline(
           nodes.editor.value,
           nodes.editor.selectionStart,
@@ -963,7 +921,7 @@ function bindEvents() {
       );
       if (!pair) return;
       event.preventDefault();
-      applyEditorEdit(pair);
+      applyEditorEdit(nodes.editor, pair);
       return;
     }
     if (isBracketCloserKeystroke(event)) {
@@ -976,7 +934,7 @@ function bindEvents() {
       );
       if (!skip) return;
       event.preventDefault();
-      applyEditorEdit(skip);
+      applyEditorEdit(nodes.editor, skip);
       return;
     }
     if (isBackspaceKeystroke(event)) {
@@ -988,7 +946,7 @@ function bindEvents() {
       );
       if (!removal) return;
       event.preventDefault();
-      applyEditorEdit(removal);
+      applyEditorEdit(nodes.editor, removal);
     }
   });
   nodes.editor.addEventListener("input", () => {
