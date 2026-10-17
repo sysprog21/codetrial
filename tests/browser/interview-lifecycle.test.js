@@ -231,8 +231,47 @@ test("the Leave button releases the warning before tearing down the session", ()
   assert.equal(target.removed, 1);
 });
 
+/// `saveHistory` from web/interview.js, compiled against the module state it
+/// reads. `whiteboard` and `mode` are passed separately, as the page derives
+/// them, so a test can set one without the other.
+function loadSaveHistory({
+  state,
+  whiteboard = false,
+  mode = "coding",
+  code = "",
+  saveReportHistory,
+  updateBeforeUnloadGuard = () => {},
+}) {
+  const body = functionBody(read("web/interview.js"), "saveHistory");
+  return new Function(
+    "state",
+    "randomId",
+    "problem",
+    "whiteboard",
+    "durationMin",
+    "interviewLoop",
+    "mode",
+    "currentCode",
+    "saveReportHistory",
+    "reportIsPersisted",
+    "updateBeforeUnloadGuard",
+    `let saveGeneration = 0;\n${body}\n}\nreturn saveHistory;`,
+  )(
+    state,
+    () => "unused",
+    { page: "two-sum", title: "Two Sum", difficulty: "Easy" },
+    whiteboard,
+    45,
+    "coding_only",
+    mode,
+    () => code,
+    saveReportHistory,
+    reportIsPersisted,
+    updateBeforeUnloadGuard,
+  );
+}
+
 test("only the newest overlapping report save can release the warning", async () => {
-  const source = read("web/interview.js");
   const pending = [];
   const guardStates = [];
   const state = {
@@ -245,31 +284,12 @@ test("only the newest overlapping report save can release the warning", async ()
   const saveReportHistory = (entry) =>
     new Promise((resolve) => pending.push({ entry, resolve }));
   const updateBeforeUnloadGuard = () => guardStates.push(state.reportPersisted);
-  const body = functionBody(source, "saveHistory");
-  const saveHistory = new Function(
-    "state",
-    "randomId",
-    "problem",
-    "whiteboard",
-    "durationMin",
-    "interviewLoop",
-    "mode",
-    "saveReportHistory",
-    "reportIsPersisted",
-    "updateBeforeUnloadGuard",
-    `let saveGeneration = 0;\n${body}\n}\nreturn saveHistory;`,
-  )(
+  const saveHistory = loadSaveHistory({
     state,
-    () => "unused",
-    { page: "two-sum", title: "Two Sum", difficulty: "Easy" },
-    false,
-    45,
-    "coding_only",
-    "whiteboard",
+    mode: "whiteboard",
     saveReportHistory,
-    reportIsPersisted,
     updateBeforeUnloadGuard,
-  );
+  });
 
   const provisional = saveHistory({ summary: "provisional" });
   const final = saveHistory({ summary: "final" });
@@ -289,6 +309,28 @@ test("only the newest overlapping report save can release the warning", async ()
   await Promise.all([provisional, final]);
   assert.equal(state.reportPersisted, false);
   assert.deepEqual(guardStates, [false, false]);
+});
+
+test("a saved attempt carries the final code, and a whiteboard none", async () => {
+  const code = "function twoSum() {\n  return [0, 1];\n}\n";
+  for (const [whiteboard, expected] of [
+    [false, code],
+    [true, null],
+  ]) {
+    const saved = [];
+    const saveHistory = loadSaveHistory({
+      state: { reportId: "attempt-1", language: "javascript" },
+      whiteboard,
+      code: whiteboard ? "" : code,
+      saveReportHistory: async (entry) => {
+        saved.push(entry);
+        return { local: "saved", account: "skipped" };
+      },
+    });
+    await saveHistory({ decision: "HIRE" });
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].code, expected);
+  }
 });
 
 test("pagehide finalizes recovery before disconnecting the room", () => {

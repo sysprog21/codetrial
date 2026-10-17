@@ -100,6 +100,8 @@ export function normalizeProgressEntry(raw) {
     recordedDecision: ["HIRE", "NO_HIRE"].includes(entry.report?.decision)
       ? entry.report.decision
       : null,
+    // Only the short local history keeps it; anything else reopens without.
+    code: typeof entry.code === "string" ? entry.code : null,
     report,
   };
 }
