@@ -692,3 +692,176 @@ test("C stays unavailable until a function-style judge has loaded", async (t) =>
     await new Promise((closed) => enabled.server.close(closed));
   }
 });
+
+test("ending an interview clears candidate cases from session storage", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
+      waitUntil: "domcontentloaded",
+    });
+    await candidateCasesReady(page);
+    await page.evaluate(() => {
+      document.querySelector("#candidate-case-input").value = "[[2,7,11,15],9]";
+      document.querySelector("#candidate-case-add").click();
+    });
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#candidate-case-list").children.length === 1,
+    );
+    const storedBefore = await page.evaluate(() =>
+      sessionStorage.getItem("codetrial.candidateCases.chargeback-pair-match"),
+    );
+    assert.ok(storedBefore && storedBefore.includes("[[2,7,11,15],9]"));
+
+    await page.evaluate(() => document.querySelector("#end").click());
+    await page.waitForFunction(
+      () =>
+        sessionStorage.getItem(
+          "codetrial.candidateCases.chargeback-pair-match",
+        ) === null,
+    );
+    const storedAfter = await page.evaluate(() =>
+      sessionStorage.getItem("codetrial.candidateCases.chargeback-pair-match"),
+    );
+    assert.equal(storedAfter, null);
+  } finally {
+    await page.close();
+  }
+});
+
+test("rendering a report clears candidate cases from session storage", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
+      waitUntil: "domcontentloaded",
+    });
+    await candidateCasesReady(page);
+    await page.evaluate(() => {
+      document.querySelector("#candidate-case-input").value = "[[2,7,11,15],9]";
+      document.querySelector("#candidate-case-add").click();
+    });
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#candidate-case-list").children.length === 1,
+    );
+    const storedBefore = await page.evaluate(() =>
+      sessionStorage.getItem("codetrial.candidateCases.chargeback-pair-match"),
+    );
+    assert.ok(storedBefore && storedBefore.includes("[[2,7,11,15],9]"));
+
+    await page.evaluate(() => {
+      document.querySelector("#force-report").click();
+    });
+    await page.waitForFunction(
+      () =>
+        sessionStorage.getItem(
+          "codetrial.candidateCases.chargeback-pair-match",
+        ) === null,
+    );
+    const storedAfter = await page.evaluate(() =>
+      sessionStorage.getItem("codetrial.candidateCases.chargeback-pair-match"),
+    );
+    assert.equal(storedAfter, null);
+  } finally {
+    await page.close();
+  }
+});
+
+test("in-flight candidate case additions are refused when interview leaves live", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  let releaseJudge = () => {};
+  try {
+    releaseJudge = await holdJudge(page);
+    await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
+      waitUntil: "domcontentloaded",
+    });
+    await page.waitForFunction(
+      () => !document.querySelector("#candidate-case-add").disabled,
+    );
+    await page.evaluate(() => {
+      document.querySelector("#candidate-case-input").value = "[[2,7,11,15],9]";
+      document.querySelector("#candidate-case-add").click();
+      document.querySelector("#end").click();
+    });
+    releaseJudge();
+    await page.waitForFunction(
+      () => !document.querySelector("#candidate-case-add").disabled,
+    );
+    const stored = await page.evaluate(() =>
+      sessionStorage.getItem("codetrial.candidateCases.chargeback-pair-match"),
+    );
+    assert.equal(stored, null);
+    const casesCount = await page.evaluate(
+      () => document.querySelector("#candidate-case-list").children.length,
+    );
+    assert.equal(casesCount, 0);
+    const status = await page.evaluate(
+      () => document.querySelector("#candidate-case-status").textContent,
+    );
+    assert.equal(status, "The interview has ended.");
+  } finally {
+    releaseJudge();
+    await page.close();
+  }
+});
+
+test("removing a candidate case after interview end does not resurrect storage", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
+      waitUntil: "domcontentloaded",
+    });
+    await candidateCasesReady(page);
+    await page.evaluate(() => {
+      const input = document.querySelector("#candidate-case-input");
+      const add = document.querySelector("#candidate-case-add");
+      input.value = "[[2,7,11,15],9]";
+      add.click();
+    });
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#candidate-case-list").children.length === 1,
+    );
+    await page.evaluate(() => {
+      const input = document.querySelector("#candidate-case-input");
+      const add = document.querySelector("#candidate-case-add");
+      input.value = "[[1,2,3],5]";
+      add.click();
+    });
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#candidate-case-list").children.length === 2,
+    );
+    const storedBefore = await page.evaluate(() =>
+      sessionStorage.getItem("codetrial.candidateCases.chargeback-pair-match"),
+    );
+    assert.ok(storedBefore && storedBefore.includes("[[1,2,3],5]"));
+
+    await page.evaluate(() => document.querySelector("#end").click());
+    await page.waitForFunction(
+      () =>
+        sessionStorage.getItem(
+          "codetrial.candidateCases.chargeback-pair-match",
+        ) === null,
+    );
+
+    await page.evaluate(() => {
+      const removeBtn = document.querySelector('[data-remove-case="0"]');
+      if (!removeBtn) {
+        throw new Error("expected remove button to exist after interview end");
+      }
+      removeBtn.click();
+    });
+
+    const storedAfter = await page.evaluate(() =>
+      sessionStorage.getItem("codetrial.candidateCases.chargeback-pair-match"),
+    );
+    assert.equal(storedAfter, null);
+  } finally {
+    await page.close();
+  }
+});
