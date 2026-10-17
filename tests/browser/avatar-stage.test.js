@@ -247,7 +247,10 @@ function installBrowser(t) {
         };
       }
       createAnalyser() {
-        return { getByteTimeDomainData: (samples) => samples.fill(128) };
+        // Silence by default; a test sets `env.sample` to hear Jim speak.
+        return {
+          getByteTimeDomainData: (samples) => samples.fill(env.sample ?? 128),
+        };
       }
       close() {
         env.closed = (env.closed ?? 0) + 1;
@@ -309,13 +312,16 @@ async function mountStage(
   };
   stage.initAvatarStage({
     nodes,
+    onShowAvatar: (track, participant) =>
+      stage.attachAvatarAnalyser(track, participant),
     loadModel: async (_mount, abort) => {
       counts.loads++;
       signal = abort;
       if (load === "unavailable") throw new Error("model unavailable");
       const model = {
-        apply: () => {
+        apply: (pose) => {
           counts.draws++;
+          counts.pose = pose;
           env.now += drawCost();
         },
         dispose: () => counts.disposed++,
@@ -657,12 +663,7 @@ test("a poll that starts while hidden takes no baseline", async (t) => {
   s.stage.stopAvatar();
 });
 
-for (const trigger of [
-  "budget",
-  "budget-while-focused",
-  "click",
-  "click-while-focused",
-]) {
+for (const trigger of ["budget", "budget-while-focused"]) {
   test(`stage retires the renderer for good after ${trigger}`, async (t) => {
     const env = installBrowser(t);
     let cost = 0;
@@ -712,6 +713,107 @@ for (const trigger of [
   });
 }
 
+for (const focused of [false, true]) {
+  test(`candidate Hide can show the avatar again${focused ? " with focus" : ""}`, async (t) => {
+    const env = installBrowser(t);
+    const s = await mountStage(env);
+    const participant = { identity: "interviewer-jim" };
+    s.stage.attachAvatarAnalyser({ mediaStreamTrack: {} }, participant);
+    await s.start();
+    s.closePreflight();
+    if (focused) env.document.activeElement = s.nodes.hideAvatar;
+
+    s.click();
+    assert.equal(s.nodes.hideAvatar.hidden, false);
+    assert.equal(s.nodes.hideAvatar.textContent, "Show avatar");
+    assert.equal(s.nodes.jimAvatar.dataset.avatarState, "stopped");
+    assert.equal(s.counts.disposed, 1);
+    assert.equal(env.frames.size, 0);
+    // Focus is left where the candidate put it, so the same key undoes the
+    // Hide, and the status region is what says the avatar went away.
+    assert.equal(s.counts.focused, 0, "focus is not moved to the note");
+    assert.equal(
+      env.document.activeElement,
+      focused ? s.nodes.hideAvatar : null,
+    );
+    assert.match(s.nodes.jimAvatarStatus.textContent, /turned off/);
+
+    s.click();
+    assert.equal(s.nodes.jimAvatarStatus.textContent, "");
+    assert.equal(s.nodes.jimAvatarNote.textContent, "Jim is here by voice.");
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (s.nodes.jimAvatar.dataset.avatarState === "ready") break;
+      await s.settle();
+    }
+    assert.equal(s.nodes.hideAvatar.hidden, false);
+    assert.equal(s.nodes.hideAvatar.textContent, "Hide avatar");
+    assert.equal(s.nodes.jimAvatar.dataset.avatarState, "ready");
+    assert.equal(s.counts.loads, 2);
+    assert.equal(s.counts.disposed, 1);
+    assert.equal(env.contexts, 2, "Show rebuilds the released analyser");
+    assert.equal(env.disconnected, 1, "Hide released the first analyser");
+    s.stage.stopAvatar();
+    assert.equal(env.disconnected, 2, "leaving releases the rebuilt analyser");
+  });
+}
+
+test("Show hands the rebuilt avatar Jim's latest state", async (t) => {
+  const env = installBrowser(t);
+  const s = await mountStage(env);
+  const participant = { identity: "interviewer-jim" };
+  s.stage.attachAvatarAnalyser({ mediaStreamTrack: {} }, participant);
+  await s.start();
+  s.closePreflight();
+  // Loud enough that an open mouth would show: a zero mouth below is the
+  // mute, not silence.
+  env.sample = 255;
+  s.click();
+  // Reported while hidden, with no model to tell: the page sends each state
+  // once, on the change, so nothing would repeat it after Show.
+  s.stage.setAvatarExpression("thinking");
+  s.stage.setAvatarSpeaking(false);
+  s.click();
+  await s.settle();
+  assert.equal(s.nodes.jimAvatar.dataset.avatarState, "ready");
+  s.tick(AVATAR_FRAME_MS);
+  assert.equal(s.counts.pose.agentState, "thinking");
+  assert.equal(s.counts.pose.mouth, 0, "the mute survives the rebuild");
+  s.stage.setAvatarSpeaking(true);
+  s.tick(AVATAR_FRAME_MS);
+  assert.ok(s.counts.pose.mouth > 0, "and the samples were loud");
+  s.stage.stopAvatar();
+});
+
+test("a stage that widens late builds with the state reported while narrow", async (t) => {
+  const env = installBrowser(t);
+  env.display = "none";
+  const s = await mountStage(env, { width: 0 });
+  await s.start();
+  s.closePreflight();
+  s.stage.setAvatarExpression("speaking");
+  env.display = "block";
+  s.setWidth(168);
+  await s.settle();
+  assert.equal(s.counts.loads, 1);
+  s.tick(AVATAR_FRAME_MS);
+  assert.equal(s.counts.pose.agentState, "speaking");
+  s.stage.stopAvatar();
+});
+
+test("final stop removes the manual Show action", async (t) => {
+  const env = installBrowser(t);
+  const s = await mountStage(env);
+  await s.start();
+  s.closePreflight();
+  s.click();
+  assert.equal(s.nodes.hideAvatar.hidden, false);
+  assert.equal(s.nodes.hideAvatar.textContent, "Show avatar");
+  s.stage.stopAvatar();
+  assert.equal(s.nodes.hideAvatar.hidden, true);
+  s.click();
+  assert.equal(s.counts.loads, 1);
+});
+
 test("Hide during loading aborts the load and nothing is built", async (t) => {
   const env = installBrowser(t);
   const s = await mountStage(env, { load: "pending" });
@@ -721,7 +823,8 @@ test("Hide during loading aborts the load and nothing is built", async (t) => {
   assert.equal(s.signal().aborted, false);
   s.click();
   assert.equal(s.signal().aborted, true, "the loader is told to stop");
-  assert.equal(s.counts.focused, 1);
+  assert.equal(s.counts.focused, 0);
+  assert.match(s.nodes.jimAvatarStatus.textContent, /turned off/);
   // A loader that finished anyway is still disposed and never drawn.
   s.finishLoading();
   await s.settle();
@@ -733,6 +836,14 @@ test("Hide during loading aborts the load and nothing is built", async (t) => {
   assert.match(s.nodes.jimAvatarNote.textContent, /turned off/);
   s.stage.startAvatar();
   assert.equal(s.counts.loads, 1);
+  s.click();
+  await s.settle();
+  assert.equal(s.counts.loads, 2);
+  // Settled and stopped, or the load deadline's timer holds the test process
+  // open for its whole minute.
+  s.finishLoading();
+  await s.settle();
+  s.stage.stopAvatar();
 });
 
 test("an unavailable model hides the control and polls nothing", async (t) => {

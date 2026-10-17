@@ -589,7 +589,10 @@ let jimAudio = null;
 // are handed over rather than re-derived: one `state` object, one `nodes` map.
 initReplay({ state, nodes, recordingEnabled, consentVersion, replayVersion });
 initCaptions({ nodes });
-initAvatarStage({ nodes });
+initAvatarStage({
+  nodes,
+  onShowAvatar: (track, participant) => playRemoteAudio(track, participant),
+});
 // The preflight overlay is up from the first paint; the stage stays inert and
 // undrawn under it until the preflight closes, below.
 setStageCovered(true);

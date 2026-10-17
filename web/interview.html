@@ -603,9 +603,10 @@
         >
           Hide avatar
         </button>
-        <!-- Announces only the automatic turn-off. A live region over the
-             whole mount announced the canvas arriving and the preflight-time
-             "unavailable", and a manual Hide already moves focus to the note. -->
+        <!-- Announces the turn-off, manual or automatic, and nothing else. A
+             live region over the whole mount announced the canvas arriving
+             and the preflight-time "unavailable". An automatic turn-off that
+             moves focus to the note leaves this silent, so it is read once. -->
         <span
           id="jim-avatar-status"
           class="visually-hidden"

@@ -363,9 +363,13 @@ The canvas is `role="img"` with the label "Jim, the AI interviewer". It carried
 unlabeled canvas announced to a screen reader is worse than a hidden one. A
 picture of a person whose whole useful content is "this is the interviewer"
 needs one sentence, not a live region. The one live region on the stage is
-`#jim-avatar-status`, a visually hidden `role="status"` that speaks only when
-the avatar is retired automatically; a manual Hide moves focus to the note
-instead, so the change is read once either way.
+`#jim-avatar-status`, a visually hidden `role="status"` that speaks when the
+candidate hides the avatar and when it is retired automatically. A manual Hide
+leaves focus on the button, which now reads Show avatar, so the same key brings
+the avatar back and the status region is what announces the change. An
+automatic retirement hides the button; if the button held focus, focus moves to
+the note and the status region stays silent, so the change is read once either
+way.
 
 The render loop stops scheduling frames while the document is hidden, the stage
 is narrower than the breakpoint, or the preflight overlay covers it. It starts
@@ -435,7 +439,12 @@ The Hide avatar button gives the candidate the same voice-only path at any
 time once the preflight has closed, including while the model is still
 loading. Hiding, or leaving, during the load aborts the download and stops
 before the renderer is imported or a WebGL context is built, so the CPU the
-candidate asked for is not spent on a model that would only be disposed.
+candidate asked for is not spent on a model that would only be disposed. After
+a Hide the button then
+offers Show avatar, which loads the model and reattaches Jim's current audio
+analyser. This candidate-controlled hide/show cycle does not change the
+automatic retirement rule above: an avatar retired for late audio or render
+pressure stays off for the rest of the interview.
 
 The Windows/Chrome CPU-stress experiment described above remains the end-to-end
 validation for jitter-buffer delay; deterministic tests cover both signals, the
