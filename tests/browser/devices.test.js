@@ -1,37 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { FakeStream, FakeTrack, settle } from "./fake-media.js";
 
 import { createDevicePool } from "../../web/devices.js";
-
-class FakeTrack {
-  constructor(kind) {
-    this.kind = kind;
-    this.stopped = false;
-    this.readyState = "live";
-  }
-  stop() {
-    this.stopped = true;
-  }
-}
-
-class FakeStream {
-  constructor(tracks = []) {
-    this.tracks = tracks;
-  }
-  getTracks() {
-    return this.tracks;
-  }
-  addTrack(track) {
-    this.tracks.push(track);
-  }
-  removeTrack(track) {
-    this.tracks = this.tracks.filter((each) => each !== track);
-  }
-}
-
-// The pool builds its own stream with `new MediaStream()`, which node does not
-// have. Nothing else in these tests touches a global.
-globalThis.MediaStream = FakeStream;
 
 function poolWith(getUserMedia, options = {}) {
   const changes = { count: 0 };
@@ -57,8 +28,6 @@ function poolWith(getUserMedia, options = {}) {
   });
   return { pool, changes };
 }
-
-const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 test("a granted track of each kind lands in one stream", async () => {
   const { pool } = poolWith(
@@ -146,6 +115,60 @@ test("disabling a held camera releases it from the interview stream", async () =
 
   assert.ok(camera.stopped);
   assert.equal(pool.trackOf("video"), null);
+});
+
+test("a re-enabled camera is requested again", async () => {
+  const asked = [];
+  const { pool } = poolWith(async (constraints) => {
+    const kind = constraints.audio ? "audio" : "video";
+    asked.push(kind);
+    return new FakeStream([new FakeTrack(kind)]);
+  });
+
+  pool.start();
+  await settle();
+  pool.disable("video");
+  pool.enable("video");
+  await settle();
+
+  assert.deepEqual(asked, ["audio", "video", "video"]);
+  assert.ok(pool.trackOf("video"));
+});
+
+test("undoing a skip after a failed attempt asks again with no stale error", async () => {
+  let videoRequests = 0;
+  let grantVideo;
+  const { pool } = poolWith(
+    (constraints) => {
+      if (!constraints.video)
+        return Promise.resolve(new FakeStream([new FakeTrack("audio")]));
+      videoRequests += 1;
+      if (videoRequests === 1)
+        return Promise.reject(
+          Object.assign(new Error("Permission denied"), {
+            name: "NotAllowedError",
+          }),
+        );
+      return new Promise((resolve) => {
+        grantVideo = resolve;
+      });
+    },
+    { schedule: () => 1, unschedule: () => {} },
+  );
+
+  pool.start();
+  await settle();
+  assert.match(pool.errorOf("video"), /NotAllowedError/);
+
+  pool.disable("video");
+  pool.enable("video");
+  assert.equal(videoRequests, 2, "undoing the skip asks the camera again");
+  assert.equal(pool.errorOf("video"), null, "the old error is gone");
+
+  grantVideo(new FakeStream([new FakeTrack("video")]));
+  await settle();
+  assert.ok(pool.trackOf("video"));
+  assert.equal(pool.errorOf("video"), null);
 });
 
 test("a request already on screen is not opened a second time", async () => {

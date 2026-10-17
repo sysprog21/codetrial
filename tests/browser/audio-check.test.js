@@ -7,6 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { FakeStream, FakeTrack, settle } from "./fake-media.js";
 
 import {
   MIC_CONFIRM_FRAMES,
@@ -17,7 +18,10 @@ import {
   peakLevel,
   sustainedPeak,
   videoTrackReady,
+  preflightReadiness,
 } from "../../web/audio-check.js";
+
+import { createDevicePool } from "../../web/devices.js";
 
 const silence = () => new Uint8Array(64).fill(128);
 const speech = () =>
@@ -392,4 +396,112 @@ test("a microphone failure outranks a camera failure", () => {
     false,
     "the camera step still shows what it knows",
   );
+});
+
+const readinessOf = (pool, cameraSkipped) =>
+  preflightReadiness({
+    pool,
+    browserSupported: true,
+    outputConfirmed: true,
+    micPeak: () => 1,
+    faceCheck: { ready: true, error: null },
+    cameraSkipped,
+  });
+
+// The first camera prompt is still open when the skip is undone, so `enable`
+// asks for nothing new and that first request is the one that finally lands.
+// The step turns true when a track arrives, not when the candidate changes
+// their mind.
+test("undoing a camera skip while the first prompt is open waits for its grant", async () => {
+  let grantVideo;
+  const videoGranted = new Promise((resolve) => {
+    grantVideo = resolve;
+  });
+  const pool = createDevicePool({
+    mediaDevices: {
+      getUserMedia: (constraints) =>
+        constraints.video
+          ? videoGranted
+          : Promise.resolve(new FakeStream([new FakeTrack("audio")])),
+    },
+    isFinished: () => false,
+    onChange: () => {},
+  });
+  pool.configure("audio", { accept: (t) => Boolean(t) });
+  pool.configure("video", { accept: (t) => Boolean(t) });
+
+  pool.start();
+  await settle();
+  pool.disable("video");
+  assert.equal(
+    readinessOf(pool, true).steps.camera,
+    true,
+    "a skipped camera passes",
+  );
+
+  pool.enable("video");
+  const waiting = readinessOf(pool, false);
+  assert.equal(waiting.steps.camera, false, "no track yet, so not done");
+  assert.equal(waiting.ready, false);
+
+  grantVideo(new FakeStream([new FakeTrack("video")]));
+  await settle();
+  assert.equal(
+    readinessOf(pool, false).steps.camera,
+    true,
+    "a live track completes it",
+  );
+});
+
+// A skip usually follows a failed attempt, and that attempt's error outlives
+// it. The banner is what the candidate reads, so it is checked here: undoing
+// the skip must not leave "Camera unavailable" beside the new prompt.
+test("undoing a camera skip after a failed attempt shows no stale camera error", async () => {
+  let videoRequests = 0;
+  let grantVideo;
+  const pool = createDevicePool({
+    mediaDevices: {
+      getUserMedia: (constraints) => {
+        if (!constraints.video)
+          return Promise.resolve(new FakeStream([new FakeTrack("audio")]));
+        videoRequests += 1;
+        if (videoRequests === 1)
+          return Promise.reject(
+            Object.assign(new Error("Permission denied"), {
+              name: "NotAllowedError",
+            }),
+          );
+        return new Promise((resolve) => {
+          grantVideo = resolve;
+        });
+      },
+    },
+    isFinished: () => false,
+    onChange: () => {},
+    schedule: () => 1,
+    unschedule: () => {},
+  });
+  pool.configure("audio", { accept: (t) => Boolean(t) });
+  pool.configure("video", { accept: (t) => Boolean(t) });
+
+  pool.start();
+  await settle();
+  assert.equal(
+    readinessOf(pool, false).blocker,
+    "camera-error",
+    "the failed attempt blocks the room",
+  );
+
+  pool.disable("video");
+  assert.equal(readinessOf(pool, true).steps.camera, true);
+
+  pool.enable("video");
+  const waiting = readinessOf(pool, false);
+  assert.notEqual(waiting.blocker, "camera-error");
+  assert.equal(waiting.steps.camera, false);
+  assert.equal(waiting.ready, false);
+
+  grantVideo(new FakeStream([new FakeTrack("video")]));
+  await settle();
+  assert.equal(readinessOf(pool, false).steps.camera, true);
 });

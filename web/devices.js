@@ -171,6 +171,15 @@ export function createDevicePool({
       held.stop();
       device.onLost();
     },
+    // Goes through `start` so the request meets the same `pending` guard and
+    // retry timer as any other, rather than opening a second prompt. The error
+    // from the attempt that led to the skip is dropped, or its banner would
+    // sit beside the new prompt; a request that fails sets it again.
+    enable(kind) {
+      devices[kind].disabled = false;
+      devices[kind].error = null;
+      start();
+    },
     trackOf,
     errorOf: (kind) => devices[kind].error,
     setError(kind, error) {
