@@ -1859,15 +1859,23 @@ p {
   outline: none;
 }
 
+.test-drawer summary::-webkit-details-marker,
+.test-drawer summary::marker {
+  display: none;
+}
+
+.test-drawer summary,
 #results-toggle {
   display: flex;
+  align-items: center;
+  gap: 0.5rem;
   width: 100%;
-  justify-content: space-between;
+  padding: 0.5rem 1rem;
   border: 0;
   background: transparent;
   color: var(--sub);
-  padding: 0.5rem 1rem;
-  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.875rem;
   font-weight: 700;
   align-items: center;
 }
@@ -1879,6 +1887,8 @@ p {
 /* Drawn rather than typed, and turned by the state the button announces:
    down while the results are open, up to say they can be opened. */
 #results-chevron {
+  display: inline-block;
+  flex: none;
   width: 0.5rem;
   height: 0.5rem;
   margin-right: 0.25rem;
@@ -3043,8 +3053,23 @@ body:not([data-recording]) .replay-detail > :not(header) {
   padding: 0.5rem 1rem;
   color: var(--sub);
   cursor: pointer;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   font-weight: 700;
+}
+
+#candidate-case > summary .drawer-chevron {
+  display: inline-block;
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-25%) rotate(-45deg);
+  transition: transform 140ms ease-out;
+}
+
+#candidate-case[open] > summary .drawer-chevron {
+  transform: translateY(-25%) rotate(45deg);
 }
 
 #candidate-case[open] {
@@ -3880,7 +3905,8 @@ body:not([data-recording]) .replay-detail > :not(header) {
   .run-button,
   .step-mark,
   .preflight-column .audio-check-step,
-  #results-chevron {
+  #results-chevron,
+  .drawer-chevron {
     transition: none;
   }
 }
