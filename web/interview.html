@@ -496,6 +496,22 @@
             </p>
           </div>
 
+          <!-- Off unless asked for: only a candidate recording the screen needs
+               their own face on it, and everyone else would spend the interview
+               watching themselves beside the code. -->
+          <div class="audio-check-step" id="audio-step-recorder">
+            <p>
+              <label for="screen-recording">
+                <input type="checkbox" id="screen-recording" />
+                I am recording this interview with a screen recorder
+              </label>
+            </p>
+            <p class="muted small">
+              Your camera then shows below Jim, so the recording includes you.
+              Leave the recorder's own camera off: the browser already holds it.
+            </p>
+          </div>
+
           <!-- Hidden unless the server says it records. Shown here rather than
                in the sidebar for the same reason the Meet checkbox is: it has
                to be settled before the room starts, because consent is written
@@ -603,6 +619,19 @@
         >
           Hide avatar
         </button>
+        <!-- The candidate's own camera, so a screen recorder captures their
+             face without opening the camera a second time. Shown only when
+             the candidate says they are recording, below Jim and under his
+             own Hide control, and hidden whenever there is no live camera. -->
+        <video
+          id="self-view"
+          class="self-view"
+          muted
+          playsinline
+          autoplay
+          hidden
+          aria-label="Your camera"
+        ></video>
         <!-- Announces only the automatic turn-off. A live region over the
              whole mount announced the canvas arriving and the preflight-time
              "unavailable", and a manual Hide already moves focus to the note. -->
