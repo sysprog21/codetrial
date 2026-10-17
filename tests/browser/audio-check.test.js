@@ -17,7 +17,41 @@ import {
   peakLevel,
   sustainedPeak,
   videoTrackReady,
+  preflightReadiness,
 } from "../../web/audio-check.js";
+
+import { createDevicePool } from "../../web/devices.js";
+
+class FakeTrack {
+  constructor(kind) {
+    this.kind = kind;
+    this.readyState = "live";
+    this.enabled = true;
+    this.muted = false;
+  }
+  stop() {
+    this.readyState = "ended";
+  }
+}
+
+class FakeStream {
+  constructor(tracks = []) {
+    this.tracks = tracks;
+  }
+  getTracks() {
+    return this.tracks;
+  }
+  addTrack(track) {
+    this.tracks.push(track);
+  }
+  removeTrack(track) {
+    this.tracks = this.tracks.filter((each) => each !== track);
+  }
+}
+
+// The pool builds its own stream with `new MediaStream()`, which node does not
+// have.
+globalThis.MediaStream = FakeStream;
 
 const silence = () => new Uint8Array(64).fill(128);
 const speech = () =>
@@ -358,5 +392,56 @@ test("a microphone failure outranks a camera failure", () => {
     state.steps.camera,
     false,
     "the camera step still shows what it knows",
+  );
+});
+
+// Skipping the camera and then undoing the skip must not read as a finished
+// step: the step turns true when a track arrives, not when the candidate
+// changes their mind.
+test("undoing a camera skip waits for a real track before the step completes", async () => {
+  let grantVideo;
+  const videoGranted = new Promise((resolve) => {
+    grantVideo = resolve;
+  });
+  const pool = createDevicePool({
+    mediaDevices: {
+      getUserMedia: (constraints) =>
+        constraints.video
+          ? videoGranted
+          : Promise.resolve(new FakeStream([new FakeTrack("audio")])),
+    },
+    isFinished: () => false,
+    onChange: () => {},
+  });
+  pool.configure("audio", { accept: (t) => Boolean(t) });
+  pool.configure("video", { accept: (t) => Boolean(t) });
+
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const readiness = (cameraSkipped) =>
+    preflightReadiness({
+      pool,
+      browserSupported: true,
+      outputConfirmed: true,
+      micPeak: () => 1,
+      faceCheck: { ready: true, error: null },
+      cameraSkipped,
+    });
+
+  pool.start();
+  await settle();
+  pool.disable("video");
+  assert.equal(readiness(true).steps.camera, true, "a skipped camera passes");
+
+  pool.enable("video");
+  const waiting = readiness(false);
+  assert.equal(waiting.steps.camera, false, "no track yet, so not done");
+  assert.equal(waiting.ready, false);
+
+  grantVideo(new FakeStream([new FakeTrack("video")]));
+  await settle();
+  assert.equal(
+    readiness(false).steps.camera,
+    true,
+    "a live track completes it",
   );
 });

@@ -148,6 +148,24 @@ test("disabling a held camera releases it from the interview stream", async () =
   assert.equal(pool.trackOf("video"), null);
 });
 
+test("a re-enabled camera is requested again", async () => {
+  const asked = [];
+  const { pool } = poolWith(async (constraints) => {
+    const kind = constraints.audio ? "audio" : "video";
+    asked.push(kind);
+    return new FakeStream([new FakeTrack(kind)]);
+  });
+
+  pool.start();
+  await settle();
+  pool.disable("video");
+  pool.enable("video");
+  await settle();
+
+  assert.deepEqual(asked, ["audio", "video", "video"]);
+  assert.ok(pool.trackOf("video"));
+});
+
 test("a request already on screen is not opened a second time", async () => {
   let asked = 0;
   const { pool } = poolWith(() => {

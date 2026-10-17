@@ -1153,7 +1153,10 @@ function runAudioCheck() {
       state.cameraSkipped = cameraSkipped;
       state.cameraSkipReason = cameraSkipReason;
       paintPreflight(state, hint);
-      nodes.cameraSkip.hidden = recordingEnabled || cameraSkipped;
+      nodes.cameraSkip.hidden = recordingEnabled;
+      nodes.cameraSkip.textContent = cameraSkipped
+        ? "Use camera"
+        : "Continue without camera";
       nodes.cameraNameDisclosure.hidden = cameraSkipped;
       // Consent is a separate gate from media readiness on purpose. It is not
       // a device that can be proven, it is an answer, and folding it into
@@ -1289,7 +1292,14 @@ function runAudioCheck() {
     nodes.audioLeave.addEventListener("click", leave);
 
     nodes.cameraSkip.addEventListener("click", () => {
-      if (recordingEnabled || cameraSkipped) return;
+      if (recordingEnabled) return;
+      if (cameraSkipped) {
+        cameraSkipped = false;
+        cameraSkipReason = null;
+        pool.enable("video");
+        refresh();
+        return;
+      }
       cameraSkipReason = cameraSkipReasonFor(pool.errorOf("video"));
       cameraSkipped = true;
       pool.disable("video");

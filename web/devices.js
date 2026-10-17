@@ -171,6 +171,12 @@ export function createDevicePool({
       held.stop();
       device.onLost();
     },
+    // Goes through `start` so the request meets the same `pending` guard and
+    // retry timer as any other, rather than opening a second prompt.
+    enable(kind) {
+      devices[kind].disabled = false;
+      start();
+    },
     trackOf,
     errorOf: (kind) => devices[kind].error,
     setError(kind, error) {
