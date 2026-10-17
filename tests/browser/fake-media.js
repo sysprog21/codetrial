@@ -12,6 +12,7 @@ export class FakeTrack {
   }
   stop() {
     this.stopped = true;
+    this.readyState = "ended";
   }
 }
 
