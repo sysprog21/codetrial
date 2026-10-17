@@ -346,6 +346,51 @@ describe("toolchain harnesses", { concurrency: true }, () => {
   );
 
   it(
+    "C Clone Graph harness accepts the numNeighbors field its starter names",
+    { skip: noCc },
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "codetrial-c-"));
+      try {
+        const source = join(dir, "clonegraph.c");
+        const binary = join(dir, "clonegraph");
+        writeFileSync(
+          source,
+          generateHarness(
+            "c",
+            judges["clone-graph"],
+            `static struct Node* copies[101];
+static struct Node* copyNode(struct Node* s) {
+    if (!s) return NULL;
+    if (copies[s->val]) return copies[s->val];
+    struct Node* copy = calloc(1, sizeof(*copy));
+    copy->val = s->val;
+    copies[s->val] = copy;
+    copy->numNeighbors = s->numNeighbors;
+    copy->neighbors = calloc(s->numNeighbors + 1, sizeof(*copy->neighbors));
+    for (int i = 0; i < s->numNeighbors; i++)
+        copy->neighbors[i] = copyNode(s->neighbors[i]);
+    return copy;
+}
+struct Node* replicateTopology(struct Node* s) {
+    memset(copies, 0, sizeof(copies));
+    return copyNode(s);
+}`,
+          ),
+        );
+        await run("cc", ["-std=c17", source, "-o", binary]);
+        assert.deepEqual(
+          parseCompilerResults(
+            (await run(binary, [], { encoding: "utf8" })).stdout,
+          ).results.map((result) => result.actual),
+          judges["clone-graph"].cases.map((testCase) => testCase.expected),
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
     "C Merge k Sorted Lists harness can produce passing Compiler Explorer JSON",
     { skip: noCc },
     async () => {
