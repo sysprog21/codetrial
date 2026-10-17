@@ -532,6 +532,26 @@ test("every published problem in the generated bank resolves to its page", () =>
   }
 });
 
+test("markdown export links to a mapped original problem safely", () => {
+  const session = {
+    report: { incomplete: true, summary: "No evaluation was available." },
+    problemTitle: "Chargeback Pair Match",
+    problemPage: "chargeback-pair-match",
+    problemPages: {
+      "two-sum": { page: "chargeback-pair-match", source: "Two ] Sum" },
+    },
+    at: "2026-10-17",
+  };
+  assert.match(
+    reportMarkdown(session),
+    /Original problem: \[Two \\\] Sum\]\(https:\/\/leetcode\.com\/problems\/two-sum\/\)/,
+  );
+  assert.doesNotMatch(
+    reportMarkdown({ ...session, problemPages: {} }),
+    /Original problem:/,
+  );
+});
+
 test("markdown export of an empty session carries no verdict either", () => {
   const markdown = reportMarkdown({
     report: {

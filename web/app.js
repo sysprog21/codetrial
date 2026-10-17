@@ -164,8 +164,8 @@ for (const card of cards) mark(card.button, false);
 // throws (a private window, blocked site data) just means off.
 const showSources = document.querySelector("#show-sources");
 showSources.checked = readStored(SHOW_SOURCES_KEY) === "1";
-// The published names are not in the page: they arrive with the map, fetched
-// the first time the candidate turns them on.
+// The published names are not in the initial page. The map arrives when the
+// candidate turns them on, or opens or downloads a completed report.
 const applySources = async () => {
   if (showSources.checked) {
     const pages = await loadPageMap().catch(() => null);
@@ -1372,9 +1372,6 @@ function renderAttemptHistory(attempts) {
       language: languageLabel(attempt.language ?? "not recorded"),
       code: "(final code was not saved)",
     });
-    void loadPageMap()
-      .then((pages) => showOriginalProblem(report, pages, attempt.problemId))
-      .catch(() => {});
     report.querySelector(".report-actions")?.remove();
     report.hidden = true;
     open.addEventListener("click", () => {
@@ -1385,6 +1382,9 @@ function renderAttemptHistory(attempts) {
       }
       report.hidden = false;
       open.textContent = "Collapse report";
+      void loadPageMap()
+        .then((pages) => showOriginalProblem(report, pages, attempt.problemId))
+        .catch(() => {});
     });
     retry.addEventListener("click", () => {
       if (starting) return;
@@ -1445,7 +1445,8 @@ function renderAttemptHistory(attempts) {
   }
 }
 
-function downloadSavedReport(attempt) {
+async function downloadSavedReport(attempt) {
+  const problemPages = await loadPageMap().catch(() => null);
   const markdown = reportMarkdown({
     report: {
       ...attempt.report,
@@ -1453,6 +1454,8 @@ function downloadSavedReport(attempt) {
         attempt.report.incomplete || attempt.recordedDecision === null,
     },
     problemTitle: attempt.problemTitle,
+    problemPage: attempt.problemId,
+    problemPages,
     language: attempt.language,
     code: null,
     transcript: null,

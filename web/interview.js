@@ -3182,15 +3182,21 @@ async function saveHistory(report = state.report) {
   return result;
 }
 
-function downloadReport() {
+async function downloadReport() {
   const at = new Date();
-  downloadMarkdown(buildMarkdown(at), reportFilename(problem.page, at));
+  const problemPages = await loadPageMap().catch(() => null);
+  downloadMarkdown(
+    buildMarkdown(at, problemPages),
+    reportFilename(problem.page, at),
+  );
 }
 
-function buildMarkdown(at) {
+function buildMarkdown(at, problemPages) {
   return reportMarkdown({
     report: state.report,
     problemTitle: problem.title,
+    problemPage: problem.page,
+    problemPages,
     language: state.language,
     code: currentCode(),
     board: finalBoardImage(),

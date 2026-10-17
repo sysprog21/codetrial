@@ -1838,6 +1838,36 @@ lobbyTest(
 );
 
 lobbyTest(
+  "opening a saved report fetches and shows its original problem",
+  async (page) => {
+    reports = [savedAttempt(EASY[0])];
+    const fetched = [];
+    page.on("request", (request) =>
+      fetched.push(new URL(request.url()).pathname),
+    );
+    await lobby(page);
+    assert.ok(!fetched.includes("/problem-pages.json"));
+
+    const history = page.locator("#attempt-history");
+    assert.equal(
+      await history.locator(".report-original-problem").textContent(),
+      "",
+    );
+    await history.getByRole("button", { name: "Open report" }).click();
+    const link = history.getByRole("link", { name: "Two Sum" });
+    await link.waitFor();
+    assert.equal(
+      await link.getAttribute("href"),
+      "https://leetcode.com/problems/two-sum/",
+    );
+    assert.equal(
+      fetched.filter((path) => path === "/problem-pages.json").length,
+      1,
+    );
+  },
+);
+
+lobbyTest(
   "a problem already passed is not what gets recommended",
   async (page) => {
     // Passed one Hard and missed another, so the streak has no opinion and the
@@ -2000,6 +2030,10 @@ for (const storage of ["account", "device"]) {
         const markdown = Buffer.concat(chunks).toString("utf8");
         assert.ok(
           markdown.startsWith(`# Interview Report - Saved report\n_${when}_`),
+        );
+        assert.match(
+          markdown,
+          /Original problem: \[Two Sum\]\(https:\/\/leetcode\.com\/problems\/two-sum\/\)/,
         );
         assert.ok(markdown.includes(`Stored summary ${index}`));
         assert.ok(

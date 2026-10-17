@@ -511,6 +511,8 @@ function boardStepsMarkdown(report, mdText) {
 export function reportMarkdown({
   report,
   problemTitle,
+  problemPage,
+  problemPages,
   language,
   code,
   board,
@@ -519,6 +521,7 @@ export function reportMarkdown({
   testHistory = [],
 }) {
   const atBoard = heldAtBoard(report, board);
+  const originalProblem = originalProblemForPage(problemPages, problemPage);
   const workTitle = atBoard ? "Board work" : "Coding";
   // One rule for every untrusted string in this document, where there used to
   // be three. Evidence rows ran through escapeHtml, feedback bullets and
@@ -783,6 +786,11 @@ export function reportMarkdown({
   return [
     `# Interview Report - ${mdText(problemTitle)}`,
     `_${at}_`,
+    ...(originalProblem
+      ? [
+          `Original problem: [${mdText(originalProblem.title).replace(/\]/g, "\\]")}](${originalProblem.url})`,
+        ]
+      : []),
     ...(report.mode ? [`Mode: ${modeLabel(report.mode)}`] : []),
     ...(report.interviewLoop
       ? [`Loop: ${loopLabel(report.interviewLoop)}`]
