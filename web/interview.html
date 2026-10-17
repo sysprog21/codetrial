@@ -264,7 +264,10 @@
         ></div>
         <section id="test-drawer" class="test-drawer">
           <details id="candidate-case">
-            <summary>Add a case</summary>
+            <summary>
+              <span class="drawer-chevron" aria-hidden="true"></span>
+              <span>Add a case</span>
+            </summary>
             <label
               >Input JSON
               <textarea
@@ -284,8 +287,12 @@
             <ol id="candidate-case-list" class="small"></ol>
           </details>
           <button id="results-toggle" type="button">
+            <span
+              id="results-chevron"
+              class="drawer-chevron"
+              aria-hidden="true"
+            ></span>
             <span id="results-label">Test results</span>
-            <span id="results-chevron">v</span>
           </button>
           <div id="results-body" class="results-body">
             <div id="results-filter" hidden>

@@ -1442,16 +1442,41 @@ p {
   flex-basis: auto;
 }
 
+.test-drawer summary::-webkit-details-marker,
+.test-drawer summary::marker {
+  display: none;
+}
+
+.test-drawer summary,
 #results-toggle {
   display: flex;
+  align-items: center;
+  gap: 0.5rem;
   width: 100%;
-  justify-content: space-between;
+  padding: 0.5rem 1rem;
   border: 0;
   background: transparent;
   color: var(--sub);
-  padding: 0.5rem 1rem;
-  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.875rem;
   font-weight: 700;
+  cursor: pointer;
+  text-align: left;
+}
+
+.drawer-chevron {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid var(--sub);
+  transition: transform 120ms ease;
+}
+
+.test-drawer details[open] .drawer-chevron,
+#results-toggle.open .drawer-chevron {
+  transform: rotate(90deg);
 }
 
 .results-body {
