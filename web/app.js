@@ -53,6 +53,8 @@ let duration;
 let interviewLoop = "coding_behavioral";
 /// Which surface the interview runs on; see the format row in index.html.
 let mode = "coding";
+/// The saved language attached to a problem selected through Try again.
+let retryLanguage = null;
 let reports = [];
 /// The practice focus the share box currently refers to.
 let sharedFocus = null;
@@ -393,6 +395,8 @@ start.addEventListener("click", async () => {
   destination.searchParams.set("duration", String(duration));
   destination.searchParams.set("loop", interviewLoop);
   destination.searchParams.set("mode", mode);
+  if (mode === "coding" && retryLanguage)
+    destination.searchParams.set("language", retryLanguage);
   setEditorOptions(destination.searchParams, selectedEditorOptions());
   const profile = {
     role: nodes.profileRole.value.trim(),
@@ -1113,12 +1117,13 @@ function applySuggestedLevel() {
 /// Clearing a filtered-out card must not leave Start pointing at it, and
 /// picking another card must not bypass an account request already in flight.
 /// Callers own the explanation beside the picker; this only knows which card.
-function setProblem(card) {
+function setProblem(card, language = null) {
   // Two buttons, not a sweep of all 150. `problem` still holds the outgoing
   // card here, which is what makes that possible.
   mark(problem?.button, false);
   mark(card?.button, true);
   problem = card;
+  retryLanguage = language;
   syncLobbyControls();
 }
 
@@ -1391,7 +1396,7 @@ function renderAttemptHistory(attempts) {
       if (!card) return;
       manualProblem = true;
       card.button.hidden = false;
-      setProblem(card);
+      setProblem(card, attempt.language);
       const savedDuration = attempt.durationMin;
       const offered = durations.map((button) =>
         Number(button.dataset.duration),

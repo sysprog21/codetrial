@@ -692,3 +692,141 @@ test("C stays unavailable until a function-style judge has loaded", async (t) =>
     await new Promise((closed) => enabled.server.close(closed));
   }
 });
+
+test("a requested C tab is restored after its judge loads", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const runtimeConfig = DEFAULT_RUNTIME_CONFIG.replace(
+    "ENABLED = false",
+    "ENABLED = true",
+  ).replace('BASE_URL = ""', 'BASE_URL = "https://godbolt.org"');
+  const enabled = await startStaticServer({ runtimeConfig });
+  const page = await browser.newPage();
+  let releaseJudge = () => {};
+  try {
+    releaseJudge = await holdJudge(page);
+    await page.goto(
+      `${enabled.base}/interview.html?problem=chargeback-pair-match&language=c`,
+      { waitUntil: "domcontentloaded" },
+    );
+    const c = page.locator('[data-language="c"]');
+    await page.waitForFunction(
+      () => document.querySelector('[data-language="c"]').disabled,
+    );
+    assert.match(
+      await page.locator('[data-language="python"]').getAttribute("class"),
+      /\bselected\b/,
+    );
+    releaseJudge();
+    await candidateCasesReady(page);
+    assert.match(await c.getAttribute("class"), /\bselected\b/);
+  } finally {
+    releaseJudge();
+    await page.close();
+    await new Promise((closed) => enabled.server.close(closed));
+  }
+});
+
+test("editing before a requested C judge loads keeps Python", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const runtimeConfig = DEFAULT_RUNTIME_CONFIG.replace(
+    "ENABLED = false",
+    "ENABLED = true",
+  ).replace('BASE_URL = ""', 'BASE_URL = "https://godbolt.org"');
+  const enabled = await startStaticServer({ runtimeConfig });
+  const page = await browser.newPage();
+  let releaseJudge = () => {};
+  const edited = "# Keep this candidate edit.\n";
+  try {
+    releaseJudge = await holdJudge(page);
+    await page.goto(
+      `${enabled.base}/interview.html?problem=chargeback-pair-match&language=c`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page.waitForFunction(
+      () => document.querySelector('[data-language="c"]').disabled,
+    );
+    await page.locator("#editor").evaluate((editor, value) => {
+      editor.value = value;
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    }, edited);
+    releaseJudge();
+    await candidateCasesReady(page);
+    assert.match(
+      await page.locator('[data-language="python"]').getAttribute("class"),
+      /\bselected\b/,
+    );
+    assert.equal(await page.locator("#editor").inputValue(), edited);
+  } finally {
+    releaseJudge();
+    await page.close();
+    await new Promise((closed) => enabled.server.close(closed));
+  }
+});
+
+test("ending before a requested C judge loads keeps Python", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const runtimeConfig = DEFAULT_RUNTIME_CONFIG.replace(
+    "ENABLED = false",
+    "ENABLED = true",
+  ).replace('BASE_URL = ""', 'BASE_URL = "https://godbolt.org"');
+  const enabled = await startStaticServer({ runtimeConfig });
+  const page = await browser.newPage();
+  let releaseJudge = () => {};
+  try {
+    releaseJudge = await holdJudge(page);
+    await page.goto(
+      `${enabled.base}/interview.html?problem=chargeback-pair-match&language=c`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page.waitForFunction(
+      () => document.querySelector('[data-language="c"]').disabled,
+    );
+    await page.evaluate(() => document.querySelector("#end").click());
+    await page.locator("#ending-overlay").waitFor({ state: "visible" });
+    releaseJudge();
+    await candidateCasesReady(page);
+    assert.match(
+      await page.locator('[data-language="python"]').getAttribute("class"),
+      /\bselected\b/,
+    );
+  } finally {
+    releaseJudge();
+    await page.close();
+    await new Promise((closed) => enabled.server.close(closed));
+  }
+});
+
+test("running before a requested C judge loads keeps Python", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const runtimeConfig = DEFAULT_RUNTIME_CONFIG.replace(
+    "ENABLED = false",
+    "ENABLED = true",
+  ).replace('BASE_URL = ""', 'BASE_URL = "https://godbolt.org"');
+  const enabled = await startStaticServer({ runtimeConfig });
+  const page = await browser.newPage();
+  let releaseJudge = () => {};
+  try {
+    releaseJudge = await holdJudge(page);
+    await page.goto(
+      `${enabled.base}/interview.html?problem=chargeback-pair-match&language=c`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page.waitForFunction(
+      () => document.querySelector('[data-language="c"]').disabled,
+    );
+    await page.evaluate(() => document.querySelector("#run-tests").click());
+    await page.waitForFunction(
+      () => document.querySelector("#run-tests").textContent === "Running...",
+    );
+    releaseJudge();
+    await candidateCasesReady(page);
+    assert.match(
+      await page.locator('[data-language="python"]').getAttribute("class"),
+      /\bselected\b/,
+    );
+  } finally {
+    releaseJudge();
+    await page.close();
+    await new Promise((closed) => enabled.server.close(closed));
+  }
+});

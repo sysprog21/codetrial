@@ -2044,6 +2044,22 @@ lobbyTest("try again selects the problem", async (page) => {
   );
 });
 
+lobbyTest("try again restores the saved language", async (page) => {
+  reports = [
+    {
+      payload: {
+        ...savedAttempt(EASY[0]).payload,
+        language: "javascript",
+      },
+    },
+  ];
+  await lobby(page);
+  await page.getByRole("button", { name: "Try again" }).click();
+  await page.click("#start");
+  await page.waitForURL("**/interview?**");
+  assert.equal(new URL(page.url()).searchParams.get("language"), "javascript");
+});
+
 lobbyTest(
   "an unmappable history entry fetches the page map at most once",
   async (page) => {

@@ -278,6 +278,9 @@ const judgePromise = loadJudge(problem.page).catch(() => null);
 const candidateCaseStorageKey = `codetrial.candidateCases.${problem.page}`;
 /// Filled by `applyLanguages`, which `init` calls before anything reads it.
 let languages = [];
+// A delayed judge may make the requested C tab available after the first
+// paint. Do not switch to it after the candidate has chosen a tab or edited.
+let languageChoiceCommitted = false;
 /// What the lobby asked for, until `/api/token` says what it got. The range
 /// here mirrors the server's own and is the fallback for a URL that arrives
 /// without passing through the lobby; the answer below is what the interview
@@ -295,6 +298,7 @@ const interviewLoop = codingLoop(params.get("loop"));
 /// the answer would leave the editor bound and the starter code published in
 /// an interview that has neither.
 const whiteboard = modeIsWhiteboard(params.get("mode"));
+const requestedLanguage = whiteboard ? null : params.get("language");
 /// The same answer as the wire spelling, which the token request and the
 /// checklist both need. Derived from the boolean rather than from the URL a
 /// second time, so an unrecognized value cannot reach the server as itself.
@@ -617,7 +621,11 @@ async function init() {
   applyEditorTheme(readStored(EDITOR_THEME_KEY));
   renderProblem();
   applyLanguages(null);
-  setLanguage("python");
+  setLanguage(
+    requestedLanguage && languages.includes(requestedLanguage)
+      ? requestedLanguage
+      : "python",
+  );
   bindEvents();
   if (whiteboard) initWhiteboard();
   placeJimStageBelowToolbar(
@@ -652,6 +660,14 @@ async function init() {
   // microtask.
   void judgePromise.then((spec) => {
     applyLanguages(spec);
+    if (
+      state.phase === "live" &&
+      !languageChoiceCommitted &&
+      requestedLanguage &&
+      state.language !== requestedLanguage &&
+      languages.includes(requestedLanguage)
+    )
+      setLanguage(requestedLanguage);
   });
   // No enumeration here. Before the preflight grant the browser reports only a
   // blank placeholder, so the list is discarded and repainted a few lines down;
@@ -851,9 +867,10 @@ function bindEvents() {
     nodes.resultsChevron.textContent = nodes.resultsBody.hidden ? "^" : "v";
   });
   for (const button of document.querySelectorAll("[data-language]")) {
-    button.addEventListener("click", () =>
-      setLanguage(button.dataset.language),
-    );
+    button.addEventListener("click", () => {
+      languageChoiceCommitted = true;
+      setLanguage(button.dataset.language);
+    });
   }
   for (const [button, step] of [
     [nodes.editorFontSmaller, -1],
@@ -992,6 +1009,7 @@ function bindEvents() {
     }
   });
   nodes.editor.addEventListener("input", () => {
+    languageChoiceCommitted = true;
     // Before the buffer below is taken, because this sends the tab as it
     // arrived. Typing inside the switch's own debounce window cancels it
     // otherwise, and the single packet that survives carries the switch and the
@@ -2539,6 +2557,7 @@ function applyPause(paused) {
 
 async function runTests() {
   if (!editorOptions.execution) return;
+  languageChoiceCommitted = true;
   flushPendingCodePublish();
   state.runningTests = true;
   nodes.run.disabled = true;

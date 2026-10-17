@@ -95,6 +95,36 @@ const setCode = (page, value, start = value.length, end = start) =>
     { value, start, end },
   );
 
+test("the interview restores an offered language from the URL", async (t) => {
+  const ctx = await editorPage(t, { params: { language: "javascript" } });
+  if (!ctx) return;
+  const { page, errors } = ctx;
+  try {
+    assert.match(
+      await page.locator('[data-language="javascript"]').getAttribute("class"),
+      /\bselected\b/,
+    );
+    assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
+  }
+});
+
+test("the interview keeps Python for an unknown saved language", async (t) => {
+  const ctx = await editorPage(t, { params: { language: "unknown" } });
+  if (!ctx) return;
+  const { page, errors } = ctx;
+  try {
+    assert.match(
+      await page.locator('[data-language="python"]').getAttribute("class"),
+      /\bselected\b/,
+    );
+    assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
+  }
+});
+
 test("typing an opening bracket auto-closes it, in a real browser", async (t) => {
   const ctx = await editorPage(t);
   if (!ctx) return;
