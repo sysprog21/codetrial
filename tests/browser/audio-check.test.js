@@ -398,7 +398,23 @@ test("a microphone failure outranks a camera failure", () => {
 // Skipping the camera and then undoing the skip must not read as a finished
 // step: the step turns true when a track arrives, not when the candidate
 // changes their mind.
-test("undoing a camera skip waits for a real track before the step completes", async () => {
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+const readinessOf = (pool, cameraSkipped) =>
+  preflightReadiness({
+    pool,
+    browserSupported: true,
+    outputConfirmed: true,
+    micPeak: () => 1,
+    faceCheck: { ready: true, error: null },
+    cameraSkipped,
+  });
+
+// The first camera prompt is still open when the skip is undone, so `enable`
+// asks for nothing new and that first request is the one that finally lands.
+// The step turns true when a track arrives, not when the candidate changes
+// their mind.
+test("undoing a camera skip while the first prompt is open waits for its grant", async () => {
   let grantVideo;
   const videoGranted = new Promise((resolve) => {
     grantVideo = resolve;
@@ -416,32 +432,75 @@ test("undoing a camera skip waits for a real track before the step completes", a
   pool.configure("audio", { accept: (t) => Boolean(t) });
   pool.configure("video", { accept: (t) => Boolean(t) });
 
-  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
-  const readiness = (cameraSkipped) =>
-    preflightReadiness({
-      pool,
-      browserSupported: true,
-      outputConfirmed: true,
-      micPeak: () => 1,
-      faceCheck: { ready: true, error: null },
-      cameraSkipped,
-    });
-
   pool.start();
   await settle();
   pool.disable("video");
-  assert.equal(readiness(true).steps.camera, true, "a skipped camera passes");
+  assert.equal(
+    readinessOf(pool, true).steps.camera,
+    true,
+    "a skipped camera passes",
+  );
 
   pool.enable("video");
-  const waiting = readiness(false);
+  const waiting = readinessOf(pool, false);
   assert.equal(waiting.steps.camera, false, "no track yet, so not done");
   assert.equal(waiting.ready, false);
 
   grantVideo(new FakeStream([new FakeTrack("video")]));
   await settle();
   assert.equal(
-    readiness(false).steps.camera,
+    readinessOf(pool, false).steps.camera,
     true,
     "a live track completes it",
   );
+});
+
+// A skip usually follows a failed attempt, and that attempt's error outlives
+// it. Undoing the skip must drop the error before the new request settles, or
+// the red banner shows beside the prompt the candidate just asked for.
+test("undoing a camera skip asks again and drops the error that led to it", async () => {
+  let videoRequests = 0;
+  let grantVideo;
+  const pool = createDevicePool({
+    mediaDevices: {
+      getUserMedia: (constraints) => {
+        if (!constraints.video)
+          return Promise.resolve(new FakeStream([new FakeTrack("audio")]));
+        videoRequests += 1;
+        if (videoRequests === 1)
+          return Promise.reject(
+            Object.assign(new Error("Permission denied"), {
+              name: "NotAllowedError",
+            }),
+          );
+        return new Promise((resolve) => {
+          grantVideo = resolve;
+        });
+      },
+    },
+    isFinished: () => false,
+    onChange: () => {},
+    schedule: () => 1,
+    unschedule: () => {},
+  });
+  pool.configure("audio", { accept: (t) => Boolean(t) });
+  pool.configure("video", { accept: (t) => Boolean(t) });
+
+  pool.start();
+  await settle();
+  assert.match(pool.errorOf("video"), /NotAllowedError/);
+
+  pool.disable("video");
+  assert.equal(readinessOf(pool, true).steps.camera, true);
+
+  pool.enable("video");
+  assert.equal(videoRequests, 2, "undoing the skip asks the camera again");
+  assert.equal(pool.errorOf("video"), null, "the old error is gone");
+  const waiting = readinessOf(pool, false);
+  assert.notEqual(waiting.blocker, "camera-error");
+  assert.equal(waiting.steps.camera, false);
+
+  grantVideo(new FakeStream([new FakeTrack("video")]));
+  await settle();
+  assert.equal(readinessOf(pool, false).steps.camera, true);
 });
