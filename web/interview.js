@@ -1,5 +1,5 @@
 import { createReportRecovery } from "./report-recovery.js";
-import { loadJudge, loadProblem } from "./problem-data.js";
+import { loadJudge, loadPageMap, loadProblem } from "./problem-data.js";
 import { downloadMarkdown, reportFilename } from "./download.js";
 import { consumeSharedFocus } from "./problem-picker.js";
 import {
@@ -50,6 +50,7 @@ import {
   reportSaveStatus,
   resultsMarkup,
   runnerStatusMarkup,
+  showOriginalProblem,
 } from "./render.js";
 import {
   acceptsReport,
@@ -3124,6 +3125,9 @@ function renderReport() {
     boardPhases: [...board.snapshots],
     saveResult: null,
   });
+  void loadPageMap()
+    .then((pages) => showOriginalProblem(nodes.report, pages, problem.page))
+    .catch(() => {});
   mountBehavioralReview(nodes.report, state.transcript.values());
 }
 

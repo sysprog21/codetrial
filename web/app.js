@@ -23,7 +23,7 @@ import {
   pickerEntry,
   progressModelFrom,
 } from "./progress.js";
-import { reportMarkdown, reportMarkup } from "./render.js";
+import { reportMarkdown, reportMarkup, showOriginalProblem } from "./render.js";
 import { downloadMarkdown, reportFilename } from "./download.js";
 import { loadPageMap, loadTopicMap } from "./problem-data.js";
 import {
@@ -1372,6 +1372,9 @@ function renderAttemptHistory(attempts) {
       language: languageLabel(attempt.language ?? "not recorded"),
       code: "(final code was not saved)",
     });
+    void loadPageMap()
+      .then((pages) => showOriginalProblem(report, pages, attempt.problemId))
+      .catch(() => {});
     report.querySelector(".report-actions")?.remove();
     report.hidden = true;
     open.addEventListener("click", () => {
