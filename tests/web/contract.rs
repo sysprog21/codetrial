@@ -256,8 +256,10 @@ fn static_interview_script_keeps_transcript_and_report_contract() {
 fn static_interview_script_leaves_candidate_identity_to_the_server() {
     let source = fs::read_to_string("web/interview.js").unwrap();
 
+    // The shared request fields follow the mode-specific problem selection.
+    // Strict assignment must retain the optional execution restriction too.
     assert!(compact(&source).contains(
-        "JSON.stringify({problemId:problem.page,durationMin,interviewId,interviewLoop,interviewMode:mode,interviewProfile,...(interviewGrounding?{interviewGrounding}:{}),...(nodes.interviewerAccent.value?{interviewerAccent:nodes.interviewerAccent.value}:{}),...(nodes.interviewerVoice.value?{interviewerVoice:nodes.interviewerVoice.value}:{}),...(nodes.hideExamples.checked?{hideExamples:true}:{}),...(!editorOptions.execution?{codeExecution:false}:{})})"
+        "durationMin,interviewId,interviewLoop,interviewMode:mode,interviewProfile,...(interviewGrounding?{interviewGrounding}:{}),...(nodes.interviewerAccent.value?{interviewerAccent:nodes.interviewerAccent.value}:{}),...(nodes.interviewerVoice.value?{interviewerVoice:nodes.interviewerVoice.value}:{}),...(nodes.hideExamples.checked?{hideExamples:true}:{}),...(!editorOptions.execution?{codeExecution:false}:{})})"
     ));
     assert!(!source.contains("candidateIdentity"));
 }

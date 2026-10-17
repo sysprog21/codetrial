@@ -1030,12 +1030,21 @@
       <p class="duration-note" id="mode-note" aria-live="polite" hidden></p>
 
       <section class="start-row">
-        <!-- Enabled by app.js once a problem is chosen, so the button cannot
-             start an interview on a problem the page has not picked yet. -->
+        <label for="selection-mode">Selection</label>
+        <select id="selection-mode">
+          <option value="practice">Practice</option>
+          <option value="strict">Strict Interview</option>
+        </select>
         <button id="start" class="start-button" type="button" disabled>
           Start interview
         </button>
       </section>
+
+      <p class="duration-note" id="selection-note" aria-live="polite" hidden>
+        Strict assigns a problem at your selected difficulties after media
+        preflight. Reloading starts a new attempt with a different problem at
+        those difficulties, if one is available, after another preflight.
+      </p>
 
       <section
         id="recent-performance"

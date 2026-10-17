@@ -1390,3 +1390,335 @@ fn token_resolves_voice_and_accent_independently() {
     assert!(metadata.get("interviewerVoice").is_none());
     assert!(metadata.get("interviewerAccent").is_none());
 }
+
+/// Selection and staffing must agree even with the development room pinned.
+#[tokio::test]
+async fn strict_assignments_ignore_the_fixed_room_and_exclude_only_the_previous_page() {
+    let (mut config, cookie, db_path) = signed_in_web_config("strict-selection");
+    config.fixed_room_name = Some("interview-local".to_string());
+    let dispatcher = std::sync::Arc::<RecordingDispatcher>::default();
+    let (base, server) =
+        spawn_web_server_with_dispatcher(config, std::sync::Arc::clone(&dispatcher)).await;
+    let client = http_client();
+    let mut previous = None;
+    let mut last_page = None;
+    let mut rooms = Vec::new();
+
+    // Server assignment must preserve the execution restriction in the signed
+    // metadata, including an attempt that returns to the default.
+    for (execution, voice, accent) in [
+        (
+            false,
+            codetrial::agent::INTERVIEWER_VOICES[0],
+            codetrial::agent::INTERVIEWER_ACCENTS[0],
+        ),
+        (true, "Random", "Random"),
+        (false, "Default", "Default"),
+    ] {
+        let mut request = json!({
+            "selectionMode": "strict",
+            "durationMin": 42.8,
+            "interviewerVoice": voice,
+            "interviewerAccent": accent,
+        });
+        if !execution {
+            request["codeExecution"] = json!(false);
+        }
+        if let Some(receipt) = previous {
+            request["previousAssignment"] = receipt;
+        }
+        let response = client
+            .post(format!("{base}/api/token"))
+            .header("cookie", &cookie)
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body: Value = response.json().await.unwrap();
+        let metadata: Value = serde_json::from_str(
+            claims(body["token"].as_str().unwrap())["metadata"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(metadata["problemId"], body["problemPage"]);
+        for (field, selected, choices) in [
+            (
+                "interviewerVoice",
+                voice,
+                codetrial::agent::INTERVIEWER_VOICES,
+            ),
+            (
+                "interviewerAccent",
+                accent,
+                codetrial::agent::INTERVIEWER_ACCENTS,
+            ),
+        ] {
+            match selected {
+                "Default" => assert!(metadata.get(field).is_none()),
+                "Random" => assert!(choices.contains(&metadata[field].as_str().unwrap())),
+                _ => assert_eq!(metadata[field], selected),
+            }
+        }
+        assert_eq!(
+            metadata.get("codeExecution"),
+            if execution { None } else { Some(&json!(false)) }
+        );
+        assert_eq!(body["durationMin"], 42);
+        assert_ne!(last_page, Some(body["problemPage"].clone()));
+        assert_ne!(body["roomName"], "interview-local");
+        assert!(!rooms.contains(&body["roomName"].as_str().unwrap().to_string()));
+        rooms.push(body["roomName"].as_str().unwrap().to_string());
+        previous = Some(body["previousAssignment"].clone());
+        last_page = Some(body["problemPage"].clone());
+    }
+    assert_eq!(dispatcher.rooms(), rooms);
+
+    // Legacy requests still select their problem and use the pinned room.
+    for selection in [None, Some("practice")] {
+        let mut request = json!({"problemId": "two-sum"});
+        if let Some(selection) = selection {
+            request["selectionMode"] = json!(selection);
+        }
+        let body: Value = client
+            .post(format!("{base}/api/token"))
+            .header("cookie", &cookie)
+            .json(&request)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(body["roomName"], "interview-local");
+        assert!(body.get("previousAssignment").is_none());
+        assert!(body.get("problemPage").is_none());
+        let metadata: Value = serde_json::from_str(
+            claims(body["token"].as_str().unwrap())["metadata"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(metadata["problemId"], "two-sum");
+    }
+    server.shutdown().await;
+    remove_database(db_path).await;
+}
+
+#[tokio::test]
+async fn strict_refuses_url_selection_invalid_receipts_and_anonymous_callers_before_dispatch() {
+    let (config, cookie, db_path) = signed_in_web_config("strict-refusals");
+    let dispatcher = std::sync::Arc::<RecordingDispatcher>::default();
+    let (base, server) =
+        spawn_web_server_with_dispatcher(config, std::sync::Arc::clone(&dispatcher)).await;
+    let client = http_client();
+    for (request, code) in [
+        (
+            json!({"selectionMode": "strict", "problemId": "two-sum", "difficulties": ["Hard"]}),
+            "strict_problem_forbidden",
+        ),
+        (
+            json!({"selectionMode": "strict", "previousAssignment": "forged"}),
+            "strict_assignment_invalid",
+        ),
+        (
+            json!({"selectionMode": "strict", "problemId": null, "difficulties": ["Easy"]}),
+            "strict_problem_forbidden",
+        ),
+        (json!({"selectionMode": "typo"}), "selection_mode_invalid"),
+    ] {
+        let response = client
+            .post(format!("{base}/api/token"))
+            .header("cookie", &cookie)
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400);
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["code"], code);
+        assert!(body.get("token").is_none());
+    }
+    let anonymous = client
+        .post(format!("{base}/api/token"))
+        .json(&json!({"selectionMode": "strict"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anonymous.status(), 401);
+    assert!(dispatcher.rooms().is_empty());
+    let granted: Value = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .json(&json!({"selectionMode": "strict"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let (other_cookie, _) = second_account(&client, &base, &db_path).await;
+    let borrowed = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", &other_cookie)
+        .json(&json!({"selectionMode": "strict",
+            "previousAssignment": granted["previousAssignment"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(borrowed.status(), 400);
+    assert_eq!(
+        borrowed.json::<Value>().await.unwrap()["code"],
+        "strict_assignment_invalid"
+    );
+    assert_eq!(dispatcher.rooms().len(), 1);
+    server.shutdown().await;
+    remove_database(db_path).await;
+}
+
+#[tokio::test]
+async fn strict_refresh_needs_fresh_consent_and_keeps_the_recording_duration_cap() {
+    let (base, server, path, client, cookie) = recorded_server("strict-consent").await;
+    let refused = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .json(&json!({"selectionMode": "strict"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 403);
+    let first_consent = start_interview(&client, &base, &cookie).await;
+    let first: Value = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .json(&json!({"selectionMode": "strict",
+            "interviewId": first_consent, "durationMin": 90}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(first["durationMin"], recording_config().max_minutes);
+    let refused = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .json(&json!({"selectionMode": "strict",
+            "interviewId": first_consent, "previousAssignment": first["previousAssignment"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 403);
+    let next_consent = start_interview(&client, &base, &cookie).await;
+    assert_ne!(first_consent, next_consent);
+    let next: Value = client
+        .post(format!("{base}/api/token"))
+        .header("cookie", &cookie)
+        .json(&json!({"selectionMode": "strict",
+            "interviewId": next_consent, "previousAssignment": first["previousAssignment"]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_ne!(next["problemPage"], first["problemPage"]);
+    assert_ne!(next["roomName"], first["roomName"]);
+    assert_eq!(interview_rows(&path).len(), 2);
+    server.shutdown().await;
+    remove_database(path).await;
+}
+
+#[tokio::test]
+async fn strict_difficulty_filters_constrain_signed_assignments_across_refresh() {
+    let (config, cookie, db_path) = signed_in_web_config("strict-difficulty");
+    let dispatcher = std::sync::Arc::<RecordingDispatcher>::default();
+    let (base, server) =
+        spawn_web_server_with_dispatcher(config, std::sync::Arc::clone(&dispatcher)).await;
+    let client = http_client();
+    let mut previous: Option<Value> = None;
+    let mut last_page: Option<String> = None;
+    let mut rooms = Vec::new();
+    for levels in [
+        vec!["Hard"],
+        vec!["Medium"],
+        vec!["Easy"],
+        vec!["Easy", "Hard"],
+    ] {
+        // Repeat each filter, then carry the receipt across a filter change.
+        for _ in 0..2 {
+            let mut request = json!({"selectionMode": "strict", "difficulties": levels});
+            if let Some(receipt) = &previous {
+                request["previousAssignment"] = receipt.clone();
+            }
+            // Neither query spelling can override the body or the server draw.
+            let response = client
+                .post(format!(
+                    "{base}/api/token?problem=two-sum&problemId=two-sum"
+                ))
+                .header("cookie", &cookie)
+                .json(&request)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            let body: Value = response.json().await.unwrap();
+            let page = body["problemPage"].as_str().unwrap();
+            let problem = codetrial::agent::find_problem(page).unwrap();
+            assert!(levels.contains(&problem.difficulty));
+            assert_ne!(last_page.as_deref(), Some(page));
+            let token = claims(body["token"].as_str().unwrap());
+            let metadata: Value =
+                serde_json::from_str(token["metadata"].as_str().unwrap()).unwrap();
+            assert_eq!(metadata["problemId"], page);
+            assert_eq!(token["video"]["room"], body["roomName"]);
+            let room = body["roomName"].as_str().unwrap().to_string();
+            assert!(!rooms.contains(&room));
+            rooms.push(room);
+            previous = Some(body["previousAssignment"].clone());
+            last_page = Some(page.to_string());
+        }
+    }
+    assert_eq!(dispatcher.rooms(), rooms);
+    server.shutdown().await;
+    remove_database(db_path).await;
+}
+
+#[tokio::test]
+async fn invalid_strict_difficulties_are_refused_before_dispatch() {
+    let (config, cookie, db_path) = signed_in_web_config("strict-invalid-difficulty");
+    let dispatcher = std::sync::Arc::<RecordingDispatcher>::default();
+    let (base, server) =
+        spawn_web_server_with_dispatcher(config, std::sync::Arc::clone(&dispatcher)).await;
+    let client = http_client();
+    for value in [
+        json!(null),
+        json!("Easy"),
+        json!(true),
+        json!([]),
+        json!(["easy"]),
+        json!(["Easy", "Extreme"]),
+        json!(["Easy", null]),
+        json!(["Easy", 1]),
+        json!(["Easy", ""]),
+        json!(["Easy", "Easy"]),
+        json!(["Easy", "Medium", "Hard", "Easy"]),
+    ] {
+        let response = client
+            .post(format!("{base}/api/token"))
+            .header("cookie", &cookie)
+            .json(&json!({"selectionMode": "strict", "difficulties": value}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400);
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["code"], "strict_difficulty_invalid");
+        assert!(body.get("token").is_none());
+        assert!(body.get("previousAssignment").is_none());
+    }
+    assert!(dispatcher.rooms().is_empty());
+    server.shutdown().await;
+    remove_database(db_path).await;
+}

@@ -242,9 +242,15 @@ keys, prompts, transcripts, code, or grounding text.
 
 ## What may be cached
 
-Checked-in and static problem-bank data, schemas, and vendored runtime metadata,
-and nothing else. Never candidate prompts, transcript, code, profile, job
-description or resume grounding, provider output, repair output, framework
+Checked-in and static problem-bank data, schemas, and vendored runtime metadata
+may be cached. The one selection-only exception is a single server-signed
+previous-assignment receipt in tab-scoped session storage for
+[Strict Interview](interview-selection.md): purpose/version, account id and
+public scenario page only, with no room credential or interview content. It
+excludes the immediately preceding problem on a new attempt and is never an
+input to assessment or session recovery.
+
+Never cache candidate prompts, transcript, code, profile, job description or resume grounding, provider output, repair output, framework
 evidence, or personalized feedback. Report requests are built from the current
 session and each retry uses that same session's immutable prompt, so there is no
 cross-session response cache. A failed report may keep its frozen prompt and

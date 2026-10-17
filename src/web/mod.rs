@@ -24,6 +24,7 @@ mod interviews;
 mod policy;
 mod pool;
 mod recordings;
+mod selection;
 mod setup;
 mod token;
 

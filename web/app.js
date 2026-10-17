@@ -1,3 +1,4 @@
+import { resetAssignments } from "./selection.js";
 import {
   FRAMEWORKS,
   SHOW_SOURCES_KEY,
@@ -48,7 +49,9 @@ import { readStored, writeStored } from "./audio-output.js";
 const SETTINGS_KEY = "codetrial.interviewSettings";
 const requestTimeoutMs = 10_000;
 
+const selection = document.querySelector("#selection-mode");
 let problem;
+let selectionMode = "practice";
 let duration;
 let interviewLoop = "coding_behavioral";
 /// Which surface the interview runs on; see the format row in index.html.
@@ -374,13 +377,36 @@ let starting = false;
 
 restoreSettings();
 
+selection.addEventListener("change", syncSelectionMode);
+syncSelectionMode();
+
+function syncSelectionMode() {
+  selectionMode = selection.value;
+  const strict = selectionMode === "strict";
+  for (const panel of [
+    document.querySelector(".random-picker"),
+    nodes.problemPicker,
+  ])
+    panel.hidden = strict;
+  document.querySelector("#selection-note").hidden = !strict;
+  syncLobbyControls();
+}
+
 // The button by name, not by asking the event which element it was dispatched
 // to: the browser clears that property when dispatch ends, so every line after
 // the first `await` was writing to null. A gated candidate signed in, the
 // handler threw on the next line, and the button stayed disabled on "Recording
 // GitHub..." with the interview never starting.
 start.addEventListener("click", async () => {
-  if (!problem || starting || accountUpdatePending() || deletingReports) return;
+  syncSelectionMode();
+  if (
+    (selectionMode === "practice" && !problem) ||
+    (selectionMode === "strict" && !historyReady) ||
+    starting ||
+    accountUpdatePending() ||
+    deletingReports
+  )
+    return;
   // The whole form is read here, before the sign-in round trip below, because
   // every control the candidate can still touch during it feeds this URL.
   // Reading them afterwards shipped an interview that was 45 minutes when the
@@ -389,7 +415,12 @@ start.addEventListener("click", async () => {
   const destination = new URL("/interview", window.location.origin);
   // The scenario's page name, not the id: the address bar is on screen for the
   // whole interview, and the id is the published problem's slug.
-  destination.searchParams.set("problem", problem.id);
+  const strict = selectionMode === "strict";
+  if (strict) {
+    destination.searchParams.set("selection", "strict");
+    for (const difficulty of selectedDifficulties())
+      destination.searchParams.append("difficulty", difficulty);
+  } else destination.searchParams.set("problem", problem.id);
   destination.searchParams.set("duration", String(duration));
   destination.searchParams.set("loop", interviewLoop);
   destination.searchParams.set("mode", mode);
@@ -440,6 +471,7 @@ start.addEventListener("click", async () => {
   start.textContent = "Starting...";
   if (!nodes.groundingConsent.checked) packet = null;
   try {
+    if (strict) resetAssignments(sessionStorage);
     storeGroundingPacket(sessionStorage, packet);
     storeSharedFocus(sessionStorage, focus?.weakness ?? null);
   } catch (error) {
@@ -529,6 +561,9 @@ function clearGrounding() {
 // Returning from the media preflight can restore this page from the browser's
 // back/forward cache after the start button was deliberately disabled.
 window.addEventListener("pageshow", (event) => {
+  // Form restoration can follow pageshow without firing change. Read the DOM
+  // on the next task; syncLobbyControls keeps an in-flight start latched.
+  setTimeout(syncSelectionMode, 0);
   // Only the restore. A normal load fires this too, after `load`, which is
   // late enough to re-enable a button the candidate already pressed and hand
   // them a second navigation.
@@ -576,7 +611,15 @@ nodes.loginLink.addEventListener("click", async () => {
 // view of the account transition in one place, including the GET-only retry.
 function syncLobbyControls() {
   const accountBusy = accountUpdatePending();
-  start.disabled = !problem || starting || accountBusy || deletingReports;
+  // Practice may start a manual pick during the initial history load. Strict
+  // waits for the account and suggested difficulties to settle.
+  start.disabled =
+    (selectionMode === "practice" && !problem) ||
+    (selectionMode === "strict" && !historyReady) ||
+    starting ||
+    accountBusy ||
+    deletingReports;
+  selection.disabled = starting;
   nodes.loginLink.disabled =
     starting || loginPending || historyRefreshing || deletingReports;
   nodes.randomProblem.disabled =

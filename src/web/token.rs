@@ -387,8 +387,11 @@ pub(crate) fn token_duration_min(value: Option<&Value>, recording_max_min: Optio
 /// never finished setting up, and every provider spent is a server that worked
 /// until this morning.
 #[allow(clippy::result_large_err)] // Responses are immediately returned by HTTP handlers.
-async fn reserved_room(state: &AppState) -> Result<(String, &crate::config::Provider), Response> {
-    match room_and_available_provider(state).await {
+async fn reserved_room(
+    state: &AppState,
+    fresh: bool,
+) -> Result<(String, &crate::config::Provider), Response> {
+    match room_and_available_provider(state, fresh).await {
         ProviderChoice::Ready(room_name, provider) => Ok((room_name, provider)),
         ProviderChoice::NoneConfigured => Err(json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -587,12 +590,6 @@ pub(crate) async fn token_handler(
         Err(response) => return response,
     };
 
-    // One record, so the three values cannot come from different providers.
-    let (room_name, provider) = match reserved_room(&state).await {
-        Ok(reserved) => reserved,
-        Err(response) => return response,
-    };
-
     let Ok(body) = to_bytes(request.into_body(), MAX_BODY_BYTES).await else {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     };
@@ -621,6 +618,25 @@ pub(crate) async fn token_handler(
     let interview = match checked_consent(&state, &accounts, &user, body.as_ref()).await {
         Ok(interview) => interview,
         Err(response) => return response,
+    };
+    let mut request = serde_json::from_slice::<Value>(&body).unwrap_or(json!({}));
+    let assignment =
+        match super::selection::assign(&request, user.id, &accounts.config().session_secret) {
+            Ok(assignment) => assignment,
+            Err(error) => return error.response(),
+        };
+
+    // Strict starts a new attempt even on a server with a pinned development
+    // room. Reusing that room would reuse its interviewer and evidence.
+    let (room_name, provider) = match reserved_room(&state, assignment.is_some()).await {
+        Ok(reserved) => reserved,
+        Err(response) => return response,
+    };
+    let body = if let Some(assignment) = &assignment {
+        request["problemId"] = json!(assignment.page);
+        serde_json::to_vec(&request).expect("JSON value is serializable")
+    } else {
+        body.to_vec()
     };
     let identity = generated_candidate_identity();
     let response = match minted_token(&state, provider, body.as_ref(), &room_name, &identity) {
@@ -660,19 +676,18 @@ pub(crate) async fn token_handler(
         .unwrap_or_else(|error| error.into_inner())
         .grant(room_name, user.id, current_epoch_seconds());
 
-    json_response(
-        StatusCode::OK,
-        json!({
-            "token": response.token,
-            "serverUrl": response.server_url,
-            "roomName": response.room_name,
-
-            // The same number the token metadata carries, so the page counts
-            // down the interview the agent is running rather than the one the
-            // lobby asked for.
-            "durationMin": response.duration_min
-        }),
-    )
+    let mut body = json!({
+        "token": response.token,
+        "serverUrl": response.server_url,
+        "roomName": response.room_name,
+        // The same granted length the agent reads from its token metadata.
+        "durationMin": response.duration_min
+    });
+    if let Some(assignment) = assignment {
+        body["problemPage"] = json!(assignment.page);
+        body["previousAssignment"] = json!(assignment.receipt);
+    }
+    json_response(StatusCode::OK, body)
 }
 
 pub(crate) async fn observer_token_handler(

@@ -246,7 +246,12 @@ pub(crate) enum ProviderChoice<'a> {
 ///
 /// The counter advances per attempt, not per request, so a dead project does
 /// not pin every later interview to the one after it.
-pub(crate) async fn room_and_available_provider(state: &AppState) -> ProviderChoice<'_> {
+/// When `fresh` is true, bypass the pinned development room so a new
+/// attempt cannot reuse its existing interviewer and evidence.
+pub(crate) async fn room_and_available_provider(
+    state: &AppState,
+    fresh: bool,
+) -> ProviderChoice<'_> {
     // A pinned development room names the project it belongs to, so it is
     // preferred while that project can still take a connection, and only while.
     // A pin whose project is out of minutes is a room nobody can join: the
@@ -258,7 +263,8 @@ pub(crate) async fn room_and_available_provider(state: &AppState) -> ProviderCho
     // the pin is the room name, so nothing here rotates and no counter is spent
     // on it. Spending one anyway would advance the rotation on every pinned
     // request, which is the opposite of what a pin is for.
-    if !state.config.production
+    if !fresh
+        && !state.config.production
         && let Some(room_name) = state
             .config
             .fixed_room_name

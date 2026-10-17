@@ -1,3 +1,4 @@
+import { previousAssignment, rememberAssignment } from "./selection.js";
 import { createReportRecovery } from "./report-recovery.js";
 import { loadJudge, loadProblem } from "./problem-data.js";
 import { downloadMarkdown, reportFilename } from "./download.js";
@@ -242,6 +243,7 @@ const replayVersion = globalThis.CODETRIAL_REPLAY_VERSION || 1;
 
 const params = new URLSearchParams(window.location.search);
 const editorOptions = editorOptionsFromParams(params);
+const strict = params.get("selection") === "strict";
 // Start this independent request while the problem data is loading. It has to
 // settle rather than reject: nothing awaits it until init() reaches the sign-in
 // gate, and a problem that fails to load throws out of the top-level await
@@ -250,32 +252,21 @@ const editorOptions = editorOptionsFromParams(params);
 const sessionPromise = fetch("/api/session")
   .then((response) => (response.ok ? response.json() : null))
   .catch(() => null);
-// Top-level await: the whole module is written against a known problem, and
-// interview.html loads it as a module, so waiting here beats threading a
-// promise through every consumer below.
-//
-// The failure has to be said out loud. Every consumer below reads `problem`
-// unconditionally, so an unreachable bank would otherwise leave the page on its
-// "Loading interview..." heading forever with a console error nobody sees.
-const problem = await loadProblem(params.get("problem")).catch((error) => {
-  const title = document.querySelector("#problem-title");
-  if (title)
-    title.textContent =
-      "This interview could not load its problem. Reload the page.";
-  throw error;
-});
-// Started here and awaited nowhere: which tabs are real is a property of the
-// judge, but it is not worth holding a page the candidate can already work in.
-// Every tab is offered until the answer arrives, which is what the row did
-// before this and what it keeps doing if the judge never loads; the run path
-// reports that failure itself.
-const judgePromise = loadJudge(problem.page).catch(() => null);
-// Up here rather than beside the functions that read them: `init()` runs
-// during module evaluation and reaches `initializeCandidateCases` before its
-// first await, so declarations further down are still uninitialized then. The
-// read threw, the catch took it for an empty list, and every reload lost the
-// candidate's saved cases.
-const candidateCaseStorageKey = `codetrial.candidateCases.${problem.page}`;
+// Practice keeps its URL lookup, including legacy aliases and fallback.
+// Strict does not load a problem until preflight and server assignment finish.
+let problem = strict
+  ? null
+  : await loadProblem(params.get("problem")).catch((error) => {
+      const title = document.querySelector("#problem-title");
+      if (title)
+        title.textContent =
+          "This interview could not load its problem. Reload the page.";
+      throw error;
+    });
+let judgePromise = problem ? loadJudge(problem.page).catch(() => null) : null;
+const candidateCaseStorageKey = problem
+  ? `codetrial.candidateCases.${problem.page}`
+  : "";
 /// Filled by `applyLanguages`, which `init` calls before anything reads it.
 let languages = [];
 /// What the lobby asked for, until `/api/token` says what it got. The range
@@ -400,7 +391,7 @@ const state = {
   // Whether an interviewer is in the room to hear the turn controls.
   interviewerPresent: false,
   agentSpeaking: false,
-  codeByLanguage: { ...problem.starterCode },
+  codeByLanguage: { ...problem?.starterCode },
   language: "python",
   // Thresholds already announced. A latch is released when the room pauses only
   // if it was set inside the pause round trip, because the agent drops either
@@ -467,6 +458,14 @@ const state = {
 };
 
 const beforeUnloadGuard = createBeforeUnloadGuard(window);
+
+// A history restore may revive a whole old page instead of evaluating this
+// module again. Strict must pass preflight again even on that browser path.
+window.addEventListener("pageshow", (event) => {
+  if (!strict || !event.persisted) return;
+  beforeUnloadGuard.setEnabled(false);
+  window.location.reload();
+});
 
 function updateBeforeUnloadGuard() {
   beforeUnloadGuard.setEnabled(
@@ -608,6 +607,7 @@ init();
 async function init() {
   state.transcript = createTranscriptView(document, nodes.transcriptPanel);
   renderRuntimeConfig();
+  document.querySelector("#strict-note").hidden = !strict;
   nodes.hideExamples.checked = readStored(HIDE_EXAMPLES_KEY) === "1";
   nodes.editorHighlight.hidden = !editorOptions.highlight;
   nodes.editorStack.classList.toggle("plain-text", !editorOptions.highlight);
@@ -615,9 +615,18 @@ async function init() {
     nodes.editorStack.style.setProperty("--editor-font-family", "inherit");
   applyEditorFontSize(readStored(EDITOR_FONT_SIZE_KEY));
   applyEditorTheme(readStored(EDITOR_THEME_KEY));
-  renderProblem();
-  applyLanguages(null);
-  setLanguage("python");
+  if (problem) {
+    renderProblem();
+    applyLanguages(null);
+    setLanguage("python");
+  } else {
+    nodes.title.textContent = "Strict Interview";
+    nodes.meta.textContent = "Assigned after media preflight";
+    nodes.editor.disabled = true;
+    nodes.run.disabled = true;
+    nodes.end.disabled = true;
+    nodes.pause.disabled = true;
+  }
   bindEvents();
   if (whiteboard) initWhiteboard();
   placeJimStageBelowToolbar(
@@ -650,7 +659,7 @@ async function init() {
   // After bindEvents, so the callback cannot beat the row it edits: everything
   // above here is synchronous, and a `then` runs no earlier than the next
   // microtask.
-  void judgePromise.then((spec) => {
+  void judgePromise?.then((spec) => {
     applyLanguages(spec);
   });
   // No enumeration here. Before the preflight grant the browser reports only a
@@ -682,7 +691,12 @@ async function init() {
   // is clear by the time the candidate is actually working rather than holding
   // a caption nobody said.
   showCaptions();
-  await connect(preflight, presenting);
+  const started = await connect(preflight, presenting);
+  if (started === false) return;
+  if (strict) {
+    nodes.end.disabled = false;
+    nodes.pause.disabled = false;
+  }
   publishCode();
   state.endsAt = Date.now() + durationMin * 60 * 1000;
   updateBeforeUnloadGuard();
@@ -818,7 +832,7 @@ function bindEvents() {
     });
     removeCandidateCase(Number(button.dataset.removeCase));
   });
-  void initializeCandidateCases();
+  if (problem) void initializeCandidateCases();
   nodes.meetOutputSelect.addEventListener("change", () => {
     void applyAudioOutput(nodes.meetOutputSelect.value);
   });
@@ -1189,7 +1203,7 @@ function runAudioCheck() {
     };
 
     const finish = () => {
-      if (!sampleReadiness().ready) return;
+      if (finished || !sampleReadiness().ready) return;
       stopChecks();
       nodes.audioCheck.hidden = true;
       resolve({ userStream: pool.stream, cameraSkipped, cameraSkipReason });
@@ -1346,6 +1360,7 @@ async function connect(preflight, presenting = false) {
     // write consent down, and it must not be reachable without one.
     if (!consentGiven())
       throw new Error("Agree to the recording notice before starting.");
+    const previous = strict ? previousAssignment(tabStorage) : null;
     const interviewId = await recordConsent();
     state.interviewId = interviewId;
     // `hideExamples` goes only when ticked, so Jim is not told the examples are
@@ -1355,7 +1370,15 @@ async function connect(preflight, presenting = false) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        problemId: problem.page,
+        ...(strict
+          ? {
+              selectionMode: "strict",
+              ...(params.has("difficulty")
+                ? { difficulties: params.getAll("difficulty") }
+                : {}),
+              ...(previous ? { previousAssignment: previous } : {}),
+            }
+          : { problemId: problem.page }),
         durationMin,
         interviewId,
         interviewLoop,
@@ -1377,12 +1400,33 @@ async function connect(preflight, presenting = false) {
         (await response.json()).error || "Failed to create a session.",
       );
     const connection = await response.json();
+    if (strict) {
+      // Save before revealing the problem or joining. A later load or join
+      // failure must still exclude this assignment on the next attempt.
+      rememberAssignment(tabStorage, connection.previousAssignment);
+      if (typeof connection.problemPage !== "string" || !connection.problemPage)
+        throw new Error("The server returned no Strict problem.");
+      const assigned = await loadProblem(connection.problemPage);
+      if (assigned.page !== connection.problemPage || assigned.requestedPage)
+        throw new Error(
+          "The assigned problem could not be loaded. Reload to try again.",
+        );
+      problem = assigned;
+      judgePromise = loadJudge(problem.page).catch(() => null);
+      state.codeByLanguage = { ...problem.starterCode };
+      renderProblem();
+      applyLanguages(null);
+      setLanguage("python");
+      void initializeCandidateCases();
+      void judgePromise.then(applyLanguages);
+    }
     // Before the room, and before anything that reads the length: the replay's
     // opening lifecycle event carries the round split, and a split computed
     // from the requested length would be the first thing written down.
     applyGrantedDuration(connection.durationMin);
     await connectLiveKit(connection, preflight, presenting);
     state.connected = true;
+    if (strict && !whiteboard) nodes.editor.disabled = false;
     // After the room, not before it. The server refuses to record an interview
     // that has not claimed a room, so starting here rather than alongside the
     // consent request is the difference between a recording and a failure
@@ -1440,6 +1484,28 @@ async function connect(preflight, presenting = false) {
     // is a "come back in a few minutes" rather than a "your interview is now a
     // simulation" - so say it, and keep the practice editor underneath it.
     setBanner("connection", degraded.message);
+    if (strict) {
+      // Keep a failed admission out of the Practice offline path. Reload goes
+      // through preflight again and keeps the newest granted receipt.
+      nodes.editor.disabled = true;
+      nodes.run.disabled = true;
+      nodes.audioStatus.textContent =
+        error?.message || "Could not start Strict Interview.";
+      nodes.audioCheck.hidden = false;
+      setStageCovered(true);
+      for (const control of nodes.audioCheck.querySelectorAll(
+        "button, input, select",
+      ))
+        control.disabled = control !== nodes.audioLeave;
+      nodes.audioJoin.disabled = false;
+      nodes.audioJoin.textContent = "Retry media preflight";
+      nodes.audioJoin.addEventListener(
+        "click",
+        () => window.location.reload(),
+        { once: true },
+      );
+      return false;
+    }
     addTranscript(
       "interviewer",
       "Offline mode is ready. Talk through your approach and run tests when you are ready.",
@@ -2045,6 +2111,7 @@ async function toggleMicrophone() {
 }
 
 function renderProblem() {
+  if (!problem) return;
   // Difficulty only. The topic tags name the technique, and the heading is the
   // scenario's own title rather than the published problem it was written from.
   nodes.title.textContent = problem.title;
@@ -2625,7 +2692,7 @@ async function runTests() {
 async function initializeCandidateCases() {
   try {
     const saved = JSON.parse(
-      readStored(candidateCaseStorageKey, tabStorage) || "[]",
+      readStored(candidateCaseStorageKey, strict ? null : tabStorage) || "[]",
     );
     state.candidateCases = Array.isArray(saved)
       ? saved.slice(0, CANDIDATE_CASE_LIMIT)
@@ -2688,7 +2755,7 @@ async function addCandidateCaseNow() {
     writeStored(
       candidateCaseStorageKey,
       JSON.stringify(state.candidateCases),
-      tabStorage,
+      strict ? null : tabStorage,
     );
     nodes.candidateCaseInput.value = "";
     nodes.candidateCaseExpected.value = "";
@@ -2740,7 +2807,7 @@ function removeCandidateCase(index) {
   writeStored(
     candidateCaseStorageKey,
     JSON.stringify(state.candidateCases),
-    tabStorage,
+    strict ? null : tabStorage,
   );
   renderCandidateCases();
   // renderCandidateCases leaves the status alone on an empty list, so the

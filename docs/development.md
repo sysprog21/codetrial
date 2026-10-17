@@ -5,6 +5,11 @@ time actually goes. `make` targets and the one-line summary of each are in
 [README.md](../README.md#development); everything here is the detail behind
 them.
 
+Selection admission and refresh behavior are specified in
+[interview selection](interview-selection.md). The Strict browser regression tests use
+the existing real media preflight with a fake media grant and room transport;
+they do not exercise paid LiveKit, Gemini or Egress services.
+
 ## What the gate checks, and what it will not
 
 `./scripts/test.sh` finishes by printing what it did not check, because several

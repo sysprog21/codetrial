@@ -106,7 +106,7 @@ INTERVIEW_ROOM_NAME=interview-local make web
 ```
 
 Open <http://localhost:3000>, choose a problem and duration, then complete the
-media preflight. `INTERVIEW_ROOM_NAME` pins every interview to that one room
+media preflight. `INTERVIEW_ROOM_NAME` pins Practice interviews to that one room
 name, which is what a local run wanting a stable URL usually wants; without it
 each session gets a random room. The pin is dropped for a session if its LiveKit
 project has run out of connection minutes, so a spent project costs the stable
@@ -129,6 +129,15 @@ whose tests run remotely: their language tabs are disabled, since code that
 cannot be run cannot complete the REACTO Test step.
 
 ## Interview behavior
+
+Practice is the default: choose a problem, reopen its URL or reload to practice
+it again after media preflight. Strict Interview keeps the difficulty choice
+and assigns a matching problem on the server only after preflight. Reloading
+returns to preflight, then starts a fresh room with a different matching problem
+from this tab's previous assignment, or refuses if none remains. It ignores URL
+problem selection and restores no interview progress. Neither mode treats a
+refresh as cheating. See [interview selection](docs/interview-selection.md) for
+tab behavior, storage requirements and the selection boundary.
 
 Jim asks short, targeted questions between logical blocks, offers progressive
 conceptual hints, and uses the latest test run in the final assessment. Voice

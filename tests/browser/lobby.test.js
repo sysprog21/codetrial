@@ -41,6 +41,8 @@ let failing = new Set();
 /// release it deliberately, rather than racing a stopwatch that a loaded CI
 /// worker wins.
 let holdReports = null;
+/// Hold the initial account check separately from the reports it may load.
+let holdSession = null;
 /// The same gate for `/api/login`, so a test about what the candidate can touch
 /// while a start is mid-flight holds that request open rather than guessing a
 /// latency long enough to win the race.
@@ -74,7 +76,10 @@ before(async () => {
         response.end("nope");
         return true;
       }
-      if (url.pathname === "/api/session") return json(session);
+      if (url.pathname === "/api/session") {
+        if (holdSession) await holdSession;
+        return json(session);
+      }
       if (
         request.method === "DELETE" &&
         url.pathname.startsWith("/api/reports/")
@@ -122,6 +127,7 @@ beforeEach(() => {
   reports = [];
   failing = new Set();
   holdReports = null;
+  holdSession = null;
   holdLogin = null;
   deleteRequests = 0;
   deletedIds = [];
@@ -305,6 +311,186 @@ function lobbyTest(name, body, options) {
     }
   });
 }
+
+// Wait for the synchronization task, not a guessed network delay.
+const normalPageshow = (page) =>
+  page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        window.dispatchEvent(new PageTransitionEvent("pageshow"));
+        setTimeout(resolve, 0);
+      }),
+  );
+
+lobbyTest(
+  "restored Strict waits for the initial session and reports despite deferred synchronization",
+  async (page) => {
+    let releaseSession;
+    holdSession = new Promise((resolve) => (releaseSession = resolve));
+    const releaseReports = holdHistory();
+    await page.route("**/app.js", (route) =>
+      route.fulfill({
+        contentType: "text/javascript",
+        body: `document.querySelector("#selection-mode").value = "strict";
+${read("web/app.js")}`,
+      }),
+    );
+    try {
+      const sessionRequest = page.waitForRequest(
+        (request) => new URL(request.url()).pathname === "/api/session",
+      );
+      await page.goto(`${base}/`, { waitUntil: "load" });
+      await sessionRequest;
+
+      for (const pending of ["session", "reports"]) {
+        await normalPageshow(page);
+        assert.equal(
+          await page.isDisabled("#start"),
+          true,
+          `Strict was enabled while the initial ${pending} request was pending`,
+        );
+        // Dispatch directly to cover the entry guard as well as the disabled
+        // button: DOM dispatch does not enforce a button's disabled attribute.
+        const afterClick = await page.evaluate(() => {
+          document
+            .querySelector("#start")
+            .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+          return {
+            startDisabled: document.querySelector("#start").disabled,
+            selectionDisabled:
+              document.querySelector("#selection-mode").disabled,
+          };
+        });
+        assert.deepEqual(afterClick, {
+          startDisabled: true,
+          selectionDisabled: false,
+        });
+        if (pending === "session") {
+          const reportsRequest = page.waitForRequest(
+            (request) => new URL(request.url()).pathname === "/api/reports",
+          );
+          releaseSession();
+          await reportsRequest;
+        }
+      }
+
+      releaseReports();
+      await awaitReady(page);
+      assert.equal(await page.isDisabled("#start"), false);
+      await page.click("#start");
+      await page.waitForURL(/\/interview/);
+      const params = new URL(page.url()).searchParams;
+      assert.equal(params.get("selection"), "strict");
+      assert.deepEqual(params.getAll("difficulty"), ["Medium"]);
+      assert.equal(params.has("problem"), false);
+    } finally {
+      releaseSession();
+      releaseReports();
+    }
+  },
+);
+
+// Restore the DOM value directly: browser form restoration emits no change.
+for (const restoration of [
+  { name: "before initialization", initial: true },
+  { name: "before normal pageshow", persisted: false },
+  { name: "after normal pageshow", persisted: false, after: true },
+  { name: "before cached pageshow", persisted: true },
+  { name: "after cached pageshow", persisted: true, after: true },
+]) {
+  lobbyTest(
+    `a Strict selection restored ${restoration.name} keeps its view and Start URL`,
+    async (page) => {
+      const errors = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.addInitScript(() => {
+        window.selectionChanges = 0;
+        document.addEventListener("change", (event) => {
+          if (event.target.id === "selection-mode") window.selectionChanges++;
+        });
+      });
+      if (restoration.initial) {
+        await page.route("**/app.js", (route) =>
+          route.fulfill({
+            contentType: "text/javascript",
+            // Set the restored value before the module runs, then observe its
+            // view before pageshow can mask a missing initialization call.
+            body: `
+document.querySelector("#selection-mode").value = "strict";
+${read("web/app.js")}
+window.initialSelectionView = [
+  document.querySelector(".random-picker").hidden,
+  document.querySelector(".problem-picker").hidden,
+  document.querySelector("#selection-note").hidden,
+];
+`,
+          }),
+        );
+      }
+      await lobby(page);
+      if (restoration.initial) {
+        assert.deepEqual(
+          await page.evaluate(() => window.initialSelectionView),
+          [true, true, false],
+        );
+      } else {
+        await page.evaluate(({ persisted, after }) => {
+          const select = document.querySelector("#selection-mode");
+          if (!after) select.value = "strict";
+          window.dispatchEvent(
+            new PageTransitionEvent("pageshow", { persisted }),
+          );
+          if (after) select.value = "strict";
+        }, restoration);
+      }
+      await page.waitForFunction(
+        () => document.querySelector(".problem-picker").hidden,
+      );
+      assert.equal(
+        await page.locator("#selection-mode").inputValue(),
+        "strict",
+      );
+      assert.equal(await page.locator(".random-picker").isVisible(), false);
+      assert.equal(await page.locator(".problem-picker").isVisible(), false);
+      assert.equal(await page.locator("#selection-note").isVisible(), true);
+      assert.equal(await page.locator(".difficulty-row").isVisible(), true);
+      assert.equal(await page.evaluate(() => window.selectionChanges), 0);
+      await awaitReady(page);
+      await page.locator("#start").click();
+      await page.waitForURL(/\/interview/);
+      const params = new URL(page.url()).searchParams;
+      assert.equal(params.get("selection"), "strict");
+      assert.deepEqual(params.getAll("difficulty"), ["Medium"]);
+      assert.equal(params.has("problem"), false);
+      assert.deepEqual(errors, []);
+    },
+  );
+}
+
+lobbyTest(
+  "Start reads a silently restored Strict selection before building its URL",
+  async (page) => {
+    await lobby(page);
+    // Restoring and clicking in one task also covers a pageshow sync that
+    // has been scheduled but has not run yet.
+    const view = await page.evaluate(() => {
+      window.dispatchEvent(new PageTransitionEvent("pageshow"));
+      document.querySelector("#selection-mode").value = "strict";
+      document.querySelector("#start").click();
+      return [
+        document.querySelector(".random-picker").hidden,
+        document.querySelector(".problem-picker").hidden,
+        document.querySelector("#selection-note").hidden,
+      ];
+    });
+    assert.deepEqual(view, [true, true, false]);
+    await page.waitForURL(/\/interview/);
+    const params = new URL(page.url()).searchParams;
+    assert.equal(params.get("selection"), "strict");
+    assert.deepEqual(params.getAll("difficulty"), ["Medium"]);
+    assert.equal(params.has("problem"), false);
+  },
+);
 
 lobbyTest(
   "editor options default to all five features enabled",
@@ -2315,6 +2501,12 @@ lobbyTest(
     );
     assert.deepEqual(widened.levels, ["Medium", "Hard"]);
     assert.equal(widened.startDisabled, false);
+    await normalPageshow(page);
+    assert.equal(
+      await page.isDisabled("#start"),
+      false,
+      "Practice must keep a manual pick startable during the initial history load",
+    );
 
     // And the arriving history does not overrule it either.
     release();
@@ -2651,6 +2843,12 @@ lobbyTest(
       return done;
     })();
     await page.click("#start");
+
+    // A normal pageshow may finish after Start was pressed. Its selection
+    // sync must leave the pending start locked, without rechecking the account.
+    await normalPageshow(page);
+    assert.equal(await page.isDisabled("#start"), true);
+    assert.equal(await page.isDisabled("#selection-mode"), true);
 
     // A second card while the button reads "Recording GitHub...": re-arming it
     // here buys the candidate a second navigation out of one start.

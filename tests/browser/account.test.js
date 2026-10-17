@@ -166,7 +166,10 @@ test("the lobby offers an editor or a whiteboard and carries the choice into the
   // coding interview with this test still green.
   assert.match(app, /destination\.searchParams\.set\("mode", mode\)/);
   assert.match(interview, /modeIsWhiteboard\(params\.get\("mode"\)\)/);
-  assert.doesNotMatch(app + lobby + interview, /"(practice|scored)"/);
+  // Selection policy is separate from the coding/whiteboard surface. Neither
+  // selection mode offers the old scored/coached assessment switch.
+  assert.doesNotMatch(app + lobby + interview, /"scored"/);
+  assert.match(interview, /interviewMode: mode/);
   // Pause stayed; the two coaching controls went with the mode that gated them.
   assert.match(page, /id="pause"/);
   assert.doesNotMatch(interview, /retryPractice/);
@@ -216,7 +219,7 @@ test("the lobby offers an editor or a whiteboard and carries the choice into the
   );
   assertIncludesCompact(
     interview,
-    "JSON.stringify({ problemId: problem.page, durationMin, interviewId, interviewLoop, interviewMode: mode, interviewProfile, ...(interviewGrounding",
+    "durationMin, interviewId, interviewLoop, interviewMode: mode, interviewProfile, ...(interviewGrounding",
   );
   assertIncludesCompact(
     interview,
