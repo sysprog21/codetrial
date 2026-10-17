@@ -2675,6 +2675,10 @@ async function addCandidateCaseNow() {
   }
   try {
     const spec = await loadJudge(problem.page);
+    if (state.phase !== "live") {
+      nodes.candidateCaseStatus.textContent = "The interview has ended.";
+      return "refused";
+    }
     const input = parseCandidateCase(spec, nodes.candidateCaseInput.value);
     const expectedText = nodes.candidateCaseExpected.value.trim();
     const expected = expectedText ? JSON.parse(expectedText) : undefined;
@@ -2723,6 +2727,10 @@ function renderCandidateCases() {
 /// the interviewer already holds from the run's topics.tests payload, which
 /// nothing here republishes or recalls.
 function removeCandidateCase(index) {
+  if (state.phase !== "live") {
+    nodes.candidateCaseStatus.textContent = "The interview has ended.";
+    return;
+  }
   // A run in flight is iterating the array it captured at start, and its
   // completion repaints the results panel and publishes it, so a removal taken
   // now is undone a moment later with results that still name the removed
@@ -2920,6 +2928,9 @@ function endInterview(reason) {
   clearTimeout(codePublishTimer);
   codePublishTimer = null;
   pendingLanguagePublish = null;
+  writeStored(candidateCaseStorageKey, "", tabStorage);
+  state.candidateCases = [];
+  nodes.candidateCaseStatus.textContent = "The interview has ended.";
   nodes.end.disabled = true;
   nodes.ending.hidden = false;
   // Only the interviewer answers `end_interview`, so a report is coming only
@@ -3113,6 +3124,9 @@ function renderReport() {
   stopAvatar();
   stopLocalMedia();
   stopEndingClock();
+  writeStored(candidateCaseStorageKey, "", tabStorage);
+  state.candidateCases = [];
+  nodes.candidateCaseStatus.textContent = "The interview has ended.";
   nodes.ending.hidden = true;
   nodes.report.hidden = false;
   nodes.report.innerHTML = reportMarkup({
