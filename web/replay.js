@@ -10,7 +10,8 @@
 // `/api/reports` sync module the lobby uses, and repurposing it would break the
 // section it already serves.
 
-import { reportMarkup } from "/render.js";
+import { reportMarkup, showOriginalProblem } from "/render.js";
+import { loadPageMap } from "/problem-data.js";
 import {
   modeLabel,
   replayRows,
@@ -493,6 +494,12 @@ async function loadReport(interviewId, recordingId) {
     problemTitle: saved.problemTitle || "",
     ...final,
   });
+  void loadPageMap()
+    .then((pages) => {
+      if (selected === recordingId)
+        showOriginalProblem(nodes.report, pages, saved.problemId);
+    })
+    .catch(() => {});
 }
 
 nodes.more.addEventListener("click", () => void loadList());

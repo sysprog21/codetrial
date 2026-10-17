@@ -254,6 +254,38 @@ export function reportSaveStatus(result) {
   return { message: "Report was not saved", className: "critical small" };
 }
 
+/// Find the published problem for a completed scenario. The map's key is the
+/// LeetCode URL slug; scenario page names and saved legacy ids both work here.
+/// A malformed map entry cannot turn the fixed destination into another host.
+export function originalProblemForPage(pages, page) {
+  if (typeof page !== "string") return null;
+  for (const [slug, entry] of Object.entries(pages ?? {})) {
+    if (entry?.page !== page && slug !== page) continue;
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) continue;
+    if (typeof entry?.source !== "string" || !entry.source.trim()) continue;
+    return {
+      title: entry.source,
+      url: `https://leetcode.com/problems/${slug}/`,
+    };
+  }
+  return null;
+}
+
+/// The report is already on screen when the page map arrives. Fill only its
+/// reserved line, so a late lookup never redraws a report the reader opened.
+export function showOriginalProblem(container, pages, page) {
+  const reference = originalProblemForPage(pages, page);
+  const line = container.querySelector(".report-original-problem");
+  if (!reference || !line) return;
+  const link = line.ownerDocument.createElement("a");
+  link.href = reference.url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = reference.title;
+  line.replaceChildren("Original problem: ", link);
+  line.hidden = false;
+}
+
 function interviewerStyle(report) {
   return [
     report.interviewerVoice ? `Voice: ${report.interviewerVoice}` : "",
@@ -375,7 +407,7 @@ export function reportMarkup({
   return `
     <div class="report-card">
       <div class="report-header">
-        <div><p>${report.mode ? `${modeLabel(report.mode)} ` : ""}interview report${loop}${surface} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p>${interviewerStyle(report) ? `<p class="muted small">${escapeHtml(interviewerStyle(report))}</p>` : ""}${practiceLevel ? `<p class="muted small">${practiceLevel}</p>` : ""}<h2>${heading}</h2></div>
+        <div><p>${report.mode ? `${modeLabel(report.mode)} ` : ""}interview report${loop}${surface} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p>${interviewerStyle(report) ? `<p class="muted small">${escapeHtml(interviewerStyle(report))}</p>` : ""}${practiceLevel ? `<p class="muted small">${practiceLevel}</p>` : ""}<h2>${heading}</h2><p class="report-original-problem" hidden></p></div>
         ${badge}
       </div>${scores}
       <section><h3>${report.incomplete ? "What happened" : "Committee summary"}</h3><p>${escapeHtml(report.summary)}</p></section>
@@ -479,6 +511,8 @@ function boardStepsMarkdown(report, mdText) {
 export function reportMarkdown({
   report,
   problemTitle,
+  problemPage,
+  problemPages,
   language,
   code,
   board,
@@ -487,6 +521,7 @@ export function reportMarkdown({
   testHistory = [],
 }) {
   const atBoard = heldAtBoard(report, board);
+  const originalProblem = originalProblemForPage(problemPages, problemPage);
   const workTitle = atBoard ? "Board work" : "Coding";
   // One rule for every untrusted string in this document, where there used to
   // be three. Evidence rows ran through escapeHtml, feedback bullets and
@@ -751,6 +786,11 @@ export function reportMarkdown({
   return [
     `# Interview Report - ${mdText(problemTitle)}`,
     `_${at}_`,
+    ...(originalProblem
+      ? [
+          `Original problem: [${mdText(originalProblem.title).replace(/\]/g, "\\]")}](${originalProblem.url})`,
+        ]
+      : []),
     ...(report.mode ? [`Mode: ${modeLabel(report.mode)}`] : []),
     ...(report.interviewLoop
       ? [`Loop: ${loopLabel(report.interviewLoop)}`]
