@@ -25,6 +25,27 @@ function loadInterview(names, scope) {
   )(new Proxy(scope, { has: (target, key) => key in target }));
 }
 
+/// Each modifier a chord can name: the event field it sets, and the sign an
+/// Apple keyboard prints on it. The page spells its chord out in one place;
+/// this is what turns that spelling back into an event, so the label is
+/// checked against the handler rather than against another copy of itself.
+const MODIFIERS = {
+  Alt: { flag: "altKey", mac: "\u2325" },
+  Ctrl: { flag: "ctrlKey", mac: "\u2303" },
+  Meta: { flag: "metaKey", mac: "\u2318" },
+  Shift: { flag: "shiftKey", mac: "\u21e7" },
+};
+
+/// The sentence interview.html ships in #turn-status, whitespace collapsed.
+function shippedTurnStatus() {
+  const html = read("web/interview.html");
+  const status = html.slice(html.indexOf('id="turn-status"'));
+  return status
+    .slice(status.indexOf(">") + 1, status.indexOf("</p>"))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 test("a server thinking acknowledgement updates the controls and records the declared gap", () => {
   const state = { candidateThinking: false, endsAt: 12345, paused: false };
   const attributes = {};
@@ -48,6 +69,9 @@ test("a server thinking acknowledgement updates the controls and records the dec
   assert.equal(nodes.thinking.textContent, "Continue");
   assert.equal(attributes["aria-pressed"], "true");
   assert.match(nodes.turnStatus.textContent, /Speak again/);
+  // Both strings written here land in a live region, so neither may name a
+  // chord: it would be read out again on every toggle.
+  assert.doesNotMatch(nodes.turnStatus.textContent, /Enter/);
   assert.equal(state.endsAt, 12345);
   assert.equal(state.paused, false);
   apply(true);
@@ -55,6 +79,10 @@ test("a server thinking acknowledgement updates the controls and records the dec
   apply(false);
   assert.equal(nodes.thinking.textContent, "Thinking");
   assert.equal(attributes["aria-pressed"], "false");
+  // Restoring the status writes back the line interview.html ships, not a
+  // second copy of it that can drift.
+  assert.equal(nodes.turnStatus.textContent, shippedTurnStatus());
+  assert.doesNotMatch(nodes.turnStatus.textContent, /Enter/);
   assert.deepEqual(events, [
     { kind: "lifecycle", payload: { state: "thinking_started" } },
     { kind: "lifecycle", payload: { state: "thinking_ended" } },
@@ -277,32 +305,66 @@ test("the page names the yield control and its shortcut the way the handler read
     button.indexOf("</button>"),
   );
   assert.equal(label.trim(), "Your turn is done");
-  assert.match(
-    button.slice(0, button.indexOf(">")),
-    /aria-keyshortcuts="Alt\+Enter"/,
+  const attributes = button.slice(0, button.indexOf(">"));
+
+  // The tooltip is the one place the chord is written out in full, so it is
+  // read back here and everything else is checked against what it says.
+  const title = /title="([^"]+) \/ ([^"]+)"/.exec(attributes);
+  assert.ok(
+    title,
+    `the tooltip should name a chord and its Mac spelling: ${attributes}`,
   );
+  const [chord, macChord] = title.slice(1);
+  const [word, key] = chord.split("+");
+  const modifier = MODIFIERS[word];
+  assert.ok(modifier, `the tooltip names an unknown modifier: ${chord}`);
+
+  // Apple keyboards print that modifier as a sign, so the Mac half is the
+  // same chord respelled, as an entity to keep the file ASCII.
+  assert.equal(macChord, `&#${modifier.mac.codePointAt(0)};${key}`);
+  assert.ok(
+    attributes.includes(`aria-keyshortcuts="${chord}"`),
+    `aria-keyshortcuts should name ${chord}: ${attributes}`,
+  );
+
+  // What the page prints is what the handler takes, and nothing else. A chord
+  // changed in one of the two and not the other fails here, rather than
+  // leaving the page naming a key that no longer does anything.
+  const editor = { tagName: "TEXTAREA" };
+  const press = (extra) =>
+    isYieldShortcut(
+      { [modifier.flag]: true, key, target: { tagName: "DIV" }, ...extra },
+      editor,
+    );
+  assert.equal(press(), true, chord);
+  for (const [other, { flag }] of Object.entries(MODIFIERS)) {
+    if (other !== word) assert.equal(press({ [flag]: true }), false, other);
+  }
+
   const ring = html.slice(html.indexOf('id="turn-ring"'));
   assert.match(
     ring.slice(0, ring.indexOf(">")),
     /aria-label="Your turn is done"/,
   );
-  const status = html.slice(html.indexOf('id="turn-status"'));
-  const copy = status
-    .slice(status.indexOf(">") + 1, status.indexOf("</p>"))
-    .replace(/\s+/g, " ");
-  assert.match(copy, /Your turn is done \(Alt\+Enter\)/);
-  // The shortcut the copy names is the one the handler takes.
-  const editor = { tagName: "TEXTAREA" };
-  assert.equal(
-    isYieldShortcut(
-      { altKey: true, key: "Enter", target: { tagName: "DIV" } },
-      editor,
-    ),
-    true,
+
+  // #turn-status is a live region, so a chord named there is read out again on
+  // every Thinking toggle, to a listener who may be on the other platform.
+  // The hint carries it instead, from an element nothing rewrites.
+  assert.doesNotMatch(shippedTurnStatus(), /Enter/);
+  const shortcut = html.slice(html.indexOf('id="turn-shortcut"'));
+  assert.doesNotMatch(
+    shortcut.slice(0, shortcut.indexOf(">")),
+    /role=|aria-live=/,
   );
-  // The status line the page restores after a hold says the same.
-  assert.match(
-    read("web/interview.js"),
-    /Choose Your turn is done \(Alt\+Enter\) to let Jim reply early\./,
+  const hint = shortcut
+    .slice(shortcut.indexOf(">") + 1, shortcut.indexOf("</p>"))
+    .replace(/\s+/g, " ")
+    .trim();
+  // Both spellings, and only the chord is pinned: the sentence around it is
+  // copy, free to be reworded without failing here.
+  assert.ok(hint.includes(chord), `the hint should name ${chord}: ${hint}`);
+  assert.ok(
+    hint.includes(macChord),
+    `the hint should name ${macChord}: ${hint}`,
   );
 });
