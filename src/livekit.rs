@@ -488,9 +488,13 @@ async fn open_cold_session(
     restarts: &mut usize,
     room: Option<&Room>,
 ) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
+    let deadline = room.is_none().then(|| {
+        tokio::time::Instant::from_std(interview.started_at) + crate::gemini::FIRST_OPEN_LIMIT
+    });
     retry_cold_open(
         interview.keys,
         restarts,
+        deadline,
         || live_session_with_keys(interview.keys, interview.boot, None),
         async |notice| {
             let Some(room) = room else { return };
@@ -514,6 +518,7 @@ async fn open_cold_session(
 async fn retry_cold_open<F, Fut, N, NFut>(
     keys: &GeminiKeys,
     restarts: &mut usize,
+    deadline: Option<tokio::time::Instant>,
     mut open: F,
     mut notify: N,
 ) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>>
@@ -536,6 +541,18 @@ where
         });
         let (reason, until) = match opened {
             Ok(session) => return Ok(session),
+
+            // A known cooldown that cannot fit the first-open budget cannot
+            // recover here. Preserve its cause rather than letting the outer
+            // timeout replace it with an unexplained transport failure.
+            Err(error)
+                if crate::gemini::exhausted_until(error.as_ref()).is_some_and(|until| {
+                    deadline
+                        .is_some_and(|deadline| tokio::time::Instant::from_std(until) >= deadline)
+                }) =>
+            {
+                return Err(error);
+            }
 
             // Every key is out on quota. A sole key would ride out the same
             // rate limit under this budget, so a rotation waits too.
@@ -588,6 +605,46 @@ where
 /// The bare notice; `reconnect_wait` adds why a replacement is waiting.
 fn interviewer_state(reconnecting: bool) -> serde_json::Value {
     serde_json::json!({ "type": "interviewer_state", "reconnecting": reconnecting })
+}
+
+fn startup_state(error: Option<&(dyn std::error::Error + 'static)>) -> serde_json::Value {
+    let mut notice = interviewer_state(false);
+    notice["startup"] = if error.is_some() { "failed" } else { "ready" }.into();
+    if let Some(error) = error {
+        notice["reason"] = crate::gemini::startup_failure_reason(error).into();
+    }
+    notice
+}
+
+/// The normal opening generation is the probe, not a second paid turn. Setup
+/// alone proves nothing, and no watchdog or replacement runs before it answers.
+async fn probe_live_output(
+    gemini: &mut GeminiLiveSession,
+    state: &mut RuntimeState,
+    greeting: &str,
+    limit: Duration,
+) -> Result<Instant, Box<dyn std::error::Error + Send + Sync>> {
+    let result = tokio::time::timeout(limit, async {
+        send_model_text(
+            gemini,
+            state,
+            ModelInputKind::Turn,
+            TurnCause::Turn,
+            greeting,
+        )
+        .await?;
+        gemini.wait_for_model_output().await?;
+        Ok(Instant::now())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "Gemini did not produce startup output before the deadline",
+        )
+        .into())
+    });
+    result.map_err(|error| gemini.startup_error(error))
 }
 
 /// The notice a replacement shows while it waits on `reason`. `None` is the
@@ -1516,6 +1573,31 @@ struct OpenSession<'a> {
     restarts: usize,
 }
 
+// A failed ready notice can follow a paid generation. Stop the reader before
+// draining so the common startup summary receives each observation once.
+async fn publish_startup_readiness(
+    gemini: &mut GeminiLiveSession,
+    usage: &mut crate::gemini::TokenUsage,
+    publication: impl std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let result = tokio::time::timeout(RECONNECT_NOTICE_LIMIT, publication)
+        .await
+        .unwrap_or_else(|_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "publishing startup readiness timed out",
+            )
+            .into())
+        });
+    if result.is_err() {
+        let _ = gemini.shutdown().await;
+        for observed in gemini.drain_usage() {
+            usage.add(observed);
+        }
+    }
+    result
+}
+
 /// Joins, waits for a candidate, brings up audio and Gemini, and greets.
 ///
 /// Split from [`run_room`] because none of it repeats: it runs once, in order,
@@ -1563,78 +1645,133 @@ async fn open_session<'a>(
     // "Neither needs the other's return value" was the wrong test. The
     // dependency is on room state, not on data.
     let setup_began = Instant::now();
+    let mut startup_usage = crate::gemini::TokenUsage::default();
     let mut restarts = 0;
-    let (output_audio, mut gemini) = tokio::try_join!(
-        async {
-            isolate_local_agent(config, room_name, &agent_identity, now_seconds).await?;
-            publish_output_audio(&room, GEMINI_OUTPUT_AUDIO_SAMPLE_RATE).await
-        },
-        async {
-            let interview = InterviewContext {
-                config,
-                keys,
-                boot: &boot,
-                started_at: setup_began,
-                candidate_identity: &candidate_identity,
-                events: &events,
-                slot: None,
-            };
-            crate::gemini::first_open_within(
-                crate::gemini::FIRST_OPEN_LIMIT,
-                open_cold_session(interview, &mut restarts, None),
+    let prepared = async {
+        let (output_audio, mut gemini) = tokio::try_join!(
+            async {
+                isolate_local_agent(config, room_name, &agent_identity, now_seconds).await?;
+                publish_output_audio(&room, GEMINI_OUTPUT_AUDIO_SAMPLE_RATE).await
+            },
+            async {
+                let interview = InterviewContext {
+                    config,
+                    keys,
+                    boot: &boot,
+                    started_at: setup_began,
+                    candidate_identity: &candidate_identity,
+                    events: &events,
+                    slot: None,
+                };
+                crate::gemini::first_open_within(
+                    crate::gemini::FIRST_OPEN_LIMIT,
+                    open_cold_session(interview, &mut restarts, None),
+                )
+                .await
+            },
+        )?;
+        eprintln!(
+            "timing: room and Gemini session ready {:.2}s after the candidate joined",
+            setup_began.elapsed().as_secs_f64()
+        );
+
+        // Only prompt construction uses this provisional clock. The opening
+        // starts with its full budget, and no watch or round transition runs
+        // before ready.
+        let started_at = Instant::now();
+
+        let mut turn = TurnState {
+            state: initial_runtime_state(&boot, started_at),
+            agent_state: std::mem::take(&mut agent_state),
+            activity: runtime_activity(config, started_at, session_id),
+            turns: SpeakerTurns::default(),
+        };
+        turn.state
+            .evidence_ledger
+            .record_model_input(ModelInputKind::LiveSetup, &boot.instructions);
+        let mut media = CandidateMedia::new();
+
+        // Keep subscriptions consumed while waiting for candidate metadata. The
+        // room loop pumps these tracks after readiness; dropping a subscription
+        // here would leave that loop deaf for the whole interview.
+        for event in deferred_events.drain(..) {
+            handle_media_event(
+                &mut media,
+                &mut gemini,
+                &candidate_identity,
+                boot.candidate_video,
+                &event,
             )
-            .await
-        },
-    )?;
-    eprintln!(
-        "timing: room and Gemini session ready {:.2}s after the candidate joined",
-        setup_began.elapsed().as_secs_f64()
-    );
+            .await?;
+        }
 
-    // The candidate's clock, not a third one. The browser starts counting when
-    // its own connect resolves, which is this instant seen from the other side,
-    // and stamping again here put the agent a second or two behind the tab for
-    // the rest of the interview. Every consumer below reads this as "when the
-    // interview started", and that is when it started.
-    let started_at = setup_began;
-
-    let mut turn = TurnState {
-        state: initial_runtime_state(&boot, started_at),
-        agent_state: std::mem::take(&mut agent_state),
-        activity: runtime_activity(config, started_at, session_id),
-        turns: SpeakerTurns::default(),
-    };
-    turn.state
-        .evidence_ledger
-        .record_model_input(ModelInputKind::LiveSetup, &boot.instructions);
-    let mut media = CandidateMedia::new();
-
-    // Before the greeting, not after: these arrived while we were waiting for
-    // the candidate, and one of them is what attaches the microphone. Greeting
-    // first would open the interview deaf for as long as Gemini takes to
-    // answer.
-    for event in deferred_events.drain(..) {
-        handle_media_event(
-            &mut media,
+        let greeting = with_timer(&turn.state, boot.greeting.clone());
+        let started_at = match probe_live_output(
             &mut gemini,
-            &candidate_identity,
-            boot.candidate_video,
-            &event,
+            &mut turn.state,
+            &greeting,
+            Duration::from_secs(u64::from(config.gemini_reply_timeout_s)),
+        )
+        .await
+        {
+            Ok(started_at) => started_at,
+            Err(error) => {
+                gemini.record_failure(keys);
+                let _ = gemini.shutdown().await;
+
+                // A failed generation can still be billed. Only observed
+                // counters are reported; absence of observations is not a claim
+                // of zero cost.
+                for usage in gemini.drain_usage() {
+                    startup_usage.add(usage);
+                }
+                return Err(error);
+            }
+        };
+        turn.state.started_at = started_at;
+        turn.activity = runtime_activity(config, started_at, session_id);
+        turn.activity
+            .mark_prompted(started_at, Some(&greeting), false);
+        publish_startup_readiness(
+            &mut gemini,
+            &mut startup_usage,
+            publish_interviewer_state(&room, &startup_state(None)),
         )
         .await?;
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>((
+            output_audio,
+            gemini,
+            media,
+            turn,
+            started_at,
+        ))
     }
+    .await;
 
-    let greeting = with_timer(&turn.state, boot.greeting.clone());
-    send_model_text(
-        &mut gemini,
-        &mut turn.state,
-        ModelInputKind::Turn,
-        TurnCause::Turn,
-        &greeting,
-    )
-    .await?;
-    turn.activity
-        .mark_prompted(Instant::now(), Some(&greeting), false);
+    let (output_audio, gemini, media, turn, started_at) = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            eprintln!(
+                "{}",
+                live_usage_line(
+                    room_name,
+                    session_id,
+                    &config.gemini_live_model,
+                    0,
+                    LiveOutcome::from_error(error.as_ref(), LiveOutcome::Error),
+                    None,
+                    &startup_usage,
+                )
+            );
+            let _ = tokio::time::timeout(
+                RECONNECT_NOTICE_LIMIT,
+                publish_interviewer_state(&room, &startup_state(Some(error.as_ref()))),
+            )
+            .await;
+            leave_room(&room).await;
+            return Err(error);
+        }
+    };
 
     Ok(Some(OpenSession {
         room,
@@ -2535,27 +2672,7 @@ pub(crate) async fn run_room_with_slot(
         mut turn,
         started_at,
         restarts,
-    }) = open_session(config, &keys, room_name, now_seconds, session_id)
-        .await
-        .inspect_err(|error| {
-            // The interview never started, and the summary is where an operator
-            // counts those, a first open a depleted project refused above all.
-            // A socket may have opened before the failure, so no count is
-            // claimed; no generation was asked for, so there is no usage.
-            let outcome = LiveOutcome::from_error(error.as_ref(), LiveOutcome::Error);
-            eprintln!(
-                "{}",
-                live_usage_line(
-                    room_name,
-                    session_id,
-                    &config.gemini_live_model,
-                    0,
-                    outcome,
-                    None,
-                    &crate::gemini::TokenUsage::default(),
-                )
-            );
-        })?
+    }) = open_session(config, &keys, room_name, now_seconds, session_id).await?
     else {
         return Ok(());
     };
@@ -2599,9 +2716,8 @@ pub(crate) async fn run_room_with_slot(
     //
     // The grace is deliberate: the browser normally ends the interview itself,
     // and this only has to catch the case where it never does.
-    let hard_deadline = tokio::time::sleep_until(
-        (Instant::now() + interview_hard_deadline(boot.duration_min)).into(),
-    );
+    let hard_deadline =
+        tokio::time::sleep_until((started_at + interview_hard_deadline(boot.duration_min)).into());
     tokio::pin!(hard_deadline);
 
     let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {

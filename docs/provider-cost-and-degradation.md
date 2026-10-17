@@ -45,7 +45,44 @@ at once or was held for an unpause or the end of a thinking hold: every
 replacement asks for one, so a run of sockets that each answer their briefing
 and die still ends the interview.
 
-A candidate turn, required prompt (including the opening greeting), or tool
+Before the interview timer starts, one bounded Live generation verifies that
+the configured model can answer, not merely accept setup. The opening greeting
+is that request on the interview's own socket; there is no separate paid probe
+turn. The initial socket open retains its bounded cold-open retry and key
+failover policy; those attempts send setup, not a readiness generation. Once
+setup succeeds, the greeting is sent once and a failed or silent generation
+is not retried. Connect and setup retain their existing limits, and
+`CODETRIAL_GEMINI_REPLY_TIMEOUT_S` bounds the greeting send and wait for the
+first model output. Keepalive pings continue during that wait, without sending
+generation input, so the reader's idle watchdog cannot shorten a longer reply
+timeout on a responsive socket. Nonempty audio,
+model text, output transcription, or a nonempty tool-call batch counts; input
+transcription, voice activity, usage, empty output and turn completion alone
+do not. The private clock travels as non-generating context before the opening
+turn; it does not add another generation request.
+
+Events observed by the probe are preserved, in order, for the normal room loop,
+with the event queue's bound also applied to the startup buffer. Only observed
+usage is logged on failure; no observation does not mean the request was free.
+The server clock and hard deadline begin at successful output, and the browser
+starts its countdown from receipt of readiness. It retains an early readiness
+notice while publishing tracks or starting recording. Recording is still
+requested after joining the room, not delayed until the greeting is heard.
+
+Startup outcomes use the existing `interviewer_state` control topic with
+`startup: "ready"` or `startup: "failed"`, and `reconnecting: false`. A failure
+can carry a classified `reason`: `quota`, `billing`, `credentials`, or `refused`.
+Only a provider response identifies those causes; timeout, 1011, 503, and an
+unexplained close use `unavailable`. The browser uses fixed wording through the
+existing degraded-start banner, not raw provider text or a second notification
+channel. A missing notice or a disconnected room also ends its finite startup
+wait without starting the timer. Replacement notices contain no startup field
+and cannot restart the clock.
+
+A deployment without a live session still offers timed offline practice as
+before. That local clock is not granted after a joined session fails readiness.
+
+After startup, a candidate turn, required prompt, or tool
 continuation that produces no output for 45 seconds replaces the socket even
 without a `GoAway`. `CODETRIAL_GEMINI_REPLY_TIMEOUT_S` sets that interval
 within 20 to 120 seconds. The `codetrial turn_timing` summaries record observed

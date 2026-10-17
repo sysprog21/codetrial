@@ -341,6 +341,48 @@ async fn report_still_runs_after_live_quota_exhaustion() {
     assert_eq!(remaining, MAX_REPORT_HTTP_ATTEMPTS - 1);
 }
 
+#[test]
+fn startup_failure_identifies_exhausted_rotations() {
+    for (prefix, failures, expected) in [
+        (
+            "startup-exhausted-quota",
+            [CredentialFailure::Quota, CredentialFailure::Quota],
+            "quota",
+        ),
+        (
+            "startup-exhausted-billing",
+            [CredentialFailure::Billing, CredentialFailure::Billing],
+            "billing",
+        ),
+        (
+            "startup-exhausted-mixed",
+            [CredentialFailure::Quota, CredentialFailure::Billing],
+            "billing",
+        ),
+        (
+            "startup-exhausted-refused",
+            [CredentialFailure::Invalid, CredentialFailure::Refused],
+            "unavailable",
+        ),
+    ] {
+        let first = format!("{prefix}-first");
+        let second = format!("{prefix}-second");
+        let configured = format!("{first},{second}");
+        let config = live_config(&[("GOOGLE_API_KEYS", &configured)]);
+        let keys = GeminiKeys::from_config(&config);
+        for (key, failure) in [(&first, failures[0]), (&second, failures[1])] {
+            keys.failed(key, failure, ApiSurface::Live);
+        }
+        let error = keys.select().unwrap_err();
+        assert_eq!(credential_failure(&error), None);
+        assert_eq!(startup_failure_reason(&error), expected, "{prefix}");
+    }
+    assert_eq!(
+        startup_failure_reason(&io::Error::other("1011 Internal error")),
+        "unavailable"
+    );
+}
+
 #[tokio::test]
 async fn report_failover_reuses_the_existing_call_budget() {
     let (result, seen, remaining) =
@@ -2622,6 +2664,87 @@ async fn open_live_session_sends_setup_and_waits_for_setup_complete() {
     session.close().await.unwrap();
 }
 
+#[tokio::test]
+async fn startup_output_requires_content_and_keeps_a_bounded_replay() {
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let (address, _frames) = stalled_live_server(false).await;
+    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+        .await
+        .unwrap();
+    let empty = [
+        GeminiEvent::Audio {
+            bytes: vec![],
+            mime_type: "audio/pcm".into(),
+        },
+        GeminiEvent::Text(" ".into()),
+        GeminiEvent::OutputTranscript("\n".into()),
+        GeminiEvent::ToolCall(vec![]),
+        GeminiEvent::InputTranscript("candidate".into()),
+        GeminiEvent::CandidateVoiceActivity(true),
+        GeminiEvent::CandidateVoiceActivity(false),
+        GeminiEvent::UsageRecorded,
+        GeminiEvent::TurnComplete,
+        GeminiEvent::Interrupted,
+    ];
+    let (send, recv) = channel(16);
+    session.events = recv;
+    for event in &empty {
+        send.send(event.clone()).await.unwrap();
+    }
+    drop(send);
+    assert!(session.wait_for_model_output().await.is_err());
+    for output in [
+        GeminiEvent::Audio {
+            bytes: vec![1, 2],
+            mime_type: "audio/pcm".into(),
+        },
+        GeminiEvent::Text("answer".into()),
+        GeminiEvent::OutputTranscript("answer".into()),
+        GeminiEvent::ToolCall(vec![GeminiFunctionCall {
+            id: "1".into(),
+            name: "read_editor".into(),
+            args: json!({}),
+        }]),
+    ] {
+        session.pending_events.clear();
+        let (send, recv) = channel(16);
+        session.events = recv;
+        for event in &empty {
+            send.send(event.clone()).await.unwrap();
+        }
+        send.send(output.clone()).await.unwrap();
+        drop(send);
+        session.wait_for_model_output().await.unwrap();
+        for expected in &empty {
+            assert_eq!(session.next_event().await.as_ref(), Some(expected));
+        }
+        assert_eq!(session.next_event().await, Some(output));
+    }
+    let (send, recv) = channel(GEMINI_EVENT_QUEUE + 1);
+    session.events = recv;
+    for _ in 0..=GEMINI_EVENT_QUEUE {
+        send.send(GeminiEvent::TurnComplete).await.unwrap();
+    }
+    drop(send);
+    assert!(
+        session
+            .wait_for_model_output()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("event limit")
+    );
+    assert_eq!(session.pending_events.len(), GEMINI_EVENT_QUEUE);
+    let reader = session.reader.abort_handle();
+    drop(session);
+    tokio::task::yield_now().await;
+    assert!(
+        reader.is_finished(),
+        "startup cancellation must retire the reader"
+    );
+}
+
 /// The clock the restart budget reads. It has to start at the socket, not
 /// at zero and not at the interview: a session that always reports no age
 /// makes every close look like an endpoint that will not stay up, and the
@@ -2934,6 +3057,113 @@ async fn open_live_session_delivers_server_events_from_reader_task() {
     );
     session.close().await.unwrap();
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn startup_output_wait_keeps_a_late_first_reply_alive() {
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (asked, request) = tokio::sync::oneshot::channel();
+    let (release, mut output) = tokio::sync::oneshot::channel();
+    let (acknowledged, mut acks) = tokio::sync::mpsc::unbounded_channel();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(socket).await.unwrap();
+        socket.next().await.unwrap().unwrap();
+        socket
+            .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+            .await
+            .unwrap();
+        let frame = socket.next().await.unwrap().unwrap();
+        let input: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+        assert_eq!(input["realtimeInput"]["text"], "opening");
+        asked.send(()).unwrap();
+        let mut generations = 1;
+        let mut pings = 0;
+        let mut sent_output = false;
+        loop {
+            tokio::select! {
+                _ = &mut output, if !sent_output => {
+                    socket.send(Message::Text(r#"{"serverContent":{"modelTurn":{"parts":[{"text":"late answer"}]}}}"#.into())).await.unwrap();
+                    sent_output = true;
+                }
+                frame = socket.next() => match frame.unwrap().unwrap() {
+                    Message::Ping(payload) => {
+                        socket.send(Message::Pong(payload)).await.unwrap();
+
+                        // The observation acknowledges receipt by the reader,
+                        // not just completion of the server's loopback write.
+                        socket.send(Message::Text(r#"{"usageMetadata":{"promptTokenCount":0}}"#.into())).await.unwrap();
+                        pings += 1;
+                        acknowledged.send(pings).unwrap();
+                    }
+                    Message::Text(_) => generations += 1,
+                    Message::Close(_) => break,
+                    _ => {},
+                }
+            }
+        }
+        (generations, pings)
+    });
+    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+        .await
+        .unwrap();
+    session.send_text("opening").await.unwrap();
+    request.await.unwrap();
+    let observed = Arc::clone(&session.usage);
+    let waiting = tokio::spawn(async move {
+        let result =
+            tokio::time::timeout(Duration::from_secs(90), session.wait_for_model_output()).await;
+        (session, result)
+    });
+    tokio::task::yield_now().await;
+    let began = tokio::time::Instant::now();
+    for count in 1..=3 {
+        tokio::time::pause();
+        tokio::time::advance(KEEPALIVE_INTERVAL).await;
+        tokio::time::resume();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), acks.recv())
+                .await
+                .unwrap(),
+            Some(count)
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while observed.lock().unwrap().len() < count {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!waiting.is_finished(), "no model output has been sent yet");
+    }
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(10)).await;
+    tokio::time::resume();
+    assert!(began.elapsed() > READ_IDLE_LIMIT);
+    release.send(()).unwrap();
+    let (mut session, result) = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    result.unwrap().unwrap();
+    for _ in 0..3 {
+        assert_eq!(session.next_event().await, Some(GeminiEvent::UsageRecorded));
+    }
+    assert_eq!(
+        session.next_event().await,
+        Some(GeminiEvent::Text("late answer".into()))
+    );
+    session.shutdown().await.unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap(),
+        (1, 3)
+    );
 }
 
 /// The whole point of reading the update: the handle has to still be

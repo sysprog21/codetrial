@@ -1,5 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { runInNewContext } from "node:vm";
+import {
+  createInterviewerReadiness,
+  interviewerReconnectMessage,
+  isAgent,
+  providerUiState,
+} from "../../web/lib.js";
 import {
   createBeforeUnloadGuard,
   shouldWarnBeforeUnload,
@@ -88,7 +95,7 @@ test("interview wiring starts after preflight and only persistence releases it",
   const init = functionBody(page, "init");
   const preflight = init.indexOf("const preflight = await runAudioCheck()");
   const connect = init.indexOf("await connect(preflight, presenting)");
-  const deadline = init.indexOf("state.endsAt = Date.now()");
+  const deadline = init.indexOf("state.endsAt = startup.startedAt");
   const guard = init.indexOf("updateBeforeUnloadGuard()", deadline);
 
   assert.ok(preflight !== -1 && preflight < connect);
@@ -113,6 +120,178 @@ test("interview wiring starts after preflight and only persistence releases it",
     save.indexOf("reportIsPersisted(result)") >
       save.indexOf("await saveReportHistory(entry)"),
   );
+});
+
+test("startup notices settle once and replacement notices cannot start a timer", async () => {
+  let timeout;
+  let cancelled = 0;
+  let now = 10;
+  const gate = createInterviewerReadiness({
+    now: () => now,
+    schedule: (fn) => {
+      timeout = fn;
+      return 1;
+    },
+    cancel: () => {
+      cancelled += 1;
+    },
+  });
+  let settled = false;
+  gate.wait.then(() => {
+    settled = true;
+  });
+  gate.receive({ type: "interviewer_state", reconnecting: false });
+  gate.receive({ type: "other", startup: "ready" });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  now = 30;
+  gate.receive({ type: "interviewer_state", startup: "ready" });
+  now = 50;
+  gate.receive({ type: "interviewer_state", startup: "ready" });
+  timeout();
+  assert.deepEqual(await gate.wait, { startup: "ready", startedAt: 30 });
+  assert.equal(cancelled, 1);
+
+  const missing = createInterviewerReadiness({
+    schedule: (fn) => {
+      timeout = fn;
+      return 2;
+    },
+    cancel: () => {},
+  });
+  timeout();
+  assert.equal((await missing.wait).startup, "failed");
+});
+
+test("the actual connection and init deadline stay behind model readiness", async () => {
+  const page = read("web/interview.js");
+  const init = functionBody(page, "init");
+  const tail = init.slice(init.indexOf("const startup = await connect"));
+  for (const outcome of ["ready", "failed", "offline"]) {
+    let gate;
+    let ticks = 0;
+    let intervals = 0;
+    let banner = "";
+    let mediaStopped = 0;
+    const context = {
+      state: { endsAt: 0 },
+      preflight: {},
+      presenting: false,
+      createInterviewerReadiness: () => {
+        gate = createInterviewerReadiness({
+          now: () => 1000,
+          schedule: () => 1,
+          cancel: () => {},
+        });
+        return gate;
+      },
+      providerUiState,
+      interviewerReconnectMessage,
+      setAgentStateLabel() {},
+      consentGiven: () => true,
+      recordConsent: async () => null,
+      fetch: async () => {
+        if (outcome === "offline")
+          throw new Error("Live session not configured");
+        return { ok: true, json: async () => ({ durationMin: 45 }) };
+      },
+      problem: { page: "two-sum" },
+      durationMin: 45,
+      interviewLoop: "coding_only",
+      mode: "coding",
+      interviewProfile: {},
+      interviewGrounding: null,
+      editorOptions: { execution: true },
+      nodes: { hideExamples: { checked: false } },
+      applyGrantedDuration() {},
+      connectLiveKit: async () => {},
+      recordingEnabled: false,
+      whiteboard: false,
+      stopPreflight() {},
+      stopLocalMedia: () => {
+        mediaStopped += 1;
+      },
+      setBanner: (_source, text) => {
+        banner = text;
+      },
+      addTranscript() {},
+      publishCode() {},
+      updateBeforeUnloadGuard() {},
+      tickTimer: () => {
+        ticks += 1;
+      },
+      setInterval: () => {
+        intervals += 1;
+      },
+      console: { warn() {} },
+    };
+    const running = runInNewContext(
+      `${functionBody(page, "connect")}\n}\n(async () => {${tail}\n})()`,
+      context,
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    if (outcome !== "offline") {
+      assert.equal(context.state.endsAt, 0);
+      assert.equal(ticks, 0);
+      gate.receive({
+        type: "interviewer_state",
+        startup: outcome,
+        reason: "billing",
+      });
+    }
+    await running;
+    if (outcome === "ready") {
+      assert.equal(context.state.endsAt, 1000 + 45 * 60 * 1000);
+      assert.equal(ticks, 1);
+      assert.equal(intervals, 1);
+    } else if (outcome === "offline") {
+      assert.ok(context.state.endsAt > 0);
+      assert.equal(ticks, 1);
+      assert.equal(intervals, 1);
+    } else {
+      assert.equal(context.state.endsAt, 0);
+      assert.equal(ticks, 0);
+      assert.equal(intervals, 0);
+      assert.match(banner, /billing/);
+      assert.equal(mediaStopped, 1);
+    }
+  }
+});
+
+test("only the pinned interviewer's departure fails startup readiness", async () => {
+  const source = functionBody(read("web/interview.js"), "connectLiveKit");
+  const handlerSource =
+    /room\.on\(livekit\.RoomEvent\.ParticipantDisconnected,\s*(\(participant\) => \{[\s\S]*?\n  \})\);/.exec(
+      source,
+    )?.[1];
+  assert.ok(handlerSource, "the participant departure handler exists");
+  const gate = createInterviewerReadiness({
+    schedule: () => 1,
+    cancel: () => {},
+  });
+  const state = {
+    agentIdentity: "interviewer-primary",
+    interviewerReadiness: gate,
+  };
+  let updates = 0;
+  const handler = runInNewContext(`(${handlerSource})`, {
+    state,
+    isAgent,
+    updateAgentState: () => {
+      updates += 1;
+    },
+  });
+  let settled = false;
+  gate.wait.then(() => {
+    settled = true;
+  });
+  handler({ identity: "interviewer-other", kind: "AGENT" });
+  handler({ identity: "candidate" });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  handler({ identity: state.agentIdentity, kind: "AGENT" });
+  assert.equal((await gate.wait).startup, "failed");
+  assert.equal(updates, 3);
 });
 
 test("LiveKit stays connected while the native leave warning is pending", () => {

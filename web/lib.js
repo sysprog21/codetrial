@@ -1586,6 +1586,22 @@ const RECONNECT_CAUSES = {
 };
 
 export function interviewerReconnectMessage(message) {
+  if (message.startup === "failed") {
+    const causes = {
+      quota:
+        "Gemini reported a quota or rate limit. Check the project's limits before starting again.",
+      billing:
+        "Gemini reported a billing or credit problem. Check the project's billing before starting again.",
+      credentials:
+        "Gemini rejected the API credentials. Check the configured key before starting again.",
+      refused:
+        "Gemini refused this Live request. Check the project's access before starting again.",
+    };
+    const cause = Object.hasOwn(causes, message.reason)
+      ? causes[message.reason]
+      : "Gemini did not answer the startup check. Try starting again when the provider is available.";
+    return `${cause} The interview timer has not started. You can still work the problem offline.`;
+  }
   if (!Object.hasOwn(RECONNECT_CAUSES, message.reason)) {
     return providerUiState("interviewer_reconnecting").message;
   }
@@ -1596,6 +1612,41 @@ export function interviewerReconnectMessage(message) {
       ? ` Retrying in about ${reconnectWaitText(wait)}.`
       : "";
   return `The interviewer ${cause} and cannot hear you right now.${estimate} Keep working; nothing is lost.`;
+}
+
+/// Installed before joining: a fast agent may publish readiness before the
+/// caller finishes publishing media or starts recording. Replacement notices
+/// never settle this one-shot gate, and a missing notice has a finite wait.
+export function createInterviewerReadiness({
+  timeoutMs = 180_000,
+  now = Date.now,
+  schedule = setTimeout,
+  cancel = clearTimeout,
+} = {}) {
+  let finish;
+  let settled = false;
+  const wait = new Promise((resolve) => {
+    finish = resolve;
+  });
+  let timer;
+  const receive = (message) => {
+    if (
+      settled ||
+      message.type !== "interviewer_state" ||
+      !["ready", "failed"].includes(message.startup)
+    )
+      return;
+    settled = true;
+    cancel(timer);
+    finish(
+      message.startup === "ready"
+        ? { startup: "ready", startedAt: now() }
+        : { startup: "failed", reason: message.reason },
+    );
+  };
+  const fail = () => receive({ type: "interviewer_state", startup: "failed" });
+  timer = schedule(fail, timeoutMs);
+  return { wait, receive, fail };
 }
 
 export function providerUiState(kind, detail = "") {

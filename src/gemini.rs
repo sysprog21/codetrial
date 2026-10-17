@@ -129,6 +129,7 @@ pub struct GeminiLiveSession {
     writer: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
     reader: JoinHandle<()>,
     events: Receiver<GeminiEvent>,
+    pending_events: std::collections::VecDeque<GeminiEvent>,
     /// When this socket was opened, which is how the caller tells Gemini's
     /// ordinary connection cap from an endpoint that will not stay up. It lives
     /// here rather than in the loop that reconnects because it is a fact about
@@ -187,17 +188,41 @@ impl GeminiLiveSession {
 
     pub(crate) fn recovery_handle(&self, keys: &GeminiKeys) -> Option<(String, String)> {
         let key = self.credential.as_ref()?;
-        if let Some(failure) = *self
-            .failure
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-        {
-            keys.failed(key, failure, ApiSurface::Live);
-        }
+        self.record_failure(keys);
         if keys.select().ok().as_ref() != Some(key) {
             return None;
         }
         Some((key.clone(), self.resumption_handle()?))
+    }
+
+    pub(crate) fn record_failure(&self, keys: &GeminiKeys) {
+        if let Some(failure) = *self
+            .failure
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            && let Some(key) = &self.credential
+        {
+            keys.failed(key, failure, ApiSurface::Live);
+        }
+    }
+
+    pub(crate) fn startup_error(
+        &self,
+        error: Box<dyn std::error::Error + Send + Sync>,
+    ) -> Box<dyn std::error::Error + Send + Sync> {
+        match *self
+            .failure
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+        {
+            Some(failure) => ApiFailure {
+                status: 0,
+                credential: Some(failure),
+                detail: Some("Gemini refused startup".to_string()),
+            }
+            .into(),
+            None => error,
+        }
     }
 
     pub async fn send_text(
@@ -267,7 +292,59 @@ impl GeminiLiveSession {
     }
 
     pub async fn next_event(&mut self) -> Option<GeminiEvent> {
+        if let Some(event) = self.pending_events.pop_front() {
+            return Some(event);
+        }
         self.events.recv().await
+    }
+
+    /// The startup gate observes output without consuming the greeting. The
+    /// room loop must still deliver it and account for earlier usage frames.
+    /// Until that loop starts, this wait must also ping: the reader's idle
+    /// watchdog can be shorter than the configured reply timeout.
+    pub(crate) async fn wait_for_model_output(
+        &mut self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
+        keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            let event = tokio::select! {
+                event = self.events.recv() => event,
+                _ = keepalive.tick() => {
+                    self.keep_alive().await?;
+                    continue;
+                }
+            };
+            let Some(event) = event else { break };
+            let ready = match &event {
+                GeminiEvent::Audio { bytes, .. } => !bytes.is_empty(),
+                GeminiEvent::Text(text) | GeminiEvent::OutputTranscript(text) => {
+                    !text.trim().is_empty()
+                }
+                GeminiEvent::ToolCall(calls) => !calls.is_empty(),
+                _ => false,
+            };
+            if self.pending_events.len() == GEMINI_EVENT_QUEUE {
+                return Err(io::Error::other("Gemini startup event limit reached").into());
+            }
+            let going_away = matches!(event, GeminiEvent::GoAway { .. });
+            self.pending_events.push_back(event);
+            if ready {
+                return Ok(());
+            }
+            if going_away {
+                break;
+            }
+        }
+        Err(ApiFailure {
+            status: 0,
+            credential: *self
+                .failure
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+            detail: Some("Gemini ended before producing startup output".to_string()),
+        }
+        .into())
     }
 
     /// How long this socket has been up.
@@ -419,6 +496,13 @@ impl GeminiLiveSession {
     /// flush wins the `select!` against `next_event`.
     fn gone(&self) -> bool {
         self.dead || self.reader.is_finished()
+    }
+}
+
+impl Drop for GeminiLiveSession {
+    fn drop(&mut self) {
+        // Cancelling startup must not detach a reader holding a metered socket.
+        self.reader.abort();
     }
 }
 
@@ -695,6 +779,24 @@ pub(crate) fn is_billing_failure(error: &(dyn std::error::Error + 'static)) -> b
         || credentials::exhausted_by_billing(error)
 }
 
+/// Machine-owned reasons only; silence and an internal provider error do not
+/// identify quota or billing. The browser uses these on interviewer_state.
+pub(crate) fn startup_failure_reason(error: &(dyn std::error::Error + 'static)) -> &'static str {
+    if credentials::exhausted_by_billing(error) {
+        return "billing";
+    }
+    if credentials::exhausted_until(error).is_some() {
+        return "quota";
+    }
+    match credential_failure(error) {
+        Some(CredentialFailure::Quota) => "quota",
+        Some(CredentialFailure::Billing) => "billing",
+        Some(CredentialFailure::Invalid) => "credentials",
+        Some(CredentialFailure::Refused) => "refused",
+        None => "unavailable",
+    }
+}
+
 /// Bounds `open` by `limit`, the way `FIRST_OPEN_LIMIT` bounds a first open.
 pub(crate) async fn first_open_within<T>(
     limit: Duration,
@@ -709,14 +811,12 @@ pub(crate) async fn first_open_within<T>(
     })
 }
 
-/// Opens one Live session the way an interview's first open would choose its
-/// key, moving past keys Gemini rejects while backups remain.
+/// Checks configured Live credentials, moving past keys Gemini rejects while
+/// backups remain.
 ///
 /// For `check-gemini`, which should pass whenever an interview could start.
-/// It makes at most one attempt per configured key, and no more than the
-/// interview's first open could: that open gets one attempt plus the restart
-/// budget, all inside `FIRST_OPEN_LIMIT`, so a key past either passes a check
-/// but never runs an interview.
+/// It makes at most one attempt per configured key under its diagnostic budget,
+/// all inside `FIRST_OPEN_LIMIT`.
 /// Marking a rejected key unavailable is not a bound on its own: a quota
 /// cooldown lasts a minute, and slow rejections from enough keys outlast it,
 /// putting the first key back in rotation. Other failures return at once: a
@@ -1704,6 +1804,7 @@ async fn open_live_session_redacted_at(
         writer,
         reader,
         events,
+        pending_events: std::collections::VecDeque::new(),
         resumption,
         usage,
         checkpoint_at,

@@ -59,6 +59,7 @@ import {
   boardStreamOptions,
   clamp,
   codeUpdatePayload,
+  createInterviewerReadiness,
   codingLoop,
   countdown,
   FRAMEWORKS,
@@ -441,7 +442,9 @@ const state = {
   /// interviewer's own evaluation is missing from it.
   reportUnreadable: false,
   room: null,
+  startupCleanupRoom: null,
   connected: false,
+  interviewerReadiness: null,
   /// The consent this interview is running under, `null` where the server
   /// records nothing. The withdrawal button needs it and has nowhere else to
   /// read it from.
@@ -682,9 +685,10 @@ async function init() {
   // is clear by the time the candidate is actually working rather than holding
   // a caption nobody said.
   showCaptions();
-  await connect(preflight, presenting);
+  const startup = await connect(preflight, presenting);
+  if (!startup) return;
   publishCode();
-  state.endsAt = Date.now() + durationMin * 60 * 1000;
+  state.endsAt = startup.startedAt + durationMin * 60 * 1000;
   updateBeforeUnloadGuard();
   tickTimer();
   setInterval(tickTimer, 1000);
@@ -1336,6 +1340,8 @@ function runAudioCheck() {
 
 async function connect(preflight, presenting = false) {
   setAgentStateLabel(providerUiState("connecting").label);
+  state.interviewerReadiness = createInterviewerReadiness();
+  let offlineStartup = null;
   try {
     // Before the token, because the token is what precedes an Egress call. The
     // server refuses a recorded room without this row, so the ordering is
@@ -1417,6 +1423,17 @@ async function connect(preflight, presenting = false) {
           language: state.language,
         });
     }
+    const startup = await state.interviewerReadiness.wait;
+    if (startup.startup !== "ready") {
+      const error = new Error("Gemini startup check failed");
+      error.startup = startup;
+      throw error;
+    }
+    if (whiteboard) {
+      board.ready = true;
+      paintBoard();
+    }
+    return startup;
   } catch (error) {
     // Swallowed for the candidate, logged for everyone else. Offline practice
     // mode is a reasonable fallback but a terrible diagnosis: it looks the same
@@ -1431,9 +1448,20 @@ async function connect(preflight, presenting = false) {
     const joined = state.room;
     state.connected = false;
     state.room = null;
+    if (joined && error?.startup) state.startupCleanupRoom = joined;
     if (joined) void joined.disconnect?.()?.catch?.(() => {});
     stopPreflight(preflight);
+    stopLocalMedia();
+    state.interviewerReadiness.fail();
     const degraded = providerUiState("degraded", error?.message);
+    if (error?.startup) {
+      degraded.message = interviewerReconnectMessage(error.startup);
+    }
+    // A deployment with no live session still offers the old timed practice.
+    // A failed readiness check never turns a joined interview into that clock.
+    if (!error?.startup && !state.joinedRoom) {
+      offlineStartup = { startedAt: Date.now() };
+    }
     setAgentStateLabel(degraded.label);
     // A degraded start without a reason reads as the product working. The server
     // says why it refused, in words written for a candidate, and a busy server
@@ -1446,12 +1474,12 @@ async function connect(preflight, presenting = false) {
       true,
     );
   }
-  // Joined and recording, or offline with nothing to send: either way the
-  // board's first stroke now reaches everything that should see it.
+  // Offline practice keeps its board even after a failed readiness check.
   if (whiteboard) {
     board.ready = true;
     paintBoard();
   }
+  return offlineStartup;
 }
 
 // The replay: what the candidate was looking at, sent to the server so the
@@ -1520,7 +1548,11 @@ async function connectLiveKit(connection, preflight, presenting = false) {
   // the agent's participant record existed, and nothing ever rewrote it. An
   // agent that leaves now updates the label too, instead of leaving it claiming
   // an interviewer who is gone.
-  room.on(livekit.RoomEvent.ParticipantDisconnected, updateAgentState);
+  room.on(livekit.RoomEvent.ParticipantDisconnected, (participant) => {
+    if (participant?.identity === state.agentIdentity)
+      state.interviewerReadiness?.fail();
+    updateAgentState();
+  });
   room.on(livekit.RoomEvent.TrackSubscribed, updateAgentState);
   // The room's own connection had no handlers at all, so a mid-interview drop
   // left `state.connected` true, the UI silent, and every `publish` quietly
@@ -1550,6 +1582,9 @@ async function connectLiveKit(connection, preflight, presenting = false) {
     updateAgentState();
   });
   room.on(livekit.RoomEvent.Disconnected, () => {
+    const startupCleanup = state.startupCleanupRoom === room;
+    if (startupCleanup) state.startupCleanupRoom = null;
+    state.interviewerReadiness?.fail();
     state.connected = false;
     // Terminal, not transient: LiveKit fires Reconnecting for a recoverable
     // blip and only reaches here when it has given up. Dropping the reference
@@ -1560,10 +1595,12 @@ async function connectLiveKit(connection, preflight, presenting = false) {
     // waiting on an overlay for a report that could not arrive.
     if (state.phase === "report_recovery") reportRecovery.finish();
     state.room = null;
-    setBanner(
-      "connection",
-      providerUiState("degraded", "The interview connection dropped.").message,
-    );
+    if (!startupCleanup)
+      setBanner(
+        "connection",
+        providerUiState("degraded", "The interview connection dropped.")
+          .message,
+      );
     console.warn("codetrial room_disconnected");
   });
   // The participant is needed to tell Jim from any other remote audio, so both
@@ -2338,6 +2375,10 @@ function receiveControl(bytes) {
       message.type === "interviewer_state" &&
       typeof message.reconnecting === "boolean"
     ) {
+      if (message.startup) {
+        state.interviewerReadiness?.receive(message);
+        return;
+      }
       // Gemini caps how long one connection lasts, so this arrives several
       // times in a normal interview. It is the only notice the candidate gets
       // that the interviewer went deaf: the agent stays in the room across it,
