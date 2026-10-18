@@ -1,0 +1,113 @@
+:root {
+  /* The workspace is dark only: a light scheme would draw the browser's own
+     form controls light on this page. */
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+  --page: #18202b;
+  --ink: #eef3f8;
+  --link: #93cfff;
+  --warning: #f1bf6c;
+  --critical: #ff8f70;
+  --critical-surface: #3a1d17;
+}
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+}
+main {
+  max-width: 1050px;
+  margin: auto;
+  padding: 1.5rem;
+  background: var(--page);
+  overflow: auto;
+}
+main:fullscreen {
+  max-width: none;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+}
+header,
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+}
+a {
+  color: var(--link);
+}
+button,
+select,
+input {
+  font: inherit;
+  padding: 0.5rem;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: default;
+}
+label {
+  display: block;
+  margin: 1rem 0;
+}
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 350px;
+  font: 15px/1.5 monospace;
+  tab-size: 4;
+  padding: 1rem;
+}
+#message {
+  border: 1px solid var(--warning);
+  padding: 1rem;
+  margin-top: 1rem;
+}
+#phase {
+  margin-left: auto;
+}
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+[hidden] {
+  display: none !important;
+}
+#countdown {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  border: 2px solid var(--critical);
+  background: var(--critical-surface);
+  padding: 1rem;
+  font-size: 1.25rem;
+  font-weight: bold;
+}
+#preview {
+  display: block;
+  width: 240px;
+  max-width: 100%;
+  margin: 1rem 0;
+  border-radius: 0.5rem;
+}
+#calculator {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: end;
+}
+#calculator label {
+  margin: 0;
+}
+#calculator output {
+  font: 15px/1.5 monospace;
+  padding: 0.5rem;
+}
+#rules li,
+#rules-reminder li {
+  margin: 0.25rem 0;
+}

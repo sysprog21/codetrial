@@ -250,6 +250,15 @@ jobs:
         id: chromium
         uses: ./.github/actions/chromium
 
+      - name: Place the instructor packaging environment
+        if: matrix.lane == 'portable'
+        run: |
+          # Outside target/, which is cached: a restored venv would keep a
+          # package the requirements file has since dropped.
+          # The gate sets it up there itself, through the same path the
+          # instructor tool takes.
+          echo "CODETRIAL_TASK_TOOLS=$RUNNER_TEMP/task-tools" >> "$GITHUB_ENV"
+
       # The Python here generates the problem bank and drives two integration
       # harnesses, and `ruff check` is its only linter. The gate skips when the
       # binary is missing, which is right on a laptop and wrong here. pipx is on
@@ -748,8 +757,13 @@ jobs:
       - name: Verify the assets about to be embedded
         run: ./scripts/verify-vendor.sh
         shell: bash
+      # The device sign-in task mode uses needs a GitHub OAuth App's client
+      # ID compiled in. It is public, not a secret; a repository without the
+      # variable builds a release with no device sign-in, which says so.
       - name: Build the self-contained executable
         if: runner.os != 'Linux'
+        env:
+          CODETRIAL_GITHUB_CLIENT_ID: ${{ vars.CODETRIAL_GITHUB_CLIENT_ID }}
         run: cargo build --release --locked --target ${{ matrix.target }}
       # GitHub retired the Ubuntu 20.04 runner, but its glibc 2.31 remains the
       # useful Linux release baseline. Build inside Bullseye, which carries the
@@ -785,6 +799,8 @@ jobs:
       - name: Build Linux executable against the compatibility baseline
         if: runner.os == 'Linux'
         shell: bash
+        env:
+          CODETRIAL_GITHUB_CLIENT_ID: ${{ vars.CODETRIAL_GITHUB_CLIENT_ID }}
         run: |
           docker run --rm \
             --user "$(id -u):$(id -g)" \
@@ -795,6 +811,7 @@ jobs:
             --env CARGO_HOME=/cargo \
             --env CXX=/clang/bin/clang++ \
             --env GITHUB_SHA \
+            --env CODETRIAL_GITHUB_CLIENT_ID \
             ${{ matrix.image }} \
             cargo build --release --locked --target ${{ matrix.target }}
       # A successful link does not prove the Objective-C categories survived.

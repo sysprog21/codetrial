@@ -411,7 +411,7 @@ pub(crate) fn token_duration_min(value: Option<&Value>, recording_max_min: Optio
 /// never finished setting up, and every provider spent is a server that worked
 /// until this morning.
 #[allow(clippy::result_large_err)] // Responses are immediately returned by HTTP handlers.
-async fn reserved_room(
+pub(crate) async fn reserved_room(
     state: &AppState,
     require_fresh_room: bool,
 ) -> Result<(String, &crate::config::Provider), Response> {

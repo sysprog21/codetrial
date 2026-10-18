@@ -331,3 +331,107 @@ export function toggleLineComment(value, start, end, language) {
   // marker goes in still ends before it.
   return { value, start: map(start, true), end: map(end, start === end) };
 }
+
+// Set for exactly the duration of an `applyEditorEdit` call, and checked
+// first thing in a beforeinput listener, so the synthetic beforeinput the
+// edit fires is recognized by when it happens rather than by a property of
+// dubious reliability.
+let applyingProgrammatic = false;
+
+/// Whether the beforeinput being handled is `applyEditorEdit`'s own.
+export function applyingEditorEdit() {
+  return applyingProgrammatic;
+}
+
+/// Every edit an editor makes on the writer's behalf -- indentation, bracket
+/// pairs, closer type-over, paired deletion, restoring the starter -- lands
+/// here. Assigning `value` wipes the native undo stack, so one such edit would
+/// cost the writer their whole editing history. The change goes through the
+/// browser's editing command instead, over just the span that actually
+/// changed.
+///
+/// A replaced selection that ends in a newline is redone wrongly by Chromium:
+/// Ctrl+Shift+Z re-applies the deletion and only the tail of what was
+/// inserted, so the first lines of the new text are gone. With `splitNewline`
+/// the newline is left out of the selection and removed by a forward delete
+/// right after, which Chromium joins into the same undo step. Only the restore
+/// asks for it: it is the edit that replaces a whole buffer, and whether
+/// another browser records the two commands as one step has not been checked.
+///
+/// A browser that refuses the command gets the value assigned, which leaves
+/// nothing to undo. With `keepUndo` the buffer is instead left exactly as it
+/// was and the call returns false, so the caller can ask before losing the
+/// history. An edit the command half did, such as an insert whose forward
+/// delete was refused, is undone first.
+export function applyEditorEdit(
+  editor,
+  next,
+  { splitNewline = false, keepUndo = false } = {},
+) {
+  const previous = editor.value;
+  const selection = [
+    editor.selectionStart,
+    editor.selectionEnd,
+    editor.selectionDirection,
+  ];
+  // The temporary edit selection must not move the writer's active end.
+  const direction =
+    next.start === next.end ? "none" : editor.selectionDirection;
+  if (next.value === previous) {
+    editor.setSelectionRange(next.start, next.end, direction);
+    return true;
+  }
+  let head = 0;
+  while (
+    head < previous.length &&
+    head < next.value.length &&
+    previous[head] === next.value[head]
+  )
+    head += 1;
+  let tail = 0;
+  while (
+    tail < Math.min(previous.length, next.value.length) - head &&
+    previous[previous.length - 1 - tail] ===
+      next.value[next.value.length - 1 - tail]
+  )
+    tail += 1;
+  const end = previous.length - tail;
+  const inserted = next.value.slice(head, next.value.length - tail);
+  const endsInNewline =
+    splitNewline && end > head && previous[end - 1] === "\n";
+  const selectedEnd = endsInNewline ? end - 1 : end;
+  editor.setSelectionRange(head, selectedEnd);
+  let rewritten = true;
+  applyingProgrammatic = true;
+  try {
+    if (inserted)
+      rewritten = document.execCommand?.("insertText", false, inserted);
+    else if (selectedEnd > head) rewritten = document.execCommand?.("delete");
+    if (rewritten && endsInNewline)
+      rewritten = document.execCommand?.("forwardDelete");
+  } finally {
+    applyingProgrammatic = false;
+  }
+  if (!rewritten && keepUndo) {
+    if (editor.value !== previous) {
+      applyingProgrammatic = true;
+      try {
+        document.execCommand?.("undo");
+      } finally {
+        applyingProgrammatic = false;
+      }
+    }
+    if (editor.value !== previous) {
+      editor.value = previous;
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    editor.setSelectionRange(...selection);
+    return false;
+  }
+  if (!rewritten) {
+    editor.value = next.value;
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  editor.setSelectionRange(next.start, next.end, direction);
+  return true;
+}

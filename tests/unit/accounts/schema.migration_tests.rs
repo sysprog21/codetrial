@@ -1422,3 +1422,22 @@ fn the_schema_version_is_the_number_of_migrations_there_are() {
         "a migration was appended without bumping ACCOUNT_SCHEMA_VERSION"
     );
 }
+
+/// Task mode takes the signed-in user's GitHub id as the learner's identity,
+/// so only an id GitHub issued counts: zero and the negative ids minted for a
+/// self-declared login are no one's.
+#[test]
+fn only_a_positive_github_id_is_reported_on_the_session() {
+    let dir = scratch("session-github-id");
+    initialize_account_database(dir.as_ref()).unwrap();
+    let accounts = accounts_at(dir.as_ref());
+    for (login, github_id, expected) in [
+        ("issued", 42, Some(42)),
+        ("zero", 0, None),
+        ("declared", -7, None),
+    ] {
+        let session = sign_in_as(dir.as_ref(), login, github_id);
+        let user = session_user(&accounts, &session).unwrap().unwrap();
+        assert_eq!(user.github_id, expected, "{login}");
+    }
+}
