@@ -78,6 +78,32 @@ test("report recovery spends one retry after cooldown and times it from acceptan
   assert.equal(finalized(events).length, 1);
 });
 
+test("the server can lengthen a retry's wait but not shorten it", () => {
+  // A local model's regeneration runs under a longer deadline, which only the
+  // server knows; a smaller or missing value leaves the floor in place.
+  for (const [said, waited] of [
+    [270, 270_000],
+    [60, 145_000],
+    [undefined, 145_000],
+  ]) {
+    globalThis.CODETRIAL_REPORT_RETRY_WAIT_SECONDS = said;
+    try {
+      const { recovery, events, advance } = setup();
+      recovery.start(raw);
+      advance(30_000);
+      recovery.retry();
+      recovery.notice(accepted);
+      advance(waited - 1000);
+      assert.equal(events.filter((e) => e?.summary).length, 0, `${said}`);
+      advance(1000);
+      recovery.finish();
+      assert.equal(events.filter((e) => e?.summary).length, 1, `${said}`);
+    } finally {
+      delete globalThis.CODETRIAL_REPORT_RETRY_WAIT_SECONDS;
+    }
+  }
+});
+
 test("an accepted retry outlives the offer's own expiry", () => {
   const { recovery, events, advance } = setup();
   recovery.start(raw);

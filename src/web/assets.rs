@@ -295,6 +295,15 @@ pub(crate) async fn runtime_config_handler(State(state): State<AppState>) -> Res
         crate::recording::CONSENT_VERSION,
         crate::recording::REPLAY_VERSION
     ));
+
+    // Which report deadline is in force depends on where reports are written,
+    // and that is known here rather than in the page.
+    let report_timeout = crate::livekit::report_timeout();
+    body.push_str(&format!(
+        "globalThis.CODETRIAL_REPORT_ESCAPE_WAIT_MS = {};\nglobalThis.CODETRIAL_REPORT_RETRY_WAIT_SECONDS = {};\n",
+        crate::livekit::report_escape_wait(report_timeout).as_millis(),
+        crate::livekit::report_retry_wait(report_timeout).as_secs()
+    ));
     (
         StatusCode::OK,
         [

@@ -80,6 +80,7 @@ pub(crate) use prompts::{
 };
 pub(crate) use report::{
     MAX_ERROR_CHARS, Sanitized, sanitize_example_drawing_candidate, sanitize_report_candidate,
+    snap_plan_weaknesses,
 };
 pub use report::{
     MAX_SUMMARY_TEXT, ReportRounds, fallback_report, final_report, names_published_problem,
