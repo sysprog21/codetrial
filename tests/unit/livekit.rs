@@ -1317,6 +1317,46 @@ fn the_browser_escape_hatch_outlasts_the_report_deadline() {
     );
 }
 
+/// Both Skip exits and a generation-time disconnect must retain teardown.
+#[test]
+fn reportless_teardown_is_shared_and_retains_its_cleanup_steps() {
+    let source = include_str!("../../src/livekit/packets.rs");
+
+    let cleanup = source
+        .split("async fn leave_without_report(")
+        .nth(1)
+        .expect("reportless teardown helper exists")
+        .split_once("\n}\n")
+        .expect("reportless teardown helper has a closing brace")
+        .0;
+
+    for effect in [
+        "context.media.audio = None;",
+        "context.media.video = None;",
+        "context.media.audio_bytes.clear();",
+        "context.gemini.shutdown().await",
+        "leave_room(room).await;",
+    ] {
+        assert!(
+            cleanup.contains(effect),
+            "reportless teardown must retain {effect}"
+        );
+    }
+
+    let handler = source
+        .split("async fn apply_data_packet(")
+        .nth(1)
+        .expect("packet handler exists");
+
+    assert_eq!(
+        handler
+            .matches("leave_without_report(room, context).await;")
+            .count(),
+        3,
+        "direct Skip, generation Skip, and disconnect must share teardown"
+    );
+}
+
 /// A publish only queues the packet, so leaving right behind it can drop the
 /// report. The ending leaves once delivery settles, with no fixed sleep
 /// standing in for it, and a report goes out only through the receipt wait.
@@ -1331,12 +1371,29 @@ fn the_ending_leaves_only_after_the_report_delivery_settles() {
         .split("\n}\n")
         .next()
         .unwrap_or_default();
-    let publish = ending
+
+    // Skip and disconnect leave without publishing. Only completed generation
+    // enters normal report delivery, which must settle before leaving.
+    assert!(
+        ending.contains("report::GenerationOutcome::Skipped =>"),
+        "the skip branch is explicit"
+    );
+    assert!(
+        ending.contains("report::GenerationOutcome::Disconnected =>"),
+        "the disconnect branch is explicit"
+    );
+    let normal_ending = ending
+        .split("    context.media.audio = None;")
+        .last()
+        .expect("normal report delivery follows generation handling");
+    let publish = normal_ending
         .find("publish_with_recovery(")
         .expect("the ending publishes through recovery");
-    let leave = ending.find("leave_room(").expect("the ending leaves");
+    let leave = normal_ending
+        .find("leave_room(")
+        .expect("the ending leaves");
     assert!(publish < leave);
-    assert!(!ending[publish..leave].contains("sleep("));
+    assert!(!normal_ending[publish..leave].contains("sleep("));
 
     let report = include_str!("../../src/livekit/report.rs");
     let live = report

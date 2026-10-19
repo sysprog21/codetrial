@@ -241,7 +241,13 @@ function renamedEntries(entries, pages, markUnmapped) {
 
 export async function saveReportHistory(
   entry,
-  { fetcher = fetch, storage, persistAccount = true } = {},
+  {
+    fetcher = fetch,
+    storage,
+    persistAccount = true,
+    onAccountSaved,
+    onAccountSaveAttempt,
+  } = {},
 ) {
   if (!persistAccount) {
     return { local: "skipped", account: "guest" };
@@ -249,7 +255,7 @@ export async function saveReportHistory(
 
   const local = saveLocalReport(entry, storage);
   const account = await inOrder(entry?.id, () =>
-    saveAccountReport(entry, fetcher),
+    saveAccountReport(entry, fetcher, onAccountSaved, onAccountSaveAttempt),
   );
   return { local, account };
 }
@@ -326,23 +332,52 @@ export async function clearReportHistory({
 /// again on the next read, and "deleted" reported a removal that never ran.
 export async function deleteReport(
   id,
-  { account = false, fetcher = fetch, storage } = {},
+  {
+    account = false,
+    requireAccountDeletion = false,
+    expectedOwnerId,
+    localOnly = false,
+    fetcher = fetch,
+    storage,
+  } = {},
 ) {
   if (typeof id !== "string" || id === "") return "failed";
+  if (localOnly && (account || requireAccountDeletion)) return "failed";
   try {
-    const session = await sessionState(fetcher);
+    const session = localOnly ? "out" : await sessionState(fetcher);
     if (session === "failed") return "failed";
     let fromAccount = false;
     if (session === "in") {
       const deleted = await fetcher(`/api/reports/${encodeURIComponent(id)}`, {
         method: "DELETE",
+        ...(expectedOwnerId == null
+          ? {}
+          : {
+              headers: {
+                "x-codetrial-report-owner": String(expectedOwnerId),
+              },
+            }),
         signal: AbortSignal.timeout(requestTimeoutMs),
       });
       if (!deleted.ok) return "failed";
       // Only a count of 0 is a miss. A 200 whose body did not parse still ran
       // the delete, and calling that missing would hide a removal.
       const body = await deleted.json().catch(() => null);
-      fromAccount = body?.deleted !== 0;
+      // A confirmed account save must also have a confirmed account delete.
+      // Another tab may have switched to an account that does not own this id.
+      if (requireAccountDeletion) {
+        if (expectedOwnerId == null) {
+          if (body?.deleted !== 1) return "failed";
+        } else if (![0, 1].includes(body?.deleted)) {
+          return "failed";
+        }
+      }
+      // A matching owner makes a zero-row delete idempotent: a previous
+      // request may have succeeded before its response was lost.
+      fromAccount =
+        requireAccountDeletion && expectedOwnerId != null
+          ? true
+          : body?.deleted !== 0;
     } else if (account !== false) {
       return "failed";
     }
@@ -438,18 +473,30 @@ function boundedReviews(reviews) {
   return { retained, json: `[${texts.join(",")}]` };
 }
 
-async function saveAccountReport(entry, fetcher) {
+async function saveAccountReport(
+  entry,
+  fetcher,
+  onAccountSaved,
+  onAccountSaveAttempt,
+) {
   const session = await sessionState(fetcher);
   if (session === "out") return "skipped";
   if (session === "failed") return "failed";
   try {
+    // Once POST starts, a timeout cannot prove the server did not save it.
+    onAccountSaveAttempt?.();
     const saved = await fetcher("/api/reports", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(entry),
       signal: AbortSignal.timeout(requestTimeoutMs),
     });
-    return saved.ok ? "saved" : "failed";
+    if (!saved.ok) return "failed";
+    const body = await saved.json().catch(() => null);
+    if (Number.isSafeInteger(body?.ownerId) && body.ownerId > 0) {
+      onAccountSaved?.(body.ownerId);
+    }
+    return "saved";
   } catch {
     return "failed";
   }

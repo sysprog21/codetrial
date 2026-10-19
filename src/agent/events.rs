@@ -829,6 +829,16 @@ fn apply_control(
                 ..control_time_warning(state)
             }
         }
+        Some("skip_report") if !state.ended => {
+            state.ended = true;
+            state
+                .evidence_ledger
+                .record_lifecycle(receipt_timestamp_ms, LifecycleTransition::Ended);
+            DataEventResult {
+                skip_report: true,
+                ..DataEventResult::default()
+            }
+        }
         Some("end_interview") if !state.ended => {
             control_end_interview(state, payload, receipt_timestamp_ms)
         }

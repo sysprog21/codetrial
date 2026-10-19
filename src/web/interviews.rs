@@ -52,13 +52,38 @@ pub(crate) async fn delete_reports_handler(Owner { accounts, user }: Owner) -> R
     }
 }
 
+// Lobby deletion has no owner header. Skip supplies the owner of the successful
+// save, so a changed session cannot delete or acknowledge it. The authenticated
+// user, not the client header, selects the database owner.
+fn report_owner_matches(headers: &axum::http::HeaderMap, user_id: i64) -> bool {
+    let Some(expected) = headers.get("x-codetrial-report-owner") else {
+        return true;
+    };
+    expected
+        .to_str()
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        == Some(user_id)
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/web/interviews.rs"]
+mod owner_checks;
+
 /// 200 with a count of 0 rather than a 404 when nothing matched, the same shape
 /// the bulk delete answers with. The report is gone either way, so a retry
 /// after a timed-out first attempt succeeds instead of reporting a failure.
 pub(crate) async fn delete_report_handler(
     Owner { accounts, user }: Owner,
     UriPath(id): UriPath<String>,
+    request: Request<Body>,
 ) -> Response {
+    if !report_owner_matches(request.headers(), user.id) {
+        return json_response(
+            StatusCode::CONFLICT,
+            json!({ "error": "Report belongs to a different account session." }),
+        );
+    }
     match blocking(move || delete_report(&accounts, user.id, &id)).await {
         Ok(deleted) => json_response(StatusCode::OK, json!({ "deleted": deleted })),
         Err(_) => json_response(
@@ -104,12 +129,16 @@ pub(crate) async fn save_report_handler(
         );
     };
     let problem_id = problem_id.to_string();
+    let owner_id = user.id;
     let saved = {
         let report_id = report_id.clone();
-        blocking(move || save_report(&accounts, user.id, &report_id, &problem_id, &payload)).await
+        blocking(move || save_report(&accounts, owner_id, &report_id, &problem_id, &payload)).await
     };
     match saved {
-        Ok(ReportSave::Saved) => json_response(StatusCode::OK, json!({ "id": report_id })),
+        Ok(ReportSave::Saved) => json_response(
+            StatusCode::OK,
+            json!({ "id": report_id, "ownerId": owner_id }),
+        ),
         Ok(ReportSave::NotOwner) => json_response(
             StatusCode::CONFLICT,
             json!({ "error": "Report id belongs to another user." }),

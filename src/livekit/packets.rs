@@ -184,8 +184,21 @@ pub(super) async fn end_through_control(
     Ok(())
 }
 
-/// Applies one decoded data packet. `Break` means the interview is over and the
-/// report has been published.
+/// Tear down a session that exits without publishing a report.
+async fn leave_without_report(room: &RoomLink, context: &mut GeminiEventContext<'_>) {
+    context.media.audio = None;
+    context.media.video = None;
+    context.media.audio_bytes.clear();
+
+    if let Err(error) = context.gemini.shutdown().await {
+        eprintln!("Gemini close without report failed ({error})");
+    }
+
+    leave_room(room).await;
+}
+
+/// Handles one decoded data packet. `Break` ends the interview, whether the
+/// report was delivered, skipped, or generation stopped on disconnect.
 pub(super) async fn handle_data_packet(
     room: &RoomLink,
     context: &mut GeminiEventContext<'_>,
@@ -411,6 +424,18 @@ pub(super) async fn apply_data_packet(
         }
     }
     context.state.settle_earlier_steps(delivered);
+
+    if result.skip_report {
+        eprintln!(
+            "codetrial report_delivery room={} outcome=skipped",
+            interview.boot.room_name
+        );
+
+        close_turns(room, context);
+        leave_without_report(room, context).await;
+        return Ok(ControlFlow::Break(()));
+    }
+
     let Some(reason) = result.finish_interview else {
         return Ok(ControlFlow::Continue(()));
     };
@@ -468,18 +493,69 @@ pub(super) async fn apply_data_packet(
         close_turns(room, context);
         context.transcripts.flush(TRANSCRIPT_FLUSH_LIMIT).await;
     };
-    let (generated, ()) = tokio::join!(
-        generate_report_bounded(
-            interview.boot,
-            &assessment.prompt,
-            &report_boards,
-            (assessment.rounds(), assessment.drawing_received()),
-            api_key,
-            crate::gemini::GENERATION_SEED,
-            &assessment.refused,
-        ),
-        farewell
-    );
+
+    // A queued Skip or disconnect can win until_skip's biased select before the
+    // generation future is polled. Only then is its cost unknown.
+    let generation_polled = std::sync::atomic::AtomicBool::new(false);
+    let generated = report::until_skip(
+        async {
+            generation_polled.store(true, std::sync::atomic::Ordering::Relaxed);
+            tokio::join!(
+                generate_report_bounded(
+                    interview.boot,
+                    &assessment.prompt,
+                    &report_boards,
+                    (assessment.rounds(), assessment.drawing_received()),
+                    api_key,
+                    crate::gemini::GENERATION_SEED,
+                    &assessment.refused,
+                ),
+                farewell,
+            )
+            .0
+        },
+        &mut recovery_events,
+        interview.candidate_identity,
+        || {
+            room.connected().remote_participants().contains_key(
+                &::livekit::id::ParticipantIdentity(interview.candidate_identity.to_string()),
+            )
+        },
+    )
+    .await;
+    let generated = match generated {
+        report::GenerationOutcome::Completed(generated) => generated,
+        report::GenerationOutcome::Skipped => {
+            if generation_polled.load(std::sync::atomic::Ordering::Relaxed) {
+                eprintln!(
+                    "codetrial report_generation room={} stage=generation outcome=cancelled cost=unknown",
+                    interview.boot.room_name
+                );
+            }
+            eprintln!(
+                "codetrial report_delivery room={} outcome=skipped",
+                interview.boot.room_name
+            );
+            // No packet is created and recovery is not entered.
+            leave_without_report(room, context).await;
+            return Ok(ControlFlow::Break(()));
+        }
+        report::GenerationOutcome::Disconnected => {
+            if generation_polled.load(std::sync::atomic::Ordering::Relaxed) {
+                eprintln!(
+                    "codetrial report_generation room={} stage=generation outcome=cancelled cost=unknown",
+                    interview.boot.room_name
+                );
+            }
+            eprintln!(
+                "codetrial report_delivery room={} outcome=disconnected stage=generation",
+                interview.boot.room_name
+            );
+            // The room is already gone; do not wait for report recovery.
+            leave_without_report(room, context).await;
+            return Ok(ControlFlow::Break(()));
+        }
+    };
     context.media.audio = None;
     context.media.video = None;
     context.media.audio_bytes.clear();

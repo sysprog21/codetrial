@@ -14,6 +14,12 @@
       }
     },
     {
+      "name": "skip report",
+      "payload": {
+        "type": "skip_report"
+      }
+    },
+    {
       "name": "thinking start",
       "payload": {
         "type": "thinking",

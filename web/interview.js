@@ -79,6 +79,7 @@ import {
   endInterviewPayload,
   drawingActivityPayload,
   retryReportPayload,
+  skipReportPayload,
   escapeHtml,
   formatTime,
   integrityEventPayload,
@@ -161,6 +162,7 @@ import {
 } from "./recording-state.js";
 import {
   assignedId as randomId,
+  deleteReport,
   reportIsPersisted,
   saveReportHistory,
 } from "./history.js";
@@ -452,6 +454,12 @@ const state = {
   // the Past attempts flow can reopen.
   reportPersisted: false,
   isGuest: false,
+  savedToAccount: false,
+  possiblySavedToAccount: false,
+  savedReportOwnerId: null,
+  savedReportOwnerConflict: false,
+  skipCleanupPending: false,
+  skipPublishPending: false,
   phase: "live",
   transcript: null, // createTranscriptView, built in init once nodes exist
   latestSummary: null,
@@ -516,6 +524,7 @@ window.addEventListener("pageshow", (event) => {
 });
 
 function updateBeforeUnloadGuard() {
+  if (state.phase === "skipped") return;
   beforeUnloadGuard.setEnabled(
     shouldWarnBeforeUnload({
       endsAt: state.endsAt,
@@ -593,6 +602,10 @@ const nodes = {
   endingWithdrawConsent: document.querySelector("#ending-withdraw-consent"),
   retryReport: document.querySelector("#retry-report"),
   forceReport: document.querySelector("#force-report"),
+  skipReport: document.querySelector("#skip-report"),
+  confirmSkipReport: document.querySelector("#confirm-skip-report"),
+  cancelSkipReport: document.querySelector("#cancel-skip-report"),
+  leaveAnyway: document.querySelector("#leave-anyway"),
   leaveRoom: document.querySelector("#leave-room"),
   endingDetail: document.querySelector("#ending-detail"),
   endingElapsed: document.querySelector("#ending-elapsed"),
@@ -1142,6 +1155,10 @@ function bindEvents() {
   );
   nodes.retryReport.addEventListener("click", () => reportRecovery.retry());
   nodes.forceReport.addEventListener("click", showReport);
+  nodes.skipReport.addEventListener("click", requestSkipReport);
+  nodes.confirmSkipReport.addEventListener("click", confirmSkipReport);
+  nodes.cancelSkipReport.addEventListener("click", cancelSkipReport);
+  nodes.leaveAnyway.addEventListener("click", leaveAnywayAfterSkip);
   nodes.leaveRoom.addEventListener("click", leaveRoom);
   nodes.run.addEventListener("click", runTests);
   // Cmd+Enter or Ctrl+Enter runs the tests from anywhere but another text
@@ -2153,6 +2170,9 @@ async function connectLiveKit(connection, preflight, presenting = false) {
         return;
       }
       if (!acceptsReport(topic, participant)) return;
+      dismissSkipConfirmation();
+      // A skipped report must not be claimed or acknowledged.
+      if (state.phase === "skipped") return;
       // The report has arrived. Nothing may offer the offline summary or a way
       // out while it is drawn, or the candidate could save an unscored summary
       // beside it; `reportRenderFailed` gives the ways out back. Only the copy
@@ -2169,11 +2189,14 @@ async function connectLiveKit(connection, preflight, presenting = false) {
       await receiveReportDelivery(
         payload,
         first,
-        (receipt) =>
-          room.localParticipant.publishData(
+        (receipt) => {
+          // Hashing is asynchronous; Skip may have been confirmed meanwhile.
+          if (state.phase === "skipped") return;
+          return room.localParticipant.publishData(
             new TextEncoder().encode(JSON.stringify(receipt)),
             { reliable: true, topic: topics.control },
-          ),
+          );
+        },
         (report, flushed) => receiveReport(room, report, flushed),
       );
     },
@@ -2511,6 +2534,8 @@ window.addEventListener("pagehide", finalizeRecoveryOnPageHide);
 /// room stays up until then so the agent can stop retransmitting. Recovery's
 /// own finalize has no receipt to wait for.
 async function receiveReport(room, payload, flushed = Promise.resolve()) {
+  if (state.phase === "skipped") return;
+
   // The wait ended when this packet arrived, whatever becomes of it below.
   stopEndingEscape();
   let rendered = false;
@@ -3714,11 +3739,13 @@ function endInterview(reason) {
       }, REPORT_ESCAPE_WAIT_MS),
     ];
   }
-  const publishEnd = () =>
-    publish(
+  const publishEnd = () => {
+    if (state.phase === "skipped") return;
+    return publish(
       topics.control,
       endInterviewPayload(reason, currentCode(), state.language),
     );
+  };
   if (whiteboard) {
     void boardUploadsSettled().then(publishEnd);
   } else if (exampleFinished) {
@@ -3752,7 +3779,263 @@ function stopEndingClock() {
   nodes.endingElapsed.textContent = "";
 }
 
+function requestSkipReport() {
+  if (state.phase === "skipped") {
+    void skipReportAndExit();
+    return;
+  }
+  if (!["ending", "report_recovery"].includes(state.phase)) return;
+  if (state.skipConfirmationPending) return;
+
+  state.skipConfirmationPending = true;
+  state.skipConfirmationDetail = nodes.endingDetail.textContent;
+  nodes.endingDetail.textContent =
+    "Skip this report? It will be discarded. You can keep waiting instead.";
+  nodes.skipReport.hidden = true;
+  nodes.confirmSkipReport.hidden = false;
+  nodes.cancelSkipReport.hidden = false;
+}
+
+function dismissSkipConfirmation() {
+  if (!state.skipConfirmationPending) return;
+  state.skipConfirmationPending = false;
+  nodes.confirmSkipReport.hidden = true;
+  nodes.cancelSkipReport.hidden = true;
+}
+
+function cancelSkipReport() {
+  if (!state.skipConfirmationPending) return;
+  dismissSkipConfirmation();
+  if (!["ending", "report_recovery"].includes(state.phase)) return;
+  nodes.skipReport.hidden = false;
+  nodes.endingDetail.textContent = state.skipConfirmationDetail;
+}
+
+async function confirmSkipReport() {
+  if (!state.skipConfirmationPending) return;
+  state.skipConfirmationPending = false;
+  nodes.confirmSkipReport.hidden = true;
+  nodes.cancelSkipReport.hidden = true;
+  if (!["ending", "report_recovery"].includes(state.phase)) return;
+  await skipReportAndExit();
+}
+
+async function skipReportAndExit() {
+  if (!["ending", "report_recovery", "skipped"].includes(state.phase)) return;
+  if (state.skipCleanupPending || state.skipPublishPending) return;
+
+  if (state.phase === "skipped") {
+    // An unsuccessful publication still owns the room. Retry publishing,
+    // not just local cleanup.
+    if (!state.room) {
+      await finishSkippedReportCleanup();
+      return;
+    }
+  } else {
+    state.phase = "skipped";
+
+    // Stop recovery callbacks before the first await, so a timer cannot
+    // restore report_recovery and save a report after Skip was confirmed.
+    reportRecovery.stop();
+    stopEndingEscape();
+    stopEndingClock();
+    // Confirmation ends report generation; do not keep showing its spinner.
+    if (nodes.endingTitle) nodes.endingTitle.textContent = "Skipping report...";
+    const spinner = nodes.ending?.querySelector?.(".spinner");
+    if (spinner) spinner.hidden = true;
+    if (nodes.endingDetail)
+      nodes.endingDetail.textContent =
+        "Stopping report generation and cleaning up this attempt.";
+    nodes.skipReport.hidden = true;
+    nodes.leaveRoom.hidden = true;
+    nodes.retryReport.hidden = true;
+    nodes.forceReport.hidden = true;
+    stopAvatar();
+    stopLocalMedia();
+    beforeUnloadGuard.setEnabled(true);
+  }
+
+  state.skipSendFailed = false;
+  state.leaveAnywayPending = false;
+  if (nodes.leaveAnyway) {
+    nodes.leaveAnyway.hidden = true;
+    nodes.leaveAnyway.textContent = "Leave anyway";
+  }
+  state.skipPublishPending = true;
+
+  if (state.room) {
+    const room = state.room;
+    let publicationTimeout;
+    let onReconnected;
+
+    try {
+      await Promise.race([
+        (async () => {
+          if (!state.connected) {
+            await new Promise((resolve) => {
+              onReconnected = () => resolve();
+              room.on(
+                window.LivekitClient.RoomEvent.Reconnected,
+                onReconnected,
+              );
+
+              // The connection may have recovered before the listener was installed.
+              if (state.connected) resolve();
+            });
+          }
+
+          await sendData(topics.control, skipReportPayload());
+        })(),
+        new Promise((_, reject) => {
+          publicationTimeout = setTimeout(
+            () => reject(new Error("Skip report publication timed out")),
+            5000,
+          );
+        }),
+      ]);
+    } catch (error) {
+      console.warn("codetrial skip_report_publish_failed", error);
+      // The agent may still be generating. Keep the room for publication retry.
+      beforeUnloadGuard.setEnabled(true);
+      nodes.ending.hidden = false;
+      nodes.skipReport.hidden = false;
+      nodes.skipReport.textContent = "Retry Skip and exit";
+      state.skipSendFailed = true;
+      state.leaveAnywayPending = false;
+      if (nodes.leaveAnyway) {
+        nodes.leaveAnyway.hidden = false;
+        nodes.leaveAnyway.textContent = "Leave anyway";
+      }
+      nodes.endingDetail.textContent =
+        "Could not send Skip. Retry before leaving; report generation may continue.";
+      window.alert(
+        "Skip was not sent. Retry before leaving; report generation may continue.",
+      );
+      return;
+    } finally {
+      clearTimeout(publicationTimeout);
+      if (onReconnected) {
+        room.off(window.LivekitClient.RoomEvent.Reconnected, onReconnected);
+      }
+      state.skipPublishPending = false;
+    }
+  } else {
+    state.skipPublishPending = false;
+  }
+
+  beforeUnloadGuard.setEnabled(true);
+
+  const room = state.room;
+  state.room = null;
+  state.connected = false;
+
+  void room?.disconnect?.().catch?.((error) => {
+    console.warn("codetrial skip_report_disconnect_failed", error);
+  });
+
+  await finishSkippedReportCleanup();
+}
+
+function leaveAnywayAfterSkip() {
+  if (
+    state.phase !== "skipped" ||
+    state.skipCleanupPending ||
+    state.skipPublishPending ||
+    (state.room && !state.skipSendFailed)
+  )
+    return;
+
+  if (!state.leaveAnywayPending) {
+    state.leaveAnywayPending = true;
+    nodes.leaveAnyway.textContent = "Confirm leave anyway";
+    nodes.endingDetail.textContent =
+      "A report may remain saved on this device or in an account. " +
+      "Leaving does not delete it. Select Confirm leave anyway to proceed, " +
+      "or retry cleanup.";
+    return;
+  }
+
+  // The candidate explicitly chose to abandon a failed Skip publication.
+  // Do not leave an active room running after navigating away.
+  const room = state.room;
+  state.room = null;
+  state.connected = false;
+  void room?.disconnect?.().catch?.((error) => {
+    console.warn("codetrial skip_leave_disconnect_failed", error);
+  });
+  beforeUnloadGuard.setEnabled(false);
+  window.location.href = "/";
+}
+
+async function finishSkippedReportCleanup() {
+  if (state.skipCleanupPending) return;
+  state.skipCleanupPending = true;
+  state.leaveAnywayPending = false;
+  if (nodes.leaveAnyway) {
+    nodes.leaveAnyway.hidden = true;
+    nodes.leaveAnyway.textContent = "Leave anyway";
+  }
+  try {
+    // A late POST must finish before its report can be removed.
+    await Promise.allSettled([...(saveHistory.pending ?? [])]);
+    const accountMayExist =
+      state.savedToAccount || state.possiblySavedToAccount;
+    if (
+      state.reportId &&
+      (!state.isGuest || accountMayExist || state.skipAccountDeleted)
+    ) {
+      if (state.savedToAccount && state.savedReportOwnerConflict) {
+        throw new Error("Report copies under different accounts remain");
+      }
+      // Without an owner id, deleteReport retains its conservative
+      // deleted:1 requirement. Do not trap the candidate before trying it.
+      const result = await deleteReport(state.reportId, {
+        account: accountMayExist,
+        requireAccountDeletion: accountMayExist,
+        ...(accountMayExist && state.savedReportOwnerId != null
+          ? { expectedOwnerId: state.savedReportOwnerId }
+          : {}),
+        ...(state.skipAccountDeleted ? { localOnly: true } : {}),
+      });
+      if (result === "account-deleted-local-failed") {
+        // Account cleanup succeeded. Even after sign-out, retry local cleanup.
+        state.skipAccountDeleted = true;
+        state.savedToAccount = false;
+        state.possiblySavedToAccount = false;
+      }
+      if (!["deleted", "missing"].includes(result)) {
+        throw new Error(`Report cleanup returned ${result}`);
+      }
+    }
+    beforeUnloadGuard.setEnabled(false);
+    window.location.href = "/";
+  } catch (error) {
+    beforeUnloadGuard.setEnabled(true);
+    console.warn("codetrial skip_report_cleanup_failed", error);
+    nodes.ending.hidden = false;
+    nodes.skipReport.hidden = false;
+    const signInRequired =
+      (state.savedToAccount || state.possiblySavedToAccount) &&
+      String(error).includes("Report cleanup returned failed");
+    nodes.skipReport.textContent = "Retry cleanup and exit";
+    if (nodes.leaveAnyway) nodes.leaveAnyway.hidden = false;
+    nodes.endingDetail.textContent = signInRequired
+      ? "Account cleanup failed. You may need to sign in again before retrying."
+      : "Could not remove the saved report. Retry cleanup before leaving.";
+    window.alert(
+      signInRequired
+        ? "Account cleanup failed. You may need to sign in again before retrying."
+        : "Could not remove this interview report. Please retry cleanup and exit.",
+    );
+  } finally {
+    state.skipCleanupPending = false;
+  }
+}
+
 function leaveRoom() {
+  // Skip Report owns navigation until report cleanup completes.
+  if (state.phase === "skipped") return;
+
   if (state.phase === "report_recovery") {
     reportRecovery.finish();
     return;
@@ -3776,7 +4059,12 @@ function leaveRoom() {
 async function showReport() {
   // An arrived report outranks the offline summary, including from the timer
   // `endInterview` sets when no report is expected.
-  if (state.phase === "report" || state.reportReceiving) return;
+  if (
+    state.phase === "report" ||
+    state.phase === "skipped" ||
+    state.reportReceiving
+  )
+    return;
   state.phase = "report";
   // The offline summary is now offered while a room is still up -- it used to
   // be hidden for the whole life of one -- so this is the one report path that
@@ -3858,6 +4146,9 @@ function reportRenderFailed(error, { offlineSummary }) {
   // way now.
   stopEndingEscape();
   nodes.report.hidden = true;
+  // The report has already arrived. Skip must not delete it after a
+  // rendering failure merely because the ending overlay is visible again.
+  nodes.skipReport.hidden = true;
   nodes.ending.hidden = false;
   nodes.endingDetail.textContent = providerUiState(
     offlineSummary ? "report_unreadable" : "report_undrawable",
@@ -3923,6 +4214,9 @@ function unclearLines() {
 }
 
 async function saveHistory(report = state.report) {
+  // A confirmed Skip is terminal: even late recovery callbacks must not save.
+  if (state.phase === "skipped")
+    return { local: "skipped", account: "skipped" };
   // The interview id travels with the report so the replay page can put the
   // two beside each other. Reports are keyed by their own id and recordings by
   // theirs, and without this the only thing relating them is the clock.
@@ -3956,9 +4250,36 @@ async function saveHistory(report = state.report) {
   const generation = ++saveGeneration;
   state.reportPersisted = false;
   updateBeforeUnloadGuard();
-  const result = await saveReportHistory(entry, {
+  const pendingSaves = (saveHistory.pending ??= new Set());
+  const pending = saveReportHistory(entry, {
     persistAccount: !state.isGuest,
+    onAccountSaveAttempt: () => {
+      state.possiblySavedToAccount = true;
+    },
+    onAccountSaved: (ownerId) => {
+      if (
+        state.savedReportOwnerId != null &&
+        state.savedReportOwnerId !== ownerId
+      ) {
+        // Different sessions saved this report. Neither owner's cleanup
+        // can stand in for cleanup of both account copies.
+        state.savedReportOwnerConflict = true;
+      } else if (!state.savedReportOwnerConflict) {
+        state.savedReportOwnerId = ownerId;
+      }
+    },
   });
+  pendingSaves.add(pending);
+  let result;
+  try {
+    result = await pending;
+    // An earlier account copy may survive a later failed or local-only save.
+    if (result?.account === "saved") {
+      state.savedToAccount = true;
+    }
+  } finally {
+    pendingSaves.delete(pending);
+  }
   if (generation === saveGeneration && reportIsPersisted(result)) {
     state.reportPersisted = true;
     updateBeforeUnloadGuard();

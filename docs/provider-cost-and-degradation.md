@@ -334,11 +334,26 @@ Watch `codetrial dispatch_refused ... reason=at_capacity` and
 report retry_unavailable` (a key rotation lost during backoff, without another
 HTTP call), `codetrial report_recovery_notice_failed`, `codetrial
 report_publish_failed`, `codetrial report_receipt_missing`, `codetrial
-report_delivery ... outcome=acknowledged|unconfirmed|failed`, `codetrial
+report_delivery ... outcome=acknowledged|unconfirmed|failed|skipped|disconnected`, `codetrial
 live_usage ... outcome=billing`, and the bounded incomplete-report categories.
 Each recovery window also keeps the agent and the candidate connected to
 LiveKit for up to about seven minutes after the interview, which counts against
 connection-minute quota like interview time.
+
+A report generation interrupted by candidate Skip or a room disconnect can
+cancel a Gemini HTTP future after its request has already reached the provider.
+In that case, the response may never be decoded, so token usage and actual
+provider cost are unknown, not zero. The agent records
+`codetrial report_generation room=... stage=generation outcome=cancelled
+cost=unknown`. A recovery regeneration interrupted after its generation
+future has started records the same marker with `stage=recovery`, including
+Skip, room disconnect and rejoin-grace expiry. A regeneration that has not
+started, or has already completed, is not logged as cancelled.
+This is a conservative cancellation marker, not evidence that
+the provider charged for the request; it must not be added as a numeric
+zero-cost sample. A room disconnect also records `codetrial report_delivery
+room=... outcome=disconnected stage=generation` and does not enter report
+recovery.
 
 Raise concurrency only after checking provider minutes, Gemini limits, CPU and
 audio capacity, and the token burst policy. The deterministic dispatcher,

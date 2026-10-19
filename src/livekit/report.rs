@@ -152,6 +152,23 @@ pub(super) async fn generate_report_bounded(
 pub(super) const DELIVERY_ATTEMPTS: usize = 3;
 pub(super) const DELIVERY_WAIT: Duration = Duration::from_secs(5);
 
+/// A Skip sent just before disconnect may lose its participant attribution
+/// when LiveKit removes the candidate from the roster. Accept an unattributed
+/// Skip only after the candidate is known to be absent.
+fn is_skip_report_with_presence(
+    topic: Option<&str>,
+    sender: Option<&str>,
+    candidate: &str,
+    payload: &[u8],
+    candidate_gone: bool,
+) -> bool {
+    topic == Some(crate::runtime::TOPIC_CONTROL)
+        && (super::is_interview_participant(sender, candidate)
+            || (sender.is_none() && candidate_gone))
+        && serde_json::from_slice::<serde_json::Value>(payload)
+            .is_ok_and(|value| value["type"] == "skip_report")
+}
+
 fn is_report_receipt(
     topic: Option<&str>,
     sender: Option<&str>,
@@ -174,6 +191,9 @@ fn is_report_receipt(
 
 pub(super) trait DeliveryEvent {
     fn acknowledges(&self, candidate: &str, id: &str, candidate_gone: bool) -> bool;
+    fn skips_report(&self, _candidate: &str, _candidate_gone: bool) -> bool {
+        false
+    }
     fn disconnected(&self) -> bool {
         false
     }
@@ -203,8 +223,87 @@ impl DeliveryEvent for RoomEvent {
             false
         }
     }
+    fn skips_report(&self, candidate: &str, candidate_gone: bool) -> bool {
+        if let Self::DataReceived {
+            payload,
+            topic,
+            participant,
+            ..
+        } = self
+        {
+            let sender = participant
+                .as_ref()
+                .map(|participant| participant.identity().0);
+            is_skip_report_with_presence(
+                topic.as_deref(),
+                sender.as_deref(),
+                candidate,
+                payload,
+                candidate_gone,
+            )
+        } else {
+            false
+        }
+    }
     fn disconnected(&self) -> bool {
         matches!(self, Self::Disconnected { .. })
+    }
+}
+
+/// A deliberate candidate cancellation, distinct from a disconnect or missing
+/// receipt.
+#[derive(Debug)]
+struct ReportSkipped;
+
+impl std::fmt::Display for ReportSkipped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("candidate skipped report")
+    }
+}
+
+impl std::error::Error for ReportSkipped {}
+
+fn skipped_error() -> Box<dyn std::error::Error + Send + Sync> {
+    Box::new(ReportSkipped)
+}
+
+/// The result of monitoring report generation and the room together.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum GenerationOutcome<T> {
+    Completed(T),
+    Skipped,
+    Disconnected,
+}
+
+/// Keep consuming the room's existing event receiver while the model and
+/// farewell run. Dropping `work` cancels the generation future without creating
+/// a second competing LiveKit receiver.
+pub(super) async fn until_skip<F, Event>(
+    work: F,
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
+    candidate: &str,
+    candidate_present: impl Fn() -> bool,
+) -> GenerationOutcome<F::Output>
+where
+    F: std::future::Future,
+    Event: DeliveryEvent,
+{
+    tokio::pin!(work);
+    loop {
+        tokio::select! {
+            biased;
+            event = events.recv() => match event {
+                Some(event) if event.disconnected() => {
+                    return GenerationOutcome::Disconnected;
+                }
+                Some(event) if event.skips_report(candidate, !candidate_present()) => {
+                    return GenerationOutcome::Skipped;
+                }
+                Some(_) => {},
+                None => return GenerationOutcome::Disconnected,
+            },
+            result = &mut work => return GenerationOutcome::Completed(result),
+        }
     }
 }
 
@@ -227,14 +326,56 @@ where
     let id = crate::sha256_hex(&[&packet.payload]);
     let mut published = false;
     for attempt in 1..=DELIVERY_ATTEMPTS {
-        let deadline = tokio::time::Instant::now() + DELIVERY_WAIT;
-        let failure = match tokio::time::timeout_at(deadline, publish(packet.clone())).await {
-            Ok(Ok(())) => {
-                published = true;
-                None
+        // Inspect queued cancellation before the first publish. Record the
+        // consumed events so a queued departure keeps its original meaning.
+        let pre_wait = queued_receipt(events, candidate, &id, !candidate_present());
+        match pre_wait {
+            wait @ (Wait::Skipped | Wait::Acknowledged | Wait::Gone) => {
+                return early_delivery(wait, room_name, attempt, published);
             }
-            Ok(Err(_)) => Some("publish_error"),
-            Err(_) => Some("timeout"),
+            Wait::TimedOut => {}
+        }
+        let deadline = tokio::time::Instant::now() + DELIVERY_WAIT;
+        let publish_call = tokio::time::timeout_at(deadline, publish(packet.clone()));
+        tokio::pin!(publish_call);
+        let mut events_open = true;
+        let mut candidate_departed = false;
+        let failure = loop {
+            tokio::select! {
+                result = &mut publish_call => break match result {
+                    Ok(Ok(())) => {
+                        published = true;
+                        None
+                    }
+                    Ok(Err(_)) => Some("publish_error"),
+                    Err(_) => Some("timeout"),
+                },
+                event = events.recv(), if events_open => match event {
+                    Some(event) => {
+                        let candidate_gone = event.disconnected() || !candidate_present();
+                        if event.skips_report(candidate, candidate_gone) {
+                            return early_delivery(Wait::Skipped, room_name, attempt, published);
+                        }
+                        if event.acknowledges(candidate, &id, candidate_gone) {
+                            return early_delivery(Wait::Acknowledged, room_name, attempt, published);
+                        }
+                        if candidate_gone {
+                            // The publish is still pending. Stop receiving
+                            // events, but wait for its result before deciding
+                            // delivery.
+                            match queued_receipt(events, candidate, &id, true) {
+                                Wait::Acknowledged => return early_delivery(Wait::Acknowledged, room_name, attempt, published),
+                                Wait::Skipped => return early_delivery(Wait::Skipped, room_name, attempt, published),
+                                _ => {
+                                    candidate_departed = true;
+                                    events_open = false;
+                                }
+                            }
+                        }
+                    }
+                    None => events_open = false,
+                },
+            }
         };
         if let Some(cause) = failure {
             eprintln!(
@@ -245,19 +386,21 @@ where
         // A failed publish waits out the rest of its window. The wait also
         // accepts a late receipt for an earlier attempt and observes
         // departures.
-        let gone = |events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>| {
-            if queued_receipt(events, candidate, &id) {
-                Wait::Acknowledged
-            } else {
-                Wait::Gone
-            }
+        let gone = |events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>| match queued_receipt(
+            events, candidate, &id, true,
+        ) {
+            Wait::TimedOut => Wait::Gone,
+            outcome => outcome,
         };
-        let wait = if candidate_present() {
+        let wait = if !candidate_departed && candidate_present() {
             tokio::time::timeout_at(deadline, async {
                 while let Some(event) = events.recv().await {
                     // Presence first: the receipt that arrives unattributed
                     // because its sender just left is this very event.
                     let candidate_gone = event.disconnected() || !candidate_present();
+                    if event.skips_report(candidate, candidate_gone) {
+                        return Wait::Skipped;
+                    }
                     if event.acknowledges(candidate, &id, candidate_gone) {
                         return Wait::Acknowledged;
                     }
@@ -280,7 +423,13 @@ where
                 return Ok(true);
             }
             Wait::Gone => break,
-            Wait::TimedOut => (),
+            Wait::Skipped => return early_delivery(Wait::Skipped, room_name, attempt, published),
+            Wait::TimedOut => {
+                // Presence may have changed while waiting for the receipt.
+                if !candidate_present() {
+                    break;
+                }
+            }
         }
         if published {
             eprintln!("codetrial report_receipt_missing room={room_name} attempt={attempt}");
@@ -295,12 +444,73 @@ where
     }
 }
 
+/// Keep terminal delivery diagnostics consistent across early returns and
+/// recovery.
+fn report_delivery_outcome(room_name: &str, outcome: &str, detail: Option<&str>) -> String {
+    match detail {
+        Some(detail) => {
+            format!("codetrial report_delivery room={room_name} {detail} outcome={outcome}")
+        }
+        None => format!("codetrial report_delivery room={room_name} outcome={outcome}"),
+    }
+}
+
+/// Record early outcomes just like the shared tail. A room disconnect is not
+/// necessarily a candidate departure, so do not attribute it to the candidate.
+fn early_delivery(
+    wait: Wait,
+    room_name: &str,
+    attempt: usize,
+    published: bool,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    match wait {
+        Wait::Acknowledged => {
+            eprintln!(
+                "{}",
+                report_delivery_outcome(
+                    room_name,
+                    "acknowledged",
+                    Some(&format!("attempt={attempt}"))
+                )
+            );
+            Ok(true)
+        }
+        Wait::Skipped => {
+            eprintln!(
+                "{}",
+                report_delivery_outcome(room_name, "skipped", Some(&format!("attempt={attempt}")))
+            );
+            Err(skipped_error())
+        }
+        Wait::Gone if published => {
+            eprintln!(
+                "{}",
+                report_delivery_outcome(
+                    room_name,
+                    "unconfirmed",
+                    Some(&format!("attempt={attempt}"))
+                )
+            );
+            Ok(false)
+        }
+        Wait::Gone => {
+            eprintln!(
+                "{}",
+                report_delivery_outcome(room_name, "failed", Some(&format!("attempt={attempt}")))
+            );
+            Err("report_delivery_failed: delivery stopped before publication (candidate left or room disconnected)".into())
+        }
+        Wait::TimedOut => unreachable!("only terminal waits have early outcomes"),
+    }
+}
+
 /// How one attempt's receipt wait ended. `Gone` covers the candidate leaving,
 /// the room disconnecting and the event stream closing: nobody is left to
 /// retransmit to.
 enum Wait {
     Acknowledged,
     Gone,
+    Skipped,
     TimedOut,
 }
 
@@ -311,13 +521,25 @@ fn queued_receipt<Event: DeliveryEvent>(
     events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
     candidate: &str,
     id: &str,
-) -> bool {
+    candidate_gone: bool,
+) -> Wait {
+    let mut acknowledged = false;
+    let mut disconnected = false;
     while let Ok(event) = events.try_recv() {
-        if event.acknowledges(candidate, id, true) {
-            return true;
+        disconnected |= event.disconnected();
+        let gone = candidate_gone || disconnected;
+        if event.skips_report(candidate, gone) {
+            return Wait::Skipped;
         }
+        acknowledged |= event.acknowledges(candidate, id, gone);
     }
-    false
+    if acknowledged {
+        Wait::Acknowledged
+    } else if disconnected {
+        Wait::Gone
+    } else {
+        Wait::TimedOut
+    }
 }
 
 const REPORT_RECOVERY_WINDOW: std::time::Duration = std::time::Duration::from_secs(300);
@@ -398,6 +620,7 @@ fn recovery_request(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RecoveryEvent {
     Retry,
+    Skipped,
     /// The room itself is gone, so nothing published can arrive.
     Left,
     /// The candidate left, which a full LiveKit rejoin under the same identity
@@ -447,6 +670,7 @@ fn recovery_notice(notice: RecoveryNotice) -> serde_json::Value {
 /// The room as recovery uses it: what arrives, and what goes back out. A
 /// separate seam from the room itself so the wait can be driven by a script.
 trait RecoveryRoom {
+    fn room_name(&self) -> &str;
     /// Whether the candidate is in the room now. Their departure is an event
     /// the interview loop may already have consumed, and a wait for a retry
     /// from nobody held the slot for the whole window.
@@ -470,7 +694,11 @@ struct LiveRecoveryRoom<'a> {
 
 /// What one room event means to a recovery wait. `None` is the event stream
 /// ending, which only happens once the room is gone.
-fn recovery_event(event: Option<::livekit::RoomEvent>, candidate: &str) -> RecoveryEvent {
+fn recovery_event(
+    event: Option<::livekit::RoomEvent>,
+    candidate: &str,
+    candidate_gone: bool,
+) -> RecoveryEvent {
     match event {
         None | Some(::livekit::RoomEvent::Disconnected { .. }) => RecoveryEvent::Left,
         Some(::livekit::RoomEvent::ParticipantDisconnected(p)) => {
@@ -486,7 +714,15 @@ fn recovery_event(event: Option<::livekit::RoomEvent>, candidate: &str) -> Recov
             ..
         }) => {
             let sender = participant.as_ref().map(|p| p.identity().0);
-            if recovery_request(topic.as_deref(), sender.as_deref(), candidate, &payload) {
+            if is_skip_report_with_presence(
+                topic.as_deref(),
+                sender.as_deref(),
+                candidate,
+                &payload,
+                candidate_gone,
+            ) {
+                RecoveryEvent::Skipped
+            } else if recovery_request(topic.as_deref(), sender.as_deref(), candidate, &payload) {
                 RecoveryEvent::Retry
             } else {
                 RecoveryEvent::Ignore
@@ -507,6 +743,10 @@ fn candidate_only(identity: &str, candidate: &str, event: RecoveryEvent) -> Reco
 }
 
 impl RecoveryRoom for LiveRecoveryRoom<'_> {
+    fn room_name(&self) -> &str {
+        self.room_name
+    }
+
     fn candidate_present(&self) -> bool {
         self.room
             .remote_participants()
@@ -516,7 +756,9 @@ impl RecoveryRoom for LiveRecoveryRoom<'_> {
     }
 
     async fn next(&mut self) -> RecoveryEvent {
-        recovery_event(self.events.recv().await, self.candidate)
+        let event = self.events.recv().await;
+        let candidate_gone = !self.candidate_present();
+        recovery_event(event, self.candidate, candidate_gone)
     }
 
     async fn notify(&mut self, notice: RecoveryNotice) {
@@ -581,6 +823,7 @@ async fn rejoin_expired(presence: &super::CandidatePresence) {
 fn track_presence(
     event: RecoveryEvent,
     presence: &mut super::CandidatePresence,
+    room_name: &str,
 ) -> std::ops::ControlFlow<()> {
     match event {
         RecoveryEvent::Left => return std::ops::ControlFlow::Break(()),
@@ -589,6 +832,13 @@ fn track_presence(
         // the grace the same way the real one does.
         RecoveryEvent::Away => presence.left(tokio::time::Instant::now().into_std()),
         RecoveryEvent::Back | RecoveryEvent::Retry => presence.returned(),
+        RecoveryEvent::Skipped => {
+            eprintln!(
+                "{} stage=recovery",
+                report_delivery_outcome(room_name, "skipped", None)
+            );
+            return std::ops::ControlFlow::Break(());
+        }
         RecoveryEvent::Ignore => {}
     }
     std::ops::ControlFlow::Continue(())
@@ -606,6 +856,8 @@ async fn recover_report(
     started: tokio::time::Instant,
     readiness: impl Fn() -> Readiness,
 ) -> Option<GeneratedReport> {
+    let room_name = events.room_name().to_owned();
+
     // A departure the provisional report's receipt wait consumed is not
     // replayed, so absence starts the rejoin grace here instead of the wait
     // holding the slot for a retry from nobody.
@@ -623,7 +875,7 @@ async fn recover_report(
             _ = rejoin_expired(&presence) => return None,
             event = events.next() => event,
         };
-        if track_presence(event, &mut presence).is_break() {
+        if track_presence(event, &mut presence, &room_name).is_break() {
             return None;
         }
         if event == RecoveryEvent::Back
@@ -632,6 +884,9 @@ async fn recover_report(
             match events.publish(packet.clone()).await {
                 Ok(true) => {}
                 Ok(false) => unconfirmed = Some(packet),
+                Err(error) if error.is::<ReportSkipped>() => {
+                    return None;
+                }
                 Err(error) => {
                     eprintln!("codetrial report_republish_failed error={error}");
                     unconfirmed = Some(packet);
@@ -670,6 +925,13 @@ async fn recover_report(
 
     // The generation keeps running while the candidate is away within the
     // grace, and what it returns waits for them to be back before it goes out.
+    // Accepted is not proof the HTTP future was polled. A queued Skip can win
+    // the select before generation starts.
+    let generation_polled = std::sync::atomic::AtomicBool::new(false);
+    let generation = async {
+        generation_polled.store(true, std::sync::atomic::Ordering::Relaxed);
+        generation.await
+    };
     tokio::pin!(generation);
     let mut generated = None;
     loop {
@@ -679,9 +941,26 @@ async fn recover_report(
             return Some(result);
         }
         tokio::select! {
-            _ = rejoin_expired(&presence) => return None,
+            _ = rejoin_expired(&presence) => {
+                if generation_polled.load(std::sync::atomic::Ordering::Relaxed) && generated.is_none() {
+                    eprintln!(
+                        "codetrial report_generation room={} stage=recovery outcome=cancelled cost=unknown",
+                        room_name
+                    );
+                }
+                return None;
+            }
             event = events.next() => {
-                if track_presence(event, &mut presence).is_break() {
+                if matches!(event, RecoveryEvent::Skipped | RecoveryEvent::Left)
+                    && generation_polled.load(std::sync::atomic::Ordering::Relaxed)
+                    && generated.is_none()
+                {
+                    eprintln!(
+                        "codetrial report_generation room={} stage=recovery outcome=cancelled cost=unknown",
+                        room_name
+                    );
+                }
+                if track_presence(event, &mut presence, &room_name).is_break() {
                     return None;
                 }
             }
@@ -754,6 +1033,13 @@ pub(super) async fn publish_with_recovery(
         close_live,
     )
     .await
+    .or_else(|error| {
+        if error.is::<ReportSkipped>() {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    })
 }
 
 /// What each published report is built from. The frozen state, never the live

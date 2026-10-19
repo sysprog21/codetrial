@@ -3494,6 +3494,37 @@ test("a retry is recognised whether or not each copy could be hashed", async (t)
   }
 });
 
+test("Skip guards both report claiming and delayed receipt publication", () => {
+  const connect = functionBody(read("web/interview.js"), "connectLiveKit");
+
+  const accepted = connect.indexOf(
+    "if (!acceptsReport(topic, participant)) return;",
+  );
+  const skipped = connect.indexOf(
+    'if (state.phase === "skipped") return;',
+    accepted,
+  );
+  const claimed = connect.indexOf(
+    "const first = claimReport(payload, receivedReports);",
+    accepted,
+  );
+
+  assert.ok(accepted >= 0 && skipped > accepted && claimed > skipped);
+
+  const receipt = connect.indexOf("(receipt) => {", claimed);
+  const delayedGuard = connect.indexOf(
+    'if (state.phase === "skipped") return;',
+    receipt,
+  );
+  const publish = connect.indexOf(
+    "room.localParticipant.publishData(",
+    receipt,
+  );
+
+  assert.ok(receipt > claimed);
+  assert.ok(delayedGuard > receipt && delayedGuard < publish);
+});
+
 test("only the first report copy claims the page, before its receipt is handed off", () => {
   const connect = functionBody(read("web/interview.js"), "connectLiveKit");
   const accepted = connect.indexOf(

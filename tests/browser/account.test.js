@@ -74,7 +74,7 @@ test("interview history routes through the shared persistence helper", () => {
   );
   assert.match(
     saveHistory,
-    /await saveReportHistory\(entry,\s*\{\s*persistAccount:\s*!state\.isGuest,\s*\}\)/,
+    /saveReportHistory\(entry,\s*\{\s*persistAccount:\s*!state\.isGuest,\s*onAccountSaveAttempt:\s*\(\)\s*=>\s*\{\s*state\.possiblySavedToAccount\s*=\s*true;\s*\},\s*onAccountSaved:\s*\(ownerId\)\s*=>/,
   );
   assert.match(saveHistory, /reportIsPersisted\(result\)/);
   assert.match(saveHistory, /state\.reportPersisted = true/);
@@ -1209,4 +1209,262 @@ test("a stored history that is not a list reads as no history", () => {
   }
   // And unparseable JSON keeps the answer it already had.
   assert.deepEqual(stored("{not json"), []);
+});
+
+test("account-required deletion cannot discard a local report after zero server deletions", async () => {
+  const storage = memoryStorage();
+  const original = JSON.stringify([{ id: "saved-by-account-a" }]);
+  storage.setItem(historyKey, original);
+  const calls = [];
+
+  const result = await deleteReport("saved-by-account-a", {
+    account: true,
+    requireAccountDeletion: true,
+    storage,
+    fetcher: async (url, options) => {
+      calls.push([url, options?.method]);
+      return url === "/api/session"
+        ? response({ signedIn: true })
+        : response({ deleted: 0 });
+    },
+  });
+
+  assert.equal(result, "failed");
+  assert.equal(storage.getItem(historyKey), original);
+  assert.deepEqual(calls, [
+    ["/api/session", undefined],
+    ["/api/reports/saved-by-account-a", "DELETE"],
+  ]);
+});
+
+test("account-required deletion succeeds after a confirmed server deletion", async () => {
+  const storage = memoryStorage();
+  storage.setItem(historyKey, JSON.stringify([{ id: "saved-by-account-a" }]));
+
+  const result = await deleteReport("saved-by-account-a", {
+    account: true,
+    requireAccountDeletion: true,
+    storage,
+    fetcher: async (url) =>
+      url === "/api/session"
+        ? response({ signedIn: true })
+        : response({ deleted: 1 }),
+  });
+
+  assert.equal(result, "deleted");
+  assert.deepEqual(JSON.parse(storage.getItem(historyKey)), []);
+});
+
+test("local-only retry skips session and account deletion", async () => {
+  const records = new Map();
+  records.set(historyKey, JSON.stringify([{ id: "partial-report" }]));
+
+  let failWrite = true;
+  let sessionCalls = 0;
+  let deleteCalls = 0;
+
+  const storage = {
+    getItem: (key) => records.get(key) ?? null,
+    setItem(key, value) {
+      if (failWrite) throw new Error("storage temporarily unavailable");
+      records.set(key, value);
+    },
+  };
+
+  const fetcher = async (url) => {
+    if (url === "/api/session") {
+      sessionCalls += 1;
+      return response({ signedIn: true });
+    }
+    deleteCalls += 1;
+    return response({ deleted: 1 });
+  };
+
+  const first = await deleteReport("partial-report", {
+    account: true,
+    requireAccountDeletion: true,
+    storage,
+    fetcher,
+  });
+
+  assert.equal(first, "account-deleted-local-failed");
+  assert.equal(deleteCalls, 1);
+
+  failWrite = false;
+
+  const second = await deleteReport("partial-report", {
+    localOnly: true,
+    storage,
+    fetcher,
+  });
+
+  assert.equal(second, "deleted");
+  assert.equal(deleteCalls, 1);
+  assert.equal(sessionCalls, 1);
+  assert.deepEqual(JSON.parse(records.get(historyKey)), []);
+});
+
+test("same owner treats a second delete of zero rows as complete", async () => {
+  const storage = memoryStorage();
+  storage.setItem(historyKey, JSON.stringify([{ id: "idempotent" }]));
+  const calls = [];
+  const result = await deleteReport("idempotent", {
+    account: true,
+    requireAccountDeletion: true,
+    expectedOwnerId: 7,
+    storage,
+    fetcher: async (url, options) => {
+      calls.push([url, options]);
+      return url === "/api/session"
+        ? response({ signedIn: true })
+        : response({ deleted: 0 });
+    },
+  });
+  assert.equal(result, "deleted");
+  assert.deepEqual(JSON.parse(storage.getItem(historyKey)), []);
+  assert.equal(calls[1][1].headers["x-codetrial-report-owner"], "7");
+});
+
+test("wrong account cannot remove the saved local report", async () => {
+  const storage = memoryStorage();
+  const original = JSON.stringify([{ id: "owned-by-a" }]);
+  storage.setItem(historyKey, original);
+  const result = await deleteReport("owned-by-a", {
+    account: true,
+    requireAccountDeletion: true,
+    expectedOwnerId: 7,
+    storage,
+    fetcher: async (url, options) => {
+      if (url === "/api/session") return response({ signedIn: true });
+      assert.equal(options.headers["x-codetrial-report-owner"], "7");
+      return response({ error: "wrong account" }, false);
+    },
+  });
+  assert.equal(result, "failed");
+  assert.equal(storage.getItem(historyKey), original);
+});
+
+test("lost delete response is retried without losing owner protection", async () => {
+  const storage = memoryStorage();
+  storage.setItem(historyKey, JSON.stringify([{ id: "lost-reply" }]));
+  let deletes = 0;
+  const fetcher = async (url, options) => {
+    if (url === "/api/session") return response({ signedIn: true });
+    assert.equal(options.headers["x-codetrial-report-owner"], "7");
+    deletes++;
+    if (deletes === 1) throw new Error("response lost after deletion");
+    return response({ deleted: 0 });
+  };
+  const options = {
+    account: true,
+    requireAccountDeletion: true,
+    expectedOwnerId: 7,
+    storage,
+    fetcher,
+  };
+  assert.equal(await deleteReport("lost-reply", options), "failed");
+  assert.equal(JSON.parse(storage.getItem(historyKey)).length, 1);
+  assert.equal(await deleteReport("lost-reply", options), "deleted");
+  assert.equal(deletes, 2);
+});
+
+test("owner-verified zero-row deletion retries only local cleanup", async () => {
+  const rows = new Map([
+    [historyKey, JSON.stringify([{ id: "retry-local" }])],
+    [reviewHistoryKey, JSON.stringify([{ id: "retry-local" }])],
+  ]);
+  let failSecondWrite = true;
+  let writes = 0;
+  let deleteCalls = 0;
+  let sessionCalls = 0;
+
+  const storage = {
+    getItem: (key) => rows.get(key) ?? null,
+    setItem(key, value) {
+      writes++;
+      if (failSecondWrite && writes === 2)
+        throw new Error("Storage quota exceeded");
+      rows.set(key, value);
+    },
+  };
+  const fetcher = async (url, options) => {
+    if (url === "/api/session") {
+      sessionCalls++;
+      return response({ signedIn: true });
+    }
+    deleteCalls++;
+    assert.equal(options.headers["x-codetrial-report-owner"], "7");
+    return response({ deleted: 0 });
+  };
+
+  const result = await deleteReport("retry-local", {
+    account: true,
+    requireAccountDeletion: true,
+    expectedOwnerId: 7,
+    storage,
+    fetcher,
+  });
+  assert.equal(result, "account-deleted-local-failed");
+  assert.equal(JSON.parse(rows.get(historyKey)).length, 0);
+  assert.equal(JSON.parse(rows.get(reviewHistoryKey)).length, 1);
+
+  failSecondWrite = false;
+  assert.equal(
+    await deleteReport("retry-local", {
+      localOnly: true,
+      storage,
+      fetcher,
+    }),
+    "deleted",
+  );
+  assert.equal(deleteCalls, 1);
+  assert.equal(sessionCalls, 1);
+  assert.deepEqual(JSON.parse(rows.get(reviewHistoryKey)), []);
+});
+
+test("a failed POST may have saved an account report", async () => {
+  const attempts = [];
+  const saved = await saveReportHistory(
+    { id: "uncertain-save", problemId: "two-sum", report: {} },
+    {
+      storage: memoryStorage(),
+      onAccountSaveAttempt: () => attempts.push("post-started"),
+      fetcher: async (url) => {
+        if (url === "/api/session") return response({ signedIn: true });
+        assert.equal(url, "/api/reports");
+        throw new Error("response lost after server may have saved");
+      },
+    },
+  );
+
+  assert.deepEqual(saved, { local: "saved", account: "failed" });
+  assert.deepEqual(attempts, ["post-started"]);
+
+  const signedOutAttempts = [];
+  await saveReportHistory(
+    { id: "no-post", problemId: "two-sum", report: {} },
+    {
+      storage: memoryStorage(),
+      onAccountSaveAttempt: () => signedOutAttempts.push("post-started"),
+      fetcher: async () => response({ signedIn: false }),
+    },
+  );
+  assert.deepEqual(signedOutAttempts, []);
+});
+
+test("successful account save reports its authenticated owner", async () => {
+  const owners = [];
+  const result = await saveReportHistory(
+    { id: "owner-callback", problemId: "two-sum", report: {} },
+    {
+      storage: memoryStorage(),
+      onAccountSaved: (ownerId) => owners.push(ownerId),
+      fetcher: async (url) =>
+        url === "/api/session"
+          ? response({ signedIn: true })
+          : response({ id: "owner-callback", ownerId: 7 }),
+    },
+  );
+  assert.equal(result.account, "saved");
+  assert.deepEqual(owners, [7]);
 });

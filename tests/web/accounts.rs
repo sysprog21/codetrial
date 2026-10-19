@@ -761,7 +761,9 @@ async fn account_reports_are_scoped_to_the_signed_in_user() {
         .await
         .unwrap();
     assert_eq!(saved.status(), 200);
-    assert_eq!(saved.json::<Value>().await.unwrap()["id"], "new-report");
+    let saved = saved.json::<Value>().await.unwrap();
+    assert_eq!(saved["id"], "new-report");
+    assert_eq!(saved["ownerId"], 1);
 
     let blocked = client
         .post(format!("{base}/api/reports"))
@@ -788,6 +790,35 @@ async fn account_reports_are_scoped_to_the_signed_in_user() {
             .header("cookie", cookie)
             .send()
     };
+
+    // An authenticated user must not be able to delete a report while claiming
+    // that it belongs to another account.
+    let wrong_owner = client
+        .delete(format!("{base}/api/reports/new-report"))
+        .header("cookie", &user_one_cookie)
+        .header("x-codetrial-report-owner", "2")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong_owner.status(), 409);
+
+    let still_saved = client
+        .get(format!("{base}/api/reports"))
+        .header("cookie", &user_one_cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert!(
+        still_saved["reports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|report| report["id"] == "new-report")
+    );
+
     let theirs = delete_one(&user_two_cookie, "new-report").await.unwrap();
     assert_eq!(theirs.status(), 200);
     assert_eq!(
