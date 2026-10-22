@@ -1186,6 +1186,73 @@ public:
       },
     );
   }
+
+  // tail starts at 1 and grows by two per node, so the 4096-slot C queue is
+  // full after the 2047th node and the 2048th has nowhere to put its children.
+  // The chain replaces the tree on every case with a root, cycle or not, and
+  // the empty case returns nothing to replace. The 2047-node chain pins the
+  // limit from the other side, so a check that gives up a node early fails.
+  for (const [nodes, cyclic] of [
+    [2047, false],
+    [2048, false],
+    [2048, true],
+  ]) {
+    const shape = `${nodes}-node ${cyclic ? "cycle" : "chain"}`;
+    it(
+      `c harness ${nodes > 2047 ? "refuses" : "prints"} a returned ${shape}`,
+      { skip: noCc },
+      async () => {
+        const dir = mkdtempSync(join(tmpdir(), "codetrial-c-bound-"));
+        const judge = judges["flatten-binary-tree-to-linked-list"];
+        try {
+          const source = join(dir, "chain.c");
+          const binary = join(dir, "chain");
+          writeFileSync(
+            source,
+            generateHarness(
+              "c",
+              judge,
+              `void linearizeMenu(struct TreeNode* root) {
+    if (!root) return;
+    struct TreeNode* last = root;
+    root->left = NULL;
+    for (int i = 1; i < ${nodes}; i++) {
+        last->right = calloc(1, sizeof(struct TreeNode));
+        last = last->right;
+    }
+    last->right = ${cyclic ? "root" : "NULL"};
+}`,
+            ),
+          );
+          await run("cc", ["-std=c17", source, "-o", binary]);
+          const { results } = parseCompilerResults(
+            (await run(binary, [], { encoding: "utf8", timeout: 10000 }))
+              .stdout,
+          );
+          assert.equal(results.length, judge.cases.length);
+          judge.cases.forEach((testCase, index) => {
+            const result = results[index];
+            if (testCase.input[0].length === 0)
+              assert.deepEqual(result.actual, [], testCase.label);
+            else if (nodes > 2047)
+              assert.match(
+                result.error ?? "",
+                /Returned tree must not have more than 2047 nodes\./,
+                testCase.label,
+              );
+            else
+              assert.equal(
+                result.actual.filter((value) => value !== null).length,
+                nodes,
+                testCase.label,
+              );
+          });
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
+  }
 });
 
 test("harness generator handles output parameter and output prefix specs", () => {
