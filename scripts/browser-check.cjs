@@ -51,6 +51,7 @@ if (process.env.BROWSER_CHECK_CAPTURE && floorLogPath) writeIncompleteCapture();
 
 const PROBLEM_IDS = {
   twoSum: "two-sum",
+  coinChange: "coin-change",
   validParentheses: "valid-parentheses",
   minStack: "min-stack",
   treeIterator: "binary-search-tree-iterator",
@@ -1012,15 +1013,15 @@ async function isolateRustAgent(
       // instead of the agent output above.
       agentFailure.catch(() => {});
     }
-    async function runAndExpectPassing(problemId, timeout = 30000) {
-      const expected = scenario(problemId).caseCount;
+    async function runAndExpectScore(problemId, passed, timeout = 30000) {
+      const total = scenario(problemId).caseCount;
       await page.getByRole("button", { name: /Run tests/ }).click();
       await page
         .getByRole("button", { name: "Run tests" })
         .waitFor({ timeout });
       try {
         await page
-          .getByText(`Test results · ${expected}/${expected}`)
+          .getByText(`Test results · ${passed}/${total}`)
           .waitFor({ timeout });
       } catch (error) {
         const label = await page
@@ -1032,9 +1033,16 @@ async function isolateRustAgent(
           .innerText()
           .catch(() => "");
         throw new Error(
-          `expected ${expected}/${expected} test results, got ${label}\n${body}`,
+          `expected ${passed}/${total} test results, got ${label}\n${body}`,
         );
       }
+    }
+    function runAndExpectPassing(problemId, timeout = 30000) {
+      return runAndExpectScore(
+        problemId,
+        scenario(problemId).caseCount,
+        timeout,
+      );
     }
     // Flow-first, before the mode dispatch. This is the only check that can see
     // WebGL at all; the node tests drive the same module with an injected
@@ -1413,6 +1421,45 @@ int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
       await page.getByRole("button", { name: "Transcript" }).click();
       await page.locator("p").filter({ hasText: /^Jim$/ }).first().waitFor();
       await page.locator("p").filter({ hasText: /^You$/ }).first().waitFor();
+
+      // A non-finite number is one wrong answer, not a lost run: the Python
+      // driver used to emit it as a bare Infinity or NaN, which the page's
+      // JSON.parse refused, so every case went with it. The two cases that
+      // expect -1 fail and the other three keep their results.
+      await page.goto(interviewUrl(PROBLEM_IDS.coinChange), {
+        waitUntil: "domcontentloaded",
+      });
+      await clearMediaGate(page);
+      await page
+        .getByRole("heading", {
+          name: scenarioTitle(PROBLEM_IDS.coinChange),
+          level: 1,
+        })
+        .waitFor();
+      await page.getByText("Offline", { exact: true }).waitFor();
+      await selectLanguage(page, "Python");
+      await page.getByLabel("Code editor").fill(`class Solution:
+    def fewestTokens(self, tokens, amount):
+        dp = [float("inf")] * (amount + 1)
+        dp[0] = 0
+        for a in range(1, amount + 1):
+            for t in tokens:
+                if t <= a:
+                    dp[a] = min(dp[a], dp[a - t] + 1)
+        return dp[amount]
+`);
+      await runAndExpectScore(PROBLEM_IDS.coinChange, 3, 120000);
+      await page.getByLabel("Code editor").fill(`class Solution:
+    def fewestTokens(self, tokens, amount):
+        dp = [float("inf")] * (amount + 1)
+        dp[0] = 0
+        for a in range(1, amount + 1):
+            for t in tokens:
+                if t <= a:
+                    dp[a] = min(dp[a], dp[a - t] + 1)
+        return dp[amount] if dp[amount] != float("inf") else float("nan")
+`);
+      await runAndExpectScore(PROBLEM_IDS.coinChange, 3, 120000);
 
       await page.goto(interviewUrl(PROBLEM_IDS.mergeSortedArray), {
         waitUntil: "domcontentloaded",
