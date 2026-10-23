@@ -2123,8 +2123,9 @@ table.phase-scores {
   border-color: var(--accent);
 }
 
-/* Done waits for the report to be saved; until then it should look it. */
-.report-actions button:disabled {
+/* Saving and copying both keep their controls visibly waiting. */
+.report-actions button:disabled,
+.final-code button[aria-disabled="true"] {
   opacity: 0.55;
   cursor: progress;
 }

@@ -100,7 +100,7 @@ test("clipboard failure and unavailable API show an error and allow retry", asyn
   assert.equal(view.status.textContent, "Copied!");
 });
 
-test("a pending copy ignores duplicate clicks without dropping focus", async (t) => {
+test("a pending copy ignores duplicate clicks", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const view = controls();
   let finish;
