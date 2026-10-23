@@ -133,6 +133,10 @@ const nodes = {
   ),
   progressSummary: document.querySelector("#progress-summary"),
   attemptHistory: document.querySelector("#attempt-history"),
+  attemptSelection: document.querySelector("#attempt-selection"),
+  attemptSelectAll: document.querySelector("#attempt-select-all"),
+  attemptDownloadSelected: document.querySelector("#attempt-download-selected"),
+  attemptDownloadNote: document.querySelector("#attempt-download-note"),
   progressTrends: document.querySelector("#progress-trends"),
   progressWeaknesses: document.querySelector("#progress-weaknesses"),
   progressTopics: document.querySelector("#progress-topics"),
@@ -490,6 +494,12 @@ nodes.groundingClear.addEventListener("click", clearGrounding);
 
 let progressNormalized = [];
 let progressSuffix = "saved";
+/// Attempts unticked for "Download selected", by `selectionKey`. Emptied only
+/// when the history changes source, so a choice survives a filter change and
+/// the reload that deleting another report triggers.
+const unselectedAttempts = new Set();
+/// What the attempt list draws now: the only reports a batch download takes.
+let shownAttempts = [];
 const selectedProgressPhases = new Map();
 /// Whether the history on screen came from an account: null until /api/session
 /// answers, and never assumed false, because a browser that cannot ask is not a
@@ -504,6 +514,29 @@ for (const filter of [
   filter.addEventListener("change", renderProgress);
 }
 nodes.deleteReports.addEventListener("click", deleteSavedReports);
+nodes.attemptSelectAll.addEventListener("click", () => {
+  const select = !allAttemptsSelected();
+  for (const attempt of shownAttempts) {
+    if (select) unselectedAttempts.delete(selectionKey(attempt));
+    else unselectedAttempts.add(selectionKey(attempt));
+  }
+  for (const box of nodes.attemptHistory.querySelectorAll(
+    "[data-attempt-select]",
+  ))
+    box.checked = select;
+  syncAttemptSelection();
+});
+nodes.attemptDownloadSelected.addEventListener("click", () => {
+  const selected = selectedAttempts();
+  for (const attempt of selected) downloadSavedReport(attempt);
+  // Chrome saves the first file of one click and asks before the rest, or
+  // drops them silently once the site is blocked. Neither reaches the page, so
+  // the note says how to recover rather than what happened.
+  nodes.attemptDownloadNote.textContent =
+    selected.length > 1
+      ? "Your browser may ask to allow multiple downloads from this page. If only the first file arrived, allow automatic downloads for this site in the browser's site settings and try again."
+      : "";
+});
 
 const durations = [...document.querySelectorAll("[data-duration]")];
 for (const button of durations) {
@@ -1575,6 +1608,7 @@ function showProgressError(message) {
   // history it had last managed to load.
   reports = [];
   progressNormalized = [];
+  shownAttempts = [];
   renderPracticeFocus();
   hideRecentPerformance();
   nodes.historyHeader.hidden = false;
@@ -1584,6 +1618,7 @@ function showProgressError(message) {
   nodes.progressWeaknesses.replaceChildren();
   nodes.progressTopics.replaceChildren();
   nodes.attemptHistory.replaceChildren();
+  syncAttemptSelection();
 }
 
 function showProgress(entries, suffix) {
@@ -1592,6 +1627,9 @@ function showProgress(entries, suffix) {
   // Normalized once here, not per render: the filters below only select from
   // these rows, so a dropdown change has nothing to re-sanitize.
   progressNormalized = normalizeProgressEntries(entries);
+  // `suffix` names the store these rows came from. A device row and its account
+  // copy share an id, so a choice made in one is not carried into the other.
+  if (suffix !== progressSuffix) unselectedAttempts.clear();
   progressSuffix = suffix;
   const erasable = entries.length > 0 || readDeviceHistory().length > 0;
   nodes.historyHeader.hidden = !erasable;
@@ -1728,6 +1766,7 @@ function renderRecentPerformance() {
 /// and it cost one more sanitizing pass over every stored report.
 function renderAttemptHistory(attempts) {
   nodes.attemptHistory.replaceChildren();
+  shownAttempts = attempts;
   for (const attempt of [...attempts].reverse()) {
     const item = document.createElement("li");
     const when = new Date(attempt.at).toLocaleString(undefined, {
@@ -1737,8 +1776,23 @@ function renderAttemptHistory(attempts) {
     const verdict = attempt.report.incomplete
       ? "INCOMPLETE"
       : (attempt.report.decision ?? "UNSCORED");
-    const label = document.createElement("p");
-    label.textContent = `${when} · ${attempt.problemTitle} · ${attempt.difficulty ?? "Difficulty not recorded"} · ${languageLabel(attempt.language ?? "not recorded")} · ${verdict}`;
+    const select = document.createElement("input");
+    select.type = "checkbox";
+    select.dataset.attemptSelect = "";
+    const key = selectionKey(attempt);
+    select.checked = !unselectedAttempts.has(key);
+    select.addEventListener("change", () => {
+      if (select.checked) unselectedAttempts.delete(key);
+      else unselectedAttempts.add(key);
+      syncAttemptSelection();
+    });
+    const label = document.createElement("label");
+    label.append(
+      select,
+      `${when} · ${attempt.problemTitle} · ${attempt.difficulty ?? "Difficulty not recorded"} · ${languageLabel(attempt.language ?? "not recorded")} · ${verdict}`,
+    );
+    const line = document.createElement("p");
+    line.append(label);
     const open = document.createElement("button");
     open.type = "button";
     open.textContent = "Open report";
@@ -1805,7 +1859,7 @@ function renderAttemptHistory(attempts) {
           : "";
       nodes.recommendation.textContent = `Selected problem: ${title(card)}.${adjustment}`;
     });
-    item.append(label, open, download, retry);
+    item.append(line, open, download, retry);
     // A row with no id has nothing both stores and the account agree on, and
     // deleting by anything weaker could take a different report than this one.
     if (attempt.id) {
@@ -1826,6 +1880,37 @@ function renderAttemptHistory(attempts) {
     item.append(report);
     nodes.attemptHistory.append(item);
   }
+  syncAttemptSelection();
+}
+
+/// The id where there is one, which a reload keeps. A row with none has nothing
+/// stable to name it, so it stands for itself and comes back ticked on reload.
+function selectionKey(attempt) {
+  return attempt.id || attempt;
+}
+
+function selectedAttempts() {
+  return shownAttempts.filter(
+    (attempt) => !unselectedAttempts.has(selectionKey(attempt)),
+  );
+}
+
+function allAttemptsSelected() {
+  return selectedAttempts().length === shownAttempts.length;
+}
+
+function syncAttemptSelection() {
+  nodes.attemptDownloadNote.textContent = "";
+  nodes.attemptSelection.hidden = shownAttempts.length === 0;
+  // With nothing listed, a count here would be the lobby speaking before any
+  // history arrived; the labels are written when there is something to count.
+  if (nodes.attemptSelection.hidden) return;
+  const selected = selectedAttempts().length;
+  nodes.attemptSelectAll.textContent = allAttemptsSelected()
+    ? "Deselect all"
+    : "Select all";
+  nodes.attemptDownloadSelected.textContent = `Download selected (${selected})`;
+  nodes.attemptDownloadSelected.disabled = selected === 0;
 }
 
 function downloadSavedReport(attempt) {

@@ -3545,6 +3545,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .lobby .interview-context button,
 .lobby #problem-filters-reset,
 .lobby .weak-topic button,
+.lobby .attempt-selection > button,
 .lobby #attempt-history > li > button {
   min-height: 2.5rem;
   padding: 0.5rem 1rem;
@@ -3563,6 +3564,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .lobby .interview-context button:hover,
 .lobby #problem-filters-reset:hover,
 .lobby .weak-topic button:hover,
+.lobby .attempt-selection > button:not(:disabled):hover,
 .lobby #attempt-history > li > button:not(:disabled):hover {
   border-color: var(--accent);
   color: var(--accent-ink);
@@ -3737,9 +3739,20 @@ body:not([data-recording]) .replay-detail > :not(header) {
   color: var(--critical);
 }
 
+.lobby .attempt-selection > button:disabled,
 .lobby #attempt-history > li > button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.lobby .attempt-selection {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.lobby input[data-attempt-select] {
+  margin-inline-end: 0.5rem;
 }
 
 .lobby .site-credits a,

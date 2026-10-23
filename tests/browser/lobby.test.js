@@ -3990,6 +3990,288 @@ for (const storage of ["account", "device"]) {
   );
 }
 
+/// Names every report the page asks the browser to save, at the moment it
+/// asks, so a test can say exactly which files one click produced rather than
+/// waiting for download events that may still be on their way.
+const recordDownloadNames = (page) =>
+  page.addInitScript(() => {
+    window.downloadNames = [];
+    const click = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () {
+      if (this.download) window.downloadNames.push(this.download);
+      return click.call(this);
+    };
+  });
+const takeDownloadNames = (page) =>
+  page.evaluate(() => window.downloadNames.splice(0).sort());
+
+for (const storage of ["account", "device"]) {
+  lobbyTest(
+    `saved ${storage} reports download the ticked ones as their own markdown`,
+    async (page) => {
+      const reportsSaved = [
+        { decision: "HIRE", codingScore: 81 },
+        { decision: "NO_HIRE", codingScore: 42 },
+        { incomplete: true, decision: "HIRE" },
+      ];
+      const entries = reportsSaved.map((report, index) => ({
+        problemId: EASY[0],
+        problemTitle: "Saved report",
+        date: `2026-01-01T${17 + index}:30:00Z`,
+        language: "python",
+        report: { ...report, summary: `Stored summary ${index}` },
+      }));
+      if (storage === "account") {
+        reports = entries.map((payload) => ({ payload }));
+      } else {
+        session = { signedIn: false };
+        await page.addInitScript((entries) => {
+          localStorage.setItem("codetrial_history", JSON.stringify(entries));
+        }, entries);
+      }
+      await recordDownloadNames(page);
+      await lobby(page);
+      const history = page.locator("#attempt-history");
+      const boxes = history.getByRole("checkbox");
+      const toggle = page.locator("#attempt-select-all");
+      const downloadSelected = page.locator("#attempt-download-selected");
+      const note = page.locator("#attempt-download-note");
+      const when = (index) => `Jan 2, 2026, ${index + 1}:30 AM`;
+      const box = (index) =>
+        history.getByRole("checkbox", { name: `${when(index)} · ` });
+      const filename = (index) =>
+        `interview-report-${EASY[0]}-2026-01-02-0${index + 1}3000.md`;
+      const text = async (download) => {
+        const chunks = [];
+        for await (const chunk of await download.createReadStream())
+          chunks.push(chunk);
+        return Buffer.concat(chunks).toString("utf8");
+      };
+
+      assert.equal(await boxes.count(), reportsSaved.length);
+      for (const box of await boxes.all()) assert.ok(await box.isChecked());
+      assert.equal(await toggle.textContent(), "Deselect all");
+      assert.equal(
+        await downloadSelected.textContent(),
+        "Download selected (3)",
+      );
+
+      // The description is the checkbox's label, so clicking the text toggles.
+      await history.locator("label", { hasText: when(1) }).click();
+      assert.equal(await box(1).isChecked(), false);
+      assert.equal(await toggle.textContent(), "Select all");
+      assert.equal(
+        await downloadSelected.textContent(),
+        "Download selected (2)",
+      );
+
+      const batch = new Map();
+      let onDownload;
+      let timer;
+      const arrived = new Promise((resolve, reject) => {
+        onDownload = (download) => {
+          batch.set(download.suggestedFilename(), download);
+          if (batch.size === 2) resolve();
+        };
+        // node:test has no default timeout, so a download that never starts
+        // fails here with what did arrive instead of hanging the suite.
+        timer = setTimeout(() => {
+          const names = [...batch.keys()].join(", ") || "none";
+          reject(new Error(`only these downloads arrived: ${names}`));
+        }, 10_000);
+      });
+      page.on("download", onDownload);
+      try {
+        await downloadSelected.click();
+        assert.deepEqual(await takeDownloadNames(page), [
+          filename(0),
+          filename(2),
+        ]);
+        assert.equal(
+          await note.textContent(),
+          "Your browser may ask to allow multiple downloads from this page. If only the first file arrived, allow automatic downloads for this site in the browser's site settings and try again.",
+        );
+        await arrived;
+      } finally {
+        clearTimeout(timer);
+        page.off("download", onDownload);
+      }
+
+      // The batch reuses the row's own download, so each file it writes is the
+      // one that row's button writes, an incomplete report included.
+      for (const index of [0, 2]) {
+        const downloading = page.waitForEvent("download");
+        await history
+          .getByRole("button", {
+            name: `Download report (.md) for Saved report, ${when(index)}`,
+            exact: true,
+          })
+          .click();
+        const single = await downloading;
+        assert.equal(single.suggestedFilename(), filename(index));
+        const markdown = await text(single);
+        assert.ok(markdown.includes(`Stored summary ${index}`));
+        assert.equal(await text(batch.get(filename(index))), markdown);
+      }
+      await takeDownloadNames(page);
+
+      await toggle.click();
+      for (const box of await boxes.all()) assert.ok(await box.isChecked());
+      assert.equal(await toggle.textContent(), "Deselect all");
+      assert.equal(
+        await downloadSelected.textContent(),
+        "Download selected (3)",
+      );
+
+      await toggle.click();
+      for (const box of await boxes.all())
+        assert.equal(await box.isChecked(), false);
+      assert.equal(await toggle.textContent(), "Select all");
+      assert.equal(
+        await downloadSelected.textContent(),
+        "Download selected (0)",
+      );
+      assert.equal(await downloadSelected.isDisabled(), true);
+    },
+    { timezoneId: "Asia/Taipei", locale: "en-US", acceptDownloads: true },
+  );
+}
+
+lobbyTest(
+  "a filtered attempt list keeps its ticks and downloads only what it shows",
+  async (page) => {
+    const attempt = (id, language, day) => ({
+      id,
+      problemId: EASY[0],
+      payload: {
+        id,
+        problemId: EASY[0],
+        problemTitle: `Attempt ${id}`,
+        language,
+        date: `2026-01-0${day}T00:00:00Z`,
+        report: { decision: "HIRE" },
+      },
+    });
+    reports = [
+      attempt("a", "python", 1),
+      attempt("b", "cpp", 2),
+      attempt("c", "python", 3),
+    ];
+    await recordDownloadNames(page);
+    await lobby(page);
+    const box = (id) =>
+      page.getByRole("checkbox", { name: ` · Attempt ${id} · ` });
+    const toggle = page.locator("#attempt-select-all");
+    const downloadSelected = page.locator("#attempt-download-selected");
+    const note = page.locator("#attempt-download-note");
+    const filename = (day) =>
+      `interview-report-${EASY[0]}-2026-01-0${day}-080000.md`;
+
+    await box("a").uncheck();
+    await page.selectOption("#progress-language", "python");
+    assert.equal(await box("a").isChecked(), false);
+    assert.equal(await box("c").isChecked(), true);
+    assert.equal(await toggle.textContent(), "Select all");
+    assert.equal(await downloadSelected.textContent(), "Download selected (1)");
+    await downloadSelected.click();
+    assert.deepEqual(await takeDownloadNames(page), [filename(3)]);
+    // One file is one download, which no browser asks about.
+    assert.equal(await note.textContent(), "");
+
+    await page.selectOption("#progress-language", "cpp");
+    assert.equal(await box("b").isChecked(), true);
+    assert.equal(await toggle.textContent(), "Deselect all");
+    await downloadSelected.click();
+    assert.deepEqual(await takeDownloadNames(page), [filename(2)]);
+    await toggle.click();
+    assert.equal(await box("b").isChecked(), false);
+    assert.equal(await downloadSelected.isDisabled(), true);
+
+    await page.selectOption("#progress-language", "all");
+    assert.equal(await box("a").isChecked(), false);
+    assert.equal(await box("b").isChecked(), false);
+    assert.equal(await box("c").isChecked(), true);
+    assert.equal(await toggle.textContent(), "Select all");
+    assert.equal(await downloadSelected.textContent(), "Download selected (1)");
+    // Some ticked is not all ticked, so the toggle ticks the rest.
+    await toggle.click();
+    for (const id of ["a", "b", "c"])
+      assert.equal(await box(id).isChecked(), true);
+    assert.equal(await downloadSelected.textContent(), "Download selected (3)");
+  },
+  { timezoneId: "Asia/Taipei", locale: "en-US" },
+);
+
+lobbyTest("deleting one report keeps another unticked", async (page) => {
+  const attempt = (id, day) => ({
+    id,
+    problemId: EASY[0],
+    payload: {
+      id,
+      problemId: EASY[0],
+      problemTitle: `Attempt ${id}`,
+      language: "python",
+      date: `2026-01-0${day}T00:00:00Z`,
+      report: { decision: "HIRE" },
+    },
+  });
+  reports = [attempt("a", 1), attempt("b", 2), attempt("c", 3)];
+  await lobby(page);
+  const box = (id) =>
+    page.getByRole("checkbox", { name: ` · Attempt ${id} · ` });
+  await box("a").uncheck();
+
+  // The delete reloads the history, which builds every row afresh.
+  const deleteB = page.getByRole("button", {
+    name: /^Delete the .* report for Attempt b$/,
+  });
+  page.once("dialog", (dialog) => dialog.accept());
+  await deleteB.click();
+  await reaches(
+    page,
+    () => document.querySelector("#report-delete-status").textContent !== "",
+  );
+  assert.deepEqual(deletedIds, ["b"]);
+  assert.equal(await box("b").count(), 0);
+  assert.equal(await box("a").isChecked(), false);
+  assert.equal(await box("c").isChecked(), true);
+  assert.equal(
+    await page.locator("#attempt-download-selected").textContent(),
+    "Download selected (1)",
+  );
+});
+
+lobbyTest(
+  "signing in does not carry a device untick onto the account copy",
+  async (page) => {
+    const entry = {
+      id: "shared",
+      problemId: EASY[0],
+      problemTitle: "Shared attempt",
+      language: "python",
+      date: "2026-01-01T00:00:00Z",
+      report: { decision: "HIRE" },
+    };
+    session = { signedIn: false, loginRequired: true };
+    reports = [{ id: entry.id, problemId: EASY[0], payload: entry }];
+    await page.addInitScript((entry) => {
+      localStorage.setItem("codetrial_history", JSON.stringify([entry]));
+    }, entry);
+    await lobby(page);
+    const summary = page.locator("#progress-summary");
+    const box = page.getByRole("checkbox", { name: " · Shared attempt · " });
+    assert.match(await summary.textContent(), /saved on this device/);
+    await box.uncheck();
+
+    await page.fill("#github-login", "candidate");
+    await page.press("#github-login", "Enter");
+    await summary.filter({ hasText: "saved to your account" }).waitFor();
+    // The account copy shares the device row's id, so only the change of
+    // source keeps the untick made on the device off it.
+    assert.equal(await box.isChecked(), true);
+  },
+);
+
 lobbyTest(
   "try again selects a problem without escaping an active title search",
   async (page) => {
