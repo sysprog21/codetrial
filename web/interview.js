@@ -55,6 +55,7 @@ import {
   problemMarkup,
   reportMarkdown,
   reportMarkup,
+  mountFinalCodeCopy,
   reportSaveStatus,
   resultsMarkup,
   runnerStatusMarkup,
@@ -3875,6 +3876,7 @@ function renderReport() {
     saveResult: null,
     unclearLines: unclearLines(),
   });
+  mountFinalCodeCopy(nodes.report, currentCode());
   mountBehavioralReview(nodes.report, state.transcript.values());
 }
 

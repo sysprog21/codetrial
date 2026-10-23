@@ -10,7 +10,7 @@
 // `/api/reports` sync module the lobby uses, and repurposing it would break the
 // section it already serves.
 
-import { reportMarkup } from "/render.js";
+import { reportMarkup, mountFinalCodeCopy } from "/render.js";
 import {
   modeLabel,
   replayRows,
@@ -515,6 +515,7 @@ async function loadReport(interviewId, recordingId) {
     unclearLines: unclearLinesOf(saved.unclearLines),
     ...final,
   });
+  mountFinalCodeCopy(nodes.report, final.code);
 }
 
 nodes.more.addEventListener("click", () => void loadList());

@@ -2083,11 +2083,23 @@ table.phase-scores {
   color: var(--ink);
 }
 
+.final-code {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.5rem;
+}
+
+.final-code [role="status"] {
+  grid-column: 1 / -1;
+}
+
 .report-actions {
   justify-content: flex-end;
 }
 
-.report-actions button {
+.report-actions button,
+.final-code button {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--accent-fill);
@@ -2099,13 +2111,15 @@ table.phase-scores {
 
 /* Done is the way on; the download is a copy to keep, so it is outlined
    rather than a second filled button of equal weight beside it. */
-.report-actions .secondary {
+.report-actions .secondary,
+.final-code .secondary {
   border-color: var(--control-border);
   background: transparent;
   color: var(--ink);
 }
 
-.report-actions .secondary:hover {
+.report-actions .secondary:hover,
+.final-code .secondary:hover {
   border-color: var(--accent);
 }
 

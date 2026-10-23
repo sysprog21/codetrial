@@ -696,6 +696,7 @@ test("the report card this page renders names no finding either", () => {
       "Communication",
       "Complexity",
       "Contract",
+      "Copy",
       "Done",
       "Download",
       "Edge",
