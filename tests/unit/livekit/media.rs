@@ -204,6 +204,9 @@ async fn a_failed_flush_is_an_error_the_caller_can_see() {
 fn an_ended_audio_track_is_released_even_when_the_flush_fails() {
     let loop_source = include_str!("../../../src/livekit.rs");
     let arm = loop_source
+        .split("pub(crate) async fn run_room_with_slot")
+        .nth(1)
+        .expect("the room loop entry point still exists")
         .split("frame = next_audio_frame")
         .nth(1)
         .expect("the room loop still has an audio arm");

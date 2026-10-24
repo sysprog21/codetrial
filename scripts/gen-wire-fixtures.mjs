@@ -416,6 +416,19 @@ const files = {
       },
     ],
   },
+  "startup-receipt.json": {
+    topic: lib.topics.control,
+    cases: [
+      {
+        name: "received startup failure",
+        payload: await lib.startupReceipt(
+          new TextEncoder().encode(
+            '{"type":"interviewer_state","reconnecting":false,"startup":"failed","reason":"billing"}',
+          ),
+        ),
+      },
+    ],
+  },
   "test-results.json": { topic: lib.topics.tests, cases: testResultsCases() },
   "integrity-chain.json": await integrityChain(),
   "board-stream.json": { topic: lib.topics.board, cases: boardCases() },

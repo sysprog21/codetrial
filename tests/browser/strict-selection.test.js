@@ -90,10 +90,23 @@ function mediaAndRoom() {
   window.LivekitClient = {
     RoomEvent: new Proxy({}, { get: (_, key) => key }),
     Room: class {
-      remoteParticipants = new Map();
+      agent = { identity: "agent-test", kind: "AGENT", attributes: {} };
+      remoteParticipants = new Map([[this.agent.identity, this.agent]]);
       localParticipant = {
         publishTrack: async () => {},
-        publishData: async () => {},
+        publishData: async (_bytes, options) => {
+          if (options.topic !== "integrity" || this.ready) return;
+          this.ready = true;
+          const payload = new TextEncoder().encode(
+            JSON.stringify({
+              type: "interviewer_state",
+              reconnecting: false,
+              startup: "ready",
+            }),
+          );
+          for (const handler of window.roomEvents.DataReceived ?? [])
+            handler(payload, this.agent, undefined, "control");
+        },
       };
       on(event, callback) {
         (window.roomEvents[event] ??= []).push(callback);

@@ -72,7 +72,8 @@ window.LivekitClient = {
   Track: { Source: { Microphone: "microphone", Camera: "camera" } },
   Room: class {
     constructor() {
-      this.remoteParticipants = new Map();
+      const agent = { identity: "agent-fake-room", kind: "AGENT", attributes: {} };
+      this.remoteParticipants = new Map([[agent.identity, agent]]);
       this.name = "fake-room";
       this.localParticipant = {
         identity: "candidate",
@@ -82,6 +83,16 @@ window.LivekitClient = {
             topic: options.topic,
             payload: JSON.parse(new TextDecoder().decode(bytes)),
           });
+          // The first integrity publication follows pinning the interviewer.
+          if (options.topic === "integrity" && !this.ready) {
+            this.ready = true;
+            window.__handlers.DataReceived(
+              new TextEncoder().encode(JSON.stringify({
+                type: "interviewer_state", reconnecting: false, startup: "ready",
+              })),
+              agent, undefined, "control",
+            );
+          }
         },
         streamBytes: async () => ({ write: async () => {}, close: async () => {} }),
       };

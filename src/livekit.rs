@@ -489,6 +489,29 @@ fn runtime_activity(config: &AgentConfig, started_at: Instant, session_id: u64) 
         .with_first_output_deadline(Duration::from_secs(u64::from(config.gemini_first_output_s)))
 }
 
+// Latency includes the opening wait, but recovery starts its clock at readiness
+// so replay cannot expire an already answered greeting before its first queued
+// event reaches the room loop.
+fn ready_runtime_activity(
+    config: &AgentConfig,
+    room_name: &str,
+    started_at: Instant,
+    opening_requested_at: Instant,
+    session_id: u64,
+    greeting: &str,
+) -> RuntimeActivity {
+    let mut activity = runtime_activity(config, started_at, session_id);
+    activity.latency.bind(
+        room_name,
+        session_id,
+        activity.live_socket,
+        config.gemini_silence_ms,
+    );
+    activity.mark_prompted(opening_requested_at, Some(greeting), false);
+    activity.resume_reply_wait(started_at);
+    activity
+}
+
 /// Opens a session that remembers nothing, retrying while the budget allows.
 ///
 /// `Err` means credentials are unavailable or retries stopped, ending the
@@ -500,9 +523,13 @@ async fn open_cold_session(
     restarts: &mut usize,
     room: Option<&RoomLink>,
 ) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
+    let deadline = room.is_none().then(|| {
+        tokio::time::Instant::from_std(interview.started_at) + crate::gemini::FIRST_OPEN_LIMIT
+    });
     retry_cold_open(
         interview.keys,
         restarts,
+        deadline,
         || live_session_with_keys(interview.keys, interview.boot, None),
         async |notice| {
             let Some(room) = room else { return };
@@ -526,6 +553,7 @@ async fn open_cold_session(
 async fn retry_cold_open<F, Fut, N, NFut>(
     keys: &GeminiKeys,
     restarts: &mut usize,
+    deadline: Option<tokio::time::Instant>,
     mut open: F,
     mut notify: N,
 ) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>>
@@ -548,6 +576,18 @@ where
         });
         let (reason, until) = match opened {
             Ok(session) => return Ok(session),
+
+            // A known cooldown that cannot fit the first-open budget cannot
+            // recover here. Preserve its cause rather than letting the outer
+            // timeout replace it with an unexplained transport failure.
+            Err(error)
+                if crate::gemini::exhausted_until(error.as_ref()).is_some_and(|until| {
+                    deadline
+                        .is_some_and(|deadline| tokio::time::Instant::from_std(until) >= deadline)
+                }) =>
+            {
+                return Err(error);
+            }
 
             // Every key is out on quota. A sole key would ride out the same
             // rate limit under this budget, so a rotation waits too.
@@ -600,6 +640,154 @@ where
 /// The bare notice; `reconnect_wait` adds why a replacement is waiting.
 fn interviewer_state(reconnecting: bool) -> serde_json::Value {
     serde_json::json!({ "type": "interviewer_state", "reconnecting": reconnecting })
+}
+
+fn startup_state(error: Option<&(dyn std::error::Error + 'static)>) -> serde_json::Value {
+    let mut notice = interviewer_state(false);
+    notice["startup"] = if error.is_some() { "failed" } else { "ready" }.into();
+    if let Some(error) = error {
+        notice["reason"] = crate::gemini::startup_failure_reason(error).into();
+    }
+    notice
+}
+
+/// The normal opening generation is the probe, not a second paid turn. Setup
+/// alone proves nothing, and no watchdog or replacement runs before it answers.
+async fn probe_live_output(
+    gemini: &mut GeminiLiveSession,
+    state: &mut RuntimeState,
+    greeting: &str,
+    limit: Duration,
+    startup: &mut StartupContext<'_>,
+    input: &mut impl StartupInputs,
+) -> Result<Instant, Box<dyn std::error::Error + Send + Sync>> {
+    let result = tokio::time::timeout(limit, async {
+        send_model_text(
+            gemini,
+            state,
+            ModelInputKind::Turn,
+            TurnCause::Turn,
+            greeting,
+        )
+        .await?;
+
+        // These survive cancellation of the output wait when media wins the
+        // select. Recreating either would restart the deadline or ping on every
+        // microphone frame. The generation above is never part of that select.
+        let mut keepalive = tokio::time::interval(crate::gemini::KEEPALIVE_INTERVAL);
+        keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                ready = gemini.wait_for_model_output(&mut keepalive) => {
+                    ready?;
+                    return Ok(Instant::now());
+                }
+                input = input.next(startup.media) => {
+                    if matches!(&input, StartupInput::Room(None | Some(RoomEvent::Disconnected { .. }))) {
+                        *startup.room_closed = true;
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "room closed before startup output",
+                        ).into());
+                    }
+                    match input {
+                        StartupInput::Room(event) => {
+                            if let Some(event) = event
+                                && !handle_media_event(
+                                    startup.media,
+                                    gemini,
+                                    startup.candidate_identity,
+                                    startup.candidate_video,
+                                    &event,
+                                ).await?
+                            {
+                                startup.deferred_events.push(event);
+                            }
+                        }
+                        StartupInput::Audio(frame) => {
+                            let ended = frame.is_none();
+                            if frame.as_ref().is_some_and(media::frame_has_voice) {
+                                startup.media.voiced_at = Some(Instant::now());
+                            }
+                            pump_audio(startup.media, gemini, frame).await?;
+                            release_if_ended(&mut startup.media.audio, ended);
+                        }
+                        StartupInput::Video(frame) => {
+                            let speaking = startup.media.voiced_recently(Instant::now());
+                            pump_video(startup.media, gemini, frame, speaking).await?;
+                        }
+
+                        // The room loop applies presence grace after readiness.
+                        // Preserve the departure and any later return in order.
+                        StartupInput::ParticipantLeft(event) => startup.deferred_events.push(event),
+                    }
+                }
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "Gemini did not produce startup output before the deadline",
+        )
+        .into())
+    });
+    result.map_err(|error| {
+        if *startup.room_closed {
+            error
+        } else {
+            gemini.startup_error(error)
+        }
+    })
+}
+
+struct StartupContext<'a> {
+    media: &'a mut CandidateMedia,
+    candidate_identity: &'a str,
+    candidate_video: bool,
+    deferred_events: &'a mut Vec<RoomEvent>,
+    room_closed: &'a mut bool,
+}
+
+enum StartupInput {
+    Room(Option<RoomEvent>),
+    ParticipantLeft(RoomEvent),
+    Audio(Option<::livekit::webrtc::audio_frame::AudioFrame<'static>>),
+    Video(Option<::livekit::webrtc::video_frame::BoxVideoFrame>),
+}
+
+trait StartupInputs: Send {
+    fn next(&mut self, media: &mut CandidateMedia) -> impl Future<Output = StartupInput> + Send;
+}
+
+impl StartupInputs for &tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<RoomEvent>> {
+    async fn next(&mut self, media: &mut CandidateMedia) -> StartupInput {
+        next_startup_input(media, self).await
+    }
+}
+
+async fn next_startup_input(
+    media: &mut CandidateMedia,
+    events: &tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<RoomEvent>>,
+) -> StartupInput {
+    tokio::select! {
+        event = async { events.lock().await.recv().await } => match event {
+            Some(event @ RoomEvent::ParticipantDisconnected(_)) => StartupInput::ParticipantLeft(event),
+            event => StartupInput::Room(event),
+        },
+        frame = next_audio_frame(&mut media.audio), if media.audio.is_some() => StartupInput::Audio(frame),
+        frame = next_video_frame(&mut media.video), if media.video.is_some() => StartupInput::Video(frame),
+    }
+}
+
+fn startup_output_limit(config: &AgentConfig) -> Duration {
+    Duration::from_secs(u64::from(
+        config
+            .gemini_first_output_s
+            .max(crate::config::DEFAULT_GEMINI_FIRST_OUTPUT_S)
+            .min(config.gemini_reply_timeout_s),
+    ))
 }
 
 /// The notice a replacement shows while it waits on `reason`. `None` is the
@@ -1529,6 +1717,87 @@ struct OpenSession<'a> {
     turn: TurnState,
     started_at: Instant,
     restarts: usize,
+    deferred_events: std::collections::VecDeque<RoomEvent>,
+}
+
+// A failed ready notice can follow a paid generation. Stop the reader before
+// draining so the common startup summary receives each observation once.
+async fn publish_startup_readiness(
+    gemini: &mut GeminiLiveSession,
+    usage: &mut crate::gemini::TokenUsage,
+    publication: impl std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let result = tokio::time::timeout(RECONNECT_NOTICE_LIMIT, publication)
+        .await
+        .unwrap_or_else(|_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "publishing startup readiness timed out",
+            )
+            .into())
+        });
+    if result.is_err() {
+        let _ = gemini.shutdown().await;
+        for observed in gemini.drain_usage() {
+            usage.add(observed);
+        }
+    }
+    result
+}
+
+// Publication only queues the notice. Keep its sender in the roster until the
+// candidate acknowledges it, within the same budget and without retransmission.
+async fn publish_startup_failure(
+    publication: impl std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>,
+    receipt: impl std::future::Future<Output = ()>,
+) {
+    let _ = tokio::time::timeout(RECONNECT_NOTICE_LIMIT, async {
+        if publication.await.is_ok() {
+            receipt.await;
+        }
+    })
+    .await;
+}
+
+fn is_startup_receipt(
+    topic: Option<&str>,
+    sender: Option<&str>,
+    candidate: &str,
+    payload: &[u8],
+    id: &str,
+) -> bool {
+    topic == Some(TOPIC_CONTROL)
+        && is_interview_participant(sender, candidate)
+        && serde_json::from_slice::<serde_json::Value>(payload)
+            .is_ok_and(|value| value["type"] == "startup_received" && value["deliveryId"] == id)
+}
+
+async fn account_startup<T>(
+    config: &AgentConfig,
+    room_name: &str,
+    session_id: u64,
+    log_startup_failure: impl FnOnce(String),
+    opening: impl AsyncFnOnce(
+        &mut crate::gemini::TokenUsage,
+    ) -> Result<T, Box<dyn std::error::Error + Send + Sync>>,
+) -> Result<T, Box<dyn std::error::Error + Send + Sync>> {
+    let mut startup_usage = crate::gemini::TokenUsage::default();
+    let opened = opening(&mut startup_usage).await;
+
+    // Room setup can fail before a Gemini socket exists. Both that path and a
+    // paid opening failure must reach exactly one summary with observed usage.
+    if let Err(error) = &opened {
+        log_startup_failure(live_usage_line(
+            room_name,
+            session_id,
+            &config.gemini_live_model,
+            0,
+            LiveOutcome::from_error(error.as_ref(), LiveOutcome::Error),
+            None,
+            &startup_usage,
+        ));
+    }
+    opened
 }
 
 enum OpenSessionOutcome<'a> {
@@ -1552,33 +1821,47 @@ async fn open_session<'a>(
     room_name: &'a str,
     now_seconds: u64,
     session_id: u64,
+    log_startup_failure: impl FnOnce(String),
 ) -> Result<OpenSessionOutcome<'a>, Box<dyn std::error::Error + Send + Sync>> {
     let agent_identity = agent_identity(room_name);
-    let (room, mut events) = match join_room(config, room_name, &agent_identity, now_seconds).await
-    {
-        Ok(joined) => joined,
-        Err(error) => return Ok(OpenSessionOutcome::FailedBeforeCandidate(error)),
-    };
-    let room = RoomLink::live(room);
-    let mut agent_state = session::AgentState::default();
-    if let Err(error) =
-        session::publish_opening_attributes(&room, &mut agent_state, config.gemini_silence_ms).await
-    {
-        return Ok(OpenSessionOutcome::FailedBeforeCandidate(error));
-    }
+    let joined = async {
+        let (room, mut events) = join_room(config, room_name, &agent_identity, now_seconds).await?;
+        let room = RoomLink::live(room);
+        let mut agent_state = session::AgentState::default();
+        session::publish_opening_attributes(&room, &mut agent_state, config.gemini_silence_ms)
+            .await?;
 
-    // The candidate's metadata picks the problem, so nothing else can start
-    // until someone joins.
-    let mut deferred_events = Vec::new();
-    let candidate =
-        match candidate_metadata(room.connected(), &mut events, &mut deferred_events).await {
-            Ok(candidate) => candidate,
-            Err(error) => return Ok(OpenSessionOutcome::FailedBeforeCandidate(error)),
-        };
+        // The candidate's metadata picks the problem, so nothing else can start
+        // until someone joins.
+        let mut deferred_events = Vec::new();
+        let candidate =
+            candidate_metadata(room.connected(), &mut events, &mut deferred_events).await?;
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>((
+            room,
+            events,
+            agent_state,
+            candidate,
+            deferred_events,
+        ))
+    }
+    .await;
+    let (room, events, mut agent_state, candidate, mut deferred_events) = match joined {
+        Ok(joined) => joined,
+        Err(error) => {
+            log_startup_failure(startup_failure_line(
+                &config.gemini_live_model,
+                room_name,
+                session_id,
+                error.as_ref(),
+            ));
+            return Ok(OpenSessionOutcome::FailedBeforeCandidate(error));
+        }
+    };
     let Some((candidate_identity, candidate_metadata)) = candidate else {
         eprintln!("no candidate joined room={room_name}; leaving it");
         return Ok(OpenSessionOutcome::NoCandidate);
     };
+    account_startup(config, room_name, session_id, log_startup_failure, async |startup_usage| {
     let events = tokio::sync::Mutex::new(events);
     let boot = candidate_bootstrap(config, room_name, Some(&candidate_metadata));
     eprintln!(
@@ -1622,99 +1905,166 @@ async fn open_session<'a>(
     // dependency is on room state, not on data.
     let setup_began = Instant::now();
     let mut restarts = 0;
-    let mut room_ready = Duration::ZERO;
-    let mut gemini_ready = Duration::ZERO;
-    let (mut output_audio, mut gemini) = tokio::try_join!(
-        async {
-            isolate_local_agent(config, room_name, &agent_identity, now_seconds).await?;
-            let published =
-                publish_output_audio(room.connected(), GEMINI_OUTPUT_AUDIO_SAMPLE_RATE).await;
-            room_ready = setup_began.elapsed();
-            published
-        },
-        async {
-            let interview = InterviewContext {
-                config,
-                keys,
-                boot: &boot,
-                started_at: setup_began,
-                candidate_identity: &candidate_identity,
-                events: &events,
-                slot: None,
-            };
-            let opened = crate::gemini::first_open_within(
-                crate::gemini::FIRST_OPEN_LIMIT,
-                open_cold_session(interview, &mut restarts, None),
+    let mut room_closed = false;
+    let prepared = async {
+        let mut room_ready = Duration::ZERO;
+        let mut gemini_ready = Duration::ZERO;
+        let (mut output_audio, mut gemini) = tokio::try_join!(
+            async {
+                isolate_local_agent(config, room_name, &agent_identity, now_seconds).await?;
+                let published = publish_output_audio(room.connected(), GEMINI_OUTPUT_AUDIO_SAMPLE_RATE).await;
+                room_ready = setup_began.elapsed();
+                published
+            },
+            async {
+                let interview = InterviewContext {
+                    config,
+                    keys,
+                    boot: &boot,
+                    started_at: setup_began,
+                    candidate_identity: &candidate_identity,
+                    events: &events,
+                    slot: None,
+                };
+                let opened = crate::gemini::first_open_within(
+                    crate::gemini::FIRST_OPEN_LIMIT,
+                    open_cold_session(interview, &mut restarts, None),
+                )
+                .await;
+                gemini_ready = setup_began.elapsed();
+                opened
+            },
+        )?;
+        output_audio.tool_ack = tool_ack;
+        output_audio.tool_ack_task = tool_ack_task;
+        eprintln!(
+            "timing: room and Gemini session ready {:.2}s after the candidate joined (room {:.2}s, gemini {:.2}s)",
+            setup_began.elapsed().as_secs_f64(),
+            room_ready.as_secs_f64(),
+            gemini_ready.as_secs_f64()
+        );
+
+        // Only prompt construction uses this provisional clock. The opening
+        // starts with its full budget, and no watch or round transition runs
+        // before ready.
+        let started_at = Instant::now();
+
+        let mut turn = TurnState {
+            state: initial_runtime_state(&boot, started_at),
+            agent_state: std::mem::take(&mut agent_state),
+            activity: runtime_activity(config, started_at, session_id),
+            turns: SpeakerTurns::default(),
+            transcripts: Default::default(),
+        };
+        turn.state
+            .evidence_ledger
+            .record_model_input(ModelInputKind::LiveSetup, &boot.instructions);
+        let mut media = CandidateMedia::new();
+
+        // Keep subscriptions consumed while waiting for candidate metadata. The
+        // startup wait pumps them too; dropping a subscription here would leave
+        // both waits deaf for the whole interview.
+        for event in std::mem::take(&mut deferred_events) {
+            if !handle_media_event(
+                &mut media,
+                &mut gemini,
+                &candidate_identity,
+                boot.candidate_video,
+                &event,
             )
-            .await;
-            gemini_ready = setup_began.elapsed();
-            opened
-        },
-    )?;
+            .await? {
+                deferred_events.push(event);
+            }
+        }
 
-    output_audio.tool_ack = tool_ack;
-    output_audio.tool_ack_task = tool_ack_task;
-
-    // Which branch held the greeting back: an earlier Gemini connect can only
-    // help when Gemini is the later of the two.
-    eprintln!(
-        "timing: room and Gemini session ready {:.2}s after the candidate joined (room {:.2}s, gemini {:.2}s)",
-        setup_began.elapsed().as_secs_f64(),
-        room_ready.as_secs_f64(),
-        gemini_ready.as_secs_f64()
-    );
-
-    // The candidate's clock, not a third one. The browser starts counting when
-    // its own connect resolves, which is this instant seen from the other side,
-    // and stamping again here put the agent a second or two behind the tab for
-    // the rest of the interview. Every consumer below reads this as "when the
-    // interview started", and that is when it started.
-    let started_at = setup_began;
-
-    let mut turn = TurnState {
-        state: initial_runtime_state(&boot, started_at),
-        agent_state: std::mem::take(&mut agent_state),
-        activity: runtime_activity(config, started_at, session_id),
-        turns: SpeakerTurns::default(),
-        transcripts: Default::default(),
-    };
-    turn.activity.latency.bind(
-        room.name(),
-        session_id,
-        turn.activity.live_socket,
-        config.gemini_silence_ms,
-    );
-    turn.state
-        .evidence_ledger
-        .record_model_input(ModelInputKind::LiveSetup, &boot.instructions);
-    let mut media = CandidateMedia::new();
-
-    // Before the greeting, not after: these arrived while we were waiting for
-    // the candidate, and one of them is what attaches the microphone. Greeting
-    // first would open the interview deaf for as long as Gemini takes to
-    // answer.
-    for event in deferred_events.drain(..) {
-        handle_media_event(
-            &mut media,
+        let greeting = with_timer(&turn.state, boot.greeting.clone());
+        let opening_requested_at = Instant::now();
+        let started_at = match probe_live_output(
             &mut gemini,
-            &candidate_identity,
-            boot.candidate_video,
-            &event,
+            &mut turn.state,
+            &greeting,
+            startup_output_limit(config),
+            &mut StartupContext {
+                media: &mut media,
+                candidate_identity: &candidate_identity,
+                candidate_video: boot.candidate_video,
+                deferred_events: &mut deferred_events,
+                room_closed: &mut room_closed,
+            },
+            &mut &events,
+        )
+        .await
+        {
+            Ok(started_at) => started_at,
+            Err(error) => {
+                if !room_closed {
+                    gemini.record_failure(keys);
+                }
+                let _ = gemini.shutdown().await;
+
+                // A failed generation can still be billed. Only observed
+                // counters are reported; absence of observations is not a claim
+                // of zero cost.
+                for usage in gemini.drain_usage() {
+                    startup_usage.add(usage);
+                }
+                return Err(error);
+            }
+        };
+        turn.state.started_at = started_at;
+        turn.activity = ready_runtime_activity(
+            config,
+            room_name,
+            started_at,
+            opening_requested_at,
+            session_id,
+            &greeting,
+        );
+        publish_startup_readiness(
+            &mut gemini,
+            startup_usage,
+            publish_interviewer_state(&room, &startup_state(None)),
         )
         .await?;
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>((
+            output_audio,
+            gemini,
+            media,
+            turn,
+            started_at,
+        ))
     }
+    .await;
 
-    let greeting = with_timer(&turn.state, boot.greeting.clone());
-    send_model_text(
-        &mut gemini,
-        &mut turn.state,
-        ModelInputKind::Turn,
-        TurnCause::Turn,
-        &greeting,
-    )
-    .await?;
-    turn.activity
-        .mark_prompted(Instant::now(), Some(&greeting), false);
+    let (output_audio, gemini, media, turn, started_at) = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            if !room_closed && let Ok(packet) = browser_packet(TOPIC_CONTROL, &startup_state(Some(error.as_ref()))) {
+                let id = crate::sha256_hex(&[&packet.payload]);
+                publish_startup_failure(
+                    room.publish_data(packet),
+                    async {
+                        let mut events = events.lock().await;
+                        while let Some(event) = events.recv().await {
+                            match event {
+                                RoomEvent::DataReceived { payload, topic, participant, .. } => {
+                                    let sender = participant.as_ref().map(|participant| participant.identity().0);
+                                    if is_startup_receipt(topic.as_deref(), sender.as_deref(), &candidate_identity, &payload, &id) {
+                                        return;
+                                    }
+                                }
+                                RoomEvent::Disconnected { .. } => return,
+                                RoomEvent::ParticipantDisconnected(participant) if participant.identity().0 == candidate_identity => return,
+                                _ => {}
+                            }
+                        }
+                    },
+                ).await;
+            }
+            leave_room(&room).await;
+            return Err(error);
+        }
+    };
 
     Ok(OpenSessionOutcome::Started(Box::new(OpenSession {
         room,
@@ -1728,7 +2078,9 @@ async fn open_session<'a>(
         turn,
         started_at,
         restarts,
+        deferred_events: deferred_events.into(),
     })))
+    }).await
 }
 
 /// The room loop's own bookkeeping, distinct from the session it runs on.
@@ -2650,32 +3002,21 @@ pub(crate) async fn run_room_with_slot(
             u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
         });
     let keys = Arc::new(GeminiKeys::from_config(config));
-    let session = open_session(config, &keys, room_name, now_seconds, session_id)
-        .await
-        .inspect_err(|error| {
-            eprintln!(
-                "{}",
-                startup_failure_line(
-                    &config.gemini_live_model,
-                    room_name,
-                    session_id,
-                    error.as_ref(),
-                )
-            );
-        })?;
+    let session = open_session(
+        config,
+        &keys,
+        room_name,
+        now_seconds,
+        session_id,
+        |summary| {
+            eprintln!("{summary}");
+        },
+    )
+    .await?;
     let session = match session {
         OpenSessionOutcome::Started(session) => session,
         OpenSessionOutcome::NoCandidate => return Ok(RoomRunOutcome::NoCandidate),
         OpenSessionOutcome::FailedBeforeCandidate(error) => {
-            eprintln!(
-                "{}",
-                startup_failure_line(
-                    &config.gemini_live_model,
-                    room_name,
-                    session_id,
-                    error.as_ref(),
-                )
-            );
             return Ok(RoomRunOutcome::FailedBeforeCandidate(error));
         }
     };
@@ -2691,6 +3032,7 @@ pub(crate) async fn run_room_with_slot(
         mut turn,
         started_at,
         restarts,
+        mut deferred_events,
     } = *session;
 
     let interview = InterviewContext {
@@ -2732,9 +3074,8 @@ pub(crate) async fn run_room_with_slot(
     //
     // The grace is deliberate: the browser normally ends the interview itself,
     // and this only has to catch the case where it never does.
-    let hard_deadline = tokio::time::sleep_until(
-        (Instant::now() + interview_hard_deadline(boot.duration_min)).into(),
-    );
+    let hard_deadline =
+        tokio::time::sleep_until((started_at + interview_hard_deadline(boot.duration_min)).into());
     tokio::pin!(hard_deadline);
 
     let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
@@ -2758,7 +3099,12 @@ pub(crate) async fn run_room_with_slot(
                     );
                     on_watch_tick(&room, &mut context, &mut loops, interview).await?
                 }
-                event = async { events.lock().await.recv().await } => {
+                event = async {
+                    match deferred_events.pop_front() {
+                        Some(event) => Some(event),
+                        None => events.lock().await.recv().await,
+                    }
+                } => {
                     let Some(event) = event else {
                         eprintln!(
                             "LiveKit event stream ended for room={room_name}; ending with no report, \

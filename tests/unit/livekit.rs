@@ -16,6 +16,39 @@ use tokio::sync::mpsc;
 
 use crate::config::load_from_pairs;
 
+#[path = "livekit/startup.rs"]
+mod startup;
+
+async fn probe_live_output(
+    gemini: &mut GeminiLiveSession,
+    state: &mut RuntimeState,
+    greeting: &str,
+    limit: Duration,
+) -> Result<Instant, Box<dyn std::error::Error + Send + Sync>> {
+    let (_tx, mut input) = mpsc::unbounded_channel();
+    super::probe_live_output(
+        gemini,
+        state,
+        greeting,
+        limit,
+        &mut StartupContext {
+            media: &mut CandidateMedia::new(),
+            candidate_identity: "candidate",
+            candidate_video: false,
+            deferred_events: &mut Vec::new(),
+            room_closed: &mut false,
+        },
+        &mut input,
+    )
+    .await
+}
+
+impl StartupInputs for mpsc::UnboundedReceiver<StartupInput> {
+    async fn next(&mut self, _media: &mut CandidateMedia) -> StartupInput {
+        self.recv().await.unwrap()
+    }
+}
+
 // Only the tests below reach for it now: the report packet that carries this
 // topic is built in `report.rs`, and what is left here asserts which topics the
 // loop refuses from a browser.
@@ -277,32 +310,237 @@ fn only_a_replacement_publishes_its_reconnect_wait() {
     }
 }
 
-/// The interview starts once, when the candidate joined.
-///
-/// Stamping a second `Instant::now()` after the room and the Gemini session
-/// came up put this process a second or two behind the tab for the rest of
-/// the interview, and the browser announces the round boundary exactly once
-/// off its own clock. The gap has to be absorbed by a tolerance nobody can
-/// justify, or removed here. Read as source because the two stamps are only
-/// distinguishable in a room that really connected.
 #[test]
-fn the_interview_clock_starts_when_the_candidate_joined() {
-    let source = include_str!("../../src/livekit.rs");
-    let opener = source
-        .split("async fn open_session")
-        .nth(1)
-        .expect("open_session is still defined here");
-    let bound = opener
-        .split_once("let started_at =")
-        .expect("open_session still stamps the interview clock")
-        .1
-        .lines()
-        .next()
-        .unwrap_or_default();
-    assert!(
-        bound.contains("setup_began"),
-        "the clock must start where the candidate's does, not after setup: {bound}"
+fn startup_results_use_the_existing_control_path() {
+    assert_eq!(
+        startup_state(None),
+        serde_json::json!({
+            "type": "interviewer_state", "reconnecting": false, "startup": "ready"
+        })
     );
+    let error = std::io::Error::other("1011 Internal error, 503, or silence");
+    assert_eq!(startup_state(Some(&error))["reason"], "unavailable");
+}
+
+#[tokio::test]
+async fn startup_probe_waits_for_output_and_preserves_the_opening_events() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "startup-success"),
+    ])
+    .unwrap();
+    let keys = GeminiKeys::from_config(&config);
+    let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/", listener.local_addr().unwrap());
+    let (asked, request) = tokio::sync::oneshot::channel();
+    let (release, output) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+        socket.next().await.unwrap().unwrap();
+        socket
+            .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+            .await
+            .unwrap();
+        let clock = socket.next().await.unwrap().unwrap();
+        let clock: serde_json::Value = serde_json::from_str(clock.to_text().unwrap()).unwrap();
+        assert_eq!(clock["clientContent"]["turnComplete"], false);
+        assert!(
+            clock["clientContent"]["turns"][0]["parts"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("TIMER:")
+        );
+        let message = socket.next().await.unwrap().unwrap();
+        let message: serde_json::Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+        assert_eq!(message["clientContent"]["turnComplete"], true);
+        assert_eq!(
+            message["clientContent"]["turns"][0]["parts"][0]["text"],
+            "opening"
+        );
+        asked.send(()).unwrap();
+        output.await.unwrap();
+        socket
+            .send(Message::Text(
+                r#"{"serverContent":{"inputTranscription":{"text":"Candidate"}}}"#.into(),
+            ))
+            .await
+            .unwrap();
+        socket
+            .send(Message::Text(
+                r#"{"serverContent":{"modelTurn":{"parts":[{"text":"Hello"}]}}}"#.into(),
+            ))
+            .await
+            .unwrap();
+        let mut generations = 1;
+        while let Some(Ok(message)) = socket.next().await {
+            if message.is_close() {
+                break;
+            }
+            if message.is_text() {
+                generations += 1;
+            }
+        }
+        generations
+    });
+    let mut gemini = crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None)
+        .await
+        .unwrap();
+    let mut state = initial_runtime_state(&boot, Instant::now());
+    let greeting = with_timer(&state, "opening".to_string());
+    let before = Instant::now();
+    let ready = {
+        let probe = probe_live_output(&mut gemini, &mut state, &greeting, Duration::from_secs(5));
+        tokio::pin!(probe);
+        tokio::select! {
+            result = &mut probe => panic!("setup alone must not start the interview: {result:?}"),
+            _ = request => {}
+        }
+        tokio::select! {
+            result = &mut probe => panic!("no model output yet: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+        }
+        release.send(()).unwrap();
+        probe.await.unwrap()
+    };
+    assert!(ready.duration_since(before) >= Duration::from_millis(20));
+    assert_eq!(
+        gemini.next_event().await,
+        Some(GeminiEvent::InputTranscript("Candidate".into()))
+    );
+    assert_eq!(
+        gemini.next_event().await,
+        Some(GeminiEvent::Text("Hello".into()))
+    );
+    gemini.shutdown().await.unwrap();
+    assert_eq!(server.await.unwrap(), 1);
+}
+
+#[test]
+fn startup_activity_preserves_opening_latency_and_restarts_the_reply_watch() {
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "startup-latency"),
+        ("CODETRIAL_GEMINI_FIRST_OUTPUT_S", "5"),
+        ("CODETRIAL_GEMINI_REPLY_TIMEOUT_S", "90"),
+    ])
+    .unwrap();
+    let requested = Instant::now();
+    let received = requested + Duration::from_secs(55);
+    let ready = requested + Duration::from_secs(60);
+    let mut activity =
+        ready_runtime_activity(&config, "startup-room", ready, requested, 7, "opening");
+    assert!(!activity.reply_timed_out(ready, false));
+    assert_eq!(
+        activity.expired_reply_wait(ready + Duration::from_secs(5), false),
+        Some(Duration::from_secs(5)),
+    );
+    assert_eq!(activity.reply_timeout, Duration::from_secs(90));
+    let record = activity.latency.audio(received).unwrap();
+    assert_eq!(record["room"], "startup-room");
+    assert_eq!(record["session"], 7);
+    assert_eq!(record["origin"], "prompt");
+    assert_eq!(record["elapsed_ms"], 55_000);
+}
+
+#[tokio::test]
+async fn startup_probe_bounds_silence_without_retrying_or_guessing_quota() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    for frame in [
+        r#"{}"#,
+        r#"{"goAway":{"timeLeft":"9.5s"}}"#,
+        r#"{"serverContent":{"turnComplete":true}}"#,
+        r#"{"serverContent":{"modelTurn":{"parts":[{"text":"  "}]}}}"#,
+        r#"{"error":{"code":402,"message":"billing is not enabled"}}"#,
+        r#"{"error":{"code":429,"message":"resource exhausted"}}"#,
+        r#"{"error":{"code":401,"message":"invalid API key"}}"#,
+        r#"{"error":{"code":403,"message":"permission denied"}}"#,
+        r#"{"error":{"code":503,"message":"internal error"}}"#,
+    ] {
+        let config = load_from_pairs([
+            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+            ("LIVEKIT_API_KEY", "devkey"),
+            ("LIVEKIT_API_SECRET", "devsecret"),
+            ("GOOGLE_API_KEY", "startup-failure"),
+        ])
+        .unwrap();
+        let keys = GeminiKeys::from_config(&config);
+        let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            socket.next().await.unwrap().unwrap();
+            socket
+                .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+                .await
+                .unwrap();
+            let clock = socket.next().await.unwrap().unwrap();
+            let clock: serde_json::Value = serde_json::from_str(clock.to_text().unwrap()).unwrap();
+            assert_eq!(clock["clientContent"]["turnComplete"], false);
+            let request = socket.next().await.unwrap().unwrap();
+            let request: serde_json::Value =
+                serde_json::from_str(request.to_text().unwrap()).unwrap();
+            assert_eq!(request["clientContent"]["turnComplete"], true);
+            socket.send(Message::Text(frame.into())).await.unwrap();
+            let mut generations = 1;
+            while let Some(Ok(message)) = socket.next().await {
+                if message.is_close() {
+                    break;
+                }
+                if message.is_text() {
+                    generations += 1;
+                }
+            }
+            generations
+        });
+        let mut gemini = crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None)
+            .await
+            .unwrap();
+        let mut state = initial_runtime_state(&boot, Instant::now());
+        let greeting = with_timer(&state, "opening".to_string());
+        let error = probe_live_output(
+            &mut gemini,
+            &mut state,
+            &greeting,
+            Duration::from_millis(100),
+        )
+        .await
+        .unwrap_err();
+        let reason = crate::gemini::startup_failure_reason(error.as_ref());
+        assert_eq!(
+            reason,
+            if frame.contains("402") {
+                "billing"
+            } else if frame.contains("429") {
+                "quota"
+            } else if frame.contains("401") {
+                "credentials"
+            } else if frame.contains("403") {
+                "refused"
+            } else {
+                "unavailable"
+            }
+        );
+        gemini.shutdown().await.unwrap();
+        drop(gemini);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap(),
+            1
+        );
+    }
 }
 
 #[test]
@@ -322,6 +560,381 @@ fn only_the_interview_candidate_can_drive_the_runtime() {
         !is_interview_participant(None, "candidate-abc"),
         "an unattributed event drives nothing: this agent never sends itself packets"
     );
+}
+
+#[tokio::test]
+async fn startup_ready_publication_failure_preserves_observed_usage() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    for stalled in [false, true] {
+        let config = load_from_pairs([
+            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+            ("LIVEKIT_API_KEY", "devkey"),
+            ("LIVEKIT_API_SECRET", "devsecret"),
+            ("GOOGLE_API_KEY", "startup-accounting"),
+        ])
+        .unwrap();
+        let keys = GeminiKeys::from_config(&config);
+        let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            socket.next().await.unwrap().unwrap();
+            socket
+                .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+                .await
+                .unwrap();
+            socket.next().await.unwrap().unwrap();
+            socket.next().await.unwrap().unwrap();
+            socket.send(Message::Text(r#"{"usageMetadata":{"promptTokenCount":42,"responseTokenCount":7,"totalTokenCount":49}}"#.into())).await.unwrap();
+            socket
+                .send(Message::Text(
+                    r#"{"serverContent":{"modelTurn":{"parts":[{"text":"Hello"}]}}}"#.into(),
+                ))
+                .await
+                .unwrap();
+            socket
+                .next()
+                .await
+                .is_some_and(|message| message.unwrap().is_close())
+        });
+        let mut gemini = crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None)
+            .await
+            .unwrap();
+        let mut state = initial_runtime_state(&boot, Instant::now());
+        let greeting = with_timer(&state, "opening".to_string());
+        let mut summaries = Vec::new();
+        let error = account_startup(
+            &config,
+            "interview-fixed",
+            7,
+            |line| summaries.push(line),
+            async |usage| {
+                probe_live_output(&mut gemini, &mut state, &greeting, Duration::from_secs(5))
+                    .await?;
+                publish_startup_readiness(&mut gemini, usage, async {
+                    if stalled {
+                        std::future::pending::<()>().await;
+                    }
+                    Err(std::io::Error::other("notice rejected").into())
+                })
+                .await
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            gemini.drain_usage().is_empty(),
+            "observations are accounted once"
+        );
+        assert_eq!(error.to_string().contains("timed out"), stalled);
+        assert_eq!(
+            summaries.len(),
+            1,
+            "the production error exit logs exactly once"
+        );
+        let summary = &summaries[0];
+        assert!(
+            summary.contains("phase=startup prompt_tokens=42 response_tokens=7"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("usage_samples=1 total_tokens=49"),
+            "{summary}"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap(),
+            "the failed startup closes its socket"
+        );
+    }
+}
+
+#[tokio::test]
+async fn startup_room_join_failure_is_accounted_exactly_once() {
+    let mut config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "startup-join-accounting"),
+    ])
+    .unwrap();
+    // Fail in the SDK before room setup, without reaching any external host.
+    config.livekit_url = "not-a-livekit-url".to_string();
+    let keys = Arc::new(GeminiKeys::from_config(&config));
+    let mut summaries = Vec::new();
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        open_session(&config, &keys, "interview-startup-failure", 1, 7, |line| {
+            summaries.push(line);
+        }),
+    )
+    .await
+    .expect("an invalid URL must fail before any network wait");
+    assert!(
+        matches!(result, Ok(OpenSessionOutcome::FailedBeforeCandidate(_))),
+        "a failed room join must preserve the pre-candidate release outcome"
+    );
+    assert_eq!(summaries.len(), 1, "every startup failure is counted once");
+    let summary = &summaries[0];
+    assert!(summary.starts_with("codetrial live_usage room=interview-startup-failure session=7 "));
+    assert!(
+        summary.contains("elapsed_s=0 outcome=error phase=startup"),
+        "{summary}"
+    );
+    assert!(summary.contains("usage_samples=0"), "{summary}");
+    assert!(summary.contains("prompt_tokens=0"), "{summary}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn startup_failure_waits_for_receipt_before_leaving() {
+    let (received, receipt) = tokio::sync::oneshot::channel();
+    let published = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = published.clone();
+    let delivery = tokio::spawn(async move {
+        publish_startup_failure(
+            async {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            },
+            async {
+                receipt.await.unwrap();
+            },
+        )
+        .await;
+    });
+    tokio::task::yield_now().await;
+    assert_eq!(published.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(
+        !delivery.is_finished(),
+        "SDK publication only queues the notice; leaving now loses a delayed classified packet's sender"
+    );
+    received.send(()).unwrap();
+    delivery.await.unwrap();
+    assert_eq!(published.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn startup_failure_missing_receipt_shares_the_publication_deadline() {
+    let began = tokio::time::Instant::now();
+    let delivery = tokio::spawn(async {
+        publish_startup_failure(
+            async {
+                tokio::time::sleep(RECONNECT_NOTICE_LIMIT / 2).await;
+                Ok(())
+            },
+            std::future::pending(),
+        )
+        .await;
+    });
+    tokio::task::yield_now().await;
+    tokio::time::advance(RECONNECT_NOTICE_LIMIT / 2).await;
+    tokio::task::yield_now().await;
+    assert!(
+        !delivery.is_finished(),
+        "a delayed publish must still allow a receipt"
+    );
+    tokio::time::advance(RECONNECT_NOTICE_LIMIT / 2 - Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    assert!(!delivery.is_finished());
+    tokio::time::advance(Duration::from_millis(1)).await;
+    delivery.await.unwrap();
+    assert_eq!(began.elapsed(), RECONNECT_NOTICE_LIMIT);
+}
+
+#[test]
+fn startup_receipt_matches_browser_bytes_and_only_the_candidate() {
+    let wire: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/startup-receipt.json")).unwrap();
+    assert_eq!(wire["cases"].as_array().unwrap().len(), 1);
+    let payload = serde_json::to_vec(&wire["cases"][0]["payload"]).unwrap();
+    let packet = br#"{"type":"interviewer_state","reconnecting":false,"startup":"failed","reason":"billing"}"#;
+    let id = crate::sha256_hex(&[packet]);
+    let topic = wire["topic"].as_str();
+    assert!(is_startup_receipt(
+        topic,
+        Some("candidate"),
+        "candidate",
+        &payload,
+        &id
+    ));
+    assert!(!is_startup_receipt(
+        topic,
+        Some("other"),
+        "candidate",
+        &payload,
+        &id
+    ));
+    assert!(!is_startup_receipt(topic, None, "candidate", &payload, &id));
+    assert!(!is_startup_receipt(
+        None,
+        Some("candidate"),
+        "candidate",
+        &payload,
+        &id
+    ));
+    assert!(!is_startup_receipt(
+        topic,
+        Some("candidate"),
+        "candidate",
+        &payload,
+        "different-notice"
+    ));
+    assert!(!is_startup_receipt(
+        topic,
+        Some("candidate"),
+        "candidate",
+        b"invalid json",
+        &id
+    ));
+    let report =
+        serde_json::to_vec(&serde_json::json!({"type":"report_received", "deliveryId":id}))
+            .unwrap();
+    assert!(!is_startup_receipt(
+        topic,
+        Some("candidate"),
+        "candidate",
+        &report,
+        &id
+    ));
+}
+
+#[tokio::test(start_paused = true)]
+async fn startup_failure_rejected_or_stalled_publication_does_not_wait_for_receipt() {
+    for stalled in [false, true] {
+        let began = tokio::time::Instant::now();
+        publish_startup_failure(
+            async {
+                if stalled {
+                    std::future::pending::<()>().await;
+                }
+                Err(std::io::Error::other("notice rejected").into())
+            },
+            async {
+                panic!("a rejected publication cannot wait for a receipt");
+            },
+        )
+        .await;
+        assert_eq!(
+            began.elapsed(),
+            if stalled {
+                RECONNECT_NOTICE_LIMIT
+            } else {
+                Duration::ZERO
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn startup_open_failover_does_not_repeat_the_readiness_generation() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    for answers in [false, true] {
+        let primary = format!("startup-open-{answers}-first");
+        let backup = format!("startup-open-{answers}-backup");
+        let configured = format!("{primary},{backup}");
+        let config = load_from_pairs([
+            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+            ("LIVEKIT_API_KEY", "devkey"),
+            ("LIVEKIT_API_SECRET", "devsecret"),
+            ("GOOGLE_API_KEYS", configured.as_str()),
+        ])
+        .unwrap();
+        let keys = GeminiKeys::from_config(&config);
+        let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut refused = tokio_tungstenite::accept_async(socket).await.unwrap();
+            refused.next().await.unwrap().unwrap();
+            refused
+                .send(Message::Text(
+                    r#"{"error":{"code":401,"message":"invalid API key"}}"#.into(),
+                ))
+                .await
+                .unwrap();
+            drop(refused);
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            socket.next().await.unwrap().unwrap();
+            socket
+                .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+                .await
+                .unwrap();
+            let clock: serde_json::Value =
+                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            assert_eq!(clock["clientContent"]["turnComplete"], false);
+            let request: serde_json::Value =
+                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            assert_eq!(request["clientContent"]["turnComplete"], true);
+            socket
+                .send(Message::Text(
+                    if answers {
+                        r#"{"serverContent":{"modelTurn":{"parts":[{"text":"Hello"}]}}}"#
+                    } else {
+                        r#"{"serverContent":{"turnComplete":true}}"#
+                    }
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            let mut generations = 1;
+            while let Some(Ok(frame)) = socket.next().await {
+                if frame.is_close() {
+                    break;
+                }
+                if frame.is_text() {
+                    generations += 1;
+                }
+            }
+            generations
+        });
+        let mut restarts = 0;
+        let mut gemini = crate::gemini::first_open_within(
+            crate::gemini::FIRST_OPEN_LIMIT,
+            retry_cold_open(
+                &keys,
+                &mut restarts,
+                Some(tokio::time::Instant::now() + crate::gemini::FIRST_OPEN_LIMIT),
+                || crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None),
+                |_| async {},
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(restarts, 1);
+        assert_eq!(keys.select().unwrap(), backup);
+        let mut state = initial_runtime_state(&boot, Instant::now());
+        let greeting = with_timer(&state, "opening".to_string());
+        assert_eq!(
+            probe_live_output(
+                &mut gemini,
+                &mut state,
+                &greeting,
+                Duration::from_millis(100)
+            )
+            .await
+            .is_ok(),
+            answers
+        );
+        let _ = gemini.shutdown().await;
+        drop(gemini);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap(),
+            1
+        );
+    }
 }
 
 /// The three guards a data packet passes before it can drive anything, in
@@ -1728,6 +2341,7 @@ async fn first_cold_open_retries_a_503_on_the_selected_key() {
         let session = retry_cold_open(
             &keys,
             &mut restarts,
+            None,
             || crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None),
             |notice| {
                 // A room slow to take the estimate must not stretch the wait it
@@ -1813,6 +2427,7 @@ async fn a_sole_key_rate_limit_is_announced_as_quota() {
         retry_cold_open(
             &keys,
             &mut 0,
+            None,
             || crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None),
             |notice| {
                 notices.push(notice);
@@ -1885,6 +2500,7 @@ async fn a_first_open_gives_up_at_its_time_limit() {
         retry_cold_open(
             &keys,
             &mut 0,
+            None,
             || crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None),
             |_| async {},
         ),
@@ -1896,6 +2512,79 @@ async fn a_first_open_gives_up_at_its_time_limit() {
     assert!(error.to_string().contains("did not open within"), "{error}");
     assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(started.elapsed() < COLD_OPEN_BACKOFF);
+}
+
+#[tokio::test]
+#[allow(clippy::result_large_err)]
+async fn startup_open_preserves_quota_when_cooldown_outlasts_its_budget() {
+    use tokio_tungstenite::tungstenite::handshake::server;
+
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEYS", "startup-cooled-a,startup-cooled-b"),
+    ])
+    .unwrap();
+    let keys = GeminiKeys::from_config(&config);
+    let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (socket, _) = listener.accept().await.unwrap();
+            let _ = tokio_tungstenite::accept_hdr_async(
+                socket,
+                |_: &server::Request, _: server::Response| {
+                    let mut refusal = server::ErrorResponse::new(None);
+                    *refusal.status_mut() = axum::http::StatusCode::TOO_MANY_REQUESTS;
+                    Err(refusal)
+                },
+            )
+            .await;
+        }
+    });
+    for _ in 0..2 {
+        assert!(
+            crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None)
+                .await
+                .is_err()
+        );
+    }
+    server.await.unwrap();
+
+    let mut restarts = 0;
+    let mut attempts = 0;
+    let mut notices = Vec::new();
+    let limit = COLD_OPEN_BACKOFF / 4;
+    let error = crate::gemini::first_open_within(
+        limit,
+        retry_cold_open(
+            &keys,
+            &mut restarts,
+            Some(tokio::time::Instant::now() + limit),
+            || {
+                attempts += 1;
+                let error = keys.select().unwrap_err();
+                async move { Err(error.into()) }
+            },
+            |notice| {
+                notices.push(notice);
+                async {}
+            },
+        ),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(
+        crate::gemini::startup_failure_reason(error.as_ref()),
+        "quota"
+    );
+    assert!(crate::gemini::exhausted_until(error.as_ref()).is_some());
+    assert_eq!(attempts, 1);
+    assert_eq!(restarts, 0);
+    assert!(notices.is_empty());
 }
 
 /// Every key's project out of credit: the rotation tries each once and then
@@ -1937,6 +2626,7 @@ async fn a_rotation_emptied_by_billing_failures_reports_billing() {
     let error = retry_cold_open(
         &keys,
         &mut 0,
+        None,
         || {
             attempts += 1;
             crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None)
@@ -2030,6 +2720,7 @@ async fn an_exhausted_rotation_waits_only_for_a_key_out_on_quota() {
             retry_cold_open(
                 &keys,
                 &mut restarts,
+                None,
                 || {
                     attempts += 1;
                     let error = keys.select().unwrap_err();
