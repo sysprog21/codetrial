@@ -488,6 +488,25 @@ printf '#!/bin/sh\nexit 1\n' > scripts/git-pre-commit.sh
         -m "The hook must resolve to this worktree's scripts." > /dev/null) \
     || fail "a linked worktree runs its own hook"
 
+# A commit that finds no hook passes too, so the case above cannot tell its own
+# hook from none. A linked worktree is where git answers --git-path with an
+# absolute path, and Git for Windows spells it with a drive letter, which the
+# installer and the hook both once took for relative: the installer wrote into a
+# directory under the worktree, and the hook could not copy the index.
+expect 0 "the linked installer writes the shared hook" test -f "$hooks/pre-commit"
+printf 'tidy\n' > "$work/linked/tidy.txt"
+git -C "$work/linked" add tidy.txt
+# The sh -c body expands its own arguments.
+# shellcheck disable=SC2016
+expect 0 "a linked worktree judges what it staged" \
+    sh -c 'cd "$1" && sh ./scripts/git-pre-commit.sh' sh "$work/linked"
+printf 'untidy \n' > "$work/linked/tidy.txt"
+git -C "$work/linked" add tidy.txt
+# shellcheck disable=SC2016
+expect 1 "a linked worktree refuses what it staged" \
+    sh -c 'cd "$1" && sh ./scripts/git-pre-commit.sh' sh "$work/linked"
+contains "the refusal is the staged content's" "$work/last.out" "trailing whitespace"
+
 if [ "$failures" -eq 0 ]; then
     printf '  HOOKS   %d checks passed\n' "$cases"
     exit 0

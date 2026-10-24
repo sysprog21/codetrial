@@ -27,11 +27,12 @@ cd "$ROOT" || exit 1
 
 # Joined by hand rather than asked for with --path-format=absolute, which git
 # before 2.31 echoes back as if it were a path. Both answers are relative to the
-# working directory, which is the top level now.
+# working directory, which is the top level now, except in a linked worktree,
+# where they are absolute and Git for Windows starts them with a drive letter.
 abs()
 {
     case "$1" in
-        /*) printf '%s\n' "$1" ;;
+        /* | [A-Za-z]:/*) printf '%s\n' "$1" ;;
         *) printf '%s/%s\n' "$ROOT" "$1" ;;
     esac
 }

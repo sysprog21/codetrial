@@ -27,9 +27,10 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 # missed by the next. Under `git commit -a` git has already pointed
 # GIT_INDEX_FILE at a temporary index, and --git-path follows it. Relative to
 # this directory, the top level, and not asked for with --path-format=absolute,
-# which git before 2.31 echoes back as a path.
+# which git before 2.31 echoes back as a path. A linked worktree gets an
+# absolute answer, which Git for Windows spells with a drive letter.
 index=$(git rev-parse --git-path index) || exit 1
-case "$index" in /*) ;; *) index=$ROOT/$index ;; esac
+case "$index" in /* | [A-Za-z]:/*) ;; *) index=$ROOT/$index ;; esac
 cp "$index" "$work/.index" || exit 1
 GIT_INDEX_FILE=$work/.index
 export GIT_INDEX_FILE
