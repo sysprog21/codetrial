@@ -128,17 +128,26 @@ export function mountExampleBoard(
     schedule();
   }
 
+  function paintToolState() {
+    for (const button of tools.querySelectorAll("button"))
+      button.setAttribute("aria-pressed", String(button.dataset.tool === tool));
+    for (const button of root.querySelectorAll(".board-color"))
+      button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.color === color),
+      );
+  }
+
   for (const name of ["pen", "eraser"]) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "board-tool";
+    button.dataset.tool = name;
     setToolIcon(button, name);
-    button.setAttribute("aria-pressed", String(name === tool));
     button.addEventListener("click", () => {
       if (drag) return;
       tool = name;
-      for (const other of tools.querySelectorAll("button"))
-        other.setAttribute("aria-pressed", String(other === button));
+      paintToolState();
     });
     tools.append(button);
   }
@@ -146,17 +155,18 @@ export function mountExampleBoard(
     const button = document.createElement("button");
     button.type = "button";
     button.className = "board-color";
+    button.dataset.color = value;
     button.style.background = value;
     button.setAttribute("aria-label", `Pen ${name}`);
-    button.setAttribute("aria-pressed", String(value === color));
     button.addEventListener("click", () => {
       if (drag) return;
       color = value;
-      for (const other of root.querySelectorAll(".board-color"))
-        other.setAttribute("aria-pressed", String(other === button));
+      tool = "pen";
+      paintToolState();
     });
     root.querySelector("[data-colors]").append(button);
   }
+  paintToolState();
   for (const action of ["undo", "clear"]) {
     const button = root.querySelector(`[data-action=${action}]`);
     setToolIcon(button, action);

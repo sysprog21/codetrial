@@ -38,6 +38,92 @@ function drawerMarkup() {
   return `<!doctype html><html><head><link rel="stylesheet" href="/styles.css"></head><body><section class="editor-panel" data-example-drawing="true"><div class="editor-stack"><textarea id="code">const keep = 42;</textarea></div><div class="drawer-resizer" role="separator" tabindex="0" aria-label="Resize drawing and test panel"></div><section class="test-drawer"><details><summary>Add a case</summary><input></details>${exampleMarkup()}<button>Test results</button><div id="results-body" hidden></div></section></section></body></html>`;
 }
 
+test("selecting an example pen color switches from erasing to drawing", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  t.after(() => page.close());
+  await page.goto(base);
+  await page.setContent(exampleMarkup());
+  await page.evaluate(async (base) => {
+    const { mountExampleBoard } = await import(`${base}/example-board.js`);
+    window.ops = [];
+    const root = document.querySelector("#example-board");
+    root.open = true;
+    mountExampleBoard(root, {
+      locked: () => false,
+      connected: () => false,
+      record: (ops) => window.ops.push(...ops),
+      publish: async () => true,
+    });
+  }, base);
+
+  const pen = page.getByRole("button", { name: "Pen", exact: true });
+  const eraser = page.getByRole("button", { name: "Eraser", exact: true });
+  const red = page.getByRole("button", { name: "Pen Red", exact: true });
+  const canvas = page.locator("canvas");
+  async function draw() {
+    const box = await canvas.boundingBox();
+    await page.mouse.move(box.x + 20, box.y + 20);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 80, box.y + 40);
+    await page.mouse.up();
+  }
+
+  await draw();
+  assert.equal(await page.evaluate(() => window.ops.length), 1);
+  await eraser.click();
+  await draw();
+  assert.deepEqual(
+    await page.evaluate(() => {
+      const { color, width } = window.ops.at(-1);
+      return { color, width };
+    }),
+    { color: "#ffffff", width: 24 },
+  );
+  await red.click();
+  assert.equal(await page.evaluate(() => window.ops.length), 2);
+  await draw();
+  assert.deepEqual(
+    await page.evaluate(() =>
+      window.ops.slice(2).map(({ color, width }) => ({ color, width })),
+    ),
+    [{ color: "#c2261b", width: 3 }],
+  );
+  assert.equal(await pen.getAttribute("aria-pressed"), "true");
+  assert.equal(await eraser.getAttribute("aria-pressed"), "false");
+  assert.equal(await red.getAttribute("aria-pressed"), "true");
+
+  await eraser.click();
+  assert.equal(await pen.getAttribute("aria-pressed"), "false");
+  assert.equal(await eraser.getAttribute("aria-pressed"), "true");
+  assert.equal(await red.getAttribute("aria-pressed"), "true");
+  await draw();
+  assert.deepEqual(
+    await page.evaluate(() => {
+      const { color, width } = window.ops.at(-1);
+      return { color, width };
+    }),
+    { color: "#ffffff", width: 24 },
+  );
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  assert.equal(await page.evaluate(() => window.ops.at(-1).op), "undo");
+
+  await red.click();
+  await draw();
+  await eraser.click();
+  await pen.click();
+  await draw();
+  assert.deepEqual(
+    await page.evaluate(() =>
+      window.ops.slice(-2).map(({ color, width }) => ({ color, width })),
+    ),
+    [
+      { color: "#c2261b", width: 3 },
+      { color: "#c2261b", width: 3 },
+    ],
+  );
+});
+
 test("the example drawer preserves code, journals pen strokes, and sends the cleared state after reconnecting", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
   const page = await browser.newPage({
