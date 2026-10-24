@@ -3,8 +3,9 @@
 //! unit
 //! test and not an integration test: private items are in scope.
 
-use super::host_is_loopback;
+use super::{host_is_loopback, read_offer};
 use axum::http::HeaderValue;
+use std::path::PathBuf;
 
 fn host(value: &str) -> HeaderValue {
     HeaderValue::from_str(value).expect("a test Host should be a header value")
@@ -175,4 +176,171 @@ impl Drop for AccountsScratch {
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.dir).ok();
     }
+}
+
+fn values(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect()
+}
+
+/// Exported credentials become the file a submission of them would have, so a
+/// launch that has them is not asked again; anything short of the LiveKit three
+/// is left for Setup to ask.
+#[test]
+fn exported_credentials_become_the_file_setup_would_write() {
+    let livekit = [
+        ("LIVEKIT_URL", " wss://example.livekit.cloud "),
+        ("LIVEKIT_API_KEY", "key"),
+        ("LIVEKIT_API_SECRET", "secret"),
+    ];
+    assert_eq!(
+        super::config_from_values(&values(&livekit), false)
+            .unwrap()
+            .unwrap(),
+        "LIVEKIT_URL=wss://example.livekit.cloud\nLIVEKIT_API_KEY=key\nLIVEKIT_API_SECRET=secret\n"
+    );
+
+    // The Google keys ride along when there are any, and nothing else does: the
+    // whole file is compared, so no other exported key can slip in.
+    let mut full = livekit.to_vec();
+    full.extend([
+        ("GOOGLE_API_KEY", "google"),
+        ("GOOGLE_API_KEYS", "one,two"),
+        ("NODE_ENV", "production"),
+        ("CODETRIAL_DB_PATH", "/elsewhere.db"),
+    ]);
+    assert_eq!(
+        super::config_from_values(&values(&full), false)
+            .unwrap()
+            .unwrap(),
+        "LIVEKIT_URL=wss://example.livekit.cloud\nLIVEKIT_API_KEY=key\nLIVEKIT_API_SECRET=secret\n\
+         GOOGLE_API_KEY=google\nGOOGLE_API_KEYS=one,two\n"
+    );
+
+    for missing in 0..livekit.len() {
+        let mut partial = livekit.to_vec();
+        partial[missing].1 = " ";
+        assert_eq!(
+            super::config_from_values(&values(&partial), false),
+            Ok(None)
+        );
+    }
+}
+
+/// Refused rather than written, for the reasons a submission is: the file
+/// cannot carry the value, or the launch reading it back would refuse the URL
+/// or the Gemini key list.
+#[test]
+fn exported_credentials_the_file_cannot_hold_are_refused() {
+    for (key, value) in [
+        ("LIVEKIT_API_SECRET", "secret\nSESSION_SECRET=chosen"),
+        ("LIVEKIT_API_KEY", "\"key\""),
+        ("LIVEKIT_URL", "ftp://example.livekit.cloud"),
+        ("GOOGLE_API_KEYS", "one\nSESSION_SECRET=chosen"),
+        ("GOOGLE_API_KEYS", "one,"),
+        ("GOOGLE_API_KEYS", "one,,two"),
+        ("GOOGLE_API_KEYS", "one,one"),
+    ] {
+        let mut pairs = vec![
+            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+            ("LIVEKIT_API_KEY", "key"),
+            ("LIVEKIT_API_SECRET", "secret"),
+        ];
+        pairs.retain(|(name, _)| *name != key);
+        pairs.push((key, value));
+        assert!(
+            super::config_from_values(&values(&pairs), false).is_err(),
+            "{key}={value:?}"
+        );
+    }
+}
+
+fn offer_file(label: &str, text: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "codetrial-offer-{label}-{}.env",
+        std::process::id()
+    ));
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+/// The rotation list outranks the single key, as it does when the server reads
+/// the file, and the form takes one key, so the first is used and the page is
+/// told how many there were.
+#[test]
+fn an_offered_rotation_list_gives_its_first_key_and_says_so() {
+    let path = offer_file(
+        "rotation",
+        "LIVEKIT_URL=wss://example.livekit.cloud\nLIVEKIT_API_KEY=key\n\
+         LIVEKIT_API_SECRET=secret\nGOOGLE_API_KEY=single\nGOOGLE_API_KEYS= first , second\n",
+    );
+    let (submission, endpoint, note) = read_offer(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(endpoint, "wss://example.livekit.cloud");
+    assert_eq!(submission["googleApiKey"], "first");
+    assert_eq!(submission["livekitApiSecret"], "secret");
+    assert!(note.unwrap().starts_with("GOOGLE_API_KEYS lists 2 keys"));
+
+    // A list of one is just that key, with nothing to say about the rest.
+    let path = offer_file(
+        "rotation-one",
+        "LIVEKIT_URL=wss://example.livekit.cloud\nLIVEKIT_API_KEY=key\n\
+         LIVEKIT_API_SECRET=secret\nGOOGLE_API_KEYS=only\n",
+    );
+    let (submission, _, note) = read_offer(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(submission["googleApiKey"], "only");
+    assert_eq!(note, None);
+}
+
+/// The reason names the file once, whichever way it could not be used, and
+/// names a malformed line by its number: the reason reaches the page, and the
+/// line can be a key with its `=` missing.
+#[test]
+fn an_unusable_offer_says_why_without_repeating_the_file() {
+    let missing = std::env::temp_dir().join("codetrial-offer-missing-nowhere.env");
+    let error = read_offer(&missing).unwrap_err();
+    assert_eq!(
+        error.matches("codetrial-offer-missing-nowhere.env").count(),
+        1,
+        "{error}"
+    );
+
+    let broken = offer_file(
+        "broken",
+        "# saved by hand\nLIVEKIT_URL=wss://example.livekit.cloud\nLIVEKIT_API_SECRET the-secret\n",
+    );
+    let error = read_offer(&broken).unwrap_err();
+    let _ = std::fs::remove_file(&broken);
+    assert_eq!(
+        error,
+        format!("{}: line 3 is not KEY=value", broken.display())
+    );
+
+    let unusable = offer_file(
+        "bad-url",
+        "LIVEKIT_URL=ftp://example.livekit.cloud/?token=the-token\nLIVEKIT_API_KEY=key\n\
+         LIVEKIT_API_SECRET=secret\n",
+    );
+    let error = read_offer(&unusable).unwrap_err();
+    let _ = std::fs::remove_file(&unusable);
+    assert!(error.contains("LIVEKIT_URL must start with"), "{error}");
+    assert!(!error.contains("the-token"), "{error}");
+}
+
+/// Only the scheme and the host reach the page: user information, a path and
+/// a query are where a LiveKit URL carries a credential.
+#[test]
+fn an_offered_url_is_shown_as_its_scheme_and_host() {
+    let path = offer_file(
+        "credentialed-url",
+        "LIVEKIT_URL=wss://user:the-password@example.livekit.cloud:7880/prefix?token=the-token\n\
+         LIVEKIT_API_KEY=key\nLIVEKIT_API_SECRET=secret\n",
+    );
+    let (_, endpoint, _) = read_offer(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(endpoint, "wss://example.livekit.cloud:7880");
 }

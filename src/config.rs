@@ -484,14 +484,24 @@ fn provider_from_file(id: &str, path: &Path, production: bool) -> Result<Provide
 pub fn read_config_file(path: &Path) -> Result<Vec<(String, String)>, String> {
     let text =
         std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    parse_config(&text).map_err(|number| {
+        let line = text.lines().nth(number - 1).unwrap_or_default().trim();
+        format!("invalid config line: {line}")
+    })
+}
+
+/// The pairs in `text`, or the number, counted from 1, of the first line that
+/// is not `KEY=value`. Apart from `read_config_file` for a caller that has to
+/// say which line without repeating it: the line can hold a secret.
+pub(crate) fn parse_config(text: &str) -> Result<Vec<(String, String)>, usize> {
     let mut values = Vec::new();
-    for line in text.lines() {
+    for (index, line) in text.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
         let Some((key, value)) = trimmed.split_once('=') else {
-            return Err(format!("invalid config line: {trimmed}"));
+            return Err(index + 1);
         };
         values.push((
             key.trim().to_string(),
@@ -984,6 +994,11 @@ pub fn guest_mode_enabled(value: Option<&str>) -> bool {
     parse_bool(value, DEFAULT_GUEST_MODE_ENABLED)
 }
 
+/// `CODETRIAL_EXIT_WITH_STDIN`: off unless a launcher asks for it.
+pub fn exit_with_stdin(value: Option<&str>) -> bool {
+    parse_bool(value, false)
+}
+
 pub fn gemini_candidate_video_enabled(value: Option<&str>) -> bool {
     parse_bool(value, DEFAULT_GEMINI_CANDIDATE_VIDEO_ENABLED)
 }
@@ -1056,9 +1071,9 @@ impl fmt::Debug for RecordingLivekit {
 }
 
 /// The authority of a URL, or the whole string when it has no scheme. Shared by
-/// the redaction above and the project comparison below, so that neither can
-/// mistake a credential for part of a hostname.
-fn livekit_authority(url: &str) -> &str {
+/// the redaction above, the project comparison below and Setup's offer, so
+/// that none of them can mistake a credential for part of a hostname.
+pub(crate) fn livekit_authority(url: &str) -> &str {
     url.split_once("://")
         .map_or(url, |(_, rest)| rest)
         .split(['/', '?', '#'])

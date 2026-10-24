@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSCameraUsageDescription</key>
+  <string>The interviewer sees you through the camera during an interview, the way a video interview would.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>The interviewer listens to your answers through the microphone during an interview.</string>
+</dict>
+</plist>

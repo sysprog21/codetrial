@@ -9,6 +9,8 @@ description: Restore the build tree the check workflow's Rust lane saves.
 #
 # `registry/src` is deliberately absent: it is unpacked from `registry/cache` on
 # demand, so caching both stores every dependency twice.
+# `target/desktop` is the desktop app's build, which only the Rust lane reads
+# and which it caches in an entry of its own.
 #
 # Keyed on the lockfile, so a dependency bump rebuilds and a source edit does
 # not, and on what compiles every object in target/: rustc, the C++ compiler
@@ -25,6 +27,9 @@ outputs:
   key:
     description: The exact key, for the step that saves the tree.
     value: ${{ steps.key.outputs.key }}
+  prefix:
+    description: The key without the lockfile, for a cache built the same way.
+    value: ${{ steps.key.outputs.prefix }}
   cache-hit:
     description: Whether the exact key was restored.
     value: ${{ steps.restore.outputs.cache-hit }}
@@ -59,5 +64,6 @@ runs:
           ~/.cargo/registry/cache
           ~/.cargo/git/db
           target
+          !target/desktop
         key: ${{ steps.key.outputs.key }}
         restore-keys: ${{ steps.key.outputs.prefix }}

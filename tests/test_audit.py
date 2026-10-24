@@ -263,7 +263,16 @@ class AuditTests(unittest.TestCase):
                     elif call[1] != "create":
                         self.assertEqual(call[2], "42")
 
-    def run_audit(self, base, head, *, full=False, invalid_base=False):
+    def run_audit(
+        self,
+        base,
+        head,
+        *,
+        full=False,
+        invalid_base=False,
+        desktop_base=None,
+        desktop_head=None,
+    ):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "scripts").mkdir()
@@ -281,9 +290,17 @@ class AuditTests(unittest.TestCase):
             lockfile = root / "Cargo.lock"
             lockfile.write_text(json.dumps(base))
             git("add", "Cargo.lock")
+            desktop = root / "desktop/Cargo.lock"
+            if desktop_base is not None:
+                desktop.parent.mkdir()
+                desktop.write_text(json.dumps(desktop_base))
+                git("add", "desktop/Cargo.lock")
             git("commit", "--quiet", "-m", "base")
             sha = git("rev-parse", "HEAD").decode().strip()
             lockfile.write_text(json.dumps(head))
+            if desktop_head is not None:
+                desktop.parent.mkdir(exist_ok=True)
+                desktop.write_text(json.dumps(desktop_head))
             command = [sys.executable, str(script), "--report", str(root / "report.md")]
             if not full:
                 command += ["--base", "missing" if invalid_base else sha]
@@ -434,6 +451,42 @@ class AuditTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertIn("Scan incomplete", report)
                 self.assertEqual(outputs, "")
+
+    def test_the_desktop_lockfile_blocks_what_it_adds_on_one_snapshot(self):
+        result, report, _, calls = self.run_audit(
+            {"findings": []},
+            {"findings": []},
+            desktop_base={"findings": [A]},
+            desktop_head={"findings": [A, B]},
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("ctutils 0.4.3` (inherited)", report)
+        self.assertIn("other 1.0.0` (blocking)", report)
+        # The root once, unchanged, then the desktop head and its base, all
+        # against the database the first audit fetched.
+        self.assertEqual(len(calls), 3)
+        self.assertNotIn("--no-fetch", calls[0])
+        self.assertTrue(all("--no-fetch" in call for call in calls[1:]))
+        databases = {call[call.index("--db") + 1] for call in calls}
+        self.assertEqual(len(databases), 1)
+
+    def test_a_desktop_lockfile_the_merge_adds_inherits_nothing(self):
+        result, report, _, _ = self.run_audit(
+            {"findings": []}, {"findings": []}, desktop_head={"findings": [A]}
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("ctutils 0.4.3` (blocking)", report)
+
+    def test_an_unchanged_desktop_lockfile_is_informational(self):
+        result, report, _, calls = self.run_audit(
+            {"findings": []},
+            {"findings": []},
+            desktop_base={"findings": [A]},
+            desktop_head={"findings": [A]},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("(inherited)", report)
+        self.assertEqual(len(calls), 2)
 
     def test_warnings_remain_visible_without_blocking(self):
         result, report, _, _ = self.run_audit(

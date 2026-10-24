@@ -1,0 +1,215 @@
+# The desktop app's installers, built on the three platforms they are for.
+#
+# A workflow of its own rather than a leg of check.yml's `build`, because the
+# two publish different things on different schedules: `build` refreshes the
+# rolling CLI release on every push to main, and a desktop release is a
+# version somebody chose to cut. Nothing here touches the CLI artifacts or the
+# `latest` release.
+#
+# Pull requests run it only when the desktop app itself changed, because each
+# leg builds the server in release mode as well as the app around it. A change
+# to the server's side of the launch contract is still caught on Linux: the
+# check job's Rust lane compiles and tests desktop/ on every run.
+name: desktop
+
+on:
+  pull_request:
+    paths:
+      - desktop/**
+      - scripts/desktop-smoke.sh
+      - .github/workflows/desktop.yml
+  push:
+    branches: [main]
+    paths:
+      - desktop/**
+      - scripts/desktop-smoke.sh
+      - .github/workflows/desktop.yml
+    tags: ['desktop-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') && github.ref != 'refs/heads/main' }}
+
+env:
+  # The CLI that bundles, pinned like every other tool the workflows run. Kept
+  # on the same minor as the `tauri` crate in desktop/Cargo.toml.
+  TAURI_CLI_VERSION: 2.12.3
+
+jobs:
+  package:
+    name: ${{ matrix.name }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 rather than the 24.04 the gates use: the bundle links the
+          # WebKitGTK it is built against, and the oldest one an installer
+          # should still start on is the floor. 22.04 is the first Ubuntu with
+          # WebKitGTK 4.1, which Tauri 2 requires.
+          - name: Linux x86_64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            extension: ''
+            bundles: deb,rpm,appimage
+            pr_bundles: deb
+          - name: macOS arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            extension: ''
+            bundles: app,dmg
+            pr_bundles: dmg
+          - name: Windows x86_64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+            extension: .exe
+            bundles: msi,nsis
+            pr_bundles: nsis
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update && sudo apt-get install -y libglib2.0-dev
+          libwebkit2gtk-4.1-dev libxdo-dev libssl-dev librsvg2-dev file xvfb
+      - name: Install WebRTC C++ compiler
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/webrtc-clang
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-${{ matrix.target }}
+          workspaces: |
+            . -> target
+            desktop -> target/desktop
+
+      # The server embeds the page and its vendored runtimes, so the same
+      # fetch and check the CLI release makes, for the same reason: a missing
+      # asset compiles into a server that boots and then strands the candidate.
+      - name: Restore vendored bytes
+        uses: ./.github/actions/restore-vendor
+      - name: Fetch browser assets
+        run: ./scripts/fetch-vendor.sh
+        shell: bash
+      - name: Verify the assets about to be embedded
+        run: ./scripts/verify-vendor.sh
+        shell: bash
+
+      # The flags check.yml's release build passes, for the reasons it gives:
+      # a static CRT on Windows, and `-ObjC` so WebRTC's Objective-C categories
+      # survive the link on macOS. Here and not job-wide, because they are the
+      # server's and the app around it links without them.
+      - name: Build the server
+        shell: bash
+        env:
+          RUSTFLAGS: >-
+            ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-C target-feature=+crt-static'
+                || contains(matrix.target, '-apple-') && '-Clink-arg=-ObjC'
+                || '' }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # Where tauri.bundle.json's `externalBin` looks: the name Tauri expects
+      # carries the target triple, and the installer drops it again.
+      - name: Place the server beside the app
+        shell: bash
+        run: |
+          mkdir -p target/desktop/sidecar
+          cp target/${{ matrix.target }}/release/codetrial${{ matrix.extension }} \
+            target/desktop/sidecar/codetrial-${{ matrix.target }}${{ matrix.extension }}
+
+      # A pull request builds one installer per platform, which is enough to
+      # prove the bundle config still packages; each further format downloads
+      # its own packaging tool on every run.
+      #
+      # `NO_STRIP`, because the AppImage tool's own strip is older than the
+      # toolchain and fails on sections it does not know. Both programs are
+      # already stripped by their release profiles, so nothing is lost.
+      - name: Build the installers
+        working-directory: desktop
+        shell: bash
+        env:
+          NO_STRIP: 'true'
+        run: >-
+          npx --yes "@tauri-apps/cli@$TAURI_CLI_VERSION" build --ci
+          --target ${{ matrix.target }}
+          --bundles ${{ github.event_name == 'pull_request' && matrix.pr_bundles || matrix.bundles }}
+          --config tauri.bundle.json
+
+      # The built app, not the installer, but with the server beside it the
+      # way every installer puts it.
+      - name: Start the app, then kill it
+        shell: bash
+        run: |
+          app=target/desktop/${{ matrix.target }}/release/codetrial-desktop${{ matrix.extension }}
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a sh scripts/desktop-smoke.sh "$app"
+          else
+            sh scripts/desktop-smoke.sh "$app"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codetrial-desktop-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            target/desktop/${{ matrix.target }}/release/bundle/deb/*.deb
+            target/desktop/${{ matrix.target }}/release/bundle/rpm/*.rpm
+            target/desktop/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            target/desktop/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            target/desktop/${{ matrix.target }}/release/bundle/msi/*.msi
+            target/desktop/${{ matrix.target }}/release/bundle/nsis/*.exe
+
+  # A tag names a version, and the version is the one desktop/Cargo.toml
+  # says: an installer reporting 0.1.0 under a desktop-v0.2.0 release is the
+  # mismatch this refuses before anything is published.
+  release:
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: codetrial-desktop-*
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
+        shell: bash
+        run: |
+          tag=${GITHUB_REF#refs/tags/}
+          version=$(sed -n 's/^version *= *"\([^"]*\)"$/\1/p' desktop/Cargo.toml | head -n 1)
+          [ "$tag" = "desktop-v$version" ] || {
+            echo "tag $tag does not match desktop/Cargo.toml version $version" >&2
+            exit 1
+          }
+          ls dist
+          cat > notes.md <<EOF
+          Desktop build of ${GITHUB_SHA:0:7}. The installers are not signed yet.
+
+          - macOS: the first launch is refused as from an unidentified developer.
+            Allow it under System Settings, Privacy & Security, Open Anyway.
+          - Windows: SmartScreen warns before the first launch.
+          - Linux: needs WebKitGTK 4.1. Where that WebKitGTK is built without
+            WebRTC, the interview opens in the default browser and the app keeps
+            its server running.
+
+          docs/desktop.md describes what the app does and what it has not been
+          qualified for yet.
+          EOF
+          gh release create "$tag" --prerelease --verify-tag \
+            --title "CodeTrial desktop $version" --notes-file notes.md dist/*

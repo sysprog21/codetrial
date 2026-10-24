@@ -31,6 +31,7 @@ fn config_with(ids: &[&str]) -> WebServerConfig {
         compiler_explorer_enabled: false,
         guest_mode_enabled: false,
         trusted_proxy_hops: 0,
+        allowed_hosts: Vec::new(),
         recording: None,
         probe_provider_quota: false,
         pool: ProviderPool {

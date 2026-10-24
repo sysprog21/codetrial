@@ -11,6 +11,11 @@ import tempfile
 from pathlib import Path
 
 
+# The root's lockfile, then the desktop app's, which is a crate of its own and
+# is audited only where it exists.
+LOCKFILES = ("Cargo.lock", "desktop/Cargo.lock")
+
+
 def git(root, *args):
     return subprocess.check_output(["git", "-C", str(root), *args])
 
@@ -68,23 +73,32 @@ def audit(lockfile, database, fetch):
         raise ValueError(f"audit did not complete: {error}") from error
 
 
-def scan(head, previous, informational):
-    """Return head findings, those the base already had, warnings and the DB revision."""
+def scan(trees):
+    """Return head findings, those the base already had, warnings and the DB revision.
+
+    `trees` holds one (head, previous, informational) per lockfile. All of them
+    are read against the one database snapshot the first audit fetches, so no
+    lockfile is judged by a newer advisory list than another.
+    """
+    findings, inherited, warnings, revision = set(), set(), {}, None
     with tempfile.TemporaryDirectory(prefix="codetrial-audit-") as directory:
         scratch = Path(directory)
         database = scratch / "advisory-db"
         lockfile = scratch / "Cargo.lock"
-        lockfile.write_bytes(head)
-        findings, warnings = audit(lockfile, database, True)
-        revision = git(database, "rev-parse", "HEAD").decode().strip()
-        if informational:
-            inherited = findings
-        elif previous is not None:
-            lockfile.write_bytes(previous)
-            inherited, _ = audit(lockfile, database, False)
-        else:
-            inherited = set()
-        return findings, inherited, warnings, revision
+        for head, previous, informational in trees:
+            lockfile.write_bytes(head)
+            found, found_warnings = audit(lockfile, database, revision is None)
+            if revision is None:
+                revision = git(database, "rev-parse", "HEAD").decode().strip()
+            for kind, items in found_warnings.items():
+                warnings.setdefault(kind, []).extend(items)
+            findings |= found
+            if informational:
+                inherited |= found
+            elif previous is not None:
+                lockfile.write_bytes(previous)
+                inherited |= audit(lockfile, database, False)[0]
+    return findings, inherited, warnings, revision
 
 
 def render(lines, findings, added, warnings, revision):
@@ -122,18 +136,39 @@ def render(lines, findings, added, warnings, revision):
         )
 
 
-def run(root, base, lines):
-    head = (root / "Cargo.lock").read_bytes()
+def base_lockfile(root, base, name):
+    """`name` as the base has it, or None when the base has no such file."""
+    if name != LOCKFILES[0]:
+        present = subprocess.run(
+            ["git", "-C", str(root), "cat-file", "-e", f"{base}:{name}"],
+            capture_output=True,
+        )
+        if present.returncode != 0:
+            # A lockfile the merge adds has nothing to inherit: every finding
+            # in it is the merge's own. A base that does not exist at all
+            # still fails, on the root's lockfile below.
+            return None
     # Failing to read the base is fatal: it decides whether errors may pass.
-    previous = git(root, "show", f"{base}:Cargo.lock") if base else None
-    informational = previous == head
+    return git(root, "show", f"{base}:{name}")
+
+
+def run(root, base, lines):
+    trees = []
+    for name in LOCKFILES:
+        path = root / name
+        if name != LOCKFILES[0] and not path.exists():
+            continue
+        head = path.read_bytes()
+        previous = base_lockfile(root, base, name) if base else None
+        trees.append((head, previous, previous == head))
+    informational = all(unchanged for _, _, unchanged in trees)
     if informational:
         mode = "informational (unchanged lockfile)"
     else:
         mode = "new vulnerabilities in proposed merge" if base else "full"
     lines.append("Mode: " + mode)
     try:
-        findings, inherited, warnings, revision = scan(head, previous, informational)
+        findings, inherited, warnings, revision = scan(trees)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         if not informational:
             raise

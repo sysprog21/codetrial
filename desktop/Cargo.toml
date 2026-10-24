@@ -1,0 +1,42 @@
+# The desktop app: a window around the `codetrial web` server, which it starts
+# as its own child process and owns for as long as it runs. See
+# docs/desktop.md for why the server is a separate program rather than linked
+# in.
+#
+# A crate of its own with its own lockfile, outside the root manifest, because
+# the root is what the Bullseye release build and every gate compile, and none
+# of them should need WebKitGTK to do it. scripts/test.sh reaches this crate
+# through its `desktop-*` gates.
+[package]
+name = "codetrial-desktop"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+
+# Exact, because a Tauri minor release has changed what a remote page may
+# reach before, and the trust boundary in docs/desktop.md is written against
+# this one.
+[build-dependencies]
+tauri-build = { version = "=2.7.3", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.4", features = [] }
+tauri-plugin-dialog = "=2.8.3"
+tauri-plugin-opener = "=2.7.2"
+tauri-plugin-single-instance = "=2.5.4"
+
+# The two WebKitGTK settings wry leaves off, which the interview cannot run
+# without: `enable-media-stream` for the camera and microphone, `enable-webrtc`
+# for the LiveKit call. The same version and feature level wry already builds.
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "=2.0.2", features = ["v2_40"] }
+
+[profile.release]
+strip = "symbols"

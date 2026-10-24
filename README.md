@@ -90,8 +90,9 @@ file. Extra `codetrial.env.*` files in the same directory are optional providers
 used for pooling.
 
 If `web` mode finds no config file at all, it serves a Setup page and prints the
-URL to open, so steps 2 and 3 above can be skipped: fill in your keys there and
-it writes `config/codetrial.env.local` for you. That page serves on a loopback
+URL to open, so steps 2 and 3 above can be skipped: fill in your keys there, or
+import them from a config file saved earlier, and it writes
+`config/codetrial.env.local` for you. That page serves on a loopback
 address only and refuses any other, so writing the file yourself is the way to
 deploy for other people. See [docs/install.md](docs/install.md).
 
@@ -99,7 +100,9 @@ deploy for other people. See [docs/install.md](docs/install.md).
 
 Prebuilt binaries for Linux, macOS, and Windows are published for every build of
 `main`. What they carry, the config file each needs beside it, and the platform
-notes are in [docs/install.md](docs/install.md). From a checkout instead:
+notes are in [docs/install.md](docs/install.md). A desktop app that starts the
+server itself and shows it in its own window is described in
+[docs/desktop.md](docs/desktop.md). From a checkout instead:
 
 ```bash
 INTERVIEW_ROOM_NAME=interview-local make web
@@ -318,6 +321,7 @@ The common ones:
 | `CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED` | `false` | Forward candidate video to Gemini, one low-resolution frame in five seconds; ignored in a whiteboard interview |
 | `CODETRIAL_COMPILER_EXPLORER_ENABLED` | `true` | Enable remote C, C++, and Java runs |
 | `CODETRIAL_MAX_CONCURRENT_INTERVIEWS` | `16` | Interviews one `web` process hosts agents for |
+| `CODETRIAL_ALLOWED_HOSTS` | empty | Comma-separated `Host` values the server answers; any other is refused with 421. Empty answers every name. `--allowed-hosts` sets it from the command line |
 
 Two more matter in production. `SESSION_SECRET` signs the session cookie, and
 its built-in default is a string published in this repository, so the server
@@ -373,6 +377,7 @@ recorded rather than left implicit. See
 | [Contributing](CONTRIBUTING.md) | Reporting a bug, the commit and title rules, opening a pull request |
 | [Development](docs/development.md) | The gate, formatters, hooks, generated files, releases |
 | [Installing a binary](docs/install.md) | Published binaries, platform notes, the config beside them |
+| [Desktop app](docs/desktop.md) | The macOS, Windows and Linux app, its data folder, and what it has not been qualified for |
 | [Interview length](docs/interview-length.md) | What the lobby offers and what the endpoints enforce |
 | [Integrity evidence](docs/integrity-evidence.md) | Response windows, and what CodeTrial declines to look for |
 | [Third-party notices](THIRD-PARTY-NOTICES.md) | Bundled software, licenses, checksums |
@@ -394,6 +399,7 @@ recorded rather than left implicit. See
 
 ```text
 src/            Rust web server, interviewer, and problem bank
+desktop/        Desktop app that runs the server in its own window
 web/            Static browser application
 problem-bank/   Problem and judge source of truth
 config/         Env file templates and per-provider credentials

@@ -59,9 +59,6 @@ fn only_sigkill_is_retryable() {
 /// exit status for a process that never ran, so
 /// `reject_usage_errors_with_exit_two` failed reporting 0 against 2 and read as
 /// the binary having accepted a usage error it had refused.
-///
-/// Both runners share this, so the attempt bound and what a run out of attempts
-/// says cannot drift apart between them.
 fn retry_on_sigkill<T>(args: &[&str], mut once: impl FnMut() -> Option<T>) -> T {
     for attempt in 0..5 {
         if let Some(result) = once() {
@@ -73,48 +70,22 @@ fn retry_on_sigkill<T>(args: &[&str], mut once: impl FnMut() -> Option<T>) -> T 
 }
 
 fn run_cli_args_with_env(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, String) {
-    retry_on_sigkill(args, || run_cli_args_with_env_once(args, envs))
+    run_cli_until_exit(args, envs)
 }
 
-fn run_cli_args_with_env_once(
-    args: &[&str],
-    envs: &[(&str, &str)],
-) -> Option<(i32, String, String)> {
-    let cwd = exe_temp_path("empty-cwd");
-    std::fs::create_dir_all(&cwd).expect("empty cwd should create");
-    let output = cli_command(args, envs, &cwd)
-        .output()
-        .expect("codetrial should exit");
-    let _ = std::fs::remove_dir_all(cwd);
-
-    let Some(code) = output.status.code() else {
-        assert!(
-            was_sigkill(&output.status),
-            "{args:?}: killed by an unexpected signal: {}",
-            output.status
-        );
-        return None;
-    };
-    Some((
-        code,
-        String::from_utf8(output.stdout).expect("stdout should be UTF-8"),
-        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
-    ))
-}
-
-/// The same invocation, but the process is required to stop by itself.
+/// Runs the binary and requires it to stop by itself, which every caller here
+/// expects of it.
 ///
-/// `run_cli_args` waits forever, which is right for a mode that always exits.
-/// A refusal test is not that: what it asserts is that the binary *stops*, so a
-/// regression letting it serve instead hangs the suite rather than failing it,
-/// and `cargo mutants` scores that as a timeout instead of a caught mutant.
-/// That is not hypothetical; it is how `replace == with != in run_web` reached
-/// CI as a 33-second timeout. Bounded, so a guard that stopped guarding is a
-/// red test.
+/// Bounded for every caller, not only the refusal tests: a mutant or a
+/// regression that loses the arguments falls back to `web`, which serves
+/// Setup and never exits, so any unbounded run hangs the suite rather than
+/// failing it, and `cargo mutants` scores that as a timeout instead of a
+/// caught mutant. That is how `replace == with != in run_web`, and later a
+/// `parse_agent_args` returning nothing, reached CI as timeouts.
 fn run_cli_until_exit(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, String) {
-    // Retried on a kill for the same reason the other runner is: the machine
-    // running out of memory says nothing about the binary, and this helper's
-    // whole point is that a refusal is observed rather than assumed.
+    // Retried on a kill: the machine running out of memory says nothing about
+    // the binary, and this helper's whole point is that a refusal is observed
+    // rather than assumed.
     retry_on_sigkill(args, || run_cli_until_exit_once(args, envs))
 }
 
@@ -184,32 +155,47 @@ fn run_cli_until_exit_once(args: &[&str], envs: &[(&str, &str)]) -> Option<(i32,
 }
 
 /// One place builds the invocation, so the two runners cannot drift about which
-/// environment the child inherits. The removals matter: a developer with
-/// `NODE_ENV` or `SESSION_SECRET` exported would otherwise change what these
-/// tests are testing.
+/// environment the child inherits: none of this process's, see `scrubbed`.
 /// Runs a linked binary inside `cwd`, not the one in the target directory:
 /// the executable's own folder is a config search path and a place the Setup
 /// page writes, so a stray `codetrial.env.local` next to the real test binary
 /// would decide these tests.
 fn cli_command(args: &[&str], envs: &[(&str, &str)], cwd: &Path) -> Command {
     let mut command = Command::new(binary_beside(cwd));
-    command
+    scrubbed(&mut command)
         .args(args)
         .current_dir(cwd)
-        .env_remove("LIVEKIT_URL")
-        .env_remove("LIVEKIT_API_KEY")
-        .env_remove("LIVEKIT_API_SECRET")
-        .env_remove("GOOGLE_API_KEY")
-        .env_remove("CODETRIAL_ROOM_PREFIX")
-        .env_remove("CODETRIAL_DURATION_MIN")
-        .env_remove("CODETRIAL_WEB_DIR")
-        .env_remove("CODETRIAL_WEB_ADDR")
-        .env_remove("CODETRIAL_TRUSTED_PROXY_HOPS")
-        .env_remove("NODE_ENV")
-        .env_remove("SESSION_SECRET")
         .envs(envs.iter().copied())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    command
+}
+
+/// A child with none of this process's environment except what starting a
+/// program needs. Clearing everything rather than listing what the server
+/// reads, because a list has to learn every key the server does, and a key it
+/// missed shows up only on the machine of a developer who exported it.
+///
+/// `LLVM_PROFILE_FILE` and `RUST_BACKTRACE` pass so a coverage run still sees
+/// the child and a panic in it still says where.
+fn scrubbed(command: &mut Command) -> &mut Command {
+    command.env_clear();
+    for key in [
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "SystemRoot",
+        "windir",
+        "USERPROFILE",
+        "TEMP",
+        "TMP",
+        "LLVM_PROFILE_FILE",
+        "RUST_BACKTRACE",
+    ] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
     command
 }
 
@@ -384,9 +370,9 @@ fn spawn_server(build: impl Fn(&str) -> Command) -> (String, ServerProcess) {
 /// A cold-start server: the binary beside `dir`, with no config file on any
 /// path it searches and no credentials in the environment.
 ///
-/// Three more variables are cleared than the credentials, because
-/// `serve_setup` reads all three: `CODETRIAL_WEB_ADDR` decides where it binds,
-/// `CODETRIAL_TRUSTED_PROXY_HOPS` can refuse the launch outright, and
+/// The whole environment is cleared, not only the credentials, and three of
+/// the keys `serve_setup` reads itself: `CODETRIAL_WEB_ADDR` decides where it
+/// binds, `CODETRIAL_TRUSTED_PROXY_HOPS` can refuse the launch outright, and
 /// `NODE_ENV` decides what a submission has to survive. A suite that inherits
 /// any of them from whoever ran it tests a different program on their machine
 /// than in CI -- and the failure arrives as `spawn_server` panicking on a
@@ -394,16 +380,9 @@ fn spawn_server(build: impl Fn(&str) -> Command) -> (String, ServerProcess) {
 fn spawn_cold_start(exe: &Path, dir: &Path, envs: &[(&str, String)]) -> (String, ServerProcess) {
     spawn_server(|addr| {
         let mut command = Command::new(exe);
-        command
+        scrubbed(&mut command)
             .args(["web", "--web-addr", addr])
             .current_dir(dir)
-            .env_remove("LIVEKIT_URL")
-            .env_remove("LIVEKIT_API_KEY")
-            .env_remove("LIVEKIT_API_SECRET")
-            .env_remove("GOOGLE_API_KEY")
-            .env_remove("CODETRIAL_WEB_ADDR")
-            .env_remove("CODETRIAL_TRUSTED_PROXY_HOPS")
-            .env_remove("NODE_ENV")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         for (key, value) in envs {
@@ -890,6 +869,7 @@ fn binary_accepts_dash_prefixed_values_through_the_attached_form() {
     let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = occupied.local_addr().unwrap().to_string();
     write_config(&config, &dir, &address);
+
     let (code, _, stderr) = run_cli_args(&[
         "web",
         &format!("--config={}", config.to_str().unwrap()),
@@ -1633,16 +1613,11 @@ fn binary_web_refuses_to_serve_setup_on_a_public_address() {
 /// in one start, and only the second one guarded.
 #[test]
 fn binary_web_refuses_a_public_setup_address_from_the_environment() {
-    let dir = exe_temp_path("setup-public-address-env");
-    std::fs::create_dir_all(&dir).unwrap();
+    // Bounded: a launch that stopped reading the variable serves Setup on
+    // loopback instead, and must fail here rather than hang the suite.
+    let (code, _, stderr) = run_cli_until_exit(&["web"], &[("CODETRIAL_WEB_ADDR", "0.0.0.0:0")]);
 
-    let output = cli_command(&["web"], &[("CODETRIAL_WEB_ADDR", "0.0.0.0:0")], &dir)
-        .output()
-        .expect("codetrial should exit");
-    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
-    let _ = std::fs::remove_dir_all(&dir);
-
-    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(code, 1, "{stderr}");
     assert!(
         stderr.contains("refusing to serve the Setup page"),
         "{stderr}"
@@ -2655,4 +2630,450 @@ fn binary_agent_web_loads_primary_config_from_the_current_directory() {
 
     stop_child(&mut child);
     let _ = std::fs::remove_dir_all(cwd);
+}
+
+/// The launch a desktop app makes: everything in one folder it chose, and
+/// nothing read from or written to the places a CLI launch looks. The working
+/// directory here is a checkout with a config of its own, the executable's
+/// folder has one too, and the environment carries LiveKit credentials, so a
+/// launch that read any of them would be configured rather than serving Setup,
+/// and one that wrote by the CLI's rule would put the file in the checkout.
+#[test]
+fn a_data_dir_launch_reads_and_writes_only_its_data_dir() {
+    let work = temp_path("data-dir-work");
+    let home = exe_temp_path("data-dir-exe");
+    let data = temp_path("data-dir-data");
+    for dir in [&work.join("config"), &home, &data] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    std::fs::write(
+        work.join("config").join("codetrial.env.example"),
+        "# keys\n",
+    )
+    .unwrap();
+    let checkout_config =
+        "LIVEKIT_URL=wss://checkout.example\nLIVEKIT_API_KEY=k\nLIVEKIT_API_SECRET=s\n";
+    std::fs::write(
+        work.join("config").join("codetrial.env.local"),
+        checkout_config,
+    )
+    .unwrap();
+    std::fs::write(home.join("codetrial.env.local"), checkout_config).unwrap();
+    let exe = binary_beside(&home);
+
+    let livekit_addr = spawn_livekit_room_service("key", "secret");
+    let data_arg = data.to_str().unwrap().to_string();
+    let (addr, _server) = spawn_server(|addr| {
+        let mut command = Command::new(&exe);
+        scrubbed(&mut command)
+            .args(["web", "--web-addr", addr, "--data-dir", &data_arg])
+            .current_dir(&work)
+            // Short of the three keys Setup needs, so the environment has
+            // nothing to offer this launch and must not decide anything.
+            .env("LIVEKIT_URL", "wss://environment.example")
+            .env("LIVEKIT_API_KEY", "environment-key")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    });
+
+    let page = http_request(
+        &addr,
+        &format!("GET / HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
+    );
+    let body = format!(
+        r#"{{"livekitUrl":"http://{livekit_addr}","livekitApiKey":"key","livekitApiSecret":"secret","googleApiKey":""}}"#
+    );
+    let submission = http_request(
+        &addr,
+        &format!(
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        ),
+    );
+
+    let written = std::fs::read_to_string(data.join("codetrial.env.local")).unwrap_or_default();
+
+    // Made by the launch that continues after Setup, which has no
+    // `SESSION_SECRET` from the file it was just given.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !data.join("session-secret").exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    let secret = data.join("session-secret").exists();
+    let checkout_after =
+        std::fs::read_to_string(work.join("config").join("codetrial.env.local")).unwrap();
+    let beside_exe = home.join("config").exists();
+
+    // Stopped first: Windows will not remove the executable a live process was
+    // started from, nor the folder it keeps open.
+    drop(_server);
+    for dir in [&work, &home, &data] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    assert!(page.contains(r#"name="livekitUrl""#), "{page}");
+    assert!(submission.starts_with("HTTP/1.1 200 OK"), "{submission}");
+    assert!(
+        written.contains(&format!("LIVEKIT_URL=http://{livekit_addr}")),
+        "{written}"
+    );
+    assert!(secret, "the session key belongs in the data directory");
+    assert_eq!(checkout_after, checkout_config);
+    assert!(!beside_exe, "nothing belongs beside the executable");
+}
+
+/// A first launch from a shell that already exports what Setup asks for is not
+/// asked: the folder's config is written from those keys, owner-only, and the
+/// full app serves. Nothing else from the environment goes in, so the file is
+/// still all a later launch, started with nothing exported, needs.
+#[test]
+fn a_first_data_dir_launch_writes_the_exported_setup_keys() {
+    let home = exe_temp_path("data-dir-exported-exe");
+    let data = temp_path("data-dir-exported-data");
+    std::fs::create_dir_all(&home).unwrap();
+    let exe = binary_beside(&home);
+
+    let livekit_addr = spawn_livekit_room_service("key", "secret");
+    let livekit_url = format!("http://{livekit_addr}");
+    let data_arg = data.to_str().unwrap().to_string();
+    let (addr, server) = spawn_server(|addr| {
+        let mut command = Command::new(&exe);
+        scrubbed(&mut command)
+            .args(["web", "--web-addr", addr, "--data-dir", &data_arg])
+            .current_dir(&home)
+            .env("LIVEKIT_URL", &livekit_url)
+            .env("LIVEKIT_API_KEY", "key")
+            .env("LIVEKIT_API_SECRET", "secret")
+            .env("CODETRIAL_ROOM_PREFIX", "from-the-shell")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    });
+    let page = http_request(
+        &addr,
+        &format!("GET / HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
+    );
+    let written = std::fs::read_to_string(data.join("codetrial.env.local")).unwrap_or_default();
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(data.join("codetrial.env.local"))
+            .map(|meta| meta.permissions().mode() & 0o777)
+            .unwrap_or(0)
+    };
+    drop(server);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&data);
+
+    assert!(page.starts_with("HTTP/1.1 200 OK"), "{page}");
+    assert!(
+        !page.contains(r#"name="livekitUrl""#),
+        "Setup was served: {page}"
+    );
+    assert_eq!(
+        written,
+        format!("LIVEKIT_URL={livekit_url}\nLIVEKIT_API_KEY=key\nLIVEKIT_API_SECRET=secret\n")
+    );
+    #[cfg(unix)]
+    assert_eq!(mode, 0o600, "{mode:o}");
+}
+
+/// A first `--data-dir` launch from a temporary home, with `--import-config`
+/// naming a file that holds `from` and `env` exported: the address, the
+/// server, the data folder, and the home to remove afterwards.
+fn launch_offering(
+    label: &str,
+    from: &str,
+    env: &[(&str, &str)],
+) -> (String, ServerProcess, PathBuf, PathBuf) {
+    let home = exe_temp_path(&format!("{label}-exe"));
+    let data = temp_path(&format!("{label}-data"));
+    std::fs::create_dir_all(&home).unwrap();
+    let exe = binary_beside(&home);
+    let offered = home.join("cli.env");
+    std::fs::write(&offered, from).unwrap();
+
+    let data_arg = data.to_str().unwrap().to_string();
+    let offer_arg = offered.to_str().unwrap().to_string();
+    let (addr, server) = spawn_server(|addr| {
+        let mut command = Command::new(&exe);
+        scrubbed(&mut command)
+            .args(["web", "--web-addr", addr, "--data-dir", &data_arg])
+            .args(["--import-config", &offer_arg])
+            .current_dir(&home)
+            .envs(env.iter().copied())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    });
+    (addr, server, data, home)
+}
+
+fn get(addr: &str, path: &str) -> String {
+    http_request(
+        addr,
+        &format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
+    )
+}
+
+fn post_setup(addr: &str, body: &str) -> String {
+    http_request(
+        addr,
+        &format!(
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ),
+    )
+}
+
+/// A file a launcher came across is not trusted on its own: the first launch
+/// still serves Setup and writes nothing, and the page is told which file and
+/// which LiveKit project, never a key, since any account on the machine can
+/// reach the port while Setup serves.
+#[test]
+fn a_first_data_dir_launch_offers_the_config_it_is_pointed_at() {
+    let (addr, server, data, home) = launch_offering(
+        "data-dir-offer",
+        "LIVEKIT_URL=wss://example.livekit.cloud\nLIVEKIT_API_KEY=the-api-key\n\
+         LIVEKIT_API_SECRET=the-api-secret\nGOOGLE_API_KEY=the-google-key\n",
+        &[],
+    );
+    let page = get(&addr, "/");
+    let offer = get(&addr, "/api/setup/offer");
+    let written = data.join("codetrial.env.local").exists();
+    drop(server);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&data);
+
+    assert!(
+        page.contains(r#"name="livekitUrl""#),
+        "Setup was not served: {page}"
+    );
+    assert!(!written, "an offered config was written without being used");
+    assert!(offer.starts_with("HTTP/1.1 200 OK"), "{offer}");
+    assert!(
+        offer.contains(r#""livekitEndpoint":"wss://example.livekit.cloud""#),
+        "{offer}"
+    );
+    assert!(offer.contains(r#""google":true"#), "{offer}");
+    assert!(offer.contains("cli.env"), "{offer}");
+    for key in ["the-api-key", "the-api-secret", "the-google-key"] {
+        assert!(!offer.contains(key), "{key} reached the page: {offer}");
+    }
+}
+
+/// Using the offer is a submission the server fills from the file and checks
+/// like a typed one, and it writes Setup's keys and nothing else of the file,
+/// so a CLI deployment's database path or room prefix stays the CLI's.
+#[test]
+fn using_the_offered_config_writes_its_setup_keys() {
+    let livekit_addr = spawn_livekit_room_service("key", "secret");
+    let livekit_url = format!("http://{livekit_addr}");
+    let (addr, server, data, home) = launch_offering(
+        "data-dir-offer-use",
+        &format!(
+            "# written by the CLI\nLIVEKIT_URL=\"{livekit_url}\"\nLIVEKIT_API_KEY=key\n\
+             LIVEKIT_API_SECRET='secret'\nCODETRIAL_ROOM_PREFIX=from-the-cli\n\
+             CODETRIAL_DB_PATH=/elsewhere/codetrial.db\n"
+        ),
+        &[],
+    );
+    let response = post_setup(&addr, r#"{"useOffer":true}"#);
+    let written = std::fs::read_to_string(data.join("codetrial.env.local")).unwrap_or_default();
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(data.join("codetrial.env.local"))
+            .map(|meta| meta.permissions().mode() & 0o777)
+            .unwrap_or(0)
+    };
+    drop(server);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&data);
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert_eq!(
+        written,
+        format!("LIVEKIT_URL={livekit_url}\nLIVEKIT_API_KEY=key\nLIVEKIT_API_SECRET=secret\n")
+    );
+    #[cfg(unix)]
+    assert_eq!(mode, 0o600, "{mode:o}");
+}
+
+/// Exported keys are this launch's own choice, so they are written and Setup
+/// is skipped whatever file a launcher offers.
+#[test]
+fn exported_setup_keys_skip_setup_whatever_is_offered() {
+    let livekit_addr = spawn_livekit_room_service("key", "secret");
+    let livekit_url = format!("http://{livekit_addr}");
+    let (addr, server, data, home) = launch_offering(
+        "data-dir-offer-exported",
+        "LIVEKIT_URL=wss://elsewhere.livekit.cloud\nLIVEKIT_API_KEY=other\n\
+         LIVEKIT_API_SECRET=other\n",
+        &[
+            ("LIVEKIT_URL", &livekit_url),
+            ("LIVEKIT_API_KEY", "key"),
+            ("LIVEKIT_API_SECRET", "secret"),
+        ],
+    );
+    let page = get(&addr, "/");
+    let written = std::fs::read_to_string(data.join("codetrial.env.local")).unwrap_or_default();
+    drop(server);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&data);
+
+    assert!(
+        !page.contains(r#"name="livekitUrl""#),
+        "Setup was served: {page}"
+    );
+    assert_eq!(
+        written,
+        format!("LIVEKIT_URL={livekit_url}\nLIVEKIT_API_KEY=key\nLIVEKIT_API_SECRET=secret\n")
+    );
+}
+
+/// An offered file that cannot be used says why, by path, in place of the
+/// offer, and using it anyway is refused with the same reason.
+#[test]
+fn an_unusable_offered_config_is_reported_not_used() {
+    let (addr, server, data, home) = launch_offering(
+        "data-dir-offer-partial",
+        "LIVEKIT_URL=wss://example.livekit.cloud\n",
+        &[],
+    );
+    let offer = get(&addr, "/api/setup/offer");
+    let response = post_setup(&addr, r#"{"useOffer":true}"#);
+    let written = data.join("codetrial.env.local").exists();
+    drop(server);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&data);
+
+    let reason = "does not set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET";
+    assert!(offer.contains(reason), "{offer}");
+    assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    assert!(response.contains(reason), "{response}");
+    assert!(!written);
+}
+
+/// Without `--import-config` there is nothing to use, and no offer to show.
+#[test]
+fn setup_without_an_offer_refuses_to_use_one() {
+    let dir = exe_temp_path("setup-no-offer");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+    let (addr, server) = spawn_cold_start(&exe, &dir, &[]);
+    let offer = get(&addr, "/api/setup/offer");
+    let response = post_setup(&addr, r#"{"useOffer":true}"#);
+    drop(server);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(offer.starts_with("HTTP/1.1 404"), "{offer}");
+    assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    assert!(response.contains("no config was offered"), "{response}");
+}
+
+#[test]
+fn binary_refuses_an_import_config_without_a_data_dir() {
+    let (code, _, stderr) = run_cli_args(&["web", "--import-config", "cli.env"]);
+    assert_eq!(code, 2);
+    assert!(
+        stderr.contains("--import-config needs --data-dir"),
+        "{stderr}"
+    );
+}
+
+/// The failure note a double-clicked binary leaves beside itself goes in the
+/// data directory instead: an installed app's executable folder is read-only
+/// or inside a bundle.
+#[test]
+fn a_data_dir_launch_logs_its_failure_in_the_data_dir() {
+    let home = exe_temp_path("data-dir-log-exe");
+    let data = temp_path("data-dir-log-data");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(
+        data.join("codetrial.env.local"),
+        "LIVEKIT_URL=wss://example.livekit.cloud\n",
+    )
+    .unwrap();
+    let exe = binary_beside(&home);
+
+    let output = scrubbed(&mut Command::new(&exe))
+        .args(["web", "--data-dir", data.to_str().unwrap()])
+        .current_dir(&home)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("codetrial should exit");
+    let log = std::fs::read_to_string(data.join("codetrial-error.log")).unwrap_or_default();
+    let beside_exe = home.join("codetrial-error.log").exists();
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&data);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        log.contains("missing required LiveKit credentials"),
+        "{log}"
+    );
+    assert!(!beside_exe, "the log belongs in the data directory");
+}
+
+#[test]
+fn binary_refuses_a_config_file_and_a_data_dir_together() {
+    let (code, _, stderr) = run_cli_args(&["web", "--config", "a.env", "--data-dir", "b"]);
+    assert_eq!(code, 2);
+    assert!(
+        stderr.contains("--config and --data-dir cannot be combined"),
+        "{stderr}"
+    );
+}
+
+/// A launcher's crash closes the pipe it held, and the server it started must
+/// not outlive it on the launcher's fixed port. Checked while Setup serves,
+/// because that is before any config exists and the first thing a new install
+/// runs.
+#[test]
+fn a_server_told_to_follow_its_stdin_exits_when_it_closes() {
+    let home = exe_temp_path("stdin-exe");
+    let data = temp_path("stdin-data");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    let exe = binary_beside(&home);
+    let data_arg = data.to_str().unwrap().to_string();
+
+    let (_addr, mut server) = spawn_server(|addr| {
+        let mut command = Command::new(&exe);
+        scrubbed(&mut command)
+            .args(["web", "--web-addr", addr, "--data-dir", &data_arg])
+            .current_dir(&home)
+            .env("CODETRIAL_EXIT_WITH_STDIN", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    });
+
+    // All three ends, as a parent's death closes them. With stdout and stderr
+    // still read here, a server that wrote to a dead pipe on its way out would
+    // pass this and then outlive a real parent.
+    drop(server.stdout.take());
+    drop(server.stderr.take());
+    drop(server.stdin.take());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = server.try_wait().expect("child status should read") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&data);
+
+    let status = status.expect("the server should exit once its stdin closes");
+    assert!(status.success(), "{status}");
 }

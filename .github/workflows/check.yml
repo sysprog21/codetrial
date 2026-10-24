@@ -225,6 +225,41 @@ jobs:
         id: cargo-cache
         uses: ./.github/actions/restore-cargo-cache
 
+      # The desktop crate's cache key: the cargo cache's compilers and flags,
+      # under a name of its own and with its own lockfile.
+      - name: Compute the desktop cache key
+        if: matrix.lane == 'rust'
+        id: desktop
+        env:
+          CARGO_PREFIX: ${{ steps.cargo-cache.outputs.prefix }}
+          INPUTS: ${{ hashFiles('desktop/Cargo.lock') }}
+        run: |
+          prefix="desktop-${CARGO_PREFIX#cargo-}"
+          echo "prefix=$prefix" >>"$GITHUB_OUTPUT"
+          echo "key=$prefix$INPUTS" >>"$GITHUB_OUTPUT"
+
+      # What desktop/ links against. Installed on every run of this lane, not
+      # only when a pull request touches desktop/: the `desktop` gate skips
+      # without them, and under CI a gate that skips fails the run, so an
+      # unrelated pull request would fail here.
+      - name: Install the desktop app's build dependencies
+        if: matrix.lane == 'rust'
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libwebkit2gtk-4.1-dev libxdo-dev libssl-dev librsvg2-dev
+
+      # The desktop crate's build, in an entry of its own. The cargo cache is
+      # also what every mutation shard restores, and a path added to it would
+      # be a gigabyte of WebKit bindings each shard downloads and never reads.
+      - name: Restore desktop cargo cache
+        id: desktop-cache
+        if: matrix.lane == 'rust'
+        uses: actions/cache/restore@v6
+        with:
+          path: target/desktop
+          key: ${{ steps.desktop.outputs.key }}
+          restore-keys: ${{ steps.desktop.outputs.prefix }}
+
       # Every lane fetches and verifies these bytes; only the portable lane
       # saves them, below, so three lanes do not race to write one key.
       - name: Restore vendored bytes
@@ -370,7 +405,18 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
+            !target/desktop
           key: ${{ steps.cargo-cache.outputs.key }}
+
+      - name: Save desktop cargo cache
+        if: >-
+          ${{ !cancelled() && github.event_name != 'merge_group'
+              && matrix.lane == 'rust'
+              && steps.desktop-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: target/desktop
+          key: ${{ steps.desktop.outputs.key }}
 
   # The one status: every gate lane and audit passed, and on a PR the mutation
   # plan and every shard did too. Planning only runs on pull requests, and the

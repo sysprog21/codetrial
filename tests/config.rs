@@ -259,6 +259,19 @@ fn guest_mode_is_disabled_by_default_and_fails_closed() {
     }
 }
 
+/// Off unless asked for: a server whose stdin is `/dev/null`, which is every
+/// service manager's default, would otherwise exit the moment it started.
+#[test]
+fn exiting_with_stdin_is_only_on_when_a_launcher_asks() {
+    let exits = codetrial::config::exit_with_stdin;
+    for off in [None, Some(""), Some("0"), Some("false"), Some("maybe")] {
+        assert!(!exits(off), "{off:?} should leave it off");
+    }
+    for on in ["1", "true", "yes"] {
+        assert!(exits(Some(on)), "{on} should turn it on");
+    }
+}
+
 /// Asserted on the parser rather than through a config struct, because the
 /// struct field it used to be read through was only ever consumed by `serve`.
 ///
@@ -2031,4 +2044,21 @@ fn compression_requires_a_valid_pair_and_preserves_provider_defaults() {
         .expect("invalid compression must fail configuration");
         assert!(!error.invalid_entries.is_empty());
     }
+}
+
+/// The message quotes the line that was refused, which is how an operator
+/// finds it, not the one after it: the parser counts lines from 1 and the
+/// quote is read back by that count.
+#[test]
+fn an_invalid_config_line_is_quoted_as_written() {
+    let path =
+        std::env::temp_dir().join(format!("codetrial-invalid-line-{}.env", std::process::id()));
+    std::fs::write(
+        &path,
+        "# comment\nLIVEKIT_URL=wss://a\n  not a setting  \nNEXT=1\n",
+    )
+    .unwrap();
+    let error = codetrial::config::read_config_file(&path).unwrap_err();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(error, "invalid config line: not a setting");
 }

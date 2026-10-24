@@ -199,7 +199,7 @@ gate()
         shared = {"fetch-vendor", "verify-vendor"}
         self.assertEqual(rust & portable, shared)
         self.assertEqual(
-            rust - shared, {"clippy", "cargo-test", "browser-server-tests"}
+            rust - shared, {"clippy", "cargo-test", "browser-server-tests", "desktop"}
         )
         self.assertEqual(rust & browser, shared)
         self.assertEqual(portable & browser, shared)

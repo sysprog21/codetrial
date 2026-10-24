@@ -261,7 +261,27 @@ cargo_audit_gate()
         return 0
     fi
 
-    cargo audit --file "$ROOT/Cargo.lock"
+    cargo audit --file "$ROOT/Cargo.lock" \
+        && cargo audit --file "$ROOT/desktop/Cargo.lock"
+}
+
+# The desktop app is a crate of its own with its own lockfile, so none of the
+# root's fmt, clippy or test gates reach it. Building it needs the platform's
+# webview, which on Linux is WebKitGTK's development package: a machine without
+# one skips the build and says so, the way a missing linter does. CI installs it
+# on every run of the Rust lane, since a skip there fails the run.
+desktop_gate()
+{
+    manifest=$ROOT/desktop/Cargo.toml
+    if [ "$(uname -s)" = Linux ] \
+        && ! pkg-config --exists webkit2gtk-4.1 > /dev/null 2>&1; then
+        skip "desktop clippy and tests: libwebkit2gtk-4.1-dev builds desktop/"
+        return 0
+    fi
+    target=$ROOT/target/desktop
+    cargo clippy --locked --all-targets --manifest-path "$manifest" \
+        --target-dir "$target" -- -D warnings \
+        && cargo test --locked --manifest-path "$manifest" --target-dir "$target"
 }
 
 # The crates under vendor/ carry fixes upstream has not released. A bump that
@@ -440,6 +460,8 @@ gate --lane rust cargo-test cargo test --locked --manifest-path "$ROOT/Cargo.tom
 # These tests start the Rust server; running them before its build silently
 # skips.
 gate --lane rust browser-server-tests browser_tests server
+gate desktop-fmt cargo fmt --check --manifest-path "$ROOT/desktop/Cargo.toml"
+gate --lane rust desktop desktop_gate
 
 gate gen-problems "$PYTHON" "$ROOT/scripts/gen-problems.py" --check
 

@@ -109,6 +109,10 @@ list()
 }
 
 rust=$(list 'build.rs' 'src/*.rs' 'tests/*.rs')
+
+# The desktop app is a crate of its own, so `cargo fmt` at the root never sees
+# it and it needs its manifest named.
+desktop=$(list 'desktop/build.rs' 'desktop/src/*.rs' 'desktop/tests/*.rs')
 shell=$(list '*.sh')
 
 # tests/ as well as scripts/: the Python under tests/ drives the recording and
@@ -126,7 +130,7 @@ web=$(list '*.html' '*.js' '*.mjs' '*.cjs' \
     '.github/ISSUE_TEMPLATE/*.yml' '.github/ISSUE_TEMPLATE/*.yaml')
 prettier=$ROOT/node_modules/.bin/prettier
 
-files=$(printf '%s\n%s\n%s\n' "$rust" "$shell" "$python" | grep -v '^$')
+files=$(printf '%s\n%s\n%s\n%s\n' "$rust" "$desktop" "$shell" "$python" | grep -v '^$')
 
 # The same refusal as scripts/git-pre-commit.sh makes for the linters, here for
 # the tree, which never goes through the hook.
@@ -165,9 +169,9 @@ lane()
 }
 
 lane commentflow "install a release from github.com/sysprog21/commentflow" \
-    "$rust$shell" && use_commentflow=1
+    "$rust$desktop$shell" && use_commentflow=1
 lane rustfmt "install Rust with rustup, then rustup component add rustfmt" \
-    "$rust" && use_rustfmt=1
+    "$rust$desktop" && use_rustfmt=1
 lane ruff "pipx install ruff" "$python" && use_ruff=1
 lane shfmt "brew install shfmt, or apt-get install shfmt" "$shell" && use_shfmt=1
 lane "$prettier" "run npm ci" "$web" && use_prettier=1
@@ -184,19 +188,33 @@ fi
 # which formats each file of the crate once: rustfmt handed every file follows
 # `mod` from the roots and formats the children a second time, 3.2s against 1.2s
 # here. A commit takes rustfmt on what it staged, so one file does not pay for
-# the crate.
+# the crate. Each crate is formatted against its own manifest.
+#
+# rustfmt_crate MANIFEST FILES...
+rustfmt_crate()
+{
+    manifest=$1
+    shift
+    [ $# -gt 0 ] || return 0
+    if [ "$mode" != staged ]; then
+        cargo fmt --manifest-path "$manifest"
+    else
+        edition=$(sed -n 's/^edition *= *"\([0-9]*\)".*/\1/p' "$manifest" | sed -n 1p)
+        rustfmt --edition "${edition:-2024}" "$@"
+    fi
+}
+
 format()
 {
     if [ -n "${use_commentflow:-}" ]; then
         # shellcheck disable=SC2086
-        commentflow $rust $shell || return 1
+        commentflow $rust $desktop $shell || return 1
     fi
-    if [ -n "${use_rustfmt:-}" ] && [ "$mode" != staged ]; then
-        cargo fmt || return 1
-    elif [ -n "${use_rustfmt:-}" ]; then
-        edition=$(sed -n 's/^edition *= *"\([0-9]*\)".*/\1/p' Cargo.toml | sed -n 1p)
+    if [ -n "${use_rustfmt:-}" ]; then
         # shellcheck disable=SC2086
-        rustfmt --edition "${edition:-2024}" $rust || return 1
+        rustfmt_crate Cargo.toml $rust || return 1
+        # shellcheck disable=SC2086
+        rustfmt_crate desktop/Cargo.toml $desktop || return 1
     fi
     if [ -n "${use_ruff:-}" ]; then
         # shellcheck disable=SC2086
@@ -250,9 +268,12 @@ if [ "$mode" = check ]; then
 
     # One tar pipe rather than a mkdir and a cp per file: 81 files was 162
     # process spawns and most of this gate's wall clock. Cargo.toml because
-    # `cargo fmt` reads the manifest to find the crate. A setting the tree does
-    # not have is left out, or tar would refuse the whole copy over it.
+    # `cargo fmt` reads the manifest to find the crate, and the desktop manifest
+    # for the same reason. A setting the tree does not have is left out, or tar
+    # would refuse the whole copy over it.
     copy=$files
+    [ -z "$desktop" ] || copy="$copy
+desktop/Cargo.toml"
     for setting in $configs; do
         [ -f "$setting" ] && copy="$copy
 $setting"

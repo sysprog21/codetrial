@@ -567,3 +567,138 @@ fn guest_mode_recording_conflict_requires_both_settings() {
     assert!(!super::guest_mode_recording_conflict(true, false));
     assert!(super::guest_mode_recording_conflict(true, true));
 }
+
+/// Written by hand in a config file or by a launcher, so the spacing and a
+/// trailing comma are the writer's, and neither may become a host name that
+/// matches a request with an empty `Host`.
+#[test]
+fn the_allowed_hosts_are_a_trimmed_list_without_blanks() {
+    assert!(super::allowed_hosts(&values(&[])).is_empty());
+    assert_eq!(
+        super::allowed_hosts(&values(&[(
+            "CODETRIAL_ALLOWED_HOSTS",
+            " 127.0.0.1:3101 ,, Desktop.Test ,"
+        )])),
+        ["127.0.0.1:3101", "Desktop.Test"]
+    );
+}
+
+/// Every path a launch derives, from the one folder `--data-dir` names. The
+/// CLI's own answers come from the working directory and the executable's
+/// folder, which a desktop launcher does not choose, so none of them may leak
+/// through.
+#[test]
+fn a_data_dir_decides_every_path_a_launch_reads_or_writes() {
+    // A folder nothing has made, so the missing config below is this test's
+    // doing and not whatever the host happens to keep at a fixed path.
+    let data = std::env::temp_dir().join(format!(
+        "codetrial-bin-data-dir-{}-{}",
+        std::process::id(),
+        codetrial::current_epoch_millis()
+    ));
+    let data = data.as_path();
+    let options = super::CliOptions {
+        data_dir: Some(data.to_path_buf()),
+        ..Default::default()
+    };
+    assert_eq!(super::config_dir(&options), data);
+    assert_eq!(
+        super::cold_start_config_path(&options),
+        data.join("codetrial.env.local")
+    );
+    assert_eq!(
+        super::web_error_log_path(&options),
+        data.join("codetrial-error.log")
+    );
+    assert_eq!(
+        super::account_db_path(&values(&[]), &options),
+        data.join("codetrial.db")
+    );
+    let missing = super::primary_config_path(&options).unwrap_err();
+    assert!(
+        missing.contains(&data.join("codetrial.env.local").display().to_string()),
+        "{missing}"
+    );
+
+    let pool = codetrial::config::ProviderPool {
+        providers: vec![provider(codetrial::config::PRIMARY_PROVIDER_ID)],
+    };
+    let served = |values: &super::BTreeMap<String, String>| {
+        super::web_server_config(values, pool.clone(), false, &options)
+            .expect("a plain local config should be accepted")
+            .web_dir
+    };
+    assert_eq!(served(&values(&[])), data.join("web"));
+    assert_eq!(
+        served(&values(&[("CODETRIAL_WEB_DIR", "/elsewhere")])),
+        std::path::Path::new("/elsewhere")
+    );
+}
+
+/// Made once and kept, so a relaunch keeps everyone signed in, and owner-only
+/// because any program on the machine can reach a loopback port.
+#[test]
+fn a_data_dir_session_key_is_made_once_and_kept() {
+    let dir = std::env::temp_dir().join(format!(
+        "codetrial-bin-secret-{}-{}",
+        std::process::id(),
+        codetrial::current_epoch_millis()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(super::SESSION_SECRET_FILE);
+
+    let first = super::data_dir_session_secret(&path).unwrap();
+    assert!(first.len() >= 32, "{first}");
+    assert_ne!(first, super::DEFAULT_SESSION_SECRET);
+    assert_eq!(super::data_dir_session_secret(&path).unwrap(), first);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{mode:o}");
+    }
+
+    // A key of every character this program writes, `-` and `_` among them, is
+    // kept as it is.
+    let written = "ab-CD_01".repeat(5);
+    std::fs::write(&path, &written).unwrap();
+    assert_eq!(super::data_dir_session_secret(&path).unwrap(), written);
+
+    // Refused, and left as it was, rather than replaced.
+    for damaged in ["", "short", "codetrial-local-session", &"=".repeat(40)] {
+        std::fs::write(&path, damaged).unwrap();
+        let error = super::data_dir_session_secret(&path).unwrap_err();
+        assert!(error.contains("not a session key"), "{error}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), damaged);
+    }
+
+    // Unreadable is not missing: a key is made only where there is none.
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    let error = super::data_dir_session_secret(&path).unwrap_err();
+    assert!(error.starts_with("cannot read"), "{error}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The flag a launcher passes, since a `--data-dir` launch reads no
+/// configuration from its environment, and the environment it would have read.
+#[test]
+fn a_data_dir_launch_takes_its_settings_from_flags_not_the_environment() {
+    // Parsed from the command line the desktop app passes, so the flags are
+    // proved to reach the options as well as to be read from them.
+    let argv = [
+        "web",
+        "--data-dir",
+        "/data",
+        "--allowed-hosts",
+        "127.0.0.1:3101",
+    ]
+    .map(String::from);
+    let (_, options) = super::parse_agent_args(&argv).unwrap();
+    assert_eq!(options.data_dir, Some(std::path::PathBuf::from("/data")));
+    assert!(super::environment(&options).is_empty());
+    assert_eq!(
+        super::allowed_hosts(&super::environment_and_flags(&options)),
+        ["127.0.0.1:3101"]
+    );
+}

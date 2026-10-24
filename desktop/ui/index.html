@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>CodeTrial</title>
+    <link rel="stylesheet" href="start.css" />
+    <script src="start.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <h1>CodeTrial</h1>
+      <p id="starting">Starting&hellip;</p>
+      <section id="browser" hidden>
+        <p>
+          CodeTrial is open in your web browser, because this system's web view
+          cannot make the video call an interview needs.
+        </p>
+        <p>
+          <a class="action" href="index.html?reopen"
+            >Open it in the browser again</a
+          >
+        </p>
+        <p>
+          Keep this window open while you practise. Closing it stops CodeTrial.
+        </p>
+      </section>
+      <section id="failure" hidden>
+        <p>CodeTrial could not start.</p>
+        <pre id="reason"></pre>
+        <p id="logs" hidden>
+          The server's log is <code>codetrial-server.log</code> in
+          <code id="logs-dir"></code>. Close this window and open CodeTrial
+          again once the reason above is fixed.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,10 @@
+# Under the repository's own target/, so a checkout has one place everything it
+# builds lands and one directory to delete. Its own subdirectory rather than
+# target/ itself: CI caches the root's build and every mutation shard restores
+# that entry, which should not carry the WebKit bindings this crate builds.
+#
+# Read by cargo and the Tauri CLI when run from this directory. A command run
+# from the repository root with --manifest-path does not see this file and
+# passes --target-dir instead, as scripts/test.sh does.
+[build]
+target-dir = "../target/desktop"

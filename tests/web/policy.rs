@@ -287,3 +287,29 @@ async fn the_recording_template_is_reachable_under_a_policy_that_permits_its_roo
 
     server.shutdown().await;
 }
+
+/// A page on another origin can give its own name a short TTL, repoint it at
+/// 127.0.0.1 and then read a loopback server as same origin. The `Host` it
+/// sends still carries that name, so a server told which names are its own
+/// refuses the rest, `/healthz` included, and matches without case because a
+/// host name has none.
+#[tokio::test]
+async fn an_allowed_hosts_list_refuses_every_other_host_name() {
+    let (base, server) = spawn_web_server(WebServerConfig {
+        allowed_hosts: vec!["desktop.test:3101".to_string()],
+        ..web_config()
+    })
+    .await;
+    let status = |host: &'static str| {
+        let request = http_client()
+            .get(format!("{base}/healthz"))
+            .header(reqwest::header::HOST, host);
+        async move { request.send().await.unwrap().status().as_u16() }
+    };
+
+    assert_eq!(status("Desktop.Test:3101").await, 200);
+    assert_eq!(status("rebound.example:3101").await, 421);
+    assert_eq!(status("desktop.test:3102").await, 421);
+
+    server.shutdown().await;
+}

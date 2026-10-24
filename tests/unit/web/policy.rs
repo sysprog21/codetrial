@@ -24,6 +24,7 @@ fn policy_for(url: &str) -> String {
         compiler_explorer_enabled: false,
         guest_mode_enabled: false,
         trusted_proxy_hops: 0,
+        allowed_hosts: Vec::new(),
         recording: None,
         pool: crate::config::ProviderPool {
             providers: vec![crate::config::Provider {

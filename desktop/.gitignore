@@ -1,0 +1,3 @@
+# Written by tauri-build and removed again by build.rs; ignored for a build
+# that stops between the two.
+/gen/

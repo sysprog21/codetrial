@@ -5,6 +5,11 @@ export function shouldWarnBeforeUnload({ endsAt, reportPersisted }) {
 }
 
 /// The browser owns the confirmation text; the page can only request it.
+///
+/// The desktop app asks the same question before it closes its window, by
+/// dispatching a cancelable `beforeunload` itself and reading
+/// `defaultPrevented`, since a window close sends none. That is why `warn`
+/// calls `preventDefault` rather than only setting `returnValue`.
 export function createBeforeUnloadGuard(target = window) {
   let enabled = false;
   const warn = (event) => {

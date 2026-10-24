@@ -62,6 +62,35 @@ pub fn exe_dir() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
+/// Writes a new file that only its owner can read, and refuses rather than
+/// replacing one: the config file Setup writes and the session key a
+/// `--data-dir` launch makes both hold secrets.
+///
+/// `create_new`, so an existing name is reported rather than followed and
+/// truncated. `is_cold_start` reached Setup by finding no config, and the
+/// `is_file` it asked answers no for a symlink with nothing at the end of it:
+/// without `O_EXCL` a dangling one planted there sends the credentials wherever
+/// it points.
+///
+/// A file cut short is removed: the next launch would find it, skip Setup or
+/// refuse the key, and never start again until someone deleted it by hand.
+pub fn create_owner_only(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        // Otherwise the umask decides, and its usual answer is world-readable.
+        // Windows has no equivalent here and inherits the folder's ACL.
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    std::io::Write::write_all(&mut file, contents).inspect_err(|_| {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+    })
+}
+
 /// Encode one URI component using only RFC 3986 unreserved bytes verbatim.
 /// Both object paths and credential query values must escape slashes and
 /// pluses.

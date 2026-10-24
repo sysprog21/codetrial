@@ -33,6 +33,18 @@ updates:
         applies-to: security-updates
         patterns:
           - "tree-sitter*"
+  # The desktop app's own lockfile. Tauri and its plugins are pinned exactly in
+  # desktop/Cargo.toml, so they move only when that file is edited on
+  # purpose; this keeps everything beneath them current, in one group so the
+  # GTK and WebView crates that have to agree move together.
+  - package-ecosystem: cargo
+    directory: /desktop
+    schedule:
+      interval: weekly
+    groups:
+      desktop:
+        patterns:
+          - "*"
   - package-ecosystem: npm
     directory: /
     schedule:

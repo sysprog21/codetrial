@@ -286,6 +286,10 @@ signature and nothing else, so a fork builds the same artifacts this repository
 does. Developer ID signing and notarization would need a paid Apple Developer
 Program membership, and the download instructions clear quarantine instead.
 
+The desktop app is released separately, from `.github/workflows/desktop.yml`
+when a `desktop-vX.Y.Z` tag is pushed, and never touches the CLI's `latest`;
+[desktop.md](desktop.md) has the procedure and what that workflow checks.
+
 The embed falls back per file rather than wholesale, so a partially populated
 web tree is filled in from the built-in copy rather than 404ing. Assets on disk
 win where they exist. That root is `web/` relative to the working directory
