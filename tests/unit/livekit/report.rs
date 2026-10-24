@@ -84,6 +84,31 @@ fn execution_choice_reaches_report_evidence_without_ledger_entries() {
 }
 
 #[test]
+fn report_prompt_uses_the_server_candidate_turn_count() {
+    let config = report_test_config();
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let mut state = RuntimeState::default();
+
+    let silent = report_prompt_text(&boot, &state, 12.0, false);
+    assert!(silent.contains("CANDIDATE TURNS: 0"), "{silent}");
+
+    state
+        .evidence_ledger
+        .record_conversation_turn(1_000, "interviewer");
+    assert!(
+        report_prompt_text(&boot, &state, 12.0, false).contains("CANDIDATE TURNS: 0"),
+        "interviewer speech is not candidate evidence"
+    );
+
+    state
+        .evidence_ledger
+        .record_conversation_turn(2_000, "candidate");
+    let spoken = report_prompt_text(&boot, &state, 12.0, false);
+    assert!(spoken.contains("CANDIDATE TURNS: 1"), "{spoken}");
+    assert!(!spoken.contains("`communicationScore` as `null`"));
+}
+
+#[test]
 fn disabled_execution_reports_explain_why_no_run_exists() {
     let config = report_test_config();
     let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
@@ -333,6 +358,9 @@ fn report_helpers_use_report_topic_prompt_state_and_error_note() {
             &GeminiKeys::single("google"),
         )),
         boot.problem,
+        crate::agent::ReportRounds::of(&state),
+        boot.interview_mode,
+        boot.example_drawing_enabled && state.board_snapshots > 0,
     );
     let packet = report_data_packet(report).unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&packet.payload).unwrap();
@@ -647,10 +675,14 @@ fn report_carries_the_debrief() {
         ],
         "frameworkAssessment": {"rubricVersion": 1, "phases": phases.iter().map(|phase| serde_json::json!({"phase": phase, "score": 75, "weaknessTags": []})).collect::<Vec<_>>()}
     });
-    let state = RuntimeState {
+    let mut state = RuntimeState {
         hint_rungs_given: 1,
+        behavioral_round_started: true,
         ..RuntimeState::default()
     };
+    state
+        .evidence_ledger
+        .record_conversation_turn(1, "candidate");
 
     let generated = report_value(
         &boot,
@@ -661,7 +693,15 @@ fn report_carries_the_debrief() {
     );
     assert_eq!(generated["interviewerVoice"], config.gemini_voice);
     assert_eq!(generated["interviewerAccent"], "Default");
-    let mut fallback = final_report(None, 0, Some("model unavailable"), boot.problem);
+    let mut fallback = final_report(
+        None,
+        0,
+        Some("model unavailable"),
+        boot.problem,
+        crate::agent::ReportRounds::of(&state),
+        boot.interview_mode,
+        false,
+    );
     stamp_report_debrief(&mut fallback, &boot, &state);
 
     for report in [&generated, &fallback] {
@@ -694,8 +734,17 @@ fn an_original_problem_keeps_its_debrief() {
     );
     assert!(boot.problem.source_title().is_none());
 
-    let mut report = final_report(None, 0, Some("model unavailable"), boot.problem);
-    stamp_report_debrief(&mut report, &boot, &RuntimeState::default());
+    let state = RuntimeState::default();
+    let mut report = final_report(
+        None,
+        0,
+        Some("model unavailable"),
+        boot.problem,
+        crate::agent::ReportRounds::of(&state),
+        boot.interview_mode,
+        false,
+    );
+    stamp_report_debrief(&mut report, &boot, &state);
 
     assert!(report["debrief"]["scenarioContract"].is_string());
     assert!(report["debrief"]["approach"].is_string());
@@ -729,8 +778,17 @@ fn an_original_problem_debrief_still_refuses_a_practice_site() {
     tampered.optimal = "You will have seen this one on LeetCode.";
     boot.problem = Box::leak(Box::new(tampered));
 
-    let mut report = final_report(None, 0, Some("model unavailable"), boot.problem);
-    stamp_report_debrief(&mut report, &boot, &RuntimeState::default());
+    let state = RuntimeState::default();
+    let mut report = final_report(
+        None,
+        0,
+        Some("model unavailable"),
+        boot.problem,
+        crate::agent::ReportRounds::of(&state),
+        boot.interview_mode,
+        false,
+    );
+    stamp_report_debrief(&mut report, &boot, &state);
 
     assert!(
         report["debrief"]["approach"].is_null(),
@@ -1161,7 +1219,12 @@ fn the_report_transcript_marks_where_the_round_opened() {
 fn report_metadata_uses_the_frozen_assessment() {
     let config = report_test_config();
     let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
-    let mut live = RuntimeState::default();
+    let mut live = RuntimeState {
+        behavioral_round_started: true,
+        ..RuntimeState::default()
+    };
+    live.evidence_ledger
+        .record_conversation_turn(1, "candidate");
     let mut frozen = freeze_assessment(&boot, &mut live, 12.0, Vec::new());
     live.code = "post-interview edits".into();
     live.hints_used = 5;
@@ -1537,7 +1600,12 @@ async fn a_report_lost_to_503s_is_regenerated_from_the_frozen_interview() {
 
     let config = report_test_config();
     let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
-    let mut live = RuntimeState::default();
+    let mut live = RuntimeState {
+        behavioral_round_started: true,
+        ..RuntimeState::default()
+    };
+    live.evidence_ledger
+        .record_conversation_turn(1, "candidate");
     let mut frozen = freeze_assessment(&boot, &mut live, 12.0, Vec::new());
     let keys = GeminiKeys::single("recovery-e2e");
     let (flag, again) = (AtomicBool::default(), AtomicBool::default());
@@ -1641,7 +1709,12 @@ async fn a_report_refused_after_both_repairs_is_regenerated_on_another_seed() {
 
     let config = report_test_config();
     let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
-    let mut live = RuntimeState::default();
+    let mut live = RuntimeState {
+        behavioral_round_started: true,
+        ..RuntimeState::default()
+    };
+    live.evidence_ledger
+        .record_conversation_turn(1, "candidate");
     let mut frozen = freeze_assessment(&boot, &mut live, 12.0, Vec::new());
     let keys = GeminiKeys::single("schema-recovery");
     let (flag, again) = (AtomicBool::default(), AtomicBool::default());
@@ -2665,7 +2738,15 @@ fn the_debrief_places_each_follow_up_judgment_beside_its_follow_up() {
     assert!(report["debrief"]["followUps"][1]["raised"].is_null());
     assert!(report["debrief"]["followUps"][1]["assessment"].is_null());
 
-    let mut lost = final_report(None, 0, Some("model unavailable"), boot.problem);
+    let mut lost = final_report(
+        None,
+        0,
+        Some("model unavailable"),
+        boot.problem,
+        crate::agent::ReportRounds::of(&released),
+        boot.interview_mode,
+        false,
+    );
     stamp_report_debrief(&mut lost, &boot, &released);
     for entry in lost["debrief"]["followUps"].as_array().unwrap() {
         assert!(entry["raised"].is_null(), "{entry}");

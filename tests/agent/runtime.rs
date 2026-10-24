@@ -153,7 +153,19 @@ fn unsupported_delivery_and_personality_judgments_are_rejected_atomically() {
             }),
             "claim escaped delivery policy: {claim:?}: {errors:?}"
         );
-        let incomplete = final_report(Some(&report), 0, None, get_problem(Some("two-sum")));
+        let incomplete = final_report(
+            Some(&report),
+            0,
+            None,
+            get_problem(Some("two-sum")),
+            ReportRounds {
+                behavioral_opened: true,
+                follow_ups_released: true,
+                candidate_turns: 1,
+            },
+            InterviewMode::Coding,
+            false,
+        );
         assert_eq!(incomplete["incomplete"], true);
         assert!(incomplete.get("codingScore").is_none());
     }

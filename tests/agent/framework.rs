@@ -699,6 +699,10 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
                 BehavioralRound::NeverOpened
             },
             follow_ups_released: false,
+            candidate_turns: transcript
+                .lines()
+                .filter(|line| line.starts_with("Candidate:"))
+                .count() as u32,
         }));
 
         assert!(prompt.contains(transcript), "{name}: transcript was lost");
@@ -855,6 +859,14 @@ fn framework_evaluation_scenarios_exercise_reactions_evidence_and_reports() {
         }
 
         let reaction = evaluation_reaction(case, &mut state);
+        if case["reaction"]["kind"] == "report" {
+            let expected = if transcript.trim().is_empty() {
+                "CANDIDATE TURNS: 0"
+            } else {
+                "CANDIDATE TURNS: 1"
+            };
+            assert!(reaction.contains(expected), "{id}: {reaction}");
+        }
         if round_gate && case["round"] == "skipped" {
             apply_data_event(
                 &mut state,
@@ -936,6 +948,27 @@ fn framework_evaluation_scenarios_exercise_reactions_evidence_and_reports() {
             );
         }
         let mut candidate_report = valid_strict_report();
+        let report_rounds = ReportRounds {
+            candidate_turns: u32::from(!transcript.trim().is_empty()),
+            ..ReportRounds::of(&state)
+        };
+        if !report_rounds.behavioral_opened {
+            candidate_report["communicationFeedback"]["improvements"] =
+                json!(["Clarify trade-offs", "Answer directly"]);
+            candidate_report["improvementPlan"][2]["phase"] = json!("Repeat");
+            candidate_report["improvementPlan"][2]["weakness"] = json!("Clarify trade-offs");
+            candidate_report["improvementPlan"][3]["phase"] = json!("Example");
+            candidate_report["improvementPlan"][3]["weakness"] = json!("Answer directly");
+        }
+        if report_rounds.candidate_turns == 0 {
+            candidate_report["communicationScore"] = Value::Null;
+            candidate_report["communicationFeedback"]["strengths"] = json!([]);
+            candidate_report["communicationFeedback"]["improvements"] = json!([]);
+            candidate_report["improvementPlan"]
+                .as_array_mut()
+                .expect("fixture plan is an array")
+                .truncate(2);
+        }
         for row in candidate_report["frameworkAssessment"]["phases"]
             .as_array_mut()
             .expect("valid report phases")
@@ -962,6 +995,9 @@ fn framework_evaluation_scenarios_exercise_reactions_evidence_and_reports() {
             hints,
             None,
             get_problem(Some("two-sum")),
+            report_rounds,
+            InterviewMode::Coding,
+            false,
         );
         assert_ne!(
             report["incomplete"], true,

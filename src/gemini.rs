@@ -778,6 +778,7 @@ pub(crate) async fn generate_report_with_keys(
             keys,
             url: gemini_generate_content_url(model),
             material,
+            communication_assessed: rounds.candidate_turns > 0,
             budget: ReportCallBudget::new(),
             backoff: REPORT_RETRY_BACKOFF,
             observer: None,
@@ -882,6 +883,7 @@ struct ReportCalls<'a> {
     keys: &'a GeminiKeys,
     url: String,
     material: ReportMaterial<'a>,
+    communication_assessed: bool,
     budget: ReportCallBudget,
     backoff: Duration,
     run: ReportRun<'a>,
@@ -895,7 +897,12 @@ impl ReportTransport for ReportCalls<'_> {
     ) -> impl Future<Output = Result<String, Box<dyn std::error::Error + Send + Sync>>> + Send {
         // Built once per call rather than once per attempt: every retry sends
         // the same request, the encoded boards included.
-        let request = generate_report_request(prompt, self.material, self.run.seed);
+        let request = generate_report_request(
+            prompt,
+            self.material,
+            self.communication_assessed,
+            self.run.seed,
+        );
         async move {
             generate_report_transport(
                 self.keys,
@@ -2374,7 +2381,12 @@ fn tool_response_message(answers: &[(GeminiFunctionCall, Value)]) -> Value {
     })
 }
 
-fn generate_report_request(prompt: &str, material: ReportMaterial<'_>, seed: i64) -> Value {
+fn generate_report_request(
+    prompt: &str,
+    material: ReportMaterial<'_>,
+    communication_assessed: bool,
+    seed: i64,
+) -> Value {
     let mut request = content_request(
         &crate::agent::report_system_instruction_for_examples(
             material.mode,
@@ -2383,7 +2395,7 @@ fn generate_report_request(prompt: &str, material: ReportMaterial<'_>, seed: i64
         prompt,
         json!({
             "responseMimeType": "application/json",
-            "responseSchema": crate::agent::report_response_schema(),
+            "responseSchema": crate::agent::report_response_schema(communication_assessed),
             "maxOutputTokens": 16384,
 
             // Thinking tokens come out of `maxOutputTokens`, and raising the

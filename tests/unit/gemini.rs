@@ -314,7 +314,7 @@ async fn report_transport_fixture_with_body(
     let result = generate_report_transport(
         &keys,
         &url,
-        &generate_report_request("prompt", EDITOR, GENERATION_SEED),
+        &generate_report_request("prompt", EDITOR, true, GENERATION_SEED),
         &mut budget,
         backoff,
         "test-room",
@@ -426,7 +426,7 @@ async fn a_key_ruled_out_during_the_backoff_is_not_retried() {
     let result = generate_report_transport(
         &keys,
         &url,
-        &generate_report_request("prompt", EDITOR, GENERATION_SEED),
+        &generate_report_request("prompt", EDITOR, true, GENERATION_SEED),
         &mut budget,
         REPORT_RETRY_BACKOFF,
         "test-room",
@@ -835,6 +835,7 @@ fn rounds(behavioral_opened: bool) -> crate::agent::ReportRounds {
     crate::agent::ReportRounds {
         behavioral_opened,
         follow_ups_released: true,
+        candidate_turns: 1,
     }
 }
 
@@ -963,8 +964,10 @@ fn report_retry_backoff_doubles_from_the_first_wait() {
 
 #[test]
 fn report_requests_are_session_local_and_never_reuse_personalized_output() {
-    let first = generate_report_request("session-a private evidence", EDITOR, GENERATION_SEED);
-    let second = generate_report_request("session-b private evidence", EDITOR, GENERATION_SEED);
+    let first =
+        generate_report_request("session-a private evidence", EDITOR, true, GENERATION_SEED);
+    let second =
+        generate_report_request("session-b private evidence", EDITOR, true, GENERATION_SEED);
     assert_ne!(first, second);
     assert!(first.to_string().contains("session-a private evidence"));
     assert!(!first.to_string().contains("session-b private evidence"));
@@ -989,6 +992,7 @@ pub(crate) async fn generate_report_at(
         keys,
         url: url.to_string(),
         material: EDITOR,
+        communication_assessed: true,
         budget: ReportCallBudget::new(),
         backoff,
         observer: None,
@@ -1631,7 +1635,19 @@ fn a_lone_unsafe_check_after_both_repairs_still_reaches_the_card() {
     let output = report_with_self_review(2, json!(["Notice whether you sounded confident."]));
     let raw = last_attempt_for(&output, problem)
         .expect("one unsafe coaching check must not lose the evaluation");
-    let card = crate::agent::final_report(Some(&raw), 1, None, problem);
+    let card = crate::agent::final_report(
+        Some(&raw),
+        1,
+        None,
+        problem,
+        crate::agent::ReportRounds {
+            behavioral_opened: true,
+            follow_ups_released: true,
+            candidate_turns: 1,
+        },
+        InterviewMode::Coding,
+        false,
+    );
     assert!(card.get("incomplete").is_none(), "{card}");
     assert_eq!(card["codingScore"], 82);
     assert_eq!(card["hintsUsed"], 1);
@@ -1911,6 +1927,7 @@ async fn a_misrecognized_turn_neither_appears_in_nor_decides_the_report() {
         evidence: "",
         behavioral_round: crate::agent::BehavioralRound::NeverOpened,
         follow_ups_released: false,
+        candidate_turns: 6,
     });
     let key = std::env::var("CODETRIAL_ENV")
         .ok()
@@ -2646,7 +2663,7 @@ fn report_generation_request_matches_python_report_model_config() {
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-report:generateContent"
     );
 
-    let request = generate_report_request("score this", EDITOR, GENERATION_SEED);
+    let request = generate_report_request("score this", EDITOR, true, GENERATION_SEED);
     assert_eq!(request["contents"][0]["parts"][0]["text"], "score this");
 
     // The constant half goes first, as the system instruction, so every report
@@ -2656,7 +2673,7 @@ fn report_generation_request_matches_python_report_model_config() {
         crate::agent::report_system_instruction(InterviewMode::Coding)
     );
     assert_eq!(
-        generate_report_request("another session", EDITOR, GENERATION_SEED)["systemInstruction"],
+        generate_report_request("another session", EDITOR, true, GENERATION_SEED)["systemInstruction"],
         request["systemInstruction"]
     );
     assert_eq!(
@@ -2673,6 +2690,7 @@ fn report_generation_request_matches_python_report_model_config() {
             mode: InterviewMode::Coding,
             boards: &[("Example drawing", &[0xff, 0xd8, 0xff])],
         },
+        true,
         GENERATION_SEED,
     );
     assert_eq!(
@@ -2693,6 +2711,7 @@ fn report_generation_request_matches_python_report_model_config() {
                 ("Final board", &[0xff, 0xd8, 0x00]),
             ],
         },
+        true,
         GENERATION_SEED,
     );
 
@@ -2739,7 +2758,7 @@ fn report_generation_request_matches_python_report_model_config() {
     );
     assert_eq!(
         request["generationConfig"]["responseSchema"],
-        crate::agent::report_response_schema()
+        crate::agent::report_response_schema(true)
     );
 }
 
@@ -3373,7 +3392,7 @@ fn the_interim_review_asks_for_bounded_prose_and_no_thinking() {
     );
 
     // The report's own config still goes through the shared envelope unchanged.
-    let report = generate_report_request("write the debrief", EDITOR, GENERATION_SEED);
+    let report = generate_report_request("write the debrief", EDITOR, true, GENERATION_SEED);
     assert_eq!(
         report["generationConfig"]["responseMimeType"],
         "application/json"
@@ -3983,7 +4002,7 @@ async fn quota_regeneration_waits_until_the_whole_key_rotation_can_make_a_call()
         generate_content_once(
             &selected,
             &url,
-            &generate_report_request("same frozen prompt", EDITOR, GENERATION_SEED),
+            &generate_report_request("same frozen prompt", EDITOR, true, GENERATION_SEED),
             REPORT_ATTEMPT_TIMEOUT,
             "quota-regeneration",
         )
@@ -4077,7 +4096,7 @@ async fn concurrent_quota_exhaustion_keeps_its_delay_after_a_report_503() {
     let error = generate_report_transport(
         &keys,
         &url,
-        &generate_report_request("frozen prompt", EDITOR, GENERATION_SEED),
+        &generate_report_request("frozen prompt", EDITOR, true, GENERATION_SEED),
         &mut budget,
         Duration::ZERO,
         "concurrent-quota",
@@ -4215,7 +4234,19 @@ fn a_success_criterion_still_unsafe_after_both_repairs_is_replaced_and_scored() 
         raw["improvementPlan"][0]["successCriterion"], "State it independently",
         "a criterion with nothing unsafe is left as the model wrote it"
     );
-    let card = crate::agent::final_report(Some(&raw), 0, None, report_problem());
+    let card = crate::agent::final_report(
+        Some(&raw),
+        0,
+        None,
+        report_problem(),
+        crate::agent::ReportRounds {
+            behavioral_opened: true,
+            follow_ups_released: true,
+            candidate_turns: 1,
+        },
+        InterviewMode::Coding,
+        false,
+    );
     assert!(card.get("incomplete").is_none(), "{card}");
     assert_eq!(card["codingScore"], 82);
 

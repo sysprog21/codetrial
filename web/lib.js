@@ -821,17 +821,17 @@ const textEncoder = new TextEncoder();
 /// function-local, moving it left the whole suite green with the supported-card
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
-  bundleVersion: 39,
+  bundleVersion: 40,
   livePromptVersion: 30,
-  reportPromptVersion: 23,
-  reportSchemaVersion: 3,
+  reportPromptVersion: 24,
+  reportSchemaVersion: 4,
   rubricVersion: 1,
 };
 
 /// Report schemas this build can compare with the active rubric. Prompt-only
 /// bundle bumps retain the same score meaning, so compatibility is a predicate
 /// over provenance rather than a list that every prompt edit can forget.
-export const SCORABLE_SCHEMAS = [1, 2, 3];
+export const SCORABLE_SCHEMAS = [1, 2, 3, 4];
 
 /// The report's contract bundle, and whether this build can score against it.
 ///
@@ -1402,7 +1402,8 @@ export function sanitizeReport(raw) {
     rounds: roundSummary,
     endReason: endReason(raw?.endReason),
     codingScore: score(raw?.codingScore),
-    communicationScore: score(raw?.communicationScore),
+    communicationScore:
+      raw?.communicationScore === null ? null : score(raw?.communicationScore),
     decision: raw?.decision === "HIRE" ? "HIRE" : "NO_HIRE",
     summary:
       typeof raw?.summary === "string"

@@ -2182,6 +2182,36 @@ test("a whiteboard report shows the board where the code block would be", () => 
   assert.match(reportMarkdown(session), /## Final code \(Python\)/);
 });
 
+test("a silent session renders communication as not assessed", () => {
+  const report = sanitizeReport({
+    codingScore: 85,
+    communicationScore: null,
+    decision: "NO_HIRE",
+    summary: "Coding was assessed; communication was not assessed.",
+    hintsUsed: 0,
+    codingFeedback: { strengths: ["Correct solution"], improvements: [] },
+    communicationFeedback: {
+      strengths: [],
+      improvements: [],
+    },
+  });
+  const session = {
+    report,
+    problemTitle: "Chargeback Pair Match",
+    language: "python",
+    code: "return [0, 1]",
+  };
+
+  const card = reportMarkup(session);
+  assert.match(card, /Interviewer communication/);
+  assert.match(card, /Not assessed/);
+  assert.doesNotMatch(card, />null<span> \/ 100/);
+
+  const markdown = reportMarkdown(session);
+  assert.match(markdown, /\| Communication \| Not assessed \|/);
+  assert.doesNotMatch(markdown, /Communication \| null \/ 100/);
+});
+
 test("a whiteboard report walks the board step by step under the names the candidate saw", () => {
   const image = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
   const later = "data:image/jpeg;base64,/9j/4BBQSkZJRg==";

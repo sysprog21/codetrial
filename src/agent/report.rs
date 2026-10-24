@@ -124,7 +124,7 @@ pub fn fallback_report(hints_used: u32, note: &str) -> serde_json::Value {
     })
 }
 
-pub fn report_response_schema() -> serde_json::Value {
+pub fn report_response_schema(communication_assessed: bool) -> serde_json::Value {
     // `responseSchema` accepts only Gemini's OpenAPI subset, which has no
     // `additionalProperties`: sending it fails the whole call with a 400 naming
     // an unknown field, so every report came back as the incomplete fallback.
@@ -138,10 +138,21 @@ pub fn report_response_schema() -> serde_json::Value {
             "items": { "type": "STRING" }
         })
     };
-    let feedback = serde_json::json!({
+    let coding_feedback = serde_json::json!({
         "type": "OBJECT",
         "propertyOrdering": ["strengths", "improvements"],
         "properties": { "strengths": strings(2, 4), "improvements": strings(2, 4) },
+        "required": ["strengths", "improvements"]
+    });
+    let communication_min = if communication_assessed { 2 } else { 0 };
+    let communication_max = if communication_assessed { 4 } else { 0 };
+    let communication_feedback = serde_json::json!({
+        "type": "OBJECT",
+        "propertyOrdering": ["strengths", "improvements"],
+        "properties": {
+            "strengths": strings(communication_min, communication_max),
+            "improvements": strings(communication_min, communication_max)
+        },
         "required": ["strengths", "improvements"]
     });
     let plan = serde_json::json!({
@@ -182,9 +193,13 @@ pub fn report_response_schema() -> serde_json::Value {
         "propertyOrdering": ["codingScore", "communicationScore", "decision", "summary", "codingFeedback", "communicationFeedback", "improvementPlan", "frameworkAssessment", "followUps"],
         "properties": {
             "codingScore": { "type": "INTEGER", "minimum": 0, "maximum": 100 },
-            "communicationScore": { "type": "INTEGER", "minimum": 0, "maximum": 100 },
+            "communicationScore": if communication_assessed {
+                serde_json::json!({ "type": "INTEGER", "minimum": 0, "maximum": 100 })
+            } else {
+                serde_json::json!({ "type": "INTEGER", "minimum": 0, "maximum": 100, "nullable": true })
+            },
             "decision": { "type": "STRING", "enum": ["HIRE", "NO_HIRE"] },
-            "summary": text(), "codingFeedback": feedback.clone(), "communicationFeedback": feedback,
+            "summary": text(), "codingFeedback": coding_feedback, "communicationFeedback": communication_feedback,
             "improvementPlan": { "type": "ARRAY", "minItems": 0, "maxItems": 8, "items": plan },
             "frameworkAssessment": {
                 "type": "OBJECT", "propertyOrdering": ["rubricVersion", "phases"],
@@ -208,32 +223,19 @@ pub fn report_response_schema() -> serde_json::Value {
     })
 }
 
-pub fn validate_report(
-    raw: &serde_json::Value,
-    hints_used: u32,
-    problem: &Problem,
-) -> Result<serde_json::Value, Vec<String>> {
-    let mut report = validate_report_candidate(raw, problem)?;
-    report
-        .as_object_mut()
-        .expect("validated object")
-        .insert("hintsUsed".to_string(), serde_json::json!(hints_used));
-    Ok(report)
-}
-
 /// Whether a model response is a report, and the report if it is.
 ///
 /// What comes back is not `raw`: the fields the server owns are applied to the
 /// accepted copy, so the plan is in its final order and the phase rows carry
 /// the tags that follow from it. A caller that keeps `raw` instead keeps a
 /// report the model happened to order, which is not the one the candidate is
-/// shown. `validate_report` adds the last of those fields, `hintsUsed`, which
-/// is counted here rather than claimed by the model.
+/// shown. The publish boundary adds the last server-owned field, `hintsUsed`,
+/// which is counted here rather than claimed by the model.
 pub fn validate_report_candidate(
     raw: &serde_json::Value,
     problem: &Problem,
 ) -> Result<serde_json::Value, Vec<String>> {
-    validate_report_judging(raw, problem, problem.variant().follow_ups.len())
+    validate_report_judging(raw, problem, problem.variant().follow_ups.len(), true)
 }
 
 /// `validate_report_candidate`, judging only the first `judged` follow-ups:
@@ -243,6 +245,7 @@ fn validate_report_judging(
     raw: &serde_json::Value,
     problem: &Problem,
     judged: usize,
+    communication_assessed: bool,
 ) -> Result<serde_json::Value, Vec<String>> {
     let snapped = snap_plan_weaknesses(raw);
     let raw = &snapped;
@@ -276,13 +279,20 @@ fn validate_report_judging(
         "$.codingScore",
         &mut errors,
     );
-    strict_integer(
-        object.get("communicationScore"),
-        0,
-        100,
-        "$.communicationScore",
-        &mut errors,
-    );
+    if communication_assessed {
+        strict_integer(
+            object.get("communicationScore"),
+            0,
+            100,
+            "$.communicationScore",
+            &mut errors,
+        );
+    } else if object.get("communicationScore") != Some(&serde_json::Value::Null) {
+        errors.push(
+            "$.communicationScore: expected null because the transcript has zero candidate turns"
+                .to_string(),
+        );
+    }
     strict_enum(
         object.get("decision"),
         &["HIRE", "NO_HIRE"],
@@ -295,8 +305,33 @@ fn validate_report_judging(
         "$.summary",
         &mut errors,
     );
-    for key in ["codingFeedback", "communicationFeedback"] {
-        validate_feedback(object.get(key), &format!("$.{key}"), &mut errors);
+    validate_feedback(
+        object.get("codingFeedback"),
+        "$.codingFeedback",
+        2,
+        2,
+        &mut errors,
+    );
+    validate_feedback(
+        object.get("communicationFeedback"),
+        "$.communicationFeedback",
+        if communication_assessed { 2 } else { 0 },
+        if communication_assessed { 2 } else { 0 },
+        &mut errors,
+    );
+    if !communication_assessed {
+        for key in ["strengths", "improvements"] {
+            if object
+                .get("communicationFeedback")
+                .and_then(|feedback| feedback.get(key))
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|items| !items.is_empty())
+            {
+                errors.push(format!(
+                    "$.communicationFeedback.{key}: expected an empty array because the transcript has zero candidate turns"
+                ));
+            }
+        }
     }
     let improvements = object
         .get("codingFeedback")
@@ -423,6 +458,9 @@ fn kept_follow_ups(entries: &serde_json::Value, judged: usize) -> Vec<(usize, se
 pub struct ReportRounds {
     pub behavioral_opened: bool,
     pub follow_ups_released: bool,
+    /// Trusted server-side count of candidate transcript turns. Zero means
+    /// there is no communication evidence to score.
+    pub candidate_turns: u32,
 }
 
 impl ReportRounds {
@@ -430,6 +468,7 @@ impl ReportRounds {
         Self {
             behavioral_opened: super::BehavioralRound::of(state).opened(),
             follow_ups_released: super::coding_round_complete(state),
+            candidate_turns: state.evidence_ledger.conversation.candidate_turns,
         }
     }
 }
@@ -461,14 +500,15 @@ pub fn validate_report_for_round(
     } else {
         0
     };
-    let report = validate_report_judging(raw, problem, judged).and_then(|report| {
-        let errors = example_drawing_judgments(&report, problem, mode, drawing_received);
-        if errors.is_empty() {
-            Ok(report)
-        } else {
-            Err(errors)
-        }
-    });
+    let report = validate_report_judging(raw, problem, judged, rounds.candidate_turns > 0)
+        .and_then(|report| {
+            let errors = example_drawing_judgments(&report, problem, mode, drawing_received);
+            if errors.is_empty() {
+                Ok(report)
+            } else {
+                Err(errors)
+            }
+        });
     if rounds.behavioral_opened {
         return report;
     }
@@ -1408,7 +1448,13 @@ fn validate_string_array(
     }
 }
 
-fn validate_feedback(value: Option<&serde_json::Value>, path: &str, errors: &mut Vec<String>) {
+fn validate_feedback(
+    value: Option<&serde_json::Value>,
+    path: &str,
+    strengths_min: usize,
+    improvements_min: usize,
+    errors: &mut Vec<String>,
+) {
     let Some(object) = value.and_then(serde_json::Value::as_object) else {
         errors.push(format!("{path}: expected object"));
         return;
@@ -1416,7 +1462,7 @@ fn validate_feedback(value: Option<&serde_json::Value>, path: &str, errors: &mut
     exact_keys(object, &["strengths", "improvements"], path, errors);
     validate_string_array(
         object.get("strengths"),
-        2,
+        strengths_min,
         4,
         400,
         &format!("{path}.strengths"),
@@ -1424,7 +1470,7 @@ fn validate_feedback(value: Option<&serde_json::Value>, path: &str, errors: &mut
     );
     validate_string_array(
         object.get("improvements"),
-        2,
+        improvements_min,
         4,
         400,
         &format!("{path}.improvements"),
@@ -1638,12 +1684,23 @@ pub fn final_report(
     hints_used: u32,
     error_note: Option<&str>,
     problem: &Problem,
+    rounds: ReportRounds,
+    mode: InterviewMode,
+    drawing_received: bool,
 ) -> serde_json::Value {
     let (reason, errors) = match (raw_report, error_note) {
-        (Some(raw_report), None) => match validate_report(raw_report, hints_used, problem) {
-            Ok(report) => return report,
-            Err(errors) => ("report schema validation failed", errors),
-        },
+        (Some(raw_report), None) => {
+            match validate_report_for_round(raw_report, problem, rounds, mode, drawing_received) {
+                Ok(mut report) => {
+                    report
+                        .as_object_mut()
+                        .expect("validated object")
+                        .insert("hintsUsed".to_string(), serde_json::json!(hints_used));
+                    return report;
+                }
+                Err(errors) => ("report schema validation failed", errors),
+            }
+        }
         _ => (error_note.unwrap_or("report generation failed"), Vec::new()),
     };
 

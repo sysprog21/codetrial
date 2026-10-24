@@ -695,6 +695,7 @@ fn candidate_code_cannot_close_its_block_in_a_side_call_or_the_report() {
         evidence: "",
         behavioral_round: crate::agent::BehavioralRound::NeverOpened,
         follow_ups_released: false,
+        candidate_turns: 1,
     });
     for prompt in [judge, report] {
         // Only the prompt's own markers remain: one editor block, opened and

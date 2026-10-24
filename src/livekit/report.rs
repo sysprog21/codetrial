@@ -858,7 +858,15 @@ fn report_value(
     generated: GeneratedReport,
 ) -> serde_json::Value {
     let mut report = match generated {
-        Ok(Ok(raw)) => final_report(Some(&raw), state.hints_used, None, boot.problem),
+        Ok(Ok(raw)) => final_report(
+            Some(&raw),
+            state.hints_used,
+            None,
+            boot.problem,
+            crate::agent::ReportRounds::of(state),
+            boot.interview_mode,
+            boot.example_drawing_enabled && state.board_snapshots > 0,
+        ),
         Ok(Err(error)) => final_report(
             None,
             state.hints_used,
@@ -870,6 +878,9 @@ fn report_value(
                 api_key,
             )),
             boot.problem,
+            crate::agent::ReportRounds::of(state),
+            boot.interview_mode,
+            boot.example_drawing_enabled && state.board_snapshots > 0,
         ),
 
         // `Elapsed` Displays as "deadline has elapsed", which does not say
@@ -893,6 +904,9 @@ fn report_value(
                 api_key,
             )),
             boot.problem,
+            crate::agent::ReportRounds::of(state),
+            boot.interview_mode,
+            boot.example_drawing_enabled && state.board_snapshots > 0,
         ),
     };
     stamp_report_debrief(&mut report, boot, state);
@@ -1159,6 +1173,7 @@ fn report_prompt_text(
         evidence: &evidence,
         behavioral_round: crate::agent::BehavioralRound::of(state),
         follow_ups_released: crate::agent::coding_round_complete(state),
+        candidate_turns: state.evidence_ledger.conversation.candidate_turns,
     })
 }
 

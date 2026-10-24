@@ -84,8 +84,7 @@ pub(crate) use report::{
 };
 pub use report::{
     MAX_SUMMARY_TEXT, ReportRounds, fallback_report, final_report, names_published_problem,
-    report_response_schema, spelled_words, validate_report, validate_report_candidate,
-    validate_report_for_round,
+    report_response_schema, spelled_words, validate_report_candidate, validate_report_for_round,
 };
 
 // Only the tests read these, and a report the filter changed is the one place
@@ -180,11 +179,11 @@ pub const THINKING_CHECK_IN_S: u64 = 120;
 pub(crate) const THINKING_RELEASE_COOLDOWN: std::time::Duration =
     std::time::Duration::from_secs(10);
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 39;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 40;
 pub const LIVE_PROMPT_VERSION: u32 = 30;
-pub const REPORT_PROMPT_VERSION: u32 = 23;
+pub const REPORT_PROMPT_VERSION: u32 = 24;
 pub const RUBRIC_VERSION: u32 = 1;
-pub const REPORT_SCHEMA_VERSION: u32 = 3;
+pub const REPORT_SCHEMA_VERSION: u32 = 4;
 
 pub fn interview_contract_json() -> serde_json::Value {
     serde_json::json!({

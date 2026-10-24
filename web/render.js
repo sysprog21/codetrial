@@ -309,12 +309,16 @@ export function reportMarkup({
   const badge = report.incomplete
     ? `<strong class="muted">INCOMPLETE</strong>`
     : `<strong class="${hire ? "good" : "critical"}">${hire ? "HIRE" : "NO HIRE"}</strong>`;
+  const communicationScore =
+    report.communicationScore === null
+      ? "<strong>Not assessed</strong>"
+      : `<strong>${escapeHtml(report.communicationScore)}<span> / 100</span></strong>`;
   const scores = report.incomplete
     ? ""
     : `
       <div class="score-grid">
         <div><p>${workTitle}</p><strong>${escapeHtml(report.codingScore)}<span> / 100</span></strong></div>
-        <div><p>Interviewer communication</p><strong>${escapeHtml(report.communicationScore)}<span> / 100</span></strong></div>
+        <div><p>Interviewer communication</p>${communicationScore}</div>
       </div>
       <p><strong>${escapeHtml(report.hintsUsed)}</strong> hints used during the session</p>`;
   const feedback = report.incomplete
@@ -727,7 +731,7 @@ export function reportMarkdown({
         "| Metric | Score |",
         "|---|---|",
         `| ${workTitle} | ${mdText(report.codingScore)} / 100 |`,
-        `| Communication | ${mdText(report.communicationScore)} / 100 |`,
+        `| Communication | ${report.communicationScore === null ? "Not assessed" : `${mdText(report.communicationScore)} / 100`} |`,
         `| Hints used | ${mdText(report.hintsUsed)} |`,
         "",
         "## Committee summary",

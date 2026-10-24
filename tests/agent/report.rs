@@ -14,6 +14,7 @@ fn rounds(behavioral_opened: bool) -> ReportRounds {
     ReportRounds {
         behavioral_opened,
         follow_ups_released: true,
+        candidate_turns: 1,
     }
 }
 
@@ -159,10 +160,131 @@ fn coding_feedback_cannot_deduct_for_drawings_or_recommend_them_for_points() {
 }
 
 #[test]
+fn a_silent_candidate_has_no_communication_assessment() {
+    let problem = get_problem(Some("two-sum"));
+    let silent = ReportRounds {
+        candidate_turns: 0,
+        ..rounds(true)
+    };
+    let mut report = valid_strict_report();
+    report["communicationScore"] = Value::Null;
+    report["communicationFeedback"]["strengths"] = json!([]);
+    report["communicationFeedback"]["improvements"] = json!([]);
+    report["improvementPlan"]
+        .as_array_mut()
+        .expect("fixture plan is an array")
+        .truncate(2);
+
+    let accepted =
+        validate_report_for_round(&report, problem, silent, InterviewMode::Coding, false)
+            .expect("zero candidate turns make communication unassessed");
+    assert!(accepted["communicationScore"].is_null());
+    assert_eq!(accepted["communicationFeedback"]["strengths"], json!([]));
+    assert_eq!(accepted["communicationFeedback"]["improvements"], json!([]));
+
+    let published = final_report(
+        Some(&report),
+        0,
+        None,
+        problem,
+        silent,
+        InterviewMode::Coding,
+        false,
+    );
+    assert!(!published["incomplete"].as_bool().unwrap_or(false));
+    assert!(published["communicationScore"].is_null());
+    assert_eq!(published["communicationFeedback"]["strengths"], json!([]));
+    assert_eq!(
+        published["communicationFeedback"]["improvements"],
+        json!([])
+    );
+
+    let mut invented_score = report.clone();
+    invented_score["communicationScore"] = json!(65);
+    let errors = validate_report_for_round(
+        &invented_score,
+        problem,
+        silent,
+        InterviewMode::Coding,
+        false,
+    )
+    .unwrap_err()
+    .join("\n");
+    assert!(errors.contains("$.communicationScore"), "{errors}");
+
+    let mut invented_strength = report.clone();
+    invented_strength["communicationFeedback"]["strengths"] = json!(["Responded to prompts"]);
+    let errors = validate_report_for_round(
+        &invented_strength,
+        problem,
+        silent,
+        InterviewMode::Coding,
+        false,
+    )
+    .unwrap_err()
+    .join("\n");
+    assert!(
+        errors.contains("$.communicationFeedback.strengths"),
+        "{errors}"
+    );
+
+    let mut invented_improvement = report;
+    invented_improvement["communicationFeedback"]["improvements"] = json!(["Explain the approach"]);
+    let errors = validate_report_for_round(
+        &invented_improvement,
+        problem,
+        silent,
+        InterviewMode::Coding,
+        false,
+    )
+    .unwrap_err()
+    .join("\n");
+    assert!(
+        errors.contains("$.communicationFeedback.improvements"),
+        "{errors}"
+    );
+}
+
+#[test]
+fn a_candidate_turn_still_requires_a_numeric_communication_assessment() {
+    let mut report = valid_strict_report();
+    report["communicationScore"] = Value::Null;
+    report["communicationFeedback"]["strengths"] = json!([]);
+    report["communicationFeedback"]["improvements"] = json!([]);
+
+    let errors = validate_report_for_round(
+        &report,
+        get_problem(Some("two-sum")),
+        rounds(true),
+        InterviewMode::Coding,
+        false,
+    )
+    .unwrap_err()
+    .join("\n");
+    assert!(errors.contains("$.communicationScore"), "{errors}");
+    assert!(
+        errors.contains("$.communicationFeedback.strengths"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("$.communicationFeedback.improvements"),
+        "{errors}"
+    );
+}
+
+#[test]
 fn strict_report_validation_is_atomic_and_server_owns_hints() {
     let valid = valid_strict_report();
-    let report =
-        validate_report(&valid, 3, get_problem(Some("two-sum"))).expect("fixture is valid");
+    let report = final_report(
+        Some(&valid),
+        3,
+        None,
+        get_problem(Some("two-sum")),
+        rounds(true),
+        InterviewMode::Coding,
+        false,
+    );
+    assert!(!report["incomplete"].as_bool().unwrap_or(false));
     assert_eq!(report["hintsUsed"], 3);
 
     let mut hostile = valid.clone();
@@ -179,7 +301,15 @@ fn strict_report_validation_is_atomic_and_server_owns_hints() {
     assert!(errors.contains("$.decision"));
     assert!(errors.contains("$.extra"));
 
-    let incomplete = final_report(Some(&hostile), 3, None, get_problem(Some("two-sum")));
+    let incomplete = final_report(
+        Some(&hostile),
+        3,
+        None,
+        get_problem(Some("two-sum")),
+        rounds(true),
+        InterviewMode::Coding,
+        false,
+    );
     assert_eq!(incomplete["incomplete"], true);
     assert!(incomplete.get("codingScore").is_none());
     assert!(incomplete.get("decision").is_none());
@@ -666,12 +796,23 @@ fn final_report_matches_frontend_publish_contract() {
         },
         "communicationFeedback": "bad",
     });
-    let sanitized = final_report(Some(&raw), 2, None, get_problem(Some("two-sum")));
+    let sanitized = final_report(
+        Some(&raw),
+        2,
+        None,
+        get_problem(Some("two-sum")),
+        rounds(true),
+        InterviewMode::Coding,
+        false,
+    );
     let fallback = final_report(
         None,
         1,
         Some("model unavailable"),
         get_problem(Some("two-sum")),
+        rounds(true),
+        InterviewMode::Coding,
+        false,
     );
 
     assert_eq!(sanitized["incomplete"], true);
@@ -954,7 +1095,7 @@ fn phase_rows_need_no_tags_from_the_model() {
     validate_report_candidate(&accepted, get_problem(Some("two-sum")))
         .expect("the derived tags validate again");
     assert!(
-        report_response_schema()["properties"]["frameworkAssessment"]["properties"]["phases"]
+        report_response_schema(true)["properties"]["frameworkAssessment"]["properties"]["phases"]
             ["items"]["properties"]
             .get("weaknessTags")
             .is_none()
@@ -989,6 +1130,7 @@ fn follow_up_judgments_are_mended_but_their_text_is_scanned() {
     let unreleased = ReportRounds {
         behavioral_opened: true,
         follow_ups_released: false,
+        candidate_turns: 1,
     };
     let report = validate_report_for_round(&raw, problem, unreleased, InterviewMode::Coding, false)
         .expect("nothing is judged");
@@ -1105,6 +1247,7 @@ fn follow_up_assessment_keeps_round_rules_and_excludes_drawing_credit() {
     let unreleased = ReportRounds {
         behavioral_opened: true,
         follow_ups_released: false,
+        candidate_turns: 1,
     };
     let accepted =
         validate_report_for_round(&report, problem, unreleased, InterviewMode::Coding, true)

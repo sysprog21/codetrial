@@ -1256,6 +1256,24 @@ test("sanitizeReport keeps an unevaluated session unevaluated", () => {
   assert.equal(scored.decision, "HIRE");
 });
 
+test("sanitizeReport preserves an unassessed communication score", () => {
+  const report = sanitizeReport({
+    interviewContract: ACTIVE_CONTRACT,
+    codingScore: 85,
+    communicationScore: null,
+    decision: "NO_HIRE",
+    communicationFeedback: {
+      strengths: [],
+      improvements: [],
+    },
+  });
+
+  assert.equal(report.codingScore, 85);
+  assert.equal(report.communicationScore, null);
+  assert.deepEqual(report.communicationFeedback.strengths, []);
+  assert.deepEqual(report.communicationFeedback.improvements, []);
+});
+
 test("sanitizeReport preserves a well-formed agent report", () => {
   const report = sanitizeReport({
     // Every report the agent writes names its loop, so a well-formed one has
@@ -3639,7 +3657,7 @@ test("every reconnect reason the agent can send has its own wording", () => {
 });
 
 test("interviewer provenance survives report migration and storage without invented defaults", () => {
-  for (const reportSchemaVersion of [2, 3]) {
+  for (const reportSchemaVersion of [2, 3, 4]) {
     for (const incomplete of [false, true]) {
       const raw = {
         interviewContract: { ...ACTIVE_CONTRACT, reportSchemaVersion },

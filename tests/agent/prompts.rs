@@ -239,8 +239,8 @@ fn prompt_golden_digest_matches_versions() {
     // its hash is a string nothing checks. The pair is still asserted, because
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
-    let recorded_versions = (30, 23);
-    let recorded_digest = "d729da5e7a47514cb51953d0e0b3063e243929fc9d2c2bc4f1170474de07ac4f";
+    let recorded_versions = (30, 24);
+    let recorded_digest = "17021257f26ec5307d2c4753476db6326244bf7c4484797f2b64ee0ad34a3ec1";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -477,6 +477,7 @@ fn report_brief_states_the_hint_rung() {
         evidence: "",
         behavioral_round: BehavioralRound::Opened,
         follow_ups_released: false,
+        candidate_turns: 1,
     });
     assert!(prompt.contains("candidate reached hint rung 2 of 3"));
     assert!(prompt.contains("1 hint was volunteered rather than requested"));
@@ -513,6 +514,7 @@ fn report_prompt_names_the_practice_level() {
         evidence: "",
         behavioral_round: BehavioralRound::Opened,
         follow_ups_released: false,
+        candidate_turns: 1,
     };
     let selected = report_prompt(base);
     assert!(selected.contains("candidate practiced for intern"));
@@ -524,6 +526,54 @@ fn report_prompt_names_the_practice_level() {
     });
     assert!(absent.contains("PRACTICE LEVEL: Not specified"));
     assert!(absent.contains("Do not invent or mention a practice level"));
+}
+
+#[test]
+fn silent_report_brief_makes_communication_unassessed() {
+    let prompt = report_prompt(ReportPromptInput {
+        problem: get_problem(Some("two-sum")),
+        interview_mode: InterviewMode::Coding,
+        board_attached: false,
+        transcript: "Interviewer: Tell me how you are approaching this.",
+        rolling_assessment: "",
+        final_code: "def match_disputed_charge(nums, target):\n    return [0, 1]\n",
+        language: "python",
+        hints_used: 0,
+        hint_rung: 0,
+        volunteered_hints: 0,
+        duration_min: 45,
+        elapsed_min: 12.0,
+        test_summary: "1/1 passed",
+        practice_level: None,
+        evidence: "",
+        behavioral_round: BehavioralRound::NeverOpened,
+        follow_ups_released: false,
+        candidate_turns: 0,
+    });
+
+    assert!(prompt.contains("CANDIDATE TURNS: 0"), "{prompt}");
+    assert!(
+        prompt.contains("`communicationScore` as `null`"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains(
+            "both `communicationFeedback.strengths` and `communicationFeedback.improvements` as empty arrays"
+        ),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("Code edits, typed code comments, and test runs are not spoken responses"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("Missing communication evidence is neither positive nor negative"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("do not change it only because communication was unassessed"),
+        "{prompt}"
+    );
 }
 
 /// What the live interviewer holds is the scenario and a way to steer it, not
@@ -619,6 +669,7 @@ fn live_instructions_pose_the_variant_and_hold_no_source_or_walkthrough() {
         evidence: "",
         behavioral_round: BehavioralRound::Opened,
         follow_ups_released: false,
+        candidate_turns: 1,
     });
     assert!(report.contains("Reference notes on approaches"));
     assert!(report.contains("never name the published problem, its title, LeetCode"));
@@ -687,7 +738,7 @@ fn document_grounding_requires_consent_and_is_bounded_as_untrusted_prompt_data()
 #[test]
 fn report_schema_matches_frozen_fixture() {
     let path = "tests/golden/report-schema.json";
-    let schema = report_response_schema();
+    let schema = report_response_schema(true);
     if std::env::var_os("UPDATE_REPORT_SCHEMA_GOLDEN").is_some() {
         let mut text = serde_json::to_string_pretty(&schema).unwrap();
         text.push('\n');
@@ -697,6 +748,33 @@ fn report_schema_matches_frozen_fixture() {
         .expect("report schema fixture should parse");
     assert_eq!(schema, expected);
     assert_eq!(spoken_minutes_from_remaining_seconds(270), 4);
+}
+
+#[test]
+fn report_schema_matches_the_communication_evidence_available() {
+    let assessed = report_response_schema(true);
+    assert!(
+        assessed["properties"]["communicationScore"]
+            .get("nullable")
+            .is_none()
+    );
+    assert_eq!(
+        assessed["properties"]["communicationFeedback"]["properties"]["strengths"]["minItems"],
+        2
+    );
+
+    let silent = report_response_schema(false);
+    assert_eq!(silent["properties"]["communicationScore"]["nullable"], true);
+    for key in ["strengths", "improvements"] {
+        assert_eq!(
+            silent["properties"]["communicationFeedback"]["properties"][key]["minItems"],
+            0
+        );
+        assert_eq!(
+            silent["properties"]["communicationFeedback"]["properties"][key]["maxItems"],
+            0
+        );
+    }
 }
 
 /// The golden fixture proves the schema is stable, not that it is legal, and it
@@ -806,7 +884,7 @@ fn report_schema_uses_only_what_gemini_accepts() {
     }
 
     let mut bad = Vec::new();
-    walk(&report_response_schema(), "$", &mut bad);
+    walk(&report_response_schema(true), "$", &mut bad);
     assert!(bad.is_empty(), "the API will 400 on: {}", bad.join(", "));
 }
 
@@ -1405,19 +1483,19 @@ fn interview_contract_versions_are_one_closed_bundle() {
         "the bundle table has no row for {INTERVIEW_CONTRACT_BUNDLE_VERSION}"
     );
 
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 39);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 40);
     assert_eq!(LIVE_PROMPT_VERSION, 30);
-    assert_eq!(REPORT_PROMPT_VERSION, 23);
+    assert_eq!(REPORT_PROMPT_VERSION, 24);
     assert_eq!(RUBRIC_VERSION, 1);
-    assert_eq!(REPORT_SCHEMA_VERSION, 3);
+    assert_eq!(REPORT_SCHEMA_VERSION, 4);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 39,
+            "bundleVersion": 40,
             "livePromptVersion": 30,
-            "reportPromptVersion": 23,
+            "reportPromptVersion": 24,
             "rubricVersion": 1,
-            "reportSchemaVersion": 3,
+            "reportSchemaVersion": 4,
         })
     );
 }

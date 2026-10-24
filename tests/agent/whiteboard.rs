@@ -234,6 +234,7 @@ fn the_report_cites_the_surface_the_interview_was_held_on() {
             evidence: "",
             behavioral_round: BehavioralRound::NotConfigured,
             follow_ups_released: false,
+            candidate_turns: 1,
         })
     };
 

@@ -71,13 +71,21 @@ function shape(report, mode) {
   assert(report && typeof report === "object", `${mode}: missing report`);
   assert(report.error !== true, `${mode}: fallback report`);
   assert(Number.isInteger(report.codingScore) && report.codingScore >= 0 && report.codingScore <= 100, `${mode}: bad coding score`);
-  assert(Number.isInteger(report.communicationScore) && report.communicationScore >= 0 && report.communicationScore <= 100, `${mode}: bad communication score`);
+  assert(
+    report.communicationScore === null ||
+      (Number.isInteger(report.communicationScore) && report.communicationScore >= 0 && report.communicationScore <= 100),
+    `${mode}: bad communication score`,
+  );
   assert(["HIRE", "NO_HIRE"].includes(report.decision), `${mode}: bad decision`);
   assert(typeof report.summary === "string", `${mode}: bad summary`);
   assert(Array.isArray(report.codingFeedback?.strengths), `${mode}: bad coding strengths`);
   assert(Array.isArray(report.codingFeedback?.improvements), `${mode}: bad coding improvements`);
   assert(Array.isArray(report.communicationFeedback?.strengths), `${mode}: bad communication strengths`);
   assert(Array.isArray(report.communicationFeedback?.improvements), `${mode}: bad communication improvements`);
+  if (report.communicationScore === null) {
+    assert(report.communicationFeedback.strengths.length === 0, `${mode}: silent report has communication strengths`);
+    assert(report.communicationFeedback.improvements.length === 0, `${mode}: silent report has communication improvements`);
+  }
   assert(Number.isInteger(report.hintsUsed) && report.hintsUsed >= 0, `${mode}: bad hints`);
   return Object.keys(report).sort().join(",");
 }

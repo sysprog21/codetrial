@@ -2207,9 +2207,11 @@ const TRANSCRIPTION_REPORT_POLICY: &str = r#"- Uncertain speech and requests to 
   framework assessments, either score, feedback, or the hiring decision, and a
   report never names the language a transcript came out in. Leave framework
   phase scores null when their only support is uncertain speech.
-- Judge communicationScore and the decision rule's clear-communication half
-  from reliable evidence only: clarified speech, typed code comments, and
-  supported notes. A recognition gap is neither clear nor unclear
+- When the brief records candidate turns, judge communicationScore and the
+  decision rule's clear-communication half from reliable evidence only:
+  clarified speech, typed code comments, and supported notes. When it records
+  zero candidate turns, typed comments remain coding evidence only and do not
+  establish a communication assessment. A recognition gap is neither clear nor unclear
   communication, so it cannot by itself turn a verdict the reliable evidence
   supports into NO_HIRE, and it is never the reason given for a verdict. When
   it leaves evidence thin, say in the summary that reliable communication
@@ -2715,6 +2717,9 @@ pub struct ReportPromptInput<'a> {
     /// cannot have been raised, so the brief lists none and the debrief says
     /// none was reached without asking the model.
     pub follow_ups_released: bool,
+    /// Trusted server-side candidate transcript turns. This is deliberately
+    /// not inferred from editor activity or browser-owned counters.
+    pub candidate_turns: u32,
 }
 
 /// Where the behavioral round stood when the interview ended, in the three
@@ -2892,6 +2897,15 @@ fn report_brief(input: &ReportPromptInput<'_>) -> String {
             "BEHAVIORAL ROUND: This interview had no behavioral round. {OUT_OF_TURN_BEHAVIORAL}"
         ),
     };
+    let communication_evidence = if input.candidate_turns == 0 {
+        "CANDIDATE TURNS: 0. The server recorded no candidate transcript turns. Return `communicationScore` as `null`, return both `communicationFeedback.strengths` and `communicationFeedback.improvements` as empty arrays, and state that communication was not assessed. Code edits, typed code comments, and test runs are not spoken responses: use them only for coding assessment and never describe them as something the candidate said, explained, answered, or narrated. Missing communication evidence is neither positive nor negative: base `decision` on the evidence that was assessed and do not change it only because communication was unassessed."
+            .to_string()
+    } else {
+        format!(
+            "CANDIDATE TURNS: {}. Communication may be assessed only from reliable candidate communication in the supplied material.",
+            input.candidate_turns
+        )
+    };
 
     // The surface, in the three places a brief reads differently for it: what
     // the contract is measured by, what the candidate produced, and what
@@ -2942,6 +2956,8 @@ Common pitfalls: {}{reference_notes}
 {rolling_assessment}
 
 {}
+
+{communication_evidence}
 
 HINTS THE INTERVIEWER GAVE: {} total; the candidate reached hint rung {} of 3.
 {} A volunteered hint is evidence
@@ -3084,9 +3100,13 @@ Score two independent dimensions from 0 to 100:
    any evidence they did provide, but do not deduct for unsupported STAR parts of
    that abandoned probe.
 
-Decision rule: "HIRE" only if the performance would clear a real mid-level SWE
-onsite bar — a working, reasonably optimal solution AND clear communication.
-Otherwise "NO_HIRE".
+Decision rule: when communication was assessed, "HIRE" only if the performance
+would clear a real mid-level SWE onsite bar — a working, reasonably optimal
+solution AND clear communication. Otherwise "NO_HIRE". When the brief records
+zero candidate turns, missing communication evidence is neither positive nor
+negative: base the decision on the evidence that was assessed, and do not turn
+an otherwise supported verdict into "NO_HIRE" only because communication was
+unassessed.
 The practice level, when supplied in the brief, gives candidate-facing context
 only; it must never raise or lower the fixed mid-level hiring bar.
 The ten `frameworkAssessment` phase scores are formative coaching signals and
@@ -3119,7 +3139,8 @@ Grounding rules — a real debrief cites evidence:
   mandatory.
 
 Return ONLY the JSON object the response schema defines, no markdown fences:
-codingScore and communicationScore (integers 0-100); decision ("HIRE" or
+codingScore (integer 0-100) and communicationScore (integer 0-100, or `null`
+when the brief says the server recorded zero candidate turns); decision ("HIRE" or
 "NO_HIRE"); summary (3-4 sentences written to the candidate as "you");
 codingFeedback and communicationFeedback, each with strengths and improvements;
 improvementPlan, one item per improvement (below), each with phase, weakness,
@@ -3134,7 +3155,10 @@ grounded in the rolling assessment, the transcript, and {material}, never generi
 filler, and no item may repeat another in the same list. A session with little to praise still holds two
 distinct observations: a clarifying question asked, uncertainty admitted instead
 of guessed at, a decision explained, a boundary noticed, effort sustained under
-time pressure. Name two of those rather than saying one thing twice.
+time pressure. Name two of those rather than saying one thing twice. The sole
+exception is a brief with zero candidate turns: communication strengths and
+improvements must both be empty, because editor and test activity cannot
+establish spoken communication or ground a communication critique.
 
 For `improvementPlan`, take every string in `codingFeedback.improvements` and
 `communicationFeedback.improvements` together and emit one item for each, so the
