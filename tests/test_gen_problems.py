@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import tempfile
 import unittest
@@ -13,6 +14,13 @@ SPEC = importlib.util.spec_from_file_location(
 GEN = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader
 SPEC.loader.exec_module(GEN)
+
+CARDS_SPEC = importlib.util.spec_from_file_location(
+    "gen_problem_cards", ROOT / "scripts/gen-problem-cards.py"
+)
+CARDS = importlib.util.module_from_spec(CARDS_SPEC)
+assert CARDS_SPEC.loader
+CARDS_SPEC.loader.exec_module(CARDS)
 
 
 class ProblemMetadataGeneratorTests(unittest.TestCase):
@@ -94,6 +102,47 @@ class ProblemMetadataGeneratorTests(unittest.TestCase):
         serialized = json.dumps(metadata).lower()
         for forbidden in ("optimal", "pitfall", "hintladder", "expecteddiscussion"):
             self.assertNotIn(forbidden, serialized)
+
+    def test_generated_categories_maps_study_plan_and_original_fallbacks(self):
+        problems = [
+            {
+                "id": "climbing-stairs",
+                "difficulty": "Easy",
+                "topics": ["Math", "Dynamic Programming"],
+            },
+            {
+                "id": "fixed-capacity-ring-buffer",
+                "origin": "original",
+                "difficulty": "Medium",
+                "topics": ["Array", "Design"],
+            },
+        ]
+        pages = {
+            "climbing-stairs": {"page": "step-ways", "title": "Step Ways"},
+            "fixed-capacity-ring-buffer": {
+                "page": "bounded-event-queue",
+                "title": "Bounded Event Queue",
+            },
+        }
+        manifest = {
+            "sections": [{"topic": "1D DP", "slugs": ["climbing-stairs"]}],
+        }
+        self.assertEqual(
+            json.loads(CARDS.generated_categories(problems, pages, manifest)),
+            {
+                "step-ways": "1D DP",
+                "bounded-event-queue": "Design",
+            },
+        )
+        self.assertEqual(CARDS.main(["--check"]), 0)
+        with tempfile.TemporaryDirectory() as temporary:
+            stale = Path(temporary) / "problem-categories.json"
+            stale.write_text("{}\n", encoding="utf-8")
+            stderr = io.StringIO()
+            self.assertEqual(
+                CARDS.main(["--check"], category_map=stale, stderr=stderr), 1
+            )
+            self.assertIn("web/problem-categories.json", stderr.getvalue())
 
 
 class VariantValidationTests(unittest.TestCase):

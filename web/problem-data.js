@@ -18,6 +18,7 @@
 // after the scenario-name lookup misses.
 let pageMap;
 let topicMap;
+let categoryMap;
 
 const judges = new Map();
 
@@ -108,6 +109,17 @@ export function loadTopicMap() {
     throw error;
   });
   return topicMap;
+}
+
+/// The page-to-category lookup for same-category report comparisons, fetched
+/// when a report is rendered so the initial lobby HTML never reveals which
+/// study-plan section a scenario belongs to before the interview.
+export function loadCategoryMap() {
+  categoryMap ??= fetchJson("/problem-categories.json").catch((error) => {
+    categoryMap = undefined;
+    throw error;
+  });
+  return categoryMap;
 }
 
 /// `page` is the problem's page name, the only name the browser uses for it.

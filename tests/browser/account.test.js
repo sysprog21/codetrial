@@ -17,6 +17,9 @@ import {
   reviewHistoryKey,
   saveReportHistory,
 } from "../../web/history.js";
+import { compareCategoryAttempt } from "../../web/practice-insights.js";
+import { normalizeProgressEntries } from "../../web/progress.js";
+import { categoryComparisonMarkup, reportMarkdown } from "../../web/render.js";
 import {
   assertIncludesCompact,
   functionBody,
@@ -1209,4 +1212,197 @@ test("a stored history that is not a list reads as no history", () => {
   }
   // And unparseable JSON keeps the answer it already had.
   assert.deepEqual(stored("{not json"), []);
+});
+
+test("post-interview and lobby reports wire same-category comparison into HTML and Markdown", () => {
+  const interview = read("interview.js");
+  const app = read("app.js");
+
+  assert.match(
+    functionBody(interview, "renderReport"),
+    /void updateCategoryComparison\(state\.report\)/,
+  );
+  assert.match(
+    functionBody(interview, "updateCategoryComparison"),
+    /loadCategoryMap\(\)\.catch\(\(\) => null\)/,
+  );
+  assert.match(
+    functionBody(interview, "updateCategoryComparison"),
+    /compareCategoryAttempt\(/,
+  );
+  assert.match(
+    functionBody(interview, "buildMarkdown"),
+    /categoryComparison: state\.categoryComparison/,
+  );
+
+  assert.match(
+    functionBody(app, "renderAttemptHistory"),
+    /compareCategoryAttempt\(\s*progressNormalized,\s*attempt,\s*historyCategories,?\s*\)/,
+  );
+  assert.match(functionBody(app, "downloadSavedReport"), /categoryComparison/);
+});
+
+test("updateCategoryComparison renders category progress and degrades cleanly when categories fail", async () => {
+  const interview = read("interview.js");
+  const bodies = [
+    "loadReportHistory",
+    "updateCategoryComparison",
+    "buildMarkdown",
+  ]
+    .map((name) => `${functionBody(interview, name)}\n}`)
+    .join("\n");
+  const localPrior = {
+    id: "prev-local",
+    problemId: "step-ways",
+    problemTitle: "Local Step Ways",
+    date: "2026-01-01T00:00:00Z",
+    report: {
+      codingScore: 60,
+      communicationScore: 70,
+      decision: "NO_HIRE",
+      hintsUsed: 2,
+    },
+  };
+  const accountPrior = {
+    id: "prev-account",
+    problemId: "step-ways",
+    createdAt: 1_767_312_000,
+    payload: {
+      id: "prev-account",
+      problemId: "step-ways",
+      problemTitle: "Account Step Ways",
+      date: "2026-01-02T00:00:00Z",
+      report: {
+        codingScore: 72,
+        communicationScore: 75,
+        decision: "HIRE",
+        hintsUsed: 1,
+      },
+    },
+  };
+  const currentReport = {
+    codingScore: 85,
+    communicationScore: 80,
+    decision: "HIRE",
+    hintsUsed: 0,
+    summary: "Improved transition.",
+    codingFeedback: { strengths: [], improvements: [] },
+    communicationFeedback: { strengths: [], improvements: [] },
+  };
+  let categoryMapResult = {
+    "step-ways": "1D DP",
+    "vault-sweep": "1D DP",
+  };
+  let signedIn = true;
+  let accountReportsOk = true;
+  const inserted = [];
+  let removedExisting = 0;
+  const actionsNode = {
+    insertAdjacentHTML(position, html) {
+      inserted.push({ position, html });
+    },
+  };
+  const scope = {
+    state: {
+      phase: "report",
+      reportId: "curr-dp",
+      report: currentReport,
+      recordedDecision: "HIRE",
+      language: "python",
+      categoryComparison: null,
+      transcript: { values: () => [] },
+      testHistory: [],
+    },
+    whiteboard: false,
+    problem: { page: "vault-sweep", title: "Vault Sweep" },
+    nodes: {
+      report: {
+        innerHTML: "existing-report-dom",
+        querySelector(selector) {
+          if (selector === ".category-comparison") {
+            return inserted.length
+              ? {
+                  remove() {
+                    removedExisting += 1;
+                  },
+                }
+              : null;
+          }
+          if (selector === ".report-actions") return actionsNode;
+          return null;
+        },
+      },
+    },
+    get sessionPromise() {
+      return Promise.resolve({ signedIn });
+    },
+    fetch: async () => {
+      if (!accountReportsOk) throw new Error("account reports unreachable");
+      return {
+        ok: true,
+        json: async () => ({ reports: [accountPrior] }),
+      };
+    },
+    readDeviceHistory: () => [localPrior],
+    normalizeProgressEntries,
+    loadCategoryMap: async () => {
+      if (!categoryMapResult) throw new Error("network down");
+      return categoryMapResult;
+    },
+    compareCategoryAttempt,
+    categoryComparisonMarkup,
+    reportMarkdown,
+    currentCode: () => "pass",
+    finalBoardImage: () => undefined,
+    unclearLines: () => [],
+    unclearLineIds: () => [],
+  };
+  const runner = new Function(
+    "scope",
+    `with (scope) { ${bodies}\nreturn { updateCategoryComparison, buildMarkdown }; }`,
+  )(new Proxy(scope, { has: (target, key) => key in target }));
+
+  // Signed-in sessions prefer account reports first and insert before .report-actions
+  // without replacing nodes.report.innerHTML.
+  await runner.updateCategoryComparison(currentReport);
+  assert.equal(scope.state.categoryComparison.category, "1D DP");
+  assert.equal(
+    scope.state.categoryComparison.previous.problemTitle,
+    "Account Step Ways",
+  );
+  assert.equal(scope.nodes.report.innerHTML, "existing-report-dom");
+  assert.equal(inserted.length, 1);
+  assert.equal(inserted[0].position, "beforebegin");
+  assert.match(inserted[0].html, /Category progress · 1D DP/);
+  assert.match(inserted[0].html, /Account Step Ways/);
+  assert.match(
+    runner.buildMarkdown(new Date("2026-01-03T00:00:00Z")),
+    /## Category progress · 1D DP/,
+  );
+
+  // When the account reports request fails, it falls back to device history.
+  accountReportsOk = false;
+  scope.state.categoryComparison = null;
+  await runner.updateCategoryComparison(currentReport);
+  assert.equal(removedExisting, 1);
+  assert.equal(inserted.length, 2);
+  assert.equal(
+    scope.state.categoryComparison.previous.problemTitle,
+    "Local Step Ways",
+  );
+
+  // Unscored reports (recordedDecision: null) are never compared.
+  scope.state.recordedDecision = null;
+  scope.state.categoryComparison = null;
+  await runner.updateCategoryComparison(currentReport);
+  assert.equal(scope.state.categoryComparison, null);
+  assert.equal(inserted.length, 2);
+
+  // If /problem-categories.json fails, the report stays intact with null comparison.
+  scope.state.recordedDecision = "HIRE";
+  scope.state.categoryComparison = null;
+  categoryMapResult = null;
+  await runner.updateCategoryComparison(currentReport);
+  assert.equal(scope.state.categoryComparison, null);
+  assert.equal(inserted.length, 2);
 });

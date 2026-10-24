@@ -30,6 +30,30 @@ test("top interview manifest records 150 unique slugs grouped by topic", async (
       .map((problem) => problem.id)
       .sort(),
   );
+
+  const pageMap = JSON.parse(
+    await readFile(repoFile("web/problem-pages.json"), "utf8"),
+  );
+  const categoryMap = JSON.parse(
+    await readFile(repoFile("web/problem-categories.json"), "utf8"),
+  );
+  assert.deepEqual(
+    Object.keys(categoryMap).sort(),
+    Object.values(pageMap)
+      .map(({ page }) => page)
+      .sort(),
+  );
+  for (const section of manifest.sections) {
+    for (const slug of section.slugs) {
+      assert.equal(categoryMap[pageMap[slug].page], section.topic);
+    }
+  }
+  for (const problem of bank.filter((item) => item.origin === "original")) {
+    assert.equal(
+      categoryMap[pageMap[problem.id].page],
+      problem.topics.find((topic) => topic !== "Array" && topic !== "String"),
+    );
+  }
 });
 
 test("leetcode fetcher never asks GraphQL for statement prose", async () => {

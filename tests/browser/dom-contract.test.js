@@ -245,16 +245,19 @@ test("a page map that could not be fetched is asked for again", async () => {
     return fromDiskFetch(url);
   };
   try {
-    const { loadPageMap } = await import(
+    const { loadPageMap, loadCategoryMap } = await import(
       `${webUrl("problem-data.js")}?map-retry`
     );
     await assert.rejects(() => loadPageMap(), /could not be reached/);
+    await assert.rejects(() => loadCategoryMap(), /could not be reached/);
     down = false;
     assert.equal((await loadPageMap())["two-sum"].page, twoSum.page);
+    assert.equal((await loadCategoryMap())[twoSum.page], "Hashmap");
     await loadPageMap();
+    await loadCategoryMap();
     assert.deepEqual(
       served,
-      ["/problem-pages.json"],
+      ["/problem-pages.json", "/problem-categories.json"],
       "fetched once it arrived, not per call",
     );
   } finally {

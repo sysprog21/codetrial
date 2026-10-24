@@ -27,9 +27,10 @@ import {
 } from "./progress.js";
 import { reportMarkdown, reportMarkup } from "./render.js";
 import { downloadMarkdown, reportFilename } from "./download.js";
-import { loadPageMap, loadTopicMap } from "./problem-data.js";
+import { loadCategoryMap, loadPageMap, loadTopicMap } from "./problem-data.js";
 import {
   availableTopics,
+  compareCategoryAttempt,
   filterProblems,
   recentPerformance,
 } from "./practice-insights.js";
@@ -65,6 +66,7 @@ let mode = "coding";
 /// The saved language attached to a problem selected through Try again.
 let retryLanguage = null;
 let reports = [];
+let historyCategories = null;
 /// The practice focus the share box currently refers to.
 let sharedFocus = null;
 let manualProblem = false;
@@ -1023,6 +1025,10 @@ async function renderServerHistory(generation) {
     // the verdict as it was saved; the progress panel normalizes its own.
     // The server reads its rows back under page names, so no map is needed.
     reports = data.reports.map(pickerEntry);
+    if (!historyCategories && hasComparableAttempts(reports)) {
+      historyCategories = await loadHistoryCategoryMap();
+      if (generation !== historyLoad) return;
+    }
     showProgress(data.reports, "saved to your account");
   } catch {
     if (generation !== historyLoad) return;
@@ -1056,10 +1062,44 @@ async function renderLocalHistory(generation = historyLoad) {
       }
     }
     reports = entries.map(pickerEntry);
+    if (!historyCategories && hasComparableAttempts(reports)) {
+      historyCategories = await loadHistoryCategoryMap();
+      if (generation !== historyLoad) return;
+    }
     showProgress(entries, "saved on this device");
   } catch {
     if (generation !== historyLoad) return;
     showProgressError("Could not load progress saved on this device.");
+  }
+}
+
+function hasComparableAttempts(entries) {
+  let assessed = 0;
+  for (const entry of entries) {
+    if (
+      Number.isFinite(entry.at) &&
+      !entry.report?.incomplete &&
+      (entry.report?.decision === "HIRE" ||
+        entry.report?.decision === "NO_HIRE")
+    ) {
+      assessed += 1;
+      if (assessed >= 2) return true;
+    }
+  }
+  return false;
+}
+
+async function loadHistoryCategoryMap() {
+  let timer;
+  try {
+    return await Promise.race([
+      loadCategoryMap().catch(() => null),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(null), requestTimeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -1739,6 +1779,11 @@ function renderAttemptHistory(attempts) {
       : (attempt.report.decision ?? "UNSCORED");
     const label = document.createElement("p");
     label.textContent = `${when} · ${attempt.problemTitle} · ${attempt.difficulty ?? "Difficulty not recorded"} · ${languageLabel(attempt.language ?? "not recorded")} · ${verdict}`;
+    const categoryComparison = compareCategoryAttempt(
+      progressNormalized,
+      attempt,
+      historyCategories,
+    );
     const open = document.createElement("button");
     open.type = "button";
     open.textContent = "Open report";
@@ -1749,7 +1794,9 @@ function renderAttemptHistory(attempts) {
       "aria-label",
       `Download report (.md) for ${attempt.problemTitle}, ${when}`,
     );
-    download.addEventListener("click", () => downloadSavedReport(attempt));
+    download.addEventListener("click", () =>
+      downloadSavedReport(attempt, categoryComparison),
+    );
     const retry = document.createElement("button");
     retry.type = "button";
     retry.textContent = "Try again";
@@ -1760,6 +1807,7 @@ function renderAttemptHistory(attempts) {
       language: languageLabel(attempt.language ?? "not recorded"),
       code: "(final code was not saved)",
       unclearLines: attempt.unclearLines,
+      categoryComparison,
     });
     report.querySelector(".report-actions")?.remove();
     report.hidden = true;
@@ -1828,7 +1876,7 @@ function renderAttemptHistory(attempts) {
   }
 }
 
-function downloadSavedReport(attempt) {
+function downloadSavedReport(attempt, categoryComparison = null) {
   const markdown = reportMarkdown({
     report: {
       ...attempt.report,
@@ -1841,6 +1889,7 @@ function downloadSavedReport(attempt) {
     transcript: null,
     at: new Date(attempt.at).toLocaleString(),
     unclearLines: attempt.unclearLines,
+    categoryComparison,
   });
   downloadMarkdown(
     markdown,
