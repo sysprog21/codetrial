@@ -363,9 +363,15 @@ its published title once, as `source`, which the interview shows in small print
 beside the scenario so the problem can be found again afterwards. The published
 id is in one file, `web/problem-pages.json`, which the browser fetches only to
 open a link that still carries a published id, to read history saved before
-pages had names, or when the candidate asks the lobby to show the titles on the
-cards. The title reaches the live interview page only: saved history, the
-downloaded report and the replay keep the scenario's.
+pages had names, when the candidate asks the lobby to show the titles on the
+cards, or to show or export a completed report. Completed reports, including
+those opened from Past attempts or a replay, and downloaded Markdown keep the
+scenario title and add an optional Original problem link with the published
+title and LeetCode URL. Collapsed attempts do not request the map for this
+link; opening or exporting their report does. Successful lookups are cached
+for the page's lifetime. Missing or malformed mappings leave the link out,
+and a failed lookup or a wait longer than ten seconds does not block a
+Markdown download: it proceeds without the link.
 
 None of this is secrecy. The page map, each page's `source` and every judge
 are served to anyone who asks, and a candidate with developer tools can map a

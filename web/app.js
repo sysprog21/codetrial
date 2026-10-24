@@ -25,9 +25,13 @@ import {
   pickerEntry,
   progressModelFrom,
 } from "./progress.js";
-import { reportMarkdown, reportMarkup } from "./render.js";
+import { reportMarkdown, reportMarkup, showOriginalProblem } from "./render.js";
 import { downloadMarkdown, reportFilename } from "./download.js";
-import { loadPageMap, loadTopicMap } from "./problem-data.js";
+import {
+  loadPageMap,
+  loadPageMapForDownload,
+  loadTopicMap,
+} from "./problem-data.js";
 import {
   availableTopics,
   filterProblems,
@@ -195,8 +199,8 @@ for (const card of cards) mark(card.button, false);
 // throws (a private window, blocked site data) just means off.
 const showSources = document.querySelector("#show-sources");
 showSources.checked = readStored(SHOW_SOURCES_KEY) === "1";
-// The published names are not in the page: they arrive with the map, fetched
-// the first time the candidate turns them on.
+// The published names are not in the initial page. The map arrives when the
+// candidate turns them on, or opens or downloads a completed report.
 const applySources = async () => {
   if (showSources.checked) {
     const pages = await loadPageMap().catch(() => null);
@@ -1771,6 +1775,9 @@ function renderAttemptHistory(attempts) {
       }
       report.hidden = false;
       open.textContent = "Collapse report";
+      void loadPageMap()
+        .then((pages) => showOriginalProblem(report, pages, attempt.problemId))
+        .catch(() => {});
     });
     retry.addEventListener("click", () => {
       if (starting) return;
@@ -1828,7 +1835,8 @@ function renderAttemptHistory(attempts) {
   }
 }
 
-function downloadSavedReport(attempt) {
+async function downloadSavedReport(attempt) {
+  const problemPages = await loadPageMapForDownload();
   const markdown = reportMarkdown({
     report: {
       ...attempt.report,
@@ -1836,6 +1844,8 @@ function downloadSavedReport(attempt) {
         attempt.report.incomplete || attempt.recordedDecision === null,
     },
     problemTitle: attempt.problemTitle,
+    problemPage: attempt.problemId,
+    problemPages,
     language: attempt.language,
     code: null,
     transcript: null,

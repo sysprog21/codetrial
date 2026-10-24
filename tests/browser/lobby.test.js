@@ -3746,6 +3746,36 @@ lobbyTest(
 );
 
 lobbyTest(
+  "opening a saved report fetches and shows its original problem",
+  async (page) => {
+    reports = [savedAttempt(EASY[0])];
+    const fetched = [];
+    page.on("request", (request) =>
+      fetched.push(new URL(request.url()).pathname),
+    );
+    await lobby(page);
+    assert.ok(!fetched.includes("/problem-pages.json"));
+
+    const history = page.locator("#attempt-history");
+    assert.equal(
+      await history.locator(".report-original-problem").textContent(),
+      "",
+    );
+    await history.getByRole("button", { name: "Open report" }).click();
+    const link = history.getByRole("link", { name: "Two Sum" });
+    await link.waitFor();
+    assert.equal(
+      await link.getAttribute("href"),
+      "https://leetcode.com/problems/two-sum/",
+    );
+    assert.equal(
+      fetched.filter((path) => path === "/problem-pages.json").length,
+      1,
+    );
+  },
+);
+
+lobbyTest(
   "a problem already passed is not what gets recommended",
   async (page) => {
     // Passed one Hard and missed another, so the streak has no opinion and the
@@ -3958,6 +3988,10 @@ for (const storage of ["account", "device"]) {
         assert.ok(
           markdown.startsWith(`# Interview Report - Saved report\n_${when}_`),
         );
+        assert.match(
+          markdown,
+          /Original problem: \[Two Sum\]\(https:\/\/leetcode\.com\/problems\/two-sum\/\)/,
+        );
         assert.ok(markdown.includes(`Stored summary ${index}`));
         assert.ok(
           markdown.includes(
@@ -4015,6 +4049,45 @@ lobbyTest(
       /0 problems matching scenario title/,
     );
   },
+);
+
+lobbyTest(
+  "a stalled problem map does not block a saved report download",
+  async (page) => {
+    reports = [savedAttempt(EASY[0])];
+    await page.addInitScript(() => {
+      const fetch = window.fetch.bind(window);
+      window.mapRequested = false;
+      window.mapDeadline = null;
+      window.fetch = (path, options) => {
+        if (path !== "/problem-pages.json") return fetch(path, options);
+        window.mapRequested = true;
+        return new Promise(() => {});
+      };
+      const setTimeout = window.setTimeout.bind(window);
+      window.setTimeout = (callback, delay, ...args) => {
+        if (delay !== 10_000) return setTimeout(callback, delay, ...args);
+        window.mapDeadline = () => callback(...args);
+        return 0;
+      };
+    });
+    await lobby(page);
+    assert.equal(await page.evaluate(() => window.mapRequested), false);
+
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("button", { name: /^Download report/ }).click();
+    await page.waitForFunction(() => window.mapRequested && window.mapDeadline);
+    await page.evaluate(() => window.mapDeadline());
+    const download = await downloading;
+    assert.equal(await download.failure(), null);
+    const chunks = [];
+    for await (const chunk of await download.createReadStream())
+      chunks.push(chunk);
+    const markdown = Buffer.concat(chunks).toString("utf8");
+    assert.match(markdown, /^# Interview Report/);
+    assert.doesNotMatch(markdown, /Original problem:/);
+  },
+  { acceptDownloads: true },
 );
 
 lobbyTest("try again selects the problem", async (page) => {

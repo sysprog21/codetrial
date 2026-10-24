@@ -467,6 +467,7 @@ test("the response window panel says what the number is worth, in words a test c
       "",
       "/lib.js",
       "/render.js",
+      "/problem-data.js",
       "/api/reports",
       "button",
       "div",

@@ -7,18 +7,21 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   createTranscriptView,
   feedbackMarkup,
   finalRunnerStatus,
   chainSentence,
+  originalProblemForPage,
   problemMarkup,
   reportMarkdown,
   reportMarkup,
   reportSaveStatus,
   resultsMarkup,
   runnerStatusMarkup,
+  showOriginalProblem,
 } from "../../web/render.js";
 import { frameworkPhases, sanitizeReport } from "../../web/lib.js";
 
@@ -547,6 +550,110 @@ test("report markup refuses to score a session with nothing in it", () => {
   assert.match(body, /id="download-report"/);
   assert.match(body, /id="done"/);
   assert.match(body, /def two_sum/);
+});
+
+test("a completed report reserves the line directly below its title", () => {
+  const html = reportMarkup({
+    report: { incomplete: true, summary: "No evaluation was available." },
+    problemTitle: "Chargeback Pair Match",
+    language: "python",
+    code: "",
+  });
+  assert.match(
+    html,
+    /<h2>No evaluation<\/h2><p class="report-original-problem" hidden><\/p>/,
+  );
+  assert.doesNotMatch(html, /leetcode\.com/);
+});
+
+test("the original problem link uses the published slug only on a report", () => {
+  const pages = {
+    "two-sum": { page: "chargeback-pair-match", source: "Two Sum" },
+  };
+  assert.deepEqual(originalProblemForPage(pages, "chargeback-pair-match"), {
+    title: "Two Sum",
+    url: "https://leetcode.com/problems/two-sum/",
+  });
+  assert.deepEqual(originalProblemForPage(pages, "two-sum"), {
+    title: "Two Sum",
+    url: "https://leetcode.com/problems/two-sum/",
+  });
+  assert.equal(originalProblemForPage(pages, "unknown"), null);
+  assert.equal(originalProblemForPage({ "two-sum": null }, "two-sum"), null);
+  assert.equal(
+    originalProblemForPage({ custom: { page: "custom" } }, "custom"),
+    null,
+  );
+  assert.equal(
+    originalProblemForPage(
+      { 'bad" onclick="alert(1)': { page: "scenario", source: "Bad" } },
+      "scenario",
+    ),
+    null,
+  );
+
+  const line = {
+    hidden: true,
+    ownerDocument: { createElement: () => ({}) },
+    replaceChildren(...children) {
+      this.children = children;
+    },
+  };
+  const container = {
+    querySelector(selector) {
+      assert.equal(selector, ".report-original-problem");
+      return line;
+    },
+  };
+  showOriginalProblem(container, pages, "chargeback-pair-match");
+  assert.equal(line.hidden, false);
+  assert.equal(line.children[0], "Original problem: ");
+  assert.deepEqual(line.children[1], {
+    href: "https://leetcode.com/problems/two-sum/",
+    target: "_blank",
+    rel: "noopener noreferrer",
+    textContent: "Two Sum",
+  });
+  showOriginalProblem(
+    container,
+    { "two-sum": { page: "chargeback-pair-match", source: "<img>" } },
+    "chargeback-pair-match",
+  );
+  assert.equal(line.children[1].textContent, "<img>");
+  assert.equal(line.children[1].innerHTML, undefined);
+});
+
+test("every published problem in the generated bank resolves to its page", () => {
+  const pages = JSON.parse(
+    readFileSync(new URL("../../web/problem-pages.json", import.meta.url)),
+  );
+  for (const [slug, entry] of Object.entries(pages)) {
+    if (!entry.source) continue;
+    assert.deepEqual(originalProblemForPage(pages, entry.page), {
+      title: entry.source,
+      url: `https://leetcode.com/problems/${slug}/`,
+    });
+  }
+});
+
+test("markdown export links to a mapped original problem safely", () => {
+  const session = {
+    report: { incomplete: true, summary: "No evaluation was available." },
+    problemTitle: "Chargeback Pair Match",
+    problemPage: "chargeback-pair-match",
+    problemPages: {
+      "two-sum": { page: "chargeback-pair-match", source: "Two ] Sum" },
+    },
+    at: "2026-10-17",
+  };
+  assert.match(
+    reportMarkdown(session),
+    /Original problem: \[Two \\\] Sum\]\(https:\/\/leetcode\.com\/problems\/two-sum\/\)/,
+  );
+  assert.doesNotMatch(
+    reportMarkdown({ ...session, problemPages: {} }),
+    /Original problem:/,
+  );
 });
 
 test("markdown export of an empty session carries no verdict either", () => {
