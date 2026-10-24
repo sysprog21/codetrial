@@ -2236,6 +2236,75 @@ lobbyTest(
 );
 
 lobbyTest(
+  "clicking an already selected problem card releases manual selection",
+  async (page) => {
+    const easyCard = EASY[0];
+    await page.addInitScript(
+      ([key, id]) => localStorage.setItem(key, JSON.stringify([id])),
+      [PRACTICE_LIST_KEY, easyCard],
+    );
+
+    await lobby(page);
+    await awaitReady(page);
+
+    const initial = await snapshot(page);
+
+    // Draw out-of-filter Easy card from saved practice list
+    await page.click("#practice-list-pick");
+    assert.equal((await snapshot(page)).card, easyCard);
+
+    // Open problem picker so the card grid is visible in DOM
+    await page.click("details.problem-picker summary");
+    assert.equal(
+      await page.locator(`[data-problem="${easyCard}"]`).isVisible(),
+      true,
+      "selected card must be visible as an exception",
+    );
+
+    // Click the active card again to deselect
+    await page.click(`[data-problem="${easyCard}"]`);
+
+    const after = await snapshot(page);
+    assert.equal(after.card, initial.card);
+    assert.equal(after.note, initial.note);
+    assert.equal(
+      after.duration,
+      initial.duration,
+      "releasing manual override must restore duration",
+    );
+    assert.equal(
+      await page.locator(`[data-problem="${easyCard}"]`).isVisible(),
+      false,
+      "out-of-filter card must be hidden after deselection",
+    );
+  },
+);
+
+lobbyTest(
+  "deselecting a problem card while history is loading clears prompt",
+  async (page) => {
+    const releaseHistory = await heldLobby(page);
+    try {
+      await page.click("details.problem-picker summary");
+
+      const card = MEDIUM[0];
+      await page.click(`[data-problem="${card}"]`);
+      assert.equal((await snapshot(page)).card, card);
+
+      // Deselect before history arrives
+      await page.click(`[data-problem="${card}"]`);
+      const after = await snapshot(page);
+      assert.equal(after.card, null);
+      assert.equal(after.note, "");
+      assert.equal(after.pressed, null);
+      assert.equal(after.startDisabled, true);
+    } finally {
+      releaseHistory();
+    }
+  },
+);
+
+lobbyTest(
   "opening the picker preserves a due review outside the selected difficulty",
   async (page) => {
     const due = pageOf("valid-parentheses");
