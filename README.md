@@ -46,7 +46,10 @@ strokes that made it, which is what lets the replay redraw any moment of it.
 How to hold one is under [Whiteboard interviews](#whiteboard-interviews).
 
 Audio and code snapshots stay in memory unless [recording](#recording) is
-enabled, which is off by default. Candidate video reaches Gemini only with
+enabled, which is off by default. The browser does keep the final code of
+up to its 20 newest attempts in its local storage, so Past attempts can
+reopen it on that device; the account copy never carries it, and deleting an
+attempt removes it. Candidate video reaches Gemini only with
 `CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED=true`, and never in a whiteboard
 interview, where the board travels the stream a camera frame would.
 Face-presence analysis runs in the browser and reports itself unavailable

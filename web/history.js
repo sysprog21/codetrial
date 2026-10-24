@@ -386,10 +386,27 @@ function saveLocalReport(entry, storage) {
     const others = previous.filter(
       (row) => entry?.id == null || row?.id !== entry.id,
     );
-    storage.setItem(
-      historyKey,
-      JSON.stringify([entry, ...others].slice(0, 20)),
-    );
+    const rows = [entry, ...others].slice(0, 20);
+    // The final code is what makes this history heavy enough to meet the
+    // quota, so each step gives some up: the older rows' first, since this
+    // report's code is the one the candidate came back for, then its own.
+    // Refusing the save would lose the whole attempt, and the next save would
+    // meet the same rows and fail too.
+    const steps = [
+      rows,
+      rows.map((row, index) => (index ? withoutCode(row) : row)),
+      rows.map(withoutCode),
+    ];
+    let step = 0;
+    for (;;) {
+      try {
+        storage.setItem(historyKey, JSON.stringify(steps[step]));
+        break;
+      } catch (error) {
+        step += 1;
+        if (step === steps.length) throw error;
+      }
+    }
     // The short history is what the lobby draws this report from, so a review
     // store that refuses the write costs the reopen twenty attempts from now,
     // not this save. Reporting "Report was not saved" for it told the candidate
@@ -398,13 +415,43 @@ function saveLocalReport(entry, storage) {
     // Rebuilt from the merged view rather than from the review store alone, so
     // an attempt whose own review write was refused goes back in the next time
     // one lands, instead of being lost the moment it rolls past the twenty.
-    try {
-      storage.setItem(
-        reviewHistoryKey,
-        boundedReviews(readDeviceHistory(storage)).json,
-      );
-    } catch {
-      /* the report is on this device either way */
+    //
+    // A refusal here may be the code's doing too: a history that fits with it
+    // can leave too little for this write, and an attempt it drops is gone
+    // once it rolls past the twenty. So the history takes the next step and
+    // the write is tried again, until it lands or no code is left to give up.
+    //
+    // When nothing given up lets it land, the refusal was never the code's,
+    // as on an origin already near its quota, and the history goes back to
+    // the step it first landed at: leaving it at the last would save every
+    // attempt there without its code, this one included.
+    const landed = step;
+    for (;;) {
+      try {
+        storage.setItem(
+          reviewHistoryKey,
+          boundedReviews(readDeviceHistory(storage)).json,
+        );
+        break;
+      } catch {
+        if (step + 1 < steps.length) {
+          try {
+            storage.setItem(historyKey, JSON.stringify(steps[step + 1]));
+            step += 1;
+            continue;
+          } catch {
+            /* no lighter history to try the write beside */
+          }
+        }
+        if (step !== landed) {
+          try {
+            storage.setItem(historyKey, JSON.stringify(steps[landed]));
+          } catch {
+            /* the lighter history still holds the report */
+          }
+        }
+        break;
+      }
     }
     return "saved";
   } catch {
@@ -417,13 +464,17 @@ function saveLocalReport(entry, storage) {
 // hundred times over on a single save. A review too large for what is left is
 // skipped and the walk carries on, so one outsized report costs itself and not
 // the older attempts behind it.
+//
+// Without the final code. It stays in the short history, so the newest twenty
+// reopen with it, while the budget here buys as many older attempts as before.
 function boundedReviews(reviews) {
   const encoder = new TextEncoder();
   const retained = [];
   const texts = [];
   // The brackets the array itself serializes to, before any element.
   let bytes = 2;
-  for (const review of reviews.slice(0, REVIEW_HISTORY_CAP)) {
+  for (const row of reviews.slice(0, REVIEW_HISTORY_CAP)) {
+    const review = withoutCode(row);
     const text = JSON.stringify(review);
     // A separator for every element after the first.
     const size = encoder.encode(text).length + (retained.length ? 1 : 0);
@@ -438,6 +489,51 @@ function boundedReviews(reviews) {
   return { retained, json: `[${texts.join(",")}]` };
 }
 
+/// A stored row with its final code left out, and any other row as it is.
+/// Copied field by field for the reason `legacyKey` gives, and defined rather
+/// than assigned: assigning a stored `__proto__` field would set the copy's
+/// prototype instead and drop the field from the row written back. Not a
+/// null-prototype object as there, because these rows go on to the lobby.
+function withoutCode(entry) {
+  if (!pairable(entry) || !Object.hasOwn(entry, "code")) return entry;
+  const copy = {};
+  for (const field of Object.keys(entry)) {
+    if (field === "code") continue;
+    Object.defineProperty(copy, field, {
+      value: entry[field],
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return copy;
+}
+
+/// Account rows, each given the final code this device kept for its report.
+///
+/// The account copy carries none, so a signed-in lobby drew the placeholder
+/// even on the device that still had the code. Paired by the report id the
+/// two copies share, the way `normalizeProgressEntry` reads it; a row this
+/// device holds no code for is passed through as it came. Storage that cannot
+/// be read is no history to `readLocalHistory`, so it costs the code alone.
+export function withLocalCode(reports, storage) {
+  const codes = new Map();
+  for (const row of readLocalHistory(storage)) {
+    if (row?.id != null && typeof row.code === "string")
+      codes.set(String(row.id), row.code);
+  }
+  if (codes.size === 0) return reports;
+  return reports.map((row) => {
+    if (!pairable(row?.payload)) return row;
+    const code = codes.get(String(row.payload.id ?? row.id ?? ""));
+    return code === undefined
+      ? row
+      : { ...row, payload: { ...row.payload, code } };
+  });
+}
+
+/// The account copy carries no code: README.md says code snapshots stay in
+/// memory unless recording is enabled, and the server keeps this body as sent.
 async function saveAccountReport(entry, fetcher) {
   const session = await sessionState(fetcher);
   if (session === "out") return "skipped";
@@ -446,7 +542,7 @@ async function saveAccountReport(entry, fetcher) {
     const saved = await fetcher("/api/reports", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(entry),
+      body: JSON.stringify(withoutCode(entry)),
       signal: AbortSignal.timeout(requestTimeoutMs),
     });
     return saved.ok ? "saved" : "failed";

@@ -16,6 +16,7 @@ import {
   reportIsPersisted,
   reviewHistoryKey,
   saveReportHistory,
+  withLocalCode,
 } from "../../web/history.js";
 import {
   assertIncludesCompact,
@@ -460,6 +461,67 @@ test("review inputs survive the full-report cap", async () => {
   });
 });
 
+test("final code stays in the short history and out of reviews and the account", async () => {
+  // Ten kilobytes each, so twenty-one of them would not fit the review budget:
+  // a review store that kept the code would also hold fewer attempts.
+  const code = (index) => `// attempt ${index}\n${"x".repeat(10_000)}`;
+  const run = async (withCode) => {
+    const storage = memoryStorage();
+    const posted = [];
+    const fetcher = async (url, options) => {
+      if (url === "/api/session") return response({ signedIn: true });
+      posted.push(JSON.parse(options.body));
+      return response({ id: "saved" });
+    };
+    for (let index = 0; index < 21; index += 1) {
+      const entry = {
+        id: `attempt-${index}`,
+        problemId: "two-sum",
+        date: `2026-01-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
+        report: { decision: "HIRE" },
+      };
+      if (withCode) entry.code = code(index);
+      await saveReportHistory(entry, { storage, fetcher });
+    }
+    return { storage, posted };
+  };
+  const kept = await run(true);
+  const plain = await run(false);
+
+  const history = readLocalHistory(kept.storage);
+  assert.equal(history.length, 20);
+  assert.deepEqual(
+    history.map((row) => row.code),
+    Array.from({ length: 20 }, (_, index) => code(20 - index)),
+  );
+  assert.equal(
+    kept.storage.getItem(reviewHistoryKey),
+    plain.storage.getItem(reviewHistoryKey),
+  );
+  assert.equal(readReviewHistory(kept.storage).length, 21);
+  assert.equal(kept.posted.length, 21);
+  assert.deepEqual(kept.posted, plain.posted);
+});
+
+test("leaving the code out keeps every other stored field, __proto__ included", async () => {
+  const storage = memoryStorage();
+  const posted = [];
+  const fetcher = async (url, options) => {
+    if (url === "/api/session") return response({ signedIn: true });
+    posted.push(options.body);
+    return response({ id: "saved" });
+  };
+  // Parsed, as a stored row is, so `__proto__` is an own field of it.
+  const entry = JSON.parse(
+    '{"id":"odd","problemId":"two-sum","__proto__":{"kept":true},"code":"x","report":{"decision":"HIRE"}}',
+  );
+  await saveReportHistory(entry, { storage, fetcher });
+  const expected =
+    '{"id":"odd","problemId":"two-sum","__proto__":{"kept":true},"report":{"decision":"HIRE"}}';
+  assert.equal(storage.getItem(reviewHistoryKey), `[${expected}]`);
+  assert.deepEqual(posted, [expected]);
+});
+
 test("a rebuilt review history keeps the local-storage budget", () => {
   const storage = memoryStorage();
   storage.setItem(
@@ -635,18 +697,158 @@ test("a report the review store refuses is still saved on this device", async ()
       memory.setItem(key, value);
     },
   };
-  const saved = await saveReportHistory(
-    { id: "only-local", problemId: "two-sum", report: { decision: "HIRE" } },
-    {
-      storage,
-      fetcher: async () => response({ signedIn: false }),
-    },
-  );
-  assert.equal(saved.local, "saved");
+  // Code on every save: a refusal the code did not cause must not take it,
+  // from this report or from the one saved before it.
+  for (const id of ["earlier", "only-local"]) {
+    const saved = await saveReportHistory(
+      {
+        id,
+        problemId: "two-sum",
+        code: `return "${id}";`,
+        report: { decision: "HIRE" },
+      },
+      {
+        storage,
+        fetcher: async () => response({ signedIn: false }),
+      },
+    );
+    assert.equal(saved.local, "saved");
+  }
   assert.deepEqual(
-    readLocalHistory(memory).map((entry) => entry.id),
-    ["only-local"],
+    readLocalHistory(memory).map((entry) => [entry.id, entry.code]),
+    [
+      ["only-local", 'return "only-local";'],
+      ["earlier", 'return "earlier";'],
+    ],
   );
+});
+
+test("account rows take the final code this device kept, by report id", () => {
+  const storage = memoryStorage();
+  storage.setItem(
+    historyKey,
+    JSON.stringify([
+      { id: "kept", code: "return 1;" },
+      { id: "row-id", code: "return 2;" },
+      { id: "no-code", code: null },
+      { code: "no id" },
+    ]),
+  );
+  const rows = [
+    { id: "kept", payload: { id: "kept", report: {} } },
+    // An account row whose payload predates ids is paired by the row's own.
+    { id: "row-id", payload: { report: {} } },
+    { id: "no-code", payload: { id: "no-code", report: {} } },
+    { id: "elsewhere", payload: { id: "elsewhere", report: {} } },
+    { id: "unwrapped" },
+  ];
+  const filled = withLocalCode(rows, storage);
+  assert.deepEqual(
+    filled.map((row) => row.payload?.code),
+    ["return 1;", "return 2;", undefined, undefined, undefined],
+  );
+  assert.equal(filled[2], rows[2]);
+  // Filled into copies: the rows the server sent are left as they came.
+  assert.equal(rows[0].payload.code, undefined);
+
+  const unreadable = {
+    getItem: () => {
+      throw new Error("SecurityError");
+    },
+  };
+  assert.equal(withLocalCode(rows, unreadable), rows);
+});
+
+/// A quota on everything stored, as a browser counts it: a write that would
+/// take the total past it is refused and leaves the store as it was. `memory`
+/// is the store behind it, for reading back without a quota in the way.
+function quotaStorage(quota) {
+  const memory = memoryStorage();
+  const storage = {
+    getItem: (key) => memory.getItem(key),
+    setItem: (key, value) => {
+      const others = [historyKey, reviewHistoryKey]
+        .filter((other) => other !== key)
+        .reduce(
+          (total, other) => total + (memory.getItem(other) ?? "").length,
+          0,
+        );
+      if (others + value.length > quota) throw new Error("QuotaExceededError");
+      memory.setItem(key, value);
+    },
+  };
+  return { memory, storage };
+}
+
+test("a history the quota refuses drops older code before the new report's", async () => {
+  const quota = 120_000;
+  const { memory, storage } = quotaStorage(quota);
+  const fetcher = async () => response({ signedIn: false });
+  const save = (id, code) =>
+    saveReportHistory(
+      { id, problemId: "two-sum", code, report: { decision: "HIRE" } },
+      { storage, fetcher },
+    );
+  const code = "x".repeat(10_000);
+  const outcomes = [];
+  // Whether each save, the one a refusal is about, reopens with its own code.
+  const ownCode = [];
+  for (let index = 0; index < 16; index += 1) {
+    outcomes.push((await save(`attempt-${index}`, code)).local);
+    ownCode.push(readLocalHistory(memory)[0].code === code);
+  }
+  // Each of these fits on its own; only the code of all of them together does
+  // not, and the saves after the first refusal meet that same history.
+  assert.deepEqual(outcomes, Array(16).fill("saved"));
+  assert.deepEqual(ownCode, Array(16).fill(true));
+  const history = readLocalHistory(memory);
+  assert.deepEqual(
+    history.map((row) => row.id),
+    Array.from({ length: 16 }, (_, index) => `attempt-${15 - index}`),
+  );
+  // The code that went is the oldest, and every row without code is older
+  // than every row with it.
+  const kept = history.map((row) => row.code === code);
+  assert.ok(kept.includes(false));
+  assert.deepEqual(
+    kept,
+    [...kept].sort((a, b) => b - a),
+  );
+  assert.equal(readReviewHistory(memory).length, 16);
+
+  // A report whose code does not fit even alone is still saved, without it.
+  assert.equal((await save("too-large", "y".repeat(quota))).local, "saved");
+  const after = readLocalHistory(memory);
+  assert.equal(after[0].id, "too-large");
+  assert.equal(after[0].code, undefined);
+});
+
+test("code gives way when the review store would not fit beside it", async () => {
+  // The history fits with its code each time, but grows into the room the
+  // review store needs. Each review is large enough that the store, holding
+  // every attempt, cannot fit beside a history full of code.
+  const { memory, storage } = quotaStorage(150_000);
+  const fetcher = async () => response({ signedIn: false });
+  const code = "x".repeat(4_000);
+  const summary = "s".repeat(2_000);
+  for (let index = 0; index < 30; index += 1) {
+    const id = `attempt-${index}`;
+    const saved = await saveReportHistory(
+      { id, problemId: "two-sum", code, report: { summary } },
+      { storage, fetcher },
+    );
+    assert.equal(saved.local, "saved", id);
+    assert.equal(readLocalHistory(memory)[0].code, code, id);
+    // Read as stored, not through `readReviewHistory`, which would rebuild a
+    // missing store from the history and hide an attempt it had dropped.
+    const reviews = JSON.parse(memory.getItem(reviewHistoryKey));
+    assert.deepEqual(
+      reviews.map((row) => row.id),
+      Array.from({ length: index + 1 }, (_, back) => `attempt-${index - back}`),
+      id,
+    );
+  }
+  assert.ok(readLocalHistory(memory).some((row) => row.code === undefined));
 });
 
 test("an oversized newest review does not erase older review history", async () => {
