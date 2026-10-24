@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 
 import {
   matchingBrackets,
+  moveSelectedText,
   indentNewline,
   indentSelection,
   insertBracketPair,
@@ -664,9 +665,8 @@ test("an opening-bracket beforeinput is a bracket keystroke", () => {
   }
 });
 
-// applyEditorEdit hands execCommand the changed span -- "()" at a bare caret,
-// "(value)" around a selection -- never a bare opener, so this excludes
-// execCommand's own synthetic beforeinput on content alone.
+// Only a single typed opener starts bracket pairing. Other input types and
+// multi-character inserts must pass through unchanged.
 test("a beforeinput that is not plain bracket text is not a bracket keystroke", () => {
   assert.equal(
     isBracketOpenerKeystroke({ inputType: "insertLineBreak", data: null }),
@@ -1424,4 +1424,37 @@ test("error trees preserve pairing in unfinished Python f-string expressions", a
       marked,
     );
   }
+});
+
+test("moving text preserves every unselected newline", () => {
+  for (const [value, start, end, target, expected, selection] of [
+    ["DRAG\n\n\n\n", 0, 4, 6, "\n\nDRAG\n\n", [2, 6]],
+    ["DRAG\n", 0, 4, 5, "\nDRAG", [1, 5]],
+    ["\n\nDRAG\n", 2, 6, 0, "DRAG\n\n\n", [0, 4]],
+    ["A\nB\nC\n", 0, 4, 6, "C\nA\nB\n", [2, 6]],
+    ["甲😀\n乙\n", 1, 3, 6, "甲\n乙\n😀", [4, 6]],
+  ]) {
+    const result = moveSelectedText(value, start, end, target);
+    assert.deepEqual(result, {
+      value: expected,
+      start: selection[0],
+      end: selection[1],
+    });
+    assert.equal(result.value.length, value.length);
+    assert.equal(result.value.split("\n").length, value.split("\n").length);
+  }
+});
+
+test("dropping in the original selection or moving no text leaves it unchanged", () => {
+  for (const target of [1, 2, 3])
+    assert.deepEqual(moveSelectedText("abcd", 1, 3, target), {
+      value: "abcd",
+      start: 1,
+      end: 3,
+    });
+  assert.deepEqual(moveSelectedText("abcd", 2, 2, 4), {
+    value: "abcd",
+    start: 2,
+    end: 2,
+  });
 });

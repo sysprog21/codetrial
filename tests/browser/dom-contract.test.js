@@ -433,9 +433,7 @@ test("rapid language selections publish only the final tab", () => {
   // is the regression this test exists for.
   const flushAt = setLanguage.indexOf("flushPendingEditorPublish()");
   const languageAt = setLanguage.indexOf("state.language = language;");
-  const bufferAt = setLanguage.indexOf(
-    "nodes.editor.value = state.codeByLanguage[language];",
-  );
+  const bufferAt = setLanguage.indexOf("nodes.editor.value = next.value;");
   assert.ok(flushAt >= 0, "setLanguage flushes a pending editor publish");
   assert.ok(
     languageAt > flushAt,

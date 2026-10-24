@@ -636,35 +636,9 @@ p {
 /* The light-theme toggle's label stays fixed (see applyEditorTheme), so
    sighted users need this instead of changing text to see which theme is
    current. */
-#editor-theme-toggle[aria-pressed="true"],
-#editor-restore-starter[data-armed="true"] {
+#editor-theme-toggle[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--ink);
-}
-
-/* The first press of Restore starter says what a second would do. It hangs
-   below the toolbar instead of widening it, so arming never moves the toolbar
-   onto another row, and it is held inside the toolbar's width: anchored to the
-   button it ran past the panel's edge on a narrow screen and made the panel
-   scroll sideways. It takes no pointer events, so the code under it stays
-   clickable. The toolbar is what it hangs from, so it is positioned below. */
-.restore-control {
-  display: inline-flex;
-}
-
-.restore-prompt {
-  position: absolute;
-  pointer-events: none;
-  top: calc(100% + 0.25rem);
-  left: 0.75rem;
-  max-width: calc(100% - 1.5rem);
-  z-index: 2;
-  padding: 0.25rem 0.625rem;
-  border: 1px solid var(--accent);
-  border-radius: 0.5rem;
-  background: var(--surface);
-  color: var(--ink);
-  font-size: 0.75rem;
 }
 
 .history {

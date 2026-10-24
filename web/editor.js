@@ -177,9 +177,8 @@ export function typeOverCloser(value, start, end, closer, language, parse) {
 }
 
 // Same content-check-only shape as the bracket predicates above, and for the
-// same reason: interview.js's reentrancy flag is what keeps this from
-// recursing into deleteEmptyPair while its own execCommand("delete") is
-// still running, not isTrusted.
+// same reason: interview.js decides which events belong to an edit; this
+// predicate describes the requested deletion, regardless of isTrusted.
 export function isBackspaceKeystroke(event) {
   return event.inputType === "deleteContentBackward";
 }
@@ -330,4 +329,19 @@ export function toggleLineComment(value, start, end, language) {
   // A caret maps once, as in indentSelection; a selection that ends where a
   // marker goes in still ends before it.
   return { value, start: map(start, true), end: map(end, start === end) };
+}
+
+// Move exactly the selected characters; all other text, including empty lines,
+// stays intact. The browser's drop position refers to the original buffer.
+export function moveSelectedText(value, start, end, target) {
+  if (start === end || (target >= start && target <= end))
+    return { value, start, end };
+  const text = value.slice(start, end);
+  const remaining = value.slice(0, start) + value.slice(end);
+  const insertion = target > end ? target - text.length : target;
+  return {
+    value: remaining.slice(0, insertion) + text + remaining.slice(insertion),
+    start: insertion,
+    end: insertion + text.length,
+  };
 }

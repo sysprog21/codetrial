@@ -3,6 +3,7 @@ import {
   rememberAssignment,
   resetAssignments,
 } from "./selection.js";
+import { createEditorHistory, editorSnapshot } from "./editor-history.js";
 import { createReportRecovery } from "./report-recovery.js";
 import { createAudioPlayback } from "./audio-playback.js";
 import {
@@ -46,6 +47,7 @@ import {
   isBackspaceKeystroke,
   deleteEmptyPair,
   matchingBrackets,
+  moveSelectedText,
   isToggleCommentKeystroke,
   toggleLineComment,
 } from "./editor.js";
@@ -191,6 +193,15 @@ let frameworkRound = "coding";
 let exampleBoard = null;
 let drawingTurn = null;
 let editorInitialized = false;
+const mac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+const editorHistory = createEditorHistory();
+let pendingEditorEdit = null;
+let observedEditor = null;
+let editorComposition = null;
+let editorDrag = null;
+let compositionTimer = null;
+let replayingEditorHistory = false;
+
 let codePublishTimer = null;
 /// The switch waiting out its debounce, held as the buffer and language it was
 /// made with rather than as a flag. By the time a keystroke can ask for it the
@@ -570,7 +581,6 @@ const nodes = {
   editorFontLarger: document.querySelector("#editor-font-larger"),
   editorThemeToggle: document.querySelector("#editor-theme-toggle"),
   restoreStarter: document.querySelector("#editor-restore-starter"),
-  restorePrompt: document.querySelector("#editor-restore-prompt"),
   restoreStatus: document.querySelector("#editor-restore-status"),
   compileDisclosure: document.querySelector(".compile-disclosure"),
   run: document.querySelector("#run-tests"),
@@ -689,19 +699,6 @@ initIntegrity({
   publishIntegrityEvent,
   endInterview,
 });
-
-/// What the first press of the restore control armed it for: the language and
-/// the exact buffer it saw. A second press confirms only if both still hold, so
-/// an edit or a tab change in between makes it a first press again instead of
-/// replacing code the candidate never saw the question about.
-///
-/// The arm has no clock. A screen reader needs as long as it needs to read the
-/// status out, and a prompt that ran out first would be armed again by the
-/// press meant to confirm it. It ends when the candidate edits, leaves the
-/// button, presses Escape or switches language, or when the control is
-/// disabled. Declared above `init()`, which runs `setLanguage` and
-/// `updateRunAvailability` before the rest of the module has evaluated.
-let restoreArmed = null;
 
 init();
 
@@ -916,102 +913,72 @@ function renderRuntimeConfig() {
       : "C, C++ and Java test runs are disabled by this server.";
 }
 
-// This flag is the actual guard: set for exactly the duration of the call,
-// and checked first thing in the listener, so the synthetic beforeinput is
-// recognized by when it happens rather than by a property of
-// dubious reliability.
+// Programmatic edits publish through input without being recorded twice.
 let applyingProgrammaticEdit = false;
 
-// Every edit the editor makes on the candidate's behalf -- indentation, bracket
-// pairs, closer type-over, paired deletion, restoring the starter -- lands here.
-// Assigning `value` wipes the native undo stack, so one such edit would cost the
-// candidate their whole editing history. Route the change through the browser's
-// editing command instead, over just the span that actually changed.
-//
-// A replaced selection that ends in a newline is redone wrongly by Chromium:
-// Ctrl+Shift+Z re-applies the deletion and only the tail of what was inserted,
-// so the first lines of the new text are gone. With `splitNewline` the newline
-// is left out of the selection and removed by a forward delete right after,
-// which Chromium joins into the same undo step. Only the restore asks for it:
-// it is the edit that replaces a whole buffer, and whether another browser
-// records the two commands as one step has not been checked.
-//
-// A browser that refuses the command gets the value assigned, which leaves
-// nothing to undo. With `keepUndo` the buffer is instead left exactly as it was
-// and the call returns false, so the caller can ask before losing the history.
-// An edit the command half did, such as an insert whose forward delete was
-// refused, is undone first.
-function applyEditorEdit(
-  next,
-  { splitNewline = false, keepUndo = false } = {},
-) {
-  const editor = nodes.editor;
-  const previous = editor.value;
-  const selection = [
-    editor.selectionStart,
-    editor.selectionEnd,
-    editor.selectionDirection,
-  ];
-  // The temporary edit selection must not move the candidate's active end.
-  const direction =
-    next.start === next.end ? "none" : editor.selectionDirection;
-  if (next.value === previous) {
-    editor.setSelectionRange(next.start, next.end, direction);
-    return true;
+function finishEditorComposition() {
+  clearTimeout(compositionTimer);
+  compositionTimer = null;
+  if (!editorComposition) return;
+  const before = editorComposition;
+  editorComposition = null;
+  observedEditor = editorSnapshot(nodes.editor);
+  editorHistory.record(before, observedEditor);
+  pendingEditorEdit = null;
+}
+
+function finishEditorDrag() {
+  if (!editorDrag) return;
+  const before = editorDrag.before;
+  editorDrag = null;
+  observedEditor = editorSnapshot(nodes.editor);
+  // A native move produces deleteByDrag and insertFromDrop inputs. They are
+  // one user action, including when the destination is in the same textarea.
+  editorHistory.record(before, observedEditor);
+  pendingEditorEdit = null;
+}
+
+function restoreEditorHistory(redo, repair = false) {
+  if (nodes.editor.disabled || nodes.editor.readOnly) return;
+  finishEditorDrag();
+  finishEditorComposition();
+  pendingEditorEdit = null;
+  const snapshot = redo ? editorHistory.redo() : editorHistory.undo();
+  // Even at a history boundary, repair an input-only native undo notification.
+  const target = snapshot || (repair ? observedEditor : null);
+  if (!target) return;
+  nodes.editor.value = target.value;
+  nodes.editor.setSelectionRange(target.start, target.end, target.direction);
+  observedEditor = editorSnapshot(nodes.editor);
+  replayingEditorHistory = true;
+  try {
+    nodes.editor.dispatchEvent(new Event("input", { bubbles: true }));
+  } finally {
+    replayingEditorHistory = false;
   }
-  let head = 0;
-  while (
-    head < previous.length &&
-    head < next.value.length &&
-    previous[head] === next.value[head]
-  )
-    head += 1;
-  let tail = 0;
-  while (
-    tail < Math.min(previous.length, next.value.length) - head &&
-    previous[previous.length - 1 - tail] ===
-      next.value[next.value.length - 1 - tail]
-  )
-    tail += 1;
-  const end = previous.length - tail;
-  const inserted = next.value.slice(head, next.value.length - tail);
-  const endsInNewline =
-    splitNewline && end > head && previous[end - 1] === "\n";
-  const selectedEnd = endsInNewline ? end - 1 : end;
-  editor.setSelectionRange(head, selectedEnd);
-  let rewritten = true;
+}
+
+// Page history owns programmatic edits too. Assign the complete buffer and
+// selection, then use the usual input path for overlays, replay and code_update.
+function applyEditorEdit(next) {
+  finishEditorDrag();
+  finishEditorComposition();
+  const editor = nodes.editor;
+  const before = editorSnapshot(editor);
+  pendingEditorEdit = null;
+  editorHistory.breakGroup();
+  const direction = next.start === next.end ? "none" : before.direction;
+  if (next.value !== before.value) editor.value = next.value;
+  editor.setSelectionRange(next.start, next.end, direction);
+  observedEditor = editorSnapshot(editor);
+  editorHistory.record(before, observedEditor);
+  if (next.value === before.value) return;
   applyingProgrammaticEdit = true;
   try {
-    if (inserted)
-      rewritten = document.execCommand?.("insertText", false, inserted);
-    else if (selectedEnd > head) rewritten = document.execCommand?.("delete");
-    if (rewritten && endsInNewline)
-      rewritten = document.execCommand?.("forwardDelete");
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
   } finally {
     applyingProgrammaticEdit = false;
   }
-  if (!rewritten && keepUndo) {
-    if (editor.value !== previous) {
-      applyingProgrammaticEdit = true;
-      try {
-        document.execCommand?.("undo");
-      } finally {
-        applyingProgrammaticEdit = false;
-      }
-    }
-    if (editor.value !== previous) {
-      editor.value = previous;
-      editor.dispatchEvent(new Event("input", { bubbles: true }));
-    }
-    editor.setSelectionRange(...selection);
-    return false;
-  }
-  if (!rewritten) {
-    editor.value = next.value;
-    editor.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-  editor.setSelectionRange(next.start, next.end, direction);
-  return true;
 }
 
 function renderJimVolume() {
@@ -1029,38 +996,12 @@ function renderJimVolume() {
   nodes.jimMutedIndicator.hidden = !jimVolume.muted;
 }
 
-function disarmRestore() {
-  restoreArmed = null;
-  delete nodes.restoreStarter.dataset.armed;
-  nodes.restorePrompt.hidden = true;
-  nodes.restoreStarter.setAttribute("aria-label", "Restore the starter code");
+function clearRestoreStatus() {
   nodes.restoreStatus.textContent = "";
 }
 
-function armRestore() {
-  restoreArmed = { language: state.language, value: nodes.editor.value };
-  nodes.restoreStarter.dataset.armed = "true";
-  nodes.restorePrompt.hidden = false;
-  // The visible words stay inside the name, so a voice user can say them.
-  nodes.restoreStarter.setAttribute(
-    "aria-label",
-    "Press again to replace your code with the starter code",
-  );
-  nodes.restoreStatus.textContent =
-    "Press again to replace your code with the starter code. Ctrl+Z (Cmd+Z on a Mac) may not bring it back.";
-  // WebKit does not focus a button that is clicked, and the blur and Escape
-  // that end the arm are heard only by a focused button, so a mouse press
-  // would arm it with no way left to cancel. Focus is put there to match.
-  nodes.restoreStarter.focus({ preventScroll: true });
-}
-
-/// Says something in the control's status region, which the caller has just
-/// cleared with `disarmRestore`. A live region reads only a change, so the
-/// words are written on the next frame, after the clear has been seen, or a
-/// second press would go unheard; and not at all if something else has written
-/// there in between, so a late message never overwrites the prompt a press has
-/// just armed. `stillTrue` is asked again on the frame, since an edit, a
-/// language switch or a pause in between can make the message false.
+// A live region needs a change to announce the same message twice. Wait for
+// the clear to be seen, and refuse a message made stale by an edit or lock.
 function announceRestore(message, stillTrue) {
   requestAnimationFrame(() => {
     if (nodes.restoreStatus.textContent === "" && stillTrue())
@@ -1068,26 +1009,18 @@ function announceRestore(message, stillTrue) {
   });
 }
 
-/// Puts the current language's starter back. A reset is an edit like any
-/// other: the input listener files it in `codeByLanguage` and schedules the
-/// usual publish.
-///
-/// The first press replaces the buffer through the editing command, so Ctrl+Z
-/// brings it back. A browser that has no such command, or refuses it, would
-/// have to assign `value`, which leaves nothing to undo, so there the buffer is
-/// left alone and a second press confirms. That is done in the toolbar and
-/// not with `window.confirm`, which blocks the page's event loop while it is
-/// open and stalls the captions, the timer and the data channel with it.
+// Restoring is one ordinary, undoable edit in the current language.
 function restoreStarter() {
+  clearRestoreStatus();
   const starter = problem?.starterCode[state.language];
-  if (codingClosed() || nodes.editor.disabled || starter === undefined) {
-    disarmRestore();
+  if (
+    codingClosed() ||
+    nodes.editor.disabled ||
+    nodes.editor.readOnly ||
+    starter === undefined
+  )
     return;
-  }
   if (nodes.editor.value === starter) {
-    // Nothing to replace, and a press that does nothing silently looks broken
-    // and says nothing to a screen reader.
-    disarmRestore();
     announceRestore(
       "The code is already the starter code.",
       () =>
@@ -1096,26 +1029,10 @@ function restoreStarter() {
     );
     return;
   }
-  const confirmed =
-    restoreArmed &&
-    restoreArmed.language === state.language &&
-    restoreArmed.value === nodes.editor.value;
-  if (!confirmed && !document.queryCommandSupported?.("insertText")) {
-    armRestore();
-    return;
-  }
-  disarmRestore();
   nodes.editor.focus();
-  const restored = applyEditorEdit(
-    { value: starter, start: 0, end: 0 },
-    { splitNewline: true, keepUndo: !confirmed },
-  );
-  if (!restored) {
-    armRestore();
-    return;
-  }
+  applyEditorEdit({ value: starter, start: 0, end: 0 });
   nodes.restoreStatus.textContent =
-    "Restored the starter code. Ctrl+Z (Cmd+Z on a Mac) may undo this, but not after you switch languages.";
+    "Restored the starter code. Ctrl+Z (Cmd+Z on a Mac) undoes this, including after switching languages.";
 }
 
 function bindEvents() {
@@ -1265,28 +1182,7 @@ function bindEvents() {
       );
     });
   }
-  nodes.restoreStarter.addEventListener("click", (event) => {
-    // The second click of a double-click is one gesture, not a confirmation.
-    // A keyboard activation reports a detail of 0, so it is not caught here.
-    if (event.detail > 1) return;
-    restoreStarter();
-  });
-  // Safari does not focus a clicked button, and its mousedown clears the focus
-  // that `armRestore` put there, so the blur below would end the arm before the
-  // second click could confirm it. Keeping the focus where it is avoids that.
-  nodes.restoreStarter.addEventListener("mousedown", (event) =>
-    event.preventDefault(),
-  );
-  nodes.restoreStarter.addEventListener("keydown", (event) => {
-    // Enter clicks a button on every auto-repeated keydown, so holding it would
-    // arm the control and then confirm it with no second press.
-    if (event.repeat && (event.key === "Enter" || event.key === " "))
-      event.preventDefault();
-    else if (event.key === "Escape" && restoreArmed) disarmRestore();
-  });
-  nodes.restoreStarter.addEventListener("blur", () => {
-    if (restoreArmed) disarmRestore();
-  });
+  nodes.restoreStarter.addEventListener("click", restoreStarter);
 
   nodes.editorThemeToggle.addEventListener("click", () => {
     // Off the effective theme, not the attribute: with no explicit choice
@@ -1306,17 +1202,85 @@ function bindEvents() {
   matchMedia("(prefers-color-scheme: light)").addEventListener("change", () =>
     applyEditorTheme(nodes.editorStack.dataset.theme),
   );
+  nodes.editor.addEventListener("dragstart", () => {
+    finishEditorComposition();
+    editorHistory.breakGroup();
+    editorDrag = {
+      before: editorSnapshot(nodes.editor),
+      localDrop: false,
+      moving: false,
+    };
+  });
+  nodes.editor.addEventListener("drop", () => {
+    if (editorDrag) editorDrag.localDrop = true;
+  });
+  nodes.editor.addEventListener("dragend", finishEditorDrag);
   nodes.editor.addEventListener("scroll", syncEditorScroll);
   document.addEventListener("selectionchange", () => {
-    if (document.activeElement === nodes.editor) scheduleEditorPaint();
+    if (document.activeElement === nodes.editor) {
+      // Keep input-only history repairs at the latest selection, without
+      // accepting text that a native history action has already changed.
+      if (observedEditor?.value === nodes.editor.value)
+        observedEditor = editorSnapshot(nodes.editor);
+      scheduleEditorPaint();
+    }
   });
   nodes.editor.addEventListener("focus", () => paintEditor());
-  nodes.editor.addEventListener("blur", () => paintEditor(false));
+  nodes.editor.addEventListener("blur", () => {
+    finishEditorComposition();
+    editorHistory.breakGroup();
+    paintEditor(false);
+  });
+  nodes.editor.addEventListener("pointerdown", () =>
+    editorHistory.breakGroup(),
+  );
+  nodes.editor.addEventListener("compositionstart", () => {
+    finishEditorComposition();
+    editorHistory.breakGroup();
+    editorComposition = editorSnapshot(nodes.editor);
+  });
+  nodes.editor.addEventListener("compositionend", () => {
+    // Some engines send the committed input after compositionend. Include it
+    // before closing the transaction, rather than recording its text twice.
+    compositionTimer = setTimeout(finishEditorComposition, 0);
+  });
   // Tab indents, so it cannot also move focus. Escape arms the next Tab to do
   // that instead, or a candidate driving the page from the keyboard is stuck
   // in the textarea with no way out.
   let tabLeavesEditor = false;
   nodes.editor.addEventListener("keydown", (event) => {
+    const key = /^[\x20-\x7e]$/.test(event.key)
+      ? event.key.toLowerCase()
+      : event.key.length === 1
+        ? event.code?.replace(/^Key/, "").toLowerCase()
+        : event.key;
+    const historyKey =
+      (mac
+        ? event.metaKey && !event.ctrlKey
+        : event.ctrlKey && !event.metaKey) &&
+      !event.altKey &&
+      (key === "z" || (!mac && key === "y" && !event.shiftKey));
+    if (historyKey) {
+      // Let the input method handle its own candidate text until it commits.
+      if (event.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      if (!nodes.editor.disabled && !nodes.editor.readOnly)
+        restoreEditorHistory(key === "y" || event.shiftKey);
+      return;
+    }
+    if (
+      [
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown",
+        "Home",
+        "End",
+        "PageUp",
+        "PageDown",
+      ].includes(event.key)
+    )
+      editorHistory.breakGroup();
     if (event.key === "Escape") {
       tabLeavesEditor = true;
       return;
@@ -1353,6 +1317,52 @@ function bindEvents() {
     );
   });
   nodes.editor.addEventListener("beforeinput", (event) => {
+    if (["historyUndo", "historyRedo"].includes(event.inputType)) {
+      if (event.isComposing) return;
+      if (event.cancelable) {
+        event.preventDefault();
+        if (!nodes.editor.disabled && !nodes.editor.readOnly)
+          restoreEditorHistory(event.inputType === "historyRedo");
+      } else if (!nodes.editor.disabled && !nodes.editor.readOnly) {
+        // selectionchange may still be queued when this action starts.
+        observedEditor = editorSnapshot(nodes.editor);
+      }
+      return;
+    }
+    // Keep the buffer unchanged until the browser supplies the drop position.
+    // Native deleteByDrag can also remove an unselected trailing newline.
+    if (editorDrag?.localDrop && event.cancelable) {
+      if (event.inputType === "deleteByDrag") {
+        event.preventDefault();
+        editorDrag.moving = true;
+        return;
+      }
+      if (event.inputType === "insertFromDrop" && editorDrag.moving) {
+        event.preventDefault();
+        const before = editorDrag.before;
+        const next = moveSelectedText(
+          before.value,
+          before.start,
+          before.end,
+          nodes.editor.selectionStart,
+        );
+        editorDrag = null;
+        nodes.editor.setSelectionRange(
+          before.start,
+          before.end,
+          before.direction,
+        );
+        applyEditorEdit(next);
+        return;
+      }
+    }
+    if (!applyingProgrammaticEdit && !editorComposition) {
+      pendingEditorEdit = {
+        before: editorSnapshot(nodes.editor),
+        type: event.inputType,
+        data: event.data,
+      };
+    }
     if (applyingProgrammaticEdit || event.isComposing || !event.cancelable)
       return;
     if (event.inputType === "insertLineBreak") {
@@ -1407,7 +1417,34 @@ function bindEvents() {
       applyEditorEdit(removal);
     }
   });
-  nodes.editor.addEventListener("input", () => {
+  nodes.editor.addEventListener("input", (event) => {
+    if (!replayingEditorHistory && !applyingProgrammaticEdit) {
+      if (
+        !event.isComposing &&
+        ["historyUndo", "historyRedo"].includes(event.inputType)
+      ) {
+        // Non-cancelable native edits can notify only after writing. Discard
+        // that result and replay the current language's edit.
+        restoreEditorHistory(event.inputType === "historyRedo", true);
+        return;
+      }
+      if (!editorComposition && !editorDrag) {
+        const before = pendingEditorEdit?.before || observedEditor;
+        const after = editorSnapshot(nodes.editor);
+        const type = pendingEditorEdit?.type;
+        const grouping =
+          before?.start === before?.end &&
+          ((type === "insertText" &&
+            pendingEditorEdit.data?.length === 1 &&
+            !/\s/.test(pendingEditorEdit.data)) ||
+            ["deleteContentBackward", "deleteContentForward"].includes(type))
+            ? type
+            : null;
+        if (before) editorHistory.record(before, after, grouping);
+        observedEditor = after;
+        pendingEditorEdit = null;
+      }
+    }
     languageChoiceCommitted = true;
     // Only a changed code buffer counts as the candidate's response.
     if (nodes.editor.value !== state.codeByLanguage[state.language]) {
@@ -1446,7 +1483,7 @@ function bindEvents() {
   // from the first `nodes.editor` input listener to that one on its own, so a
   // listener that reads this module's state cannot sit inside that span.
   nodes.editor.addEventListener("input", () => {
-    if (restoreArmed) disarmRestore();
+    clearRestoreStatus();
   });
 }
 
@@ -2869,18 +2906,31 @@ function setLanguage(language) {
       })
       .catch(() => {});
   }
+  finishEditorDrag();
+  finishEditorComposition();
   if (editorInitialized) {
     // A switch is a coalescer boundary. Flush the old tab before selecting the
     // new one so a quick click cannot replace an unreported edit with the new
     // language's starter buffer.
     flushPendingEditorPublish();
     state.codeByLanguage[state.language] = nodes.editor.value;
-    // A round trip lands on the same language and buffer the arm was taken
-    // for, so the match in `restoreStarter` would honor it.
-    disarmRestore();
+    clearRestoreStatus();
   }
+  const next = editorHistory.select(
+    language,
+    {
+      value: state.codeByLanguage[language],
+      start: 0,
+      end: 0,
+      direction: "none",
+    },
+    editorInitialized ? editorSnapshot(nodes.editor) : null,
+  );
   state.language = language;
-  nodes.editor.value = state.codeByLanguage[language];
+  nodes.editor.value = next.value;
+  nodes.editor.setSelectionRange(next.start, next.end, next.direction);
+  observedEditor = editorSnapshot(nodes.editor);
+  pendingEditorEdit = null;
   paintEditor();
   editorInitialized = true;
   nodes.languageSelect.value = language;
@@ -3499,12 +3549,12 @@ function removeCandidateCase(index) {
 function updateRunAvailability() {
   const restoreOff = codingClosed();
   // Disabling the control that has focus drops focus to the body, so a keyboard
-  // user who armed it is moved first, to the language picker, which this never
+  // user is moved first, to the language picker, which this never
   // disables, as the board buttons do.
   if (restoreOff && document.activeElement === nodes.restoreStarter)
     nodes.languageSelect.focus({ preventScroll: true });
   nodes.restoreStarter.disabled = restoreOff;
-  if (restoreOff) disarmRestore();
+  if (restoreOff) clearRestoreStatus();
   nodes.run.disabled =
     !editorOptions.execution ||
     (strict && !state.connected) ||
@@ -4569,7 +4619,6 @@ function initWhiteboard() {
   nodes.board.addEventListener("pointerenter", paintBoardCursor);
   window.addEventListener("resize", paintBoardCursor);
   paintToolState();
-  const mac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
   for (const [button, action, shortcut, hint] of [
     [
       nodes.boardUndo,

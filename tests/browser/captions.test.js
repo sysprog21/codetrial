@@ -386,6 +386,8 @@ test("only changed editor text dismisses Jim", async (t) => {
     nodes,
     state,
     dismissCaptions: captions.dismissCaptions,
+    // History is covered separately; this fixture isolates input side effects.
+    replayingEditorHistory: true,
     drawingTurn: null,
     flushPendingLanguagePublish: () => events.push("language"),
     scheduleEditorPaint: () => events.push("paint"),

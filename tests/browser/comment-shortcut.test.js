@@ -181,8 +181,6 @@ test("the comment marker follows the language tab", async (t) => {
 });
 
 // One toggle over several lines is one edit to take back, not one per line.
-// Asked of the browser's own undo stack, which is where a toggle written by
-// assigning the textarea's value would have left nothing at all.
 test("one undo takes a toggled block back", async (t) => {
   const ctx = await interviewPage(t);
   if (!ctx) return;
@@ -192,7 +190,7 @@ test("one undo takes a toggled block back", async (t) => {
     await setBuffer(page, code, 0, code.length);
     await page.keyboard.press("Control+/");
     assert.equal(await buffer(page), "# a = 1\n# b = 2\n# c = 3");
-    await page.evaluate(() => document.execCommand("undo"));
+    await page.keyboard.press("ControlOrMeta+Z");
     assert.equal(await buffer(page), code);
     assert.deepEqual(errors, []);
   } finally {
@@ -217,7 +215,7 @@ test("a held chord toggles once", async (t) => {
     await page.keyboard.up("/");
     await page.keyboard.up("Control");
     assert.equal(await buffer(page), "# a = 1");
-    await page.evaluate(() => document.execCommand("undo"));
+    await page.keyboard.press("ControlOrMeta+Z");
     assert.equal(await buffer(page), "a = 1");
     assert.deepEqual(errors, []);
   } finally {

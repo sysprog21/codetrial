@@ -200,9 +200,7 @@ test("Backspace right after an auto-closed pair removes both characters, in a re
   if (!ctx) return;
   const { page, errors } = ctx;
   try {
-    // deleteEmptyPair changes the value, so this exercises the other
-    // execCommand round trip (execCommand("delete")), not just the
-    // insertText one the test above covers.
+    // deleteEmptyPair uses the same programmatic edit path as pair insertion.
     await page.keyboard.type("(");
     await page.keyboard.press("Backspace");
     assert.equal(await page.locator("#editor").inputValue(), "");

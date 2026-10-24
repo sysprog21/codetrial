@@ -1,6 +1,5 @@
 // A browser-level pin for the Restore starter control in web/interview.js: it
-// puts the current language's starter back through the editor's own editing
-// command, so native undo survives, and it touches nothing else.
+// puts the current language's starter back in one undoable page-history edit.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -47,8 +46,8 @@ after(async () => {
   await new Promise((closed) => (server ? server.close(closed) : closed()));
 });
 
-/// Page errors, and every dialog the page opens. The control confirms in the
-/// toolbar because a native dialog blocks the page's event loop, so a dialog
+/// Page errors, and every dialog the page opens. Restore relies on
+/// page history because a native dialog blocks the event loop, so a dialog
 /// showing up at all is a failure; they are dismissed here only so a test that
 /// hits one fails instead of hanging.
 function watch(page) {
@@ -96,9 +95,7 @@ window.LivekitClient = {
   },
 };`;
 
-/// A browser that does not offer the editing command, so a restore could not be
-/// undone and asks for a second press. Every real browser offers it, which makes
-/// this the one way to reach the confirmation.
+/// Restore works even when the browser does not offer an editing command.
 const WITHOUT_EDITING_COMMAND = `document.queryCommandSupported = () => false;`;
 
 /// A page that has cleared the real preflight and joined the fake room, in a
@@ -225,16 +222,7 @@ async function openPage(
 const value = (page) => page.locator("#editor").inputValue();
 const language = (page, name) => page.selectOption("#language-select", name);
 const press = (page) => page.click("#editor-restore-starter");
-const armed = async (page) =>
-  (await page.locator("#editor-restore-starter").getAttribute("data-armed")) ===
-  "true";
-/// A restore the way a candidate confirms it: a first press arms the control
-/// and a second replaces the code. A buffer that already is the starter never
-/// arms, so the second press is skipped.
-async function restore(page) {
-  await press(page);
-  if (await armed(page)) await press(page);
-}
+const restore = press;
 const undo = (page) => page.keyboard.press("ControlOrMeta+Z");
 const redo = (page) => page.keyboard.press("ControlOrMeta+Shift+Z");
 
@@ -245,6 +233,44 @@ async function overwrite(page, text) {
   if (text === "") await page.keyboard.press("Delete");
   else await page.keyboard.insertText(text);
 }
+
+test("one restore press uses page history without calling native editing commands", async (t) => {
+  const ctx = await openPage(t, {}, { withoutEditingCommand: true });
+  if (!ctx) return;
+  const { page } = ctx;
+  try {
+    await overwrite(page, "candidate work\n\n");
+    await page.evaluate(() => {
+      window.__commands = [];
+      document.execCommand = (name) => {
+        window.__commands.push(name);
+        return false;
+      };
+      document.querySelector("#editor").setSelectionRange(1, 5, "backward");
+    });
+    await press(page);
+    assert.equal(await value(page), starters.python);
+    assert.deepEqual(await page.evaluate(() => window.__commands), []);
+    await undo(page);
+    assert.equal(await value(page), "candidate work\n\n");
+    assert.deepEqual(
+      await page
+        .locator("#editor")
+        .evaluate((node) => [
+          node.selectionStart,
+          node.selectionEnd,
+          node.selectionDirection,
+        ]),
+      [1, 5, "backward"],
+    );
+    await redo(page);
+    assert.equal(await value(page), starters.python);
+    assert.deepEqual(ctx.errors, []);
+    assert.deepEqual(ctx.dialogs, []);
+  } finally {
+    await page.close();
+  }
+});
 
 test("every language gets exactly its own starter back", async (t) => {
   const ctx = await openPage(t);
@@ -390,7 +416,7 @@ test("indent, dedent and comment edits share the path and stay exact under undo 
   }
 });
 
-test("a browser with the editing command restores on the first press and arms nothing", async (t) => {
+test("a browser with the editing command restores on the first press", async (t) => {
   const ctx = await openPage(t);
   if (!ctx) return;
   const { page } = ctx;
@@ -403,8 +429,7 @@ test("a browser with the editing command restores on the first press and arms no
     await overwrite(page, "mine\n");
     await press(page);
     assert.equal(await value(page), starters.python, "one press restores");
-    assert.equal(await armed(page), false);
-    assert.equal(await page.locator("#editor-restore-prompt").isHidden(), true);
+
     assert.equal(
       await page.locator("#editor-restore-starter").getAttribute("aria-label"),
       "Restore the starter code",
@@ -417,110 +442,33 @@ test("a browser with the editing command restores on the first press and arms no
   }
 });
 
-test("only the restore splits a trailing newline off the span it replaces", async (t) => {
-  const ctx = await openPage(t);
-  if (!ctx) return;
-  const { page } = ctx;
-  try {
-    await overwrite(page, "a\nb");
-    await page.evaluate(() => {
-      const commands = [];
-      window.__commands = commands;
-      const run = document.execCommand.bind(document);
-      document.execCommand = (name, ...rest) => {
-        commands.push(name);
-        return run(name, ...rest);
-      };
-      const editor = document.querySelector("#editor");
-      editor.setSelectionRange(0, editor.value.length);
-    });
-    await page.keyboard.press("ControlOrMeta+/");
-    assert.equal(await value(page), "# a\n# b", "the comment toggle ran");
-    assert.deepEqual(
-      await page.evaluate(() => window.__commands),
-      ["insertText"],
-      "a comment toggle is one command, with no forward delete after it",
-    );
-    assert.deepEqual(ctx.errors, []);
-  } finally {
-    await page.close();
-  }
-});
-
-test("a second click confirms even when the browser clears focus on mousedown", async (t) => {
+test("a click restores and focuses the editor when mousedown clears focus", async (t) => {
   const ctx = await openPage(t, {}, { withoutEditingCommand: true });
   if (!ctx) return;
   const { page } = ctx;
   try {
-    // Safari does not focus a clicked button and drops the focus that was
-    // there, unless the page cancels the mousedown. Playwright's WebKit focuses
-    // buttons on click, so the behaviour is modelled here.
-    await page.evaluate(() => {
-      document.addEventListener("mousedown", (event) => {
-        if (!event.defaultPrevented) document.activeElement?.blur();
-      });
-    });
-    await overwrite(page, "mine\n");
-    await press(page);
-    assert.equal(await armed(page), true, "the first click armed it");
-    await press(page);
-    assert.equal(await value(page), starters.python, "the second confirmed");
-    assert.equal(await armed(page), false);
-    assert.deepEqual(ctx.errors, []);
-  } finally {
-    await page.close();
-  }
-});
-
-test("an insert whose forward delete is refused leaves the code and its history as they were", async (t) => {
-  const problem = NO_TRAILING_NEWLINE[0];
-  const ctx = await openPage(t, { problem });
-  if (!ctx) return;
-  const { page } = ctx;
-  const starter = startersOf(problem).python;
-  try {
-    // A buffer ending in a newline over a starter that does not takes the
-    // insert and then the forward delete; the second is the one that fails.
-    await overwrite(page, "first\n");
-    await overwrite(page, "mine\n");
-    await page.evaluate(() => {
-      const run = document.execCommand.bind(document);
-      document.execCommand = (name, ...rest) =>
-        name === "forwardDelete" ? false : run(name, ...rest);
-      document.querySelector("#editor").setSelectionRange(1, 3);
-    });
-    await press(page);
-    assert.equal(await value(page), "mine\n", "the half-done insert is undone");
-    assert.equal(await armed(page), true, "asked before assigning the value");
-    assert.deepEqual(
-      await page.evaluate(() => {
-        const editor = document.querySelector("#editor");
-        return [editor.selectionStart, editor.selectionEnd];
-      }),
-      [1, 3],
-      "the candidate's selection is back",
+    await page.evaluate(() =>
+      document.addEventListener("mousedown", () =>
+        document.activeElement?.blur(),
+      ),
     );
-    await page.evaluate(() => document.querySelector("#editor").focus());
-    await undo(page);
+    await overwrite(page, "mine\n");
+    await press(page);
+    assert.equal(await value(page), starters.python);
     assert.equal(
-      await value(page),
-      "first\n",
-      "one undo reaches the earlier edit: the refused restore left no step behind",
+      await page.evaluate(() => document.activeElement?.id),
+      "editor",
     );
-    await redo(page);
-    await press(page);
-    await press(page);
-    assert.equal(await value(page), starter, "a second press still restores");
+    await undo(page);
+    assert.equal(await value(page), "mine\n");
     assert.deepEqual(ctx.errors, []);
   } finally {
     await page.close();
   }
 });
 
-// Chromium redoes a replaced selection that ends in a newline wrongly, which
-// is every buffer ending in a newline restored over a starter that does not.
-// The chargeback starter ends in a newline, so it never shows it; these use the
-// problems whose starter does not.
+// Keep the trailing-newline cases that previously exposed native redo bugs.
+// Page-history undo and redo must restore every byte without a workaround.
 const NO_TRAILING_NEWLINE = Object.entries(
   JSON.parse(readFileSync(webFile("problem-pages.json"), "utf8")),
 )
@@ -565,63 +513,53 @@ test("undo and redo are exact over a starter that does not end in a newline", as
   }
 });
 
-test("a double-click arms the control and does not confirm it", async (t) => {
+test("a double-click restores once and leaves one undo step", async (t) => {
   const ctx = await openPage(t, {}, { withoutEditingCommand: true });
   if (!ctx) return;
   const { page } = ctx;
   try {
     await overwrite(page, "keep this\n");
     await page.dblclick("#editor-restore-starter");
-    assert.equal(await armed(page), true, "the first click armed it");
-    assert.equal(
-      await value(page),
-      "keep this\n",
-      "the second click of the same gesture did not replace the code",
-    );
-    await press(page);
-    assert.equal(await value(page), starters.python, "a later press confirms");
+    assert.equal(await value(page), starters.python);
+    await page.locator("#editor").focus();
+    await undo(page);
+    assert.equal(await value(page), "keep this\n");
+    await redo(page);
+    assert.equal(await value(page), starters.python);
+    assert.deepEqual(ctx.errors, []);
   } finally {
     await page.close();
   }
 });
 
-test("the prompt stays inside the panel and the code under it stays clickable", async (t) => {
-  const ctx = await openPage(t, {}, { withoutEditingCommand: true });
+test("the restore control stays inside narrow panels and leaves the editor clickable", async (t) => {
+  const ctx = await openPage(t);
   if (!ctx) return;
   const { page } = ctx;
   try {
-    await overwrite(page, "keep this\n");
     for (const width of [320, 390, 600, 1024]) {
       await page.setViewportSize({ width, height: 900 });
-      // Fresh each time: a press on an armed control would confirm it.
       await overwrite(page, "keep this\n");
       await press(page);
-      assert.equal(await armed(page), true, `${width}: armed`);
-      const m = await page.evaluate(() => {
-        const panel = document.querySelector(".editor-panel");
-        const box = panel.getBoundingClientRect();
-        const prompt = document.querySelector("#editor-restore-prompt");
-        const at = prompt.getBoundingClientRect();
-        const under = document.elementFromPoint(
-          at.left + at.width / 2,
-          at.top + at.height / 2,
-        );
-        return {
-          inside: at.left >= box.left - 1 && at.right <= box.right + 1,
-          scrollsSideways: panel.scrollWidth > panel.clientWidth,
-          visible: prompt.checkVisibility(),
-          underPrompt: under?.id || under?.tagName,
-        };
+      const inside = await page.evaluate(() => {
+        const panel = document
+          .querySelector(".editor-panel")
+          .getBoundingClientRect();
+        const button = document
+          .querySelector("#editor-restore-starter")
+          .getBoundingClientRect();
+        return button.left >= panel.left && button.right <= panel.right;
       });
-      assert.equal(m.visible, true, `${width}: shown`);
-      assert.equal(m.inside, true, `${width}: inside the panel`);
-      assert.equal(m.scrollsSideways, false, `${width}: no sideways scroll`);
-      assert.notEqual(
-        m.underPrompt,
-        "editor-restore-prompt",
-        `${width}: the prompt takes no clicks`,
+      assert.equal(inside, true, String(width));
+      await page.locator("#editor").click();
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.id),
+        "editor",
       );
+      await undo(page);
+      assert.equal(await value(page), "keep this\n");
     }
+    assert.deepEqual(ctx.errors, []);
   } finally {
     await page.close();
   }
@@ -729,65 +667,15 @@ test("the painted overlays follow the restored buffer", async (t) => {
   }
 });
 
-test("the first press arms the control and a second one replaces the code", async (t) => {
-  const ctx = await openPage(t, {}, { withoutEditingCommand: true });
-  if (!ctx) return;
-  const { page } = ctx;
-  try {
-    const button = page.locator("#editor-restore-starter");
-    const toolbar = page.locator(".editor-toolbar");
-    const toolbarHeight = (await toolbar.boundingBox()).height;
-    await overwrite(page, "mine\n");
-    await press(page);
-    assert.equal(await armed(page), true);
-    assert.equal(await value(page), "mine\n", "one press replaces nothing");
-    assert.equal(
-      (await page.locator("#editor-restore-prompt").textContent()).trim(),
-      "Press again to replace your code",
-    );
-    assert.equal(
-      await button.getAttribute("aria-label"),
-      "Press again to replace your code with the starter code",
-      "the visible words are inside the accessible name",
-    );
-    assert.equal(
-      (await toolbar.boundingBox()).height,
-      toolbarHeight,
-      "the prompt hangs below the button, so the toolbar keeps its row",
-    );
-    assert.match(
-      await page.locator("#editor-restore-status").textContent(),
-      /Ctrl\+Z \(Cmd\+Z on a Mac\) may not bring it back/,
-      "the candidate is told how far undo reaches",
-    );
-    await press(page);
-    assert.equal(await value(page), starters.python);
-    assert.equal(await armed(page), false);
-    assert.equal(await page.locator("#editor-restore-prompt").isHidden(), true);
-    assert.equal(
-      await button.getAttribute("aria-label"),
-      "Restore the starter code",
-    );
-    assert.equal(
-      await page.locator("#editor-restore-status").textContent(),
-      "Restored the starter code. Ctrl+Z (Cmd+Z on a Mac) may undo this, but not after you switch languages.",
-    );
-    assert.deepEqual(ctx.dialogs, [], "no native dialog, which would block");
-    assert.deepEqual(ctx.errors, []);
-  } finally {
-    await page.close();
-  }
-});
-
 const ALREADY = "The code is already the starter code.";
 
-test("the starter itself arms nothing, and says so", async (t) => {
+test("the untouched starter is unchanged and announced", async (t) => {
   const ctx = await openPage(t);
   if (!ctx) return;
   const { page } = ctx;
   try {
     await press(page);
-    assert.equal(await armed(page), false);
+
     assert.equal(await value(page), starters.python);
     // Said on the next frame, so wait for it: a press that did nothing in
     // silence looked broken, and told a screen reader nothing.
@@ -798,7 +686,6 @@ test("the starter itself arms nothing, and says so", async (t) => {
       ALREADY,
       { timeout: 5000 },
     );
-    assert.equal(await page.locator("#editor-restore-prompt").isHidden(), true);
   } finally {
     await page.close();
   }
@@ -875,285 +762,30 @@ test("an announcement that stopped being true before its frame is not made", asy
   }
 });
 
-test("a late announcement does not overwrite the prompt an arm has just written", async (t) => {
-  const ctx = await openPage(t, {}, { withoutEditingCommand: true });
+test("a late announcement does not overwrite a successful restore", async (t) => {
+  const ctx = await openPage(t);
   if (!ctx) return;
   const { page } = ctx;
   try {
     await page.evaluate(() => {
       const button = document.querySelector("#editor-restore-starter");
-      const editor = document.querySelector("#editor");
-      // A press on the starter schedules its announcement for the next frame;
-      // the buffer then changes and a second press arms before that frame.
       button.click();
-      editor.value = "changed\n";
+      document.querySelector("#editor").value = "changed\n";
       button.click();
     });
-    await page.waitForTimeout(300);
-    assert.equal(await armed(page), true);
+    await page.evaluate(() => new Promise(requestAnimationFrame));
     assert.match(
       await page.locator("#editor-restore-status").textContent(),
-      /Press again to replace your code/,
-      "the arm's own words stand",
+      /^Restored the starter code\./,
     );
-  } finally {
-    await page.close();
-  }
-});
-
-test("an arm does not run out on its own", async (t) => {
-  const ctx = await openPage(t, {}, { withoutEditingCommand: true });
-  if (!ctx) return;
-  const { page } = ctx;
-  try {
-    // Page timers on a fake clock, so a minute passes at once: a screen reader
-    // needs as long as it needs to read the status, and a prompt that ran out
-    // first would be armed again by the very press meant to confirm it.
-    await page.clock.install();
-    await overwrite(page, "keep this\n");
-    await press(page);
-    assert.equal(await armed(page), true);
-    await page.clock.fastForward(60_000);
-    assert.equal(await armed(page), true, "still armed a minute on");
-    assert.equal(await value(page), "keep this\n");
-    await press(page);
-    assert.equal(await value(page), starters.python, "and it confirms");
-  } finally {
-    await page.close();
-  }
-});
-
-// WebKit does not focus a button that is clicked, so a mouse press there arms
-// the control with focus still in the editor. A script click is the same: it
-// runs the click handler and moves no focus.
-const clickWithoutFocus = (page) =>
-  page.evaluate(() =>
-    document.querySelector("#editor-restore-starter").click(),
-  );
-
-test("arming puts focus on the control, so Escape cancels it after a click that did not", async (t) => {
-  const ctx = await openPage(t, {}, { withoutEditingCommand: true });
-  if (!ctx) return;
-  const { page } = ctx;
-  try {
-    await overwrite(page, "keep this\n");
-    await clickWithoutFocus(page);
-    assert.equal(await armed(page), true);
-    assert.equal(
-      await page.evaluate(() => document.activeElement?.id),
-      "editor-restore-starter",
-      "arming focused the button, as a click does in Chromium",
-    );
-    await page.keyboard.press("Escape");
-    assert.equal(await armed(page), false, "Escape reached the button");
-    await clickWithoutFocus(page);
-    assert.equal(
-      await armed(page),
-      true,
-      "a new first press, not a confirmation",
-    );
-    assert.equal(await value(page), "keep this\n", "nothing was replaced");
-  } finally {
-    await page.close();
-  }
-});
-
-test("clicking back into the editor cancels an arm taken without focus", async (t) => {
-  const ctx = await openPage(t, {}, { withoutEditingCommand: true });
-  if (!ctx) return;
-  const { page } = ctx;
-  try {
-    await overwrite(page, "keep this\n");
-    await clickWithoutFocus(page);
-    assert.equal(await armed(page), true);
-    // Back into the code without typing: only the button losing focus tells
-    // the control, and it has focus only because arming gave it.
-    await page.focus("#editor");
-    assert.equal(await armed(page), false);
-    await clickWithoutFocus(page);
-    assert.equal(await armed(page), true, "armed afresh");
-    assert.equal(
-      await value(page),
-      "keep this\n",
-      "and the code is still there",
-    );
-  } finally {
-    await page.close();
-  }
-});
-
-test("leaving the button ends the arm", async (t) => {
-  const ctx = await openPage(t, {}, { withoutEditingCommand: true });
-  if (!ctx) return;
-  const { page } = ctx;
-  try {
-    await overwrite(page, "keep this\n");
-    await press(page);
-    assert.equal(await armed(page), true);
-    await page.evaluate(() => document.querySelector("#editor").focus());
-    assert.equal(await armed(page), false);
-    assert.equal(await page.locator("#editor-restore-prompt").isHidden(), true);
-    assert.equal(
-      await page.locator("#editor-restore-status").textContent(),
-      "",
-    );
-    await press(page);
-    assert.equal(await armed(page), true, "a press now is a first press");
-    assert.equal(await value(page), "keep this\n");
-  } finally {
-    await page.close();
-  }
-});
-
-test("an edit ends the arm even while the button keeps focus", async (t) => {
-  const ctx = await openPage(t, {}, { withoutEditingCommand: true });
-  if (!ctx) return;
-  const { page } = ctx;
-  try {
-    await overwrite(page, "keep this\n");
-    await press(page);
-    assert.equal(await armed(page), true);
-    await page.evaluate(() => {
-      const editor = document.querySelector("#editor");
-      editor.value += "more\n";
-      editor.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    assert.equal(await armed(page), false);
-    assert.equal(await page.locator("#editor-restore-prompt").isHidden(), true);
-  } finally {
-    await page.close();
-  }
-});
-
-test("holding Enter on the button arms it and does not confirm it", async (t) => {
-  const ctx = await openPage(t, {}, { withoutEditingCommand: true });
-  if (!ctx) return;
-  const { page } = ctx;
-  try {
-    await overwrite(page, "keep this\n");
-    await page.focus("#editor-restore-starter");
-    // Auto-repeat is a keydown that arrives again with the key still down, and
-    // the browser clicks a button on each of them.
-    await page.keyboard.down("Enter");
-    for (let i = 0; i < 4; i += 1) await page.keyboard.down("Enter");
-    await page.keyboard.up("Enter");
-    assert.equal(await armed(page), true, "the first keydown armed it");
-    assert.equal(
-      await value(page),
-      "keep this\n",
-      "the repeats did not replace the code",
-    );
-    await page.keyboard.press("Enter");
-    assert.equal(await value(page), starters.python, "a second press does");
-  } finally {
-    await page.close();
-  }
-});
-
-test("Escape on the armed control disarms it", async (t) => {
-  const ctx = await openPage(t, {}, { withoutEditingCommand: true });
-  if (!ctx) return;
-  const { page } = ctx;
-  try {
-    await overwrite(page, "keep this\n");
-    await press(page);
-    assert.equal(await armed(page), true);
-    await page.keyboard.press("Escape");
-    assert.equal(await armed(page), false);
-    assert.equal(await value(page), "keep this\n");
-  } finally {
-    await page.close();
-  }
-});
-
-test("an edit or a language change between presses makes the next one a first press", async (t) => {
-  const ctx = await openPage(t, {}, { withoutEditingCommand: true });
-  if (!ctx) return;
-  const { page } = ctx;
-  try {
-    await overwrite(page, "first\n");
-    await press(page);
-    await page.evaluate(() => document.querySelector("#editor").focus());
-    await page.keyboard.insertText("and more\n");
-    await press(page);
-    assert.equal(await armed(page), true, "armed afresh for the new buffer");
-    assert.equal(await value(page), "first\nand more\n");
-
-    await language(page, "javascript");
-    await overwrite(page, "// js\n");
-    await press(page);
-    assert.equal(await armed(page), true);
-    assert.equal(
-      await value(page),
-      "// js\n",
-      "the other language is untouched",
-    );
-    await language(page, "python");
-    assert.equal(await value(page), "first\nand more\n");
+    assert.equal(await value(page), starters.python);
     assert.deepEqual(ctx.errors, []);
   } finally {
     await page.close();
   }
 });
 
-test("a language round trip drops the arm even though it lands on the same buffer", async (t) => {
-  const ctx = await openPage(t, {}, { withoutEditingCommand: true });
-  if (!ctx) return;
-  const { page } = ctx;
-  try {
-    await overwrite(page, "round trip\n");
-    await press(page);
-    assert.equal(await armed(page), true);
-    await language(page, "javascript");
-    assert.equal(await armed(page), false, "switching away disarms");
-    await language(page, "python");
-    assert.equal(
-      await value(page),
-      "round trip\n",
-      "same language, same buffer",
-    );
-    // The arm was taken before the switch, so this is a first press: it arms
-    // and replaces nothing, where a stale arm would have replaced at once.
-    await press(page);
-    assert.equal(await armed(page), true);
-    assert.equal(await value(page), "round trip\n");
-    assert.deepEqual(ctx.errors, []);
-  } finally {
-    await page.close();
-  }
-});
-
-test("an unconfirmed press leaves the buffer, the selection and the undo history alone", async (t) => {
-  const ctx = await openPage(t, {}, { withoutEditingCommand: true });
-  if (!ctx) return;
-  const { page } = ctx;
-  try {
-    await overwrite(page, "keep this\n");
-    await page.keyboard.insertText("and this\n");
-    await page.evaluate(() =>
-      document.querySelector("#editor").setSelectionRange(3, 8),
-    );
-    await press(page);
-    assert.equal(await value(page), "keep this\nand this\n");
-    const selection = await page.evaluate(() => {
-      const editor = document.querySelector("#editor");
-      return [editor.selectionStart, editor.selectionEnd];
-    });
-    assert.deepEqual(selection, [3, 8], "the candidate's selection is kept");
-    await page.evaluate(() => document.querySelector("#editor").focus());
-    await undo(page);
-    assert.notEqual(
-      await value(page),
-      "keep this\nand this\n",
-      "the candidate's own typing is still undoable",
-    );
-    assert.deepEqual(ctx.errors, []);
-  } finally {
-    await page.close();
-  }
-});
-
-test("after a language switch the old buffer is gone, as the question says", async (t) => {
+test("a restored buffer can be undone and redone after switching languages", async (t) => {
   const ctx = await openPage(t);
   if (!ctx) return;
   const { page } = ctx;
@@ -1166,17 +798,20 @@ test("after a language switch the old buffer is gone, as the question says", asy
     await undo(page);
     assert.equal(
       await value(page),
-      starters.python,
-      "undo does not cross a switch, which is why the restore asked first",
+      "my precious work\n",
+      "undo restores this language's work after a switch",
     );
+    await language(page, "javascript");
+    await language(page, "python");
+    await page.locator("#editor").focus();
+    await redo(page);
+    assert.equal(await value(page), starters.python);
   } finally {
     await page.close();
   }
 });
 
-// A browser with no editing command, or one that refuses it, would have to
-// assign `value` and leave nothing to undo. It is asked for a second press
-// first, and the first one leaves the code exactly as it was.
+// Native editing command support does not affect page-history restores.
 for (const [name, disable] of [
   [
     "a browser that offers the editing command but refuses it",
@@ -1192,7 +827,7 @@ for (const [name, disable] of [
     },
   ],
 ]) {
-  test(`${name} keeps the code on the first press and restores on the second`, async (t) => {
+  test(`${name} restores on the first press`, async (t) => {
     const ctx = await openPage(t);
     if (!ctx) return;
     const { page } = ctx;
@@ -1200,19 +835,21 @@ for (const [name, disable] of [
       await overwrite(page, "kept only in the tab\n");
       await page.evaluate(disable);
       await press(page);
-      assert.equal(await value(page), "kept only in the tab\n");
-      assert.equal(await armed(page), true, "asked before the history is lost");
-      await press(page);
       assert.equal(await value(page), starters.python);
-      assert.equal(await armed(page), false);
+
       assert.deepEqual(ctx.dialogs, []);
       await language(page, "javascript");
       await language(page, "python");
       assert.equal(
         await value(page),
         starters.python,
-        "the fallback fires the input event, so the buffer is filed",
+        "the input event saves the restored buffer",
       );
+      await page.locator("#editor").focus();
+      await undo(page);
+      assert.equal(await value(page), "kept only in the tab\n");
+      await redo(page);
+      assert.equal(await value(page), starters.python);
       assert.deepEqual(ctx.errors, []);
     } finally {
       await page.close();
@@ -1311,7 +948,7 @@ test("a buffer of other scripts and a longer one restores whole", async (t) => {
   }
 });
 
-test("Enter and Space on the focused button arm it and then replace the code", async (t) => {
+test("Enter and Space on the focused button each restore on the first press", async (t) => {
   const ctx = await openPage(t, {}, { withoutEditingCommand: true });
   if (!ctx) return;
   const { page } = ctx;
@@ -1320,11 +957,11 @@ test("Enter and Space on the focused button arm it and then replace the code", a
       await overwrite(page, `before ${key}\n`);
       await page.focus("#editor-restore-starter");
       await page.keyboard.press(key);
-      assert.equal(await armed(page), true, `${key} arms`);
+      assert.equal(await value(page), starters.python, key);
+      await undo(page);
       assert.equal(await value(page), `before ${key}\n`);
-      await page.keyboard.press(key);
-      assert.equal(await value(page), starters.python, `${key} replaces`);
     }
+    assert.deepEqual(ctx.errors, []);
   } finally {
     await page.close();
   }
@@ -1344,8 +981,7 @@ test("the control is a named button beside the language it acts on", async (t) =
         glyphHidden: node.firstElementChild.getAttribute("aria-hidden"),
         label: node.getAttribute("aria-label"),
         title: node.title,
-        promptHidden: document.querySelector("#editor-restore-prompt").hidden,
-        after: node.closest(".restore-control")?.previousElementSibling?.id,
+        after: node.previousElementSibling?.id,
         inToolbar: Boolean(node.closest(".editor-toolbar")),
         inDisplaySettings: Boolean(node.closest(".editor-view-controls")),
         inEnd: Boolean(node.closest(".toolbar-end")),
@@ -1364,7 +1000,6 @@ test("the control is a named button beside the language it acts on", async (t) =
       glyphHidden: "true",
       label: "Restore the starter code",
       title: "Restore the starter code",
-      promptHidden: true,
       after: "language-select",
       inToolbar: true,
       inDisplaySettings: false,
@@ -1395,7 +1030,6 @@ test("pressing it after the interview has ended changes nothing", async (t) => {
       "final answer\n",
       "the submitted code is not replaced once the interview is over",
     );
-    assert.equal(await armed(page), false, "and nothing is left armed");
   } finally {
     await page.close();
   }
@@ -1414,7 +1048,6 @@ test("a disabled editor is not restored", async (t) => {
       button.click();
     });
     assert.equal(await value(page), "locked work\n");
-    assert.equal(await armed(page), false);
   } finally {
     await page.close();
   }
@@ -1463,8 +1096,7 @@ test("the behavioral round disables the control when the agent opens it", async 
       { timeout: 5000 },
     );
 
-    await press(page);
-    assert.equal(await armed(page), true, "armed before the round opens");
+    await button.focus();
 
     // Off the control, so the resting look below is read without a hover.
     await page.mouse.move(0, 0);
@@ -1488,7 +1120,7 @@ test("the behavioral round disables the control when the agent opens it", async 
       () => document.querySelector("#editor").disabled,
     );
     assert.equal(await button.isDisabled(), true, "disabled with the editor");
-    assert.equal(await armed(page), false, "and no longer armed");
+
     assert.equal(
       await page.evaluate(() => document.activeElement?.id),
       "language-select",
@@ -1595,33 +1227,20 @@ test("a reset goes out as a code_update for the current language", async (t) => 
   }
 });
 
-test("nothing is sent until the confirming press, and a dropped arm starts over", async (t) => {
+test("the first restore press publishes once and a repeated no-op publishes nothing", async (t) => {
   const ctx = await connectedPage(t, { withoutEditingCommand: true });
   if (!ctx) return;
   const { page } = ctx;
   try {
     await sentBy(page, () => overwrite(page, "mine\n"));
-    assert.equal(
-      await sentQuietly(page, () => press(page)),
-      0,
-      "armed only: nothing sent",
-    );
-    // Leaving the button ends the arm, so the next press is not a confirmation.
-    await page.evaluate(() => document.querySelector("#editor").focus());
-    assert.equal(await armed(page), false);
-    assert.equal(
-      await sentQuietly(page, () => press(page)),
-      0,
-      "after the arm ended a press arms again and sends nothing",
-    );
-    assert.equal(await armed(page), true);
+    const before = (await codePackets(page)).length;
     const packets = await sentBy(page, () => press(page));
-    assert.equal(packets.at(-1).code, starters.python, "only this one sends");
-    assert.equal(
-      await sentQuietly(page, () => restore(page)),
-      0,
-      "already the starter: nothing sent",
-    );
+    assert.equal(packets.length, before + 1);
+    assert.deepEqual(packets.at(-1), {
+      language: "python",
+      code: starters.python,
+    });
+    assert.equal(await sentQuietly(page, () => press(page)), 0);
     assert.deepEqual(ctx.errors, []);
   } finally {
     await page.close();
@@ -1639,7 +1258,7 @@ test("a browser that refuses the editing command still sends the reset", async (
     });
     const packets = await sentBy(page, () => restore(page));
     assert.equal(packets.at(-1).code, starters.python);
-    assert.deepEqual(ctx.dialogs, [], "confirmed in the toolbar, not a dialog");
+    assert.deepEqual(ctx.dialogs, [], "restoring opens no blocking dialog");
     assert.deepEqual(ctx.errors, []);
   } finally {
     await page.close();
@@ -1661,3 +1280,91 @@ test("a whiteboard interview loads without the editor panel and without error", 
     await page.close();
   }
 });
+
+test("restore, undo and redo publish the active buffer after language switches", async (t) => {
+  const ctx = await connectedPage(t);
+  if (!ctx) return;
+  const { page } = ctx;
+  try {
+    const mine = "candidate solution\n";
+    await sentBy(page, () => overwrite(page, mine));
+    await page
+      .locator("#editor")
+      .evaluate((node) => node.setSelectionRange(2, 9, "backward"));
+    let packets = await sentBy(page, () => restore(page));
+    assert.deepEqual(packets.at(-1), {
+      language: "python",
+      code: starters.python,
+    });
+    await sentBy(page, () => language(page, "javascript"));
+    await sentBy(page, () => overwrite(page, "// JavaScript stays here\n"));
+    await sentBy(page, () => language(page, "python"));
+    await page.locator("#editor").focus();
+    packets = await sentBy(page, () => undo(page));
+    assert.deepEqual(packets.at(-1), { language: "python", code: mine });
+    assert.deepEqual(
+      await page
+        .locator("#editor")
+        .evaluate((node) => [
+          node.selectionStart,
+          node.selectionEnd,
+          node.selectionDirection,
+        ]),
+      [2, 9, "backward"],
+    );
+    packets = await sentBy(page, () => redo(page));
+    assert.deepEqual(packets.at(-1), {
+      language: "python",
+      code: starters.python,
+    });
+    await sentBy(page, () => language(page, "javascript"));
+    assert.equal(await value(page), "// JavaScript stays here\n");
+    assert.deepEqual(ctx.errors, []);
+  } finally {
+    await page.close();
+  }
+});
+
+for (const [index, name] of LANGUAGES.entries()) {
+  test(`${name} starter restore stays undoable and redoable after switching languages`, async (t) => {
+    const ctx = await openPage(t);
+    if (!ctx) return;
+    const { page } = ctx;
+    try {
+      await language(page, name);
+      const marker = name === "python" ? "#" : "//";
+      const mine = `${starters[name]}\n${marker} ${name} candidate work\n`;
+      await overwrite(page, mine);
+      await page
+        .locator("#editor")
+        .evaluate((node) => node.setSelectionRange(2, 7, "backward"));
+      await restore(page);
+      assert.equal(await value(page), starters[name]);
+      const other = LANGUAGES[(index + 1) % LANGUAGES.length];
+      await language(page, other);
+      assert.equal(await value(page), starters[other]);
+      await language(page, name);
+      await page.locator("#editor").focus();
+      await undo(page);
+      assert.equal(await value(page), mine);
+      assert.deepEqual(
+        await page
+          .locator("#editor")
+          .evaluate((node) => [
+            node.selectionStart,
+            node.selectionEnd,
+            node.selectionDirection,
+          ]),
+        [2, 7, "backward"],
+      );
+      await language(page, other);
+      await language(page, name);
+      await page.locator("#editor").focus();
+      await redo(page);
+      assert.equal(await value(page), starters[name]);
+      assert.deepEqual(ctx.errors, []);
+    } finally {
+      await page.close();
+    }
+  });
+}
