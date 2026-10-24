@@ -261,7 +261,7 @@ fn static_interview_script_leaves_candidate_identity_to_the_server() {
     // The shared request fields follow the mode-specific problem selection.
     // Strict assignment must retain the optional execution restriction too.
     assert!(compact(&source).contains(
-        "durationMin,interviewId,interviewLoop,interviewMode:mode,interviewProfile,...(interviewGrounding?{interviewGrounding}:{}),...(nodes.interviewerAccent.value?{interviewerAccent:nodes.interviewerAccent.value}:{}),...(nodes.interviewerVoice.value?{interviewerVoice:nodes.interviewerVoice.value}:{}),...(nodes.hideExamples.checked?{hideExamples:true}:{}),...(exampleDrawingEnabled?{exampleDrawing:true}:{}),...(!editorOptions.execution?{codeExecution:false}:{})})"
+        "durationMin,interviewId,interviewLoop,interviewMode:mode,interviewProfile,...(interviewGrounding?{interviewGrounding}:{}),...(nodes.interviewerAccent.value?{interviewerAccent:nodes.interviewerAccent.value}:{}),...(nodes.interviewerVoice.value?{interviewerVoice:nodes.interviewerVoice.value}:{}),...(nodes.hideExamples.checked?{hideExamples:true}:{}),...(exampleDrawingEnabled?{exampleDrawing:true}:{}),...(candidateLedEnabled?{candidateLed:true}:{}),...(!editorOptions.execution?{codeExecution:false}:{})})"
     ));
     assert!(!source.contains("candidateIdentity"));
 }

@@ -24,6 +24,7 @@ fn instructions(problem: &Problem, duration_min: u32) -> String {
             voice: None,
             accent: None,
             example_drawing_enabled: false,
+            candidate_led_enabled: false,
             profile: InterviewProfile::default(),
             grounding: InterviewGrounding::default(),
             interview_loop: InterviewLoop::CodingBehavioral,
@@ -43,6 +44,7 @@ fn board_instructions(problem: &Problem, duration_min: u32) -> String {
             voice: None,
             accent: None,
             example_drawing_enabled: false,
+            candidate_led_enabled: false,
             profile: InterviewProfile::default(),
             grounding: InterviewGrounding::default(),
             interview_loop: InterviewLoop::CodingBehavioral,
@@ -318,6 +320,7 @@ fn prompt_samples() -> Value {
                 voice: None,
                 accent: None,
             example_drawing_enabled: false,
+            candidate_led_enabled: false,
                 profile: full_profile.clone(),
                 grounding: InterviewGrounding::default(),
                 interview_loop: InterviewLoop::CodingBehavioral,
@@ -332,6 +335,7 @@ fn prompt_samples() -> Value {
                 voice: None,
                 accent: None,
             example_drawing_enabled: false,
+            candidate_led_enabled: false,
                 profile: InterviewProfile::default(),
                 grounding: InterviewGrounding::default(),
                 interview_loop: InterviewLoop::CodingBehavioral,
@@ -343,8 +347,9 @@ fn prompt_samples() -> Value {
         "boardInstructions": board_instructions(problem, 45),
         "greeting": greeting(InterviewMode::Coding),
         "boardGreeting": greeting(InterviewMode::Whiteboard),
-        "boardSilenceEmpty": board_silence_nudge(&empty, 0),
-        "boardSilenceDrawn": board_silence_nudge(&board_working, 17),
+        "boardSilenceEmpty": board_silence_nudge(&empty, 0, false),
+        "boardSilenceDrawn": board_silence_nudge(&board_working, 17, false),
+        "boardSilenceCandidateLed": board_silence_nudge(&board_working, 17, true),
         "boardColdRestart": cold_restart(&RuntimeState {
             interview_mode: InterviewMode::Whiteboard,
             board_snapshots: 4,
@@ -364,6 +369,139 @@ fn prompt_samples() -> Value {
         "silenceEmpty": silence_nudge(&RuntimeState::default(), &empty, None),
         "silenceEarly": silence_nudge(&RuntimeState::default(), &early, None),
         "silenceWorking": silence_nudge(&working_state, &working, Some(&excerpt)),
+        "silenceCandidateLed": silence_nudge(
+            &RuntimeState {
+                candidate_led_enabled: true,
+                ..RuntimeState::default()
+            },
+            &empty,
+            None,
+        ),
+
+        // Repeat and Example recorded but Algorithm is not: the conversation
+        // could still be back in Example, so `candidate_led_certain` must stay
+        // false and the hedged `unwritten` branch, with the trailing
+        // candidate-led clause appended, must run unchanged.
+        "silenceCandidateLedInExample": silence_nudge(
+            &RuntimeState {
+                candidate_led_enabled: true,
+                framework_evidence: vec![
+                    FrameworkEvidence {
+                        at_ms: 0,
+                        phase: FrameworkPhase::Repeat,
+                        source: EvidenceSource::CandidateSpeech,
+                        kind: EvidenceKind::Observed,
+                        confidence: 90,
+                        summary: "Restated the problem.".to_string(),
+                        framework_version: FRAMEWORK_VERSION,
+                    },
+                    FrameworkEvidence {
+                        at_ms: 0,
+                        phase: FrameworkPhase::Example,
+                        source: EvidenceSource::CandidateSpeech,
+                        kind: EvidenceKind::Observed,
+                        confidence: 90,
+                        summary: "Walked through an example.".to_string(),
+                        framework_version: FRAMEWORK_VERSION,
+                    },
+                ],
+                ..RuntimeState::default()
+            },
+            &empty,
+            None,
+        ),
+
+        // Repeat, Example and Algorithm all recorded, an untouched editor, and
+        // `unwritten` would name the next step: the open question must replace
+        // it rather than be appended beside it.
+        "silenceCandidateLedBeforeCoding": silence_nudge(
+            &RuntimeState {
+                candidate_led_enabled: true,
+                framework_evidence: vec![
+                    FrameworkEvidence {
+                        at_ms: 0,
+                        phase: FrameworkPhase::Repeat,
+                        source: EvidenceSource::CandidateSpeech,
+                        kind: EvidenceKind::Observed,
+                        confidence: 90,
+                        summary: "Restated the problem.".to_string(),
+                        framework_version: FRAMEWORK_VERSION,
+                    },
+                    FrameworkEvidence {
+                        at_ms: 0,
+                        phase: FrameworkPhase::Example,
+                        source: EvidenceSource::CandidateSpeech,
+                        kind: EvidenceKind::Observed,
+                        confidence: 90,
+                        summary: "Walked through an example.".to_string(),
+                        framework_version: FRAMEWORK_VERSION,
+                    },
+                    FrameworkEvidence {
+                        at_ms: 0,
+                        phase: FrameworkPhase::Algorithm,
+                        source: EvidenceSource::CandidateSpeech,
+                        kind: EvidenceKind::Observed,
+                        confidence: 90,
+                        summary: "Outlined a planned algorithm.".to_string(),
+                        framework_version: FRAMEWORK_VERSION,
+                    },
+                ],
+                ..RuntimeState::default()
+            },
+            &empty,
+            None,
+        ),
+
+        // Repeat, Example and Algorithm recorded, same as above, but the editor
+        // already holds the candidate's own code: the usual Coding stall, where
+        // `candidate_led_certain` is also true but `branch` never touches
+        // `unwritten`. The trailing append must still carry the candidate-led
+        // instruction here, or an opted-in candidate gets none at all on the
+        // stall they hit most.
+        "silenceCandidateLedWriting": silence_nudge(
+            &RuntimeState {
+                candidate_led_enabled: true,
+                framework_evidence: vec![
+                    FrameworkEvidence {
+                        at_ms: 0,
+                        phase: FrameworkPhase::Repeat,
+                        source: EvidenceSource::CandidateSpeech,
+                        kind: EvidenceKind::Observed,
+                        confidence: 90,
+                        summary: "Restated the problem.".to_string(),
+                        framework_version: FRAMEWORK_VERSION,
+                    },
+                    FrameworkEvidence {
+                        at_ms: 0,
+                        phase: FrameworkPhase::Example,
+                        source: EvidenceSource::CandidateSpeech,
+                        kind: EvidenceKind::Observed,
+                        confidence: 90,
+                        summary: "Walked through an example.".to_string(),
+                        framework_version: FRAMEWORK_VERSION,
+                    },
+                    FrameworkEvidence {
+                        at_ms: 0,
+                        phase: FrameworkPhase::Algorithm,
+                        source: EvidenceSource::CandidateSpeech,
+                        kind: EvidenceKind::Observed,
+                        confidence: 90,
+                        summary: "Outlined a planned algorithm.".to_string(),
+                        framework_version: FRAMEWORK_VERSION,
+                    },
+                ],
+                language: "python".to_string(),
+                code_templates: [(
+                    "python".to_string(),
+                    "def two_sum(nums, target):\n    return []\n".to_string(),
+                )]
+                .into(),
+                code: "def two_sum(nums, target):\n    seen = {}\n    return []\n".to_string(),
+                ..RuntimeState::default()
+            },
+            &working,
+            Some(&excerpt),
+        ),
         "coldRestart": cold_restart(&cold_state),
         "coldRestartEmpty": cold_restart(&RuntimeState::default()),
 
@@ -445,6 +583,7 @@ fn prompt_samples() -> Value {
             false,
         ),
         "exampleInstructions": build_instructions_for_plan(problem, 45, &codetrial::runtime::RuntimeOptions { example_drawing_enabled: true, ..Default::default() }),
+        "candidateLedInstructions": build_instructions_for_plan(problem, 45, &codetrial::runtime::RuntimeOptions { candidate_led_enabled: true, ..Default::default() }),
         "exampleReportSystem": report_system_instruction_for_examples(InterviewMode::Coding, true),
         "exampleInterim": interim_review_prompt(&InterimReviewInput { problem, example_drawing_enabled: true, interview_mode: InterviewMode::Coding, transcript_window: "Candidate: I will use a hash map.", code: "seen = {}", language: "python", already_recorded: "", evidence: &working_interim }),
         "reportSystem": report_system_instruction(InterviewMode::Coding),
@@ -637,6 +776,7 @@ fn prompt_samples() -> Value {
             voice: None,
             accent: None,
             example_drawing_enabled: false,
+            candidate_led_enabled: false,
             profile: InterviewProfile::default(),
             grounding: InterviewGrounding::default(),
             interview_loop: InterviewLoop::CodingBehavioral,

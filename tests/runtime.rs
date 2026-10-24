@@ -76,6 +76,46 @@ fn example_drawing_is_explicit_and_coding_only() {
     );
 }
 
+/// Unlike example drawing, candidate-led coding is not coding-only: the
+/// Algorithm and Coding steps it is scoped to exist at a whiteboard too, so
+/// the instructions carry it in both modes.
+#[test]
+fn candidate_led_is_explicit_in_both_modes() {
+    let config = config();
+    for mode in [InterviewMode::Coding, InterviewMode::Whiteboard] {
+        for enabled in [false, true] {
+            let boot = bootstrap_with_rounds(
+                &config,
+                "candidate-led-opt-in",
+                Some("two-sum"),
+                45,
+                RuntimeOptions {
+                    candidate_led_enabled: enabled,
+                    interview_mode: mode,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(boot.candidate_led_enabled, enabled);
+            assert_eq!(boot.instructions.contains("CANDIDATE-LED CODING"), enabled);
+        }
+    }
+    for value in [
+        serde_json::json!(false),
+        serde_json::json!("true"),
+        serde_json::json!(1),
+        serde_json::Value::Null,
+    ] {
+        let parsed = codetrial::agent::parse_participant_metadata(Some(
+            &serde_json::json!({"candidateLed":value}).to_string(),
+        ));
+        assert!(!parsed.candidate_led_enabled);
+    }
+    assert!(
+        codetrial::agent::parse_participant_metadata(Some("{\"candidateLed\":true}"))
+            .candidate_led_enabled
+    );
+}
+
 #[test]
 fn bootstrap_resolves_requested_problem_and_room() {
     let config = config();

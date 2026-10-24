@@ -115,6 +115,7 @@ fn disabled_execution_prompts_request_traces_across_recovery_and_editor_events()
                 voice: None,
                 accent: None,
                 example_drawing_enabled: false,
+                candidate_led_enabled: false,
                 profile: InterviewProfile::default(),
                 grounding: InterviewGrounding::default(),
                 interview_loop,
@@ -239,8 +240,8 @@ fn prompt_golden_digest_matches_versions() {
     // its hash is a string nothing checks. The pair is still asserted, because
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
-    let recorded_versions = (31, 23);
-    let recorded_digest = "c08f45877fc5b2a65a8e9acbfddc1cbab3140df8cfa74efce9229c133f332bec";
+    let recorded_versions = (32, 23);
+    let recorded_digest = "adc9b273f1d81c51ba374927914bff213247c00fe769b12e1d4b342245a603f9";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -631,6 +632,7 @@ fn document_grounding_requires_consent_and_is_bounded_as_untrusted_prompt_data()
             voice: None,
             accent: None,
             example_drawing_enabled: false,
+            candidate_led_enabled: false,
             profile: InterviewProfile::default(),
             grounding: grounding.clone(),
             interview_loop: InterviewLoop::CodingBehavioral,
@@ -951,6 +953,7 @@ fn profile_text_is_bounded_and_prompt_context_cannot_change_the_coding_rubric() 
             voice: None,
             accent: None,
             example_drawing_enabled: false,
+            candidate_led_enabled: false,
             profile: profile.clone(),
             grounding: InterviewGrounding::default(),
             interview_loop: InterviewLoop::CodingBehavioral,
@@ -1000,6 +1003,7 @@ fn hidden_examples_are_not_on_screen_for_the_interviewer() {
                 voice: None,
                 accent: None,
                 example_drawing_enabled: false,
+                candidate_led_enabled: false,
                 profile: InterviewProfile::default(),
                 grounding: InterviewGrounding::default(),
                 interview_loop: InterviewLoop::CodingBehavioral,
@@ -1049,6 +1053,7 @@ fn coding_only_prompt_removes_the_behavioral_round_contract() {
             voice: None,
             accent: None,
             example_drawing_enabled: false,
+            candidate_led_enabled: false,
             profile: InterviewProfile::default(),
             grounding: InterviewGrounding::default(),
             interview_loop: InterviewLoop::CodingOnly,
@@ -1072,6 +1077,7 @@ fn coding_only_prompt_removes_the_behavioral_round_contract() {
                 voice: None,
                 accent: None,
                 example_drawing_enabled: false,
+                candidate_led_enabled: false,
                 profile: InterviewProfile::default(),
                 grounding: InterviewGrounding::default(),
                 interview_loop: InterviewLoop::CodingBehavioral,
@@ -1093,6 +1099,7 @@ fn coding_only_prompt_removes_the_behavioral_round_contract() {
             voice: None,
             accent: None,
             example_drawing_enabled: false,
+            candidate_led_enabled: false,
             profile: InterviewProfile::default(),
             grounding: (InterviewGrounding {
                 requirements: vec!["Owns incident response".to_string()],
@@ -1375,16 +1382,16 @@ fn interview_contract_versions_are_one_closed_bundle() {
         "the bundle table has no row for {INTERVIEW_CONTRACT_BUNDLE_VERSION}"
     );
 
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 40);
-    assert_eq!(LIVE_PROMPT_VERSION, 31);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 41);
+    assert_eq!(LIVE_PROMPT_VERSION, 32);
     assert_eq!(REPORT_PROMPT_VERSION, 23);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 3);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 40,
-            "livePromptVersion": 31,
+            "bundleVersion": 41,
+            "livePromptVersion": 32,
             "reportPromptVersion": 23,
             "rubricVersion": 1,
             "reportSchemaVersion": 3,

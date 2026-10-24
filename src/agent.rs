@@ -180,8 +180,8 @@ pub const THINKING_CHECK_IN_S: u64 = 120;
 pub(crate) const THINKING_RELEASE_COOLDOWN: std::time::Duration =
     std::time::Duration::from_secs(10);
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 40;
-pub const LIVE_PROMPT_VERSION: u32 = 31;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 41;
+pub const LIVE_PROMPT_VERSION: u32 = 32;
 pub const REPORT_PROMPT_VERSION: u32 = 23;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 3;
@@ -967,6 +967,10 @@ pub struct RuntimeState {
     pub interview_mode: InterviewMode,
     pub code_execution_disabled: bool,
     pub example_drawing_enabled: bool,
+    /// The candidate opted to lead the Algorithm and Coding steps; see
+    /// `prompts::candidate_led_policy` and the nudge it tells `silence_nudge`
+    /// to send instead of naming the next step.
+    pub candidate_led_enabled: bool,
     pub coding_minutes: u32,
     pub behavioral_minutes: u32,
     pub round_transition_seen: bool,
@@ -1250,6 +1254,7 @@ impl Default for RuntimeState {
             interview_mode: InterviewMode::Coding,
             code_execution_disabled: false,
             example_drawing_enabled: false,
+            candidate_led_enabled: false,
             coding_minutes: 37,
             behavioral_minutes: 8,
             round_transition_seen: false,
@@ -3023,6 +3028,7 @@ pub struct MetadataConfig {
     pub examples_hidden: bool,
     pub code_execution_disabled: bool,
     pub example_drawing_enabled: bool,
+    pub candidate_led_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -3393,6 +3399,7 @@ pub fn parse_participant_metadata(metadata: Option<&str>) -> MetadataConfig {
 
     let example_drawing_enabled = !interview_mode.is_whiteboard()
         && value.get("exampleDrawing") == Some(&serde_json::Value::Bool(true));
+    let candidate_led_enabled = value.get("candidateLed") == Some(&serde_json::Value::Bool(true));
     MetadataConfig {
         voice: sanitize_interviewer_choice(value.get("interviewerVoice"), INTERVIEWER_VOICES),
         accent: sanitize_interviewer_choice(value.get("interviewerAccent"), INTERVIEWER_ACCENTS),
@@ -3405,6 +3412,7 @@ pub fn parse_participant_metadata(metadata: Option<&str>) -> MetadataConfig {
         examples_hidden,
         code_execution_disabled,
         example_drawing_enabled,
+        candidate_led_enabled,
     }
 }
 

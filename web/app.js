@@ -114,6 +114,7 @@ let avoidedProblem;
 const nodes = {
   editorOptions: document.querySelector(".editor-options-row"),
   exampleDrawing: document.querySelector("#enable-example-drawing"),
+  candidateLed: document.querySelector("#enable-candidate-led"),
   accountStatus: document.querySelector("#account-status"),
   githubLogin: document.querySelector("#github-login"),
   loginLink: document.querySelector("#login-link"),
@@ -532,6 +533,7 @@ for (const button of document.querySelectorAll("[data-mode]")) {
 }
 
 nodes.exampleDrawing.addEventListener("change", rememberSettings);
+nodes.candidateLed.addEventListener("change", rememberSettings);
 
 const start = document.querySelector("#start");
 
@@ -599,6 +601,8 @@ start.addEventListener("click", async () => {
   destination.searchParams.set("mode", mode);
   if (mode === "coding" && nodes.exampleDrawing.checked)
     destination.searchParams.set("exampleDrawing", "1");
+  if (nodes.candidateLed.checked)
+    destination.searchParams.set("candidateLed", "1");
   if (!strict && mode === "coding" && retryLanguage)
     destination.searchParams.set("language", retryLanguage);
   setEditorOptions(destination.searchParams, selectedEditorOptions());
@@ -1470,6 +1474,7 @@ function rememberSettings() {
       interviewLoop,
       interviewMode: mode,
       exampleDrawing: nodes.exampleDrawing.checked,
+      candidateLed: nodes.candidateLed.checked,
     }),
   );
 }
@@ -1485,6 +1490,7 @@ function restoreSettings() {
   }
   if (!settings || typeof settings !== "object") return;
   nodes.exampleDrawing.checked = settings.exampleDrawing === true;
+  nodes.candidateLed.checked = settings.candidateLed === true;
   if (
     durations.some(
       (button) => Number(button.dataset.duration) === settings.durationMin,
