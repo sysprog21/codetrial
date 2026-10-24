@@ -1,0 +1,262 @@
+{
+  "problem": {
+    "id": "min-stack",
+    "title": "Min Stack",
+    "difficulty": "Medium",
+    "topics": [
+      "Stack",
+      "Design"
+    ],
+    "statement": [
+      "Design a stack that supports push, pop, top, and retrieving the current minimum value.",
+      "Each operation must run in O(1) time."
+    ],
+    "examples": [
+      {
+        "input": "[\"MinStack\",\"push\",\"push\",\"push\",\"getMin\",\"pop\",\"top\",\"getMin\"]\n[[],[-2],[0],[-3],[],[],[],[]]",
+        "output": "[null,null,null,null,-3,null,0,-2]"
+      }
+    ],
+    "constraints": [
+      "-2^31 <= value <= 2^31 - 1",
+      "Methods pop, top, and getMin are called only when the stack is non-empty.",
+      "At most 3 * 10^4 calls will be made."
+    ],
+    "starterCode": {
+      "python": "class MinStack:\n    def __init__(self):\n        pass\n\n    def push(self, value: int) -> None:\n        pass\n\n    def pop(self) -> None:\n        pass\n\n    def top(self) -> int:\n        pass\n\n    def getMin(self) -> int:\n        pass\n",
+      "javascript": "class MinStack {\n  constructor() {\n  }\n\n  /** @param {number} value @return {void} */\n  push(value) {\n  }\n\n  /** @return {void} */\n  pop() {\n  }\n\n  /** @return {number} */\n  top() {\n  }\n\n  /** @return {number} */\n  getMin() {\n  }\n}\n",
+      "c": "typedef struct {\n    // Think out loud as you go!\n} MinStack;\n\nMinStack* minStackCreate() {\n    return NULL;\n}\n\nvoid minStackPush(MinStack* obj, int value) {\n}\n\nvoid minStackPop(MinStack* obj) {\n}\n\nint minStackTop(MinStack* obj) {\n    return 0;\n}\n\nint minStackGetMin(MinStack* obj) {\n    return 0;\n}\n\nvoid minStackFree(MinStack* obj) {\n}\n",
+      "cpp": "class MinStack {\npublic:\n    MinStack() {\n    }\n\n    void push(int value) {\n    }\n\n    void pop() {\n    }\n\n    int top() {\n        return 0;\n    }\n\n    int getMin() {\n        return 0;\n    }\n};\n",
+      "java": "class MinStack {\n    public MinStack() {\n    }\n\n    public void push(int value) {\n    }\n\n    public void pop() {\n    }\n\n    public int top() {\n        return 0;\n    }\n\n    public int getMin() {\n        return 0;\n    }\n}\n"
+    },
+    "summary": "Design a stack supporting push, pop, top, and getMin, where getMin returns the current minimum value and every operation is O(1).",
+    "optimal": "Keep a normal value stack plus a second stack storing the minimum at each depth or storing value/count pairs for minima. Push and pop update both stacks so getMin reads the current minimum directly.",
+    "pitfalls": "Recomputing the minimum by scanning on every getMin; losing duplicate minima after one pop; not updating min state on pop; returning stale minima after the minimum value is removed."
+  },
+  "judge": {
+    "kind": "class",
+    "entry": "minStack",
+    "className": "MinStack",
+    "checker": "exact",
+    "cases": [
+      {
+        "label": "classic negative minimum sequence",
+        "input": [
+          [
+            "MinStack",
+            "push",
+            "push",
+            "push",
+            "getMin",
+            "pop",
+            "top",
+            "getMin"
+          ],
+          [
+            [],
+            [
+              -2
+            ],
+            [
+              0
+            ],
+            [
+              -3
+            ],
+            [],
+            [],
+            [],
+            []
+          ]
+        ],
+        "expected": [
+          null,
+          null,
+          null,
+          null,
+          -3,
+          null,
+          0,
+          -2
+        ]
+      },
+      {
+        "label": "duplicate minimum survives one pop",
+        "input": [
+          [
+            "MinStack",
+            "push",
+            "push",
+            "push",
+            "getMin",
+            "pop",
+            "getMin",
+            "pop",
+            "getMin"
+          ],
+          [
+            [],
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              1
+            ],
+            [],
+            [],
+            [],
+            [],
+            []
+          ]
+        ],
+        "expected": [
+          null,
+          null,
+          null,
+          null,
+          1,
+          null,
+          1,
+          null,
+          2
+        ]
+      },
+      {
+        "label": "top after decreasing pushes",
+        "input": [
+          [
+            "MinStack",
+            "push",
+            "push",
+            "top",
+            "getMin",
+            "pop",
+            "top",
+            "getMin"
+          ],
+          [
+            [],
+            [
+              5
+            ],
+            [
+              3
+            ],
+            [],
+            [],
+            [],
+            [],
+            []
+          ]
+        ],
+        "expected": [
+          null,
+          null,
+          null,
+          3,
+          3,
+          null,
+          5,
+          5
+        ]
+      },
+      {
+        "label": "negative minimum after positive values",
+        "input": [
+          [
+            "MinStack",
+            "push",
+            "push",
+            "push",
+            "getMin",
+            "top"
+          ],
+          [
+            [],
+            [
+              4
+            ],
+            [
+              6
+            ],
+            [
+              -1
+            ],
+            [],
+            []
+          ]
+        ],
+        "expected": [
+          null,
+          null,
+          null,
+          null,
+          -1,
+          -1
+        ]
+      },
+      {
+        "label": "new stack",
+        "input": [
+          [
+            "MinStack"
+          ],
+          [
+            []
+          ]
+        ],
+        "expected": [
+          null
+        ]
+      }
+    ]
+  },
+  "variant": {
+    "title": "Tentative Bid Ledger",
+    "className": "BidLedger",
+    "brief": [
+      "An auction desk tool keeps traders' tentative bids in a last-in, first-out ledger: new bids go on top, and undo removes the most recent one. Traders also want to see the lowest bid currently in the ledger at any moment, and that display refreshes after every action.",
+      "Implement the class BidLedger with a constructor taking no arguments and four methods: push(value) adds a bid on top, pop() removes the top bid, top() returns the top bid without removing it, and smallest() returns the smallest bid currently in the ledger."
+    ],
+    "contract": "BidLedger() creates an empty stack; push(value) adds value on top, pop() removes the top element, top() returns the top element, and smallest() returns the minimum value currently in the stack, with duplicates treated as separate elements. pop, top and smallest are only called on a non-empty stack, each operation should be O(1), and the graded output is the list of return values with null for the constructor, push and pop.",
+    "examples": [
+      {
+        "case": 3
+      }
+    ],
+    "clarifications": [
+      {
+        "question": "Can pop, top or smallest be called when the ledger is empty?",
+        "answer": "No. Those three are only called when at least one bid is present."
+      },
+      {
+        "question": "Can the same bid value be pushed more than once?",
+        "answer": "Yes. Repeated values are separate bids, and removing one copy leaves the others in place."
+      },
+      {
+        "question": "How fast does smallest need to be?",
+        "answer": "The display calls it after every action, so every method should take the same small amount of time no matter how many bids are in the ledger."
+      },
+      {
+        "question": "What range do bids fall in and how many calls are there?",
+        "answer": "Bids are between -2^31 and 2^31 - 1, and there are at most 3 * 10^4 calls in total."
+      }
+    ],
+    "followUps": [
+      "Traders now also want the highest bid at any moment. What would you add, and what would it cost?",
+      "Memory is tight and most bids are not new lows. Can you store less extra information per bid?",
+      "Undo now needs to remove the oldest bid as well as the newest. How would you keep the lowest bid available?"
+    ],
+    "hints": [
+      "Push 5, then 3, then 7, and pop them one at a time. What should the lowest bid read after each pop, and where would that answer come from?",
+      "When the current lowest bid is removed, the answer falls back to what it was before that bid arrived. What could you record at the moment of each push so that fallback is already known?",
+      "If the same low value is pushed twice and one copy is popped, what must your recorded information show so the lowest bid does not change too early?"
+    ],
+    "terms": {
+      "getMin": "smallest"
+    }
+  }
+}

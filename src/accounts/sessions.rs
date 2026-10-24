@@ -132,12 +132,13 @@ pub fn session_user(
         let verified: i64 = row.get(4)?;
         Ok(Some(SignedInUser {
             id: row.get(0)?,
-
-            // Trusted only under create_session's caller invariant.
-            identity_verified: row.get::<_, i64>(5)? > 0,
             login: row.get(1)?,
             avatar_url: row.get(2)?,
             verified_email: row.get::<_, Option<String>>(3)?.filter(|_| verified != 0),
+            // Trusted only under create_session's caller invariant.
+            github_id: u64::try_from(row.get::<_, i64>(5)?)
+                .ok()
+                .filter(|id| *id > 0),
         }))
     })
 }

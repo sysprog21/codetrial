@@ -100,11 +100,13 @@ class TestGateLanes(unittest.TestCase):
         skip="",
         ci=False,
         unset_cxx=False,
-        replace=None,
+        replace=(),
+        env=None,
     ):
         source = SCRIPT.read_text()
-        if replace:
-            source = source.replace(*replace)
+        for old, new in replace:
+            self.assertEqual(source.count(old), 1, old)
+            source = source.replace(old, new)
         # Keep the real dispatch and failure aggregation; substitute only the
         # gate payload so the test needs neither compilers nor downloaded assets.
         self.assertEqual(source.count('if "$@"; then'), 1)
@@ -128,7 +130,7 @@ gate()
         )
         if extra_gate:
             source = source.replace("gate fmt ", "gate future-check true\ngate fmt ", 1)
-        env = {**os.environ, "CXX": "unused"}
+        env = {**os.environ, "CXX": "unused", **(env or {})}
         if unset_cxx:
             del env["CXX"]
         result = subprocess.run(
@@ -608,10 +610,50 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
         for lane, fetched in (("all", True), ("rust", True), ("portable", False)):
             with self.subTest(lane=lane):
                 result, _ = self.run_lane(
-                    lane, unset_cxx=True, replace=(fetch, "{ echo fetch:clang >&2; }")
+                    lane,
+                    unset_cxx=True,
+                    replace=[(fetch, "{ echo fetch:clang >&2; }")],
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual("fetch:clang" in result.stderr, fetched)
+
+    def test_only_the_portable_lane_sets_up_the_packaging_python(self):
+        # As if the Python found had no `cryptography`, so the gate would set
+        # up the instructor tool's environment for the packaging tests.
+        replace = [
+            ("\"$1\" -c 'import cryptography'", "false"),
+            (
+                '"$PYTHON" "$ROOT/scripts/problem_bank/runtime.py"',
+                "{ echo setup:task-tools >&2; }",
+            ),
+        ]
+        for lane, setup in (
+            ("all", True),
+            ("portable", True),
+            ("rust", False),
+            ("browser", False),
+        ):
+            with self.subTest(lane=lane):
+                result, _ = self.run_lane(lane, replace=replace)
+                self.assertEqual("setup:task-tools" in result.stderr, setup)
+        self.assertEqual(
+            condition(gates_job(), "Place the instructor packaging environment"),
+            "matrix.lane == 'portable'",
+        )
+
+    def test_a_named_packaging_environment_is_set_up_beside_a_ready_python(self):
+        # A runner's system Python can already import `cryptography`; CI names
+        # its own environment so the packaging tests run in a venv regardless.
+        setup = (
+            '"$PYTHON" "$ROOT/scripts/problem_bank/runtime.py"',
+            "{ echo setup:task-tools >&2; }",
+        )
+        ready = ("\"$1\" -c 'import cryptography'", "true")
+        for named, expected in (("/nonexistent/task-tools", True), ("", False)):
+            with self.subTest(named=named):
+                env = {"CODETRIAL_TASK_TOOLS": named}
+                result, _ = self.run_lane("portable", replace=[ready, setup], env=env)
+                self.assertEqual("setup:task-tools" in result.stderr, expected)
 
     def test_each_lane_installs_what_its_gates_need(self):
         gates, matrix = gates_job(), lanes()

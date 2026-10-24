@@ -308,6 +308,25 @@ saves it on arrival like any report, and the final outcome replaces it under
 the same report id, so a tab lost during the window keeps the failure rather
 than nothing.
 
+Two exceptions cover [task mode](task-mode.md), which runs on the learner's
+own machine for that learner alone.
+
+The latest attempt's result (a Learning review, an unavailable envelope, or an
+invalid or interrupted record) stays in process memory with the attempt's final
+code and revision ID, so the learner's page can collect it after a room
+disconnect or a reload. It is returned only to the signed-in learner with
+`Cache-Control: no-store`, bounded by `reviewBytes`, and dropped once
+`reviewRetentionSeconds` has passed (at the next task request, so an idle
+process can hold it until then), when the next attempt ends, or on process
+exit. It is
+never persisted and never an input to another attempt or a later review. The
+attempt's other revisions, turns, runs and review prompt are not kept with it.
+
+The instructor's package is static problem data. Its manifest and encrypted
+`tasks.enc` are downloaded at unlock and decoded in process memory; nothing
+from it, encrypted or not, is written to disk, and the PIN and the key derived
+from it are discarded once the set is decoded.
+
 ## What the candidate sees
 
 The browser exposes distinct accessible states for connecting, live,

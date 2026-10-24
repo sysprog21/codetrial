@@ -249,7 +249,10 @@ STARTER_LANGS = {
 
 
 def validated_problems(source: Path = SOURCE) -> list[dict]:
-    problems = read_json(source)
+    return validated_problem_data(read_json(source))
+
+
+def validated_problem_data(problems: object) -> list[dict]:
     if not isinstance(problems, list):
         raise RuntimeError("problem bank must be a JSON array")
     require_valid_origins(problems)

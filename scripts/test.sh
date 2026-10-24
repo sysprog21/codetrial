@@ -28,6 +28,26 @@ python_ok()
 {
     "$1" -c 'import sys; sys.exit(sys.version_info < (3, 9))' > /dev/null 2>&1
 }
+
+has_cryptography()
+{
+    "$1" -c 'import cryptography' > /dev/null 2>&1
+}
+
+# The instructor tool's own environment comes first when it holds the
+# `cryptography` the packaging tests need. Without it, it is set up from the
+# Python found, once, here: the packaging suites run in parallel and must not
+# each set it up. Only the portable lane runs them, so no other lane installs
+# it. An environment CODETRIAL_TASK_TOOLS names, as CI's does, is set up even
+# when the Python found has the package: a runner's system Python can, and the
+# tests that need a venv would skip under it. A PYTHON named outright is used as
+# it is.
+failed=""
+TASK_PYTHON=${CODETRIAL_TASK_TOOLS:-$ROOT/target/task-tools}/bin/python
+if [ -z "${PYTHON:-}" ] && python_ok "$TASK_PYTHON" \
+    && has_cryptography "$TASK_PYTHON"; then
+    PYTHON=$TASK_PYTHON
+fi
 if [ -z "${PYTHON:-}" ]; then
     for candidate in python3 python3.14 python3.13 python3.12 python3.11 \
         python3.10 python3.9; do
@@ -36,13 +56,20 @@ if [ -z "${PYTHON:-}" ]; then
             break
         fi
     done
+    if [ -n "${PYTHON:-}" ] && [ "$lane" != rust ] && [ "$lane" != browser ]; then
+        if [ -n "${CODETRIAL_TASK_TOOLS:-}" ] || ! has_cryptography "$PYTHON"; then
+            if "$PYTHON" "$ROOT/scripts/problem_bank/runtime.py"; then
+                PYTHON=$TASK_PYTHON
+            else
+                failed=" task-tools"
+            fi
+        fi
+    fi
 fi
 if [ -z "${PYTHON:-}" ]; then
     echo "no Python 3.9+ found; the Python gates will fail. Set PYTHON to one." >&2
     PYTHON=python3
 fi
-
-failed=""
 
 # What this run did not check, collected as it goes and printed at the end.
 #
@@ -454,6 +481,14 @@ unittest_gate()
 }
 
 gate gen-problems-tests unittest_gate "$ROOT/tests/test_gen_problems.py"
+gate task-mode-tests unittest_gate "$ROOT/tests/test_task_mode.py"
+
+if has_cryptography "$PYTHON"; then
+    gate task-package-tests unittest_gate "$ROOT/tests/test_task_package.py"
+    gate task-authoring-tests unittest_gate "$ROOT/tests/test_task_authoring.py"
+else
+    skip "instructor packaging tests: $PYTHON has no \`cryptography\`; see docs/development.md"
+fi
 gate gen-problem-cards "$PYTHON" "$ROOT/scripts/gen-problem-cards.py" --check
 gate wire-fixtures node "$ROOT/scripts/gen-wire-fixtures.mjs" --check
 gate recording-fixtures node "$ROOT/scripts/gen-recording-fixtures.mjs" --check

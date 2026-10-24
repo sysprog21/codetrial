@@ -320,9 +320,16 @@ async function mediaBrowser(t) {
 async function clearPreflight(page) {
   await page.getByRole("button", { name: "Play test tone" }).click();
   await page.getByRole("button", { name: "I heard it" }).click();
-  await page.waitForFunction(
-    () => !document.querySelector("#audio-check-join").disabled,
-  );
+  await page
+    .waitForFunction(
+      () => !document.querySelector("#audio-check-join").disabled,
+    )
+    .catch(async (error) => {
+      throw new Error(
+        `Media preflight blocked: ${await page.locator("#audio-check-status").textContent()}`,
+        { cause: error },
+      );
+    });
   await page.click("#audio-check-join");
   await page.waitForFunction(
     () => document.querySelector("#timer").textContent !== "00:00",

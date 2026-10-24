@@ -159,6 +159,7 @@ test("setup validates required fields and preserves retry after server error", a
       livekitApiKey: "key",
       livekitApiSecret: "secret",
       googleApiKey: "",
+      taskMode: false,
     },
   ]);
 });

@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use crate::config::{AgentConfig, Provider};
-use crate::web::{DispatchRefusal, NoShowConsent, RoomDispatcher};
+use crate::web::{AgentJob, DispatchRefusal, NoShowConsent, RoomDispatcher};
 
 const MAX_CONCURRENT_GUEST_INTERVIEWS: usize = 2;
 
@@ -45,8 +45,13 @@ impl RoomDispatcher for LocalDispatcher {
         true
     }
 
-    fn ensure_agent(&self, room_name: &str, provider: &Provider) -> Result<(), DispatchRefusal> {
-        self.ensure_agent_with_kind(room_name, provider, false, None)
+    fn ensure_agent(
+        &self,
+        room_name: &str,
+        provider: &Provider,
+        job: AgentJob,
+    ) -> Result<(), DispatchRefusal> {
+        self.ensure_agent_with_kind(room_name, provider, job, false, None)
     }
 
     fn ensure_agent_with_no_show_release(
@@ -55,7 +60,7 @@ impl RoomDispatcher for LocalDispatcher {
         provider: &Provider,
         no_show: Option<NoShowConsent>,
     ) -> Result<(), DispatchRefusal> {
-        self.ensure_agent_with_kind(room_name, provider, false, no_show)
+        self.ensure_agent_with_kind(room_name, provider, AgentJob::Interview, false, no_show)
     }
 
     fn ensure_guest_agent(
@@ -63,7 +68,7 @@ impl RoomDispatcher for LocalDispatcher {
         room_name: &str,
         provider: &Provider,
     ) -> Result<(), DispatchRefusal> {
-        self.ensure_agent_with_kind(room_name, provider, true, None)
+        self.ensure_agent_with_kind(room_name, provider, AgentJob::Interview, true, None)
     }
 }
 
@@ -72,6 +77,7 @@ impl LocalDispatcher {
         &self,
         room_name: &str,
         provider: &Provider,
+        job: AgentJob,
         guest: bool,
         no_show: Option<NoShowConsent>,
     ) -> Result<(), DispatchRefusal> {
@@ -100,16 +106,25 @@ impl LocalDispatcher {
         let config = agent_config_for(&self.config, provider);
 
         // Spawned, not awaited: this runs on the request path, and the task
-        // outlives the response by the length of the interview.
+        // outlives the response by the length of the interview or attempt.
         self.runtime.spawn(async move {
             eprintln!("codetrial dispatch room={}", slot.room_name);
-            let outcome = crate::livekit::run_room_with_slot(
-                &config,
-                &slot.room_name,
-                crate::web::current_epoch_seconds(),
-                Some(&slot),
-            )
-            .await;
+            let outcome = match job {
+                AgentJob::Interview => {
+                    crate::livekit::run_room_with_slot(
+                        &config,
+                        &slot.room_name,
+                        crate::web::current_epoch_seconds(),
+                        Some(&slot),
+                    )
+                    .await
+                }
+                AgentJob::Task { candidate, task } => {
+                    crate::livekit::tasks::run(&config, &slot.room_name, &candidate, task, &slot)
+                        .await
+                        .map(|()| crate::livekit::RoomRunOutcome::Completed)
+                }
+            };
             if outcome.as_ref().is_ok_and(no_show_release_required) {
                 release_no_show(no_show, &slot.room_name).await;
             }

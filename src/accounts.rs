@@ -60,13 +60,15 @@ pub struct GitHubOauth {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedInUser {
     pub id: i64,
-    pub identity_verified: bool,
     pub login: String,
     pub avatar_url: Option<String>,
     /// The primary verified address GitHub gave us at sign-in, and only that.
     /// `None` for every self-declared login, which is the whole point: a typed
     /// handle is a label, and a recording is delivered to a person.
     pub verified_email: Option<String>,
+    /// GitHub's numeric account ID, for a login GitHub vouched for; `None` for
+    /// a self-declared one.
+    pub github_id: Option<u64>,
 }
 
 /// What GitHub told us. Its `github_id` is not the local `users.id`, which is
