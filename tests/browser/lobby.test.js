@@ -7772,3 +7772,341 @@ lobbyTest(
     }
   },
 );
+
+for (const storage of ["account", "device"]) {
+  lobbyTest(
+    `problem attempt summaries use full ${storage} history without changing card controls`,
+    async (page) => {
+      const entries = [
+        {
+          id: "first",
+          problemId: EASY[0],
+          date: "2026-01-01T10:00:00Z",
+          language: "python",
+          difficulty: "Easy",
+          durationMin: 30,
+          report: { decision: "HIRE" },
+        },
+        {
+          id: "second",
+          problemId: EASY[0],
+          date: "2026-01-03T23:30:00Z",
+          language: "cpp",
+          difficulty: "Hard",
+          durationMin: 45,
+          report: { decision: "NO_HIRE" },
+        },
+        {
+          id: "third",
+          problemId: EASY[0],
+          date: "2026-01-03T23:30:00Z",
+          language: "python",
+          difficulty: "Easy",
+          durationMin: 30,
+          interviewMode: "whiteboard",
+          report: { incomplete: true },
+        },
+        {
+          id: "other",
+          problemId: EASY[1],
+          date: "2026-01-02T10:00:00Z",
+          report: {},
+        },
+        { problemId: EASY[0], date: "invalid", report: {} },
+        { problemId: EASY[0], report: {} },
+        {
+          problemId: "unknown-problem",
+          problemTitle: "Chargeback Pair Match",
+          date: "2026-01-04",
+          report: {},
+        },
+      ];
+      if (storage === "account")
+        reports = entries.map((payload) => ({ payload }));
+      else {
+        session = { signedIn: false };
+        await page.addInitScript(
+          (entries) =>
+            localStorage.setItem("codetrial_history", JSON.stringify(entries)),
+          entries,
+        );
+      }
+      await lobby(page);
+      await awaitReady(page);
+      const summary = page.locator(
+        `#problem-entry-${EASY[0]} .problem-attempt-summary`,
+      );
+      const other = page.locator(
+        `#problem-entry-${EASY[1]} .problem-attempt-summary`,
+      );
+      assert.equal(
+        await summary.textContent(),
+        "Previously attempted · 3 attempts · Last attempted 1/4/2026",
+      );
+      assert.equal(
+        await other.textContent(),
+        "Previously attempted · 1 attempt · Last attempted 1/2/2026",
+      );
+      assert.equal(
+        await page.locator(".problem-attempt-summary:not([hidden])").count(),
+        2,
+      );
+      const original = await snapshot(page);
+      for (const [selector, value] of [
+        ["#progress-language", "python"],
+        ["#progress-difficulty", "Easy"],
+        ["#progress-duration", "30"],
+      ]) {
+        await page.locator(selector).selectOption(value);
+        assert.equal(
+          await summary.textContent(),
+          "Previously attempted · 3 attempts · Last attempted 1/4/2026",
+        );
+      }
+      assert.equal((await snapshot(page)).card, original.card);
+      await page.click("details.problem-picker summary");
+      const card = page.locator(`[data-problem="${EASY[0]}"]`);
+      assert.equal(
+        await card.getAttribute("aria-describedby"),
+        await summary.getAttribute("id"),
+      );
+      const cdp = await page.context().newCDPSession(page);
+      try {
+        const { root } = await cdp.send("DOM.getDocument");
+        const { nodeId } = await cdp.send("DOM.querySelector", {
+          nodeId: root.nodeId,
+          selector: `[data-problem="${EASY[0]}"]`,
+        });
+        const { nodes } = await cdp.send("Accessibility.getPartialAXTree", {
+          nodeId,
+        });
+        assert.equal(
+          nodes.find((node) => node.role?.value === "button")?.description
+            ?.value,
+          await summary.textContent(),
+        );
+      } finally {
+        await cdp.detach();
+      }
+      assert.doesNotMatch(
+        (await card.getAttribute("aria-label")) ?? (await card.innerText()),
+        /Previously attempted/,
+      );
+      await card.click();
+      assert.equal(await card.getAttribute("aria-pressed"), "true");
+      assert.equal(
+        await page
+          .locator(`#problem-entry-${EASY[0]} button .problem-attempt-summary`)
+          .count(),
+        0,
+      );
+      await page.locator(`[data-practice-problem="${EASY[0]}"]`).check();
+      assert.equal(
+        await summary.textContent(),
+        "Previously attempted · 3 attempts · Last attempted 1/4/2026",
+      );
+      await page.locator("#problem-search").fill("no-matching-problem-451");
+      assert.equal(await summary.isVisible(), false);
+      await page.locator("#problem-search").fill("");
+      await summary.waitFor({ state: "visible" });
+      assert.equal(await card.getAttribute("aria-pressed"), "true");
+    },
+    { locale: "en-US", timezoneId: "Asia/Taipei" },
+  );
+}
+
+lobbyTest(
+  "problem attempt summaries reuse the device merge and legacy problem mapping",
+  async (page) => {
+    session = { signedIn: false };
+    await page.addInitScript(
+      ({ pageId }) => {
+        const copy = {
+          id: "one-copy",
+          problemId: pageId,
+          date: "2026-01-01",
+          report: {},
+        };
+        const legacy = {
+          problemId: "two-sum",
+          date: "2026-01-02",
+          report: { incomplete: true },
+        };
+        localStorage.setItem(
+          "codetrial_history",
+          JSON.stringify([copy, legacy, { ...legacy }]),
+        );
+        localStorage.setItem(
+          "codetrial_review_history",
+          JSON.stringify([copy, legacy, { ...legacy }]),
+        );
+      },
+      { pageId: EASY[0] },
+    );
+    await lobby(page);
+    await awaitReady(page);
+    const summary = page.locator(
+      `#problem-entry-${EASY[0]} .problem-attempt-summary`,
+    );
+    assert.equal(
+      await summary.textContent(),
+      "Previously attempted · 3 attempts · Last attempted 1/2/2026",
+    );
+    await page.reload();
+    await awaitReady(page);
+    assert.equal(
+      await summary.textContent(),
+      "Previously attempted · 3 attempts · Last attempted 1/2/2026",
+    );
+  },
+  { locale: "en-US", timezoneId: "UTC" },
+);
+
+lobbyTest(
+  "problem attempt summaries clear during refresh, replacement, failure and deletion",
+  async (page) => {
+    reports = [{ ...savedAttempt(EASY[0]), id: "initial" }];
+    await lobby(page);
+    await awaitReady(page);
+    const summary = (id) =>
+      page.locator(`#problem-entry-${id} .problem-attempt-summary`);
+    assert.equal(await summary(EASY[0]).getAttribute("hidden"), null);
+    const release = holdHistory();
+    try {
+      await restore(page);
+      assert.equal(
+        await page.locator(".problem-attempt-summary:not([hidden])").count(),
+        0,
+      );
+      reports = [{ ...savedAttempt(EASY[1]), id: "replacement" }];
+    } finally {
+      release();
+      holdReports = null;
+    }
+    await awaitReady(page);
+    assert.equal(await summary(EASY[0]).textContent(), "");
+    assert.equal(await summary(EASY[1]).getAttribute("hidden"), null);
+    page.on("dialog", (dialog) => dialog.accept());
+    const releaseDeleteReload = holdHistory();
+    try {
+      const reloading = page.waitForRequest(`${base}/api/reports`);
+      await page.locator("[data-delete-report]").click();
+      await reloading;
+      assert.deepEqual(deletedIds, ["replacement"]);
+      assert.equal(await summary(EASY[1]).textContent(), "");
+      assert.equal(
+        await page.locator(".problem-attempt-summary:not([hidden])").count(),
+        0,
+      );
+    } finally {
+      releaseDeleteReload();
+      holdReports = null;
+    }
+    await awaitReady(page);
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll(".problem-attempt-summary:not([hidden])")
+          .length === 0,
+    );
+    assert.deepEqual(deletedIds, ["replacement"]);
+    reports = [{ ...savedAttempt(EASY[0]), id: "restored" }];
+    await restore(page);
+    await awaitReady(page);
+    assert.equal(await summary(EASY[0]).getAttribute("hidden"), null);
+    failing.add("/api/reports");
+    await restore(page);
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#progress-summary")
+        .textContent.includes("Could not load"),
+    );
+    assert.equal(
+      await page.locator(".problem-attempt-summary:not([hidden])").count(),
+      0,
+    );
+  },
+);
+
+lobbyTest(
+  "problem attempt summaries ignore a stale account response",
+  async (page) => {
+    await lobby(page);
+    await awaitReady(page);
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    let requests = 0;
+    await page.route(`${base}/api/reports`, async (route) => {
+      const first = ++requests === 1;
+      if (first) await gate;
+      await route.fulfill({
+        json: { reports: [savedAttempt(first ? EASY[0] : EASY[1])] },
+      });
+    });
+    const pending = page.waitForRequest(`${base}/api/reports`);
+    await restore(page);
+    await pending;
+    await restore(page);
+    await awaitReady(page);
+    const newest = page.locator(
+      `#problem-entry-${EASY[1]} .problem-attempt-summary`,
+    );
+    assert.equal(await newest.getAttribute("hidden"), null);
+    const stale = page.waitForResponse(`${base}/api/reports`);
+    release();
+    await stale;
+    // Wait until the browser has consumed the released body, then let its
+    // promise handlers settle before checking that the older load stayed inert.
+    await page.evaluate(async () => {
+      await new Promise(requestAnimationFrame);
+      await new Promise(requestAnimationFrame);
+    });
+    assert.equal(await newest.getAttribute("hidden"), null);
+    assert.equal(
+      await page
+        .locator(`#problem-entry-${EASY[0]} .problem-attempt-summary`)
+        .textContent(),
+      "",
+    );
+  },
+);
+
+lobbyTest(
+  "problem attempt summaries remain readable in both themes and narrow layouts",
+  async (page) => {
+    reports = Array.from({ length: 23 }, (_, i) => ({
+      ...savedAttempt(EASY[0]),
+      id: `attempt-${i}`,
+    }));
+    await lobby(page);
+    await awaitReady(page);
+    await page.click("details.problem-picker summary");
+    const summary = page.locator(
+      `#problem-entry-${EASY[0]} .problem-attempt-summary`,
+    );
+    for (const colorScheme of ["light", "dark"]) {
+      await page.emulateMedia({ colorScheme });
+      for (const width of [375, 1100]) {
+        await page.setViewportSize({ width, height: 900 });
+        await summary.scrollIntoViewIfNeeded();
+        const layout = await summary.evaluate((node) => {
+          const style = getComputedStyle(node);
+          return {
+            width: node.clientWidth,
+            content: node.scrollWidth,
+            color: style.color,
+            focusable: node.tabIndex,
+            parent: node.parentElement.className,
+            text: node.textContent,
+          };
+        });
+        assert.ok(layout.width > 0 && layout.content <= layout.width);
+        assert.equal(layout.focusable, -1);
+        assert.equal(layout.parent, "problem-entry");
+        assert.match(layout.text, /Previously attempted · 23 attempts/);
+        assert.notEqual(layout.color, "rgba(0, 0, 0, 0)");
+      }
+    }
+  },
+);

@@ -317,6 +317,14 @@ p {
   width: 100%;
 }
 
+.problem-attempt-summary {
+  margin: 0;
+  padding: 0 0.5rem;
+  color: var(--sub);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
 .practice-list-toggle {
   display: flex;
   align-items: center;

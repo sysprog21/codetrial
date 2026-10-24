@@ -21,6 +21,7 @@ import {
 } from "./problem-picker.js";
 import {
   normalizeProgressEntries,
+  problemAttemptSummaries,
   phaseChartData,
   pickerEntry,
   progressModelFrom,
@@ -188,7 +189,15 @@ const cardIds = new Set(cards.map((card) => card.id));
 let practiceList = new Set();
 let practiceListSaved = true;
 practiceListSaved = refreshPracticeList();
-for (const card of cards) mark(card.button, false);
+for (const card of cards) {
+  mark(card.button, false);
+  card.attemptSummary = document.createElement("p");
+  card.attemptSummary.id = `problem-attempts-${card.id}`;
+  card.button.setAttribute("aria-describedby", card.attemptSummary.id);
+  card.attemptSummary.className = "problem-attempt-summary";
+  card.attemptSummary.hidden = true;
+  card.entry.append(card.attemptSummary);
+}
 
 // The published names are off unless the candidate turns them on, and the
 // choice is theirs to keep between visits. A convenience, so storage that
@@ -858,6 +867,7 @@ applyDifficulties();
 refreshHistory();
 
 function refreshHistory() {
+  renderProblemAttempts([]);
   const generation = ++historyLoad;
   historyRefreshing = generation > 1;
   historyReady = false;
@@ -1177,6 +1187,7 @@ async function deleteSavedReport(attempt, when, button) {
 /// `local` draws this device's copy whatever the account holds, because that
 /// is the one the status line says was left behind.
 async function reloadAfterDelete(local) {
+  renderProblemAttempts([]);
   if (!historyReady) {
     await refreshHistory();
     return;
@@ -1569,6 +1580,7 @@ function title(card) {
 }
 
 function showProgressError(message) {
+  renderProblemAttempts([]);
   // Emptied, not just unpainted. These outlive the panel: recommendations and
   // every filter change read them again afterwards, so a lobby that failed to
   // load one account's history went on answering from whichever account's
@@ -1586,12 +1598,24 @@ function showProgressError(message) {
   nodes.attemptHistory.replaceChildren();
 }
 
+function renderProblemAttempts(attempts) {
+  const summaries = problemAttemptSummaries(attempts);
+  for (const card of cards) {
+    const summary = summaries.get(card.id);
+    card.attemptSummary.textContent = summary
+      ? `Previously attempted · ${summary.count} attempt${summary.count === 1 ? "" : "s"} · Last attempted ${new Date(summary.lastAttemptAt).toLocaleDateString()}`
+      : "";
+    card.attemptSummary.hidden = !summary;
+  }
+}
+
 function showProgress(entries, suffix) {
   renderPracticeFocus();
   renderRecentPerformance();
   // Normalized once here, not per render: the filters below only select from
   // these rows, so a dropdown change has nothing to re-sanitize.
   progressNormalized = normalizeProgressEntries(entries);
+  renderProblemAttempts(progressNormalized);
   progressSuffix = suffix;
   const erasable = entries.length > 0 || readDeviceHistory().length > 0;
   nodes.historyHeader.hidden = !erasable;

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   buildProgressModel,
+  problemAttemptSummaries,
   normalizeProgressEntries,
   normalizeProgressEntry,
   phaseChartData,
@@ -828,4 +829,43 @@ test("unclearLines past the cap or too long is bounded on read", () => {
   assert.equal(attempt.unclearLines.length, 10);
   assert.ok(attempt.unclearLines[0].length < 5000);
   assert.deepEqual(attempt.unclearLines.slice(1), lines.slice(1, 10));
+});
+
+test("problem summaries count retained attempts across outcomes, languages and modes", () => {
+  const attempts = normalizeProgressEntries([
+    entry("a", "2026-01-03T00:00:00Z", 70),
+    entry("b", "2026-01-01T00:00:00Z", 50, { language: "cpp" }),
+    entry("c", "2026-01-03T00:00:00Z", 0, {
+      report: { incomplete: true },
+      interviewMode: "whiteboard",
+    }),
+    entry("d", "2026-01-02T00:00:00Z", 90, { problemId: "climbing-stairs" }),
+    entry("bad-time", "not a date", 90),
+    entry("missing-time", null, 90),
+    entry("no-problem", "2026-01-04T00:00:00Z", 90, { problemId: "" }),
+  ]);
+  const before = structuredClone(attempts);
+  assert.deepEqual(
+    problemAttemptSummaries(attempts),
+    new Map([
+      ["two-sum", { count: 3, lastAttemptAt: at(3) }],
+      ["climbing-stairs", { count: 1, lastAttemptAt: at(2) }],
+    ]),
+  );
+  assert.deepEqual(attempts, before);
+  assert.deepEqual(problemAttemptSummaries([]), new Map());
+  assert.equal(
+    problemAttemptSummaries([...attempts].reverse()).get("two-sum")
+      .lastAttemptAt,
+    at(3),
+  );
+});
+
+test("problem summaries preserve distinct id-less attempts and epoch timestamps", () => {
+  const same = { problemId: "same", date: "1970-01-01T00:00:00Z", report: {} };
+  const attempts = normalizeProgressEntries([same, { ...same }]);
+  assert.deepEqual(problemAttemptSummaries(attempts).get("same"), {
+    count: 2,
+    lastAttemptAt: 0,
+  });
 });

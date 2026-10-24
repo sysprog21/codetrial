@@ -120,6 +120,21 @@ export function normalizeProgressEntries(rawEntries) {
     .sort((left, right) => left.at - right.at);
 }
 
+// The caller supplies merged, normalized history. Deduplicating here by date
+// or content would erase separate interviews that happened to look alike.
+export function problemAttemptSummaries(attempts) {
+  const summaries = new Map();
+  for (const { problemId, at } of attempts) {
+    if (!problemId) continue;
+    const previous = summaries.get(problemId);
+    summaries.set(problemId, {
+      count: (previous?.count ?? 0) + 1,
+      lastAttemptAt: previous ? Math.max(previous.lastAttemptAt, at) : at,
+    });
+  }
+  return summaries;
+}
+
 export function buildProgressModel(rawEntries, filters = {}) {
   return progressModelFrom(normalizeProgressEntries(rawEntries), filters);
 }
