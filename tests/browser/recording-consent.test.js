@@ -106,7 +106,7 @@ test("recording-consent the start button waits for an answer", () => {
     "consent is given, or does not apply; there is no third state",
   );
   assert.ok(
-    code.includes("const ready = state.ready && consentGiven();"),
+    code.includes("const ready = state.ready && consentGiven() && !joining;"),
     "media readiness alone must not open the Start button on a recording server",
   );
   assert.ok(

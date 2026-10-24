@@ -90,6 +90,32 @@
             >
               Thinking
             </button>
+            <div id="local-recording" class="recording-row" hidden>
+              <button data-local-start class="pill-button" type="button">
+                Start recording
+              </button>
+              <button
+                data-local-stop
+                class="pill-button"
+                type="button"
+                disabled
+                hidden
+              >
+                End recording
+              </button>
+              <span
+                data-local-status
+                class="muted small"
+                role="status"
+                hidden
+              ></span>
+              <a
+                data-local-download
+                aria-label="Download recording (.webm)"
+                hidden
+                >Download</a
+              >
+            </div>
             <span class="dock-end">
               <button id="end" class="pill-button danger" type="button">
                 End interview
@@ -724,6 +750,15 @@
             <div class="audio-check-actions">
               <button id="audio-check-leave" class="pill-button" type="button">
                 Back to lobby
+              </button>
+              <button
+                id="local-recording-join"
+                class="pill-button"
+                type="button"
+                disabled
+                hidden
+              >
+                Start &amp; record
               </button>
               <button
                 id="audio-check-join"

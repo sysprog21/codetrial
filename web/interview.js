@@ -153,6 +153,7 @@ import {
   unclearLineIds,
   updateCaptions,
 } from "./captions.js";
+import { initLocalRecording } from "./local-recorder.js";
 import {
   consentGiven,
   initRecording,
@@ -561,6 +562,8 @@ const nodes = {
   end: document.querySelector("#end"),
   withdrawConsent: document.querySelector("#withdraw-consent"),
   recordingState: document.querySelector("#recording-state"),
+  localRecording: document.querySelector("#local-recording"),
+  localRecordingJoin: document.querySelector("#local-recording-join"),
   editor: document.querySelector("#editor"),
   languageSelect: document.querySelector("#language-select"),
   editorHighlight: document.querySelector("#editor-highlight"),
@@ -682,6 +685,17 @@ initAvatarStage({ nodes });
 holdWorkspaceBehindDialogs();
 initAudioOutput({ nodes, jimAudioElement: () => jimAudio });
 initRecording({ state, nodes, recordingEnabled, addTranscript, setBanner });
+const localRecording = initLocalRecording({
+  state,
+  nodes,
+  recordingEnabled,
+  onRecordingChange(active) {
+    if (nodes.screenRecording.checked) return;
+    detachSelfView();
+    if (active && !nodes.meetPresentation.checked)
+      detachSelfView = attachSelfView(nodes.selfView, state.localUserStream);
+  },
+});
 initIntegrity({
   state,
   nodes,
@@ -1512,6 +1526,7 @@ function runAudioCheck() {
     const browserSupported = Boolean(mediaDevices?.getUserMedia);
     let outputConfirmed = false;
     let advanced = false;
+    let joining = false;
     let cameraSkipped = false;
     let cameraSkipReason = null;
 
@@ -1677,8 +1692,9 @@ function runAudioCheck() {
       // a device that can be proven, it is an answer, and folding it into
       // `mediaReadiness` would put a legal question inside the function that
       // decides whether a microphone works.
-      const ready = state.ready && consentGiven();
+      const ready = state.ready && consentGiven() && !joining;
       nodes.audioJoin.disabled = !ready;
+      nodes.localRecordingJoin.disabled = !ready;
 
       // refresh() runs on every animation frame from the meter, so hand over
       // once on the transition rather than stealing focus continuously. The
@@ -1710,8 +1726,14 @@ function runAudioCheck() {
       void context?.close().catch(() => {});
     };
 
-    const finish = () => {
-      if (finished || !sampleReadiness().ready) return;
+    const finish = async (recordLocally = false) => {
+      if (finished || joining || !sampleReadiness().ready) return;
+      joining = true;
+      refresh();
+      if (recordLocally) {
+        state.localUserStream = pool.stream;
+        await localRecording.start();
+      }
       stopChecks();
       nodes.audioCheck.hidden = true;
       resolve({ userStream: pool.stream, cameraSkipped, cameraSkipReason });
@@ -1833,7 +1855,8 @@ function runAudioCheck() {
     nodes.audioHeard.addEventListener("pointerdown", confirmOutput);
     nodes.audioHeard.addEventListener("click", confirmOutput);
 
-    nodes.audioJoin.addEventListener("click", finish);
+    nodes.audioJoin.addEventListener("click", () => void finish());
+    nodes.localRecordingJoin.addEventListener("click", () => void finish(true));
     nodes.audioLeave.addEventListener("click", leave);
 
     nodes.cameraSkip.addEventListener("click", () => {
@@ -1860,6 +1883,7 @@ function runAudioCheck() {
     // records nothing asks for permission nobody needs and teaches candidates
     // to click past it.
     nodes.recordingConsentStep.hidden = !recordingEnabled;
+    nodes.localRecordingJoin.hidden = recordingEnabled;
     nodes.recordingConsent.addEventListener("change", refresh);
 
     // A live track is enough for the microphone: the meter is what proves one
@@ -2047,6 +2071,7 @@ async function connect(preflight, presenting = false) {
     state.connected = false;
     state.room = null;
     if (joined) void joined.disconnect?.()?.catch?.(() => {});
+    localRecording.finish();
     stopPreflight(preflight);
     const reason =
       strict &&
@@ -2398,6 +2423,7 @@ function setLocalAudioEnabled(enabled) {
 }
 
 function stopLocalMedia() {
+  localRecording.finish(nodes.ending);
   stopIntegrityWorker();
   stopPreflight({ userStream: state.localUserStream });
   state.localUserStream = null;
@@ -2501,6 +2527,7 @@ function restoreEndingOverlay() {
 }
 
 function finalizeRecoveryOnPageHide() {
+  localRecording.dispose();
   if (state.phase === "report_recovery") reportRecovery.finish();
   void state.room?.disconnect?.().catch?.(() => {});
 }
@@ -3628,6 +3655,7 @@ function endInterview(reason) {
   const exampleFinished = exampleBoard?.finish();
   state.phase = "ending";
   if (strict) updateRunAvailability();
+  localRecording.finish(nodes.ending);
   // The hint outranks the ending overlay in the stacking order, so a candidate
   // who ends while it is still up would read the report status through it.
   globalThis.clearTimeout(frameworkHintTimer);
@@ -3895,6 +3923,7 @@ function renderReport() {
     saveResult: null,
     unclearLines: unclearLines(),
   });
+  localRecording.finish(nodes.report);
   mountBehavioralReview(nodes.report, state.transcript.values());
 }
 

@@ -532,3 +532,43 @@ test("the replay list marks the open recording", async (t) => {
     await page.close();
   }
 });
+
+test("local recording controls preserve the original problem reading space", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  for (const [width, height] of [
+    [1280, 720],
+    [390, 844],
+  ]) {
+    const page = await openInterview(width, height);
+    try {
+      await closeSetupCheck(page);
+      const sizes = await page.evaluate(() => {
+        const panel = document.querySelector("#local-recording");
+        const height = () =>
+          document.querySelector("#problem-panel").getBoundingClientRect()
+            .height;
+        const idle = height();
+        panel.hidden = true;
+        const original = height();
+        panel.hidden = false;
+        panel.querySelector("[data-local-start]").hidden = true;
+        const stop = panel.querySelector("[data-local-stop]");
+        stop.hidden = false;
+        stop.textContent = "End recording 00:05";
+        return { original, idle, recording: height() };
+      });
+      assert.equal(
+        sizes.idle,
+        sizes.original,
+        JSON.stringify({ width, ...sizes }),
+      );
+      assert.equal(
+        sizes.recording,
+        sizes.original,
+        JSON.stringify({ width, ...sizes }),
+      );
+    } finally {
+      await page.close();
+    }
+  }
+});

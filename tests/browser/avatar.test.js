@@ -14,6 +14,7 @@ import {
   captures,
   firstPartyScripts,
   functionBody,
+  INTERVIEW_SOURCES,
   interviewSource,
   read,
   root,
@@ -818,21 +819,27 @@ test("avatar analyser reads Jim and never the candidate", () => {
   // have passed a slice-scoped assertion while the avatar watched the candidate.
   // An allowlist, not a count. The preflight legitimately builds a source from
   // the candidate's own microphone to drive the level meter, so the property
-  // worth pinning is that the set does not grow: exactly two call sites, and
-  // the avatar's is the remote track.
+  // worth pinning is which module may read each source. Local recording also
+  // mixes the tab and existing microphone; neither source belongs to the avatar.
   //
   // `mic-meter.js` is read in beside the path rather than added to
   // `INTERVIEW_SOURCES`, which is the modules `interview.js` hands its bindings
   // to and is pinned to exactly those. The meter is where the microphone's own
   // source lives, so leaving it out would let this allowlist grow unwatched in
   // the one file most likely to grow it.
-  const sources = captures(
-    `${script}\n${read("web/mic-meter.js")}`,
-    /createMediaStreamSource\(([^)]*)\)/g,
-  ).map((source) => source.trim());
+  const sources = [...INTERVIEW_SOURCES, "web/mic-meter.js"].flatMap((name) =>
+    captures(read(name), /createMediaStreamSource\(([^)]*)\)/g).map(
+      (source) => [name, source.trim()],
+    ),
+  );
   assert.deepEqual(
     sources,
-    ["new MediaStream([track.mediaStreamTrack]", "stream"],
+    [
+      ["web/local-recorder.js", "new MediaStream(capture.getAudioTracks("],
+      ["web/local-recorder.js", "new MediaStream(mic"],
+      ["web/avatar/stage.js", "new MediaStream([track.mediaStreamTrack]"],
+      ["web/mic-meter.js", "stream"],
+    ],
     "a new createMediaStreamSource call site appeared; the avatar must only ever read Jim",
   );
   assert.doesNotMatch(script, /createMediaStreamSource\([^)]*localUserStream/);
