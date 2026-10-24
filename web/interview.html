@@ -310,9 +310,19 @@
                 id="candidate-case-expected"
                 aria-label="Candidate expected output"
             /></label>
-            <button id="candidate-case-add" class="pill-button" type="button">
-              Add case
-            </button>
+            <div class="candidate-case-actions">
+              <button id="candidate-case-add" class="pill-button" type="button">
+                Add case
+              </button>
+              <button
+                id="candidate-case-cancel"
+                class="pill-button"
+                type="button"
+                hidden
+              >
+                Cancel
+              </button>
+            </div>
             <p id="candidate-case-status" class="muted small" role="status"></p>
             <ol id="candidate-case-list" class="small"></ol>
           </details>

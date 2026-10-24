@@ -1,10 +1,14 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { parseCandidateCase } from "../../web/runners.js";
+import { writeStored } from "../../web/audio-output.js";
 
 import {
   closeSetupCheck,
   DEFAULT_RUNTIME_CONFIG,
   launchChromium,
+  loadInterview,
   startStaticServer,
 } from "./source.js";
 import { COMPILED_LANGUAGES } from "../../web/compiler-explorer.js";
@@ -815,16 +819,22 @@ test("in-flight candidate case additions are refused when interview leaves live"
   let releaseJudge = () => {};
   try {
     releaseJudge = await holdJudge(page);
+
     await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
       waitUntil: "domcontentloaded",
     });
-    await page.waitForFunction(
-      () => !document.querySelector("#candidate-case-add").disabled,
-    );
-    await page.evaluate(() => {
+
+    await page.waitForFunction(() => {
+      const add = document.querySelector("#candidate-case-add");
+      if (!add || add.disabled) return false;
+
       document.querySelector("#candidate-case-input").value = "[[2,7,11,15],9]";
-      document.querySelector("#candidate-case-add").click();
+      add.click();
+
+      if (!add.disabled) return false;
+
       document.querySelector("#end").click();
+      return true;
     });
     releaseJudge();
     await page.waitForFunction(
@@ -994,4 +1004,650 @@ test("running before a requested C judge loads keeps Python", async (t) => {
     await candidateCasesReady(page);
     assert.equal(await page.locator("#language-select").inputValue(), "python");
   });
+});
+
+test("saved candidate cases display their expected output safely", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+
+  const scenarios = [
+    { input: "", shown: "Not specified" },
+    { input: "7", shown: "7" },
+    { input: "0", shown: "0" },
+    { input: "false", shown: "false" },
+    { input: "null", shown: "null" },
+    { input: "[0,1]", shown: "[0,1]" },
+    { input: '"<b>sample</b>"', shown: '"<b>sample</b>"' },
+  ];
+
+  for (const scenario of scenarios) {
+    const page = await browser.newPage();
+    try {
+      await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
+        waitUntil: "domcontentloaded",
+      });
+      await candidateCasesReady(page);
+
+      await page.evaluate((expected) => {
+        document.querySelector("#candidate-case-input").value =
+          "[[2,7,11,15],9]";
+        document.querySelector("#candidate-case-expected").value = expected;
+        document.querySelector("#candidate-case-add").click();
+      }, scenario.input);
+
+      await page.waitForFunction(
+        () =>
+          document.querySelector("#candidate-case-list").children.length === 1,
+      );
+
+      const row = page.locator("#candidate-case-list > li").first();
+
+      assert.equal(
+        await row.locator("span").nth(1).textContent(),
+        `Expected: ${scenario.shown}`,
+        `Expected JSON field: ${JSON.stringify(scenario.input)}`,
+      );
+      assert.equal(await row.locator("b").count(), 0);
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+test("editing a saved case at the limit preserves order and persists", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
+      waitUntil: "domcontentloaded",
+    });
+    await candidateCasesReady(page);
+    await closeSetupCheck(page);
+    await page.locator("#candidate-case").evaluate((element) => {
+      element.open = true;
+    });
+
+    for (let index = 0; index < 5; index++) {
+      await page.evaluate((index) => {
+        document.querySelector("#candidate-case-input").value = JSON.stringify([
+          [index, index + 1],
+          index * 2 + 1,
+        ]);
+        document.querySelector("#candidate-case-expected").value = "[0,1]";
+        document.querySelector("#candidate-case-add").click();
+      }, index);
+
+      await page.waitForFunction(
+        (count) =>
+          document.querySelector("#candidate-case-list").children.length ===
+          count,
+        index + 1,
+      );
+    }
+
+    const rows = page.locator("#candidate-case-list > li");
+    const before = await rows.locator("span:first-child").allTextContents();
+
+    await page.locator('[data-edit-case="2"]').click();
+
+    assert.equal(
+      await page.locator("#candidate-case-input").inputValue(),
+      "[[2,3],5]",
+    );
+    assert.equal(
+      await page.locator("#candidate-case-expected").inputValue(),
+      "[0,1]",
+    );
+    assert.equal(await page.locator("#run-tests").isDisabled(), true);
+
+    await page.locator("#candidate-case-input").fill("[[8,9],17]");
+    await page.locator("#candidate-case-expected").fill("[1,0]");
+    await page.locator("#candidate-case-add").click();
+
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#candidate-case-status").textContent ===
+        "Case 3 updated.",
+    );
+
+    const expectedRows = [...before];
+    expectedRows[2] = "Your case 3: [[8,9],17]";
+
+    assert.deepEqual(
+      await rows.locator("span:first-child").allTextContents(),
+      expectedRows,
+    );
+    assert.equal(
+      await rows.nth(2).locator("span").nth(1).textContent(),
+      "Expected: [1,0]",
+    );
+    assert.equal(await page.locator("#candidate-case-cancel").isHidden(), true);
+    assert.equal(
+      await page.locator("#candidate-case-add").textContent(),
+      "Add case",
+    );
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#candidate-case-list").children.length === 5,
+    );
+
+    assert.deepEqual(
+      await rows.locator("span:first-child").allTextContents(),
+      expectedRows,
+    );
+    assert.equal(
+      await rows.nth(2).locator("span").nth(1).textContent(),
+      "Expected: [1,0]",
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+test("invalid edits preserve the saved case and Cancel restores the draft", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
+      waitUntil: "domcontentloaded",
+    });
+    await candidateCasesReady(page);
+    await closeSetupCheck(page);
+    await page.locator("#candidate-case").evaluate((element) => {
+      element.open = true;
+    });
+
+    await page.locator("#candidate-case-input").fill("[[2,7],9]");
+    await page.locator("#candidate-case-expected").fill("[0,1]");
+    await page.locator("#candidate-case-add").click();
+
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#candidate-case-list").children.length === 1,
+    );
+
+    const row = page.locator("#candidate-case-list > li").first();
+    const original = await row.textContent();
+
+    await page.locator("#candidate-case-input").fill("[[8,9],17]");
+    await page.locator("#candidate-case-expected").fill("[1,0]");
+
+    await page.locator('[data-edit-case="0"]').click();
+    await page.locator("#candidate-case-input").fill("not JSON");
+    await page.locator("#candidate-case-add").click();
+
+    await page.waitForFunction(
+      () => !document.querySelector("#candidate-case-add").disabled,
+    );
+
+    assert.equal(await row.textContent(), original);
+    assert.equal(
+      await page.locator("#candidate-case-input").inputValue(),
+      "not JSON",
+    );
+    assert.equal(
+      await page.locator("#candidate-case-add").textContent(),
+      "Save changes",
+    );
+    assert.equal(
+      await page.locator("#candidate-case-cancel").isVisible(),
+      true,
+    );
+
+    await page.locator("#candidate-case-cancel").click();
+
+    assert.equal(await row.textContent(), original);
+    assert.equal(
+      await page.locator("#candidate-case-input").inputValue(),
+      "[[8,9],17]",
+    );
+    assert.equal(
+      await page.locator("#candidate-case-expected").inputValue(),
+      "[1,0]",
+    );
+    assert.equal(
+      await page.locator("#candidate-case-add").textContent(),
+      "Add case",
+    );
+    assert.equal(await page.locator("#candidate-case-cancel").isHidden(), true);
+    assert.equal(await page.locator("#run-tests").isDisabled(), false);
+    assert.equal(
+      await page
+        .locator('[data-edit-case="0"]')
+        .evaluate((button) => button === document.activeElement),
+      true,
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+test("Run tests refuses an active edit without adding a duplicate", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
+      waitUntil: "domcontentloaded",
+    });
+    await candidateCasesReady(page);
+    await closeSetupCheck(page);
+    await page.locator("#candidate-case").evaluate((element) => {
+      element.open = true;
+    });
+    await addCase(page, "[[2,7],9]");
+
+    await page.locator('[data-edit-case="0"]').click();
+    await page.locator("#candidate-case-input").fill("[[8,9],17]");
+
+    assert.equal(await page.locator("#run-tests").isDisabled(), true);
+
+    // Exercise the handler guard even when the disabled button is bypassed.
+    await page.evaluate(() => {
+      document
+        .querySelector("#run-tests")
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    assert.equal(
+      await page.locator("#candidate-case-status").textContent(),
+      "Save or cancel the current edit before running tests.",
+    );
+    assert.equal(await page.locator("#candidate-case-list > li").count(), 1);
+    assert.equal(
+      await page.locator("#candidate-case-input").inputValue(),
+      "[[8,9],17]",
+    );
+    assert.equal(
+      await page.locator("#candidate-case-add").textContent(),
+      "Save changes",
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+test("ending during a pending save clears the edit without restoring cases", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
+      waitUntil: "domcontentloaded",
+    });
+    await candidateCasesReady(page);
+    await closeSetupCheck(page);
+    await page.locator("#candidate-case").evaluate((element) => {
+      element.open = true;
+    });
+    await addCase(page, "[[2,7],9]");
+
+    await page.locator('[data-edit-case="0"]').click();
+    await page.locator("#candidate-case-input").fill("[[8,9],17]");
+
+    // End in the same task, before the save resumes after awaiting the judge.
+    await page.evaluate(() => {
+      document.querySelector("#candidate-case-add").click();
+      document.querySelector("#end").click();
+    });
+
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#candidate-case-list").children.length === 0 &&
+        !document.querySelector("#candidate-case-add").disabled,
+    );
+
+    assert.equal(await page.locator("#candidate-case-cancel").isHidden(), true);
+    assert.equal(
+      await page.locator("#candidate-case-add").textContent(),
+      "Add case",
+    );
+    assert.equal(
+      await page.evaluate(() =>
+        sessionStorage.getItem(
+          "codetrial.candidateCases.chargeback-pair-match",
+        ),
+      ),
+      null,
+    );
+    assert.equal(
+      await page.locator("#candidate-case-status").textContent(),
+      "The interview has ended.",
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+async function openCandidateEditPage(problem = "conveyor-grid-routing") {
+  const page = await browser.newPage({
+    viewport: { width: 1280, height: 900 },
+  });
+  await page.goto(`${base}/interview.html?problem=${problem}`, {
+    waitUntil: "domcontentloaded",
+  });
+  await page.waitForFunction(
+    () => document.querySelector("#candidate-case-input")?.placeholder,
+  );
+  await closeSetupCheck(page);
+  await page.locator("#candidate-case").evaluate((element) => {
+    element.open = true;
+  });
+  return page;
+}
+async function addCaseWithExpectation(page, input, expected = "") {
+  const count = await page.locator("#candidate-case-list > li").count();
+  await page.locator("#candidate-case-input").fill(input);
+  await page.locator("#candidate-case-expected").fill(expected);
+  await page.locator("#candidate-case-add").click();
+  await page.waitForFunction(
+    (count) =>
+      document.querySelector("#candidate-case-list").children.length === count,
+    count + 1,
+  );
+}
+async function saveEditedCandidateCase(page, input, expected = "") {
+  await page.locator("#candidate-case-input").fill(input);
+  await page.locator("#candidate-case-expected").fill(expected);
+  await page.locator("#candidate-case-add").click();
+  await page.waitForFunction(
+    () =>
+      document.querySelector("#candidate-case-status").textContent ===
+      "Case 1 updated.",
+  );
+}
+async function runEditedCandidateTests(page) {
+  await page.locator("#run-tests").click();
+  await page.waitForFunction(
+    () =>
+      !document.querySelector("#run-tests").disabled &&
+      document
+        .querySelector("#results-content")
+        .textContent.includes("Your case 1"),
+  );
+}
+test("edited inputs actually run; save clears current results; Cancel and saved run history remain intact", async () => {
+  const page = await openCandidateEditPage();
+  try {
+    await page.locator("#language-select").selectOption("javascript");
+    await page
+      .locator("#editor")
+      .fill("function cheapestRouteCost(grid) { return grid[0][0]; }");
+    await addCaseWithExpectation(page, "[[[2]]]", "3");
+    await runEditedCandidateTests(page);
+    const results = page.locator("#results-content");
+    const first = await results.textContent();
+    assert.match(first, /expected 3\s+got 2/);
+    await page.locator('[data-edit-case="0"]').click();
+    await page.locator("#candidate-case-input").fill("[[[99]]]");
+    await page.locator("#candidate-case-cancel").click();
+    assert.equal(await results.textContent(), first);
+    await page.locator('[data-edit-case="0"]').click();
+    await saveEditedCandidateCase(page, "[[[7]]]", "8");
+    assert.equal(
+      (await results.textContent()).trim(),
+      "Run the test cases any time - Jim sees your results too.",
+    );
+    assert.equal(await page.locator("#results-filter").isHidden(), true);
+    await runEditedCandidateTests(page);
+    assert.match(await results.textContent(), /expected 8\s+got 7/);
+
+    await page.locator('[data-edit-case="0"]').click();
+
+    await page.locator("#candidate-case-cancel").click();
+    await page.locator("#force-report").evaluate((button) => button.click());
+    const downloadPromise = page.waitForEvent("download");
+    await page.locator("#download-report").click();
+    const download = await downloadPromise;
+    const markdown = await readFile(await download.path(), "utf8");
+    const history = markdown.slice(markdown.indexOf("## Test Run History"));
+    assert.equal([...history.matchAll(/^### Run \d+/gm)].length, 2);
+    const oldRun = history.split("### Run 2")[0];
+    const newRun = history.split("### Run 2")[1];
+    assert.match(oldRun.replaceAll("\\[", "["), /- Input: \[\[\[2\]\]\]/);
+    assert.match(oldRun, /- Expected: 3\s+- Actual: 2/);
+    assert.match(newRun.replaceAll("\\[", "["), /- Input: \[\[\[7\]\]\]/);
+    assert.match(newRun, /- Expected: 8\s+- Actual: 7/);
+  } finally {
+    await page.close();
+  }
+});
+test("editing preserves absent expectations and explicit JSON values", async () => {
+  const page = await openCandidateEditPage();
+  try {
+    await addCaseWithExpectation(page, "[[[1]]]", "7");
+    for (const text of ["", "null", "0", "false", '"<b>sample</b>"', "[0,1]"]) {
+      await page.locator('[data-edit-case="0"]').click();
+      await saveEditedCandidateCase(page, "[[[1]]]", text);
+      const stored = await page.evaluate(() =>
+        JSON.parse(
+          sessionStorage.getItem(
+            "codetrial.candidateCases.conveyor-grid-routing",
+          ),
+        ),
+      );
+      assert.equal(Object.hasOwn(stored[0], "expected"), text !== "");
+      if (text !== "") assert.deepEqual(stored[0].expected, JSON.parse(text));
+      assert.equal(await page.locator("#candidate-case-list > li").count(), 1);
+      assert.equal(
+        await page
+          .locator("#candidate-case-list > li span")
+          .nth(1)
+          .textContent(),
+        `Expected: ${text || "Not specified"}`,
+      );
+      assert.equal(await page.locator("#candidate-case-list b").count(), 0);
+      await page.locator('[data-edit-case="0"]').click();
+      assert.equal(
+        await page.locator("#candidate-case-expected").inputValue(),
+        text,
+      );
+      await page.locator("#candidate-case-cancel").click();
+    }
+  } finally {
+    await page.close();
+  }
+});
+test("invalid expected JSON and repeated saves cannot corrupt or duplicate a saved case", async () => {
+  const page = await openCandidateEditPage();
+  try {
+    await addCaseWithExpectation(page, "[[[1]]]", "1");
+    await page.locator('[data-edit-case="0"]').click();
+    await page.locator("#candidate-case-expected").fill("not JSON");
+    await page.locator("#candidate-case-add").click();
+    await page.waitForFunction(
+      () => !document.querySelector("#candidate-case-add").disabled,
+    );
+    assert.equal(
+      await page.locator("#candidate-case-list > li span").nth(1).textContent(),
+      "Expected: 1",
+    );
+    assert.equal(
+      await page.locator("#candidate-case-expected").inputValue(),
+      "not JSON",
+    );
+    await page.locator("#candidate-case-input").fill("[[[2]]]");
+    await page.locator("#candidate-case-expected").fill("2");
+    await page.evaluate(() => {
+      const button = document.querySelector("#candidate-case-add");
+      button.click();
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#candidate-case-status").textContent ===
+        "Case 1 updated.",
+    );
+    assert.equal(await page.locator("#candidate-case-list > li").count(), 1);
+    assert.equal(
+      await page
+        .locator("#candidate-case-list > li span")
+        .first()
+        .textContent(),
+      "Your case 1: [[[2]]]",
+    );
+    await page.locator('[data-edit-case="0"]').click();
+    assert.equal(
+      await page.locator('[data-remove-case="0"]').isDisabled(),
+      true,
+    );
+    await page.locator('[data-remove-case="0"]').dispatchEvent("click");
+    assert.equal(await page.locator("#candidate-case-list > li").count(), 1);
+    assert.match(
+      await page.locator("#candidate-case-status").textContent(),
+      /Save or cancel/,
+    );
+  } finally {
+    await page.close();
+  }
+});
+test("editing is refused during an active run", async () => {
+  const page = await browser.newPage();
+  let release;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  try {
+    await page.addInitScript(() =>
+      sessionStorage.setItem(
+        "codetrial.candidateCases.chargeback-pair-match",
+        JSON.stringify([{ input: [[2, 7], 9], expected: [0, 1] }]),
+      ),
+    );
+    await page.route("**/judges/*.json", async (route) => {
+      await held;
+      await route.continue();
+    });
+    await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
+      waitUntil: "domcontentloaded",
+    });
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#candidate-case-list").children.length === 1,
+    );
+    await closeSetupCheck(page);
+    await page.locator("#candidate-case").evaluate((element) => {
+      element.open = true;
+    });
+    await page.locator("#language-select").selectOption("javascript");
+    await page.locator("#run-tests").click();
+    await page.locator('[data-edit-case="0"]').click();
+    assert.match(
+      await page.locator("#candidate-case-status").textContent(),
+      /Wait for the current operation/,
+    );
+    assert.equal(await page.locator("#candidate-case-cancel").isHidden(), true);
+    assert.equal(
+      (await page.locator("#candidate-case-add").textContent()).trim(),
+      "Add case",
+    );
+  } finally {
+    release();
+    await page.close();
+  }
+});
+
+test("editing retains the palindrome expectation restriction", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await openCandidateEditPage("mirrored-tag-segment");
+  try {
+    await addCaseWithExpectation(page, '["aba"]', '"aba"');
+    await page.locator('[data-edit-case="0"]').click();
+    await page.locator("#candidate-case-expected").fill("null");
+    await page.locator("#candidate-case-add").click();
+    await page.waitForFunction(
+      () => !document.querySelector("#candidate-case-add").disabled,
+    );
+    assert.equal(
+      await page.locator("#candidate-case-list > li span").nth(1).textContent(),
+      'Expected: "aba"',
+    );
+    assert.equal(
+      await page.locator("#candidate-case-status").textContent(),
+      "A palindrome expectation must be a string, or leave it blank to observe the result.",
+    );
+    assert.equal(
+      await page.locator("#candidate-case-expected").inputValue(),
+      "null",
+    );
+    await page.locator("#candidate-case-cancel").click();
+    await page.locator('[data-edit-case="0"]').click();
+    await saveEditedCandidateCase(page, '["aba"]', "");
+    assert.equal(
+      await page.locator("#candidate-case-list > li span").nth(1).textContent(),
+      "Expected: Not specified",
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+test("saving edits preserves Practice storage and Strict non-persistence", async () => {
+  const spec = JSON.parse(
+    await readFile(
+      new URL("../../web/judges/conveyor-grid-routing.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  for (const strict of [false, true]) {
+    const history = [{ runNumber: 1, cases: [{ got: "2" }] }];
+    const state = {
+      candidateCaseEdit: { index: 0 },
+      candidateCaseAddition: null,
+      candidateCases: [{ input: [[[2]]], expected: 3 }],
+      runningTests: false,
+      phase: "live",
+      latestSummary: { passed: 0 },
+      testHistory: history,
+    };
+    const writes = [];
+    const storage = {
+      setItem(key, value) {
+        writes.push({ key, value });
+      },
+    };
+    const nodes = {
+      candidateCaseInput: { value: "[[[7]]]" },
+      candidateCaseExpected: { value: "8" },
+      candidateCaseAdd: {},
+      candidateCaseCancel: {},
+      candidateCaseStatus: {},
+      resultsLabel: {},
+      resultsFilter: {},
+      resultsContent: {},
+    };
+    const { saveCandidateCaseEdit } = loadInterview(
+      [
+        "candidateCaseFromForm",
+        "invalidateCandidateCaseResults",
+        "saveCandidateCaseEdit",
+      ],
+      {
+        state,
+        nodes,
+        strict,
+        tabStorage: storage,
+        candidateCaseStorageKey: "synthetic-cases",
+        problem: { page: "conveyor-grid-routing" },
+        loadJudge: async () => spec,
+        parseCandidateCase,
+        codingClosed: () => false,
+        writeStored,
+        cancelCandidateCaseEdit: () => {
+          state.candidateCaseEdit = null;
+        },
+      },
+    );
+    await saveCandidateCaseEdit();
+    assert.deepEqual(state.candidateCases, [{ input: [[[7]]], expected: 8 }]);
+    assert.equal(state.latestSummary, null);
+    assert.strictEqual(state.testHistory, history);
+    assert.deepEqual(history, [{ runNumber: 1, cases: [{ got: "2" }] }]);
+    assert.equal(writes.length, strict ? 0 : 1);
+    if (!strict)
+      assert.deepEqual(JSON.parse(writes[0].value), state.candidateCases);
+  }
 });
