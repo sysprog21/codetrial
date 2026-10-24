@@ -868,7 +868,7 @@ function runWorker(code, spec) {
 }
 
 const pythonDriver = `
-import json, time
+import json, math, time
 from typing import List, Optional
 
 class ListNode:
@@ -1064,6 +1064,20 @@ def _graph_to_adjacency(node):
         queue.extend(getattr(current, "neighbors", []) or [])
     return [sorted(neighbor.val for neighbor in by_value[value].neighbors) for value in sorted(by_value)]
 
+# The JavaScript runner turns a non-finite number into null, and so does the
+# Java harness. Here json.dumps would write a bare Infinity or NaN, which is not
+# JSON: the page's JSON.parse then refuses the whole reply and every case is
+# lost with the one that returned it. A nested one goes the same way, and a
+# tuple is a list to the page.
+def _finite_or_none(value):
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (list, tuple)):
+        return [_finite_or_none(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _finite_or_none(item) for key, item in value.items()}
+    return value
+
 def _prepare_args(case, spec, arg_types=None):
     raw = json.loads(json.dumps(case["input"]))
     arg_types = arg_types if arg_types is not None else spec.get("argTypes")
@@ -1157,11 +1171,10 @@ def _codetrial_run(user_code, spec_json):
                         actual = _next_tree_to_levels(actual)
                     if spec.get("outputType") == "quadTree":
                         actual = _quad_tree_to_preorder(actual)
-            if isinstance(actual, tuple):
-                actual = list(actual)
             try:
-                json.dumps(actual)
-            except (TypeError, ValueError):
+                actual = _finite_or_none(actual)
+                json.dumps(actual, allow_nan=False)
+            except (TypeError, ValueError, RecursionError):
                 actual = repr(actual)
             results.append({"actual": actual, "timeMs": (time.perf_counter() - t0) * 1000})
         except Exception as exc:
