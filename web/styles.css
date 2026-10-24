@@ -3071,14 +3071,14 @@ body:not([data-recording]) .replay-detail > :not(header) {
 }
 
 #candidate-case > label,
-#candidate-case > button,
+#candidate-case > .candidate-case-actions,
 #candidate-case > p,
 #candidate-case > ol {
   margin-inline: 1rem;
 }
 
 /* Name over field, the setup check's field style, and the two side by side
-   with Add case on their baseline where the drawer is wide enough. */
+   where the drawer is wide enough. */
 #candidate-case > label {
   display: inline-flex;
   flex-direction: column;
@@ -3103,11 +3103,17 @@ body:not([data-recording]) .replay-detail > :not(header) {
   resize: vertical;
 }
 
-/* Down by the label's line and gap, so it sits level with the fields. */
-#candidate-case > button {
+.candidate-case-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+/* Keep the actions below the fields, clear of Jim's floating captions when
+   the results expand the drawer. */
+.candidate-case-actions > button {
   min-height: 2.25rem;
-  margin-top: 1.5rem;
-  vertical-align: top;
 }
 
 .preflight-head {
