@@ -2145,3 +2145,7 @@ export function isYieldShortcut(event, editor) {
 export function retryReportPayload() {
   return { type: "retry_report" };
 }
+
+export function skipReportPayload() {
+  return { type: "skip_report" };
+}

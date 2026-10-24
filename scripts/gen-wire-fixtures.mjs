@@ -63,6 +63,7 @@ function controlCases() {
   return [
     { name: "drawing activity", payload: lib.drawingActivityPayload() },
     { name: "retry report", payload: lib.retryReportPayload() },
+    { name: "skip report", payload: lib.skipReportPayload() },
     { name: "thinking start", payload: lib.thinkingPayload(true) },
     { name: "thinking end", payload: lib.thinkingPayload(false) },
     { name: "yield turn", payload: lib.yieldTurnPayload() },

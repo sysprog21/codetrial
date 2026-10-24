@@ -1202,15 +1202,20 @@ struct RecoveryFixture(
     bool,
     bool,
     Option<bool>,
+    Option<bool>,
 );
 
 impl RecoveryFixture {
     fn new(events: tokio::sync::mpsc::UnboundedReceiver<RecoveryEvent>) -> Self {
-        Self(events, Vec::new(), Vec::new(), true, true, None)
+        Self(events, Vec::new(), Vec::new(), true, true, None, None)
     }
 }
 
 impl RecoveryRoom for RecoveryFixture {
+    fn room_name(&self) -> &str {
+        "room"
+    }
+
     fn candidate_present(&self) -> bool {
         self.3
     }
@@ -1232,8 +1237,27 @@ impl RecoveryRoom for RecoveryFixture {
         if let Some(present) = self.5 {
             self.3 = present;
         }
+        if let Some(skipped) = self.6.take() {
+            return if skipped {
+                Err(Box::new(ReportSkipped))
+            } else {
+                Err(std::io::Error::other("transport").into())
+            };
+        }
         Ok(self.4)
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn skipped_recovery_never_regenerates_a_report() {
+    let (generated, notices) = scripted_recovery(
+        vec![(0, RecoveryEvent::Skipped)],
+        std::future::pending::<GeneratedReport>(),
+        Readiness::Ready,
+    )
+    .await;
+    assert!(generated.is_none());
+    assert!(notices.is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -1299,6 +1323,181 @@ async fn recovery_generates_once_despite_duplicate_requests() {
     assert_eq!(result.unwrap().unwrap().unwrap()["result"], "complete");
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(fixture.1, [RecoveryNotice::Accepted]);
+}
+
+/// A Skip after Accepted must interrupt an already-polled generation future,
+/// rather than merely prevent a regeneration which never started.
+#[tokio::test]
+async fn skipping_after_accepted_cancels_running_regeneration() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct Dropped(std::sync::Arc<AtomicBool>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tx.send(RecoveryEvent::Retry).unwrap();
+
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let dropped = std::sync::Arc::new(AtomicBool::new(false));
+    let guard = dropped.clone();
+
+    let generation = async move {
+        let _guard = Dropped(guard);
+        started_tx.send(()).unwrap();
+        std::future::pending::<GeneratedReport>().await
+    };
+
+    let mut fixture = RecoveryFixture::new(rx);
+    let send_skip = async move {
+        // This cannot fire until generation was actually polled.
+        started_rx.await.unwrap();
+        tx.send(RecoveryEvent::Skipped).unwrap();
+        tx
+    };
+
+    let (result, _tx) = tokio::join!(
+        recover_report(
+            &mut fixture,
+            None,
+            generation,
+            REPORT_RECOVERY_WINDOW,
+            std::time::Duration::ZERO,
+            tokio::time::Instant::now(),
+            || Readiness::Ready,
+        ),
+        send_skip,
+    );
+
+    assert!(result.is_none());
+    assert_eq!(fixture.1, [RecoveryNotice::Accepted]);
+    assert!(dropped.load(Ordering::SeqCst));
+}
+
+/// A completed generation waiting for the candidate to return is not an
+/// in-flight provider call. Skipping it must discard the report, not treat
+/// the already-finished generation as a cancelled HTTP request.
+#[tokio::test(start_paused = true)]
+async fn skipping_after_regeneration_completed_does_not_cancel_the_call() {
+    let generation = async {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        Ok(Ok(serde_json::json!({"result": "complete"})))
+    };
+
+    let (result, notices) = scripted_recovery(
+        vec![
+            (0, RecoveryEvent::Retry),
+            (0, RecoveryEvent::Away),
+            (2, RecoveryEvent::Skipped),
+        ],
+        generation,
+        Readiness::Ready,
+    )
+    .await;
+
+    assert!(result.is_none());
+    assert_eq!(notices, [RecoveryNotice::Accepted]);
+}
+
+/// A room disconnect cancels a regeneration that has actually been polled.
+#[tokio::test]
+async fn disconnect_drops_an_already_running_regeneration() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct Dropped(std::sync::Arc<AtomicBool>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tx.send(RecoveryEvent::Retry).unwrap();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let dropped = std::sync::Arc::new(AtomicBool::new(false));
+    let guard = dropped.clone();
+    let generation = async move {
+        let _guard = Dropped(guard);
+        started_tx.send(()).unwrap();
+        std::future::pending::<GeneratedReport>().await
+    };
+
+    let mut fixture = RecoveryFixture::new(rx);
+    let disconnect = async move {
+        started_rx.await.unwrap();
+        tx.send(RecoveryEvent::Left).unwrap();
+        tx
+    };
+
+    let (result, _tx) = tokio::join!(
+        recover_report(
+            &mut fixture,
+            None,
+            generation,
+            REPORT_RECOVERY_WINDOW,
+            std::time::Duration::ZERO,
+            tokio::time::Instant::now(),
+            || Readiness::Ready,
+        ),
+        disconnect,
+    );
+
+    assert!(result.is_none());
+    assert_eq!(fixture.1, [RecoveryNotice::Accepted]);
+    assert!(dropped.load(Ordering::SeqCst));
+}
+
+/// An absent candidate's expired grace cancels in-flight regeneration.
+#[tokio::test(start_paused = true)]
+async fn grace_expiry_drops_an_already_running_regeneration() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct Dropped(std::sync::Arc<AtomicBool>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tx.send(RecoveryEvent::Retry).unwrap();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let dropped = std::sync::Arc::new(AtomicBool::new(false));
+    let guard = dropped.clone();
+    let generation = async move {
+        let _guard = Dropped(guard);
+        started_tx.send(()).unwrap();
+        std::future::pending::<GeneratedReport>().await
+    };
+
+    let mut fixture = RecoveryFixture::new(rx);
+    let leave = async move {
+        started_rx.await.unwrap();
+        tx.send(RecoveryEvent::Away).unwrap();
+        tx
+    };
+
+    let began = tokio::time::Instant::now();
+    let (result, _tx) = tokio::join!(
+        recover_report(
+            &mut fixture,
+            None,
+            generation,
+            REPORT_RECOVERY_WINDOW,
+            std::time::Duration::ZERO,
+            began,
+            || Readiness::Ready,
+        ),
+        leave,
+    );
+
+    assert!(result.is_none());
+    assert_eq!(fixture.1, [RecoveryNotice::Accepted]);
+    assert!(dropped.load(Ordering::SeqCst));
+    assert!(began.elapsed() >= REJOIN_GRACE);
 }
 
 #[tokio::test]
@@ -1449,20 +1648,20 @@ async fn recovery_room_events_ignore_unrelated_activity_and_stop_on_disconnect()
     .unwrap();
     let candidate = "candidate-original";
     assert_eq!(
-        recovery_event(rx.recv().await, candidate),
+        recovery_event(rx.recv().await, candidate, false),
         RecoveryEvent::Ignore
     );
     assert_eq!(
-        recovery_event(rx.recv().await, candidate),
+        recovery_event(rx.recv().await, candidate, false),
         RecoveryEvent::Ignore
     );
     assert_eq!(
-        recovery_event(rx.recv().await, candidate),
+        recovery_event(rx.recv().await, candidate, false),
         RecoveryEvent::Left
     );
     drop(tx);
     assert_eq!(
-        recovery_event(rx.recv().await, candidate),
+        recovery_event(rx.recv().await, candidate, false),
         RecoveryEvent::Left
     );
 }
@@ -1980,12 +2179,143 @@ async fn a_hung_report_publish_is_bounded_and_retried() {
     assert_eq!(started.elapsed(), DELIVERY_WAIT * DELIVERY_ATTEMPTS as u32);
 }
 
+#[test]
+fn skip_report_requires_candidate_and_control_topic() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../fixtures/control.json")).unwrap();
+    let cases = fixture["cases"].as_array().unwrap();
+    let skip = cases
+        .iter()
+        .find(|case| case["name"] == "skip report")
+        .expect("generated skip report fixture");
+    let payload = serde_json::to_vec(&skip["payload"]).unwrap();
+
+    assert!(is_skip_report_with_presence(
+        Some(crate::runtime::TOPIC_CONTROL),
+        Some("candidate"),
+        "candidate",
+        &payload,
+        false,
+    ));
+
+    assert!(!is_skip_report_with_presence(
+        Some(crate::runtime::TOPIC_CONTROL),
+        Some("other"),
+        "candidate",
+        &payload,
+        false,
+    ));
+
+    assert!(!is_skip_report_with_presence(
+        Some(TOPIC_REPORT),
+        Some("candidate"),
+        "candidate",
+        &payload,
+        false,
+    ));
+
+    assert!(!is_skip_report_with_presence(
+        Some(crate::runtime::TOPIC_CONTROL),
+        Some("candidate"),
+        "candidate",
+        br#"{"type":"end_interview"}"#,
+        false,
+    ));
+}
+
+#[tokio::test]
+async fn skip_interrupts_a_pending_generation() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    sender
+        .send(ReceiptTestEvent {
+            sender: "candidate",
+            payload: br#"{"type":"skip_report"}"#.to_vec(),
+        })
+        .unwrap();
+    let result = tokio::time::timeout(
+        Duration::from_millis(200),
+        until_skip(
+            std::future::pending::<()>(),
+            &mut events,
+            "candidate",
+            || true,
+        ),
+    )
+    .await
+    .expect("a candidate skip must interrupt pending generation");
+    assert!(matches!(result, GenerationOutcome::Skipped));
+}
+
+#[tokio::test]
+async fn skip_interrupts_a_stalled_report_publish() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let send_skip = async move {
+        tokio::task::yield_now().await;
+        sender
+            .send(ReceiptTestEvent {
+                sender: "candidate",
+                payload: br#"{"type":"skip_report"}"#.to_vec(),
+            })
+            .unwrap();
+    };
+    let deliver = deliver_report(
+        |_| std::future::pending::<Result<(), std::io::Error>>(),
+        &mut events,
+        "candidate",
+        "room",
+        || true,
+        delivery_test_packet(br#"{"codingScore":80}"#.to_vec()),
+    );
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::join!(deliver, send_skip)
+    })
+    .await
+    .expect("skip must interrupt a stalled report publish");
+    assert!(result.unwrap_err().is::<ReportSkipped>());
+}
+
+#[tokio::test]
+async fn queued_skip_prevents_the_first_report_publish() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    sender
+        .send(ReceiptTestEvent {
+            sender: "candidate",
+            payload: br#"{"type":"skip_report"}"#.to_vec(),
+        })
+        .unwrap();
+    let mut attempts = 0;
+    let result = deliver_report(
+        |_| {
+            attempts += 1;
+            std::future::ready(Ok::<(), std::io::Error>(()))
+        },
+        &mut events,
+        "candidate",
+        "room",
+        || true,
+        delivery_test_packet(br#"{"codingScore":80}"#.to_vec()),
+    )
+    .await;
+    assert!(result.unwrap_err().is::<ReportSkipped>());
+    assert_eq!(attempts, 0);
+}
+
 struct ReceiptTestEvent {
     sender: &'static str,
     payload: Vec<u8>,
 }
 
 impl DeliveryEvent for ReceiptTestEvent {
+    fn skips_report(&self, candidate: &str, candidate_gone: bool) -> bool {
+        is_skip_report_with_presence(
+            Some(crate::runtime::TOPIC_CONTROL),
+            Some(self.sender),
+            candidate,
+            &self.payload,
+            candidate_gone,
+        )
+    }
+
     fn acknowledges(&self, candidate: &str, id: &str, candidate_gone: bool) -> bool {
         is_report_receipt(
             Some("control"),
@@ -2083,7 +2413,7 @@ async fn a_lost_packet_is_retransmitted_until_receipt() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_disconnected_room_stops_waiting_without_claiming_delivery_failure() {
+async fn a_queued_disconnect_prevents_publication() {
     let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
     sender
         .send(RoomEvent::Disconnected {
@@ -2104,8 +2434,13 @@ async fn a_disconnected_room_stops_waiting_without_claiming_delivery_failure() {
         delivery_test_packet(b"{}".to_vec()),
     )
     .await;
-    assert!(!result.unwrap());
-    assert_eq!(attempts, 1);
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("report_delivery_failed")
+    );
+    assert_eq!(attempts, 0);
     assert_eq!(started.elapsed(), Duration::ZERO);
 }
 
@@ -2199,41 +2534,45 @@ async fn failed_publication_followed_by_disconnect_is_a_delivery_failure() {
 
 // LiveKit constructs RemoteParticipant internally, so the real room's
 // participant map is supplied through the presence probe rather than faked.
-#[tokio::test(start_paused = true)]
-async fn a_candidate_leaving_during_the_receipt_wait_stops_retries() {
-    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
-    sender
-        .send(ReceiptTestEvent {
-            sender: "peer",
-            payload: b"{}".to_vec(),
-        })
-        .unwrap();
-    let presence_reads = std::cell::Cell::new(0);
-    let mut attempts = 0;
-    let started = tokio::time::Instant::now();
-    let result = deliver_report(
+#[tokio::test]
+async fn a_disconnect_during_the_receipt_wait_stops_retries() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+
+    let published = std::sync::Arc::new(tokio::sync::Notify::new());
+    let published_signal = published.clone();
+    let attempts = std::cell::Cell::new(0);
+
+    let deliver = deliver_report(
         |_| {
-            attempts += 1;
+            attempts.set(attempts.get() + 1);
+            published_signal.notify_one();
             std::future::ready(Ok::<(), std::io::Error>(()))
         },
         &mut events,
         "candidate",
         "room",
-        || {
-            let reads = presence_reads.get();
-            presence_reads.set(reads + 1);
-
-            // Present after publication, gone when the queued event is
-            // consumed.
-            reads == 0
-        },
+        || true,
         delivery_test_packet(b"{}".to_vec()),
-    )
-    .await;
+    );
+
+    let disconnect = async {
+        published.notified().await;
+        tokio::task::yield_now().await;
+        sender
+            .send(RoomEvent::Disconnected {
+                reason: ::livekit::DisconnectReason::ClientInitiated,
+            })
+            .unwrap();
+    };
+
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::join!(deliver, disconnect)
+    })
+    .await
+    .expect("disconnect should end the receipt wait promptly");
+
     assert!(!result.unwrap());
-    assert_eq!(attempts, 1);
-    assert_eq!(presence_reads.get(), 2);
-    assert_eq!(started.elapsed(), Duration::ZERO);
+    assert_eq!(attempts.get(), 1);
 }
 
 #[test]
@@ -2336,38 +2675,45 @@ async fn a_candidate_gone_when_the_wait_begins_gets_only_the_rejoin_grace() {
     }
 }
 
-/// The receipt that arrives unattributed because its sender just left is
-/// itself the event that reveals the departure, so presence is read before the
-/// receipt is judged rather than only for the events behind it.
-#[tokio::test(start_paused = true)]
-async fn an_unattributed_receipt_that_reveals_the_departure_is_acknowledged() {
+/// A queued anonymous receipt is not proof while the candidate is present.
+/// It becomes eligible only after presence or a queued disconnect proves
+/// departure; another participant could otherwise echo the report digest.
+#[test]
+fn queued_anonymous_receipt_requires_candidate_departure() {
     let payload = br#"{"codingScore":80}"#.to_vec();
     let id = crate::sha256_hex(&[&payload]);
-    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+
+    let receipt = || RoomEvent::DataReceived {
+        payload: std::sync::Arc::new(receipt_bytes(&id)),
+        topic: Some("control".to_string()),
+        kind: ::livekit::prelude::DataPacketKind::Reliable,
+        participant: None,
+    };
+
+    for (gone, expected_acknowledgement) in [(false, false), (true, true)] {
+        let (sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+        sender.send(receipt()).unwrap();
+
+        let result = queued_receipt(&mut events, "candidate", &id, gone);
+        assert_eq!(
+            matches!(result, Wait::Acknowledged),
+            expected_acknowledgement,
+            "candidate_gone={gone}"
+        );
+    }
+
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
     sender
-        .send(RoomEvent::DataReceived {
-            payload: std::sync::Arc::new(receipt_bytes(&id)),
-            topic: Some("control".to_string()),
-            kind: ::livekit::prelude::DataPacketKind::Reliable,
-            participant: None,
+        .send(RoomEvent::Disconnected {
+            reason: ::livekit::DisconnectReason::ClientInitiated,
         })
         .unwrap();
-    let presence_reads = std::cell::Cell::new(0);
-    let result = deliver_report(
-        |_| std::future::ready(Ok::<(), std::io::Error>(())),
-        &mut events,
-        "candidate",
-        "room",
-        || {
-            let reads = presence_reads.get();
-            presence_reads.set(reads + 1);
-            // Present when the wait starts, gone once the receipt is read.
-            reads == 0
-        },
-        delivery_test_packet(payload),
-    )
-    .await;
-    assert!(result.unwrap());
+    sender.send(receipt()).unwrap();
+
+    assert!(matches!(
+        queued_receipt(&mut events, "candidate", &id, false),
+        Wait::Acknowledged
+    ));
 }
 
 /// A candidate who dropped before the provisional report's receipt came back
@@ -2726,4 +3072,649 @@ fn frozen_drawing_receipt_uses_received_snapshots_even_without_report_images() {
             "later live state must not change the frozen receipt"
         );
     }
+}
+
+/// A disconnect event is authoritative even before the participant map
+/// reflects the departure.
+#[tokio::test(start_paused = true)]
+async fn a_disconnect_during_delivery_stops_the_receipt_wait() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let mut attempts = 0;
+    let started = tokio::time::Instant::now();
+
+    let deliver = deliver_report(
+        |_| {
+            attempts += 1;
+            std::future::ready(Ok::<(), std::io::Error>(()))
+        },
+        &mut events,
+        "candidate",
+        "room",
+        || true,
+        delivery_test_packet(b"{}".to_vec()),
+    );
+
+    // Let publication complete before delivering the disconnect, so it reaches
+    // the receipt wait rather than the publish-time event drain.
+    let disconnect = async {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        sender
+            .send(RoomEvent::Disconnected {
+                reason: ::livekit::DisconnectReason::ClientInitiated,
+            })
+            .unwrap();
+    };
+
+    let (result, ()) = tokio::join!(deliver, disconnect);
+
+    assert!(!result.unwrap());
+    assert_eq!(attempts, 1);
+    assert_eq!(started.elapsed(), Duration::from_millis(1));
+}
+
+/// An unrelated event from a still-connected participant must not
+/// prematurely terminate the report's receipt window.
+#[tokio::test(start_paused = true)]
+async fn an_unrelated_event_does_not_end_a_connected_receipt_wait() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let mut attempts = 0;
+    let started = tokio::time::Instant::now();
+
+    let result = deliver_report(
+        |_| {
+            attempts += 1;
+            if attempts == 1 {
+                sender
+                    .send(ReceiptTestEvent {
+                        sender: "peer",
+                        payload: b"{}".to_vec(),
+                    })
+                    .unwrap();
+            }
+            std::future::ready(Ok::<(), std::io::Error>(()))
+        },
+        &mut events,
+        "candidate",
+        "room",
+        || true,
+        delivery_test_packet(b"{}".to_vec()),
+    )
+    .await;
+
+    assert!(!result.unwrap());
+    assert_eq!(attempts, DELIVERY_ATTEMPTS);
+    assert_eq!(started.elapsed(), DELIVERY_WAIT * DELIVERY_ATTEMPTS as u32);
+}
+
+/// Skipping a republish ends recovery, while a transport failure retains
+/// the provisional report for the candidate's next rejoin.
+#[tokio::test(start_paused = true)]
+async fn republish_distinguishes_report_skip_from_transport_failure() {
+    for skipped in [true, false] {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tx.send(RecoveryEvent::Back).unwrap();
+        tx.send(RecoveryEvent::Back).unwrap();
+
+        let mut fixture = RecoveryFixture::new(rx);
+        fixture.6 = Some(skipped);
+        let started = tokio::time::Instant::now();
+
+        let result = recover_report(
+            &mut fixture,
+            Some(delivery_test_packet(br#"{"incomplete":true}"#.to_vec())),
+            std::future::pending::<GeneratedReport>(),
+            std::time::Duration::from_secs(1),
+            REPORT_RETRY_COOLDOWN,
+            started,
+            || Readiness::Ready,
+        )
+        .await;
+
+        assert!(result.is_none());
+
+        if skipped {
+            assert_eq!(fixture.2.len(), 1);
+            assert_eq!(started.elapsed(), Duration::ZERO);
+            assert!(fixture.1.is_empty());
+        } else {
+            assert_eq!(fixture.2.len(), 2);
+            assert_eq!(started.elapsed(), Duration::from_secs(1));
+            assert_eq!(fixture.1, [RecoveryNotice::Closed]);
+        }
+
+        drop(tx);
+    }
+}
+
+#[test]
+fn report_skipped_error_explains_the_cancellation() {
+    assert_eq!(ReportSkipped.to_string(), "candidate skipped report");
+}
+
+/// A cancellation already in the receiver wins the biased select before
+/// generation is polled. Reporting an unknown generation cost in this case
+/// would imply work started when it did not.
+#[tokio::test]
+async fn queued_disconnect_does_not_poll_report_generation() {
+    use std::sync::atomic::Ordering;
+
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    sender
+        .send(RoomEvent::Disconnected {
+            reason: ::livekit::DisconnectReason::ClientInitiated,
+        })
+        .unwrap();
+
+    let generation_polled = AtomicBool::new(false);
+    let generation = async {
+        generation_polled.store(true, Ordering::Relaxed);
+        std::future::pending::<()>().await
+    };
+
+    let result = until_skip(generation, &mut events, "candidate", || true).await;
+    assert!(matches!(result, GenerationOutcome::Disconnected));
+    assert!(
+        !generation_polled.load(Ordering::Relaxed),
+        "queued disconnect must not start report generation"
+    );
+}
+
+#[tokio::test]
+async fn generation_without_queued_cancellation_is_polled() {
+    use std::sync::atomic::Ordering;
+
+    let (_sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    let generation_polled = AtomicBool::new(false);
+    let generation = async {
+        generation_polled.store(true, Ordering::Relaxed);
+        42
+    };
+
+    let result = until_skip(generation, &mut events, "candidate", || true).await;
+    assert_eq!(result, GenerationOutcome::Completed(42));
+    assert!(
+        generation_polled.load(Ordering::Relaxed),
+        "completed report generation must be marked as polled"
+    );
+}
+
+#[tokio::test]
+async fn generation_completes_normally_without_a_skip() {
+    let (_sender, mut events) = tokio::sync::mpsc::unbounded_channel::<ReceiptTestEvent>();
+
+    let result = until_skip(async { 42 }, &mut events, "candidate", || true).await;
+
+    assert_eq!(result, GenerationOutcome::Completed(42));
+}
+
+/// Closing the room event stream must stop a pending generation.
+/// Otherwise the agent keeps working after the room is gone.
+#[tokio::test]
+async fn closed_room_event_stream_cancels_pending_generation() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    drop(sender);
+
+    let result = tokio::time::timeout(
+        Duration::from_millis(200),
+        until_skip(
+            std::future::pending::<()>(),
+            &mut events,
+            "candidate",
+            || true,
+        ),
+    )
+    .await
+    .expect("closed event stream must stop pending generation");
+
+    assert!(matches!(result, GenerationOutcome::Disconnected));
+}
+
+/// A room disconnect consumed during generation must not disappear before
+/// delivery or turn into a candidate-requested report Skip.
+#[tokio::test]
+async fn disconnect_during_generation_is_not_report_skip() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    sender
+        .send(RoomEvent::Disconnected {
+            reason: ::livekit::DisconnectReason::ClientInitiated,
+        })
+        .unwrap();
+
+    let result = tokio::time::timeout(
+        Duration::from_millis(200),
+        until_skip(
+            std::future::pending::<()>(),
+            &mut events,
+            "candidate",
+            || true,
+        ),
+    )
+    .await
+    .expect("disconnect must stop pending generation");
+
+    assert!(matches!(result, GenerationOutcome::Disconnected));
+}
+
+/// Events without a skip implementation must not cancel report delivery.
+#[test]
+fn delivery_events_do_not_skip_reports_by_default() {
+    struct OrdinaryEvent;
+
+    impl DeliveryEvent for OrdinaryEvent {
+        fn acknowledges(&self, _: &str, _: &str, _: bool) -> bool {
+            false
+        }
+    }
+
+    assert!(!OrdinaryEvent.skips_report("candidate", false));
+    assert!(!OrdinaryEvent.disconnected());
+}
+
+/// An ordinary event can reveal a departure before LiveKit emits a
+/// disconnected event. Delivery must stop without another retry.
+#[tokio::test(start_paused = true)]
+async fn an_unrelated_event_reveals_a_candidate_departure() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let presence_reads = std::cell::Cell::new(0);
+    let mut attempts = 0;
+    let started = tokio::time::Instant::now();
+
+    let result = deliver_report(
+        |_| {
+            attempts += 1;
+            std::future::ready(Ok::<(), std::io::Error>(()))
+        },
+        &mut events,
+        "candidate",
+        "room",
+        || {
+            let reads = presence_reads.get();
+            presence_reads.set(reads + 1);
+            reads == 0
+        },
+        delivery_test_packet(b"{}".to_vec()),
+    );
+
+    let unrelated = async {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        sender
+            .send(ReceiptTestEvent {
+                sender: "peer",
+                payload: b"{}".to_vec(),
+            })
+            .unwrap();
+    };
+
+    let (result, ()) = tokio::join!(result, unrelated);
+
+    assert!(!result.unwrap());
+    assert_eq!(attempts, 1);
+    assert_eq!(started.elapsed(), Duration::from_millis(1));
+}
+
+#[tokio::test]
+async fn receipt_during_pending_publication_stops_delivery() {
+    let payload = br#"{"codingScore":80}"#.to_vec();
+    let id = crate::sha256_hex(&[&payload]);
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+
+    let deliver = deliver_report(
+        |_| std::future::pending::<Result<(), std::io::Error>>(),
+        &mut events,
+        "candidate",
+        "room",
+        || true,
+        delivery_test_packet(payload),
+    );
+
+    let send_receipt = async move {
+        tokio::task::yield_now().await;
+        sender
+            .send(ReceiptTestEvent {
+                sender: "candidate",
+                payload: receipt_bytes(&id),
+            })
+            .unwrap();
+    };
+
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::join!(deliver, send_receipt)
+    })
+    .await
+    .expect("receipt must interrupt pending publication");
+
+    assert!(result.unwrap());
+}
+
+#[tokio::test]
+async fn disconnect_during_pending_publication_waits_for_publish() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+    let (finish_tx, finish_rx) = tokio::sync::oneshot::channel::<()>();
+
+    let delivery = tokio::spawn(async move {
+        let mut started_tx = Some(started_tx);
+        let mut finish_rx = Some(finish_rx);
+
+        deliver_report(
+            move |_| {
+                let started = started_tx.take().expect("publication starts once");
+                let finish = finish_rx.take().expect("publication starts once");
+
+                async move {
+                    let _ = started.send(());
+                    finish.await.expect("publication must not be cancelled");
+                    Ok::<(), std::io::Error>(())
+                }
+            },
+            &mut events,
+            "candidate",
+            "room",
+            || true,
+            delivery_test_packet(b"{}".to_vec()),
+        )
+        .await
+    });
+
+    started_rx.await.expect("publication must start");
+
+    sender
+        .send(RoomEvent::Disconnected {
+            reason: ::livekit::DisconnectReason::ClientInitiated,
+        })
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    assert!(
+        !delivery.is_finished(),
+        "disconnect must not cancel pending publication"
+    );
+
+    finish_tx.send(()).unwrap();
+
+    let result = tokio::time::timeout(Duration::from_secs(1), delivery)
+        .await
+        .expect("delivery must finish")
+        .expect("delivery task must not panic")
+        .expect("successful publication must be preserved");
+
+    assert!(!result, "departure leaves the report unconfirmed");
+}
+
+#[test]
+fn anonymous_skip_requires_candidate_departure() {
+    let payload = br#"{"type":"skip_report"}"#;
+    let control = Some(crate::runtime::TOPIC_CONTROL);
+
+    // The identified candidate may skip while still connected.
+    assert!(is_skip_report_with_presence(
+        control,
+        Some("candidate"),
+        "candidate",
+        payload,
+        false,
+    ));
+
+    // LiveKit may lose the sender after the candidate disconnects.
+    assert!(is_skip_report_with_presence(
+        control,
+        None,
+        "candidate",
+        payload,
+        true,
+    ));
+
+    // An anonymous control packet is not enough while the candidate remains.
+    assert!(!is_skip_report_with_presence(
+        control,
+        None,
+        "candidate",
+        payload,
+        false,
+    ));
+
+    // Another identified participant must never cancel this report.
+    assert!(!is_skip_report_with_presence(
+        control,
+        Some("other"),
+        "candidate",
+        payload,
+        true,
+    ));
+
+    // The correct topic remains mandatory.
+    assert!(!is_skip_report_with_presence(
+        Some(TOPIC_REPORT),
+        None,
+        "candidate",
+        payload,
+        true,
+    ));
+
+    // An unrelated control packet must not trigger Skip.
+    assert!(!is_skip_report_with_presence(
+        control,
+        None,
+        "candidate",
+        br#"{"type":"end_interview"}"#,
+        true,
+    ));
+}
+
+#[tokio::test]
+async fn anonymous_skip_after_departure_interrupts_generation() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+
+    sender
+        .send(RoomEvent::DataReceived {
+            payload: std::sync::Arc::new(br#"{"type":"skip_report"}"#.to_vec()),
+            topic: Some(crate::runtime::TOPIC_CONTROL.into()),
+            kind: ::livekit::DataPacketKind::Reliable,
+            participant: None,
+        })
+        .unwrap();
+
+    let result = tokio::time::timeout(
+        Duration::from_millis(200),
+        until_skip(
+            std::future::pending::<()>(),
+            &mut events,
+            "candidate",
+            || false,
+        ),
+    )
+    .await
+    .expect("anonymous Skip after departure must interrupt generation");
+
+    assert!(matches!(result, GenerationOutcome::Skipped));
+}
+
+#[test]
+fn anonymous_skip_is_accepted_only_after_departure() {
+    let event = RoomEvent::DataReceived {
+        payload: std::sync::Arc::new(br#"{"type":"skip_report"}"#.to_vec()),
+        topic: Some(crate::runtime::TOPIC_CONTROL.into()),
+        kind: ::livekit::DataPacketKind::Reliable,
+        participant: None,
+    };
+    assert!(!event.skips_report("candidate", false));
+    assert!(event.skips_report("candidate", true));
+}
+
+#[test]
+fn queued_anonymous_skip_after_disconnect_is_recognized() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+
+    sender
+        .send(RoomEvent::Disconnected {
+            reason: ::livekit::DisconnectReason::ClientInitiated,
+        })
+        .unwrap();
+
+    sender
+        .send(RoomEvent::DataReceived {
+            payload: std::sync::Arc::new(br#"{"type":"skip_report"}"#.to_vec()),
+            topic: Some(crate::runtime::TOPIC_CONTROL.into()),
+            kind: ::livekit::DataPacketKind::Reliable,
+            participant: None,
+        })
+        .unwrap();
+
+    assert!(matches!(
+        queued_receipt(&mut events, "candidate", "unused", false),
+        Wait::Skipped
+    ));
+}
+
+#[test]
+fn recovery_accepts_anonymous_skip_only_after_departure() {
+    let skip = || RoomEvent::DataReceived {
+        payload: std::sync::Arc::new(br#"{"type":"skip_report"}"#.to_vec()),
+        topic: Some(crate::runtime::TOPIC_CONTROL.into()),
+        kind: ::livekit::DataPacketKind::Reliable,
+        participant: None,
+    };
+
+    assert_eq!(
+        recovery_event(Some(skip()), "candidate", false),
+        RecoveryEvent::Ignore,
+    );
+    assert_eq!(
+        recovery_event(Some(skip()), "candidate", true),
+        RecoveryEvent::Skipped,
+    );
+}
+
+#[tokio::test]
+async fn anonymous_skip_during_pending_publication_cancels_delivery() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+
+    let deliver = deliver_report(
+        |_| std::future::pending::<Result<(), std::io::Error>>(),
+        &mut events,
+        "candidate",
+        "room",
+        || false,
+        delivery_test_packet(b"{}".to_vec()),
+    );
+
+    let send_skip = async move {
+        tokio::task::yield_now().await;
+        sender
+            .send(RoomEvent::DataReceived {
+                payload: std::sync::Arc::new(br#"{"type":"skip_report"}"#.to_vec()),
+                topic: Some(crate::runtime::TOPIC_CONTROL.into()),
+                kind: ::livekit::DataPacketKind::Reliable,
+                participant: None,
+            })
+            .unwrap();
+    };
+
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::join!(deliver, send_skip)
+    })
+    .await
+    .expect("anonymous Skip must interrupt pending publication");
+
+    assert!(result.unwrap_err().is::<ReportSkipped>());
+}
+
+#[tokio::test]
+async fn anonymous_skip_while_candidate_present_does_not_cancel_generation() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+
+    sender
+        .send(RoomEvent::DataReceived {
+            payload: std::sync::Arc::new(br#"{"type":"skip_report"}"#.to_vec()),
+            topic: Some(crate::runtime::TOPIC_CONTROL.into()),
+            kind: ::livekit::DataPacketKind::Reliable,
+            participant: None,
+        })
+        .unwrap();
+
+    // The candidate is still present, so an anonymous Skip is invalid.
+    let result = until_skip(async { 42 }, &mut events, "candidate", || true).await;
+
+    assert_eq!(result, GenerationOutcome::Completed(42));
+}
+
+#[tokio::test]
+async fn queued_anonymous_skip_after_departure_prevents_publication() {
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+
+    sender
+        .send(RoomEvent::DataReceived {
+            payload: std::sync::Arc::new(br#"{"type":"skip_report"}"#.to_vec()),
+            topic: Some(crate::runtime::TOPIC_CONTROL.into()),
+            kind: ::livekit::DataPacketKind::Reliable,
+            participant: None,
+        })
+        .unwrap();
+    drop(sender);
+
+    let publications = std::cell::Cell::new(0);
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        deliver_report(
+            |_| {
+                publications.set(publications.get() + 1);
+                async { Ok::<(), std::io::Error>(()) }
+            },
+            &mut events,
+            "candidate",
+            "room",
+            || false, // Candidate has departed.
+            delivery_test_packet(b"{}".to_vec()),
+        ),
+    )
+    .await
+    .expect("queued Skip must stop delivery promptly");
+
+    assert!(result.unwrap_err().is::<ReportSkipped>());
+    assert_eq!(publications.get(), 0, "Skip must prevent publication");
+}
+
+#[test]
+fn early_delivery_logs_and_results_share_the_terminal_outcomes() {
+    let attempt = 2;
+    for (wait, published, expected, success) in [
+        (Wait::Acknowledged, false, "acknowledged", Some(true)),
+        (Wait::Skipped, false, "skipped", None),
+        (Wait::Gone, true, "unconfirmed", Some(false)),
+        (Wait::Gone, false, "failed", None),
+    ] {
+        let line = report_delivery_outcome("test-room", expected, Some("attempt=2"));
+        assert_eq!(
+            line,
+            format!("codetrial report_delivery room=test-room attempt=2 outcome={expected}")
+        );
+        let result = early_delivery(wait, "test-room", attempt, published);
+        match (expected, success) {
+            ("skipped", None) => assert!(result.unwrap_err().is::<ReportSkipped>()),
+            ("failed", None) => {
+                let error = result.unwrap_err().to_string();
+                assert!(error.contains("candidate left or room disconnected"));
+                assert!(!error.contains("candidate disconnected"));
+            }
+            (_, Some(value)) => assert_eq!(result.unwrap(), value),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn recovery_and_republish_skips_preserve_room_outcome_and_stage() {
+    let base = report_delivery_outcome("recovery-room", "skipped", None);
+    assert_eq!(
+        format!("{base} stage=recovery"),
+        "codetrial report_delivery room=recovery-room outcome=skipped stage=recovery"
+    );
+    assert_eq!(
+        format!("{base} stage=republish"),
+        "codetrial report_delivery room=recovery-room outcome=skipped stage=republish"
+    );
+    let mut presence = super::super::CandidatePresence::default();
+    assert!(track_presence(RecoveryEvent::Skipped, &mut presence, "recovery-room").is_break());
 }

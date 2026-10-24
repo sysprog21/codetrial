@@ -3759,3 +3759,44 @@ fn no_parse_is_free_and_a_recovery_baseline_is_charged_too() {
         .insert(oversized.language.clone(), baseline(70_000));
     assert_eq!(refused(&mut oversized, 40, invalid), 0);
 }
+#[test]
+fn skip_report_ends_live_interview_without_requesting_report() {
+    let mut state = RuntimeState::default();
+
+    let result = apply_data_event_at(
+        &mut state,
+        crate::runtime::TOPIC_CONTROL,
+        &serde_json::json!({"type": "skip_report"}),
+        0.0,
+        100,
+    );
+
+    assert!(state.ended, "Skip must end the live interview");
+    assert!(result.skip_report, "Skip must signal the live loop to exit");
+    assert!(
+        result.finish_interview.is_none(),
+        "Skip must not request report generation"
+    );
+    assert!(result.generate_reply.is_none());
+}
+
+#[test]
+fn skip_report_is_ignored_after_interview_has_ended() {
+    let mut state = RuntimeState {
+        ended: true,
+        ..Default::default()
+    };
+
+    let result = apply_data_event_at(
+        &mut state,
+        crate::runtime::TOPIC_CONTROL,
+        &serde_json::json!({"type": "skip_report"}),
+        0.0,
+        200,
+    );
+
+    assert!(state.ended);
+    assert!(!result.skip_report);
+    assert!(result.finish_interview.is_none());
+    assert!(result.generate_reply.is_none());
+}

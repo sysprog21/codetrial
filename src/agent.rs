@@ -3063,6 +3063,7 @@ pub struct DataEventResult {
     pub update_last_interjection: bool,
     pub generate_reply: Option<String>,
     pub finish_interview: Option<String>,
+    pub skip_report: bool,
     pub thinking_changed: Option<bool>,
     pub yield_turn: bool,
     /// `generate_reply` carries what a hold left owed (see `thinking_resume`),

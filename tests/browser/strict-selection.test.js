@@ -194,11 +194,14 @@ async function strictFailure(page, message) {
   );
 }
 
-async function preflight(page) {
+async function preflight(page, noWaitAfter = false) {
   await page.locator("#audio-heard").click();
   await page.locator("#camera-skip").click();
   try {
-    await page.locator("#audio-check-join").click({ timeout: 10000 });
+    await page.locator("#audio-check-join").click({
+      timeout: 10000,
+      noWaitAfter,
+    });
   } catch (error) {
     throw new Error(await page.locator("#audio-check-status").textContent(), {
       cause: error,
@@ -299,12 +302,13 @@ for (const action of ["restore", "edit", "choose", "run", "end"]) {
         "Running...",
       );
     } else if (action === "end") {
-      // With no interviewer here, the offline summary replaces the ending
-      // overlay on a timer, and the report phase refuses language changes on
-      // its own. The paused clock keeps the judge landing during the ending.
+      // Pause the clock to keep the judge landing during ending.
+      // The offline summary can replace the transient ending overlay after
+      // 300 ms, so verify that End was processed using its disabled state.
       await pauseClock(page);
+      await page.locator("#end:not([disabled])").waitFor();
       await page.locator("#end").click();
-      await page.locator("#ending-overlay:not([hidden])").waitFor();
+      await page.locator("#end:disabled").waitFor();
     } else {
       expected = "c";
     }
@@ -1008,7 +1012,8 @@ test("two Strict tabs keep separate previous assignments in the same browser con
     },
     first.context(),
   );
-  await preflight(second);
+  // The click starts navigation; the assertion below verifies room joining.
+  await preflight(second, true);
   await second.waitForFunction(() => window.roomJoins.length === 1);
   assert.equal(firstCalls[0].previousAssignment, undefined);
   assert.equal(secondCalls[0].previousAssignment, undefined);
