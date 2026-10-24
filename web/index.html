@@ -2008,6 +2008,13 @@
         <p id="progress-summary" aria-live="polite"></p>
         <section aria-labelledby="attempt-history-title">
           <h3 id="attempt-history-title">Past attempts</h3>
+          <div id="attempt-selection" class="attempt-selection" hidden>
+            <button id="attempt-select-all" type="button">Deselect all</button>
+            <button id="attempt-download-selected" type="button">
+              Download selected (0)
+            </button>
+          </div>
+          <p id="attempt-download-note" class="small" role="status"></p>
           <ol id="attempt-history"></ol>
         </section>
         <div id="progress-trends" class="progress-trends"></div>
