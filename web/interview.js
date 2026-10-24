@@ -1337,6 +1337,14 @@ function bindEvents() {
   // that instead, or a candidate driving the page from the keyboard is stuck
   // in the textarea with no way out.
   let tabLeavesEditor = false;
+  // Escape arms only the keyboard's next move. A click in the editor is the
+  // candidate editing again, and a blur means they left some other way, so
+  // neither may leave the next Tab armed.
+  for (const type of ["pointerdown", "blur"]) {
+    nodes.editor.addEventListener(type, () => {
+      tabLeavesEditor = false;
+    });
+  }
   nodes.editor.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       tabLeavesEditor = true;

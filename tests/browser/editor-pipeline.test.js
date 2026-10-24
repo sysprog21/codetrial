@@ -653,6 +653,63 @@ test("disabled auto indentation uses native Enter and retains manual indentation
   }
 });
 
+test("a click back into the editor after Escape lets Tab indent again", async (t) => {
+  const ctx = await editorPage(t);
+  if (!ctx) return;
+  const { page, errors } = ctx;
+  try {
+    await setCode(page, "x");
+    await page.keyboard.press("Escape");
+    await page.locator("#editor").click();
+    // The click leaves the caret wherever it landed; put it back at the end.
+    await setCode(page, "x");
+    await page.keyboard.press("Tab");
+    assert.deepEqual(await caretState(page), {
+      value: "x    ",
+      start: 5,
+      end: 5,
+    });
+    assert.equal(
+      await page
+        .locator("#editor")
+        .evaluate((editor) => document.activeElement === editor),
+      true,
+    );
+    assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
+  }
+});
+
+test("leaving the editor after Escape disarms its Tab exit", async (t) => {
+  const ctx = await editorPage(t);
+  if (!ctx) return;
+  const { page, errors } = ctx;
+  try {
+    await setCode(page, "x");
+    await page.keyboard.press("Escape");
+    // Focus goes elsewhere without that Tab, as a click on another control
+    // sends it, and returns with no click in the editor, as Shift+Tab does.
+    await page.locator("#editor").evaluate((editor) => editor.blur());
+    await setCode(page, "x");
+    await page.keyboard.press("Tab");
+    assert.deepEqual(await caretState(page), {
+      value: "x    ",
+      start: 5,
+      end: 5,
+    });
+    assert.equal(
+      await page
+        .locator("#editor")
+        .evaluate((editor) => document.activeElement === editor),
+      true,
+    );
+    assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
+  }
+});
+
 for (const direction of ["forward", "backward"]) {
   for (const { command, code, end, edited, start, finish } of [
     {
