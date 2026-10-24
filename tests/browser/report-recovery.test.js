@@ -290,6 +290,7 @@ function pageHarness(phase = "live") {
     },
     stopAvatar: () => events.push("stop-avatar"),
     stopLocalMedia: () => events.push("stop-media"),
+    localRecording: { dispose() {} },
     startEndingClock: () => {},
     stopEndingClock: () => {},
     publish: (topic, payload) => {

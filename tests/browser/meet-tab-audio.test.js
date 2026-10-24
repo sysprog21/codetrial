@@ -176,15 +176,15 @@ test("sink routing", () => {
   );
 });
 
-test("no synthetic microphone", () => {
+test("capture and audio mixing are confined to local recording", () => {
   const offenders = firstPartyScripts.filter((name) =>
     /createMediaStreamDestination|getDisplayMedia/.test(read(name)),
   );
 
   assert.deepEqual(
     offenders,
-    [],
-    "CodeTrial must not build an audio bridge or capture the screen for Meet",
+    ["local-recorder.js"],
+    "only local recording may mix audio or capture the screen; Meet must not",
   );
 });
 

@@ -53,6 +53,7 @@ export const INTERVIEW_SOURCES = [
   "web/captions.js",
   "web/integrity.js",
   "web/recording-state.js",
+  "web/local-recorder.js",
   "web/replay-feed.js",
   "web/avatar/stage.js",
 ];
@@ -103,7 +104,9 @@ export function loadInterview(names, scope, { stubMissing = false } = {}) {
 /// ones a hand-written list would have missed.
 export function initialisedModules() {
   const page = read("web/interview.js");
-  const called = new Set(captures(page, /^(init[A-Z]\w*)\(/gm));
+  const called = new Set(
+    captures(page, /^(?:const \w+ = )?(init[A-Z]\w*)\(/gm),
+  );
   return firstPartyScripts()
     .map((name) => `web/${name}`)
     .filter((path) => {

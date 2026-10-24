@@ -149,8 +149,9 @@ test("the room disconnects on actual pagehide, not when beforeunload is cancelle
   const pagehide = new Function(
     "state",
     "reportRecovery",
+    "localRecording",
     `${body}\n}\nreturn finalizeRecoveryOnPageHide;`,
-  )(state, reportRecovery);
+  )(state, reportRecovery, { dispose: () => calls.push("dispose") });
   const guard = createBeforeUnloadGuard(target);
 
   guard.setEnabled(true);
@@ -162,7 +163,7 @@ test("the room disconnects on actual pagehide, not when beforeunload is cancelle
 
   // Once navigation really proceeds, pagehide performs room cleanup.
   target.dispatchEvent(new Event("pagehide"));
-  assert.deepEqual(calls, ["disconnect"]);
+  assert.deepEqual(calls, ["dispose", "disconnect"]);
 
   guard.dispose();
   target.removeEventListener("pagehide", pagehide);
@@ -436,6 +437,7 @@ test("pagehide finalizes recovery before disconnecting the room", () => {
   const handler = new Function(
     "state",
     "reportRecovery",
+    "localRecording",
     `${body}\n}\nreturn finalizeRecoveryOnPageHide;`,
   )(
     {
@@ -448,8 +450,9 @@ test("pagehide finalizes recovery before disconnecting the room", () => {
       },
     },
     { finish: () => calls.push("finish") },
+    { dispose: () => calls.push("dispose") },
   );
 
   handler();
-  assert.deepEqual(calls, ["finish", "disconnect"]);
+  assert.deepEqual(calls, ["dispose", "finish", "disconnect"]);
 });
