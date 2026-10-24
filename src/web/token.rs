@@ -333,6 +333,12 @@ pub fn token_response(
             .expect("metadata is an object")
             .insert("codeExecution".to_string(), Value::Bool(false));
     }
+    if request.get("candidateLed") == Some(&Value::Bool(true)) {
+        metadata
+            .as_object_mut()
+            .expect("metadata is an object")
+            .insert("candidateLed".to_string(), Value::Bool(true));
+    }
     for (field, choices) in interviewer_choices() {
         if let Some(choice) = resolve_interviewer_choice(request.get(field), choices, || {
             let mut byte = [0u8];

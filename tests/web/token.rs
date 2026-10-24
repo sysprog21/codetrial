@@ -382,6 +382,42 @@ fn token_carries_hidden_examples_only_when_true() {
     }
 }
 
+/// Only a literal true carries the candidate-led setting, the same rule
+/// `token_carries_hidden_examples_only_when_true` holds `exampleDrawing` to.
+/// Unlike `exampleDrawing`, a whiteboard session keeps it: the Algorithm and
+/// Coding steps it is scoped to exist at a whiteboard too.
+#[test]
+fn token_carries_candidate_led_only_when_true() {
+    let config = TokenConfig {
+        api_key: "key",
+        api_secret: "secret",
+        server_url: "wss://example.test",
+        recording_max_min: None,
+    };
+    let metadata = |body: &[u8]| -> Value {
+        let response = token_response(&config, body, "room", "candidate", 2_000).unwrap();
+        serde_json::from_str(claims(&response.token)["metadata"].as_str().unwrap()).unwrap()
+    };
+
+    let enabled = metadata(br#"{"candidateLed":true}"#);
+    assert_eq!(enabled["candidateLed"], true);
+    assert!(
+        codetrial::agent::parse_participant_metadata(Some(&enabled.to_string()))
+            .candidate_led_enabled
+    );
+    let whiteboard = metadata(br#"{"candidateLed":true,"interviewMode":"whiteboard"}"#);
+    assert_eq!(whiteboard["candidateLed"], true);
+
+    for body in [
+        br#"{}"#.as_slice(),
+        br#"{"candidateLed":false}"#.as_slice(),
+        br#"{"candidateLed":"true"}"#.as_slice(),
+        br#"{"candidateLed":1}"#.as_slice(),
+    ] {
+        assert!(metadata(body).get("candidateLed").is_none());
+    }
+}
+
 /// The server names the candidate; a name the body carries is ignored.
 ///
 /// Both halves are one assertion pair on purpose. The body below asks for

@@ -627,6 +627,34 @@ fn example_mutation_initial_state_carries_signed_drawing_choice() {
     }
 }
 
+/// Unlike example drawing, candidate-led coding is not coding-only: a
+/// dropped `candidate_led_enabled` assignment in `candidate_bootstrap` or
+/// `initial_runtime_state` would still leave the rest of the suite green,
+/// since the direct `build_instructions_for_plan` and token tests never
+/// route through either line.
+#[test]
+fn candidate_led_initial_state_carries_signed_choice() {
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google-key"),
+    ])
+    .unwrap();
+    for mode in ["coding", "whiteboard"] {
+        for candidate_led in [Some(true), Some(false), None] {
+            let mut metadata = serde_json::json!({"interviewMode": mode});
+            if let Some(value) = candidate_led {
+                metadata["candidateLed"] = serde_json::json!(value);
+            }
+            let boot =
+                candidate_bootstrap(&config, "candidate-led-opt-in", Some(&metadata.to_string()));
+            let state = initial_runtime_state(&boot, Instant::now());
+            assert_eq!(state.candidate_led_enabled, candidate_led == Some(true));
+        }
+    }
+}
+
 #[test]
 fn runtime_activity_emits_periodic_prompts_and_updates_gates() {
     let now = Instant::now();

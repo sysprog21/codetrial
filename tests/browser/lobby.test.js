@@ -7288,6 +7288,101 @@ for (const settings of [
   );
 }
 
+lobbyTest(
+  "candidate led coding is opt-in and stays on in Whiteboard",
+  async (page) => {
+    for (const enabled of [false, true]) {
+      await lobby(page);
+      const toggle = page.getByRole("checkbox", {
+        name: "Candidate-led coding",
+        exact: true,
+      });
+      assert.equal(await toggle.isChecked(), false);
+      if (enabled) await toggle.check();
+      await page.click("#start");
+      await page.waitForURL(/\/interview/);
+      assert.equal(
+        new URL(page.url()).searchParams.get("candidateLed"),
+        enabled ? "1" : null,
+      );
+    }
+    await lobby(page);
+    const toggle = page.getByRole("checkbox", {
+      name: "Candidate-led coding",
+      exact: true,
+    });
+    await toggle.check();
+    await page.click('[data-mode="whiteboard"]');
+    assert.equal(await toggle.isDisabled(), false);
+    await page.click("#start");
+    await page.waitForURL(/\/interview/);
+    assert.equal(new URL(page.url()).searchParams.get("candidateLed"), "1");
+  },
+);
+
+lobbyTest(
+  "candidate led choice survives reload and can be turned off",
+  async (page) => {
+    await lobby(page);
+    const toggle = page.getByRole("checkbox", {
+      name: "Candidate-led coding",
+      exact: true,
+    });
+    assert.equal(await toggle.isChecked(), false);
+    await toggle.check();
+    assert.equal(
+      await page.evaluate(
+        () =>
+          JSON.parse(localStorage.getItem("codetrial.interviewSettings"))
+            ?.candidateLed,
+      ),
+      true,
+    );
+    await page.reload();
+    await awaitReady(page);
+    assert.equal(await toggle.isChecked(), true);
+    await page.click('[data-mode="whiteboard"]');
+    await page.reload();
+    await awaitReady(page);
+    assert.equal(await toggle.isDisabled(), false);
+    assert.equal(await toggle.isChecked(), true);
+    await toggle.uncheck();
+    await page.reload();
+    await awaitReady(page);
+    assert.equal(await toggle.isChecked(), false);
+  },
+);
+
+for (const settings of [
+  {},
+  { candidateLed: "true" },
+  { candidateLed: false },
+]) {
+  lobbyTest(
+    `candidate led stays off without a stored true choice: ${JSON.stringify(settings)}`,
+    async (page) => {
+      await page.addInitScript(
+        (value) =>
+          localStorage.setItem(
+            "codetrial.interviewSettings",
+            JSON.stringify(value),
+          ),
+        settings,
+      );
+      await lobby(page);
+      assert.equal(
+        await page
+          .getByRole("checkbox", {
+            name: "Candidate-led coding",
+            exact: true,
+          })
+          .isChecked(),
+        false,
+      );
+    },
+  );
+}
+
 for (const storage of ["account", "device"]) {
   lobbyTest(`saved ${storage} attempt labels show difficulty`, async (page) => {
     const difficulties = ["Easy", "Medium", "Hard", null, "Unknown"];

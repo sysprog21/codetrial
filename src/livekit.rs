@@ -3192,6 +3192,7 @@ fn candidate_bootstrap<'a>(
             interview_loop: candidate.interview_loop,
             examples_hidden: candidate.examples_hidden,
             example_drawing_enabled: candidate.example_drawing_enabled,
+            candidate_led_enabled: candidate.candidate_led_enabled,
             interview_mode: candidate.interview_mode,
             code_execution_disabled: candidate.code_execution_disabled
                 && !candidate.interview_mode.is_whiteboard(),
@@ -3245,6 +3246,7 @@ fn initial_runtime_state(boot: &RuntimeBootstrap<'_>, started_at: Instant) -> Ru
         interview_mode: boot.interview_mode,
         code_execution_disabled: boot.code_execution_disabled,
         example_drawing_enabled: boot.example_drawing_enabled,
+        candidate_led_enabled: boot.candidate_led_enabled,
         coding_minutes: boot.coding_minutes,
         behavioral_minutes: boot.behavioral_minutes,
         context_compression: boot.context_compression,

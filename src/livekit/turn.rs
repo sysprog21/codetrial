@@ -1901,7 +1901,7 @@ impl RuntimeActivity {
             // they can carry rather than only in wording; see
             // `board_silence_nudge`.
             let nudge = if state.interview_mode.is_whiteboard() {
-                board_silence_nudge(&evidence, state.board_strokes)
+                board_silence_nudge(&evidence, state.board_strokes, state.candidate_led_enabled)
             } else {
                 silence_nudge(state, &evidence, excerpt.as_deref())
             };

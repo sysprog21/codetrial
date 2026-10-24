@@ -330,6 +330,9 @@ const requestedLanguage = whiteboard ? null : params.get("language");
 const mode = whiteboard ? "whiteboard" : "coding";
 const exampleDrawingEnabled =
   !whiteboard && params.get("exampleDrawing") === "1";
+/// Unlike example drawing, valid in both modes: the Algorithm and Coding
+/// steps exist at a whiteboard too (see `reacto_policy` in prompts.rs).
+const candidateLedEnabled = params.get("candidateLed") === "1";
 /// The board, and what is in flight for it.
 ///
 /// Declared with the other module state rather than beside the functions that
@@ -1951,6 +1954,7 @@ async function connect(preflight, presenting = false) {
           : {}),
         ...(nodes.hideExamples.checked ? { hideExamples: true } : {}),
         ...(exampleDrawingEnabled ? { exampleDrawing: true } : {}),
+        ...(candidateLedEnabled ? { candidateLed: true } : {}),
         ...(!editorOptions.execution ? { codeExecution: false } : {}),
       }),
     });
