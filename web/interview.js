@@ -1733,6 +1733,12 @@ function runAudioCheck() {
       if (recordLocally) {
         state.localUserStream = pool.stream;
         await localRecording.start();
+        if (finished) return;
+        if (!sampleReadiness().ready) {
+          joining = false;
+          refresh();
+          return;
+        }
       }
       stopChecks();
       nodes.audioCheck.hidden = true;
