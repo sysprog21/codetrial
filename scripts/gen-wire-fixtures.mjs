@@ -24,6 +24,7 @@ const { reportRecoveryLimits } = await import(
   join(ROOT, "web", "report-recovery.js")
 );
 const lib = await import(join(ROOT, "web", "lib.js"));
+const { switchDetail } = await import(join(ROOT, "web", "mic-switch.js"));
 const { ALL_LANGUAGES } = await import(
   join(ROOT, "web", "compiler-explorer.js")
 );
@@ -360,6 +361,20 @@ const INTEGRITY_INPUTS = [
       "4444444444444",
       "5555555555555",
     ],
+  },
+  // Last, so the rows above keep their hashes. A type the agent's allowlist
+  // lacks is refused and stops the chain, which is how a switch the browser
+  // records would otherwise vanish from every report. The detail comes from the
+  // producer the page uses, with a label carrying the separators it is placed
+  // last to survive.
+  {
+    type: "MICROPHONE_SWITCHED",
+    source: "microphone",
+    severity: "info",
+    at: "2026-08-18T06:40:30.512Z",
+    detail: switchDetail("chosen", {
+      label: "USB Audio; Rear=Mic (0d8c:0014)",
+    }),
   },
 ];
 

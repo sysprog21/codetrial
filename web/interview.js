@@ -49,8 +49,14 @@ import {
   isToggleCommentKeystroke,
   toggleLineComment,
 } from "./editor.js";
-import { createDevicePool } from "./devices.js";
+import { createDevicePool, openMicrophone } from "./devices.js";
 import { createAudioInput } from "./audio-input.js";
+import {
+  INPUT_NOTES,
+  createMicrophoneSwitch,
+  inputOptions,
+  switchDetail,
+} from "./mic-switch.js";
 import { createFaceCheck } from "./face-check.js";
 import { attachSelfView } from "./self-view.js";
 import { createMicMeter, startMediaMeter } from "./mic-meter.js";
@@ -142,6 +148,7 @@ import {
   PRESENCE_EVENTS,
   initIntegrity,
   monitorIntegrityTracks,
+  watchIntegrityTrack,
   startIntegrityHeartbeat,
   startIntegrityWorker,
   stopIntegrityWorker,
@@ -645,6 +652,8 @@ const nodes = {
   preflightOutputNote: document.querySelector("#preflight-output-note"),
   preflightInput: document.querySelector("#preflight-input"),
   preflightInputNote: document.querySelector("#preflight-input-note"),
+  micInputSelect: document.querySelector("#mic-input-select"),
+  micInputNote: document.querySelector("#mic-input-note"),
   sidebar: document.querySelector("#interview-sidebar"),
   sidebarResizer: document.querySelector("#sidebar-resizer"),
   editorPanel: document.querySelector(".editor-panel"),
@@ -1220,6 +1229,14 @@ function bindEvents() {
       void applyAudioOutput(select.value);
     });
   }
+  nodes.micInputSelect.addEventListener("change", () => {
+    void microphoneSwitch().switchTo(
+      nodes.micInputSelect.value,
+      "chosen",
+      null,
+      soleGroupOf(nodes.micInputSelect),
+    );
+  });
   // The checkbox is the only copy of this answer. A mirrored state field had to
   // be written in two places and read in four, and the one reader that forgot
   // it published a wrong camera status for the whole interview.
@@ -1244,10 +1261,11 @@ function bindEvents() {
   nodes.meetMode.addEventListener("toggle", () => {
     if (nodes.meetMode.open) void refreshAudioOutputs();
   });
-  navigator.mediaDevices?.addEventListener?.(
-    "devicechange",
-    () => void refreshAudioOutputs(),
-  );
+  navigator.mediaDevices?.addEventListener?.("devicechange", () => {
+    void refreshAudioOutputs();
+    void refreshAudioInputs();
+    retryMicrophone();
+  });
   nodes.resultsToggle.addEventListener("click", () =>
     setResultsOpen(nodes.resultsBody.hidden),
   );
@@ -2297,6 +2315,8 @@ async function connectLiveKit(connection, preflight, presenting = false) {
   nodes.mic.textContent = "Mic on";
   updateAgentState();
   monitorIntegrityTracks();
+  followMicrophoneLoss(state.localUserStream?.getAudioTracks?.()[0]);
+  void refreshAudioInputs();
   await publishIntegrityEvent({
     type: "SESSION_START",
     source: "media",
@@ -2422,6 +2442,7 @@ function stopLocalMedia() {
   stopIntegrityWorker();
   stopPreflight({ userStream: state.localUserStream });
   state.localUserStream = null;
+  forgetAudioInputs();
   clearInterval(state.integrityHeartbeatTimer);
   state.integrityHeartbeatTimer = null;
   clearInterval(state.integrityTrackStateTimer);
@@ -2776,6 +2797,9 @@ async function toggleMicrophone() {
   state.micEnabled = !state.micEnabled;
   if (state.localUserStream) {
     setLocalAudioEnabled(state.micEnabled);
+    // An input a microphone switch is still handing to the sender is in
+    // neither the stream nor the publication yet.
+    microphoneSwitch().setEnabled(state.micEnabled);
     if (!state.micEnabled) {
       void publishIntegrityEvent({
         type: "MICROPHONE_STOPPED",
@@ -3290,6 +3314,189 @@ function startTurnRing(stream) {
   turnMeter = meter;
   turnMeterTrack = track;
   meter.start();
+}
+
+/// A switch only ever runs inside a joined room: before it there is no
+/// published track to hand a new input to, and after it the device would be
+/// opened for an interview that is over.
+function microphoneLive() {
+  return state.phase === "live" && Boolean(state.room);
+}
+
+/// Read through the room on every switch rather than held, because the
+/// publication is LiveKit's and the page never owned a handle to it.
+function publishedMicrophone() {
+  const source = window.LivekitClient?.Track?.Source?.Microphone;
+  return (
+    state.room?.localParticipant?.getTrackPublication?.(source)?.track ?? null
+  );
+}
+
+/// Built on first use rather than at module scope: the select's listener is
+/// bound inside `init`, and a const declared below that call is still in its
+/// temporal dead zone while `init` awaits.
+let microphoneSwitchInstance = null;
+
+function microphoneSwitch() {
+  microphoneSwitchInstance ??= createMicrophoneSwitch({
+    open: (deviceId) => openMicrophone(navigator.mediaDevices, deviceId),
+    streamOf: () => state.localUserStream,
+    publishedTrack: publishedMicrophone,
+    isLive: microphoneLive,
+    micEnabled: () => state.micEnabled,
+    onSwitched: (track, reason) => {
+      // The track the heartbeat, the state poll and the ring read is a new
+      // object, so each reader is pointed at it here or it keeps reporting the
+      // one that was stopped.
+      watchIntegrityTrack(track, "MICROPHONE_STOPPED", "microphone");
+      followMicrophoneLoss(track);
+      startTurnRing(state.localUserStream);
+      void publishIntegrityEvent({
+        type: "MICROPHONE_SWITCHED",
+        source: "microphone",
+        severity: "info",
+        detail: switchDetail(reason, track),
+      });
+      showInputNote(reason === "lost" ? INPUT_NOTES.lost : "");
+      void refreshAudioInputs();
+    },
+    onFailed: (reason, error, outcome, droppedLive) => {
+      console.warn("codetrial microphone_switch_failed", error);
+      // The input the interview was using was still working and has been
+      // dropped, which nothing else in the trail would record: its `stop()`
+      // fires no `ended`, and the state poll skips a missing track.
+      if (droppedLive) {
+        void publishIntegrityEvent({
+          type: "MICROPHONE_STOPPED",
+          source: "microphone",
+          severity: "high",
+          detail: "reason=switch_failed",
+        });
+      }
+      if (reason === "lost") showInputNote(INPUT_NOTES.none);
+      else if (outcome === "stranded") showInputNote(INPUT_NOTES.stranded);
+      else showInputNote(INPUT_NOTES.refused);
+      // A stranded switch dropped the input the ring was reading.
+      if (outcome === "stranded") startTurnRing(state.localUserStream);
+      // Puts the select back on the input still in use, rather than on the
+      // one that was refused.
+      void refreshAudioInputs();
+    },
+  });
+  return microphoneSwitchInstance;
+}
+
+/// An input that ends under a live interview, unplugged or revoked, leaves the
+/// candidate talking into nothing with no prompt to answer. The
+/// MICROPHONE_STOPPED its integrity listener publishes stays, because the
+/// input really did stop; this only moves the interview to the default.
+function followMicrophoneLoss(track) {
+  track?.addEventListener?.("ended", () => {
+    if (!microphoneLive()) return;
+    if (state.localUserStream?.getAudioTracks?.()[0] !== track) return;
+    void microphoneSwitch().switchTo("", "lost", track);
+  });
+}
+
+/// A loss whose move to the default failed leaves nothing listening for the
+/// microphone to come back, since the `ended` it followed has already fired.
+/// A device appearing is the moment one may be usable again, so the move is
+/// tried once more whenever no input is live.
+function retryMicrophone() {
+  if (!microphoneLive()) return;
+  const held = state.localUserStream?.getAudioTracks?.()[0] ?? null;
+  if (held && held.readyState !== "ended") return;
+  void microphoneSwitch().switchTo("", "lost", held);
+}
+
+/// The picked row's group, when no other row shares it. Several real inputs of
+/// one audio interface share a group, and then the group cannot say which of
+/// them the default alias in use is.
+function soleGroupOf(select) {
+  const group = select.selectedOptions?.[0]?.dataset.groupId;
+  if (!group) return null;
+  const rows = [...select.options].filter(
+    (option) => option.dataset.groupId === group,
+  );
+  return rows.length === 1 ? group : null;
+}
+
+/// Stamps each listing, because `devicechange`, a switch and the join can each
+/// start one, and an older listing finishing last would repaint the select
+/// with the input that was in use before.
+let inputListing = 0;
+
+async function refreshAudioInputs() {
+  const request = ++inputListing;
+  const current = state.localUserStream?.getAudioTracks?.()[0] ?? null;
+  // No `current` is not a reason to stop: that is the stranded state, where the
+  // select matters most.
+  if (!microphoneLive() || !navigator.mediaDevices?.enumerateDevices) return;
+  let devices = [];
+  try {
+    devices = await navigator.mediaDevices.enumerateDevices();
+  } catch {
+    // Listing is a convenience; the input in use keeps working without it.
+  }
+  // The interview can end, or a switch replace the input, while the browser
+  // lists devices; teardown has already hidden the select by then.
+  if (
+    request !== inputListing ||
+    !microphoneLive() ||
+    (state.localUserStream?.getAudioTracks?.()[0] ?? null) !== current
+  )
+    return;
+  // An ended input is not in use, so it marks no row as the current one.
+  const inUse = current?.readyState === "live" ? current : null;
+  const options = inputOptions(devices, {
+    deviceId: inUse?.getSettings?.().deviceId,
+    groupId: inUse?.getSettings?.().groupId,
+    label: inUse?.label,
+  });
+  const rows = options.map((option) => {
+    const element = document.createElement("option");
+    element.value = option.deviceId;
+    element.dataset.groupId = option.groupId;
+    element.textContent = option.label;
+    element.selected = option.selected;
+    return element;
+  });
+  // With no row for the input in use, the select would show its first device
+  // as if it were, and picking that row fires no `change`. A disabled
+  // placeholder in its place makes every device a change. It names the input
+  // still in use when there is one, such as a system default no row matches,
+  // so a working microphone does not read as missing.
+  if (!options.some((option) => option.selected)) {
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = inUse
+      ? inUse.label || "System default"
+      : "Choose a microphone";
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    rows.unshift(placeholder);
+  }
+  nodes.micInputSelect.replaceChildren(...rows);
+  // One input is nothing to choose between, and a select with a single row
+  // reads as a control that does nothing. The rows already leave out the
+  // `default` and `communications` aliases, and keep every real input of a
+  // group, so they are the count. With no input live it shows regardless,
+  // since picking is then the way out.
+  nodes.micInputSelect.hidden = Boolean(inUse) && options.length < 2;
+}
+
+/// Nothing is left to switch once the media stops, so neither the list nor a
+/// note about the last switch belongs over the report, and a listing still in
+/// flight is told it is stale.
+function forgetAudioInputs() {
+  inputListing += 1;
+  nodes.micInputSelect.hidden = true;
+  showInputNote("");
+}
+
+function showInputNote(text) {
+  nodes.micInputNote.textContent = text;
+  nodes.micInputNote.hidden = !text;
 }
 
 function applyThinking(thinking) {

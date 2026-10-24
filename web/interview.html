@@ -82,6 +82,16 @@
           </button>
           <div class="control-row">
             <button id="mic" class="pill-button" type="button">Mic on</button>
+            <!-- Filled once the room is joined, from the inputs the browser
+                 names after the preflight grant; hidden while there is only
+                 one to pick. -->
+            <select
+              id="mic-input-select"
+              class="mic-input-select"
+              aria-label="Microphone"
+              title="Microphone"
+              hidden
+            ></select>
             <button
               id="thinking"
               class="pill-button"
@@ -99,6 +109,7 @@
               </button>
             </span>
           </div>
+          <p id="mic-input-note" class="muted small" hidden role="status"></p>
           <!-- Recording, apart from ending: withdrawing consent and ending the
                interview are different acts and should not sit side by side. -->
           <div class="recording-row">

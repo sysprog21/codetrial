@@ -28,6 +28,39 @@ const CONSTRAINTS = {
   video: true,
 };
 
+/// The microphone constraints with a device named, exactly: a switch the
+/// candidate asked for that opened some other input and called it theirs would
+/// be worse than one that said it failed. No id asks for the default.
+function microphoneConstraints(deviceId) {
+  if (!deviceId) return CONSTRAINTS.audio;
+  return { ...CONSTRAINTS.audio, deviceId: { exact: deviceId } };
+}
+
+// The only capture call in the first-party tree, and the getUserMedia allowlist
+// in meet-tab-audio.test.js holds it to that. The preflight pool and a
+// mid-interview microphone switch both ask through here, so a switch is a
+// second device through the same door rather than a second door.
+function capture(mediaDevices, constraints) {
+  return mediaDevices.getUserMedia(constraints);
+}
+
+/// One live microphone track for an interview already under way, where there
+/// is no pool to retry and no preflight to explain a failure: the caller keeps
+/// the input it has and says why. Anything else the browser hands back is
+/// stopped, so a refusal leaves no device open behind the candidate's back.
+export async function openMicrophone(mediaDevices, deviceId) {
+  const granted = await capture(mediaDevices, {
+    audio: microphoneConstraints(deviceId),
+  });
+  const tracks = granted.getTracks();
+  const track = tracks.find(
+    (each) => each.kind === "audio" && each.readyState !== "ended",
+  );
+  for (const spare of tracks) if (spare !== track) spare.stop();
+  if (!track) throw new Error("no active audio track");
+  return track;
+}
+
 // `schedule` is injected so a test can fire the retry rather than wait for it.
 // The bug this guards -- two timers where there should be one -- only shows up
 // as a count of requests, and a count read off a sleep is a count read off how
@@ -106,8 +139,7 @@ export function createDevicePool({
     if (device.disabled || device.pending || trackOf(device.kind)) return;
     device.pending = true;
     const generation = device.generation;
-    void mediaDevices
-      .getUserMedia(device.constraints)
+    void capture(mediaDevices, device.constraints)
       .then((granted) => {
         if (
           device.disabled ||
@@ -181,12 +213,7 @@ export function createDevicePool({
       )
         return;
       audio.generation += 1;
-      audio.constraints = {
-        audio: {
-          ...CONSTRAINTS.audio,
-          ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
-        },
-      };
+      audio.constraints = { audio: microphoneConstraints(deviceId) };
       audio.error = null;
       const held = trackOf("audio");
       if (held) {

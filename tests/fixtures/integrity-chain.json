@@ -135,5 +135,17 @@
       "444444444444"
     ],
     "hash": "a1fefca650b641ce4370bf98be71c940b1f3e79b0bce53b1f3f1fedc194a74fa"
+  },
+  {
+    "seq": 12,
+    "prevHash": "a1fefca650b641ce4370bf98be71c940b1f3e79b0bce53b1f3f1fedc194a74fa",
+    "type": "MICROPHONE_SWITCHED",
+    "at": "2026-08-18T06:40:30.512Z",
+    "severity": "info",
+    "source": "microphone",
+    "durationMs": 0,
+    "detail": "reason=chosen;microphone=USB Audio; Rear=Mic (0d8c:0014)",
+    "sourceEventIds": [],
+    "hash": "421c6644f15f1acd1c6cd614b55a185f4419cb0ba47d1925d92eeb1e7c2861b3"
   }
 ]

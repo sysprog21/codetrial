@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FakeStream, FakeTrack, settle } from "./fake-media.js";
 
-import { createDevicePool } from "../../web/devices.js";
+import { createDevicePool, openMicrophone } from "../../web/devices.js";
 
 function poolWith(getUserMedia, options = {}) {
   const changes = { count: 0 };
@@ -570,4 +570,63 @@ test("the pool's own drop of an ended track also removes before notifying", asyn
   );
   finished = true;
   pool.cancelRetry();
+});
+
+// The switch the candidate asked for names its device exactly: opening some
+// other input and calling it theirs would be worse than saying it failed.
+test("a mid-interview microphone is asked for by exact device", async () => {
+  const asked = [];
+  const track = new FakeTrack("audio");
+  const opened = await openMicrophone(
+    {
+      getUserMedia: async (constraints) => {
+        asked.push(constraints);
+        return new FakeStream([track]);
+      },
+    },
+    "headset",
+  );
+
+  assert.equal(opened, track);
+  assert.deepEqual(asked, [
+    {
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        deviceId: { exact: "headset" },
+      },
+    },
+  ]);
+});
+
+test("the default microphone is asked for with no device id", async () => {
+  const asked = [];
+  await openMicrophone(
+    {
+      getUserMedia: async (constraints) => {
+        asked.push(constraints);
+        return new FakeStream([new FakeTrack("audio")]);
+      },
+    },
+    "",
+  );
+
+  assert.equal("deviceId" in asked[0].audio, false);
+});
+
+test("a grant with no live input is refused and leaves nothing open", async () => {
+  const spare = new FakeTrack("video");
+  const dead = new FakeTrack("audio");
+  dead.readyState = "ended";
+
+  await assert.rejects(
+    openMicrophone(
+      { getUserMedia: async () => new FakeStream([dead, spare]) },
+      "headset",
+    ),
+    /no active audio track/,
+  );
+  assert.ok(spare.stopped, "a track nothing will read was left running");
+  assert.ok(dead.stopped);
 });

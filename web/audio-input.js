@@ -1,4 +1,6 @@
-// Microphone choices are limited to preflight, before its stream is published.
+// The preflight's microphone picker, which works on the pool before its stream
+// is published. Moving the published input once the interview is under way is
+// web/mic-switch.js.
 export function createAudioInput({
   mediaDevices,
   pool,

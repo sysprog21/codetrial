@@ -1460,6 +1460,25 @@ p {
   color: white;
 }
 
+/* Sized as a pill so it sits in the control row beside the Mic button it
+   belongs to; capped because device labels run long and would push the row's
+   other controls onto a second line. Bordered like the other form controls,
+   since a select whose edge is the hairline does not read as one. */
+.mic-input-select {
+  max-width: 14rem;
+  min-height: 2rem;
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--control-border);
+  border-radius: 999px;
+  background: var(--inset-surface);
+  color: var(--sub);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
 .tab-row {
   min-height: 2.5rem;
   padding: 0 0.75rem;

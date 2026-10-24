@@ -276,6 +276,12 @@ pub fn sanitize_integrity_event(payload: &serde_json::Value) -> Option<serde_jso
         "CAMERA_RELEASED_TO_PRESENTER" => "CAMERA_RELEASED_TO_PRESENTER",
         "CAMERA_NOT_USED" => "CAMERA_NOT_USED",
         "MICROPHONE_STATE_CHANGED" => "MICROPHONE_STATE_CHANGED",
+
+        // The candidate moved the interview to another input, or the page did
+        // after the one in use ended. Without it the heartbeat goes on naming a
+        // live microphone and nothing says it is no longer the one the
+        // interview started with.
+        "MICROPHONE_SWITCHED" => "MICROPHONE_SWITCHED",
         _ => return None,
     };
     let at = text("at")?;

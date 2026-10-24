@@ -26,6 +26,35 @@ the camera required, because the recording notice describes a video recording.
 - `declined`: the candidate skipped a camera with no error, or with an error
   that names none of the causes above.
 
+## Microphone switches
+
+A candidate can move the interview to another microphone from the interview
+page, and the page does so by itself when the input in use ends. Either way,
+once the new input is in use, the browser records a signed `MICROPHONE_SWITCHED`
+event, because the heartbeat that follows names a live microphone and would
+otherwise read as the one the interview started with. Its detail is
+`reason=chosen` or `reason=lost`, then `microphone=` and the new device's label,
+last because a label is the browser's text and may contain the separators. A
+switch is not a microphone stopping, so it records no `MICROPHONE_STOPPED`; an
+input that ended before the page switched away from it still records one, since
+it did stop.
+
+A chosen switch that fails leaves the previous input in use and records nothing,
+unless the previous input cannot be handed back to the sender either; the page
+then drops it, says the interviewer cannot hear the candidate, and asks for a
+microphone again. That drop records `MICROPHONE_STOPPED` with
+`reason=switch_failed`, because stopping a working input fires no `ended` and
+the state poll skips a missing track, so nothing else would. A move after a lost
+input that fails leaves the interview with no working microphone; the page says
+so, records no switch, and tries the move again whenever a device is plugged in,
+while the `MICROPHONE_STOPPED` for the loss stays the last word on the input
+that ended.
+
+The server drops an integrity event whose type it does not list before it
+checks the chain, so that event's sequence number is never accepted and every
+later event is refused as out of sequence. A new event type is therefore added
+to `sanitize_integrity_event` in the same change that starts sending it.
+
 ## Response windows
 
 The replay page lists a *response window* for each turn the interviewer took:
