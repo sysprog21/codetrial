@@ -2497,3 +2497,321 @@ test("markdown tags only the marked turn when Jim repeats himself", () => {
     /\*\*Jim:\*\* Try sorting\.\n\n\*\*You:\*\* Sorry\?\n\n\*\*Jim \(marked unclear\):\*\* Try sorting\./,
   );
 });
+
+test("report renders same-category progress, deltas, and side-by-side phase feedback", () => {
+  const report = {
+    codingScore: 82,
+    communicationScore: 78,
+    decision: "HIRE",
+    summary: "Transferred recurrence cleanly.",
+    codingFeedback: { strengths: ["Clear DP state"], improvements: [] },
+    communicationFeedback: { strengths: [], improvements: [] },
+    hintsUsed: 0,
+  };
+  const categoryComparison = {
+    category: "1D DP",
+    sameProblem: false,
+    previous: {
+      id: "prev-1",
+      at: new Date(2026, 0, 2, 7, 30).getTime(),
+      problemId: "step-ways",
+      problemTitle: "Step Ways",
+      decision: "NO_HIRE",
+      codingScore: 60,
+      communicationScore: 85,
+      hintsUsed: 2,
+    },
+    current: {
+      id: "curr-1",
+      at: new Date(2026, 0, 9, 12, 0).getTime(),
+      problemId: "vault-sweep",
+      problemTitle: "Vault Sweep",
+      decision: "HIRE",
+      codingScore: 82,
+      communicationScore: 78,
+      hintsUsed: 0,
+    },
+    codingScoreDelta: 22,
+    communicationScoreDelta: -7,
+    hintsUsedDelta: -2,
+    rubricComparable: true,
+    prevRubricVersion: 1,
+    currRubricVersion: 1,
+    phaseDeltas: [
+      { phase: "Repeat", previousScore: 70, currentScore: 70, delta: 0 },
+      { phase: "Algorithm", previousScore: 55, currentScore: 80, delta: 25 },
+      { phase: "Test", previousScore: 60, currentScore: 50, delta: -10 },
+    ],
+    phaseComparisons: [
+      {
+        phase: "Algorithm",
+        previousItems: [
+          {
+            phase: "Algorithm",
+            weakness: "Jumped to code before recurrence",
+            drill: "Write the state transition first",
+          },
+        ],
+        currentItems: [
+          {
+            phase: "Algorithm",
+            weakness: "Omitted space complexity of rolling variables",
+            drill: "Compare table vs rolling space",
+          },
+        ],
+        status: "still_flagged",
+      },
+      {
+        phase: "Test",
+        previousItems: [
+          {
+            phase: "Test",
+            weakness: "Missed n = 1 boundary case",
+            drill: "Trace smallest input before running",
+          },
+        ],
+        currentItems: [],
+        status: "no_longer_flagged",
+      },
+    ],
+  };
+  const session = {
+    report,
+    problemTitle: "Vault Sweep",
+    language: "python",
+    code: "pass",
+    transcript: [],
+    at: "2026-01-09",
+    categoryComparison,
+  };
+
+  const html = reportMarkup(session);
+  assert.match(html, /<h3>Category progress · 1D DP<\/h3>/);
+  assert.match(
+    html,
+    /Compared with Step Ways · 2026-01-02 · NO HIRE \(previous problem in this category\)/,
+  );
+  assert.match(html, /<strong>Coding:<\/strong> 60 -> 82 \(\+22\)/);
+  assert.match(
+    html,
+    /<strong>Interviewer communication:<\/strong> 85 -> 78 \(-7\)/,
+  );
+  assert.match(html, /<strong>Hints used:<\/strong> 2 -> 0 \(-2\)/);
+  assert.match(
+    html,
+    /<th scope="row">Algorithm<\/th><td>55<\/td><td>80<\/td><td>\+25<\/td>/,
+  );
+  assert.match(
+    html,
+    /<th scope="row">Test<\/th><td>60<\/td><td>50<\/td><td>-10<\/td>/,
+  );
+  assert.match(html, /Flagged in both attempts/);
+  assert.match(html, /No improvement item flagged in this phase/);
+  assert.match(html, /Jumped to code before recurrence/);
+  assert.match(html, /Omitted space complexity of rolling variables/);
+
+  const whiteboardHtml = reportMarkup({
+    ...session,
+    report: { ...report, interviewMode: "whiteboard" },
+  });
+  assert.match(
+    whiteboardHtml,
+    /<strong>Board work:<\/strong> 60 -> 82 \(\+22\)/,
+  );
+  assert.match(
+    whiteboardHtml,
+    /<th scope="row">Approach<\/th><td>55<\/td><td>80<\/td><td>\+25<\/td>/,
+  );
+  assert.match(
+    whiteboardHtml,
+    /<th scope="row">Edge cases<\/th><td>60<\/td><td>50<\/td><td>-10<\/td>/,
+  );
+
+  const markdown = reportMarkdown(session);
+  assert.match(markdown, /^## Category progress · 1D DP$/m);
+  assert.match(
+    markdown,
+    /Compared with Step Ways · 2026-01-02 · NO HIRE \(previous problem in this category\)/,
+  );
+  assert.match(markdown, /- \*\*Coding:\*\* 60 -> 82 \(\+22\)/);
+  assert.match(markdown, /\| Algorithm \| 55 \| 80 \| \+25 \|/);
+  assert.match(markdown, /- \*\*Algorithm\*\* \(Flagged in both attempts\)/);
+  assert.match(
+    markdown,
+    /- \*\*Test\*\* \(No improvement item flagged in this phase\)/,
+  );
+});
+
+test("report renders rubric-version boundary note when rubricComparable is false", () => {
+  const session = {
+    report: {
+      codingScore: 80,
+      communicationScore: 80,
+      decision: "HIRE",
+      summary: "Good.",
+      codingFeedback: { strengths: [], improvements: [] },
+      communicationFeedback: { strengths: [], improvements: [] },
+      hintsUsed: 1,
+    },
+    problemTitle: "Vault Sweep",
+    language: "python",
+    code: "pass",
+    transcript: [],
+    at: "2026-01-09",
+    categoryComparison: {
+      category: "1D DP",
+      sameProblem: false,
+      previous: {
+        at: "2026-01-02",
+        problemTitle: "Step Ways",
+        decision: "HIRE",
+        codingScore: 70,
+        communicationScore: 75,
+        hintsUsed: 1,
+      },
+      codingScoreDelta: 10,
+      communicationScoreDelta: 5,
+      hintsUsedDelta: 0,
+      rubricComparable: false,
+      prevRubricVersion: 1,
+      currRubricVersion: 2,
+      phaseDeltas: [],
+      phaseComparisons: [],
+    },
+  };
+
+  const html = reportMarkup(session);
+  const markdown = reportMarkdown(session);
+  for (const output of [html, markdown]) {
+    assert.match(
+      output,
+      /Step score changes omitted: previous attempt used rubric v1, current uses v2\./,
+    );
+  }
+  assert.doesNotMatch(html, /category-phase-scores/);
+});
+
+test("incomplete reports never render category progress even when categoryComparison is passed", () => {
+  const session = {
+    report: {
+      incomplete: true,
+      summary: "Ended early.",
+      hintsUsed: 0,
+    },
+    problemTitle: "Vault Sweep",
+    language: "python",
+    code: "",
+    transcript: [],
+    at: "2026-01-09",
+    categoryComparison: {
+      category: "1D DP",
+      sameProblem: false,
+      previous: {
+        at: "2026-01-02",
+        problemTitle: "Step Ways",
+        decision: "HIRE",
+        codingScore: 70,
+        communicationScore: 75,
+        hintsUsed: 1,
+      },
+      codingScoreDelta: 10,
+      communicationScoreDelta: 5,
+      hintsUsedDelta: -1,
+      rubricComparable: true,
+      prevRubricVersion: 1,
+      currRubricVersion: 1,
+      phaseDeltas: [
+        { phase: "Algorithm", previousScore: 55, currentScore: 80, delta: 25 },
+      ],
+      phaseComparisons: [],
+    },
+  };
+
+  assert.doesNotMatch(reportMarkup(session), /Category progress|Step Ways/);
+  assert.doesNotMatch(reportMarkdown(session), /Category progress|Step Ways/);
+});
+
+test("category comparison escapes untrusted strings in HTML and Markdown", () => {
+  const session = {
+    report: {
+      codingScore: 80,
+      communicationScore: 80,
+      decision: "HIRE",
+      summary: "Done.",
+      codingFeedback: { strengths: [], improvements: [] },
+      communicationFeedback: { strengths: [], improvements: [] },
+      hintsUsed: 0,
+    },
+    problemTitle: "Vault Sweep",
+    language: "python",
+    code: "pass",
+    transcript: [],
+    at: "2026-01-09",
+    categoryComparison: {
+      category: "<script>cat</script>",
+      sameProblem: false,
+      previous: {
+        at: "<script>date</script>",
+        problemTitle: "<script>title</script>",
+        decision: "NO_HIRE",
+        codingScore: 60,
+        communicationScore: 70,
+        hintsUsed: 1,
+      },
+      codingScoreDelta: 20,
+      communicationScoreDelta: 10,
+      hintsUsedDelta: -1,
+      rubricComparable: true,
+      prevRubricVersion: 1,
+      currRubricVersion: 1,
+      phaseDeltas: [],
+      phaseComparisons: [
+        {
+          phase: "Algorithm",
+          previousItems: [
+            {
+              phase: "Algorithm",
+              weakness: "<script>prev-weakness</script>",
+              drill: "<script>prev-drill</script>",
+            },
+          ],
+          currentItems: [
+            {
+              phase: "Algorithm",
+              weakness: "<script>curr-weakness</script>",
+              drill: "<script>curr-drill</script>",
+            },
+          ],
+          status: "still_flagged",
+        },
+      ],
+    },
+  };
+
+  const html = reportMarkup(session);
+  assert.doesNotMatch(html, /<script>/);
+  for (const tag of [
+    "cat",
+    "date",
+    "title",
+    "prev-weakness",
+    "prev-drill",
+    "curr-weakness",
+    "curr-drill",
+  ]) {
+    assert.match(html, new RegExp(`&lt;script&gt;${tag}&lt;/script&gt;`));
+  }
+
+  const markdown = reportMarkdown(session);
+  for (const tag of [
+    "cat",
+    "date",
+    "title",
+    "prev-weakness",
+    "prev-drill",
+    "curr-weakness",
+    "curr-drill",
+  ]) {
+    assert.match(markdown, new RegExp(`\\\\<script>${tag}\\\\</script>`));
+  }
+});

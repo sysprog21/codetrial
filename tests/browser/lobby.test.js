@@ -7772,3 +7772,64 @@ lobbyTest(
     }
   },
 );
+
+lobbyTest(
+  "saved reports in the same category render and export category progress",
+  async (page) => {
+    const firstPage = pageOf("climbing-stairs");
+    const secondPage = pageOf("house-robber");
+    reports = [
+      {
+        id: "dp-1",
+        problemId: firstPage,
+        payload: {
+          id: "dp-1",
+          problemId: firstPage,
+          problemTitle: "Step Ways",
+          date: "2026-01-01T10:00:00Z",
+          language: "python",
+          report: {
+            codingScore: 60,
+            communicationScore: 70,
+            decision: "NO_HIRE",
+            hintsUsed: 2,
+            summary: "First 1D DP attempt.",
+          },
+        },
+      },
+      {
+        id: "dp-2",
+        problemId: secondPage,
+        payload: {
+          id: "dp-2",
+          problemId: secondPage,
+          problemTitle: "Vault Sweep",
+          date: "2026-01-02T10:00:00Z",
+          language: "python",
+          report: {
+            codingScore: 84,
+            communicationScore: 80,
+            decision: "HIRE",
+            hintsUsed: 0,
+            summary: "Second 1D DP attempt.",
+          },
+        },
+      },
+    ];
+    await lobby(page);
+    const rows = page.locator("#attempt-history > li");
+    const newest = rows.nth(0);
+    await newest.getByRole("button", { name: "Open report" }).click();
+    assert.match(
+      await newest.locator(".report-card").textContent(),
+      /Category progress · 1D DP[\s\S]*Compared with Step Ways · 2026-01-01 · NO HIRE/,
+    );
+
+    const oldest = rows.nth(1);
+    await oldest.getByRole("button", { name: "Open report" }).click();
+    assert.doesNotMatch(
+      await oldest.locator(".report-card").textContent(),
+      /Category progress/,
+    );
+  },
+);

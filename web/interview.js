@@ -11,9 +11,11 @@ import {
   reconnectCodingInterview,
 } from "./example-board.js";
 import { mountInterviewDrawer } from "./interview-drawer.js";
-import { loadJudge, loadProblem } from "./problem-data.js";
+import { loadCategoryMap, loadJudge, loadProblem } from "./problem-data.js";
 import { downloadMarkdown, reportFilename } from "./download.js";
 import { consumeSharedFocus } from "./problem-picker.js";
+import { normalizeProgressEntries } from "./progress.js";
+import { compareCategoryAttempt } from "./practice-insights.js";
 import {
   deviceErrorKind,
   outputUsable,
@@ -55,6 +57,7 @@ import { createFaceCheck } from "./face-check.js";
 import { attachSelfView } from "./self-view.js";
 import { createMicMeter, startMediaMeter } from "./mic-meter.js";
 import {
+  categoryComparisonMarkup,
   createTranscriptView,
   finalRunnerStatus,
   problemMarkup,
@@ -161,6 +164,7 @@ import {
 } from "./recording-state.js";
 import {
   assignedId as randomId,
+  readDeviceHistory,
   reportIsPersisted,
   saveReportHistory,
 } from "./history.js";
@@ -475,6 +479,8 @@ const state = {
   /// worked examples are hidden: it is a worked case in its own right.
   candidateCaseHint: "",
   report: null,
+  recordedDecision: null,
+  categoryComparison: null,
   reportReceiving: false,
   /// Set when the interviewer's report reached this page and could not be
   /// rendered. The offline summary that follows is written from what this page
@@ -2562,6 +2568,9 @@ async function receiveReport(room, payload, flushed = Promise.resolve()) {
     }
     reportRecovery.stop();
     restoreEndingOverlay();
+    state.recordedDecision = ["HIRE", "NO_HIRE"].includes(raw?.decision)
+      ? raw.decision
+      : null;
     state.report = sanitizeReport(raw);
     if (state.report.incomplete) {
       setBanner("session", providerUiState("incomplete_report").message);
@@ -3908,6 +3917,7 @@ async function showReport() {
   // present is a different fact from whether the connection survived, and only
   // the first one decides if this browser may score anybody. The rule and the
   // failure it came from live in `sessionReport`.
+  state.recordedDecision = null;
   state.report = {
     ...sessionReport({
       joinedRoom: state.joinedRoom,
@@ -3990,6 +4000,7 @@ function renderReport() {
   audioPlayback.setRoom(null);
   stopEndingClock();
   clearCandidateCases();
+  state.categoryComparison = null;
   nodes.ending.hidden = true;
   nodes.report.hidden = false;
   nodes.report.innerHTML = reportMarkup({
@@ -4002,8 +4013,62 @@ function renderReport() {
     boardPhases: [...board.snapshots],
     saveResult: null,
     unclearLines: unclearLines(),
+    categoryComparison: state.categoryComparison,
   });
   mountBehavioralReview(nodes.report, state.transcript.values());
+  void updateCategoryComparison(state.report);
+}
+
+async function loadReportHistory() {
+  const session = await sessionPromise;
+  if (session?.signedIn) {
+    try {
+      const response = await fetch("/api/reports");
+      if (response.ok) {
+        const body = await response.json();
+        if (Array.isArray(body?.reports)) {
+          return normalizeProgressEntries(body.reports);
+        }
+      }
+    } catch {
+      // Fall back to device history when the account report fetch fails.
+    }
+  }
+  return normalizeProgressEntries(readDeviceHistory());
+}
+
+async function updateCategoryComparison(report = state.report) {
+  if (
+    !report ||
+    report.incomplete ||
+    state.recordedDecision === null ||
+    !["HIRE", "NO_HIRE"].includes(report.decision)
+  )
+    return;
+  const [categories, history] = await Promise.all([
+    loadCategoryMap().catch(() => null),
+    loadReportHistory(),
+  ]);
+  if (!categories || state.phase !== "report" || state.report !== report)
+    return;
+  const comparison = compareCategoryAttempt(
+    history,
+    {
+      id: state.reportId,
+      problemId: problem.page,
+      problemTitle: problem.title,
+      recordedDecision: state.recordedDecision,
+      report,
+    },
+    categories,
+  );
+  const markup = categoryComparisonMarkup(state.report, comparison, whiteboard);
+  if (!markup) return;
+  state.categoryComparison = comparison;
+  nodes.report.querySelector(".category-comparison")?.remove();
+  nodes.report
+    .querySelector(".report-actions")
+    ?.insertAdjacentHTML("beforebegin", markup);
 }
 
 function renderReportSaveStatus(result) {
@@ -4091,6 +4156,7 @@ function buildMarkdown(at) {
     testHistory: state.testHistory,
     unclearLines: unclearLines(),
     unclearIds: unclearLineIds(),
+    categoryComparison: state.categoryComparison,
   });
 }
 

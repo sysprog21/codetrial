@@ -14,12 +14,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "problem-bank" / "problems.json"
+MANIFEST = ROOT / "scripts" / "top-interview-150.json"
 # The scenario page and title for each id, from the map gen-problems.py writes
 # rather than from variants.json, so the one script that validates variants is
 # the only one that reads them. Run it first.
 PAGE_MAP = ROOT / "web" / "problem-pages.json"
 INDEX = ROOT / "web" / "index.html"
 TOPIC_MAP = ROOT / "web" / "problem-topics.json"
+CATEGORY_MAP = ROOT / "web" / "problem-categories.json"
+CONTAINER_TOPICS = {"Array", "String"}
 # Matched without their indentation, which the surrounding markup owns and has
 # already changed once: wrapping the grid in a `<details>` moved it two columns
 # right, and the six-space literals these used to be went on matching only
@@ -31,10 +34,10 @@ START = '<section class="problem-grid" aria-label="Problems">'
 END = "</section>"
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def read_json(path: Path) -> object:
@@ -89,14 +92,52 @@ def generated_topics(problems: list, pages: dict) -> str:
     return json.dumps(mapping, ensure_ascii=False, indent=2) + "\n"
 
 
-def main() -> int:
-    args = parse_args()
+def problem_category(problem: dict, plan_topics: dict[str, str]) -> str:
+    """The single study-plan section a problem belongs to.
+
+    Imported problems take their unique section from scripts/top-interview-150.json;
+    original problems outside that manifest fall back to their first non-container
+    topic so every exercise resolves to one category without editing problems.json.
+    """
+    problem_id = str(problem["id"])
+    if problem_id in plan_topics:
+        return plan_topics[problem_id]
+    topics = [str(topic) for topic in problem.get("topics", []) if topic]
+    for topic in topics:
+        if topic not in CONTAINER_TOPICS:
+            return topic
+    if topics:
+        return topics[0]
+    raise RuntimeError(f"{problem_id}: problem has no study-plan section or topic")
+
+
+def generated_categories(problems: list, pages: dict, manifest: dict) -> str:
+    """The report comparison's read-only page-to-category lookup."""
+    plan_topics = {
+        slug: section["topic"]
+        for section in manifest.get("sections", [])
+        for slug in section.get("slugs", [])
+    }
+    mapping = {
+        pages[problem["id"]]["page"]: problem_category(problem, plan_topics)
+        for problem in problems
+    }
+    return json.dumps(mapping, ensure_ascii=False, indent=2) + "\n"
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    category_map: Path = CATEGORY_MAP,
+    stderr: object = sys.stderr,
+) -> int:
+    args = parse_args(argv)
     html_text = INDEX.read_text(encoding="utf-8")
     opening = re.search(
         rf"^([ \t]*){re.escape(START)}[ \t]*$", html_text, flags=re.MULTILINE
     )
     if opening is None:
-        print(f"{INDEX}: could not find the problem-grid opening tag", file=sys.stderr)
+        print(f"{INDEX}: could not find the problem-grid opening tag", file=stderr)
         return 1
 
     indent = opening.group(1)
@@ -108,26 +149,33 @@ def main() -> int:
     if end is None:
         print(
             f"{INDEX}: the problem-grid section is not closed at its own indentation",
-            file=sys.stderr,
+            file=stderr,
         )
         return 1
 
     problems = read_json(SOURCE)
     pages = read_json(PAGE_MAP)
+    manifest = read_json(MANIFEST)
     block = textwrap.indent(generated(problems, pages), indent)
     updated = html_text[: opening.start()] + block + html_text[end.end() :]
     topics = generated_topics(problems, pages)
+    categories = generated_categories(problems, pages, manifest)
     current_topics = TOPIC_MAP.read_text(encoding="utf-8") if TOPIC_MAP.exists() else ""
+    current_categories = (
+        category_map.read_text(encoding="utf-8") if category_map.exists() else ""
+    )
     if args.check:
         stale = []
         if updated != html_text:
             stale.append("web/index.html problem cards")
         if topics != current_topics:
             stale.append("web/problem-topics.json")
+        if categories != current_categories:
+            stale.append("web/problem-categories.json")
         if stale:
             print(
                 f"{', '.join(stale)} are stale; run: python3 scripts/gen-problem-cards.py",
-                file=sys.stderr,
+                file=stderr,
             )
             return 1
         return 0
@@ -138,6 +186,11 @@ def main() -> int:
     if topics != current_topics:
         TOPIC_MAP.write_text(topics, encoding="utf-8")
         print(f"updated {len(problems)} problem topics in web/problem-topics.json")
+    if categories != current_categories:
+        category_map.write_text(categories, encoding="utf-8")
+        print(
+            f"updated {len(problems)} problem categories in web/problem-categories.json"
+        )
     return 0
 
 

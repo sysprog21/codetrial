@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   availableTopics,
+  compareCategoryAttempt,
   filterProblems,
   recentPerformance,
 } from "../../web/practice-insights.js";
@@ -315,4 +316,372 @@ test("weak topic details exclude incompatible, incomplete and undated evidence",
       { topic: "Hash Table", misses: 1, passes: 0, lastAt: 20 },
     ],
   );
+});
+
+const categories = {
+  "step-ways": "1D DP",
+  "vault-sweep": "1D DP",
+  "coin-payout": "1D DP",
+  "window-bounds": "Sliding Window",
+};
+
+const assessedAttempt = ({
+  id = "",
+  problemId,
+  problemTitle = problemId,
+  at,
+  decision = "HIRE",
+  codingScore = 75,
+  communicationScore = 80,
+  hintsUsed = 1,
+  rubricVersion = 1,
+  phases = [],
+  improvementPlan = [],
+  incomplete = false,
+}) => ({
+  ...(id ? { id } : {}),
+  problemId,
+  problemTitle,
+  at,
+  report: {
+    incomplete,
+    decision,
+    codingScore,
+    communicationScore,
+    hintsUsed,
+    frameworkAssessment:
+      rubricVersion === null
+        ? null
+        : {
+            rubricVersion,
+            phases,
+          },
+    improvementPlan,
+  },
+});
+
+test("category comparison pairs a different problem in the same category and computes deltas", () => {
+  const previous = assessedAttempt({
+    id: "prev-1",
+    problemId: "step-ways",
+    problemTitle: "Step Ways",
+    at: 100,
+    decision: "NO_HIRE",
+    codingScore: 60,
+    communicationScore: 85,
+    hintsUsed: 2,
+  });
+  const current = assessedAttempt({
+    id: "curr-1",
+    problemId: "vault-sweep",
+    problemTitle: "Vault Sweep",
+    at: 200,
+    decision: "HIRE",
+    codingScore: 82,
+    communicationScore: 78,
+    hintsUsed: 0,
+  });
+
+  const comparison = compareCategoryAttempt(
+    [previous, current],
+    current,
+    categories,
+  );
+  assert.equal(comparison.category, "1D DP");
+  assert.equal(comparison.sameProblem, false);
+  assert.equal(comparison.previous.problemId, "step-ways");
+  assert.equal(comparison.previous.problemTitle, "Step Ways");
+  assert.equal(comparison.previous.decision, "NO_HIRE");
+  assert.equal(comparison.codingScoreDelta, 22);
+  assert.equal(comparison.communicationScoreDelta, -7);
+  assert.equal(comparison.hintsUsedDelta, -2);
+});
+
+test("category comparison selects the most recent prior attempt in that category", () => {
+  const oldest = assessedAttempt({
+    id: "a1",
+    problemId: "step-ways",
+    at: 10,
+    codingScore: 50,
+  });
+  const middle = assessedAttempt({
+    id: "a2",
+    problemId: "coin-payout",
+    at: 30,
+    codingScore: 68,
+  });
+  const newestPrior = assessedAttempt({
+    id: "a3",
+    problemId: "step-ways",
+    at: 20,
+    codingScore: 61,
+  });
+  const laterAttempt = assessedAttempt({
+    id: "a5",
+    problemId: "coin-payout",
+    at: 50,
+    codingScore: 95,
+  });
+  const current = assessedAttempt({
+    id: "a4",
+    problemId: "vault-sweep",
+    at: 40,
+    codingScore: 80,
+  });
+
+  const comparison = compareCategoryAttempt(
+    [oldest, middle, newestPrior, laterAttempt, current],
+    current,
+    categories,
+  );
+  assert.equal(comparison.previous.id, "a2");
+  assert.equal(comparison.previous.at, 30);
+  assert.equal(comparison.codingScoreDelta, 12);
+});
+
+test("category comparison skips incomplete, unscored, and undated prior attempts", () => {
+  const validPrior = assessedAttempt({
+    id: "valid",
+    problemId: "step-ways",
+    at: 10,
+    decision: "NO_HIRE",
+    codingScore: 55,
+  });
+  const incompletePrior = assessedAttempt({
+    id: "inc",
+    problemId: "coin-payout",
+    at: 20,
+    decision: "HIRE",
+    codingScore: 90,
+    incomplete: true,
+  });
+  const unscoredPrior = assessedAttempt({
+    id: "unscored",
+    problemId: "coin-payout",
+    at: 25,
+    decision: "PENDING",
+    codingScore: 90,
+  });
+  const undatedPrior = assessedAttempt({
+    id: "undated",
+    problemId: "coin-payout",
+    at: null,
+    decision: "HIRE",
+    codingScore: 90,
+  });
+  // A raw stored entry with no decision gets coerced to NO_HIRE + 0 by
+  // sanitizeReport inside normalizeProgressEntry, with recordedDecision: null.
+  const sanitizedUnscoredPrior = {
+    id: "sanitized-unscored",
+    problemId: "coin-payout",
+    problemTitle: "Coin Payout",
+    date: "1970-01-01T00:00:00.028Z",
+    report: { summary: "Legacy unscored session" },
+  };
+  const current = assessedAttempt({
+    id: "curr",
+    problemId: "vault-sweep",
+    at: 30,
+    decision: "HIRE",
+    codingScore: 75,
+  });
+
+  const comparison = compareCategoryAttempt(
+    [
+      validPrior,
+      incompletePrior,
+      unscoredPrior,
+      undatedPrior,
+      sanitizedUnscoredPrior,
+    ],
+    current,
+    categories,
+  );
+  assert.equal(comparison.previous.id, "valid");
+  assert.equal(comparison.codingScoreDelta, 20);
+  assert.equal(
+    compareCategoryAttempt([validPrior], sanitizedUnscoredPrior, categories),
+    null,
+  );
+  assert.equal(
+    compareCategoryAttempt(
+      [validPrior],
+      { ...current, recordedDecision: null },
+      categories,
+    ),
+    null,
+  );
+});
+
+test("category comparison returns null on a first category attempt or incomplete current report", () => {
+  const otherCategory = assessedAttempt({
+    id: "other",
+    problemId: "window-bounds",
+    at: 10,
+  });
+  const current = assessedAttempt({
+    id: "curr",
+    problemId: "vault-sweep",
+    at: 20,
+  });
+  const incompleteCurrent = assessedAttempt({
+    id: "inc-curr",
+    problemId: "vault-sweep",
+    at: 30,
+    incomplete: true,
+  });
+  const prototypeProblem = assessedAttempt({
+    id: "proto",
+    problemId: "__proto__",
+    at: 30,
+  });
+
+  assert.equal(
+    compareCategoryAttempt([otherCategory], current, categories),
+    null,
+  );
+  assert.equal(
+    compareCategoryAttempt([current], incompleteCurrent, categories),
+    null,
+  );
+  assert.equal(
+    compareCategoryAttempt([otherCategory], prototypeProblem, categories),
+    null,
+  );
+});
+
+test("category comparison computes per-phase score deltas when rubricVersion matches and skips null phases", () => {
+  const previous = assessedAttempt({
+    id: "prev",
+    problemId: "step-ways",
+    at: 10,
+    rubricVersion: 1,
+    phases: [
+      { phase: "Repeat", score: 70 },
+      { phase: "Algorithm", score: 55 },
+      { phase: "Test", score: 60 },
+      { phase: "Situation", score: null },
+    ],
+  });
+  const current = assessedAttempt({
+    id: "curr",
+    problemId: "vault-sweep",
+    at: 20,
+    rubricVersion: 1,
+    phases: [
+      { phase: "Repeat", score: 70 },
+      { phase: "Algorithm", score: 80 },
+      { phase: "Test", score: 50 },
+      { phase: "Situation", score: null },
+    ],
+  });
+
+  const comparison = compareCategoryAttempt([previous], current, categories);
+  assert.equal(comparison.rubricComparable, true);
+  assert.equal(comparison.prevRubricVersion, 1);
+  assert.equal(comparison.currRubricVersion, 1);
+  assert.deepEqual(comparison.phaseDeltas, [
+    { phase: "Repeat", previousScore: 70, currentScore: 70, delta: 0 },
+    { phase: "Algorithm", previousScore: 55, currentScore: 80, delta: 25 },
+    { phase: "Test", previousScore: 60, currentScore: 50, delta: -10 },
+  ]);
+});
+
+test("category comparison omits per-phase score deltas across a rubricVersion boundary", () => {
+  const previous = assessedAttempt({
+    id: "prev",
+    problemId: "step-ways",
+    at: 10,
+    codingScore: 60,
+    rubricVersion: 1,
+    phases: [{ phase: "Algorithm", score: 55 }],
+    improvementPlan: [
+      {
+        phase: "Algorithm",
+        weakness: "Jumped to code before recurrence",
+        drill: "Write the state transition first",
+        impact: "high",
+      },
+    ],
+  });
+  const current = assessedAttempt({
+    id: "curr",
+    problemId: "vault-sweep",
+    at: 20,
+    codingScore: 85,
+    rubricVersion: 2,
+    phases: [{ phase: "Algorithm", score: 80 }],
+    improvementPlan: [],
+  });
+
+  const comparison = compareCategoryAttempt([previous], current, categories);
+  assert.equal(comparison.rubricComparable, false);
+  assert.equal(comparison.prevRubricVersion, 1);
+  assert.equal(comparison.currRubricVersion, 2);
+  assert.deepEqual(comparison.phaseDeltas, []);
+  assert.equal(comparison.codingScoreDelta, 25);
+  assert.equal(comparison.phaseComparisons.length, 1);
+  assert.equal(comparison.phaseComparisons[0].status, "no_longer_flagged");
+});
+
+test("category comparison groups improvementPlan items by canonical phase without matching prose", () => {
+  const prevAlgorithmItem = {
+    phase: "Algorithm",
+    weakness: "Did not justify overlapping subproblems",
+    drill: "State the recurrence and memo table dimensions before coding",
+    impact: "high",
+  };
+  const prevTestItem = {
+    phase: "Test",
+    weakness: "Skipped boundary input n = 1",
+    drill: "Trace the smallest valid input by hand",
+    impact: "medium",
+  };
+  const currAlgorithmItem = {
+    phase: "Algorithm",
+    weakness: "Recurrence was stated without space complexity",
+    drill: "Compare O(n) table space against two rolling variables",
+    impact: "medium",
+  };
+  const currOptimizationsItem = {
+    phase: "Optimizations",
+    weakness: "Left the rolling-array reduction unmentioned",
+    drill: "Check which prior states the transition actually reads",
+    impact: "low",
+  };
+
+  const previous = assessedAttempt({
+    id: "prev",
+    problemId: "step-ways",
+    at: 10,
+    improvementPlan: [prevTestItem, prevAlgorithmItem],
+  });
+  const current = assessedAttempt({
+    id: "curr",
+    problemId: "vault-sweep",
+    at: 20,
+    improvementPlan: [currOptimizationsItem, currAlgorithmItem],
+  });
+
+  const comparison = compareCategoryAttempt([previous], current, categories);
+  assert.deepEqual(comparison.phaseComparisons, [
+    {
+      phase: "Algorithm",
+      previousItems: [prevAlgorithmItem],
+      currentItems: [currAlgorithmItem],
+      status: "still_flagged",
+    },
+    {
+      phase: "Test",
+      previousItems: [prevTestItem],
+      currentItems: [],
+      status: "no_longer_flagged",
+    },
+    {
+      phase: "Optimizations",
+      previousItems: [],
+      currentItems: [currOptimizationsItem],
+      status: "newly_flagged",
+    },
+  ]);
 });
