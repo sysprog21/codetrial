@@ -101,6 +101,12 @@ let deletingReports = false;
 /// file is still in its temporal dead zone, and reading one there throws
 /// before the lobby has rendered anything at all.
 let durationCeiling = Infinity;
+/// Whether the interviewer sends candidate video, from `/api/session`. Null
+/// until it answers, when it fails, and when this server does not host the
+/// interviewer itself; the billing notice above Start stays hidden while null.
+/// Here for the same temporal dead zone: `setInterviewMode` reads it during
+/// setup.
+let candidateVideo = null;
 
 // The roll a recommendation is drawn with. It changes when the candidate asks
 // for something different and at no other time, so recommending twice for one
@@ -151,6 +157,7 @@ const nodes = {
   groundingClear: document.querySelector("#grounding-clear"),
   groundingError: document.querySelector("#grounding-error"),
   durationNote: document.querySelector("#duration-note"),
+  costNote: document.querySelector("#cost-note"),
   problemSearch: document.querySelector("#problem-search"),
   problemSearchModes: document.querySelectorAll('[name="problem-search-mode"]'),
   problemTopic: document.querySelector("#problem-topic"),
@@ -531,7 +538,10 @@ for (const button of document.querySelectorAll("[data-mode]")) {
   });
 }
 
-nodes.exampleDrawing.addEventListener("change", rememberSettings);
+nodes.exampleDrawing.addEventListener("change", () => {
+  rememberSettings();
+  applyCostNote();
+});
 
 const start = document.querySelector("#start");
 
@@ -916,6 +926,11 @@ async function loadAccount(generation) {
     }
     accountHistory = false;
     applyDurationCeiling(session.maxDurationMin);
+    candidateVideo =
+      typeof session.candidateVideo === "boolean"
+        ? session.candidateVideo
+        : null;
+    applyCostNote();
     if (session.signedIn) {
       loginResult = null;
       accountHistory = true;
@@ -951,6 +966,11 @@ async function loadAccount(generation) {
   } catch {
     // A server that cannot answer about accounts is not one that will mint a
     // token either, but the editor still works offline, so do not lock the page.
+    // Nor will it bill one, so a notice from an earlier answer comes down.
+    if (generation === historyLoad) {
+      candidateVideo = null;
+      applyCostNote();
+    }
   }
   if (generation !== historyLoad) return;
   if (loginResult) {
@@ -1460,6 +1480,27 @@ function setInterviewMode(value) {
       ? "Whiteboard: no editor and no test runner. You explain by drawing, and Jim sees the board as you go."
       : "";
   note.hidden = mode !== "whiteboard";
+  applyCostNote();
+}
+
+/// Names who pays and what reaches Gemini Live in the chosen mode. A whiteboard
+/// interview sends no camera, but every board it publishes stays in the
+/// billed context as a realtime image, so it is not voice alone. A coding
+/// interview with example drawing sends a board only when `read_board` asks for
+/// it, which is why the drawing is named as conditional there.
+function applyCostNote() {
+  const voice = candidateVideo ? "your voice and video" : "your voice";
+  const media =
+    mode === "whiteboard"
+      ? "your voice and board images"
+      : nodes.exampleDrawing.checked
+        ? `${voice}, and your drawing whenever Jim reads it,`
+        : voice;
+  nodes.costNote.hidden = candidateVideo === null;
+  nodes.costNote.textContent =
+    candidateVideo === null
+      ? ""
+      : `This interview sends ${media} to Gemini Live. Gemini Live usage is billed to this server's Google AI project, on the whole context of the session.`;
 }
 
 function rememberSettings() {
@@ -1485,6 +1526,7 @@ function restoreSettings() {
   }
   if (!settings || typeof settings !== "object") return;
   nodes.exampleDrawing.checked = settings.exampleDrawing === true;
+  applyCostNote();
   if (
     durations.some(
       (button) => Number(button.dataset.duration) === settings.durationMin,

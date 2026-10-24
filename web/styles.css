@@ -3714,6 +3714,13 @@ body:not([data-recording]) .replay-detail > :not(header) {
   line-height: 1.4;
 }
 
+.cost-note {
+  margin: -0.5rem 0 1.25rem;
+  color: var(--sub);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
 /* The dot is painted, not a marker or generated content: the stylesheet draws
    no text, and tests/browser/replay-render.test.js holds it to that. */
 .next-steps li {

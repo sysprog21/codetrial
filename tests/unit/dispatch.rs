@@ -600,3 +600,25 @@ async fn local_dispatcher_enforces_guest_admission_capacity() {
         Err(DispatchRefusal::AtCapacity),
     );
 }
+
+/// The lobby's billing notice names video only on this answer, so it has to
+/// be the setting the local interviewer will run with, both ways.
+#[tokio::test]
+async fn candidate_video_reports_the_local_agent_setting() {
+    for (value, expected) in [("true", true), ("false", false)] {
+        let dispatcher = LocalDispatcher {
+            config: crate::config::load_from_pairs([
+                ("LIVEKIT_URL", "wss://primary.example"),
+                ("LIVEKIT_API_KEY", "primary-key"),
+                ("LIVEKIT_API_SECRET", "primary-secret"),
+                ("GOOGLE_API_KEY", "primary-google"),
+                ("CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED", value),
+            ])
+            .unwrap(),
+            runtime: tokio::runtime::Handle::current(),
+            state: Arc::default(),
+            max_concurrent: 1,
+        };
+        assert_eq!(dispatcher.candidate_video(), Some(expected), "{value}");
+    }
+}

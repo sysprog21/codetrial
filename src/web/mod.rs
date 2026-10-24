@@ -619,6 +619,17 @@ pub trait RoomDispatcher: Send + Sync + 'static {
         false
     }
 
+    /// Whether the interviewer this dispatcher starts sends candidate video to
+    /// Gemini, so the lobby can say what a coding interview is billed on.
+    ///
+    /// `None` unless the dispatcher runs the interviewer from a config it
+    /// holds. An agent that joins from another host reads its own environment,
+    /// and the web side guessing at it would put a promise in front of the
+    /// candidate that nothing here can keep.
+    fn candidate_video(&self) -> Option<bool> {
+        None
+    }
+
     fn ensure_guest_agent(
         &self,
         _room_name: &str,

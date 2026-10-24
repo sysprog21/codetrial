@@ -129,7 +129,8 @@ async fn account_routes_record_interviewee_github_login() {
     assert_eq!(
         session.json::<Value>().await.unwrap(),
         json!({"signedIn": false, "loginRequired": true,
-                "guestModeAvailable": true, "maxDurationMin": MAX_DURATION_MIN})
+                "guestModeAvailable": true, "maxDurationMin": MAX_DURATION_MIN,
+                "candidateVideo": null})
     );
 
     let signed_in = client
@@ -166,6 +167,73 @@ async fn account_routes_record_interviewee_github_login() {
 
     server.shutdown().await;
     remove_database(path).await;
+}
+
+/// A dispatcher that answers `candidate_video` with whatever it is built with.
+struct CandidateVideoDispatcher(Option<bool>);
+
+impl RoomDispatcher for CandidateVideoDispatcher {
+    fn ensure_agent(
+        &self,
+        _room_name: &str,
+        _provider: &codetrial::config::Provider,
+    ) -> Result<(), DispatchRefusal> {
+        Ok(())
+    }
+
+    fn candidate_video(&self) -> Option<bool> {
+        self.0
+    }
+}
+
+/// Both branches of `/api/session` carry the dispatcher's answer, each value of
+/// it, and null with no dispatcher at all. Every other assertion here runs
+/// against a dispatcher that does not know, so a handler that hardcoded the
+/// field, or a signed-in branch that dropped it, would pass them.
+#[tokio::test]
+async fn session_reports_candidate_video_signed_out_and_signed_in() {
+    for (label, answer, expected) in [
+        ("video-on", Some(Some(true)), json!(true)),
+        ("video-off", Some(Some(false)), json!(false)),
+        ("video-unknown", Some(None), Value::Null),
+        ("video-no-dispatcher", None, Value::Null),
+    ] {
+        let path = account_db_path(label);
+        initialize_account_database(&path).unwrap();
+        let mut config = web_config();
+        config.session_secret = Some("session-secret".to_string());
+        config.db_path = Some(path.clone());
+        let (base, server) = match answer {
+            Some(answer) => {
+                spawn_web_server_with_dispatcher(
+                    config,
+                    std::sync::Arc::new(CandidateVideoDispatcher(answer)),
+                )
+                .await
+            }
+            None => spawn_web_server(config).await,
+        };
+        let client = http_client();
+        let session = |cookie: Option<String>| {
+            let mut request = client.get(format!("{base}/api/session"));
+            if let Some(cookie) = cookie {
+                request = request.header("cookie", cookie);
+            }
+            async move { request.send().await.unwrap().json::<Value>().await.unwrap() }
+        };
+
+        let signed_out = session(None).await;
+        assert_eq!(signed_out["signedIn"], false, "{label}");
+        assert_eq!(signed_out.get("candidateVideo"), Some(&expected), "{label}");
+
+        let cookie = record_login(&client, &base, "octo-cat").await;
+        let signed_in = session(Some(cookie)).await;
+        assert_eq!(signed_in["signedIn"], true, "{label}");
+        assert_eq!(signed_in.get("candidateVideo"), Some(&expected), "{label}");
+
+        server.shutdown().await;
+        remove_database(path).await;
+    }
 }
 
 /// A typed handle is not proof of anything, so it must not be the key an
@@ -251,7 +319,8 @@ async fn an_unmigratable_account_database_refuses_rather_than_disabling_login() 
     assert_eq!(
         session,
         json!({"signedIn": false, "loginRequired": true,
-                "guestModeAvailable": false, "maxDurationMin": MAX_DURATION_MIN}),
+                "guestModeAvailable": false, "maxDurationMin": MAX_DURATION_MIN,
+                "candidateVideo": null}),
         "a database this binary cannot migrate still requires a login"
     );
 
@@ -292,7 +361,8 @@ async fn an_unopenable_account_database_refuses_rather_than_disabling_login() {
     assert_eq!(
         session,
         json!({"signedIn": false, "loginRequired": true,
-                "guestModeAvailable": false, "maxDurationMin": MAX_DURATION_MIN}),
+                "guestModeAvailable": false, "maxDurationMin": MAX_DURATION_MIN,
+                "candidateVideo": null}),
         "a broken database still requires a login; it cannot serve one"
     );
 
@@ -348,7 +418,8 @@ async fn an_unopenable_account_database_refuses_rather_than_disabling_login() {
             "signedIn": false,
             "loginRequired": false,
             "guestModeAvailable": true,
-            "maxDurationMin": MAX_DURATION_MIN
+            "maxDurationMin": MAX_DURATION_MIN,
+            "candidateVideo": null
         }),
         "nothing to sign in to, and the lobby has to be told so"
     );
@@ -867,7 +938,8 @@ async fn account_reports_are_scoped_to_the_signed_in_user() {
     assert_eq!(
         signed_out,
         json!({"signedIn": false, "loginRequired": true,
-                "guestModeAvailable": true, "maxDurationMin": MAX_DURATION_MIN}),
+                "guestModeAvailable": true, "maxDurationMin": MAX_DURATION_MIN,
+                "candidateVideo": null}),
         "accounts exist here, so the browser has to know to demand a sign-in"
     );
 

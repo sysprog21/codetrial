@@ -7772,3 +7772,198 @@ lobbyTest(
     }
   },
 );
+
+/// Loads the lobby and waits until `/api/session` has been applied. The
+/// status starts as "Checking account..." in the markup, so only the text the
+/// answer writes says the notice has been decided; any non-empty text would
+/// pass before the response arrived.
+async function lobbyAfterSession(page, status) {
+  const answered = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/session",
+  );
+  await page.goto(`${base}/`, { waitUntil: "domcontentloaded" });
+  await answered;
+  await page.waitForFunction(
+    (expected) =>
+      document.querySelector("#account-status").textContent === expected,
+    status,
+  );
+}
+
+const BILLED_TO_SERVER =
+  "Gemini Live usage is billed to this server's Google AI project, on the whole context of the session.";
+
+lobbyTest(
+  "the billing notice names voice and video for a coding interview with candidate video",
+  async (page) => {
+    session = {
+      signedIn: true,
+      user: { login: "candidate" },
+      candidateVideo: true,
+    };
+    await lobbyAfterSession(page, "Signed in as candidate");
+    const note = page.locator("#cost-note");
+    assert.equal(await note.isVisible(), true);
+    assert.equal(
+      await note.textContent(),
+      `This interview sends your voice and video to Gemini Live. ${BILLED_TO_SERVER}`,
+    );
+    assert.equal(
+      await page.getAttribute("#start", "aria-describedby"),
+      "cost-note",
+    );
+  },
+);
+
+lobbyTest(
+  "the billing notice names voice alone for a coding interview without candidate video",
+  async (page) => {
+    session = { signedIn: false, candidateVideo: false };
+    await lobbyAfterSession(page, "Signed out");
+    const note = page.locator("#cost-note");
+    assert.equal(await note.isVisible(), true);
+    assert.equal(
+      await note.textContent(),
+      `This interview sends your voice to Gemini Live. ${BILLED_TO_SERVER}`,
+    );
+  },
+);
+
+for (const candidateVideo of [true, false]) {
+  lobbyTest(
+    `the billing notice names board images at a whiteboard (candidate video ${candidateVideo})`,
+    async (page) => {
+      session = {
+        signedIn: true,
+        user: { login: "candidate" },
+        candidateVideo,
+      };
+      await lobbyAfterSession(page, "Signed in as candidate");
+      const note = page.locator("#cost-note");
+      const coding = `This interview sends ${
+        candidateVideo ? "your voice and video" : "your voice"
+      } to Gemini Live. ${BILLED_TO_SERVER}`;
+      assert.equal(await note.textContent(), coding);
+
+      await page.locator('[data-mode="whiteboard"]').click();
+      assert.equal(await note.isVisible(), true);
+      assert.equal(
+        await note.textContent(),
+        `This interview sends your voice and board images to Gemini Live. ${BILLED_TO_SERVER}`,
+      );
+
+      await page.locator('[data-mode="coding"]').click();
+      assert.equal(await note.textContent(), coding);
+    },
+  );
+}
+
+// A web-only server answers null, an older one leaves the field out, and a
+// failed request means offline practice: none of them can say who is billed.
+for (const [name, setup, status] of [
+  [
+    "is null",
+    () => (session = { signedIn: false, candidateVideo: null }),
+    "Signed out",
+  ],
+  [
+    "is missing",
+    () => (session = { signedIn: true, user: { login: "candidate" } }),
+    "Signed in as candidate",
+  ],
+  ["request fails", () => failing.add("/api/session"), "Signed out"],
+]) {
+  lobbyTest(
+    `the billing notice stays hidden when candidateVideo ${name}`,
+    async (page) => {
+      setup();
+      await lobbyAfterSession(page, status);
+      assert.equal(await page.locator("#cost-note").isVisible(), false);
+      await page.locator('[data-mode="whiteboard"]').click();
+      assert.equal(await page.locator("#cost-note").isVisible(), false);
+    },
+  );
+}
+
+lobbyTest(
+  "a failed account refresh takes down the billing notice",
+  async (page) => {
+    session = {
+      signedIn: true,
+      user: { login: "candidate" },
+      candidateVideo: true,
+    };
+    await lobbyAfterSession(page, "Signed in as candidate");
+    assert.equal(await page.locator("#cost-note").isVisible(), true);
+
+    failing.add("/api/session");
+    const answered = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === "/api/session",
+    );
+    await restore(page);
+    await answered;
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#account-status").textContent === "Signed out",
+    );
+    assert.equal(await page.locator("#cost-note").isVisible(), false);
+  },
+);
+
+for (const candidateVideo of [true, false]) {
+  lobbyTest(
+    `the billing notice names the coding drawing while example drawing is on (candidate video ${candidateVideo})`,
+    async (page) => {
+      session = {
+        signedIn: true,
+        user: { login: "candidate" },
+        candidateVideo,
+      };
+      await lobbyAfterSession(page, "Signed in as candidate");
+      const note = page.locator("#cost-note");
+      const voice = candidateVideo ? "your voice and video" : "your voice";
+      const plain = `This interview sends ${voice} to Gemini Live. ${BILLED_TO_SERVER}`;
+      const drawing = `This interview sends ${voice}, and your drawing whenever Jim reads it, to Gemini Live. ${BILLED_TO_SERVER}`;
+      assert.equal(await note.textContent(), plain);
+
+      await page.locator("#enable-example-drawing").check();
+      assert.equal(await note.textContent(), drawing);
+
+      // The whiteboard's own wording wins while the checkbox is disabled, and
+      // the drawing comes back with coding because the box stayed checked.
+      await page.locator('[data-mode="whiteboard"]').click();
+      assert.equal(
+        await note.textContent(),
+        `This interview sends your voice and board images to Gemini Live. ${BILLED_TO_SERVER}`,
+      );
+      await page.locator('[data-mode="coding"]').click();
+      assert.equal(await note.textContent(), drawing);
+
+      await page.locator("#enable-example-drawing").uncheck();
+      assert.equal(await note.textContent(), plain);
+    },
+  );
+}
+
+lobbyTest(
+  "a restored example drawing setting is named in the billing notice",
+  async (page) => {
+    session = {
+      signedIn: true,
+      user: { login: "candidate" },
+      candidateVideo: false,
+    };
+    await page.addInitScript(() =>
+      localStorage.setItem(
+        "codetrial.interviewSettings",
+        JSON.stringify({ exampleDrawing: true }),
+      ),
+    );
+    await lobbyAfterSession(page, "Signed in as candidate");
+    assert.equal(await page.isChecked("#enable-example-drawing"), true);
+    assert.equal(
+      await page.locator("#cost-note").textContent(),
+      `This interview sends your voice, and your drawing whenever Jim reads it, to Gemini Live. ${BILLED_TO_SERVER}`,
+    );
+  },
+);

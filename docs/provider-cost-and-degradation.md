@@ -325,6 +325,22 @@ says that no scores or verdict were created. Browser fallback may summarize
 local test progress only for a session that never reached an interviewer, and
 never presents canned feedback as an agent evaluation.
 
+Before an interview on a server that hosts its own interviewer, the lobby says
+above Start that Gemini Live usage is billed to this server's Google AI project
+on the whole context of the session, and names what reaches it: voice and video
+for a coding interview with candidate video enabled, voice for one without, and
+voice and board images at a whiteboard, where the camera is off but every board
+stays in the context as a realtime image (see
+[What a whiteboard interview adds](#what-a-whiteboard-interview-adds)). A coding
+interview with example drawing checked also names the drawing, sent whenever
+Jim reads it: each `read_board` call sends the current example JPEG, which then
+stays in the context like any other image. The
+Setup page says the same beside the Google API key. `/api/session` reports
+`candidateVideo` from the local agent config and `null` on the web half of a
+split deployment, whose agent's settings it cannot see; the lobby shows no
+notice while it is `null`, including before the answer and when the request
+fails.
+
 ## Operating it
 
 Watch `codetrial dispatch_refused ... reason=at_capacity` and

@@ -103,6 +103,11 @@ test("setup shows distinct credential groups without narrow-screen overflow", as
       await page.locator("fieldset").last().innerText(),
       /Optional/i,
     );
+    // Beside the key, so whoever enters it learns whose project pays.
+    assert.match(
+      await page.locator("fieldset").last().innerText(),
+      /Gemini Live usage is billed to this server's Google AI project, on the whole context of the session/,
+    );
     assert.equal(await page.locator("input:required").count(), 3);
     assert.equal(await page.locator("#googleApiKey:required").count(), 0);
     assert.equal(

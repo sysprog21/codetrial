@@ -45,6 +45,10 @@ impl RoomDispatcher for LocalDispatcher {
         true
     }
 
+    fn candidate_video(&self) -> Option<bool> {
+        Some(self.config.gemini_candidate_video_enabled)
+    }
+
     fn ensure_agent(&self, room_name: &str, provider: &Provider) -> Result<(), DispatchRefusal> {
         self.ensure_agent_with_kind(room_name, provider, false, None)
     }
