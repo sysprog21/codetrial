@@ -316,6 +316,13 @@ pub(crate) async fn session_handler(
     // because the duration row is live before anyone signs in.
     let max_duration_min =
         super::token::duration_ceiling(state.config.recording.as_ref().map(|it| it.max_minutes));
+
+    // Null on the web half of a split deployment, where the lobby keeps its
+    // billing notice hidden rather than describe an agent it cannot see.
+    let candidate_video = state
+        .dispatcher
+        .as_ref()
+        .and_then(|dispatcher| dispatcher.candidate_video());
     match current_user(state.accounts.as_ref(), request.headers()).await {
         Ok(Some(user)) => json_response(
             StatusCode::OK,
@@ -325,6 +332,7 @@ pub(crate) async fn session_handler(
                 "loginRequired": login_required,
                 "guestModeAvailable": state.guest_mode_available(),
                 "maxDurationMin": max_duration_min,
+                "candidateVideo": candidate_video,
                 "user": {
                     "login": user.login,
                     "avatarUrl": user.avatar_url
@@ -338,6 +346,7 @@ pub(crate) async fn session_handler(
                 "loginRequired": login_required,
                 "guestModeAvailable": state.guest_mode_available(),
                 "maxDurationMin": max_duration_min,
+                "candidateVideo": candidate_video,
             }),
         ),
         Err(_) => json_response(

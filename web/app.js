@@ -103,6 +103,12 @@ let deletingReports = false;
 /// file is still in its temporal dead zone, and reading one there throws
 /// before the lobby has rendered anything at all.
 let durationCeiling = Infinity;
+/// Whether the interviewer sends candidate video, from `/api/session`. Null
+/// until it answers, when it fails, and when this server does not host the
+/// interviewer itself; the billing notice above Start stays hidden while null.
+/// Here for the same temporal dead zone: `setInterviewMode` reads it during
+/// setup.
+let candidateVideo = null;
 
 // The roll a recommendation is drawn with. It changes when the candidate asks
 // for something different and at no other time, so recommending twice for one
@@ -157,6 +163,7 @@ const nodes = {
   groundingClear: document.querySelector("#grounding-clear"),
   groundingError: document.querySelector("#grounding-error"),
   durationNote: document.querySelector("#duration-note"),
+  costNote: document.querySelector("#cost-note"),
   problemSearch: document.querySelector("#problem-search"),
   problemSearchModes: document.querySelectorAll('[name="problem-search-mode"]'),
   problemTopic: document.querySelector("#problem-topic"),
@@ -585,7 +592,10 @@ for (const button of document.querySelectorAll("[data-mode]")) {
   });
 }
 
-nodes.exampleDrawing.addEventListener("change", rememberSettings);
+nodes.exampleDrawing.addEventListener("change", () => {
+  rememberSettings();
+  applyCostNote();
+});
 
 const start = document.querySelector("#start");
 
@@ -971,6 +981,11 @@ async function loadAccount(generation) {
     }
     accountHistory = false;
     applyDurationCeiling(session.maxDurationMin);
+    candidateVideo =
+      typeof session.candidateVideo === "boolean"
+        ? session.candidateVideo
+        : null;
+    applyCostNote();
     if (session.signedIn) {
       loginResult = null;
       accountHistory = true;
@@ -1006,6 +1021,12 @@ async function loadAccount(generation) {
   } catch {
     // A server that cannot answer about accounts is not one that will mint a
     // token either, but the editor still works offline, so do not lock the page.
+    // An answer we cannot read says nothing about the agent, so a notice from
+    // an earlier answer comes down rather than describe it.
+    if (generation === historyLoad) {
+      candidateVideo = null;
+      applyCostNote();
+    }
   }
   if (generation !== historyLoad) return;
   if (loginResult) {
@@ -1517,6 +1538,32 @@ function setInterviewMode(value) {
       ? "Whiteboard: no editor and no test runner. You explain by drawing, and Jim sees the board as you go."
       : "";
   note.hidden = mode !== "whiteboard";
+  applyCostNote();
+}
+
+/// Names who pays and what reaches Gemini Live in the chosen mode. A whiteboard
+/// interview sends no camera, but every board it publishes stays in the
+/// billed context as a realtime image, so it is not voice alone. A coding
+/// interview with example drawing sends a board only when `read_board` asks for
+/// it, which is why the drawing is named as conditional there. The media are
+/// listed against the text of the interview rather than as everything sent:
+/// the code, and any resume or job description snippets the candidate chose,
+/// reach the model too, and which of them do depends on mode, loop and consent.
+function applyCostNote() {
+  nodes.costNote.hidden = candidateVideo === null;
+  if (candidateVideo === null) return;
+  const voice = candidateVideo
+    ? "your voice and any camera video"
+    : "your voice";
+  const media =
+    mode === "whiteboard"
+      ? "your voice and board images"
+      : nodes.exampleDrawing.checked
+        ? `${voice}, plus your drawing whenever Jim reads it`
+        : voice;
+  const text = `Besides the interview text, this interview sends ${media} to Gemini Live. Usage is billed to the Google AI project of the key the interview runs on, on the whole session context.`;
+  // The note is a live region; rewriting identical text would re-announce it.
+  if (nodes.costNote.textContent !== text) nodes.costNote.textContent = text;
 }
 
 function rememberSettings() {
@@ -1542,6 +1589,7 @@ function restoreSettings() {
   }
   if (!settings || typeof settings !== "object") return;
   nodes.exampleDrawing.checked = settings.exampleDrawing === true;
+  applyCostNote();
   if (
     durations.some(
       (button) => Number(button.dataset.duration) === settings.durationMin,

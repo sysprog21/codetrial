@@ -159,6 +159,17 @@ test("setup shows distinct credential groups without narrow-screen overflow", as
       await page.locator("fieldset").last().innerText(),
       /Optional/i,
     );
+    // Beside the key, so whoever enters it learns whose project pays.
+    assert.match(
+      await page.locator("fieldset").last().innerText(),
+      /Gemini Live usage is billed to the Google AI project of the key the interview runs on, on the whole context of the session/,
+    );
+    // The report model spends the same key, so a note naming Live alone would
+    // understate what the operator is charged for.
+    assert.match(
+      await page.locator("fieldset").last().innerText(),
+      /The reports, interim reviews and phase judge run on the same keys and are billed to the same project\./,
+    );
     assert.equal(await page.locator("input:required").count(), 3);
     assert.equal(await page.locator("#googleApiKey:required").count(), 0);
     assert.equal(

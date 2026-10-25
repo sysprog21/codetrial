@@ -2,7 +2,9 @@
 
 What the lobby offers, what the endpoints enforce, and how recording lowers
 both. One rule matters more than the rest: the length offered and the length
-enforced come from one function, so they cannot drift apart.
+enforced come from one function, so they cannot drift apart. The same response
+also carries `candidateVideo`, which the billing notice in the lobby reads; see
+[provider cost and degradation](provider-cost-and-degradation.md).
 
 The lobby offers 30, 45, and 60 minutes, and the candidate picks one before
 starting. `CODETRIAL_DURATION_MIN` is only the length preselected for a

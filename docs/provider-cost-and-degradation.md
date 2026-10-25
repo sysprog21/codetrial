@@ -326,6 +326,35 @@ says that no scores or verdict were created. Browser fallback may summarize
 local test progress only for a session that never reached an interviewer, and
 never presents canned feedback as an agent evaluation.
 
+Before an interview on a server that hosts its own interviewer, the lobby says
+above Start that Gemini Live usage is billed to the Google AI project of the key
+the interview runs on (a provider's own `google_api_keys` when it has any, else
+`GOOGLE_API_KEYS`), on the whole context of the session. It also names what
+reaches Gemini besides the text of the interview. That text is the instructions
+and, in a coding interview, the candidate's code, which is resent on a
+reconnect, plus, outside a coding-only session, any resume or job description
+snippets the candidate selected and agreed to send. The notice names the media
+per mode:
+
+- Coding with candidate video enabled: voice and any camera video. The video is
+  not sent when the candidate skipped the camera or the camera went to the Meet
+  presenter, which is why the notice says "any".
+- Coding with candidate video disabled: voice.
+- Whiteboard: voice and board images. The camera is off, but every board stays
+  in the context as a realtime image (see
+  [What a whiteboard interview adds](#what-a-whiteboard-interview-adds)).
+- Coding with example drawing checked: the above plus the drawing, sent whenever
+  Jim reads it. Each `read_board` call sends the current example JPEG, which
+  then stays in the context like any other image.
+
+The Setup page says the same beside the Google API key, and that the final
+report, the quiet-pause interim reviews and the phase judge run on the same
+report model and keys, so they are billed to the same project. `/api/session`
+reports `candidateVideo` from the local agent config and `null` on the web half
+of a split deployment, whose agent's settings it cannot see; the lobby shows no
+notice while it is `null`, including before the answer and when the request
+fails. See also `maxDurationMin` in [interview length](interview-length.md).
+
 ## Operating it
 
 Watch `codetrial dispatch_refused ... reason=at_capacity` and

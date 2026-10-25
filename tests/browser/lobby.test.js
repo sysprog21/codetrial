@@ -8571,3 +8571,303 @@ lobbyTest(
     }
   },
 );
+
+/// Loads the lobby and waits until `/api/session` has been applied. The
+/// status starts as "Checking account..." in the markup, so only the text the
+/// answer writes says the notice has been decided; any non-empty text would
+/// pass before the response arrived.
+async function lobbyAfterSession(page, status) {
+  const answered = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/session",
+  );
+  await page.goto(`${base}/`, { waitUntil: "domcontentloaded" });
+  await answered;
+  await page.waitForFunction(
+    (expected) =>
+      document.querySelector("#account-status").textContent === expected,
+    status,
+  );
+}
+
+function seedExampleDrawing(page) {
+  return page.addInitScript(() =>
+    localStorage.setItem(
+      "codetrial.interviewSettings",
+      JSON.stringify({ exampleDrawing: true }),
+    ),
+  );
+}
+
+const BILLED_TO_SERVER =
+  "Usage is billed to the Google AI project of the key the interview runs on, on the whole session context.";
+
+lobbyTest(
+  "the billing notice names voice and video for a coding interview with candidate video",
+  async (page) => {
+    session = {
+      signedIn: true,
+      user: { login: "candidate" },
+      candidateVideo: true,
+    };
+    await lobbyAfterSession(page, "Signed in as candidate");
+    const note = page.locator("#cost-note");
+    assert.equal(await note.isVisible(), true);
+    assert.equal(
+      await note.textContent(),
+      `Besides the interview text, this interview sends your voice and any camera video to Gemini Live. ${BILLED_TO_SERVER}`,
+    );
+    assert.equal(
+      await page.getAttribute("#start", "aria-describedby"),
+      "cost-note",
+    );
+  },
+);
+
+lobbyTest(
+  "the billing notice names voice alone for a coding interview without candidate video",
+  async (page) => {
+    session = { signedIn: false, candidateVideo: false };
+    await lobbyAfterSession(page, "Signed out");
+    const note = page.locator("#cost-note");
+    assert.equal(await note.isVisible(), true);
+    assert.equal(
+      await note.textContent(),
+      `Besides the interview text, this interview sends your voice to Gemini Live. ${BILLED_TO_SERVER}`,
+    );
+  },
+);
+
+for (const candidateVideo of [true, false]) {
+  lobbyTest(
+    `the billing notice names board images at a whiteboard (candidate video ${candidateVideo})`,
+    async (page) => {
+      session = {
+        signedIn: true,
+        user: { login: "candidate" },
+        candidateVideo,
+      };
+      await lobbyAfterSession(page, "Signed in as candidate");
+      const note = page.locator("#cost-note");
+      const coding = `Besides the interview text, this interview sends ${
+        candidateVideo ? "your voice and any camera video" : "your voice"
+      } to Gemini Live. ${BILLED_TO_SERVER}`;
+      assert.equal(await note.textContent(), coding);
+
+      await page.locator('[data-mode="whiteboard"]').click();
+      assert.equal(await note.isVisible(), true);
+      assert.equal(
+        await note.textContent(),
+        `Besides the interview text, this interview sends your voice and board images to Gemini Live. ${BILLED_TO_SERVER}`,
+      );
+
+      await page.locator('[data-mode="coding"]').click();
+      assert.equal(await note.textContent(), coding);
+    },
+  );
+}
+
+// A web-only server answers null, an older one leaves the field out, and a
+// failed request means offline practice: none of them can say who is billed.
+for (const [name, setup, status] of [
+  [
+    "is null",
+    () => (session = { signedIn: false, candidateVideo: null }),
+    "Signed out",
+  ],
+  [
+    "is missing",
+    () => (session = { signedIn: true, user: { login: "candidate" } }),
+    "Signed in as candidate",
+  ],
+  ["request fails", () => failing.add("/api/session"), "Signed out"],
+]) {
+  lobbyTest(
+    `the billing notice stays hidden when candidateVideo ${name}`,
+    async (page) => {
+      setup();
+      await lobbyAfterSession(page, status);
+      assert.equal(await page.locator("#cost-note").isVisible(), false);
+      await page.locator('[data-mode="whiteboard"]').click();
+      assert.equal(await page.locator("#cost-note").isVisible(), false);
+    },
+  );
+}
+
+lobbyTest(
+  "a failed account refresh takes down the billing notice",
+  async (page) => {
+    session = {
+      signedIn: true,
+      user: { login: "candidate" },
+      candidateVideo: true,
+    };
+    await lobbyAfterSession(page, "Signed in as candidate");
+    assert.equal(await page.locator("#cost-note").isVisible(), true);
+
+    failing.add("/api/session");
+    const answered = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === "/api/session",
+    );
+    await restore(page);
+    await answered;
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#account-status").textContent === "Signed out",
+    );
+    assert.equal(await page.locator("#cost-note").isVisible(), false);
+  },
+);
+
+for (const candidateVideo of [true, false]) {
+  lobbyTest(
+    `the billing notice names the coding drawing while example drawing is on (candidate video ${candidateVideo})`,
+    async (page) => {
+      session = {
+        signedIn: true,
+        user: { login: "candidate" },
+        candidateVideo,
+      };
+      await lobbyAfterSession(page, "Signed in as candidate");
+      const note = page.locator("#cost-note");
+      const voice = candidateVideo
+        ? "your voice and any camera video"
+        : "your voice";
+      const plain = `Besides the interview text, this interview sends ${voice} to Gemini Live. ${BILLED_TO_SERVER}`;
+      const drawing = `Besides the interview text, this interview sends ${voice}, plus your drawing whenever Jim reads it to Gemini Live. ${BILLED_TO_SERVER}`;
+      assert.equal(await note.textContent(), plain);
+
+      await page.locator("#enable-example-drawing").check();
+      assert.equal(await note.textContent(), drawing);
+
+      // The whiteboard's own wording wins while the checkbox is disabled, and
+      // the drawing comes back with coding because the box stayed checked.
+      await page.locator('[data-mode="whiteboard"]').click();
+      assert.equal(
+        await note.textContent(),
+        `Besides the interview text, this interview sends your voice and board images to Gemini Live. ${BILLED_TO_SERVER}`,
+      );
+      await page.locator('[data-mode="coding"]').click();
+      assert.equal(await note.textContent(), drawing);
+
+      await page.locator("#enable-example-drawing").uncheck();
+      assert.equal(await note.textContent(), plain);
+    },
+  );
+}
+
+lobbyTest(
+  "a restored example drawing setting is named in the billing notice",
+  async (page) => {
+    session = {
+      signedIn: true,
+      user: { login: "candidate" },
+      candidateVideo: false,
+    };
+    await seedExampleDrawing(page);
+    await lobbyAfterSession(page, "Signed in as candidate");
+    assert.equal(await page.isChecked("#enable-example-drawing"), true);
+    assert.equal(
+      await page.locator("#cost-note").textContent(),
+      `Besides the interview text, this interview sends your voice, plus your drawing whenever Jim reads it to Gemini Live. ${BILLED_TO_SERVER}`,
+    );
+  },
+);
+
+// The longest notice (video on, example drawing checked) is seven lines in the
+// Start column at 1280x800. Measured under the same fonts and long title as
+// the one-screen test above, which runs with the notice hidden.
+lobbyTest(
+  "the longest billing notice keeps the lobby on one 1280x800 screen",
+  async (page) => {
+    session = {
+      signedIn: true,
+      user: { login: "candidate" },
+      candidateVideo: true,
+    };
+    await seedExampleDrawing(page);
+    await lobbyAfterSession(page, "Signed in as candidate");
+    assert.equal(
+      await page.locator("#cost-note").textContent(),
+      `Besides the interview text, this interview sends your voice and any camera video, plus your drawing whenever Jim reads it to Gemini Live. ${BILLED_TO_SERVER}`,
+    );
+    await page.evaluate(async () => {
+      const font = new FontFace(
+        "TallMetrics",
+        'local("Arial"), local("Liberation Sans"), local("DejaVu Sans")',
+        {
+          ascentOverride: "110%",
+          descentOverride: "25%",
+          lineGapOverride: "0%",
+        },
+      );
+      document.fonts.add(await font.load());
+    });
+    await page.click("details.problem-picker summary");
+    await page.click(`[data-problem="${LONG_TITLE}"]`);
+    await page.click("details.problem-picker summary");
+
+    const { height } = page.viewportSize();
+    for (const font of ["", "Arial, sans-serif", "TallMetrics"]) {
+      await page.evaluate((font) => {
+        document.body.style.fontFamily = font;
+      }, font);
+      const layout = await page.evaluate(() => {
+        const bounds = (selector) => {
+          const { bottom, height } = document
+            .querySelector(selector)
+            .getBoundingClientRect();
+          return { bottom, height };
+        };
+        return {
+          height: document.body.scrollHeight,
+          note: bounds("#cost-note"),
+          start: bounds("#start"),
+          footer: bounds(".site-credits"),
+        };
+      });
+      const diagnostic = `${font || "the system font"}: ${JSON.stringify(layout)}`;
+      assert.ok(
+        layout.height <= height,
+        `the notice pushes the lobby past one ${height}px screen; ${diagnostic}`,
+      );
+      for (const name of ["note", "start", "footer"]) {
+        const bounds = layout[name];
+        assert.ok(
+          bounds.height > 0 && bounds.bottom <= height,
+          `${name} must remain on screen; ${diagnostic}`,
+        );
+      }
+    }
+    // The whiteboard layout is taller than one screen with or without the
+    // notice, so there the notice is held to adding no height of its own: it
+    // sits in the Start column, which the settings column outgrows.
+    await page.click('[data-mode="whiteboard"]');
+    const pageHeight = () => page.evaluate(() => document.body.scrollHeight);
+    const withNote = await pageHeight();
+    await page.evaluate(() => {
+      document.querySelector("#cost-note").hidden = true;
+    });
+    assert.equal(withNote, await pageHeight());
+  },
+  { viewport: { width: 1280, height: 800 } },
+);
+
+lobbyTest(
+  "the billing notice does not overflow a phone-width lobby",
+  async (page) => {
+    session = {
+      signedIn: true,
+      user: { login: "candidate" },
+      candidateVideo: true,
+    };
+    await seedExampleDrawing(page);
+    await lobbyAfterSession(page, "Signed in as candidate");
+    assert.equal(await page.locator("#cost-note").isVisible(), true);
+    const { scroll, width } = await page.evaluate(() => ({
+      scroll: document.documentElement.scrollWidth,
+      width: window.innerWidth,
+    }));
+    assert.ok(scroll <= width, `horizontal overflow: ${scroll} > ${width}`);
+  },
+  { viewport: { width: 390, height: 800 } },
+);
