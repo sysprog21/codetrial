@@ -1559,9 +1559,9 @@ function applyCostNote() {
     mode === "whiteboard"
       ? "your voice and board images"
       : nodes.exampleDrawing.checked
-        ? `${voice}, plus your drawing whenever Jim reads it`
+        ? `${voice}, plus your drawing when Jim reads it`
         : voice;
-  const text = `Besides the interview text, this interview sends ${media} to Gemini Live. Usage is billed to the Google AI project of the key the interview runs on, on the whole session context.`;
+  const text = `Sends ${media} to Gemini Live, besides the interview text. Billed to the key's Google AI project on the whole session context.`;
   // The note is a live region; rewriting identical text would re-announce it.
   if (nodes.costNote.textContent !== text) nodes.costNote.textContent = text;
 }

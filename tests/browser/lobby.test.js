@@ -8599,7 +8599,7 @@ function seedExampleDrawing(page) {
 }
 
 const BILLED_TO_SERVER =
-  "Usage is billed to the Google AI project of the key the interview runs on, on the whole session context.";
+  "Billed to the key's Google AI project on the whole session context.";
 
 lobbyTest(
   "the billing notice names voice and video for a coding interview with candidate video",
@@ -8614,7 +8614,7 @@ lobbyTest(
     assert.equal(await note.isVisible(), true);
     assert.equal(
       await note.textContent(),
-      `Besides the interview text, this interview sends your voice and any camera video to Gemini Live. ${BILLED_TO_SERVER}`,
+      `Sends your voice and any camera video to Gemini Live, besides the interview text. ${BILLED_TO_SERVER}`,
     );
     assert.equal(
       await page.getAttribute("#start", "aria-describedby"),
@@ -8632,7 +8632,7 @@ lobbyTest(
     assert.equal(await note.isVisible(), true);
     assert.equal(
       await note.textContent(),
-      `Besides the interview text, this interview sends your voice to Gemini Live. ${BILLED_TO_SERVER}`,
+      `Sends your voice to Gemini Live, besides the interview text. ${BILLED_TO_SERVER}`,
     );
   },
 );
@@ -8648,16 +8648,16 @@ for (const candidateVideo of [true, false]) {
       };
       await lobbyAfterSession(page, "Signed in as candidate");
       const note = page.locator("#cost-note");
-      const coding = `Besides the interview text, this interview sends ${
+      const coding = `Sends ${
         candidateVideo ? "your voice and any camera video" : "your voice"
-      } to Gemini Live. ${BILLED_TO_SERVER}`;
+      } to Gemini Live, besides the interview text. ${BILLED_TO_SERVER}`;
       assert.equal(await note.textContent(), coding);
 
       await page.locator('[data-mode="whiteboard"]').click();
       assert.equal(await note.isVisible(), true);
       assert.equal(
         await note.textContent(),
-        `Besides the interview text, this interview sends your voice and board images to Gemini Live. ${BILLED_TO_SERVER}`,
+        `Sends your voice and board images to Gemini Live, besides the interview text. ${BILLED_TO_SERVER}`,
       );
 
       await page.locator('[data-mode="coding"]').click();
@@ -8732,8 +8732,8 @@ for (const candidateVideo of [true, false]) {
       const voice = candidateVideo
         ? "your voice and any camera video"
         : "your voice";
-      const plain = `Besides the interview text, this interview sends ${voice} to Gemini Live. ${BILLED_TO_SERVER}`;
-      const drawing = `Besides the interview text, this interview sends ${voice}, plus your drawing whenever Jim reads it to Gemini Live. ${BILLED_TO_SERVER}`;
+      const plain = `Sends ${voice} to Gemini Live, besides the interview text. ${BILLED_TO_SERVER}`;
+      const drawing = `Sends ${voice}, plus your drawing when Jim reads it to Gemini Live, besides the interview text. ${BILLED_TO_SERVER}`;
       assert.equal(await note.textContent(), plain);
 
       await page.locator("#enable-example-drawing").check();
@@ -8744,7 +8744,7 @@ for (const candidateVideo of [true, false]) {
       await page.locator('[data-mode="whiteboard"]').click();
       assert.equal(
         await note.textContent(),
-        `Besides the interview text, this interview sends your voice and board images to Gemini Live. ${BILLED_TO_SERVER}`,
+        `Sends your voice and board images to Gemini Live, besides the interview text. ${BILLED_TO_SERVER}`,
       );
       await page.locator('[data-mode="coding"]').click();
       assert.equal(await note.textContent(), drawing);
@@ -8768,7 +8768,7 @@ lobbyTest(
     assert.equal(await page.isChecked("#enable-example-drawing"), true);
     assert.equal(
       await page.locator("#cost-note").textContent(),
-      `Besides the interview text, this interview sends your voice, plus your drawing whenever Jim reads it to Gemini Live. ${BILLED_TO_SERVER}`,
+      `Sends your voice, plus your drawing when Jim reads it to Gemini Live, besides the interview text. ${BILLED_TO_SERVER}`,
     );
   },
 );
@@ -8788,7 +8788,7 @@ lobbyTest(
     await lobbyAfterSession(page, "Signed in as candidate");
     assert.equal(
       await page.locator("#cost-note").textContent(),
-      `Besides the interview text, this interview sends your voice and any camera video, plus your drawing whenever Jim reads it to Gemini Live. ${BILLED_TO_SERVER}`,
+      `Sends your voice and any camera video, plus your drawing when Jim reads it to Gemini Live, besides the interview text. ${BILLED_TO_SERVER}`,
     );
     await page.evaluate(async () => {
       const font = new FontFace(

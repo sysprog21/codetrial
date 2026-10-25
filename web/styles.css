@@ -3888,11 +3888,12 @@ body:not([data-recording]) .replay-detail > :not(header) {
     padding: 0.375rem 0.625rem;
   }
 
-  /* The longest billing notice wraps to seven lines in the Start column,
-     which was enough to push the page past 800px with taller metrics. */
+  /* The Start column is narrow: the longest billing notice wraps to six or
+     seven lines there, which pushes the page past 800px at full size. */
   .cost-note {
     margin-bottom: 0.75rem;
-    line-height: 1.35;
+    font-size: 0.8125rem;
+    line-height: 1.3;
   }
 }
 
