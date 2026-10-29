@@ -28,11 +28,29 @@ BROWSER_CHECK_AGENT=${BROWSER_CHECK_AGENT:-home}
 # leaves only that cap out of its verdict, reports the strict outcome beside the
 # structural one, and prints qualification=not_evaluated, so a pilot that
 # completed is never read as having qualified.
+#
+# `long-interview` holds one real interview for the duration a budgeted run
+# manifest names (scripts/long-interview-plan.cjs). BROWSER_CHECK_DURATION_MIN
+# is its harness-only length: 10, 20, 30, 60 or 90, 20 when unset, inside the
+# product's own range and recording cap. Every other flow keeps the page's 20
+# minutes, so selecting a duration for one of them is refused rather than read
+# as a long-interview result.
+#
+# The long interview plays the schedule of scripts/long-interview-schedule.cjs
+# into the session, each action through the run budget
+# (scripts/long-interview-driver.cjs). BROWSER_CHECK_LONG_CLIP_DIR names a
+# directory holding manifest.json and the recorded speech clips it lists,
+# authored outside the checkout. BROWSER_CHECK_LONG_TONE_FIXTURE=1 instead plays
+# synthetic tones, for a smoke run only: it contains no speech and is reported
+# as a validation fixture, never as a speech run.
+# BROWSER_CHECK_LONG_ARTIFACT_DIR holds the failure-<class>.json artifacts; it
+# defaults to a directory beside BROWSER_CHECK_CAPTURE. The exit code is the
+# failure class's: 4 budget, 5 cleanup, 6 artifact, 77 no GoAway, 1 other.
 BROWSER_CHECK_FLOW=${BROWSER_CHECK_FLOW:-voice}
 case $BROWSER_CHECK_FLOW in
-    voice | report | barge | avatar | soak) ;;
+    voice | report | barge | avatar | soak | long-interview) ;;
     *)
-        echo "BROWSER_CHECK_FLOW must be voice, report, barge, avatar, or soak." >&2
+        echo "BROWSER_CHECK_FLOW must be voice, report, barge, avatar, soak, or long-interview." >&2
         exit 2
         ;;
 esac
@@ -52,6 +70,12 @@ elif [ "${BROWSER_CHECK_SOAK_SECONDS+x}" ]; then
     exit 2
 else
     SOAK_SECONDS=0
+fi
+
+if [ "$BROWSER_CHECK_FLOW" != long-interview ] && [ "${BROWSER_CHECK_DURATION_MIN+x}" ]; then
+    echo "BROWSER_CHECK_DURATION_MIN applies to BROWSER_CHECK_FLOW=long-interview," >&2
+    echo "not to $BROWSER_CHECK_FLOW." >&2
+    exit 2
 fi
 
 if [ "${BROWSER_CHECK_REQUIRE_MODEL:-}" = "1" ]; then
@@ -188,6 +212,79 @@ case $BROWSER_CHECK_AGENT in
         ;;
 esac
 
+# A run launched by scripts/interview-run-budget.py carries its budget in these
+# variables. They are all or nothing: a worker holding some of them could spend
+# without a permit, so a partial set is refused rather than guessed at. Checked
+# here, ahead of the validate-only exit, so the same refusals can be exercised
+# without a browser or credentials.
+PREBUILT_BIN=
+BUDGET_VARS=
+for name in BROWSER_CHECK_RUN_MANIFEST BROWSER_CHECK_RUN_ID \
+    BROWSER_CHECK_RUN_MANIFEST_SHA256 BROWSER_CHECK_BUDGET_SOCKET; do
+    eval "value=\${$name:-}"
+    [ -z "$value" ] || BUDGET_VARS="$BUDGET_VARS $name"
+done
+if [ -n "$BUDGET_VARS" ]; then
+    if [ -z "${BROWSER_CHECK_RUN_MANIFEST:-}" ] || [ -z "${BROWSER_CHECK_RUN_ID:-}" ] \
+        || [ -z "${BROWSER_CHECK_RUN_MANIFEST_SHA256:-}" ] \
+        || {
+            [ -z "${BROWSER_CHECK_VALIDATE_ENV_ONLY:-}" ] && [ ! -S "${BROWSER_CHECK_BUDGET_SOCKET:-}" ]
+        }; then
+        echo "A budgeted run needs BROWSER_CHECK_RUN_MANIFEST, BROWSER_CHECK_RUN_ID," >&2
+        echo "BROWSER_CHECK_RUN_MANIFEST_SHA256 and a live BROWSER_CHECK_BUDGET_SOCKET;" >&2
+        echo "start it through scripts/interview-run-budget.py run. Set:$BUDGET_VARS" >&2
+        exit 2
+    fi
+    if [ "${CODETRIAL_WEB_URL:-}" ]; then
+
+        # An external server is shared and was not built from the pinned
+        # executable, so neither its exposure nor its identity can be bounded.
+        echo "A budgeted run launches the pinned candidate itself; unset CODETRIAL_WEB_URL." >&2
+        exit 2
+    fi
+    BUDGET_PYTHON=
+    for candidate in ${PYTHON:-} python3 python3.14 python3.13 python3.12 \
+        python3.11 python3.10 python3.9; do
+        if command -v "$candidate" > /dev/null 2>&1 \
+            && "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 9))' > /dev/null 2>&1; then
+            BUDGET_PYTHON=$candidate
+            break
+        fi
+    done
+    if [ -z "$BUDGET_PYTHON" ]; then
+        echo "A budgeted run needs Python 3.9 or newer; set PYTHON to one." >&2
+        exit 2
+    fi
+    BUDGET_TOOL="$ROOT/scripts/interview-run-budget.py"
+
+    # The manifest, the pinned executables and the identity the launcher hashed
+    # must all agree before anything is built or started.
+    manifest_sha=$("$BUDGET_PYTHON" "$BUDGET_TOOL" validate \
+        --manifest "$BROWSER_CHECK_RUN_MANIFEST" --verify-binaries --print sha) || exit 2
+    manifest_run_id=$("$BUDGET_PYTHON" "$BUDGET_TOOL" validate \
+        --manifest "$BROWSER_CHECK_RUN_MANIFEST" --print run_id) || exit 2
+    if [ "$manifest_sha" != "$BROWSER_CHECK_RUN_MANIFEST_SHA256" ]; then
+        echo "BROWSER_CHECK_RUN_MANIFEST_SHA256 does not match the manifest." >&2
+        exit 2
+    fi
+    if [ "$manifest_run_id" != "$BROWSER_CHECK_RUN_ID" ]; then
+        echo "BROWSER_CHECK_RUN_ID does not match the manifest." >&2
+        exit 2
+    fi
+    PREBUILT_BIN=$("$BUDGET_PYTHON" "$BUDGET_TOOL" binary \
+        --manifest "$BROWSER_CHECK_RUN_MANIFEST" candidate) || exit 2
+fi
+
+# The duration, run kind, end mode and observation target of a long interview
+# are judged before anything is built or started. The same module answers when
+# browser-check.cjs is run directly.
+if [ "$BROWSER_CHECK_FLOW" = long-interview ]; then
+    BROWSER_CHECK_AGENT="$BROWSER_CHECK_AGENT" \
+        BROWSER_CHECK_FLOW="$BROWSER_CHECK_FLOW" \
+        BROWSER_CHECK_CONFIG_PATH="$CONFIG_PATH" \
+        node "$ROOT/scripts/long-interview-plan.cjs" || exit 2
+fi
+
 if [ "${BROWSER_CHECK_VALIDATE_ENV_ONLY:-}" ]; then
     exit 0
 fi
@@ -258,7 +355,17 @@ else
     # A cold build can take minutes. Keep it outside the server's readiness
     # deadline, and ahead of choosing a port that could be taken meanwhile, so
     # compiler errors reach the caller before anything is launched.
-    cargo build --manifest-path "$ROOT/Cargo.toml" --bin codetrial
+    #
+    # A budgeted run never builds here: the candidate was built and hashed
+    # before the paid window opened, and a rebuild inside it would spend the
+    # window on a binary nobody pinned. The server command is held in the
+    # positional parameters, which nothing else in this script uses.
+    if [ -n "$PREBUILT_BIN" ]; then
+        set -- "$PREBUILT_BIN"
+    else
+        cargo build --manifest-path "$ROOT/Cargo.toml" --bin codetrial
+        set -- cargo run --quiet --manifest-path "$ROOT/Cargo.toml" --
+    fi
 
     PORT=${PORT:-}
     if [ -z "$PORT" ]; then
@@ -276,7 +383,7 @@ else
             env -u LIVEKIT_URL -u LIVEKIT_API_KEY -u LIVEKIT_API_SECRET -u GOOGLE_API_KEY \
                 SESSION_SECRET="$LOGIN_SESSION_SECRET" \
                 CODETRIAL_DB_PATH="$LOGIN_DB_PATH" \
-                cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- web --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
+                "$@" web --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
                 > "$SERVER_LOG" 2>&1 &
             ;;
         dispatch)
@@ -288,7 +395,7 @@ else
             DISPATCH_MODE=1
             SESSION_SECRET="$LOGIN_SESSION_SECRET" \
                 CODETRIAL_DB_PATH="$LOGIN_DB_PATH" \
-                cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- web --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
+                "$@" web --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
                 > "$SERVER_LOG" 2>&1 &
             ;;
         rust)
@@ -297,7 +404,7 @@ else
             FIXED_ROOM=1
             SESSION_SECRET="$LOGIN_SESSION_SECRET" \
                 CODETRIAL_DB_PATH="$LOGIN_DB_PATH" \
-                cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -- web --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
+                "$@" web --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
                 > "$SERVER_LOG" 2>&1 &
             ;;
     esac
@@ -326,6 +433,7 @@ BASE_URL="$BASE_URL" \
     BROWSER_CHECK_BARGE_AUDIO_FILE="$BARGE_AUDIO_FILE" \
     BROWSER_CHECK_COMPILER_EXPLORER_BASE_URL="$COMPILER_EXPLORER_BASE_URL_ARG" \
     BROWSER_CHECK_SESSION_COOKIE="$SESSION_COOKIE" \
+    BROWSER_CHECK_PREBUILT_BIN="$PREBUILT_BIN" \
     BROWSER_CHECK_FIXED_ROOM="$FIXED_ROOM" \
     BROWSER_CHECK_CONFIG_PATH="$CONFIG_PATH" \
     INTERVIEW_ROOM_NAME="${INTERVIEW_ROOM_NAME:-}" \

@@ -8679,3 +8679,7 @@ async fn a_tool_call_consumed_while_a_prompt_is_owed_keeps_the_original_obligati
     let turns = briefing_turns(&seen[0].1);
     assert_eq!(turns.iter().filter(|asked| **asked).count(), 1, "{turns:?}");
 }
+
+// The credentialed real-room fixture and its offline pieces.
+#[path = "recovery_live.rs"]
+mod live;

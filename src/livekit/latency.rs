@@ -19,6 +19,10 @@ const EPISODES_KEPT: usize = 8;
 /// Spacing of `interview clock:` samples on the assessment clock.
 const CLOCK_SAMPLE_MS: u64 = 60_000;
 
+/// Spacing of `runtime tasks:` samples on the assessment clock, the same
+/// cadence as the harness's process resource samples.
+const TASK_SAMPLE_MS: u64 = 30_000;
+
 /// Version 1 never shipped; 2 keys turns by process and interview session, not
 /// by socket, so a reply that survives a socket replacement stays one turn.
 const SCHEMA_VERSION: u64 = 2;
@@ -177,6 +181,8 @@ pub(super) struct ReplyLatency {
     start_unix_ms: Option<u64>,
     /// The last whole minute a clock sample was logged for.
     sampled: u64,
+    /// The last whole 30 second period a task sample was logged for.
+    task_sampled: u64,
     clock: Option<Instant>,
     voice_ended: bool,
     voice_started: bool,
@@ -322,6 +328,7 @@ impl ReplyLatency {
             .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
             .map(crate::agent::saturating_ms);
         self.sampled = 0;
+        self.task_sampled = 0;
         self.clock_line(0, 0)
     }
 
@@ -335,6 +342,27 @@ impl ReplyLatency {
         }
         self.sampled = minute;
         Some(self.clock_line(elapsed, minute))
+    }
+
+    /// One `runtime tasks:` sample per whole 30 seconds of the assessment
+    /// clock, at most. `alive` is the runtime's own count of tasks spawned and
+    /// not yet finished, or `None` where no runtime answers; that is logged as
+    /// `none`, never as zero. On a multithreaded runtime the count is
+    /// approximate, and it does not replace joining a reader task.
+    pub(super) fn task_sample(&mut self, now: Instant, alive: Option<usize>) -> Option<String> {
+        let elapsed = u64::try_from(self.interview_ms(now)?).ok()?;
+        let period = elapsed / TASK_SAMPLE_MS;
+        if period <= self.task_sampled {
+            return None;
+        }
+        self.task_sampled = period;
+        Some(format!(
+            "runtime tasks: pid={} session={} elapsed_ms={elapsed} sample={period} alive_tasks={} room={}",
+            std::process::id(),
+            self.session,
+            alive.map_or_else(|| "none".to_string(), |count| count.to_string()),
+            self.room
+        ))
     }
 
     fn clock_line(&self, elapsed_ms: u64, sample: u64) -> String {

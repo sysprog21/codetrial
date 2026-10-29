@@ -326,6 +326,13 @@ cooldown between retries, but cannot add retry charges beyond the same budget.
 An already partly spent failure run permits fewer attempts. First startup is
 different: its entire retry sequence already has a 30-second outer deadline.
 
+The local matrices drive this loop over a recorded room, so they cannot show
+that the real SDK delivers a participant leaving, a control packet or a report
+receipt to the driver while a replacement pends. The native SDK recovery
+fixture in `docs/development.md` (four ignored, budgeted sessions) is the check
+for that boundary, and a crossing it did not observe stays uncovered: a normal
+live ending does not show that a cancel during recovery is correct.
+
 Microphone retention is a separate limit. `NativeAudioStream` is configured
 with 4000 frames, roughly 40 seconds at its nominal ten-millisecond cadence,
 and drops the oldest when full. That SDK queue exposes no occupancy, enqueue

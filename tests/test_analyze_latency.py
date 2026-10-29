@@ -1874,6 +1874,75 @@ class ResourceTests(unittest.TestCase):
             self.assertNotIn(name, text)
 
 
+def task_line(sample, alive, *, elapsed=None, pid=7, session=1, room="r"):
+    elapsed = sample * 30_000 if elapsed is None else elapsed
+    return (
+        f"runtime tasks: pid={pid} session={session} elapsed_ms={elapsed} "
+        f"sample={sample} alive_tasks={alive} room={room}"
+    )
+
+
+class RuntimeTaskTests(unittest.TestCase):
+    def task(self, extra):
+        lines = reply(1, 10_000, 20_000) + hour_clock() + extra
+        return MODULE.analyze(lines)["resources"]["task"]
+
+    def test_a_log_with_no_task_lines_has_an_unknown_task_never_zero(self):
+        report = MODULE.analyze(reply(1, 10_000, 20_000) + hour_clock())
+        self.assertIsNone(report["resources"]["task"])
+        text = "\n".join(MODULE.summary_lines(report))
+        self.assertIn("task=unknown", text)
+        self.assertNotIn("task_alive_max", text)
+
+    def test_samples_the_runtime_could_not_answer_stay_unknown(self):
+        task = self.task([task_line(1, "none"), task_line(2, "none")])
+        self.assertEqual(task["samples"], 2)
+        self.assertEqual(task["known"], 0)
+        self.assertEqual(task["unknown"], 2)
+        self.assertIsNone(task["alive_max"])
+        self.assertIsNone(task["alive_last"])
+        report = MODULE.analyze(
+            reply(1, 10_000, 20_000)
+            + hour_clock()
+            + [task_line(1, "none"), task_line(2, "none")]
+        )
+        text = "\n".join(MODULE.summary_lines(report))
+        self.assertIn("task_alive_max=unknown", text)
+        self.assertIn("task_alive_last=unknown", text)
+        self.assertIn("task_unknown_samples=2", text)
+
+    def test_a_real_zero_is_a_count_and_the_maximum_ignores_unknowns(self):
+        task = self.task([task_line(1, 0), task_line(2, "none"), task_line(3, 9)])
+        self.assertEqual((task["known"], task["unknown"]), (2, 1))
+        self.assertEqual(task["alive_max"], 9)
+        self.assertEqual(task["alive_last"], 9)
+        zero = self.task([task_line(1, 0)])
+        self.assertEqual(zero["alive_max"], 0)
+        self.assertEqual(zero["known"], 1)
+
+    def test_the_last_count_follows_the_clock_not_the_line_order(self):
+        task = self.task([task_line(2, 8), task_line(1, 3)])
+        self.assertEqual(task["alive_last"], 8)
+
+    def test_a_copied_line_is_one_sample_and_a_differing_copy_is_a_conflict(self):
+        once = MODULE.analyze(reply(1, 1, 2) + [task_line(1, 4), task_line(1, 4)])
+        self.assertEqual(once["resources"]["task"]["samples"], 1)
+        self.assertEqual(once["lifecycle_conflicts"], 0)
+        twice = MODULE.analyze(reply(1, 1, 2) + [task_line(1, 4), task_line(1, 5)])
+        self.assertEqual(twice["lifecycle_conflicts"], 1)
+
+    def test_a_malformed_count_is_rejected_rather_than_read_as_zero(self):
+        for bad in ("", "-1", "x", "0x1", "1.5"):
+            report = MODULE.analyze(reply(1, 1, 2) + [task_line(1, bad)])
+            self.assertIsNone(report["resources"]["task"], bad)
+            self.assertGreaterEqual(report["rejected_records"], 1, bad)
+
+    def test_a_task_line_cut_at_the_end_of_a_tail_is_not_trusted(self):
+        report = MODULE.analyze(reply(1, 1, 2) + [task_line(1, 4)], tail_open=True)
+        self.assertIsNone(report["resources"]["task"])
+        self.assertTrue(report["truncated_final"])
+
+
 class ControlAdapterTests(unittest.TestCase):
     def files(self, directory, control, candidate):
         paths = []

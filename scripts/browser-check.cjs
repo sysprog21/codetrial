@@ -7,6 +7,12 @@
 // becoming visible and then hidden, or by a `waitFor` on the heading the flow
 // cares about. Those wait for the thing being tested; `networkidle` waited for
 // the whole page and cost the offline flow about fifty seconds of it.
+// Validation only, ahead of Playwright, which this entry point must not need to
+// refuse a configuration. scripts/browser-check.sh stops at the same checks.
+if (process.env.BROWSER_CHECK_VALIDATE_ENV_ONLY) {
+  require("./long-interview-plan.cjs").validateOnly(process.env);
+  process.exit(0);
+}
 const { chromium } = require(process.env.PLAYWRIGHT_PATH);
 const assert = require("node:assert/strict");
 const fs = require("fs");
@@ -24,7 +30,33 @@ const {
   listRoomParticipants,
   removeParticipant,
 } = require("./livekit-room-service.cjs");
+const {
+  BudgetDenied,
+  loadRunBudget,
+  watchLauncher,
+} = require("./run-budget-guard.cjs");
+const {
+  DriverRefused,
+  finalizeLongRun,
+  prepareLongRun,
+  runLongInterview,
+  writeArtifacts,
+} = require("./long-interview-driver.cjs");
+const {
+  installMicrophone,
+  pageController,
+  silenceGateTone,
+} = require("./long-interview-page.cjs");
 const { problemPages, judgeCaseCount } = require("./judge-case-counts.cjs");
+const {
+  bootstrapMinutes,
+  deadlineMinutes,
+  judgeObservation,
+  pageDurationMin,
+  parseCountdown,
+  planFromEnv,
+  validateEnvironment,
+} = require("./long-interview-plan.cjs");
 const {
   clockEvidenceLines,
   completeLines,
@@ -71,6 +103,10 @@ function writeIncompleteCapture(fields) {
 // What the soak made of itself, kept for the capture so a run that fails later
 // still names the verdict it had reached.
 let soakSummary = null;
+
+// The long interview's capture holds its report. The generic failure path
+// below must not replace it with an incomplete one.
+let longCaptureWritten = false;
 
 if (process.env.BROWSER_CHECK_CAPTURE && floorLogPath) writeIncompleteCapture();
 
@@ -142,7 +178,7 @@ async function selectLanguage(page, language) {
 
 function interviewUrl(problemId, mode) {
   const surface = mode ? `&mode=${mode}` : "";
-  return `${process.env.BASE_URL}/interview?problem=${scenario(problemId).page}&duration=20${surface}`;
+  return `${process.env.BASE_URL}/interview?problem=${scenario(problemId).page}&duration=${pageDurationMin(process.env)}${surface}`;
 }
 
 async function checkEditorNewlines(page) {
@@ -436,6 +472,17 @@ async function checkEditorNewlines(page) {
   );
 }
 
+// The same refusals as the shell entry point, for a run that reaches this
+// script without it. A long interview's plan is what the flow below runs.
+const environmentErrors = validateEnvironment(process.env);
+if (environmentErrors.length) {
+  throw new Error(environmentErrors.join("; "));
+}
+const longPlan =
+  process.env.BROWSER_CHECK_FLOW === "long-interview"
+    ? planFromEnv(process.env).plan
+    : null;
+
 const soakSeconds = Number(process.env.BROWSER_CHECK_SOAK_SECONDS || "0");
 const requireModel = process.env.BROWSER_CHECK_REQUIRE_MODEL === "1";
 // strict is the qualification, with the one-watchdog cap; pilot leaves the cap
@@ -508,6 +555,24 @@ function stopProcessGroup(child) {
   } catch {
     child.kill();
   }
+}
+
+/// Stops a detached child's process group and waits for it to close, for at
+/// most `graceMs`. With `escalate`, a group still running after that gets
+/// SIGKILL. A child that already exited is left alone: its group id may belong
+/// to something else by now.
+async function stopAgentGroup(child, graceMs, escalate) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  stopProcessGroup(child);
+  const exited = await Promise.race([
+    closed.then(() => true),
+    sleep(graceMs).then(() => false),
+  ]);
+  if (exited || !escalate) return;
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {}
 }
 
 /// The whiteboard interview, as far as a run with no credentials can take it.
@@ -589,7 +654,7 @@ async function checkWhiteboardInterview(page, pageErrors) {
 /// The interview page gates the room join on local media, with no bypass, so
 /// every run clears it the way a candidate would. Fake browser devices drive
 /// the level meter.
-async function clearMediaGate(page) {
+async function clearMediaGate(page, guard = (dispatch) => dispatch()) {
   const gate = page.locator("#audio-check");
   await gate.waitFor({ state: "visible", timeout: 30000 });
   await page.getByRole("button", { name: "Play test tone" }).click();
@@ -607,7 +672,8 @@ async function clearMediaGate(page) {
       `media gate never opened: ${await page.locator("#audio-check-status").textContent()}`,
     );
   }
-  await join.click();
+  // The long interview's join is its first budgeted action.
+  await guard(() => join.click());
   await gate.waitFor({ state: "hidden" });
 }
 
@@ -688,6 +754,194 @@ function reportRotationLines(log, room, reported) {
     if (!line.endsWith(` room=${room}`)) continue;
     reported.add(line);
     console.log(line);
+  }
+}
+
+/// Raised to leave with a specific exit code rather than the plain failure's.
+class LongInterviewExit extends Error {
+  constructor(message, exitCode) {
+    super(message);
+    this.exitCode = exitCode;
+  }
+}
+
+/// Plays the long interview's schedule into one real session, holds it to the
+/// plan's observation target, ends it deliberately and judges the run from its
+/// evidence (scripts/long-interview-driver.cjs). The driver dispatches every
+/// scripted action through the run budget; this function only lets it reach
+/// the page and the logs.
+async function longInterview(
+  page,
+  roomName,
+  agentOutput,
+  tokenDurations,
+  failure,
+  runStartMs,
+  prepared,
+  runBudget,
+  tokenRequestsMs,
+  joinGuarded,
+  tokenExpiredNow,
+) {
+  const plan = longPlan;
+  const countdownStartS = parseCountdown(
+    await page.locator("#timer").innerText(),
+  );
+  const readAtMs = Date.now();
+  // The interview began when the page's own countdown began, so the target is
+  // measured on that clock rather than from whenever this function was called.
+  const interviewStartMs =
+    readAtMs - (plan.durationMin * 60 - (countdownStartS ?? 0)) * 1000;
+
+  // Latched as they go past: the agent's output is a rolling window, and a
+  // 90 minute interview outlasts it many times over.
+  const bootstrap = new Set();
+  const deadline = new Set();
+  const evidence = new Map();
+  const episodeLines = new Map();
+  let ended = false;
+  let browserDisconnected = false;
+  page.once("close", () => {
+    browserDisconnected = !ended;
+  });
+  const refresh = () => {
+    const log = `${agentOutput.join("")}\n${readServerLog()}`;
+    for (const minutes of bootstrapMinutes(log, roomName))
+      bootstrap.add(minutes);
+    for (const minutes of deadlineMinutes(log, roomName)) deadline.add(minutes);
+    for (const line of clockEvidenceLines(log, roomName))
+      evidence.set(line, true);
+    // The agent's output is a rolling window, so the rotation lines are kept
+    // as they go past for the end-of-run classes.
+    for (const line of episodeEvidenceLines(log, roomName))
+      episodeLines.set(line, true);
+  };
+  let nextProgress = 0;
+  const observe = async () => {
+    refresh();
+    const elapsedS = Math.floor((Date.now() - interviewStartMs) / 1000);
+    if (elapsedS >= nextProgress) {
+      console.log(
+        `long-interview: ${elapsedS}s of ${plan.observationTargetS}s observed`,
+      );
+      nextProgress = elapsedS + 300;
+    }
+  };
+
+  const pageSide = pageController(page, {
+    selectLanguage,
+    mode: prepared.mode,
+  });
+  const controller = {
+    ...pageSide,
+    // The server-deadline route sends nothing: it waits for the agent's own
+    // deadline line, then for what the page shows after it.
+    async awaitServerDeadline() {
+      const until = Date.now() + 30000;
+      while (!deadline.size && Date.now() < until) {
+        refresh();
+        await sleep(500);
+      }
+      return pageSide.awaitServerDeadline();
+    },
+  };
+  // The schedule's clock starts here: connected, greeted, the join already
+  // dispatched through the budget by the media gate.
+  const run = await runLongInterview({
+    plan,
+    schedule: prepared.schedule,
+    playback: prepared.playback,
+    clipSource: prepared.clipSource,
+    budget: runBudget,
+    controller,
+    joinedAtMs: Date.now(),
+    interviewStartMs,
+    joinDispatched: joinGuarded,
+    observe,
+    failure: failure() ?? new Promise(() => {}),
+  });
+  ended = true;
+  refresh();
+  const clock = parseClock(`${[...evidence.keys()].join("\n")}\n`, roomName);
+  const observation = judgeObservation(plan, {
+    tokenDurationsMin: tokenDurations,
+    bootstrapDurationsMin: [...bootstrap],
+    deadlineDurationsMin: [...deadline],
+    countdownStartS,
+    countdownSlackS: (readAtMs - runStartMs) / 1000 + 5,
+    clock,
+    harnessStartMs: runStartMs,
+    nowMs: Date.now(),
+    observedS: Math.floor(
+      ((run.observationEndMs ?? Date.now()) - interviewStartMs) / 1000,
+    ),
+    graceStimuli: 0,
+  });
+  const log = `${agentOutput.join("")}\n${readServerLog()}`;
+  const serverLog = process.env.SERVER_LOG;
+  const logsComplete =
+    Boolean(serverLog) &&
+    fs.existsSync(serverLog) &&
+    fs.statSync(serverLog).size > 0 &&
+    log.endsWith("\n");
+  const finished = finalizeLongRun({
+    plan,
+    schedule: prepared.schedule,
+    playback: prepared.playback,
+    clipSource: prepared.clipSource,
+    run,
+    observation,
+    clock,
+    tokenRequestsMs,
+    episodes: parseEpisodes(
+      `${[...episodeLines.keys()].join("\n")}\n`,
+      roomName,
+    ).episodes,
+    logs: { truncated: false, evicted: false, complete: logsComplete },
+    browserDisconnected,
+    tokenExpired: tokenExpiredNow(),
+    launchMs: runStartMs,
+    // The worker's own end. The process-level teardown and the check for what
+    // was left active belong after it, so cleanup is reported unknown until a
+    // reader that runs after teardown supplies it.
+    teardownEndMs: Date.now(),
+    cleanup: undefined,
+  });
+  const { report } = finished;
+  console.log(
+    `long-interview verdict=${finished.exitCode === 0 ? "pass" : "fail"} status=${report.status} run_kind=${plan.runKind} end_mode=${plan.endMode} duration_min=${plan.durationMin} observation_target_s=${plan.observationTargetS} clip_source=${report.clip_source} speech_run=${report.speech_run} full_interview=${report.full_interview}`,
+  );
+  if (report.validation_fixture) {
+    console.log(
+      "long-interview: TONE VALIDATION FIXTURE, no speech was played and no model answer was asked for; this is not a speech run",
+    );
+  }
+  if (process.env.BROWSER_CHECK_CAPTURE) {
+    longCaptureWritten = true;
+    fs.writeFileSync(
+      process.env.BROWSER_CHECK_CAPTURE,
+      JSON.stringify(
+        {
+          mode: process.env.BROWSER_CHECK_AGENT,
+          flow: "long-interview",
+          plan,
+          result: observation,
+          report,
+        },
+        null,
+        2,
+      ),
+    );
+  }
+  writeArtifacts(process.env, finished.resolved);
+  if (finished.exitCode !== 0) {
+    const reasons = finished.failures.concat(
+      finished.resolved.artifacts.flatMap((a) => a.reasons),
+    );
+    throw new LongInterviewExit(
+      `long interview ${report.status}: ${reasons.join("; ")}`,
+      finished.exitCode,
+    );
   }
 }
 
@@ -1001,11 +1255,81 @@ async function isolateRustAgent(
   let rustAgent;
   let compilerExplorerMock;
   let agentDone = false;
+
+  // Before a browser or an agent exists: a run launched by
+  // scripts/interview-run-budget.py joins its budget here, and a manifest the
+  // launcher did not hash, or a launcher that cannot be reached, ends the check
+  // while nothing has been spent. Scripted actions are dispatched through
+  // `runBudget.guarded(id, ...)`: the long-interview flow below does that for
+  // every action of its schedule, and any other flow only proves the run is
+  // permitted to start.
+  let runBudget = null;
+  try {
+    // Unbudgeted checks must not gain an await before the browser launches.
+    if (
+      Object.keys(process.env).some(
+        (name) =>
+          name.startsWith("BROWSER_CHECK_RUN_") ||
+          name === "BROWSER_CHECK_BUDGET_SOCKET",
+      )
+    ) {
+      runBudget = await loadRunBudget(process.env);
+    }
+  } catch (error) {
+    if (!(error instanceof BudgetDenied)) throw error;
+    console.error(`run budget refused the check: ${error.message}`);
+    process.exit(2);
+  }
+  if (runBudget) {
+    console.log(
+      `run budget joined: ${runBudget.runId}, ${runBudget.actions.length} scripted actions`,
+    );
+    // The worker runs in its own session, so a killed launcher does not take
+    // it down; between scheduled permits nothing else would notice.
+    watchLauncher(runBudget, {
+      onLost: async () => {
+        console.error("run budget launcher is gone; stopping the check");
+        // The agent is detached, so neither this exit nor the shell reaches
+        // it, and the launcher that would have reaped it is the one that died.
+        await stopAgentGroup(rustAgent, 1500, true);
+        const closing = browser ? browser.close().catch(() => {}) : null;
+        await Promise.race([closing, new Promise((r) => setTimeout(r, 2000))]);
+        process.exit(4);
+      },
+    }).unref();
+  }
+  // The schedule, its clips and their pin in the budget are judged here, with
+  // nothing spent and no browser open, so a run that has no recorded speech
+  // stops before it joins a room.
+  let longPrepared = null;
+  if (longPlan) {
+    try {
+      longPrepared = prepareLongRun({
+        env: process.env,
+        plan: longPlan,
+        budget: runBudget,
+      });
+    } catch (error) {
+      if (!(error instanceof DriverRefused)) throw error;
+      console.error(redact(error.message));
+      process.exit(2);
+    }
+    console.log(
+      `long-interview clips: ${longPrepared.clipSource.kind}, ${longPrepared.schedule.steps.length} scripted steps, ${longPrepared.schedule.actions.length} budgeted actions`,
+    );
+  }
+
   try {
     browser = await chromium.launch({
       args: [
         "--use-fake-device-for-media-stream",
         "--use-fake-ui-for-media-stream",
+        // The long interview's injected microphone is an AudioContext, which
+        // Chromium holds suspended until a gesture; the media gate would read
+        // it as a microphone that carries no sound.
+        ...(process.env.BROWSER_CHECK_FLOW === "long-interview"
+          ? ["--autoplay-policy=no-user-gesture-required"]
+          : []),
         ...(process.env.BROWSER_CHECK_BARGE_AUDIO_FILE &&
         process.env.BROWSER_CHECK_FLOW !== "barge"
           ? [
@@ -1195,17 +1519,19 @@ async function isolateRustAgent(
       // The same `--config` the server was started with. `provider_dir` is
       // the config file's directory, so an agent left to find its own would
       // route against a different pool than the server it is answering for.
+      //
+      // A budgeted run starts the executable its manifest pinned. Building one
+      // here would spend the paid window on a binary nobody hashed.
+      const prebuilt = process.env.BROWSER_CHECK_PREBUILT_BIN;
+      const agentArguments = [
+        "run-livekit",
+        room,
+        "--config",
+        process.env.BROWSER_CHECK_CONFIG_PATH,
+      ];
       rustAgent = spawn(
-        "cargo",
-        [
-          "run",
-          "--quiet",
-          "--",
-          "run-livekit",
-          room,
-          "--config",
-          process.env.BROWSER_CHECK_CONFIG_PATH,
-        ],
+        prebuilt || "cargo",
+        prebuilt ? agentArguments : ["run", "--quiet", "--", ...agentArguments],
         {
           cwd: process.env.ROOT,
           detached: true,
@@ -1220,7 +1546,11 @@ async function isolateRustAgent(
         stream.on("data", (chunk) => {
           streamCapture?.push(chunk);
           const text = redact(chunk);
-          if (text.includes("problem=two-sum duration=20min"))
+          if (
+            text.includes(
+              `problem=two-sum duration=${pageDurationMin(process.env)}min`,
+            )
+          )
             sawRustMetadataConfig = true;
           agentOutput.push(text);
           while (agentOutput.join("").length > 12000) agentOutput.shift();
@@ -2658,12 +2988,48 @@ PatternLexicon.prototype.search = function(word) {
       }
     }
 
-    await page.goto(interviewUrl(PROBLEM_IDS.twoSum));
+    // What the server actually granted, which is the length the agent, the
+    // countdown and the deadline all follow. A clamp shows up here.
+    const tokenDurations = [];
+    const tokenRequestsMs = [];
+    const longRunStartMs = Date.now();
+    if (flow === "long-interview") {
+      await installMicrophone(page);
+      page.on("request", (request) => {
+        if (request.url().endsWith("/api/token")) {
+          tokenRequestsMs.push(Date.now());
+        }
+      });
+      page.on("response", (response) => {
+        if (!response.url().endsWith("/api/token") || !response.ok()) return;
+        response
+          .json()
+          .then((body) => tokenDurations.push(body?.durationMin))
+          .catch(() => {});
+      });
+    }
+    await page.goto(
+      interviewUrl(
+        PROBLEM_IDS.twoSum,
+        longPrepared?.mode === "whiteboard" ? "whiteboard" : undefined,
+      ),
+    );
     probingAudio = credentialed && ["voice", "barge", "soak"].includes(flow);
     if (probingAudio) {
       await page.evaluate(mediaProbeSource());
     }
-    await clearMediaGate(page);
+    let joinGuarded = false;
+    await clearMediaGate(
+      page,
+      flow === "long-interview"
+        ? (dispatch) =>
+            runBudget.guarded("candidate_join", async () => {
+              await dispatch();
+              await silenceGateTone(page);
+              joinGuarded = true;
+            })
+        : undefined,
+    );
     if (credentialed && !rustAgentIdentity) {
       roomName = await page
         .waitForFunction(
@@ -2765,6 +3131,24 @@ PatternLexicon.prototype.search = function(word) {
             probingAudio,
           );
         }
+        if (flow === "long-interview") {
+          await longInterview(
+            page,
+            roomName,
+            agentOutput,
+            tokenDurations,
+            () => agentFailure,
+            longRunStartMs,
+            longPrepared,
+            runBudget,
+            tokenRequestsMs,
+            joinGuarded,
+            () =>
+              consoleErrors.some((line) =>
+                /token.*(expired|invalid)|expired.*token/i.test(line),
+              ),
+          );
+        }
         let testResultText = null;
         let candidateSegmentCount = null;
         let agentAfterCandidate = false;
@@ -2861,7 +3245,7 @@ PatternLexicon.prototype.search = function(word) {
             }
           }
         }
-        if (process.env.BROWSER_CHECK_CAPTURE) {
+        if (process.env.BROWSER_CHECK_CAPTURE && flow !== "long-interview") {
           if (mode === "rust" && flow !== "report") {
             rustAgentParticipants = await isolateRustAgent(
               roomName,
@@ -2931,7 +3315,11 @@ PatternLexicon.prototype.search = function(word) {
           .evaluate(() => globalThis.__finishJimAudioProbe(true))
           .catch(() => null);
       }
-      if (process.env.BROWSER_CHECK_CAPTURE && (floorLogPath || probingAudio))
+      if (
+        process.env.BROWSER_CHECK_CAPTURE &&
+        (floorLogPath || probingAudio) &&
+        !longCaptureWritten
+      )
         writeIncompleteCapture({
           floorRecords: floorLogPath ? readFloorRecords(floorLogPath) : [],
           bargeReplay,
@@ -2961,15 +3349,7 @@ PatternLexicon.prototype.search = function(word) {
     agentDone = true;
   } finally {
     agentDone = true;
-    if (
-      rustAgent &&
-      rustAgent.exitCode === null &&
-      rustAgent.signalCode === null
-    ) {
-      const closed = new Promise((resolve) => rustAgent.once("close", resolve));
-      stopProcessGroup(rustAgent);
-      await Promise.race([closed, sleep(5000)]);
-    }
+    await stopAgentGroup(rustAgent, 5000, false);
     if (compilerExplorerMock)
       await new Promise((resolve) =>
         compilerExplorerMock.server.close(resolve),
@@ -2981,6 +3361,12 @@ PatternLexicon.prototype.search = function(word) {
   // resort, so it is also the one that prints a `fetch` failure verbatim, and
   // a LiveKit URL or a bearer token in a CI log outlives the run that wrote it.
   console.error(redact(error?.stack ?? error));
+  // A long interview leaves with its failure class's code, and a permit
+  // refused anywhere in a budgeted run, the join included, is the exhausted
+  // budget class and not a plain failure. The soak's mapping is below, as it
+  // was.
+  if (error instanceof LongInterviewExit) process.exit(error.exitCode);
+  if (error instanceof BudgetDenied) process.exit(4);
   process.exit(error instanceof InconclusiveSoak ? SOAK_INCONCLUSIVE_EXIT : 1);
 });
 

@@ -565,8 +565,23 @@ an episode or told from a copy of themselves; `ingress_lines_exceed_episode_ends
 is true when there are more of them than episode ends (a driver prints at most
 one, and a billing exit none, so fewer is normal), which a copied log causes,
 and `room_counts_exact` is false then and whenever the log held a copied record
-or a conflict, because the room totals may be doubled. `task` is `null` (shown as
-`task=unknown`) until the log carries one.
+or a conflict, because the room totals may be doubled.
+
+`task` summarizes the runtime's own count of live tasks. The interviewer prints
+`runtime tasks: pid= session= elapsed_ms= sample= alive_tasks= room=` once per
+30 seconds of the assessment clock, from the same watch tick as the clock
+sample (a tick late by several periods yields one line, not a burst).
+`alive_tasks` is Tokio's `num_alive_tasks` for the runtime the tick runs on,
+which is stable in the pinned 1.54.1; on a multithreaded runtime it is an
+approximate instant reading and it does not replace joining the reader task.
+`alive_tasks=none` says no runtime answered. `task` has `samples`, `known`,
+`unknown`, `alive_max`, `alive_last` and `scopes`. It is `null` (shown as
+`task=unknown`) when the log carries no such line, as every log from before the
+line existed does, and `alive_max` and `alive_last` are `null` (shown as
+`unknown`) when no sample carried a number. Absence is unknown and is never
+read as zero; a malformed count (`-1`, `x`, an empty value) is a rejected
+record, not a zero, and a copy of a line that disagrees with its first copy is
+a lifecycle conflict.
 
 The key=value summary adds these lines only when a log has obligations or
 episodes, so a legacy log's summary is unchanged.
@@ -592,7 +607,7 @@ too. The output lists what the control cannot show and so is not
 compared: owed gaps and censoring, owed seconds per interview-hour, obligation
 outcomes, carried debt, replacement episodes, setup-to-first-output, socket
 pressure, ingress, quarantine and omission counts, sockets observed and the
-task.
+runtime task counts.
 
 ## What is not measured
 

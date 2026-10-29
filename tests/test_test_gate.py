@@ -827,7 +827,13 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
         self.assertEqual(
             set(matrix["portable"]["packages"].split()), {"shellcheck", "shfmt"}
         )
-        self.assertEqual(set(matrix["browser"]), {"lane", "shard", "timeout"})
+        # The browser lane builds nothing, so it installs only what its tests
+        # run as programs: the long-interview schedule decodes its clips with
+        # ffmpeg, and a skipped check fails the run.
+        self.assertEqual(
+            set(matrix["browser"]), {"lane", "shard", "timeout", "packages"}
+        )
+        self.assertEqual(set(matrix["browser"]["packages"].split()), {"ffmpeg"})
         for name in ("ruff", "commentflow", "actionlint"):
             with self.subTest(tool=name):
                 self.assertEqual(

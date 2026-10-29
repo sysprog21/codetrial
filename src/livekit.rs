@@ -1735,6 +1735,35 @@ async fn open_session<'a>(
     })))
 }
 
+/// Prepared-write gates a test hosting the real room loop arms before it
+/// starts. `run_room_with_slot` builds its own `RoomLoop`, so this is the only
+/// way a fixture reaches the gates the recovery matrices set on a hand-built
+/// one. Empty unless a test fills it, and taken once by the loop that starts.
+#[cfg(test)]
+static LIVE_WRITE_BARRIERS: std::sync::Mutex<std::collections::VecDeque<recovery::WriteBarrier>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+
+#[cfg(test)]
+fn take_live_write_barriers() -> std::collections::VecDeque<recovery::WriteBarrier> {
+    std::mem::take(&mut *LIVE_WRITE_BARRIERS.lock().unwrap())
+}
+
+/// Where a test hosting the real room loop is told about each Live reader the
+/// loop owns: the first socket's once the interview has started, then each
+/// replacement's. Taken once by the loop that starts. It is how a fixture
+/// reaches the first reader to end it, which is the loop's own Close path, and
+/// how it later sees that every reader has finished.
+#[cfg(test)]
+static LIVE_READER_PROBE: std::sync::Mutex<
+    Option<tokio::sync::mpsc::UnboundedSender<crate::gemini::LiveReaderInspection>>,
+> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+fn take_live_reader_probe()
+-> Option<tokio::sync::mpsc::UnboundedSender<crate::gemini::LiveReaderInspection>> {
+    LIVE_READER_PROBE.lock().unwrap().take()
+}
+
 /// The room loop's own bookkeeping, distinct from the session it runs on.
 ///
 /// Four things only the loop reads, bundled so an arm that needs three of them
@@ -1854,6 +1883,12 @@ async fn on_watch_tick(
     // against another was answering a question nobody asked.
     let tick_at = Instant::now();
     if let Some(line) = context.activity.latency.clock_sample(tick_at) {
+        eprintln!("{line}");
+    }
+    let alive_tasks = tokio::runtime::Handle::try_current()
+        .ok()
+        .map(|handle| handle.metrics().num_alive_tasks());
+    if let Some(line) = context.activity.latency.task_sample(tick_at, alive_tasks) {
         eprintln!("{line}");
     }
     if loops.presence.gave_up(tick_at) {
@@ -2696,6 +2731,14 @@ pub(crate) async fn run_room_with_slot(
         restarts,
     } = *session;
 
+    #[cfg(test)]
+    let reader_probe = take_live_reader_probe();
+    #[cfg(test)]
+    if let Some(probe) = &reader_probe
+        && let Some(reader) = gemini.inspect_reader_for_test()
+    {
+        let _ = probe.send(reader);
+    }
     let interview = InterviewContext {
         config,
         keys: &keys,
@@ -2724,9 +2767,9 @@ pub(crate) async fn run_room_with_slot(
         #[cfg(test)]
         recovery_phase: None,
         #[cfg(test)]
-        recovery_reader: None,
+        recovery_reader: reader_probe,
         #[cfg(test)]
-        recovery_writes: Default::default(),
+        recovery_writes: take_live_write_barriers(),
         #[cfg(test)]
         recovery_after: Default::default(),
         restarts,

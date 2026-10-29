@@ -608,6 +608,11 @@ gate audio-latency-tests unittest_gate "$ROOT/tests/test_audio_latency_report.py
 gate interview-behavior-script-tests unittest_gate "$ROOT/tests/test_interview_behavior_script.py"
 gate wait-for-server-tests unittest_gate "$ROOT/tests/test_wait_for_server.py"
 
+# These cases enforce real one-second permit and process cleanup deadlines.
+# Thirty-two concurrent launchers starve their own guards on a loaded host.
+gate run-budget-tests unittest_gate --jobs 4 "$ROOT/tests/test_interview_run_budget.py"
+gate recovery-matrix-tests unittest_gate "$ROOT/tests/test_check_recovery_matrix.py"
+
 # The skills name scripts, lanes, make targets and each other's headings, and an
 # agent follows a dangling one without noticing. Their own scripts are tested
 # like any other, against a fake gh and a scratch repository.

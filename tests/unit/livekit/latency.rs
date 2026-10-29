@@ -1279,6 +1279,56 @@ fn the_interview_clock_is_anchored_once_and_sampled_each_minute() {
     assert!(trace.clock_sample(ms(start, 300_600)).is_none());
 }
 
+fn task_fields(line: &str) -> std::collections::HashMap<String, String> {
+    line.trim_end_matches(" room=room")
+        .strip_prefix("runtime tasks: ")
+        .expect("a runtime tasks line")
+        .split_whitespace()
+        .filter_map(|token| token.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+#[test]
+fn task_samples_follow_the_thirty_second_cadence_of_the_interview_clock() {
+    let (start, mut trace) = traced();
+    // No anchor, no clock: nothing to sample against.
+    assert!(trace.task_sample(ms(start, 90_000), Some(5)).is_none());
+    trace.anchor(start);
+    assert!(trace.task_sample(ms(start, 29_999), Some(5)).is_none());
+    let first = task_fields(&trace.task_sample(ms(start, 30_000), Some(5)).unwrap());
+    assert_eq!(first["elapsed_ms"], "30000");
+    assert_eq!(first["sample"], "1");
+    assert_eq!(first["alive_tasks"], "5");
+    assert_eq!(first["session"], "4");
+    assert!(trace.task_sample(ms(start, 59_000), Some(6)).is_none());
+    // A tick late by several periods yields one sample, not a burst.
+    let late = task_fields(&trace.task_sample(ms(start, 150_500), Some(7)).unwrap());
+    assert_eq!(late["sample"], "5");
+    assert!(trace.task_sample(ms(start, 150_600), Some(7)).is_none());
+}
+
+#[test]
+fn an_unavailable_task_count_is_logged_as_none_and_a_real_zero_as_zero() {
+    let (start, mut trace) = traced();
+    trace.anchor(start);
+    let unknown = trace.task_sample(ms(start, 30_000), None).unwrap();
+    assert!(unknown.contains(" alive_tasks=none "), "{unknown}");
+    let zero = trace.task_sample(ms(start, 60_000), Some(0)).unwrap();
+    assert!(zero.contains(" alive_tasks=0 "), "{zero}");
+}
+
+#[test]
+fn a_new_anchor_restarts_the_task_cadence() {
+    let (start, mut trace) = traced();
+    trace.anchor(start);
+    assert!(trace.task_sample(ms(start, 61_000), Some(1)).is_some());
+    let again = start + Duration::from_secs(1_000);
+    trace.anchor(again);
+    let sample = task_fields(&trace.task_sample(ms(again, 30_000), Some(1)).unwrap());
+    assert_eq!(sample["sample"], "1");
+}
+
 #[test]
 fn repeated_advisories_print_a_doubling_run_and_keep_the_raw_count() {
     let (_, mut trace) = traced();

@@ -213,6 +213,12 @@ impl LiveReaderInspection {
         self.task.is_finished()
     }
 
+    /// Ends the reader the way a server hang-up does from the loop's side:
+    /// its event stream closes and the room loop takes its Close path.
+    pub(crate) fn abort(&self) {
+        self.task.abort();
+    }
+
     pub(crate) fn pending_usage_count(&self) -> usize {
         self.usage
             .lock()

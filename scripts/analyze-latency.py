@@ -564,7 +564,7 @@ def obligation_report(rows):
 # audio quarantine` predate the ids and carry only the room, so they are
 # counted per room and never attributed to an episode.
 LIFECYCLE_LINE = re.compile(
-    r"(interview clock|replacement start|replacement end|recovery ingress"
+    r"(interview clock|runtime tasks|replacement start|replacement end|recovery ingress"
     r"|candidate audio quarantine): "
 )
 EPISODE_RESULTS = {"installed", "failed", "no_setup", "cancelled"}
@@ -573,6 +573,13 @@ LIFECYCLE_FIELDS = {
     "interview clock": (
         ("pid", "session", "elapsed_ms", "sample"),
         ("start_unix_ms",),
+        (),
+    ),
+    # `alive_tasks` is `none` where the runtime gave no count; a legacy log has
+    # no such line at all. Neither is ever read as zero.
+    "runtime tasks": (
+        ("pid", "session", "elapsed_ms", "sample"),
+        ("alive_tasks",),
         (),
     ),
     "replacement start": (
@@ -929,6 +936,29 @@ def by_room(lines, names):
     return out
 
 
+def task_report(tasks):
+    """The runtime's alive-task counts, or None when the log carries no sample.
+
+    Absent is unknown, never zero: a legacy log has no sample, and a sample the
+    runtime could not answer has `alive_tasks=none`. Only a number the log
+    printed counts, so `alive_max` and `alive_last` are None when every sample
+    is unanswered. The count is approximate on a multithreaded runtime.
+    """
+    samples = [(number, row) for rows in tasks.values() for number, row in rows.items()]
+    if not samples:
+        return None
+    known = [r["alive_tasks"] for _, r in samples if r["alive_tasks"] is not None]
+    latest = max(samples, key=lambda item: (item[1]["elapsed_ms"], item[0]))
+    return {
+        "samples": len(samples),
+        "known": len(known),
+        "unknown": len(samples) - len(known),
+        "alive_max": max(known) if known else None,
+        "alive_last": latest[1]["alive_tasks"],
+        "scopes": len(tasks),
+    }
+
+
 def lifecycle_report(rows, state):
     """Owed-reply gaps, episodes and resource counts joined by identity."""
     episodes = build_episodes(state["starts"], state["ends"], rows, state["conflicted"])
@@ -1069,8 +1099,7 @@ def lifecycle_report(rows, state):
                 ),
             ),
             "audio_quarantine": by_room(state["quarantine"], ("bytes",)),
-            # Added to the log by a later change; unknown until then.
-            "task": None,
+            "task": task_report(state["tasks"]),
         },
     }
 
@@ -1090,6 +1119,14 @@ def note_lifecycle(state, kind, fields):
             c["sample"] == fields["sample"] and c != fields for c in seen
         ) and not any(c == fields for c in seen)
         seen.append(fields)
+        observe(state, scope, fields["elapsed_ms"])
+    elif kind == "runtime tasks":
+        seen = state["tasks"].setdefault(scope, {})
+        earlier = seen.get(fields["sample"])
+        if earlier is None:
+            seen[fields["sample"]] = fields
+        elif earlier != fields:
+            state["conflicts"] += 1
         observe(state, scope, fields["elapsed_ms"])
     elif kind in ("replacement start", "replacement end"):
         table = state["starts" if kind == "replacement start" else "ends"]
@@ -1139,6 +1176,7 @@ def analyze(lines, slow_ms=1500, stall_ms=5000, tail_open=False):
         "starts": {},
         "ends": {},
         "clocks": {},
+        "tasks": {},
         "ingress": [],
         "quarantine": [],
         "pressure_sockets": set(),
@@ -1821,7 +1859,7 @@ UNOBSERVABLE_IN_CONTROL = (
     "per-socket event-channel pressure",
     "recovery ingress, quarantine and omission counts by episode",
     "sockets observed per interview",
-    "task (added to the log by a later change)",
+    "runtime task counts (no runtime tasks lines)",
 )
 
 
@@ -2060,8 +2098,15 @@ def summary_lines(report):
         ):
             for name in sorted({n for v in table.values() for n in v if n != "lines"}):
                 out.append(f"{label}_{name}={sum(v[name] for v in table.values())}")
-        # The task is added to the log by a later change.
-        out.append("task=unknown")
+        task = resources["task"]
+        if task is None:
+            out.append("task=unknown")
+        else:
+            out.append(f"task_samples={task['samples']}")
+            out.append(f"task_unknown_samples={task['unknown']}")
+            for name in ("alive_max", "alive_last"):
+                value = task[name]
+                out.append(f"task_{name}={'unknown' if value is None else value}")
     if report["duplicate_records"]:
         out.append(f"duplicate_records={report['duplicate_records']}")
     if report["truncated_final"]:

@@ -137,12 +137,15 @@ jobs:
           - lane: browser
             shard: 1/3
             timeout: 20
+            packages: ffmpeg
           - lane: browser
             shard: 2/3
             timeout: 20
+            packages: ffmpeg
           - lane: browser
             shard: 3/3
             timeout: 20
+            packages: ffmpeg
     # Pinned rather than `ubuntu-latest`: that label moves to a new image on
     # GitHub's schedule, which turns an unrelated morning into a debugging
     # session. Bumping this is a commit somebody chose to make.
