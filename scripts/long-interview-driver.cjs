@@ -261,6 +261,7 @@ async function runLongInterview(o) {
     finalClipEndMs: null,
     performanceReceived: false,
     reportReceived: false,
+    endPermitGranted: false,
     endClicked: null,
     aborted: null,
     budgetDenied: null,
@@ -396,7 +397,10 @@ async function runLongInterview(o) {
     run.observationEndMs = clock.now();
     let ended;
     if (plan.endMode === "manual") {
-      ended = await budget.guarded(END_ACTION_ID, () => controller.end());
+      ended = await budget.guarded(END_ACTION_ID, () => {
+        run.endPermitGranted = true;
+        return controller.end();
+      });
     } else {
       ended = await controller.awaitServerDeadline();
     }
@@ -529,6 +533,12 @@ function finalizeLongRun(o) {
     status,
     exit_code: exitCode,
     run_kind: plan.runKind,
+    // Run kind declares the intended workload, not the evidence this driver
+    // can judge. Completion does not certify checkpoint content or signal.
+    assessment_scope: "structural",
+    qualification: "not_evaluated",
+    reply_content: "not_assessed",
+    decoded_signal: "not_assessed",
     end_mode: plan.endMode,
     duration_min: plan.durationMin,
     observation_target_s: plan.observationTargetS,
@@ -546,6 +556,7 @@ function finalizeLongRun(o) {
     full_interview: passed && fullInterview,
     coverage_complete: covered,
     cleanup_assessed: cleanupAssessed,
+    end_permit_granted: run.endPermitGranted,
     end_clicked: run.endClicked,
     schedule_start_delay_s: (run.joinedAtMs - run.interviewStartMs) / 1000,
     exposure_s: stamps.exposureS,
@@ -564,6 +575,7 @@ function finalizeLongRun(o) {
     failure_classes: resolved.artifacts.map((a) => a.class),
     not_exercised: [
       "reply content: checkpoint answers are not judged by this driver",
+      "decoded signal: native capture records do not verify a post-swap decoded waveform",
       ...(cleanupAssessed
         ? []
         : ["cleanup: nothing active after teardown was checked by the worker"]),

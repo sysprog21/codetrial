@@ -23,6 +23,12 @@ const CLOCK_SAMPLE_MS: u64 = 60_000;
 /// cadence as the harness's process resource samples.
 const TASK_SAMPLE_MS: u64 = 30_000;
 
+/// The microphone dequeue gaps counted as stalls, in `mic_gap_over_*`. A gap
+/// is counted when it is strictly longer than the threshold.
+const MIC_GAP_OVER_1S: Duration = Duration::from_secs(1);
+const MIC_GAP_OVER_10S: Duration = Duration::from_secs(10);
+const MIC_GAP_OVER_30S: Duration = Duration::from_secs(30);
+
 /// Version 1 never shipped; 2 keys turns by process and interview session, not
 /// by socket, so a reply that survives a socket replacement stays one turn.
 const SCHEMA_VERSION: u64 = 2;
@@ -158,8 +164,65 @@ struct Pending {
     yielded: Option<Instant>,
 }
 
+/// The gap between consecutive microphone-frame dequeues in one interview: the
+/// longest, and how many exceeded 1, 10 and 30 seconds. Counters only: no
+/// frame, time series or content is kept.
+///
+/// A gap is measured between two frames dequeued from one subscribed audio
+/// stream, on the monotonic clock. The SDK keeps delivering (silence) frames
+/// while a track is published, so a long gap there means the consumer, not the
+/// candidate, was not dequeuing. The span between two streams (a track that
+/// was unsubscribed and a later one) and the span after a stream ended are not
+/// dequeue stalls and are never counted: [`Self::stream_broken`] forgets the
+/// last dequeue. It belongs to the interview, so a socket replacement does not
+/// reset it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct MicGaps {
+    last: Option<Instant>,
+    /// Whether any gap has been measured; before that nothing is known.
+    measured: bool,
+    max: Duration,
+    over_1s: u64,
+    over_10s: u64,
+    over_30s: u64,
+}
+
+impl MicGaps {
+    pub(super) fn dequeued(&mut self, now: Instant) {
+        if let Some(previous) = self.last.replace(now) {
+            let gap = now.saturating_duration_since(previous);
+            self.measured = true;
+            self.max = self.max.max(gap);
+            self.over_1s += u64::from(gap > MIC_GAP_OVER_1S);
+            self.over_10s += u64::from(gap > MIC_GAP_OVER_10S);
+            self.over_30s += u64::from(gap > MIC_GAP_OVER_30S);
+        }
+    }
+
+    pub(super) fn stream_broken(&mut self) {
+        self.last = None;
+    }
+
+    /// The four fields, `none` before any gap was measured (unknown, never
+    /// zero).
+    pub(super) fn fields(&self) -> String {
+        if !self.measured {
+            return "mic_gap_max_ms=none mic_gap_over_1s=none mic_gap_over_10s=none mic_gap_over_30s=none".to_string();
+        }
+        format!(
+            "mic_gap_max_ms={} mic_gap_over_1s={} mic_gap_over_10s={} mic_gap_over_30s={}",
+            crate::agent::saturating_ms(self.max),
+            self.over_1s,
+            self.over_10s,
+            self.over_30s
+        )
+    }
+}
+
 #[derive(Default)]
 pub(super) struct ReplyLatency {
+    /// The microphone dequeue gaps of this interview.
+    mic: MicGaps,
     room: String,
     session: u64,
     socket: u64,
@@ -286,6 +349,34 @@ impl ReplyLatency {
         self.silence_window_ms = silence_window_ms;
     }
 
+    /// A microphone frame was dequeued at `now`.
+    pub(super) fn mic_dequeued(&mut self, now: Instant) {
+        self.mic.dequeued(now);
+    }
+
+    /// The microphone stream ended or a new one began: no gap spans it.
+    pub(super) fn mic_stream_broken(&mut self) {
+        self.mic.stream_broken();
+    }
+
+    #[cfg(test)]
+    pub(super) fn mic_gaps(&self) -> MicGaps {
+        self.mic
+    }
+
+    /// The once-per-interview `mic gaps:` line, written as the interview ends
+    /// with the same fields the clock samples carry.
+    pub(super) fn mic_summary(&self, now: Instant) -> Option<String> {
+        let elapsed = u64::try_from(self.interview_ms(now)?).ok()?;
+        Some(format!(
+            "mic gaps: pid={} session={} elapsed_ms={elapsed} {} room={}",
+            std::process::id(),
+            self.session,
+            self.mic.fields(),
+            self.room
+        ))
+    }
+
     pub(super) fn set_socket(&mut self, socket: u64) {
         self.socket = socket;
     }
@@ -367,11 +458,12 @@ impl ReplyLatency {
 
     fn clock_line(&self, elapsed_ms: u64, sample: u64) -> String {
         format!(
-            "interview clock: pid={} session={} start_unix_ms={} elapsed_ms={elapsed_ms} sample={sample} room={}",
+            "interview clock: pid={} session={} start_unix_ms={} elapsed_ms={elapsed_ms} sample={sample} {} room={}",
             std::process::id(),
             self.session,
             self.start_unix_ms
                 .map_or_else(|| "none".to_string(), |ms| ms.to_string()),
+            self.mic.fields(),
             self.room
         )
     }

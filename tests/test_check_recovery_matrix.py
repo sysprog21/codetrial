@@ -109,6 +109,33 @@ class Fixture:
         result.update(result_over)
         (run / "budget-result.json").write_text(json.dumps(result))
 
+    def write_live(self, run_id, end_mode, granted, end_permit, **result_over):
+        """A live-fixture run: complete, reaped, resource samples, no heartbeats."""
+        run = self.sdk / run_id
+        run.mkdir(parents=True, exist_ok=True)
+        manifest = json.dumps({"run_id": run_id, "end_mode": end_mode}).encode()
+        (run / "run-manifest.json").write_bytes(manifest)
+        result = {
+            "run_id": run_id,
+            "manifest_sha256": sha256(manifest),
+            "child_exit": 0,
+            "status": "complete",
+            "budget_failure": None,
+            "cleanup": {"failures": [], "leaked_children": 0, "reaped": True},
+            "resources": {"samples": 2},
+            "hard": {
+                "scripted_actions": {
+                    "granted": len(granted),
+                    "granted_ids": list(granted),
+                    "dispatched_without_permit": [],
+                    "end_permit_used": end_permit,
+                }
+            },
+            "telemetry": {"events": 0, "heartbeat_seen": False, "malformed": 0},
+        }
+        result.update(result_over)
+        (run / "budget-result.json").write_text(json.dumps(result))
+
     def passing_rows(self):
         rows = []
         for phase in PHASES:
@@ -808,6 +835,446 @@ class Record(Base):
             universal_newlines=True,
         )
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+
+END_D = "d-end-during-pending-recovery-with-thinking-hold"
+END_A = "a-manual-end-with-transient-leave"
+DEADLINE_B = "b-server-deadline"
+ABSENT_C = "c-absence-expiry"
+CLOSED_E = "e-room-closed-during-recovery"
+SHARE_REASON = (
+    "Every recovery phase waits through the single Driver::wait select in "
+    "src/livekit/recovery.rs, so the same handler sees the SDK event in every phase."
+)
+EOF_REASON = (
+    "The SDK has no EOF event: the local channel in src/livekit/recovery.rs closes "
+    "after Disconnected and maps to the same Terminal::RoomClosed path."
+)
+N_REPRESENTATIVE_FIXTURES = 30
+ROW_END, ROW_DEADLINE, ROW_DISCONNECTED, ROW_ABSENT, ROW_FINISH, ROW_EOF = range(6)
+
+
+def rep(run_id, action, reason=SHARE_REASON, **over):
+    claim = {
+        "status": "sdk_representative",
+        "run_id": run_id,
+        "action_id": action,
+        "reason": reason,
+    }
+    claim.update(over)
+    return claim
+
+
+class RepresentativeSdk(Base):
+    """A live run of the same cause at another phase backs a row only as an argument."""
+
+    def setUp(self):
+        super().setUp()
+        fx = self.fx
+        fx.write_live(
+            END_D,
+            "manual",
+            ["thinking_hold", "controlled_recovery_trigger", "end"],
+            True,
+        )
+        fx.write_live(
+            END_A,
+            "manual",
+            ["candidate_join", "controlled_recovery_trigger", "candidate_leave", "end"],
+            True,
+        )
+        fx.write_live(
+            DEADLINE_B, "server_deadline", ["controlled_recovery_trigger"], False
+        )
+        fx.write_live(
+            ABSENT_C,
+            "absence",
+            ["controlled_recovery_trigger", "candidate_leave"],
+            False,
+        )
+        fx.write_live(
+            CLOSED_E,
+            "room_closed",
+            ["controlled_recovery_trigger", "room_delete"],
+            False,
+        )
+        fx.rows[ROW_END]["sdk_report"] = rep(END_D, "end")
+        fx.rows[ROW_DEADLINE]["sdk_report"] = rep(
+            DEADLINE_B, "controlled_recovery_trigger"
+        )
+        fx.rows[ROW_ABSENT]["sdk_report"] = rep(ABSENT_C, "candidate_leave")
+
+    def test_representative_receipts_for_the_right_causes_pass_strict(self):
+        code, report, err = self.strict()
+        self.assertEqual((code, err), (0, ""), report)
+        self.assertEqual(report["by_sdk"]["sdk_representative"], 3)
+
+    def test_either_end_scenario_backs_an_end_row(self):
+        self.fx.rows[ROW_END]["sdk_report"] = rep(END_A, "end")
+        self.assertEqual(self.strict()[0], 0)
+
+    def test_a_receipt_for_a_different_cause_is_fabricated(self):
+        for claim in (
+            rep(DEADLINE_B, "controlled_recovery_trigger"),
+            rep(ABSENT_C, "candidate_leave"),
+        ):
+            self.setUp()
+            self.fx.rows[ROW_END]["sdk_report"] = claim
+            self.assertFails("fabricated_sdk")
+        self.setUp()
+        self.fx.rows[ROW_ABSENT]["sdk_report"] = rep(END_D, "end")
+        self.assertFails("fabricated_sdk")
+
+    def test_a_placeholder_or_unanchored_reason_is_rejected(self):
+        for reason in (
+            "TODO",
+            "n/a",
+            "",
+            "short reason",
+            "src/livekit.rs",
+            "the phases all behave in the very same way as the live one did",
+        ):
+            with self.subTest(reason):
+                self.setUp()
+                self.fx.rows[ROW_END]["sdk_report"] = rep(END_D, "end", reason)
+                self.assertFails("missing_reason")
+
+    def test_a_missing_reason_key_is_rejected(self):
+        claim = rep(END_D, "end")
+        del claim["reason"]
+        self.fx.rows[ROW_END]["sdk_report"] = claim
+        self.assertFails("fabricated_sdk")
+
+    def test_a_failed_or_unfinished_run_does_not_represent(self):
+        for over in (
+            {"child_exit": 101, "status": "child_failed"},
+            {"status": "incomplete_budget"},
+            {"child_exit": 1},
+            {"budget_failure": "wall"},
+        ):
+            with self.subTest(over):
+                self.setUp()
+                self.fx.write_live(
+                    END_D,
+                    "manual",
+                    ["controlled_recovery_trigger", "end"],
+                    True,
+                    **over,
+                )
+                self.assertFails("fabricated_sdk")
+
+    def test_a_run_with_overrides_or_unreaped_children_does_not_represent(self):
+        for over in (
+            {"test_overrides": {"min_cleanup_reserve_s": 1}},
+            {"cleanup": {"failures": [], "leaked_children": 1, "reaped": True}},
+            {"cleanup": {"failures": ["x"], "leaked_children": 0, "reaped": True}},
+            {"cleanup": {"failures": [], "leaked_children": 0, "reaped": False}},
+            {"resources": {"samples": 0}},
+            {"telemetry": {"events": 0, "malformed": 2}},
+        ):
+            with self.subTest(over):
+                self.setUp()
+                self.fx.write_live(
+                    END_D,
+                    "manual",
+                    ["controlled_recovery_trigger", "end"],
+                    True,
+                    **over,
+                )
+                self.assertFails("fabricated_sdk")
+
+    def test_the_wrong_scenario_shape_does_not_represent(self):
+        for run_id, mode, granted, permit in (
+            (END_D, "absence", ["controlled_recovery_trigger", "end"], True),
+            (END_D, "manual", ["controlled_recovery_trigger"], True),
+            (END_D, "manual", ["end"], True),
+            (END_D, "manual", ["controlled_recovery_trigger", "end"], False),
+            (DEADLINE_B, "server_deadline", ["controlled_recovery_trigger"], True),
+        ):
+            with self.subTest((run_id, mode, granted, permit)):
+                self.setUp()
+                self.fx.write_live(run_id, mode, granted, permit)
+                self.assertFails("fabricated_sdk")
+
+    def test_a_lookalike_run_that_is_not_the_scenario_is_rejected(self):
+        self.fx.write_live(
+            "x-manual-end-lookalike",
+            "manual",
+            ["controlled_recovery_trigger", "end"],
+            True,
+        )
+        self.fx.rows[ROW_END]["sdk_report"] = rep("x-manual-end-lookalike", "end")
+        self.assertFails("fabricated_sdk")
+
+    def test_a_setup_action_does_not_stand_in_for_the_driving_one(self):
+        self.fx.rows[ROW_END]["sdk_report"] = rep(END_D, "controlled_recovery_trigger")
+        self.assertFails("fabricated_sdk")
+        self.setUp()
+        self.fx.rows[ROW_ABSENT]["sdk_report"] = rep(
+            ABSENT_C, "controlled_recovery_trigger"
+        )
+        self.assertFails("fabricated_sdk")
+
+    def test_a_non_boolean_end_permit_flag_is_rejected(self):
+        for flag in ("false", "yes", 2, [0], None):
+            with self.subTest(flag):
+                self.setUp()
+                self.fx.write_live(
+                    END_D,
+                    "manual",
+                    ["thinking_hold", "controlled_recovery_trigger", "end"],
+                    flag,
+                )
+                self.assertFails("fabricated_sdk")
+
+    def test_an_action_that_does_not_drive_the_cause_is_rejected(self):
+        self.fx.rows[ROW_END]["sdk_report"] = rep(END_D, "thinking_hold")
+        self.assertFails("fabricated_sdk")
+
+    def test_a_cause_without_a_live_scenario_cannot_be_represented(self):
+        # RoomEventsEof has no SDK event: it shares RoomDisconnected, and no
+        # run represents it.
+        self.fx.rows[ROW_EOF]["sdk_report"] = rep(CLOSED_E, "room_delete")
+        report = self.assertFails("fabricated_sdk")
+        self.assertIn(
+            "no live scenario drives RoomEventsEof",
+            "".join(entry[2] for entry in report["integrity"]),
+        )
+
+    def test_the_room_closed_scenario_backs_a_disconnect_row(self):
+        self.fx.rows[ROW_DISCONNECTED]["sdk_report"] = rep(CLOSED_E, "room_delete")
+        code, report, err = self.strict()
+        self.assertEqual((code, err), (0, ""), report)
+        self.assertEqual(report["by_sdk"]["sdk_representative"], 4)
+
+    def test_the_end_of_events_row_stands_on_a_representative_disconnect_claim(self):
+        fx = self.fx
+        fx.rows[ROW_DISCONNECTED]["sdk_report"] = rep(CLOSED_E, "room_delete")
+        fx.rows[ROW_EOF]["sdk_report"] = {
+            "status": "N/A",
+            "shares": "RoomDisconnected",
+            "reason": EOF_REASON,
+        }
+        code, report, err = self.strict()
+        self.assertEqual((code, err), (0, ""), report)
+        self.assertEqual(report["by_sdk"]["N/A"], 1)
+        # The same row is left uncovered once the disconnect claim is not the
+        # room-closed scenario's.
+        fx.rows[ROW_DISCONNECTED]["sdk_report"] = rep(ABSENT_C, "candidate_leave")
+        _, report, _ = self.strict()
+        self.assertIn("alpha_wait/RoomEventsEof", [g[0] for g in report["gaps"]])
+
+    def test_only_the_room_closed_scenario_represents_a_disconnect(self):
+        for run_id, action in (
+            (ABSENT_C, "candidate_leave"),
+            (DEADLINE_B, "controlled_recovery_trigger"),
+            (END_A, "end"),
+            (END_D, "end"),
+        ):
+            with self.subTest(run_id):
+                self.setUp()
+                self.fx.rows[ROW_DISCONNECTED]["sdk_report"] = rep(run_id, action)
+                report = self.assertFails("fabricated_sdk")
+                self.assertIn(
+                    "is not a RoomDisconnected scenario",
+                    "".join(entry[2] for entry in report["integrity"]),
+                )
+
+    def test_the_room_closed_scenario_backs_no_other_cause(self):
+        for row, action in (
+            (ROW_END, "end"),
+            (ROW_DEADLINE, "controlled_recovery_trigger"),
+            (ROW_ABSENT, "candidate_leave"),
+        ):
+            with self.subTest(row):
+                self.setUp()
+                self.fx.rows[row]["sdk_report"] = rep(CLOSED_E, action)
+                self.assertFails("fabricated_sdk")
+        self.setUp()
+        self.fx.rows[ROW_END]["sdk_report"] = {"run_id": CLOSED_E, "action_id": "end"}
+        report = self.assertFails("fabricated_sdk")
+        self.assertIn(
+            "is the RoomDisconnected scenario",
+            "".join(entry[2] for entry in report["integrity"]),
+        )
+
+    def test_the_room_closed_run_must_have_the_scenarios_shape(self):
+        for mode, granted, permit in (
+            ("absence", ["controlled_recovery_trigger", "room_delete"], False),
+            ("manual", ["controlled_recovery_trigger", "room_delete"], False),
+            ("room_closed", ["controlled_recovery_trigger"], False),
+            ("room_closed", ["room_delete"], False),
+            ("room_closed", ["controlled_recovery_trigger", "room_delete"], True),
+        ):
+            with self.subTest((mode, granted, permit)):
+                self.setUp()
+                self.fx.write_live(CLOSED_E, mode, granted, permit)
+                self.fx.rows[ROW_DISCONNECTED]["sdk_report"] = rep(
+                    CLOSED_E, "room_delete"
+                )
+                self.assertFails("fabricated_sdk")
+
+    def test_a_setup_action_does_not_stand_in_for_the_room_delete(self):
+        self.fx.rows[ROW_DISCONNECTED]["sdk_report"] = rep(
+            CLOSED_E, "controlled_recovery_trigger"
+        )
+        self.assertFails("fabricated_sdk")
+
+    def test_a_failed_or_lookalike_room_closed_run_does_not_represent(self):
+        self.fx.write_live(
+            CLOSED_E,
+            "room_closed",
+            ["controlled_recovery_trigger", "room_delete"],
+            False,
+            child_exit=101,
+            status="child_failed",
+        )
+        self.fx.rows[ROW_DISCONNECTED]["sdk_report"] = rep(CLOSED_E, "room_delete")
+        self.assertFails("fabricated_sdk")
+        self.setUp()
+        self.fx.write_live(
+            "x-room-closed-lookalike",
+            "room_closed",
+            ["controlled_recovery_trigger", "room_delete"],
+            False,
+        )
+        self.fx.rows[ROW_DISCONNECTED]["sdk_report"] = rep(
+            "x-room-closed-lookalike", "room_delete"
+        )
+        self.assertFails("fabricated_sdk")
+
+    def test_a_plain_claim_cannot_cite_another_causes_scenario(self):
+        self.fx.rows[ROW_DISCONNECTED]["sdk_report"] = {
+            "run_id": ABSENT_C,
+            "action_id": "candidate_leave",
+        }
+        self.fx.rows[ROW_EOF]["sdk_report"] = {
+            "status": "N/A",
+            "shares": "RoomDisconnected",
+            "reason": EOF_REASON,
+        }
+        report = self.assertFails("fabricated_sdk")
+        self.assertIn(
+            "is the Absent scenario",
+            "".join(entry[2] for entry in report["integrity"]),
+        )
+        self.assertIn("alpha_wait/RoomEventsEof", [gap[0] for gap in report["gaps"]])
+
+    def test_manifest_and_liveness_values_must_be_exact(self):
+        for body in (
+            b'{"run_id": "other", "end_mode": "manual"}',
+            b'["end_mode", "manual"]',
+        ):
+            with self.subTest(body):
+                self.setUp()
+                path = self.fx.sdk / END_D / "run-manifest.json"
+                path.write_bytes(body)
+                result = json.loads((path.parent / "budget-result.json").read_text())
+                result["manifest_sha256"] = sha256(body)
+                (path.parent / "budget-result.json").write_text(json.dumps(result))
+                self.assertFails("fabricated_sdk")
+        for over in (
+            {"cleanup": {"failures": [], "leaked_children": False, "reaped": True}},
+            {"telemetry": {"events": 0, "malformed": False}},
+        ):
+            with self.subTest(over):
+                self.setUp()
+                self.fx.write_live(
+                    END_D,
+                    "manual",
+                    ["thinking_hold", "controlled_recovery_trigger", "end"],
+                    True,
+                    **over,
+                )
+                self.assertFails("fabricated_sdk")
+
+    def test_an_sdk_na_claim_with_extra_keys_is_rejected(self):
+        self.fx.rows[ROW_EOF]["sdk_report"] = {
+            "status": "N/A",
+            "shares": "RoomDisconnected",
+            "reason": EOF_REASON,
+            "extra": 1,
+        }
+        self.assertFails("fabricated_sdk")
+
+    def test_a_reason_without_a_source_file_path_is_rejected(self):
+        self.fx.rows[ROW_END]["sdk_report"] = rep(
+            END_D,
+            "end",
+            "Every recovery phase waits through the single Driver::wait select, "
+            "so the same handler sees the SDK event in every phase.",
+        )
+        self.assertFails("missing_reason")
+
+    def test_a_representative_claim_with_extra_or_foreign_keys_is_rejected(self):
+        self.fx.rows[ROW_END]["sdk_report"] = rep(END_D, "end", note="x")
+        self.assertFails("fabricated_sdk")
+
+    def test_a_representative_claim_without_an_sdk_directory_is_fabricated(self):
+        self.assertFails("fabricated_sdk", sdk=False)
+
+    def test_the_end_of_events_row_stands_only_on_a_valid_disconnect_claim(self):
+        fx = self.fx
+        fx.rows[ROW_EOF]["sdk_report"] = {
+            "status": "N/A",
+            "shares": "RoomDisconnected",
+            "reason": EOF_REASON,
+        }
+        # RoomDisconnected still has its plain claim from the base ledger.
+        code, report, err = self.strict()
+        self.assertEqual((code, err), (0, ""), report)
+        self.assertEqual(report["by_sdk"]["N/A"], 1)
+
+    def test_the_end_of_events_row_is_uncovered_while_disconnect_is_uncovered(self):
+        fx = self.fx
+        fx.rows[ROW_EOF]["sdk_report"] = {
+            "status": "N/A",
+            "shares": "RoomDisconnected",
+            "reason": EOF_REASON,
+        }
+        fx.rows[ROW_DISCONNECTED]["sdk_report"] = "uncovered required T4b.4"
+        code, report, _ = self.strict()
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            sorted((g[0], g[1]) for g in report["gaps"]),
+            [
+                ("alpha_wait/RoomDisconnected", "sdk_pending"),
+                ("alpha_wait/RoomEventsEof", "sdk_pending"),
+            ],
+        )
+        self.assertEqual(self.fx.run("incremental")[0], 0)
+        # A failed disconnect claim is a ledger lie that leaves EOF uncovered too.
+        fx.rows[ROW_DISCONNECTED]["sdk_report"] = rep(ABSENT_C, "candidate_leave")
+        _, report, _ = self.strict()
+        self.assertIn("alpha_wait/RoomEventsEof", [g[0] for g in report["gaps"]])
+
+    def test_an_sdk_na_column_needs_a_reason_and_only_fits_end_of_events(self):
+        base = {"status": "N/A", "shares": "RoomDisconnected", "reason": EOF_REASON}
+        self.fx.rows[ROW_EOF]["sdk_report"] = dict(base, reason="n/a")
+        self.assertFails("missing_reason")
+        self.setUp()
+        self.fx.rows[ROW_EOF]["sdk_report"] = dict(base, shares="End")
+        self.assertFails("fabricated_sdk")
+        self.setUp()
+        self.fx.rows[ROW_END]["sdk_report"] = dict(base)
+        self.assertFails("fabricated_sdk")
+
+    def test_the_fixture_count_is_asserted(self):
+        self.assertEqual(
+            len(
+                [
+                    n
+                    for n in dir(self)
+                    if n.startswith("test_")
+                    and n != "test_the_fixture_count_is_asserted"
+                ]
+            ),
+            N_REPRESENTATIVE_FIXTURES,
+        )
+
+    def test_plain_claims_still_demand_telemetry_events(self):
+        self.fx.write_sdk(telemetry={"events": 0})
+        self.assertFails("fabricated_sdk")
 
 
 if __name__ == "__main__":

@@ -1943,6 +1943,151 @@ class RuntimeTaskTests(unittest.TestCase):
         self.assertTrue(report["truncated_final"])
 
 
+def mic_clock(sample, mx, o1, o10, o30, *, elapsed=None, pid=7, session=1, room="r"):
+    elapsed = sample * 60_000 if elapsed is None else elapsed
+    return (
+        f"interview clock: pid={pid} session={session} start_unix_ms=1700000000000 "
+        f"elapsed_ms={elapsed} sample={sample} mic_gap_max_ms={mx} "
+        f"mic_gap_over_1s={o1} mic_gap_over_10s={o10} mic_gap_over_30s={o30} room={room}"
+    )
+
+
+def mic_final(mx, o1, o10, o30, *, elapsed=3_600_000, pid=7, session=1, room="r"):
+    return (
+        f"mic gaps: pid={pid} session={session} elapsed_ms={elapsed} "
+        f"mic_gap_max_ms={mx} mic_gap_over_1s={o1} mic_gap_over_10s={o10} "
+        f"mic_gap_over_30s={o30} room={room}"
+    )
+
+
+class MicGapTests(unittest.TestCase):
+    def mic(self, extra, *, base=None):
+        lines = reply(1, 10_000, 20_000) + (hour_clock() if base is None else base)
+        return MODULE.analyze(lines + extra)["resources"]["mic_gap"]
+
+    def test_a_legacy_log_has_unknown_mic_gaps_never_zero(self):
+        report = MODULE.analyze(reply(1, 10_000, 20_000) + hour_clock())
+        mic = report["resources"]["mic_gap"]
+        # The legacy clock lines parse, and say nothing of the gap.
+        self.assertEqual(mic["known"], 0)
+        self.assertEqual(mic["unknown"], 2)
+        for name in (
+            "mic_gap_max_ms",
+            "mic_gap_over_1s",
+            "mic_gap_over_10s",
+            "mic_gap_over_30s",
+        ):
+            self.assertIsNone(mic[name], name)
+        text = "\n".join(MODULE.summary_lines(report))
+        self.assertIn("mic_gap_max_ms=unknown", text)
+        self.assertIn("mic_gap_over_30s=unknown", text)
+        self.assertNotIn("mic_gap_max_ms=0", text)
+
+    def test_a_log_with_no_clock_or_gap_line_has_no_mic_gap_at_all(self):
+        report = MODULE.analyze(reply(1, 10_000, 20_000))
+        self.assertIsNone(report["resources"]["mic_gap"])
+
+    def test_none_is_unknown_and_a_real_zero_is_a_measurement(self):
+        unmeasured = self.mic([mic_clock(1, "none", "none", "none", "none")], base=[])
+        self.assertEqual((unmeasured["known"], unmeasured["unknown"]), (0, 1))
+        self.assertIsNone(unmeasured["mic_gap_max_ms"])
+        zero = self.mic([mic_clock(1, 0, 0, 0, 0)], base=[])
+        self.assertEqual(zero["mic_gap_max_ms"], 0)
+        self.assertEqual(zero["mic_gap_over_1s"], 0)
+        self.assertEqual(zero["known"], 1)
+
+    def test_the_maximum_and_cumulative_counts_come_from_the_largest_reading(self):
+        mic = self.mic(
+            [
+                mic_clock(1, 1500, 1, 0, 0),
+                mic_clock(2, 31_000, 3, 2, 1),
+                mic_clock(3, "none", "none", "none", "none"),
+                mic_final(31_000, 4, 2, 1),
+            ]
+        )
+        self.assertEqual(mic["mic_gap_max_ms"], 31_000)
+        self.assertEqual(
+            (mic["mic_gap_over_1s"], mic["mic_gap_over_10s"], mic["mic_gap_over_30s"]),
+            (4, 2, 1),
+        )
+        self.assertEqual(mic["known"], 3)
+        self.assertEqual(mic["unknown"], 3)
+        text = "\n".join(
+            MODULE.summary_lines(
+                MODULE.analyze(
+                    reply(1, 10_000, 20_000)
+                    + [mic_clock(2, 31_000, 3, 2, 1), mic_final(31_000, 4, 2, 1)]
+                )
+            )
+        )
+        self.assertIn("mic_gap_max_ms=31000", text)
+        self.assertIn("mic_gap_over_1s=4", text)
+
+    def test_interviews_add_their_counts_and_share_the_maximum(self):
+        mic = self.mic(
+            [
+                mic_final(2000, 1, 0, 0, session=1),
+                mic_final(12_000, 5, 1, 0, session=2),
+            ],
+            base=[],
+        )
+        self.assertEqual(mic["mic_gap_max_ms"], 12_000)
+        self.assertEqual(mic["mic_gap_over_1s"], 6)
+        self.assertEqual(mic["mic_gap_over_10s"], 1)
+
+    def test_a_final_line_does_not_extend_the_exposure_of_the_clock(self):
+        clocks = reply(1, 10_000, 20_000) + hour_clock()
+        plain = MODULE.analyze(clocks)["owed"]
+        with_final = MODULE.analyze(
+            clocks + [mic_final(5000, 1, 0, 0, elapsed=ONE_HOUR_MS + 59_000)]
+        )["owed"]
+        self.assertEqual(plain["exposure_s"], with_final["exposure_s"])
+
+    def test_a_clock_line_in_two_overlapping_files_counts_once(self):
+        line = mic_clock(1, 1500, 1, 0, 0)
+        self.assertEqual(self.mic([line, line], base=[])["lines"], 1)
+
+    def test_a_copied_final_line_counts_once(self):
+        once = self.mic([mic_final(2000, 1, 0, 0), mic_final(2000, 1, 0, 0)], base=[])
+        self.assertEqual(once["lines"], 1)
+
+    def test_a_malformed_or_partial_gap_field_is_rejected_not_read_as_zero(self):
+        good = mic_clock(1, 1500, 1, 0, 0)
+        cases = {
+            "negative": good.replace("mic_gap_max_ms=1500", "mic_gap_max_ms=-1"),
+            "text": good.replace("mic_gap_over_1s=1", "mic_gap_over_1s=x"),
+            "partial": good.replace(" mic_gap_over_10s=0", ""),
+            "none_among_numbers": good.replace(
+                "mic_gap_over_30s=0", "mic_gap_over_30s=none"
+            ),
+            "not_nested": mic_clock(1, 40_000, 1, 2, 0),
+            "count_without_a_long_enough_gap": mic_clock(1, 500, 2, 0, 0),
+            "long_gap_with_no_count": mic_clock(1, 40_000, 1, 1, 0),
+        }
+        for name, line in cases.items():
+            report = MODULE.analyze(reply(1, 1, 2) + [line])
+            self.assertIsNone(report["resources"]["mic_gap"], name)
+            self.assertGreaterEqual(report["rejected_records"], 1, name)
+        final = mic_final(1, 0, 0, 0).replace(" mic_gap_over_30s=0", "")
+        report = MODULE.analyze(reply(1, 1, 2) + [final])
+        self.assertGreaterEqual(report["rejected_records"], 1)
+
+    def test_a_final_line_cut_at_the_end_of_a_tail_is_not_trusted(self):
+        report = MODULE.analyze(
+            reply(1, 1, 2) + [mic_final(5000, 1, 0, 0)], tail_open=True
+        )
+        self.assertIsNone(report["resources"]["mic_gap"])
+        self.assertTrue(report["truncated_final"])
+
+    def test_the_gap_fields_do_not_change_the_clock_samples_they_ride(self):
+        report = MODULE.analyze(
+            reply(1, 10_000, 20_000)
+            + [mic_clock(0, "none", "none", "none", "none", elapsed=0)]
+            + [mic_clock(60, 900, 0, 0, 0, elapsed=ONE_HOUR_MS)]
+        )
+        self.assertEqual(report["owed"]["exposure_s"], 3600.0)
+
+
 class ControlAdapterTests(unittest.TestCase):
     def files(self, directory, control, candidate):
         paths = []
@@ -2354,6 +2499,100 @@ class PairedRegressionTests(unittest.TestCase):
             self.assertEqual(empty.returncode, 1)
             self.assertIn("log under test has no replies", empty.stderr)
             self.assertIn("median of per-session deltas", text.stdout)
+
+
+class RecoverySeriesTests(unittest.TestCase):
+    """Both readers consume this reduced synthetic trace, never a private run log."""
+
+    def trace(self):
+        return (
+            SCRIPT.parent.parent / "tests/fixtures/gemini-recovery-series.txt"
+        ).read_text()
+
+    def test_six_rotations_preserve_one_carried_reply_and_seven_reader_summaries(self):
+        report = MODULE.analyze(self.trace().splitlines())
+        self.assertEqual(report["rejected_records"], 0)
+        self.assertEqual(report["lifecycle_conflicts"], 0)
+        self.assertEqual(report["owed"]["count"], 6)
+        self.assertEqual(report["owed"]["states"], {"captured": 5, "superseded": 1})
+        episodes = report["owed"]["episodes"]
+        self.assertEqual(episodes["count"], 6)
+        self.assertEqual(episodes["classes"], {"no_reply_owed": 5, "satisfied": 1})
+        self.assertEqual(
+            [row["new_socket"] for row in episodes["rows"]], list(range(2, 8))
+        )
+        self.assertEqual(report["socket_pressure"]["sockets"], 7)
+        self.assertEqual(report["socket_pressure"]["blocked_sends"], 0)
+        self.assertEqual(report["socket_pressure"]["read_idle_ends"], 0)
+        self.assertEqual(report["socket_pressure"]["high_water_max"], 27)
+        readers = report["socket_pressure"]["rows"]
+        self.assertEqual([r["socket"] for r in readers], list(range(1, 8)))
+        self.assertTrue(all(r["received"] == r["consumed"] for r in readers))
+        self.assertEqual(
+            [r["end"] for r in readers], ["replacement"] * 6 + ["terminal"]
+        )
+
+    def test_duplicate_sources_do_not_double_count_the_series(self):
+        once = MODULE.analyze(self.trace().splitlines())
+        twice = MODULE.analyze((self.trace() * 2).splitlines())
+        for key in ("count", "states", "exposure_s", "gap_s_total", "episodes"):
+            self.assertEqual(once["owed"][key], twice["owed"][key], key)
+        self.assertEqual(twice["socket_pressure"]["sockets"], 7)
+        self.assertEqual(twice["lifecycle_conflicts"], 0)
+
+    def test_every_missing_end_remains_unresolved_despite_other_successful_swaps(self):
+        for episode in range(1, 7):
+            with self.subTest(episode=episode):
+                lines = [
+                    s
+                    for s in self.trace().splitlines()
+                    if not (
+                        s.startswith("replacement end:") and f" episode={episode} " in s
+                    )
+                ]
+                rows = MODULE.analyze(lines)["owed"]["episodes"]["rows"]
+                self.assertEqual(len(rows), 6)
+                self.assertEqual(
+                    next(r for r in rows if r["episode"] == episode)["class"],
+                    "incomplete",
+                )
+
+    def test_prior_socket_audio_does_not_satisfy_the_carried_reply(self):
+        lines = []
+        for text in self.trace().splitlines():
+            if text.startswith("codetrial latency "):
+                record = json.loads(text[len("codetrial latency ") :])
+                if record.get("obligation") == 2:
+                    record.update(socket=2, first_accept_socket=2)
+                    text = "codetrial latency " + json.dumps(record)
+            lines.append(text)
+        rows = MODULE.analyze(lines)["owed"]["episodes"]["rows"]
+        self.assertEqual(
+            next(r for r in rows if r["episode"] == 2)["class"], "prior_socket"
+        )
+
+    def test_clock_scopes_stalls_and_initial_unknown_gap_stay_distinct(self):
+        report = MODULE.analyze(self.trace().splitlines())
+        self.assertEqual(report["owed"]["exposure_s"], 3608)
+        self.assertEqual(report["stall_ms"], 5000)
+        self.assertEqual(report["stalls"], {"count": 2, "of": 5})
+        self.assertEqual(report["beyond_window"]["count"], 3)
+        self.assertEqual(report["beyond_window"]["p95_ms"], 1000)
+        self.assertEqual(report["beyond_window_with_stalls"]["count"], 5)
+        self.assertEqual(report["beyond_window_with_stalls"]["max_ms"], 8000)
+        mic = report["resources"]["mic_gap"]
+        self.assertEqual((mic["known"], mic["unknown"]), (2, 1))
+        self.assertEqual(mic["mic_gap_max_ms"], 27)
+        self.assertEqual(mic["mic_gap_over_1s"], 0)
+
+    def test_strict_cli_reads_the_shared_trace_and_rejects_its_cut_final_record(self):
+        for body, expected in ((self.trace(), 0), (self.trace().rstrip("\n"), 1)):
+            with self.subTest(complete=expected == 0):
+                result = run("--json", "--strict", stdin=body)
+                self.assertEqual(result.returncode, expected, result.stderr)
+                self.assertEqual(
+                    json.loads(result.stdout)["truncated_final"], expected == 1
+                )
 
 
 if __name__ == "__main__":

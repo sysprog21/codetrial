@@ -564,10 +564,19 @@ def obligation_report(rows):
 # audio quarantine` predate the ids and carry only the room, so they are
 # counted per room and never attributed to an episode.
 LIFECYCLE_LINE = re.compile(
-    r"(interview clock|runtime tasks|replacement start|replacement end|recovery ingress"
+    r"(interview clock|mic gaps|runtime tasks|replacement start|replacement end|recovery ingress"
     r"|candidate audio quarantine): "
 )
 EPISODE_RESULTS = {"installed", "failed", "no_setup", "cancelled"}
+# The microphone dequeue gap fields: the longest gap and the counts of gaps
+# strictly over 1, 10 and 30 seconds. An `interview clock` line may lack all four
+# (a legacy log) and then they are unknown, never zero; `none` is the same.
+MIC_GAP_FIELDS = (
+    "mic_gap_max_ms",
+    "mic_gap_over_1s",
+    "mic_gap_over_10s",
+    "mic_gap_over_30s",
+)
 # kind -> (whole numbers, whole numbers or `none`, words)
 LIFECYCLE_FIELDS = {
     "interview clock": (
@@ -580,6 +589,12 @@ LIFECYCLE_FIELDS = {
     "runtime tasks": (
         ("pid", "session", "elapsed_ms", "sample"),
         ("alive_tasks",),
+        (),
+    ),
+    # Written once as the interview ends; the fields are those of the clock.
+    "mic gaps": (
+        ("pid", "session", "elapsed_ms"),
+        MIC_GAP_FIELDS,
         (),
     ),
     "replacement start": (
@@ -626,6 +641,40 @@ def whole_number(text):
     return value
 
 
+def read_optional_mic_gaps(fields):
+    """Reads the gap fields of a clock line that may predate them: all four
+    absent is a legacy line (unknown), all four present is a measurement or
+    `none`, and anything between is malformed."""
+    present = [name in fields for name in MIC_GAP_FIELDS]
+    if not any(present):
+        fields.update(dict.fromkeys(MIC_GAP_FIELDS))
+        return
+    if not all(present):
+        raise Rejected("interview clock mic gap fields")
+    for name in MIC_GAP_FIELDS:
+        fields[name] = None if fields[name] == "none" else whole_number(fields[name])
+    check_mic_gaps(fields, "interview clock")
+
+
+def check_mic_gaps(fields, kind):
+    """The four are measured together, and a larger threshold is a subset."""
+    values = [fields[name] for name in MIC_GAP_FIELDS]
+    if any(v is None for v in values) and not all(v is None for v in values):
+        raise Rejected(f"{kind} mic gap fields")
+    if values[0] is None:
+        return
+    if not values[1] >= values[2] >= values[3]:
+        raise Rejected(f"{kind} mic gap counts")
+    # The maximum is whole milliseconds of the longest gap. A count over a
+    # threshold needs a maximum at least that long, and a maximum past the
+    # threshold needs at least one such gap.
+    for count, limit_ms in zip(values[1:], (1_000, 10_000, 30_000)):
+        if (count > 0 and values[0] < limit_ms) or (
+            values[0] > limit_ms and count == 0
+        ):
+            raise Rejected(f"{kind} mic gap counts")
+
+
 def parse_lifecycle(line):
     """(kind, fields) for a lifecycle line, None for any other line, or
     Rejected. The room is the rest of the line, because a name may hold spaces;
@@ -657,6 +706,10 @@ def parse_lifecycle(line):
     for name in words:
         if not fields.get(name):
             raise Rejected(f"{kind} {name}")
+    if kind == "interview clock":
+        read_optional_mic_gaps(fields)
+    if kind == "mic gaps":
+        check_mic_gaps(fields, kind)
     if kind == "replacement end" and fields["result"] not in EPISODE_RESULTS:
         raise Rejected("replacement end result")
     if kind in ("replacement start", "replacement end") and fields["episode"] < 1:
@@ -959,6 +1012,46 @@ def task_report(tasks):
     }
 
 
+def mic_gap_report(state):
+    """The microphone dequeue gap of the runs, or None when no line measured it.
+
+    Absent is unknown, never zero: a legacy log has no such fields, and a line
+    whose interview had not yet seen two frames says `none`. Only a measured
+    line counts. The counts are cumulative within an interview, so a scope
+    contributes its largest reading and scopes add up.
+    """
+    rows = []
+    for row in [r for seen in state["clocks"].values() for r in seen] + state["mic"]:
+        # A line joined from two overlapping files counts once.
+        if row not in rows:
+            rows.append(row)
+    if not rows:
+        return None
+    scopes = {}
+    for row in rows:
+        if row["mic_gap_max_ms"] is None:
+            continue
+        scope = scope_of(row)
+        best = scopes.setdefault(scope, dict.fromkeys(MIC_GAP_FIELDS, 0))
+        for name in MIC_GAP_FIELDS:
+            best[name] = max(best[name], row[name])
+    known = sum(r["mic_gap_max_ms"] is not None for r in rows)
+    if not scopes:
+        return {
+            "lines": len(rows),
+            "known": 0,
+            "unknown": len(rows),
+            **dict.fromkeys(MIC_GAP_FIELDS),
+        }
+    return {
+        "lines": len(rows),
+        "known": known,
+        "unknown": len(rows) - known,
+        "mic_gap_max_ms": max(s["mic_gap_max_ms"] for s in scopes.values()),
+        **{name: sum(s[name] for s in scopes.values()) for name in MIC_GAP_FIELDS[1:]},
+    }
+
+
 def lifecycle_report(rows, state):
     """Owed-reply gaps, episodes and resource counts joined by identity."""
     episodes = build_episodes(state["starts"], state["ends"], rows, state["conflicted"])
@@ -1100,6 +1193,7 @@ def lifecycle_report(rows, state):
             ),
             "audio_quarantine": by_room(state["quarantine"], ("bytes",)),
             "task": task_report(state["tasks"]),
+            "mic_gap": mic_gap_report(state),
         },
     }
 
@@ -1120,6 +1214,9 @@ def note_lifecycle(state, kind, fields):
         ) and not any(c == fields for c in seen)
         seen.append(fields)
         observe(state, scope, fields["elapsed_ms"])
+    elif kind == "mic gaps":
+        if fields not in state["mic"]:
+            state["mic"].append(fields)
     elif kind == "runtime tasks":
         seen = state["tasks"].setdefault(scope, {})
         earlier = seen.get(fields["sample"])
@@ -1177,6 +1274,7 @@ def analyze(lines, slow_ms=1500, stall_ms=5000, tail_open=False):
         "ends": {},
         "clocks": {},
         "tasks": {},
+        "mic": [],
         "ingress": [],
         "quarantine": [],
         "pressure_sockets": set(),
@@ -1860,6 +1958,7 @@ UNOBSERVABLE_IN_CONTROL = (
     "recovery ingress, quarantine and omission counts by episode",
     "sockets observed per interview",
     "runtime task counts (no runtime tasks lines)",
+    "microphone dequeue gaps (no mic_gap fields)",
 )
 
 
@@ -2107,6 +2206,14 @@ def summary_lines(report):
             for name in ("alive_max", "alive_last"):
                 value = task[name]
                 out.append(f"task_{name}={'unknown' if value is None else value}")
+        mic = resources["mic_gap"]
+        if mic is None:
+            out.append("mic_gap=unknown")
+        else:
+            out.append(f"mic_gap_unknown_lines={mic['unknown']}")
+            for name in MIC_GAP_FIELDS:
+                value = mic[name]
+                out.append(f"{name}={'unknown' if value is None else value}")
     if report["duplicate_records"]:
         out.append(f"duplicate_records={report['duplicate_records']}")
     if report["truncated_final"]:

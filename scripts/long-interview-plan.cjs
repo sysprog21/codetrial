@@ -45,6 +45,7 @@ const END_MODES = [
   "manual",
   "server_deadline",
   "absence",
+  "room_closed",
   "terminal_cancel",
   "native_close",
 ];

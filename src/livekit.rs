@@ -106,6 +106,8 @@ mod floor;
 mod latency;
 mod media;
 mod packets;
+#[cfg(test)]
+mod probe;
 mod recovery;
 mod report;
 mod room_link;
@@ -1802,6 +1804,29 @@ fn take_live_reader_probe()
     LIVE_READER_PROBE.lock().unwrap().take()
 }
 
+/// Where a test hosting the real room loop is told which terminal cancelled a
+/// recovery wait, keyed by the room it hosts so parallel tests never see one
+/// another's. Unlike the hand-built loop's `recovery_terminal`, it observes the
+/// terminal and lets the loop handle it as production does.
+#[cfg(test)]
+type LiveTerminalProbe = (
+    String,
+    tokio::sync::mpsc::UnboundedSender<(&'static str, std::time::Instant)>,
+);
+
+#[cfg(test)]
+static LIVE_TERMINAL_PROBES: std::sync::Mutex<Vec<LiveTerminalProbe>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn note_live_terminal(room: &str, terminal: &'static str) {
+    for (name, probe) in LIVE_TERMINAL_PROBES.lock().unwrap().iter() {
+        if name == room {
+            let _ = probe.send((terminal, std::time::Instant::now()));
+        }
+    }
+}
+
 /// The room loop's own bookkeeping, distinct from the session it runs on.
 ///
 /// Four things only the loop reads, bundled so an arm that needs three of them
@@ -2437,6 +2462,11 @@ async fn on_candidate_input(
     };
     let ended = frame.is_none();
     let now = Instant::now();
+    if observed {
+        context
+            .media
+            .note_mic_dequeue(&mut context.activity.latency, frame.is_some(), now);
+    }
     if observed && note_candidate_audio_frame(context.state, context.activity, frame.as_ref(), now)
     {
         context.media.voiced_at = Some(now);
@@ -2969,6 +2999,11 @@ pub(crate) async fn run_room_with_slot(
                     ControlFlow::Continue(())
                 }
             };
+            #[cfg(test)]
+            probe::note_retention(
+                media.recovery_audio.dropped_bytes,
+                media.quarantined_audio_bytes,
+            );
             if media.quarantined_audio_bytes != 0 {
                 eprintln!("candidate audio quarantine: bytes={} room={}",
                     std::mem::take(&mut media.quarantined_audio_bytes), room.name());
@@ -3024,6 +3059,9 @@ pub(crate) async fn run_room_with_slot(
         &room,
         &mut turn.context(&mut output_audio, &mut gemini, &mut board, &mut media),
     );
+    if let Some(line) = turn.activity.latency.mic_summary(Instant::now()) {
+        eprintln!("{line}");
+    }
     eprintln!("{}", turn.state.evidence_ledger.metrics.cost_line());
     let outcome = match &result {
         Err(error) => LiveOutcome::from_error(error.as_ref(), LiveOutcome::Error),

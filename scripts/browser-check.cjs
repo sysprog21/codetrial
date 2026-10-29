@@ -909,7 +909,7 @@ async function longInterview(
   });
   const { report } = finished;
   console.log(
-    `long-interview verdict=${finished.exitCode === 0 ? "pass" : "fail"} status=${report.status} run_kind=${plan.runKind} end_mode=${plan.endMode} duration_min=${plan.durationMin} observation_target_s=${plan.observationTargetS} clip_source=${report.clip_source} speech_run=${report.speech_run} full_interview=${report.full_interview}`,
+    `long-interview verdict=${finished.exitCode === 0 ? "pass" : "fail"} status=${report.status} run_kind=${plan.runKind} end_mode=${plan.endMode} duration_min=${plan.durationMin} observation_target_s=${plan.observationTargetS} clip_source=${report.clip_source} speech_run=${report.speech_run} full_interview=${report.full_interview} assessment_scope=${report.assessment_scope} qualification=${report.qualification}`,
   );
   if (report.validation_fixture) {
     console.log(

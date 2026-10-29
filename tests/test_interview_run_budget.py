@@ -264,6 +264,7 @@ class ManifestTests(Scratch):
             },
             {"run_kind": "smoke", "end_mode": "server_deadline"},
             {"run_kind": "smoke", "end_mode": "absence"},
+            {"run_kind": "smoke", "end_mode": "room_closed"},
             {"run_kind": "smoke", "end_mode": "terminal_cancel"},
             {"run_kind": "clip", "end_mode": "native_close"},
             {

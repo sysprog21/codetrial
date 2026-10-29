@@ -1466,6 +1466,8 @@ async fn on_input_transcript(
     text: &str,
     interruptible: Interruptible,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    #[cfg(test)]
+    super::probe::note_transcript(text);
     if let Some(prepared) = prepare_input_transcript(
         room,
         context,

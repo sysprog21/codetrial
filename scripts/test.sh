@@ -612,6 +612,8 @@ gate wait-for-server-tests unittest_gate "$ROOT/tests/test_wait_for_server.py"
 # Thirty-two concurrent launchers starve their own guards on a loaded host.
 gate run-budget-tests unittest_gate --jobs 4 "$ROOT/tests/test_interview_run_budget.py"
 gate recovery-matrix-tests unittest_gate "$ROOT/tests/test_check_recovery_matrix.py"
+gate gap-state-table "$PYTHON" "$ROOT/scripts/check-gap-state.py" check
+gate gap-state-tests unittest_gate "$ROOT/tests/test_check_gap_state.py"
 
 # The skills name scripts, lanes, make targets and each other's headings, and an
 # agent follows a dangling one without noticing. Their own scripts are tested

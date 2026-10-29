@@ -8683,3 +8683,108 @@ async fn a_tool_call_consumed_while_a_prompt_is_owed_keeps_the_original_obligati
 // The credentialed real-room fixture and its offline pieces.
 #[path = "recovery_live.rs"]
 mod live;
+
+// Microphone dequeue gap accounting in the room loop.
+//
+// Declared before running: the recovery driver's audio arm counts the frames it
+// takes from the SDK queue, so a loop that was away for 300 ms between two
+// frames measures about 300 ms; a stream that ended, and a stream attached
+// later, are not gaps however long they were apart; a buffered frame replayed
+// from the ingress is not a dequeue.
+
+#[tokio::test]
+async fn the_recovery_drivers_audio_arm_measures_the_gap_between_dequeues() {
+    if isolated("the_recovery_drivers_audio_arm_measures_the_gap_between_dequeues") {
+        return;
+    }
+    use ::livekit::webrtc::audio_source::AudioSourceOptions;
+    use ::livekit::webrtc::audio_source::native::NativeAudioSource;
+    let mut rig = Rig::new("ws://127.0.0.1:9/".into()).await;
+    let source = NativeAudioSource::new(AudioSourceOptions::default(), 16_000, 1, 0);
+    let track = ::livekit::prelude::LocalAudioTrack::create_audio_track(
+        "driver-gap",
+        ::livekit::prelude::RtcAudioSource::Native(source.clone()),
+    );
+    rig.media.audio = Some(crate::livekit::media::candidate_audio_stream(
+        track.rtc_track(),
+    ));
+    let boot = crate::runtime::bootstrap(&rig.config, "recovery-test", Some("two-sum"), 45);
+    for round in 0..2 {
+        source.capture_frame(&numbered_frame(7, 160)).await.unwrap();
+        let interview = InterviewContext {
+            config: &rig.config,
+            keys: &rig.keys,
+            boot: &boot,
+            live_endpoint: Some(&rig.endpoint),
+            started_at: Instant::now(),
+            candidate_identity: "candidate",
+            events: &rig.events,
+            slot: None,
+        };
+        let mut context = rig.turn.context(
+            &mut rig.output,
+            &mut rig.gemini,
+            &mut rig.board,
+            &mut rig.media,
+        );
+        let mut driver = Driver::new(&rig.room, &mut context, &mut rig.loops, interview);
+        driver
+            .wait(tokio::time::sleep(Duration::from_millis(40)))
+            .await
+            .unwrap();
+        assert_eq!(driver.ingress.frames.len(), 1, "round {round}");
+        if round == 0 {
+            // Only one frame so far: nothing is measured.
+            assert!(
+                driver
+                    .context
+                    .activity
+                    .latency
+                    .mic_gaps()
+                    .fields()
+                    .contains("mic_gap_max_ms=none"),
+            );
+            drop(driver);
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        } else {
+            let fields = driver.context.activity.latency.mic_gaps().fields();
+            let max: u64 = fields
+                .split_whitespace()
+                .find_map(|t| t.strip_prefix("mic_gap_max_ms="))
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert!((300..1000).contains(&max), "{fields}");
+            assert!(fields.contains("mic_gap_over_1s=0"), "{fields}");
+        }
+    }
+    rig.finish().await;
+}
+
+#[test]
+fn a_stream_end_or_a_new_stream_breaks_the_gap_and_replayed_frames_are_not_dequeues() {
+    let mut media = crate::livekit::media::CandidateMedia::new();
+    let mut latency = crate::livekit::latency::ReplyLatency::default();
+    let start = Instant::now();
+    let at = |ms: u64| start + Duration::from_millis(ms);
+    media.note_mic_dequeue(&mut latency, true, at(0));
+    media.note_mic_dequeue(&mut latency, true, at(20));
+    let measured = latency.mic_gaps().fields();
+    assert!(measured.contains("mic_gap_max_ms=20 "), "{measured}");
+    // The stream ended; a minute later a new one began and delivered.
+    media.note_mic_dequeue(&mut latency, false, at(30));
+    media.note_mic_dequeue(&mut latency, true, at(60_000));
+    assert_eq!(
+        latency.mic_gaps().fields(),
+        measured,
+        "no gap across the end"
+    );
+    // A new stream attached with no end seen in between.
+    media.note_mic_dequeue(&mut latency, true, at(60_010));
+    media.begin_mic_stream();
+    media.note_mic_dequeue(&mut latency, true, at(120_000));
+    media.note_mic_dequeue(&mut latency, true, at(120_010));
+    let after = latency.mic_gaps().fields();
+    assert!(after.contains("mic_gap_max_ms=20 "), "{after}");
+    assert!(after.contains("mic_gap_over_1s=0 "), "{after}");
+}

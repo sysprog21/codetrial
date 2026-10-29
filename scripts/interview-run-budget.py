@@ -80,6 +80,7 @@ END_MODES = frozenset(
         "manual",
         "server_deadline",
         "absence",
+        "room_closed",
         "terminal_cancel",
         "native_close",
     }

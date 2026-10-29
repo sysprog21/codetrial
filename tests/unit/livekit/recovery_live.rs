@@ -241,7 +241,7 @@ impl PermitClient {
     }
 }
 
-// The four scenarios: explicit action lists, not the long-schedule generator.
+// The five scenarios: explicit action lists, not the long-schedule generator.
 
 const SETUP_S: u64 = 120;
 const OBSERVATION_S: u64 = 180;
@@ -255,6 +255,10 @@ enum EndMode {
     Manual,
     ServerDeadline,
     Absence,
+    /// The server closes the room (deleted by this run's own `room_delete`
+    /// action) while the recovery write is held, so the agent's SDK reports
+    /// `Disconnected` and the loop takes `Terminal::RoomClosed`.
+    RoomClosed,
 }
 
 impl EndMode {
@@ -263,6 +267,7 @@ impl EndMode {
             Self::Manual => "manual",
             Self::ServerDeadline => "server_deadline",
             Self::Absence => "absence",
+            Self::RoomClosed => "room_closed",
         }
     }
 }
@@ -282,7 +287,7 @@ struct Scenario {
     report: bool,
 }
 
-const SCENARIOS: [Scenario; 4] = [
+const SCENARIOS: [Scenario; 5] = [
     Scenario {
         name: "a_manual_end_with_transient_leave",
         actions: &[
@@ -340,9 +345,26 @@ const SCENARIOS: [Scenario; 4] = [
         outer_cap_s: 15 * 60,
         report: true,
     },
+    // The fifth case is the room being closed by the server while the recovery
+    // write is held. Its End permit is reserved and, as in (b) and (c), the
+    // automatic terminal does not spend it.
+    Scenario {
+        name: "e_room_closed_during_recovery",
+        actions: &[
+            "candidate_join",
+            "seed_fixture",
+            "controlled_recovery_trigger",
+            "room_delete",
+        ],
+        scripted_end: false,
+        ceiling: 5,
+        end_mode: EndMode::RoomClosed,
+        outer_cap_s: 15 * 60,
+        report: false,
+    },
 ];
 
-/// Every interview in the four cases is the shortest the product admits.
+/// Every interview in the five cases is the shortest the product admits.
 const SCENARIO_DURATION_MIN: u32 = 10;
 
 impl Scenario {
@@ -360,7 +382,7 @@ impl Scenario {
             EndMode::ServerDeadline => {
                 super::super::super::interview_hard_deadline(SCENARIO_DURATION_MIN).as_secs()
             }
-            EndMode::Manual | EndMode::Absence => OBSERVATION_S,
+            EndMode::Manual | EndMode::Absence | EndMode::RoomClosed => OBSERVATION_S,
         }
     }
 
@@ -438,10 +460,10 @@ fn duration_min_from_manifest(
             "a server-deadline run observes the {server}s deadline, not {target}s"
         )),
         Some("server_deadline") => Ok(duration),
-        Some("manual" | "absence") if target > u64::from(duration) * 60 => Err(format!(
-            "observation_target_s {target} is longer than the {duration} minute interview"
-        )),
-        Some("manual" | "absence") => Ok(duration),
+        Some("manual" | "absence" | "room_closed") if target > u64::from(duration) * 60 => Err(
+            format!("observation_target_s {target} is longer than the {duration} minute interview"),
+        ),
+        Some("manual" | "absence" | "room_closed") => Ok(duration),
         other => Err(format!("end_mode {other:?} is not one of this fixture's")),
     }
 }
@@ -738,6 +760,15 @@ struct Facts {
     participants_left: Option<Vec<String>>,
     readers_unfinished: usize,
     room_gone_after_delete: bool,
+    /// The recovery terminal the room loop took, by name, as the loop reported
+    /// it. `None` when the loop reported none.
+    terminal: Option<String>,
+    /// Whether the run's own `room_delete` was issued only after the
+    /// recovery write was held. `None` when the run issued no delete.
+    delete_after_gate: Option<bool>,
+    /// Whether the terminal was reported no earlier than the delete was
+    /// issued. `None` when either was not observed.
+    terminal_after_delete: Option<bool>,
 }
 
 /// How the hosted room loop returned.
@@ -794,6 +825,20 @@ fn judge(scenario: &Scenario, facts: &Facts) -> Vec<String> {
                 other => problems.push(format!(
                     "the deadline ended it at {other:?}s, not at the {deadline}s hard deadline"
                 )),
+            }
+        }
+        EndMode::RoomClosed => {
+            match facts.terminal.as_deref() {
+                Some("RoomClosed") => {}
+                other => problems.push(format!(
+                    "the terminal was {other:?}, not RoomClosed from the server closing the room"
+                )),
+            }
+            if facts.delete_after_gate != Some(true) {
+                problems.push("the room was not deleted after the recovery write was held".into());
+            }
+            if facts.terminal_after_delete != Some(true) {
+                problems.push("the terminal was not observed after the room was deleted".into());
             }
         }
         EndMode::Absence => {
@@ -1056,6 +1101,8 @@ struct LiveEffects<'a> {
     /// Set once the `candidate_join` permit let the agent task start. The
     /// room is cleaned up only if this run could have created it.
     joined: bool,
+    /// Seconds the interview may take to start after the join permit.
+    setup_s: u64,
     /// The scripted waits stop here: the cap less the cleanup minute.
     script_stop: std::time::Instant,
     /// Nothing runs past here: the outer wall cap.
@@ -1065,6 +1112,13 @@ struct LiveEffects<'a> {
     ended_before_end: bool,
     agent_after_return: Option<bool>,
     end_while_pending: Option<bool>,
+    /// The recovery terminals the room loop reported, with when.
+    terminals: tokio::sync::mpsc::UnboundedReceiver<(&'static str, std::time::Instant)>,
+    terminal: Option<(&'static str, std::time::Instant)>,
+    /// When this run issued its own `room_delete`, and whether the recovery
+    /// write was held at that moment.
+    deleted_at: Option<std::time::Instant>,
+    delete_after_gate: Option<bool>,
 }
 
 impl<'a> LiveEffects<'a> {
@@ -1105,6 +1159,11 @@ impl<'a> LiveEffects<'a> {
         }
         let (probe, readers) = tokio::sync::mpsc::unbounded_channel();
         *super::super::super::LIVE_READER_PROBE.lock().unwrap() = Some(probe);
+        let (terminal_probe, terminals) = tokio::sync::mpsc::unbounded_channel();
+        super::super::super::LIVE_TERMINAL_PROBES
+            .lock()
+            .unwrap()
+            .push((room_name.clone(), terminal_probe));
         Ok(Self {
             scenario,
             agent_identity: crate::runtime::agent_identity(&room_name),
@@ -1126,6 +1185,7 @@ impl<'a> LiveEffects<'a> {
             left_at: None,
             end_sent: false,
             joined: false,
+            setup_s: SETUP_S,
             script_stop: std::time::Instant::now() + script_budget(scenario),
             hard_stop: std::time::Instant::now() + Duration::from_secs(scenario.outer_cap_s),
             tearing_down: false,
@@ -1133,6 +1193,10 @@ impl<'a> LiveEffects<'a> {
             ended_before_end: false,
             agent_after_return: None,
             end_while_pending: None,
+            terminals,
+            terminal: None,
+            deleted_at: None,
+            delete_after_gate: None,
         })
     }
 
@@ -1177,6 +1241,13 @@ impl<'a> LiveEffects<'a> {
         }
     }
 
+    /// Notes the first recovery terminal the room loop reported.
+    fn drain_terminals(&mut self) {
+        while let Ok(reported) = self.terminals.try_recv() {
+            self.terminal.get_or_insert(reported);
+        }
+    }
+
     fn drain_readers(&mut self) {
         while let Ok(reader) = self.readers.try_recv() {
             if self.first_reader.is_none() {
@@ -1190,11 +1261,12 @@ impl<'a> LiveEffects<'a> {
 
     // LiveKit closes a room that only agents remain in once its departure
     // timeout passes (the server default is 20 s), long before the interview's
-    // 90 s absence grace: the first live run of this scenario saw `RoomClosed`
-    // about 28 s after the candidate left. Production now creates its rooms
-    // explicitly in `/api/token`; this scenario uses that same call, so it
-    // exercises the departure timeout production actually sends.
-    async fn create_room_for_absence(&self) -> Result<(), String> {
+    // 90 s absence grace: the first live run of the absence scenario saw
+    // `RoomClosed` about 28 s after the candidate left. Production now creates
+    // its rooms explicitly in `/api/token`; the absence and room-closed
+    // scenarios use that same call, so they exercise the room production
+    // actually creates.
+    async fn create_production_room(&self) -> Result<(), String> {
         super::super::super::room_service::create_interview_room(
             &self.config.livekit_url,
             &self.config.livekit_api_key,
@@ -1209,8 +1281,11 @@ impl<'a> LiveEffects<'a> {
     async fn join(&mut self) -> Result<(), String> {
         let began = std::time::Instant::now();
         self.joined = true;
-        if matches!(self.scenario.end_mode, EndMode::Absence) {
-            self.create_room_for_absence().await?;
+        if matches!(
+            self.scenario.end_mode,
+            EndMode::Absence | EndMode::RoomClosed
+        ) {
+            self.create_production_room().await?;
         }
         let config = self.config.clone();
         let room = self.room_name.clone();
@@ -1247,7 +1322,7 @@ impl<'a> LiveEffects<'a> {
             json!({"room": self.room_name, "identity": self.candidate_identity}),
         );
         self.wait_for(
-            Duration::from_secs(SETUP_S).saturating_sub(began.elapsed()),
+            Duration::from_secs(self.setup_s).saturating_sub(began.elapsed()),
             "the interview to start",
             |this| !this.agent_running() || this.first_reader_probed(),
         )
@@ -1355,6 +1430,27 @@ impl<'a> LiveEffects<'a> {
         Ok(())
     }
 
+    /// The server closes this run's own named room while the recovery write is
+    /// held. It refuses to run before the gate has really been entered, so the
+    /// close can only arrive during the recovery.
+    async fn delete_own_room(&mut self) -> Result<(), String> {
+        let held = self.gate_entered;
+        self.delete_after_gate = Some(held);
+        if !held {
+            return Err("room_delete before the recovery write was held".into());
+        }
+        self.deleted_at = Some(std::time::Instant::now());
+        super::super::super::room_service::delete_room(
+            &self.config.livekit_url,
+            &self.config.livekit_api_key,
+            &self.config.livekit_api_secret,
+            &self.room_name,
+            crate::current_epoch_seconds(),
+        )
+        .await
+        .map_err(|error| redact(&error.to_string()))
+    }
+
     async fn seed(&self) -> Result<(), String> {
         for code in [SEED_STARTER, SEED_SOLUTION] {
             self.publish(
@@ -1408,6 +1504,11 @@ impl<'a> LiveEffects<'a> {
             self.agent_end = Some(handle.await.unwrap_or(AgentEnd::Aborted));
         }
         self.drain_readers();
+        self.drain_terminals();
+        super::super::super::LIVE_TERMINAL_PROBES
+            .lock()
+            .unwrap()
+            .retain(|(room, _)| *room != self.room_name);
         if !self.joined {
             // The join permit was never spent: no room was created, so no
             // provider call is made to look for one.
@@ -1532,6 +1633,12 @@ impl<'a> LiveEffects<'a> {
             participants_left: teardown.participants.clone(),
             readers_unfinished: teardown.readers_unfinished,
             room_gone_after_delete: teardown.room_gone_after_delete,
+            terminal: self.terminal.map(|(name, _)| name.to_owned()),
+            delete_after_gate: self.delete_after_gate,
+            terminal_after_delete: match (self.terminal, self.deleted_at) {
+                (Some((_, at)), Some(deleted)) => Some(at >= deleted),
+                _ => None,
+            },
         }
     }
 }
@@ -1571,6 +1678,7 @@ impl Effects for LiveEffects<'_> {
             }
             "candidate_leave" => self.leave().await,
             "candidate_rejoin" => self.rejoin().await,
+            "room_delete" => self.delete_own_room().await,
             FINAL_ACTION_ID => self.end().await,
             other => Err(format!("{other} has no live effect")),
         }
@@ -1609,6 +1717,8 @@ impl Effects for LiveEffects<'_> {
             EndMode::Absence => {
                 super::super::super::CANDIDATE_ABSENCE_LIMIT + Duration::from_secs(60)
             }
+            // The close is already issued; the loop only has to observe it.
+            EndMode::RoomClosed => Duration::from_secs(60),
         };
         let terminal = self
             .wait_for(within, "the expected terminal", |this| {
@@ -1622,9 +1732,14 @@ impl Effects for LiveEffects<'_> {
                 self.agent = Some(handle);
             }
         }
+        self.drain_terminals();
         emit(
             "terminal",
-            json!({"mode": scenario.end_mode.manifest_name(), "observed": terminal.is_ok()}),
+            json!({
+                "mode": scenario.end_mode.manifest_name(),
+                "observed": terminal.is_ok(),
+                "loop_terminal": self.terminal.map(|(name, _)| name),
+            }),
         );
         terminal
     }
@@ -1661,9 +1776,17 @@ fn live_write_manifest() {
     let candidate = PathBuf::from(
         std::env::var("CODETRIAL_LIVE_CANDIDATE").expect("set CODETRIAL_LIVE_CANDIDATE"),
     );
-    let scenario = scenario_for(&letter).expect("the scenario is one of a, b, c, d");
     let digest = crate::sha256_hex(&[&std::fs::read(&candidate).expect("read the pinned binary")]);
-    let manifest = scenario.manifest(&candidate, &digest);
+    let manifest = match scenario_for(&letter) {
+        Some(scenario) => scenario.manifest(&candidate, &digest),
+        None => continuity::arm_for(&letter)
+            .expect("the scenario is one of a, b, c, d, e, s0, s20, s39, s41, s60")
+            .manifest(
+                &candidate,
+                &digest,
+                &continuity::clips_fixture_sha(std::env::var("CODETRIAL_LIVE_CLIPS").ok()),
+            ),
+    };
     std::fs::write(out, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
 }
 
@@ -1672,8 +1795,8 @@ fn live_write_manifest() {
 /// Gemini, under the B0.1 launcher that sets the permit variables. It spends
 /// LiveKit and Gemini quota.
 ///
-/// One scenario per invocation, chosen by `CODETRIAL_LIVE_SCENARIO` (a, b, c
-/// or d) and checked against the manifest the launcher holds. Before any
+/// One scenario per invocation, chosen by `CODETRIAL_LIVE_SCENARIO` (a, b, c,
+/// d or e) and checked against the manifest the launcher holds. Before any
 /// permit it checks the variables and manifest, that the manifest names the
 /// selected scenario with exactly its declared actions, ceiling, cap and end
 /// mode, that the bootstrap built from the manifest has the hard deadline the
@@ -1694,8 +1817,8 @@ async fn live_sdk_control_presence_and_report_delivery() {
         .await
         .unwrap_or_else(|error| panic!("{error}"));
     let letter = std::env::var("CODETRIAL_LIVE_SCENARIO")
-        .expect("set CODETRIAL_LIVE_SCENARIO to a, b, c or d");
-    let scenario = scenario_for(&letter).expect("CODETRIAL_LIVE_SCENARIO is one of a, b, c, d");
+        .expect("set CODETRIAL_LIVE_SCENARIO to a, b, c, d or e");
+    let scenario = scenario_for(&letter).expect("CODETRIAL_LIVE_SCENARIO is one of a, b, c, d, e");
     assert_eq!(
         permits.manifest["run_id"],
         json!(scenario.name.replace('_', "-")),
@@ -1803,6 +1926,9 @@ async fn live_sdk_control_presence_and_report_delivery() {
             "absence_elapsed_s": facts.absence_elapsed_s,
             "participants_left": facts.participants_left,
             "room_gone_after_delete": facts.room_gone_after_delete,
+            "loop_terminal": facts.terminal,
+            "delete_after_gate": facts.delete_after_gate,
+            "terminal_after_delete": facts.terminal_after_delete,
             "readers_unfinished": facts.readers_unfinished,
             "teardown_notes": teardown.notes,
             "problems": problems,
@@ -2436,11 +2562,11 @@ async fn permit_worker_child() {
     }
 }
 
-/// Declared before running: the four action lists are the ones the task
-/// declares, with the ceilings 6/4/5/6 (the reserved End included), End
+/// Declared before running: the five action lists are the ones the task
+/// declares, with the ceilings 6/4/5/6/5 (the reserved End included), End
 /// scripted in (a) and (d) only.
 #[test]
-fn the_four_scenarios_declare_the_explicit_action_lists_and_ceilings() {
+fn the_five_scenarios_declare_the_explicit_action_lists_and_ceilings() {
     let scripts: Vec<Vec<&str>> = SCENARIOS.iter().map(Scenario::script).collect();
     assert_eq!(
         scripts,
@@ -2472,11 +2598,17 @@ fn the_four_scenarios_declare_the_explicit_action_lists_and_ceilings() {
                 "thinking_release",
                 "end"
             ],
+            vec![
+                "candidate_join",
+                "seed_fixture",
+                "controlled_recovery_trigger",
+                "room_delete"
+            ],
         ]
     );
     assert_eq!(
         SCENARIOS.iter().map(|s| s.ceiling).collect::<Vec<_>>(),
-        [6, 4, 5, 6]
+        [6, 4, 5, 6, 5]
     );
     for scenario in &SCENARIOS {
         assert_eq!(
@@ -2489,7 +2621,29 @@ fn the_four_scenarios_declare_the_explicit_action_lists_and_ceilings() {
     }
     assert_eq!(
         SCENARIOS.iter().map(|s| s.report).collect::<Vec<_>>(),
-        [true, true, false, true]
+        [true, true, false, true, false]
+    );
+
+    // Every scenario has a run ID, and a manifest end mode pairing, of its own:
+    // the matrix gate tells the scenarios apart by them.
+    let mut ids: Vec<_> = SCENARIOS.iter().map(|s| s.name.replace('_', "-")).collect();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), SCENARIOS.len());
+    let mut modes: Vec<_> = SCENARIOS
+        .iter()
+        .map(|s| s.end_mode.manifest_name())
+        .collect();
+    modes.sort();
+    assert_eq!(
+        modes,
+        [
+            "absence",
+            "manual",
+            "manual",
+            "room_closed",
+            "server_deadline"
+        ]
     );
 }
 
@@ -2508,7 +2662,7 @@ fn the_scenario_budgets_fit_their_caps() {
                 assert_eq!(total, 20 * 60);
                 assert_eq!(scenario.outer_cap_s, 20 * 60);
             }
-            EndMode::Manual | EndMode::Absence => {
+            EndMode::Manual | EndMode::Absence | EndMode::RoomClosed => {
                 assert_eq!(total, 660);
                 assert!(total < 15 * 60);
                 assert_eq!(scenario.outer_cap_s, 15 * 60);
@@ -2603,6 +2757,8 @@ fn the_manifest_duration_follows_the_product_range_and_the_recording_cap() {
         ),
         (base("manual", json!(10), 180), None, Ok(10)),
         (base("absence", json!(10), 600), None, Ok(10)),
+        (base("room_closed", json!(10), 180), None, Ok(10)),
+        (base("room_closed", json!(10), 601), None, Err(())),
         (base("manual", json!(10), 180), Some(5), Ok(10)),
         (base("manual", json!(20), 180), Some(15), Err(())),
         (base("manual", json!(9), 180), None, Err(())),
@@ -2954,6 +3110,9 @@ fn passing_facts(scenario: &Scenario) -> Facts {
         participants_left: Some(Vec::new()),
         readers_unfinished: 0,
         room_gone_after_delete: true,
+        terminal: (scenario.end_mode == EndMode::RoomClosed).then(|| "RoomClosed".to_owned()),
+        delete_after_gate: (scenario.end_mode == EndMode::RoomClosed).then_some(true),
+        terminal_after_delete: (scenario.end_mode == EndMode::RoomClosed).then_some(true),
     }
 }
 
@@ -3087,7 +3246,7 @@ fn redaction_removes_credentials_carried_in_a_query() {
     assert!(redact("wss://x/rtc?access_token=T&protocol=15").ends_with("&protocol=15"));
 }
 
-/// Declared before running: the selector accepts exactly a, b, c and d.
+/// Declared before running: the selector accepts exactly a, b, c, d and e.
 #[test]
 fn the_scenario_selector_takes_one_letter() {
     for (letter, name) in [
@@ -3095,10 +3254,11 @@ fn the_scenario_selector_takes_one_letter() {
         ("b", "b_server_deadline"),
         ("c", "c_absence_expiry"),
         ("d", "d_end_during_pending_recovery_with_thinking_hold"),
+        ("e", "e_room_closed_during_recovery"),
     ] {
         assert_eq!(scenario_for(letter).map(|s| s.name), Some(name));
     }
-    for bad in ["", "e", "ab", "a_manual", "A", " a"] {
+    for bad in ["", "f", "ab", "a_manual", "A", " a", "e_room"] {
         assert!(scenario_for(bad).is_none(), "{bad:?}");
     }
 }
@@ -3320,3 +3480,287 @@ fn a_deadline_far_past_the_hard_deadline_is_not_a_pass() {
     };
     assert!(judge(&SCENARIOS[1], &edge).is_empty());
 }
+
+// The room-closed case (e): the server deletes the room while the recovery
+// write is held, so the agent's SDK reports a real `Disconnected` and the loop
+// takes `Terminal::RoomClosed` and leaves without a report.
+
+fn room_closed() -> &'static Scenario {
+    scenario_for("e").unwrap()
+}
+
+/// Declared before running: the room-closed case is ordered join, seed,
+/// trigger, delete; the delete is the driving action, the gate is awaited after
+/// the trigger and before the delete, End is reserved and not scripted, and the
+/// manifest says `room_closed` under its own run ID.
+#[test]
+fn the_room_closed_case_deletes_the_room_after_the_gate_and_reserves_end() {
+    let scenario = room_closed();
+    assert_eq!(scenario.script(), scenario.actions);
+    assert_eq!(scenario.actions.last(), Some(&"room_delete"));
+    assert!(!scenario.scripted_end);
+    assert_eq!(scenario.ceiling, scenario.actions.len() + 1);
+    assert!(!scenario.report);
+    let manifest = scenario.manifest(Path::new("/pinned"), &"d".repeat(64));
+    assert_eq!(manifest["run_id"], json!("e-room-closed-during-recovery"));
+    assert_eq!(manifest["end_mode"], json!("room_closed"));
+    assert_eq!(manifest["action_ceiling"], json!(5));
+    assert_eq!(
+        manifest["actions"],
+        json!([
+            "candidate_join",
+            "seed_fixture",
+            "controlled_recovery_trigger",
+            "room_delete"
+        ])
+    );
+    assert_eq!(manifest["outer_wall_cap_s"], json!(900));
+    assert_eq!(
+        scenario.selected_duration_s() + scenario.cleanup_reserve_s(),
+        SETUP_S + OBSERVATION_S + ENDING_S + CLEANUP_S
+    );
+}
+
+fn closed_by_server(facts: &mut Facts) {
+    facts.terminal = Some("RoomClosed".into());
+    facts.delete_after_gate = Some(true);
+    facts.terminal_after_delete = Some(true);
+}
+
+/// Declared before running: the verdict passes the room-closed facts and names
+/// each departure: any other terminal or none, a delete before the gate or
+/// none, a terminal before the delete, a final report receipt, an unfinished
+/// loop, a participant left and an unfinished reader.
+#[test]
+fn the_room_closed_verdict_names_each_departure() {
+    let scenario = room_closed();
+    let mut passing = passing_facts(scenario);
+    closed_by_server(&mut passing);
+    assert_eq!(judge(scenario, &passing), Vec::<String>::new());
+    // A participants listing that found no room is acceptable: it is gone.
+    assert!(passing.participants_left.is_some());
+    let gone = Facts {
+        participants_left: None,
+        ..passing_facts(scenario)
+    };
+    assert_eq!(judge(scenario, &gone), Vec::<String>::new());
+
+    type Departure = (&'static str, fn(&mut Facts), &'static str);
+    let departures: [Departure; 13] = [
+        ("end", |f| f.terminal = Some("End".into()), "not RoomClosed"),
+        (
+            "absent",
+            |f| f.terminal = Some("Absent".into()),
+            "not RoomClosed",
+        ),
+        (
+            "deadline",
+            |f| f.terminal = Some("Deadline".into()),
+            "not RoomClosed",
+        ),
+        ("none", |f| f.terminal = None, "not RoomClosed"),
+        (
+            "delete before the gate",
+            |f| f.delete_after_gate = Some(false),
+            "after the recovery write was held",
+        ),
+        (
+            "no delete",
+            |f| f.delete_after_gate = None,
+            "after the recovery write was held",
+        ),
+        (
+            "early terminal",
+            |f| f.terminal_after_delete = Some(false),
+            "after the room was deleted",
+        ),
+        (
+            "unobserved order",
+            |f| f.terminal_after_delete = None,
+            "after the room was deleted",
+        ),
+        (
+            "report receipt",
+            |f| {
+                f.final_copies = 1;
+                f.final_distinct = 1;
+            },
+            "final report receipt",
+        ),
+        ("gate", |f| f.gate_entered = false, "never entered"),
+        ("loop", |f| f.agent = AgentEnd::Aborted, "did not complete"),
+        (
+            "left",
+            |f| f.participants_left = Some(vec!["x".into()]),
+            "participants left",
+        ),
+        ("reader", |f| f.readers_unfinished = 1, "Live reader"),
+    ];
+    for (label, change, needle) in departures {
+        let mut facts = passing_facts(scenario);
+        closed_by_server(&mut facts);
+        change(&mut facts);
+        let problems = judge(scenario, &facts);
+        assert!(
+            problems.iter().any(|p| p.contains(needle)),
+            "{label}: {problems:?}"
+        );
+    }
+    // The other four cases do not read the room-closed facts.
+    for other in &SCENARIOS[..4] {
+        let mut facts = passing_facts(other);
+        facts.terminal = Some("RoomClosed".into());
+        facts.delete_after_gate = Some(false);
+        assert_eq!(judge(other, &facts), Vec::<String>::new(), "{}", other.name);
+    }
+}
+
+/// Declared before running: the run's own `room_delete` is refused, and issues
+/// no request, before the recovery write is held.
+#[tokio::test]
+async fn room_delete_is_refused_before_the_recovery_gate_is_entered() {
+    let config = crate::config::load_from_pairs([
+        ("LIVEKIT_URL", "ws://127.0.0.1:9"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google"),
+    ])
+    .unwrap();
+    let (gate, _barrier) = private_gate();
+    let mut effects =
+        LiveEffects::new(room_closed(), config, None, 10, &gate, None).expect("local setup");
+    let error = effects.perform("room_delete").await.unwrap_err();
+    assert!(
+        error.contains("before the recovery write was held"),
+        "{error}"
+    );
+    assert!(effects.deleted_at.is_none(), "no delete was issued");
+    assert_eq!(effects.delete_after_gate, Some(false));
+    let facts = effects.facts(&Teardown {
+        participants: None,
+        room_gone_after_delete: true,
+        readers_unfinished: 0,
+        notes: Vec::new(),
+    });
+    assert_eq!(facts.terminal_after_delete, None);
+    // The order is read from the instants the delete and the terminal carry.
+    let now = std::time::Instant::now();
+    let later = now + Duration::from_secs(1);
+    let teardown = Teardown {
+        participants: None,
+        room_gone_after_delete: true,
+        readers_unfinished: 0,
+        notes: Vec::new(),
+    };
+    effects.deleted_at = Some(later);
+    effects.terminal = Some(("RoomClosed", now));
+    assert_eq!(effects.facts(&teardown).terminal_after_delete, Some(false));
+    effects.terminal = Some(("RoomClosed", later));
+    assert_eq!(effects.facts(&teardown).terminal_after_delete, Some(true));
+    assert_eq!(
+        effects.facts(&teardown).terminal.as_deref(),
+        Some("RoomClosed")
+    );
+    assert!(
+        judge(room_closed(), &facts)
+            .iter()
+            .any(|p| p.contains("after the recovery write was held"))
+    );
+}
+
+/// Declared before running: a terminal the loop reports reaches only the probe
+/// registered for its own room, with the name the judge reads and a time.
+#[test]
+fn the_live_terminal_probe_is_keyed_by_room_and_carries_the_terminal_name() {
+    use super::super::Terminal;
+    let (mine, mut mine_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (other, mut other_rx) = tokio::sync::mpsc::unbounded_channel();
+    {
+        let mut probes = super::super::super::LIVE_TERMINAL_PROBES.lock().unwrap();
+        probes.push(("probe-room-mine".into(), mine));
+        probes.push(("probe-room-other".into(), other));
+    }
+    let before = std::time::Instant::now();
+    super::super::super::note_live_terminal("probe-room-mine", Terminal::RoomClosed.name());
+    let (name, at) = mine_rx.try_recv().unwrap();
+    assert_eq!(name, "RoomClosed");
+    assert!(at >= before);
+    assert!(
+        other_rx.try_recv().is_err(),
+        "another room's probe is silent"
+    );
+    super::super::super::LIVE_TERMINAL_PROBES
+        .lock()
+        .unwrap()
+        .retain(|(room, _)| !room.starts_with("probe-room-"));
+    let names = [
+        Terminal::End {
+            topic: String::new(),
+            payload: Value::Null,
+        }
+        .name(),
+        Terminal::Finish(String::new()).name(),
+        Terminal::Deadline.name(),
+        Terminal::Absent.name(),
+        Terminal::RoomClosed.name(),
+    ];
+    assert_eq!(names, ["End", "Finish", "Deadline", "Absent", "RoomClosed"]);
+}
+
+/// Declared before running: with the recovery write held, the SDK's
+/// `Disconnected` makes the real recovery driver take `Terminal::RoomClosed`,
+/// the probe the live fixture reads reports exactly that, and the loop leaves
+/// as production does (no hand-built terminal probe short-circuits it). This is
+/// a local socket and a recorded room, not a live one.
+#[tokio::test]
+async fn a_room_disconnect_while_the_recovery_write_is_held_is_reported_as_room_closed() {
+    if super::isolated(
+        "live::a_room_disconnect_while_the_recovery_write_is_held_is_reported_as_room_closed",
+    ) {
+        return;
+    }
+    let (listener, endpoint) = super::listener().await;
+    let mut rig = super::Rig::new(endpoint).await;
+    rig.loops.recovery_terminal = None;
+    let (live_terminal, mut reported) = tokio::sync::mpsc::unbounded_channel();
+    super::super::super::LIVE_TERMINAL_PROBES
+        .lock()
+        .unwrap()
+        .push((rig.room.name().to_owned(), live_terminal));
+    let (gate, barrier) = private_gate();
+    rig.loops.recovery_writes.push_back(barrier);
+    let reader = rig
+        .gemini
+        .inspect_reader_for_test()
+        .expect("setup owns its reader");
+    reader.abort();
+    let server = tokio::spawn(super::recording_fresh_gemini(
+        listener,
+        vec![super::FreshStep::Ready],
+    ));
+    let room = rig._room_sender.clone();
+    let (flow, entered) = tokio::join!(rig.run(), async {
+        gate.entered(Duration::from_secs(8)).await.unwrap();
+        let held_at = std::time::Instant::now();
+        room.send(RoomEvent::Disconnected {
+            reason: ::livekit::DisconnectReason::RoomDeleted,
+        })
+        .unwrap();
+        held_at
+    });
+    assert!(flow.is_break(), "RoomClosed leaves the room");
+    let (name, at) = reported.try_recv().expect("the loop reported its terminal");
+    assert_eq!(name, "RoomClosed");
+    assert!(
+        at >= entered,
+        "the terminal came after the gate and the close"
+    );
+    assert!(reported.try_recv().is_err(), "one terminal");
+    gate.release();
+    server.abort();
+}
+
+// The speech-continuity arms (T5b.2): a stalled microphone consumer against the
+// real room loop, one clip arm per invocation.
+#[path = "recovery_continuity.rs"]
+mod continuity;

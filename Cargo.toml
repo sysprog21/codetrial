@@ -134,6 +134,9 @@ livekit-net = "0.1.4"
 # The paused clock, so the Live socket's keepalive and idle limits are tested
 # at their real values instead of waiting them out.
 tokio = { version = "1.54.1", features = ["test-util"] }
+# The continuity fixture installs a logger to read the SDK's queue-overflow
+# line; the SDK already depends on this crate.
+log = "0.4.34"
 
 # The audio probe matches onsets to pulses, and `cargo test` builds an
 # example's tests without running them unless asked to.

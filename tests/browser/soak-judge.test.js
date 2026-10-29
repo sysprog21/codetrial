@@ -1082,3 +1082,108 @@ test("the driver judges with the mode, exits 77 only for no GoAway and 1 for the
     "only a soak that learned nothing is inconclusive",
   );
 });
+
+// A reduced synthetic series shared with the Python analyzer, not live evidence.
+const recoverySeries = fs.readFileSync(
+  new URL("../fixtures/gemini-recovery-series.txt", import.meta.url),
+  "utf8",
+);
+const seriesRoom = "recovery-series";
+const seriesReplies = (log = recoverySeries) =>
+  judge.judgeEpisodeReplies(
+    judge.parseEpisodes(log, seriesRoom),
+    judge.parseObligations(log, seriesRoom),
+  );
+
+test("six resumed rotations preserve one owed crossing without inventing five replies", () => {
+  const parsed = judge.parseEpisodes(recoverySeries, seriesRoom);
+  assert.equal(parsed.episodes.length, 6);
+  const swaps = judge.parseReplacements(recoverySeries, seriesRoom);
+  assert.equal(swaps.length, 6);
+  assert.deepEqual(
+    swaps.map((s) => s.newSocket),
+    [2, 3, 4, 5, 6, 7],
+  );
+  const tally = judge.tallyReplacements(swaps);
+  assert.equal(tally.goAwaySwapsTotal, 6);
+  assert.equal(tally.watchdogSwapsTotal, 0);
+  const replies = seriesReplies();
+  assert.equal(replies.verdict, "pass");
+  assert.deepEqual(
+    replies.episodes.map((e) => e.class),
+    ["idle", "answered", "idle", "idle", "idle", "idle"],
+  );
+  assert.equal(judge.parseObligations(recoverySeries, seriesRoom).size, 6);
+});
+
+test("two copies of the series keep exactly six swaps and one answered crossing", () => {
+  const twice = recoverySeries + recoverySeries;
+  assert.equal(judge.parseReplacements(twice, seriesRoom).length, 6);
+  assert.deepEqual(seriesReplies(twice), seriesReplies());
+  assert.equal(judge.parseObligations(twice, seriesRoom).size, 6);
+  assert.deepEqual(judge.parseEpisodes(twice, "foreign-room").episodes, []);
+});
+
+for (let episode = 1; episode <= 6; episode++) {
+  test(`the series cannot hide missing handover ${episode} behind its other swaps`, () => {
+    const log = recoverySeries
+      .split("\n")
+      .filter(
+        (line) =>
+          !(
+            line.startsWith("replacement end:") &&
+            line.includes(` episode=${episode} `)
+          ),
+      )
+      .join("\n");
+    const replies = seriesReplies(log);
+    assert.equal(replies.episodes.length, 6);
+    assert.equal(replies.verdict, "fail");
+    const missing = replies.episodes.find((e) => e.episode === episode);
+    assert.equal(missing.status, "uncovered");
+    assert.equal(missing.class, "truncated");
+  });
+}
+
+test("the carried reply in the series rejects audio accepted on the old socket", () => {
+  const log = recoverySeries
+    .split("\n")
+    .map((line) => {
+      if (!line.startsWith("codetrial latency ")) return line;
+      const record = JSON.parse(line.slice("codetrial latency ".length));
+      if (record.obligation === 2) {
+        record.socket = 2;
+        record.first_accept_socket = 2;
+      }
+      return `codetrial latency ${JSON.stringify(record)}`;
+    })
+    .join("\n");
+  const replies = seriesReplies(log);
+  assert.equal(replies.verdict, "fail");
+  assert.equal(
+    replies.episodes.find((e) => e.episode === 2).class,
+    "pre_rotation_audio",
+  );
+});
+
+test("native capture records in the series do not prove fresh decoded audio", () => {
+  const replies = seriesReplies();
+  assert.equal(replies.ok, true);
+  const absent = judge.judgeSwapAudio(replies, []);
+  assert.equal(absent.ok, false);
+  assert.equal(
+    absent.episodes.find((e) => e.episode === 2).status,
+    "missing_sample",
+  );
+  const unrelated = judge.judgeSwapAudio(replies, [rearm(6)]);
+  assert.equal(unrelated.ok, false);
+  const stale = judge.judgeSwapAudio(replies, [rearm(2, { windowEdge: 4 })]);
+  assert.equal(stale.ok, false);
+  const fresh = judge.judgeSwapAudio(replies, [rearm(2)]);
+  assert.equal(fresh.ok, true);
+  assert.equal(fresh.episodes.filter((e) => e.status === "verified").length, 1);
+  assert.equal(
+    fresh.episodes.filter((e) => e.status === "not_required").length,
+    5,
+  );
+});

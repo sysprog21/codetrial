@@ -782,7 +782,7 @@ manifest names and judges that it ran that long. It needs a budgeted run and
 `BROWSER_CHECK_AGENT=rust` or `dispatch`. The manifest adds `run_kind`
 (`smoke`, `pilot`, `qualification`, `experiment` or `clip`), `duration_min` and
 `observation_target_s`, and `end_mode` gains `manual`, `server_deadline`,
-`absence`, `terminal_cancel` beside `native_close`; `explicit_end` is the older
+`absence`, `room_closed`, `terminal_cancel` beside `native_close`; `explicit_end` is the older
 spelling of `manual` and is not a long interview. `interview-run-budget.py`
 checks only their shape. `scripts/long-interview-plan.cjs` owns what they mean
 for a browser run, and `browser-check.sh` and `browser-check.cjs` both call it
@@ -804,8 +804,8 @@ under `BROWSER_CHECK_VALIDATE_ENV_ONLY=1`, before anything is built or started:
   target. A `server_deadline` smoke sends nothing, so the real route ends the
   interview, and observes the duration plus the agent's 120 second grace.
 - `clip` and `native_close` belong to the native worker and are refused for a
-  browser run, as are `absence` and `terminal_cancel`, which this flow does not
-  drive. A clip emits no assessment report and satisfies no report gate.
+  browser run, as are `absence`, `room_closed` and `terminal_cancel`, which this
+  flow does not drive. A clip emits no assessment report and satisfies no report gate.
 - A run with no bootstrap line, token response, countdown or interview clock
   sample (for a target of two minutes or more) fails instead of passing on
   nothing, and so does a clock whose origin is missing, moves or lies outside
@@ -951,6 +951,20 @@ granted after the client has given up.
 | b | join, seed, trigger | the loop's own 12 minute deadline (10 + 120 s) | one |
 | c | join, seed, trigger, leave | absence grace (90 s) expires | none |
 | d | join, seed, Thinking hold, trigger, release, End | manual End while the recovery write is still held | one |
+| e | join, seed, trigger, room_delete | the server closes the room while the recovery write is held: the agent's SDK reports `Disconnected` and the loop takes `Terminal::RoomClosed` | none |
+
+Case e creates its room through `create_interview_room`, as production does,
+and its `room_delete` action deletes that room with the existing RoomService
+helper only after the prepared recovery write is held; the End permit stays
+reserved and unspent. Besides the conditions below, its verdict requires that
+the loop's own recovery terminal, read from a test-only probe keyed by the room,
+was `RoomClosed` (not End, Absent or Deadline) and arrived after the delete. A
+participants listing that finds no room is acceptable, since the room is
+already gone. The recovery matrix gate (`scripts/check-recovery-matrix.py`)
+accepts run `e-room-closed-during-recovery` (end mode `room_closed`, with
+`controlled_recovery_trigger` and `room_delete` granted and no End permit) as
+the representative RoomDisconnected observation, and RoomEventsEof's SDK column
+stands only on a validated RoomDisconnected claim, plain or representative.
 
 The pass conditions are the fixture's `judge`: the gate was entered, the loop
 returned, exactly the declared number of final report receipts (a second copy
@@ -960,3 +974,60 @@ named room, the room is gone afterwards, and every Live reader has finished. A
 passing run shows one crossing for one session. It does not show that a
 recovery-time cancel is correct for any other timing, and what it did not reach
 stays uncovered.
+
+### Native speech-continuity arms
+
+The same file family holds a second ignored fixture,
+`live_sdk_clip_continuity_arm` in `tests/unit/livekit/recovery_continuity.rs`.
+It asks whether the SDK's bounded microphone queue keeps what a candidate said
+while the room loop is not reading it. A real SDK candidate publishes two
+authored, numbered speech clips (`c01_say_plan` and `c01_say_loop` of the
+10-minute coding smoke schedule, six numbered turns) through a real audio track
+into the real room loop and the configured Gemini. A test-only gate in front of
+the loop's microphone dequeue (`src/livekit/probe.rs`, compiled only for tests;
+there is no production fault flag and no network rule) holds that one dequeue
+from about the clip's first frame (a consumer already waiting on the
+stream may take one more frame) while the room controls, the Gemini reader
+and the keepalive polling keep running, and releases it after the arm's stall. The
+queue holds 4000 ten-millisecond frames (40 s) and drops the oldest when full.
+
+| Arm | Dequeue held | Expected if the SDK keeps its documented rule |
+| --- | --- | --- |
+| s0 | never (matched control) | everything arrives as it is spoken |
+| s20 | 20 s | all frames retained |
+| s39 | 39 s | all frames retained |
+| s41 | 41 s | the oldest 1 s of audio is dropped |
+| s60 | 60 s | the oldest 20 s is dropped, so the first clip is lost |
+
+Each arm is one invocation under the B0.1 manifest: `run_kind` `clip`,
+`end_mode` `native_close`, 60 s of setup, 180 s for the clip, the hold and the
+drain, 60 s of cleanup (a 300 s cap), the planned actions `candidate_join` and
+`clip_start`, and the reserved close permit as the third. The fixture closes the
+candidate's connection and the interviewer's task itself and deletes its own
+room; it sends no End, so no assessment report is generated, and the arm cannot
+certify end or report behavior. The spoken clips live outside the checkout; the
+answer key is authored on the `smoke-coding` set, and the loader refuses a set
+whose clip text differs (the whiteboard set does).
+
+```bash
+scripts/live-sdk-fixture.sh build DIR
+CODETRIAL_LIVE_CONFIG=PATH CODETRIAL_LIVE_CLIPS=/path/to/clips/out/smoke-coding \
+    scripts/live-sdk-fixture.sh run-clip s0 DIR      # then s20, s39, s41, s60
+scripts/live-sdk-fixture.sh clip-report DIR          # reads DIR/worker-s*.log
+```
+
+Each arm runs once per `DIR` and nothing reruns it. `grep LIVE_OBS
+DIR/worker-<arm>.log` shows the raw clip and turn IDs, the times the frames were
+actually taken from the SDK queue (a per-second tally, the first frame after the
+release), the Gemini input transcript lines as the room loop received them, and
+the room loop's own retention counters (ingress `dropped_bytes`, quarantined
+bytes). `clip-report` compares each arm's transcript with the answer key and
+counts missing, repeated and delayed turns per arm; a miss, repeat or delay the
+unstalled control shows too is reported as inconclusive, not as a loss, and an
+arm with no result is listed as not run. One clip per arm is descriptive
+evidence only: it is no estimate of a loss rate, and exact SDK drops are not
+inferred from the transcript, because the SDK counts them nowhere a caller can
+read and a transcript can lack words that were sent. The local recording-peer
+test (`the_recording_peer_sees_nothing_while_held_and_the_retained_frames_after`)
+runs the same gate against a fake Gemini socket offline and asserts the wire:
+nothing during the hold, then one message per retained frame, in order.

@@ -52,6 +52,14 @@ That is the rule's consequence, stated as a fact about the session; it is not
 an assessment of the learner and never a claim about intent. Everything else
 above applies to task reviews unchanged.
 
+An audio continuity gap is a session condition too. When the process itself
+loses voiced candidate audio, the [continuity gap specification](turn-timing.md#continuity-gaps)
+lets the interviewer make a bounded repeat request when the candidate releases
+the floor.
+The request is not a candidate signal, the missing words are never supplied,
+credited or held against the candidate, and a gap that was never repaired is
+neither clear nor unclear communication.
+
 ## What enforces it
 
 The report prompt states the boundary, and the server independently scans every

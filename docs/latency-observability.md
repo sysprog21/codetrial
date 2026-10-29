@@ -198,6 +198,42 @@ field of the episode's start line, so count actual replacements by episode and
 not by notice messages. This baseline is a smoke observation, not a long-interview
 qualification or a performance comparison by itself.
 
+### Credential-free recovery replay
+
+`tests/fixtures/gemini-recovery-series.txt` is a reduced synthetic trace,
+not a retained interview or a baseline measurement. It chains six resumed
+GoAway replacements across seven sockets. Five swaps owe no reply; one carries
+a reply. Five obligations reach native capture, one is superseded, and two of
+the captured replies cross the analyzer's 5,000 ms stall threshold. These
+fixture counts are deliberately smaller than a live interview's counts.
+
+Both readers replay the same file: the Python analyzer classifies the owed
+crossing as `satisfied` and the others as `no_reply_owed`; the browser judge
+calls them `answered` and `idle`. Only Python checks the socket-pressure and
+microphone-gap records. Node separately requires a fresh decoded sample for
+the answered crossing: native capture records do not supply that sample.
+Tests also remove each of the six handover ends, duplicate the complete trace,
+and move accepted audio back to the old socket. Earlier successful swaps
+cannot make those missing or stale observations pass.
+
+Run the replay and the long-interview report checks without credentials:
+
+```sh
+python3 scripts/run-python-tests.py tests/test_analyze_latency.py
+node --test tests/browser/soak-judge.test.js tests/browser/long-interview-driver.test.js
+```
+
+A long-interview report's `assessment_scope` is `structural`, even when
+`run_kind` declares a qualification workload. Its `qualification` remains
+`not_evaluated`: checkpoint `reply_content` and post-swap `decoded_signal`
+are `not_assessed` by this driver. Separate evidence is required before
+qualifying a build. `exposure_s` ends at the harness's observation boundary;
+the analyzer's exposure can extend through the terminal socket's end and must
+not be substituted for it. `end_permit_granted` records permission, while
+`end_clicked` records the page action; the countdown can win after the permit
+is granted. `cleanup_assessed: false` is not a zero-leak measurement. The
+budget launcher's later child-tree reap is a separate cleanup scope.
+
 ## Paired per-session screen
 
 `python3 scripts/analyze-latency.py --paired before.log after.log` pairs the
@@ -463,6 +499,50 @@ the wall clock at the start, repeated on every sample so a cut or joined log
 still has the anchor. `elapsed_ms` and every `interview_ms` read the same clock,
 which a socket replacement does not reset, so a long harness can verify the
 full duration from the last sample.
+
+#### Microphone dequeue gaps
+
+Each `interview clock:` line also carries `mic_gap_max_ms=`,
+`mic_gap_over_1s=`, `mic_gap_over_10s=` and `mic_gap_over_30s=` (before
+`room=`), and a `mic gaps: pid= session= elapsed_ms= <the same four> room=` line
+is printed once as the interview ends. They measure the room loop as a consumer
+of the SDK's microphone queue (the queue holds 4000 frames, about 40 s, and
+drops the oldest beyond that). They are four counters per interview and no
+per-frame log, series or audio content.
+
+- A gap is the monotonic time between two consecutive frames taken from the SDK
+  queue, stamped when the frame is in hand, in the room loop's own dequeue
+  (`on_candidate_input`) and in the recovery driver's audio arm. A frame
+  replayed from the recovery ingress is not a dequeue and is never counted a
+  second time. The time the loop spends between two dequeues, writing the
+  previous frame included, is part of the gap.
+- The counts are cumulative and strict: `over_1s` counts gaps longer than 1 s
+  (exactly 1 s is not), and a 31 s gap counts in all three. `max_ms` is the
+  longest gap in whole milliseconds.
+- The SDK delivers (silence) frames for as long as a candidate audio track is
+  subscribed, muted or not, so a gap on one stream means the consumer was not
+  dequeuing. A span with no stream is not a stall and is never counted: the
+  last dequeue is forgotten when the stream ends and when a new track is
+  attached, so the first frame of a stream has no gap. A candidate who left,
+  or whose track was unsubscribed, produces no gap.
+- The figures belong to the interview: a socket replacement, which restarts
+  episodes and sockets, neither resets nor splits them.
+- Before two frames have been taken from one stream the four fields are
+  `none`, which means unmeasured and not zero. `scripts/analyze-latency.py`
+  reads a log without the fields (an older agent) as unknown as well: the
+  report's `resources.mic_gap` then has `null` figures and the summary prints
+  `mic_gap_max_ms=unknown`. `known` and `unknown` count the lines with and
+  without a measurement; the maximum is the largest reading of any interview,
+  and since the counts are cumulative within an interview, each interview
+  contributes its largest reading and the interviews add up. A partial set of
+  fields, a malformed number, counts that are not nested, or counts that
+  contradict the maximum (a count over a threshold the maximum does not reach,
+  or a maximum past a threshold with no count) are rejected.
+
+A maximum under 40 s means the consumer never fell far enough behind to lose
+audio to the queue's bound; a maximum above it names an interview that could
+have. It measures the gap of one consumer, not how much the SDK dropped, which
+only its overflow log reports.
 
 ### Reading the lines
 

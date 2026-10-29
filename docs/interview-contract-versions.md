@@ -70,6 +70,11 @@ later commit in the same series that changes a prompt again keeps that bundle's
 versions, records the prompt golden's new digest, and extends the bundle's row.
 Bundle 5's row, which covers every commit of PR #38, is the precedent.
 
+A specification that no code implements is not a version. The
+[continuity gap specification](turn-timing.md#continuity-gaps) changes no
+prompt, rubric or schema and so leaves the active bundle as it is; implementing
+a repeat request would be a live prompt change and would open a new bundle.
+
 ## Compatibility rules
 
 - Reports without `interviewContract` predate this contract. They stay readable

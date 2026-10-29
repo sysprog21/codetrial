@@ -21,6 +21,19 @@ pub(super) enum Terminal {
     RoomClosed,
 }
 
+#[cfg(test)]
+impl Terminal {
+    pub(super) fn name(&self) -> &'static str {
+        match self {
+            Self::End { .. } => "End",
+            Self::Finish(_) => "Finish",
+            Self::Deadline => "Deadline",
+            Self::Absent => "Absent",
+            Self::RoomClosed => "RoomClosed",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct Cancelled;
 
@@ -499,6 +512,7 @@ impl<'r, 'c, 'i> Driver<'r, 'c, 'i> {
                 }
                 frame = next_audio_frame(&mut self.context.media.audio), if self.context.media.audio.is_some() => {
                     let now = Instant::now();
+                    self.context.media.note_mic_dequeue(&mut self.context.activity.latency, frame.is_some(), now);
                     if note_candidate_audio_frame(self.context.state, self.context.activity, frame.as_ref(), now) {
                         self.context.media.voiced_at = Some(now);
                     }
@@ -831,6 +845,8 @@ impl Driver<'_, '_, '_> {
             {
                 Ok(Some(GeminiEvent::InputTranscript(text))) if !text.trim().is_empty() => {
                     fragments.push(text.clone());
+                    #[cfg(test)]
+                    super::probe::note_transcript(&text);
                     if session::apply_recovery_transcript(
                         self.room,
                         self.context,
@@ -1250,6 +1266,8 @@ pub(super) async fn replace(
                 .terminal
                 .take()
                 .expect("cancelled wait retains its terminal intent");
+            #[cfg(test)]
+            super::note_live_terminal(room.name(), terminal.name());
             #[cfg(test)]
             if let Some(probe) = &driver.loops.recovery_terminal {
                 let _ = probe.send(terminal);

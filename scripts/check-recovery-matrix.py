@@ -12,6 +12,35 @@ takes its path explicitly. A row is one of:
   N/A                             the pair cannot occur, for a source reason
   uncovered                       open work
 
+The SDK column (`sdk_report`) of a covered row is one of:
+
+  "uncovered required T4b.4"      open work (a gap)
+  {run_id, action_id}             the row's own phase was driven by that run
+  {status: "sdk_representative",  a live run drove the SAME cause class at a
+   run_id, action_id, reason}     representative phase; the reason states, with
+                                  a source anchor, why the SDK-event-to-handler
+                                  path does not depend on the phase. This is an
+                                  argument layered on one observation, not an
+                                  observation of this phase.
+  {status: "N/A", shares, reason} only RoomEventsEof: no SDK event exists, the
+                                  row shares the RoomDisconnected terminal path,
+                                  so it stands only while the same phase's
+                                  RoomDisconnected SDK claim validates.
+
+A representative claim is validated like a plain one (complete run, child exit
+0, no overrides, action granted, a matching run-manifest.json) and additionally
+against REPRESENTATIVE below: the run must be the scenario that drives the
+claimed cause, with the manifest's end_mode, the required actions granted and
+the End permit used or not as that scenario requires. A cause with no entry in
+that table (RoomEventsEof, which has no SDK event of its own) cannot be backed by
+a representative claim.
+What is checked is the run id, manifest end_mode, granted actions and result
+fields, all files the claimant supplies; the reason is checked for shape (length,
+a src/*.rs path, an identifier), not that the path exists or that the argument is
+sound. A representative row is an argument, not an observation of its phase.
+The live fixture emits no budget heartbeats, so a representative claim asks for
+a clean, reaped run with resource samples instead of telemetry events.
+
 `check` resolves each tested row to a fully qualified test that exists in the
 `cargo test --lib -- --list` output and to a receipt from a successful run that
 discovered at least one test against the current sources, and resolves each
@@ -55,6 +84,54 @@ CAUSES = ("End", "Deadline", "RoomDisconnected", "Absent", "Finish", "RoomEvents
 STATUSES = ("covered_local_terminal_cleanup", "covered_shared", "N/A", "uncovered")
 SDK_PENDING = "uncovered required T4b.4"
 RECEIPT_SCHEMA = 1
+SDK_REPRESENTATIVE = "sdk_representative"
+
+# The live scenarios that drive a cause class, keyed by cause. `actions` must all
+# be granted and the claim's action_id must be `drive`, the action that causes it
+# (the others are setup), `end_mode` is the manifest's,
+# `end_permit` is whether the run used the manual End permit. RoomDisconnected is
+# driven by the room-closed scenario, which has a run id and a manifest end_mode
+# of its own: the server deletes the room (`room_delete`) while the recovery
+# write is held. It is not the absence scenario, whose run only ever saw a
+# RoomClosed by accident (the departure timeout, in a run that ended
+# child_failed), so the two cannot stand in for each other.
+REPRESENTATIVE = {
+    "End": {
+        "runs": (
+            "a-manual-end-with-transient-leave",
+            "d-end-during-pending-recovery-with-thinking-hold",
+        ),
+        "end_mode": "manual",
+        "drive": "end",
+        "actions": ("controlled_recovery_trigger", "end"),
+        "end_permit": True,
+    },
+    "Deadline": {
+        "runs": ("b-server-deadline",),
+        "end_mode": "server_deadline",
+        "drive": "controlled_recovery_trigger",
+        "actions": ("controlled_recovery_trigger",),
+        "end_permit": False,
+    },
+    "Absent": {
+        "runs": ("c-absence-expiry",),
+        "end_mode": "absence",
+        "drive": "candidate_leave",
+        "actions": ("controlled_recovery_trigger", "candidate_leave"),
+        "end_permit": False,
+    },
+    "RoomDisconnected": {
+        "runs": ("e-room-closed-during-recovery",),
+        "end_mode": "room_closed",
+        "drive": "room_delete",
+        "actions": ("controlled_recovery_trigger", "room_delete"),
+        "end_permit": False,
+    },
+}
+# (cause, shared cause): RoomEventsEof ends through RoomDisconnected's terminal,
+# so its SDK column stands only while the same phase's RoomDisconnected claim
+# (a plain one, or a representative one from the room-closed scenario) validates.
+EOF_SHARES = ("RoomEventsEof", "RoomDisconnected")
 
 # The closed baseline: 29 phases x 6 causes. A ledger with any other row count,
 # or whose (phase, cause) set hashes differently, has silently dropped or
@@ -191,6 +268,7 @@ class Report:
         self.gaps = []  # (row id, kind, detail): work remains
         self.rows = 0
         self.by_status = {}
+        self.by_sdk = {}
 
     def lie(self, rid, kind, detail):
         self.integrity.append((rid, kind, detail))
@@ -364,7 +442,7 @@ def check_local(row, names, tests, receipts, digest, report):
 
 
 def load_sdk_runs(directory):
-    """{run id: (result, manifest bytes digest or None)} for each budget-result.json."""
+    """{run id: (result, manifest digest or None, parsed manifest or None)} for each budget-result.json."""
     runs = {}
     if directory is None:
         return runs
@@ -377,24 +455,32 @@ def load_sdk_runs(directory):
             continue
         manifest = path.with_name("run-manifest.json")
         digest = sha256_hex(manifest.read_bytes()) if manifest.is_file() else None
+        try:
+            parsed = json.loads(manifest.read_text()) if digest else None
+        except (OSError, ValueError):
+            parsed = None
         if result["run_id"] in runs:
             raise Unusable(
                 "run %s has more than one budget-result.json under %s"
                 % (result["run_id"], directory)
             )
-        runs[result["run_id"]] = (result, digest)
+        runs[result["run_id"]] = (result, digest, parsed)
     return runs
 
 
-def sdk_problem(claim, runs):
-    """None when the claimed run executed the claimed action, else the reason."""
-    if not (isinstance(claim, dict) and set(claim) == {"run_id", "action_id"}):
+def sdk_problem(claim, runs, live=False):
+    """None when the claimed run executed the claimed action, else the reason.
+
+    `live` swaps the telemetry-event requirement for the live fixture's own
+    liveness evidence (see the module docstring).
+    """
+    if not (isinstance(claim, dict) and {"run_id", "action_id"} <= set(claim)):
         return "sdk_report must be an object with run_id and action_id"
-    if not all(isinstance(claim[k], str) and claim[k] for k in claim):
+    if not all(isinstance(claim[k], str) and claim[k] for k in ("run_id", "action_id")):
         return "sdk_report run_id and action_id must be nonempty strings"
     if claim["run_id"] not in runs:
         return "no budget-result.json for run %s" % claim["run_id"]
-    result, manifest_digest = runs[claim["run_id"]]
+    result, manifest_digest, _manifest = runs[claim["run_id"]]
     if manifest_digest is None or result.get("manifest_sha256") != manifest_digest:
         return "run %s has no run-manifest.json matching its result" % claim["run_id"]
     if (
@@ -418,25 +504,188 @@ def sdk_problem(claim, runs):
         return "run %s dispatched an action without a permit" % claim["run_id"]
     if claim["action_id"] not in granted:
         return "run %s never granted action %s" % (claim["run_id"], claim["action_id"])
+    if live:
+        return live_problem(claim["run_id"], result, telemetry)
     if not is_count(telemetry.get("events")):
         return "run %s recorded no telemetry events" % claim["run_id"]
     return None
 
 
+def live_problem(run_id, result, telemetry):
+    """Liveness for a live-fixture run, which emits no budget heartbeats."""
+    cleanup, resources = result.get("cleanup"), result.get("resources")
+    if not (isinstance(cleanup, dict) and isinstance(resources, dict)):
+        return "run %s has no cleanup and resource record" % run_id
+    leaked = cleanup.get("leaked_children")
+    if not (cleanup.get("reaped") is True and type(leaked) is int and leaked == 0):
+        return "run %s did not reap its children cleanly" % run_id
+    if cleanup.get("failures"):
+        return "run %s recorded cleanup failures" % run_id
+    if not is_count(resources.get("samples")):
+        return "run %s recorded no resource samples" % run_id
+    malformed = telemetry.get("malformed")
+    if malformed is not None and not (type(malformed) is int and malformed == 0):
+        return "run %s recorded malformed telemetry" % run_id
+    return None
+
+
+SOURCE_PATH = re.compile(r"\bsrc/[\w/.-]+\.rs\b")
+
+
+def reason_problem(reason, path=False):
+    """Why a reason is not a source explanation; `path` also wants a src/*.rs path."""
+    if not isinstance(reason, str):
+        return "reason must be a string"
+    reason = reason.strip()
+    if reason.lower() in PLACEHOLDERS or len(reason) < MIN_REASON:
+        return (
+            "reason needs a source explanation of at least %d characters" % MIN_REASON
+        )
+    if not SOURCE_ANCHOR.search(reason):
+        return "reason names no source path or identifier"
+    if path and not SOURCE_PATH.search(reason):
+        return "reason names no src/*.rs path"
+    return None
+
+
+def representative_problem(cause, claim, runs):
+    """None when the claim is a valid representative receipt for `cause`."""
+    if set(claim) != {"status", "run_id", "action_id", "reason"}:
+        return "fabricated_sdk", (
+            "a representative claim has exactly status, run_id, action_id and reason"
+        )
+    why = reason_problem(claim["reason"], path=True)
+    if why:
+        return "missing_reason", "representative claim: " + why
+    table = REPRESENTATIVE.get(cause)
+    if table is None:
+        return "fabricated_sdk", (
+            "no live scenario drives %s, so no run can represent it" % cause
+        )
+    why = sdk_problem(claim, runs, live=True)
+    if why:
+        return "fabricated_sdk", why
+    run_id = claim["run_id"]
+    if run_id not in table["runs"]:
+        return "fabricated_sdk", "run %s is not a %s scenario (%s)" % (
+            run_id,
+            cause,
+            ", ".join(table["runs"]),
+        )
+    result, _digest, manifest = runs[run_id]
+    if not (isinstance(manifest, dict) and manifest.get("run_id") == run_id):
+        return "fabricated_sdk", "run %s manifest names another run" % run_id
+    if not (
+        isinstance(manifest, dict) and manifest.get("end_mode") == table["end_mode"]
+    ):
+        return "fabricated_sdk", "run %s manifest end_mode is not %s" % (
+            run_id,
+            table["end_mode"],
+        )
+    actions = result["hard"]["scripted_actions"]
+    missing = [a for a in table["actions"] if a not in actions["granted_ids"]]
+    if missing:
+        return "fabricated_sdk", "run %s never granted %s" % (
+            run_id,
+            ", ".join(missing),
+        )
+    if claim["action_id"] != table["drive"]:
+        return "fabricated_sdk", "action %s does not drive %s" % (
+            claim["action_id"],
+            cause,
+        )
+    if actions.get("end_permit_used") is not table["end_permit"]:
+        return "fabricated_sdk", "run %s end permit use is not %s" % (
+            run_id,
+            table["end_permit"],
+        )
+    return None
+
+
+def foreign_scenario(cause, run_id):
+    """Why a run is the live scenario of another cause, or None."""
+    for other, table in REPRESENTATIVE.items():
+        if run_id in table["runs"] and other != cause:
+            return "run %s is the %s scenario, not evidence for %s" % (
+                run_id,
+                other,
+                cause,
+            )
+    return None
+
+
+def count_sdk(report, kind):
+    report.by_sdk[kind] = report.by_sdk.get(kind, 0) + 1
+
+
 def check_sdk(row, runs, report):
+    """Judge one row's SDK column; returns "ok", "gap", "lie" or "shared"."""
     rid, claim = row_id(row), row.get("sdk_report")
     if claim is None or claim == SDK_PENDING:
         report.gap(rid, "sdk_pending", "SDK report not yet executed (%s)" % SDK_PENDING)
-        return
-    problem = sdk_problem(claim, runs)
+        count_sdk(report, "pending")
+        return "gap"
+    if isinstance(claim, dict) and claim.get("status") == SDK_REPRESENTATIVE:
+        problem = representative_problem(row["cause"], claim, runs)
+        if problem:
+            report.lie(rid, problem[0], problem[1])
+            return "lie"
+        count_sdk(report, SDK_REPRESENTATIVE)
+        return "ok"
+    if isinstance(claim, dict) and claim.get("status") == "N/A":
+        return "shared"  # judged once every row's own claim is known
+    plain = isinstance(claim, dict) and set(claim) == {"run_id", "action_id"}
+    foreign = plain and foreign_scenario(row["cause"], claim["run_id"])
+    if foreign:
+        report.lie(rid, "fabricated_sdk", foreign)
+        return "lie"
+    problem = (
+        sdk_problem(claim, runs)
+        if plain
+        else "sdk_report must be an object with run_id and action_id"
+    )
     if problem:
         report.lie(rid, "fabricated_sdk", problem)
+        return "lie"
+    count_sdk(report, "plain")
+    return "ok"
+
+
+def check_shared_sdk(row, outcomes, report):
+    """RoomEventsEof's N/A SDK column: valid only beside a valid RoomDisconnected."""
+    rid, claim = row_id(row), row["sdk_report"]
+    if (row["cause"], claim.get("shares")) != EOF_SHARES or set(claim) != {
+        "status",
+        "shares",
+        "reason",
+    }:
+        report.lie(
+            rid,
+            "fabricated_sdk",
+            "an N/A SDK column exists only for RoomEventsEof sharing RoomDisconnected",
+        )
+        return
+    why = reason_problem(claim["reason"], path=True)
+    if why:
+        report.lie(rid, "missing_reason", "SDK N/A: " + why)
+        return
+    if outcomes.get((row["phase"], EOF_SHARES[1])) != "ok":
+        report.gap(
+            rid,
+            "sdk_pending",
+            "shares the RoomDisconnected path, whose SDK claim for %s is not validated"
+            % row["phase"],
+        )
+        count_sdk(report, "pending")
+        return
+    count_sdk(report, "N/A")
 
 
 def check_ledger(rows, baseline, tests, receipts, digest, sdk_runs):
     report = Report()
     valid = check_structure(rows, baseline, report)
     report.rows = len(rows)
+    outcomes, shared = {}, []
     for row in valid:
         status = row["status"]
         report.by_status[status] = report.by_status.get(status, 0) + 1
@@ -451,7 +700,13 @@ def check_ledger(rows, baseline, tests, receipts, digest, sdk_runs):
             continue
         check_local(row, names, tests, receipts, digest, report)
         if status != "N/A":
-            check_sdk(row, sdk_runs, report)
+            outcome = check_sdk(row, sdk_runs, report)
+            if outcome == "shared":
+                shared.append(row)
+            else:
+                outcomes[(row["phase"], row["cause"])] = outcome
+    for row in shared:
+        check_shared_sdk(row, outcomes, report)
     return report
 
 
@@ -501,6 +756,7 @@ def command_check(args):
                     "baseline": "synthetic" if args.synthetic_baseline else "pinned",
                     "rows": report.rows,
                     "by_status": report.by_status,
+                    "by_sdk": report.by_sdk,
                     "integrity": [list(i) for i in report.integrity],
                     "gaps": [list(g) for g in report.gaps],
                     "pass": not failed,
@@ -526,12 +782,14 @@ def print_report(report, mode, failed):
         for rid, detail in kinds[kind]:
             print("          %s: %s" % (rid, detail))
     counts = ", ".join("%s=%d" % item for item in sorted(report.by_status.items()))
+    sdk = ", ".join("%s=%d" % item for item in sorted(report.by_sdk.items()))
     print(
-        "recovery matrix (%s): %d rows (%s); %d ledger error(s), %d gap(s): %s"
+        "recovery matrix (%s): %d rows (%s; sdk: %s); %d ledger error(s), %d gap(s): %s"
         % (
             mode,
             report.rows,
             counts,
+            sdk or "none",
             len(report.integrity),
             len(report.gaps),
             "FAIL" if failed else "ok",

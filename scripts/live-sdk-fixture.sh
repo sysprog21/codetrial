@@ -1,10 +1,14 @@
 #!/bin/sh
 # Builds the ignored native SDK fixture once, pins it by hash, and launches one
-# of its four scenarios under the run budget controller. Nothing here runs a
-# scenario unless `run` is called, and `run` spends LiveKit and Gemini quota.
+# of its five recovery scenarios, or one of its five speech-continuity clip
+# arms, under the run budget controller. Nothing here runs a scenario unless
+# `run` or `run-clip` is called, and both spend LiveKit and Gemini quota.
 #
 #   scripts/live-sdk-fixture.sh build DIR
-#   CODETRIAL_LIVE_CONFIG=PATH scripts/live-sdk-fixture.sh run a|b|c|d DIR
+#   CODETRIAL_LIVE_CONFIG=PATH scripts/live-sdk-fixture.sh run a|b|c|d|e DIR
+#   CODETRIAL_LIVE_CONFIG=PATH CODETRIAL_LIVE_CLIPS=CLIPDIR \
+#       scripts/live-sdk-fixture.sh run-clip s0|s20|s39|s41|s60 DIR
+#   scripts/live-sdk-fixture.sh clip-report DIR
 #
 # DIR holds the pinned binary and, per scenario, a manifest, an artifact
 # directory (empty, as the controller requires) and the worker log. A scenario
@@ -14,6 +18,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 TEST_FILTER=livekit::recovery::tests::live::
+CLIP_FILTER=livekit::recovery::tests::live::continuity::
 
 die()
 {
@@ -98,14 +103,23 @@ print(found or "")
     printf 'pinned %s sha256=%s\n' "$dir/live-fixture" "$sum"
 }
 
-run()
+# `launch KIND LETTER DIR`: KIND is the test family (`recovery` or `clip`),
+# LETTER the scenario or arm, DIR the pinned build.
+launch()
 {
-    letter=$1
-    [ -d "$2" ] || die "$2 is not a directory; run build first"
-    dir=$(cd "$2" && pwd)
-    case $letter in a | b | c | d) ;; *) die "scenario must be a, b, c or d" ;; esac
+    kind=$1
+    letter=$2
+    [ -d "$3" ] || die "$3 is not a directory; run build first"
+    dir=$(cd "$3" && pwd)
     [ -n "${CODETRIAL_LIVE_CONFIG:-}" ] || die "set CODETRIAL_LIVE_CONFIG to the isolated live config"
     [ -f "$CODETRIAL_LIVE_CONFIG" ] || die "CODETRIAL_LIVE_CONFIG is not a file"
+    if [ "$kind" = clip ]; then
+        [ -n "${CODETRIAL_LIVE_CLIPS:-}" ] || die "set CODETRIAL_LIVE_CLIPS to the spoken clip directory"
+        [ -f "$CODETRIAL_LIVE_CLIPS/manifest.json" ] || die "CODETRIAL_LIVE_CLIPS holds no manifest.json"
+        live_test=${CLIP_FILTER}live_sdk_clip_continuity_arm
+    else
+        live_test=${TEST_FILTER}live_sdk_control_presence_and_report_delivery
+    fi
     bin=$dir/live-fixture
     [ -x "$bin" ] || die "no pinned binary in $dir; run build first"
     [ "$(digest "$bin")" = "$(cat "$dir/live-fixture.sha256")" ] \
@@ -113,7 +127,7 @@ run()
     artifacts=$dir/artifacts-$letter
     [ ! -e "$artifacts" ] || die "$artifacts exists; a scenario runs once per directory"
     name=$("$bin" --list --ignored 2> /dev/null \
-        | sed -n "s/: test\$//p" | grep "^${TEST_FILTER}live_sdk_control_presence_and_report_delivery\$") \
+        | sed -n "s/: test\$//p" | grep "^${live_test}\$") \
         || die "the pinned binary lists no live fixture"
     writer=$("$bin" --list 2> /dev/null \
         | sed -n "s/: test\$//p" | grep "^${TEST_FILTER}live_write_manifest\$") \
@@ -147,14 +161,39 @@ run()
     exit "$status"
 }
 
+# Reads DIR/worker-<arm>.log for every declared arm and writes
+# DIR/continuity-report.txt. It runs no arm and touches no provider.
+clip_report()
+{
+    [ -d "$1" ] || die "$1 is not a directory"
+    dir=$(cd "$1" && pwd)
+    bin=$dir/live-fixture
+    [ -x "$bin" ] || die "no pinned binary in $dir; run build first"
+    reporter=$("$bin" --list 2> /dev/null \
+        | sed -n "s/: test\$//p" | grep "^${CLIP_FILTER}live_clip_report\$") \
+        || die "the pinned binary lists no clip report"
+    CODETRIAL_LIVE_REPORT_DIR=$dir "$bin" --exact "$reporter" --nocapture
+    printf 'report: %s\n' "$dir/continuity-report.txt" >&2
+}
+
 case ${1:-} in
     build)
         [ $# -eq 2 ] || die "usage: build DIR"
         build "$2"
         ;;
     run)
-        [ $# -eq 3 ] || die "usage: run a|b|c|d DIR"
-        run "$2" "$3"
+        [ $# -eq 3 ] || die "usage: run a|b|c|d|e DIR"
+        case $2 in a | b | c | d | e) ;; *) die "scenario must be a, b, c, d or e" ;; esac
+        launch recovery "$2" "$3"
         ;;
-    *) die "usage: build DIR | run a|b|c|d DIR" ;;
+    run-clip)
+        [ $# -eq 3 ] || die "usage: run-clip s0|s20|s39|s41|s60 DIR"
+        case $2 in s0 | s20 | s39 | s41 | s60) ;; *) die "arm must be s0, s20, s39, s41 or s60" ;; esac
+        launch clip "$2" "$3"
+        ;;
+    clip-report)
+        [ $# -eq 2 ] || die "usage: clip-report DIR"
+        clip_report "$2"
+        ;;
+    *) die "usage: build DIR | run a|b|c|d|e DIR | run-clip s0|s20|s39|s41|s60 DIR | clip-report DIR" ;;
 esac

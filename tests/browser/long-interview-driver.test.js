@@ -55,12 +55,12 @@ const QUALIFICATION = {
 const TONES = { BROWSER_CHECK_LONG_TONE_FIXTURE: "1" };
 
 /// A budget the way the launcher's manifest would pin this schedule.
-function budgetFor(plan, env = TONES, extra = {}) {
+function budgetFor(plan, env = TONES, extra = {}, clipSet) {
   const schedule = sched.generateSchedule("coding", {
     durationMin: plan.durationMin,
     observationTargetS: plan.observationTargetS,
   }).schedule;
-  const set = sched.syntheticClipSet(schedule);
+  const set = clipSet ?? sched.syntheticClipSet(schedule);
   const budget = {
     actions: [...schedule.actions],
     fixtureSha256: sched.budgetFields(schedule, set.manifest).fixture_sha256,
@@ -82,6 +82,47 @@ function budgetFor(plan, env = TONES, extra = {}) {
     ...extra,
   };
   return budget;
+}
+
+// Altered tones exercise recorded-file accounting, never speech recognition.
+function recordedSourceFor(plan) {
+  const schedule = sched.generateSchedule("coding", {
+    durationMin: plan.durationMin,
+    observationTargetS: plan.observationTargetS,
+  }).schedule;
+  const set = sched.syntheticClipSet(schedule);
+  for (const [id, bytes] of set.audio) {
+    const wav = sched.parseWav(bytes);
+    set.audio.set(
+      id,
+      sched.wavBytes(Array.from(wav.samples, (v) => Math.round(v * 0.9))),
+    );
+  }
+  set.manifest = sched.buildClipManifest(
+    schedule,
+    set.audio,
+    "recorded-speech",
+    {
+      tool: "test recording",
+      tool_version: "0",
+    },
+  );
+  const dir = path.join(os.tmpdir(), "long-interview-recording-fixture");
+  return {
+    set,
+    env: { BROWSER_CHECK_LONG_CLIP_DIR: dir },
+    io: {
+      readFile(file) {
+        if (file === path.join(dir, "manifest.json"))
+          return Buffer.from(JSON.stringify(set.manifest));
+        const clip = set.manifest.clips.find(
+          (c) => path.join(dir, c.file) === file,
+        );
+        if (!clip) throw new Error("unknown fixture file");
+        return set.audio.get(clip.clip_id);
+      },
+    },
+  };
 }
 
 function virtualClock(start = T0) {
@@ -148,7 +189,12 @@ function fakeController(clock, budget, options = {}) {
     async end() {
       needGuard("end");
       calls.push(["end", clock.now()]);
-      return { performanceReceived: true, reportReceived: true };
+      if (options.endError) throw new Error("End response failed");
+      return {
+        performanceReceived: true,
+        reportReceived: true,
+        clicked: options.endClicked ?? true,
+      };
     },
     async awaitServerDeadline() {
       calls.push(["deadline", clock.now()]);
@@ -172,10 +218,18 @@ const GOAWAY = [
 
 async function play(
   plan,
-  { env = TONES, budgetOptions, controllerOptions, failure, mutate } = {},
+  {
+    env = TONES,
+    budgetOptions,
+    controllerOptions,
+    failure,
+    mutate,
+    source,
+  } = {},
 ) {
-  const budget = budgetFor(plan, env, budgetOptions);
-  const prepared = prepareLongRun({ env, plan, budget });
+  if (source) env = source.env;
+  const budget = budgetFor(plan, env, budgetOptions, source?.set);
+  const prepared = prepareLongRun({ env, plan, budget, io: source?.io });
   const clock = virtualClock();
   const controller = fakeController(clock, budget, controllerOptions);
   // The media gate dispatched the join before the driver is called.
@@ -577,71 +631,17 @@ test("failure classes land as artifacts, a clean run writes none", async () => {
 });
 
 test("recorded speech reports a speech run only when every clip was covered", async () => {
-  // Stand-ins for recordings: the tones with their level changed, so they are
-  // not the generator's bytes. They exist only to reach the speech branch of
-  // the report; the driver cannot hear whether a file is speech.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "li-speech-"));
-  try {
-    const schedule = sched.generateSchedule("coding", {
-      durationMin: 10,
-      observationTargetS: 600,
-    }).schedule;
-    const set = sched.syntheticClipSet(schedule);
-    for (const [id, bytes] of set.audio) {
-      const wav = sched.parseWav(bytes);
-      set.audio.set(
-        id,
-        sched.wavBytes(Array.from(wav.samples, (v) => Math.round(v * 0.9))),
-      );
-    }
-    const manifest = sched.buildClipManifest(
-      schedule,
-      set.audio,
-      "recorded-speech",
-      {
-        tool: "test recording",
-        tool_version: "0",
-      },
-    );
-    for (const [id, bytes] of set.audio)
-      fs.writeFileSync(path.join(dir, `${id}.wav`), bytes);
-    fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify(manifest));
-    const env = { BROWSER_CHECK_LONG_CLIP_DIR: dir };
-    const budget = budgetFor(SMOKE, env, {
-      fixtureSha256: sched.budgetFields(schedule, manifest).fixture_sha256,
-    });
-    const make = async (controllerOptions) => {
-      const prepared = prepareLongRun({
-        env,
-        plan: SMOKE,
-        budget: Object.assign(budget, { ids: [] }),
-      });
-      const clock = virtualClock();
-      const controller = fakeController(clock, budget, controllerOptions);
-      await budget.guarded("candidate_join", async () => {});
-      const run = await runLongInterview({
-        plan: SMOKE,
-        ...prepared,
-        budget,
-        controller,
-        clock,
-        joinedAtMs: clock.now(),
-        interviewStartMs: clock.now() - 5000,
-        joinDispatched: true,
-      });
-      clock.advance(1000);
-      return finalize({ plan: SMOKE, prepared, run, joinedAtMs: T0, clock });
-    };
-    const covered = await make({});
-    assert.equal(covered.exitCode, EXIT.pass);
-    assert.equal(covered.report.clip_source, CLIP_SOURCE.speech);
-    assert.equal(covered.report.validation_fixture, false);
-    assert.equal(covered.report.speech_run, true);
-    const uncovered = await make({ neverSpeaks: true });
-    assert.equal(uncovered.report.speech_run, false);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  const source = recordedSourceFor(SMOKE);
+  const covered = finalize(await play(SMOKE, { source }));
+  assert.equal(covered.exitCode, EXIT.pass);
+  assert.equal(covered.report.clip_source, CLIP_SOURCE.speech);
+  assert.equal(covered.report.validation_fixture, false);
+  assert.equal(covered.report.speech_run, true);
+  assert.equal(covered.report.qualification, "not_evaluated");
+  const uncovered = finalize(
+    await play(SMOKE, { source, controllerOptions: { neverSpeaks: true } }),
+  );
+  assert.equal(uncovered.report.speech_run, false);
 });
 
 test("refusals: no clips, a second source, tones outside a smoke, tones as speech", () => {
@@ -1083,3 +1083,89 @@ test("a run the page's countdown ended is reported as such, and its capture is k
   );
   assert.match(cjs, /longCaptureWritten = true;\s*fs\.writeFileSync/);
 });
+
+test("a completed long interview reports structural scope without claiming qualification", async () => {
+  const finished = finalize(await play(SMOKE), { cleanup: undefined });
+  assert.equal(finished.exitCode, EXIT.pass);
+  assert.equal(finished.report.status, "complete");
+  assert.equal(finished.report.assessment_scope, "structural");
+  assert.equal(finished.report.qualification, "not_evaluated");
+  assert.equal(finished.report.cleanup_assessed, false);
+  assert.equal(finished.report.reply_content, "not_assessed");
+  assert.equal(finished.report.decoded_signal, "not_assessed");
+  assert.ok(
+    finished.report.not_exercised.some((n) => /^reply content:/.test(n)),
+  );
+  assert.ok(
+    finished.report.not_exercised.some((n) => /^decoded signal:/.test(n)),
+  );
+});
+
+for (const plan of [
+  SMOKE,
+  { ...SMOKE, runKind: "pilot", durationMin: 60, observationTargetS: 3600 },
+  QUALIFICATION,
+]) {
+  test(`a complete recorded-file ${plan.runKind} workload still needs independent qualification evidence`, async () => {
+    const played = await play(plan, { source: recordedSourceFor(plan) });
+    const finished = finalize(played);
+    assert.equal(finished.exitCode, EXIT.pass);
+    assert.equal(finished.report.full_interview, true);
+    assert.equal(finished.report.speech_run, true);
+    assert.equal(finished.report.assessment_scope, "structural");
+    assert.equal(finished.report.qualification, "not_evaluated");
+    assert.equal(finished.report.reply_content, "not_assessed");
+    assert.equal(finished.report.decoded_signal, "not_assessed");
+  });
+}
+
+for (const [name, plan, options, granted, clicked] of [
+  ["clicked", SMOKE, {}, true, true],
+  [
+    "countdown first",
+    SMOKE,
+    { controllerOptions: { endClicked: false } },
+    true,
+    false,
+  ],
+  ["server deadline", DEADLINE, {}, false, null],
+  [
+    "end permit denied",
+    SMOKE,
+    {
+      budgetOptions: {
+        denyAt:
+          sched.generateSchedule("coding", {
+            durationMin: 10,
+            observationTargetS: 600,
+          }).schedule.actions.length + 1,
+      },
+    },
+    false,
+    null,
+  ],
+  [
+    "end response failed",
+    SMOKE,
+    { controllerOptions: { endError: true } },
+    true,
+    null,
+  ],
+  ["early denial", SMOKE, { budgetOptions: { denyAt: 6 } }, false, null],
+]) {
+  test(`End accounting keeps permit and click separate: ${name}`, async () => {
+    const played = await play(plan, options);
+    const finished = finalize(played, { cleanup: undefined });
+    assert.equal(finished.report.end_permit_granted, granted);
+    assert.equal(finished.report.end_clicked, clicked);
+    assert.equal(played.budget.ids.includes("end"), granted);
+    assert.equal(finished.report.cleanup_assessed, false);
+    assert.equal(finished.report.qualification, "not_evaluated");
+    if (name === "end permit denied" || name === "early denial")
+      assert.equal(finished.exitCode, EXIT.incompleteBudget);
+    if (name === "end response failed")
+      assert.equal(finished.exitCode, EXIT.failed);
+    if (name === "countdown first")
+      assert.ok(finished.report.not_exercised.some((n) => /^end:/.test(n)));
+  });
+}
