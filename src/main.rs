@@ -364,7 +364,7 @@ fn web_server_config(
         update_check_commit: codetrial::config::update_check_commit(
             values.get("CODETRIAL_UPDATE_CHECK").map(String::as_str),
             env!("CODETRIAL_RELEASE_COMMIT"),
-            cfg!(target_os = "macos"),
+            cfg!(any(target_os = "macos", target_os = "windows")),
         ),
     })
 }

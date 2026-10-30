@@ -90,11 +90,10 @@ default because it is the one request the server makes to GitHub on its own:
 GitHub sign-in reaches GitHub when a candidate signs in, on their account, and
 the avatar model is fetched by the interview page, while this check is the
 server asking whenever a lobby is open, with no account. It does nothing on
-Linux or Windows, or in a build from source, whose commit the release will
-never name. The desktop app never checks either: it is
-published as `desktop-latest`, which this does not read, so it starts its
-server with `--no-update-check`, which turns the setting off over the config
-file.
+Linux, or in a build from source, whose commit the release will never name.
+The desktop app never checks either: it is published as `desktop-latest`,
+which this does not read, so it starts its server with `--no-update-check`,
+which turns the setting off over the config file.
 
 `GOOGLE_API_KEY` is the optional one, and it decides which of two things this
 process is. With it, the server hosts interviewers itself. Without it, it serves
