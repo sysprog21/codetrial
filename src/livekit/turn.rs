@@ -170,7 +170,7 @@ pub(super) struct ReplyDebt {
 /// makes the new interviewer discard output or wait on work it did not
 /// create. Grouped so that clearing is one assignment, and a wait added here
 /// is cleared with the rest without anyone remembering to.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct SocketWork {
     /// A hold can arrive between Gemini producing a reply and this loop
     /// receiving its final event. Drop that old turn after the release too.
@@ -482,6 +482,13 @@ pub(super) struct RuntimeActivity {
     pub(super) generating: bool,
     /// Progress within a turn that has not completed, distinct from its debt.
     pub(super) last_output_at: Option<Instant>,
+    /// The startup probe saw output that the room loop has not replayed yet.
+    /// Keep its progress deadline without marking earlier queued boundaries as
+    /// completed output or applying their effects out of receive order.
+    pub(super) buffered_startup_output_at: Option<Instant>,
+    /// Stable wall-clock counterpart of the successful probe's monotonic start.
+    /// Survives socket replacement so reconnect cannot grant a fresh clock.
+    pub(super) startup_ready_at: Option<u64>,
     /// When the tool response behind `tool_response_outstanding` went out, so
     /// a continuation Gemini never produces stalls like a prompt does.
     pub(super) tool_response_at: Option<Instant>,
@@ -867,6 +874,8 @@ impl RuntimeActivity {
             prompt_text: None,
             generating: false,
             last_output_at: None,
+            buffered_startup_output_at: None,
+            startup_ready_at: None,
             tool_response_at: None,
             prompt_sequence: 0,
             last_agent_speech: now,
@@ -1043,6 +1052,7 @@ impl RuntimeActivity {
     /// wrap-up before the continuation finishes.
     pub(super) fn note_output(&mut self, now: Instant) {
         self.drop_handoff_reply();
+        self.buffered_startup_output_at = None;
         self.generating = true;
         self.socket.thinking_reply_fallback = None;
         self.last_output_at = Some(now);
@@ -1198,6 +1208,9 @@ impl RuntimeActivity {
                 .is_some_and(|at| now.saturating_duration_since(at) >= wait)
                 .then_some(wait)
         };
+        if self.buffered_startup_output_at.is_some() {
+            return expired(self.buffered_startup_output_at, self.reply_timeout);
+        }
         if self.first_output_owed() {
             // A recovery, a replacement's briefing or a check on a reply that
             // stalled, is never held to less than the default deadline, so a
@@ -1315,7 +1328,7 @@ impl RuntimeActivity {
     /// A reply is owed, or one under way has not finished: what a replaced
     /// socket leaves the next one to give, and what keeps the nudges out.
     pub(super) fn reply_unfinished(&self) -> bool {
-        self.owes_reply() || self.generating
+        self.owes_reply() || self.generating || self.buffered_startup_output_at.is_some()
     }
 
     /// The oldest reply still owed with no output toward it: a candidate turn,

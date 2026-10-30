@@ -6,8 +6,8 @@ import { readFileSync } from "node:fs";
 
 import {
   DEFAULT_RUNTIME_CONFIG,
-  FAKE_LIVEKIT,
   FAKE_SPEECH_CAPTURE,
+  fakeLiveKit,
   launchChromium,
   startStaticServer,
 } from "./source.js";
@@ -85,7 +85,7 @@ async function connectedPage(t, { withoutEditingCommand = false } = {}) {
   const page = await media.newPage();
   const watched = watch(page);
   if (withoutEditingCommand) await page.addInitScript(WITHOUT_EDITING_COMMAND);
-  await page.addInitScript(FAKE_LIVEKIT);
+  await page.addInitScript(fakeLiveKit({ startupReady: true }));
   await page.route("**/vendor/livekit-client.js", (route) =>
     route.fulfill({ contentType: "text/javascript", body: "" }),
   );

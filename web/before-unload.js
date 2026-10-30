@@ -1,7 +1,13 @@
-/// A positive deadline means the timed interview has started; keep warning
-/// until a report copy is available from Past attempts.
-export function shouldWarnBeforeUnload({ endsAt, reportPersisted }) {
-  return Number.isFinite(endsAt) && endsAt > 0 && !reportPersisted;
+/// Readiness can leave editable work without a deadline. Neither that work nor
+/// a timed attempt is safe to leave until a report copy is in Past attempts.
+export function shouldWarnBeforeUnload({
+  endsAt,
+  workStarted,
+  reportPersisted,
+}) {
+  return (
+    (workStarted || (Number.isFinite(endsAt) && endsAt > 0)) && !reportPersisted
+  );
 }
 
 /// The browser owns the confirmation text; the page can only request it.

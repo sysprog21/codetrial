@@ -168,6 +168,7 @@ pub(super) enum Sent {
 #[derive(Default)]
 pub(super) struct Recorder {
     sent: std::sync::Mutex<Vec<Sent>>,
+    data_destinations: std::sync::Mutex<Vec<Vec<String>>>,
     attributes: std::sync::Mutex<HashMap<String, String>>,
 }
 
@@ -178,6 +179,13 @@ impl Recorder {
     }
 
     fn data(&self, packet: DataPacket) {
+        self.data_destinations.lock().unwrap().push(
+            packet
+                .destination_identities
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+        );
         let message = serde_json::from_slice(&packet.payload).unwrap_or_else(|_| {
             serde_json::Value::String(String::from_utf8_lossy(&packet.payload).into())
         });
@@ -199,6 +207,10 @@ impl Recorder {
     /// Everything sent so far, cleared.
     pub(super) fn take(&self) -> Vec<Sent> {
         std::mem::take(&mut *self.sent.lock().unwrap())
+    }
+
+    pub(super) fn take_data_destinations(&self) -> Vec<Vec<String>> {
+        std::mem::take(&mut *self.data_destinations.lock().unwrap())
     }
 }
 

@@ -63,6 +63,7 @@ function codeUpdateCases(languages) {
 function controlCases() {
   return [
     { name: "drawing activity", payload: lib.drawingActivityPayload() },
+    { name: "startup sync", payload: lib.startupSyncPayload() },
     { name: "retry report", payload: lib.retryReportPayload() },
     { name: "skip report", payload: lib.skipReportPayload() },
     { name: "thinking start", payload: lib.thinkingPayload(true) },
@@ -713,6 +714,19 @@ const files = {
         // bytes checks the browser's hashing and not a copy of it.
         payload: await lib.reportReceipt(
           new TextEncoder().encode('{"codingScore":80}'),
+        ),
+      },
+    ],
+  },
+  "startup-receipt.json": {
+    topic: lib.topics.control,
+    cases: [
+      {
+        name: "received startup failure",
+        payload: await lib.startupReceipt(
+          new TextEncoder().encode(
+            '{"type":"interviewer_state","reconnecting":false,"startup":"failed","reason":"billing"}',
+          ),
         ),
       },
     ],

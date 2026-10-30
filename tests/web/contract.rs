@@ -1141,8 +1141,11 @@ fn browser_interview_takes_the_length_the_server_granted() {
         .find("applyGrantedDuration(connection.durationMin)")
         .expect("the call is asserted above");
     let connected = interview
-        .find("await connectLiveKit(connection")
+        .find("connectLiveKit(connection, preflight, presenting)")
         .expect("the page joins the room");
+    assert!(compact(&interview).contains(
+        "awaitPromise.race([connectLiveKit(connection,preflight,presenting),startupFailed])"
+    ));
     assert!(
         applied < connected,
         "the length is applied after the room is joined"

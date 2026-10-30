@@ -908,11 +908,11 @@ test("the interviewer is whoever the page pinned, or else the first agent", () =
 
 // interview.js cannot run under node, so these read it. What they pin is the
 // question each asks, not the wording around it.
-test("ending the interview waits for a report only while an interviewer is in the room", () => {
+test("ending waits for a report only after startup and while the interviewer remains", () => {
   const end = functionBody(read("web/interview.js"), "endInterview");
   assertIncludesCompact(
     end,
-    "const reportComing = Boolean(roomInterviewer(roomParticipants(), state.agentIdentity))",
+    "const reportComing = !startupPending && Boolean(roomInterviewer(roomParticipants(), state.agentIdentity))",
   );
   assert.match(end, /nodes\.forceReport\.hidden = reportComing;/);
   assert.match(end, /if \(!reportComing\) setTimeout\(showReport, /);
@@ -3655,6 +3655,32 @@ test("interviewer reconnect reasons use bounded wording and optional estimates",
       interviewerReconnectMessage({ reason: "quota", waitSeconds }),
       /seconds/,
     );
+  }
+});
+
+test("startup errors name only classified provider reasons", () => {
+  for (const [reason, expected] of [
+    ["billing", /billing or credit/],
+    ["quota", /quota or rate limit/],
+    ["credentials", /API credentials/],
+    ["refused", /refused this Live request/],
+  ]) {
+    const text = interviewerReconnectMessage({ startup: "failed", reason });
+    assert.match(text, expected);
+    assert.match(text, /timer has not started/);
+    assert.doesNotMatch(text, /Retrying in/);
+  }
+  for (const reason of [
+    undefined,
+    "1011",
+    "503",
+    "secret provider body",
+    "__proto__",
+    "toString",
+  ]) {
+    const text = interviewerReconnectMessage({ startup: "failed", reason });
+    assert.match(text, /did not answer/);
+    assert.doesNotMatch(text, /billing|quota|secret provider body/);
   }
 });
 

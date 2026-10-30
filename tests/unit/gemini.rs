@@ -495,6 +495,48 @@ async fn report_still_runs_after_live_quota_exhaustion() {
     assert_eq!(remaining, MAX_REPORT_HTTP_ATTEMPTS - 1);
 }
 
+#[test]
+fn startup_failure_identifies_exhausted_rotations() {
+    for (prefix, failures, expected) in [
+        (
+            "startup-exhausted-quota",
+            [CredentialFailure::Quota, CredentialFailure::Quota],
+            "quota",
+        ),
+        (
+            "startup-exhausted-billing",
+            [CredentialFailure::Billing, CredentialFailure::Billing],
+            "billing",
+        ),
+        (
+            "startup-exhausted-mixed",
+            [CredentialFailure::Quota, CredentialFailure::Billing],
+            "billing",
+        ),
+        (
+            "startup-exhausted-refused",
+            [CredentialFailure::Invalid, CredentialFailure::Refused],
+            "unavailable",
+        ),
+    ] {
+        let first = format!("{prefix}-first");
+        let second = format!("{prefix}-second");
+        let configured = format!("{first},{second}");
+        let config = live_config(&[("GOOGLE_API_KEYS", &configured)]);
+        let keys = GeminiKeys::from_config(&config);
+        for (key, failure) in [(&first, failures[0]), (&second, failures[1])] {
+            keys.failed(key, failure, ApiSurface::Live);
+        }
+        let error = keys.select().unwrap_err();
+        assert_eq!(credential_failure(&error), None);
+        assert_eq!(startup_failure_reason(&error), expected, "{prefix}");
+    }
+    assert_eq!(
+        startup_failure_reason(&io::Error::other("1011 Internal error")),
+        "unavailable"
+    );
+}
+
 #[tokio::test]
 async fn report_failover_reuses_the_existing_call_budget() {
     let (result, seen, remaining) =
@@ -1206,17 +1248,29 @@ pub(crate) async fn generate_report_at(
     problem: &crate::agent::Problem,
     run: ReportRun<'_>,
 ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    generate_report_for_round_at(keys, url, backoff, prompt, problem, rounds(true), run).await
+}
+
+pub(crate) async fn generate_report_for_round_at(
+    keys: &GeminiKeys,
+    url: &str,
+    backoff: Duration,
+    prompt: &str,
+    problem: &crate::agent::Problem,
+    rounds: crate::agent::ReportRounds,
+    run: ReportRun<'_>,
+) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
     let calls = ReportCalls {
         keys,
         url: url.to_string(),
         material: EDITOR,
-        communication_assessed: true,
+        communication_assessed: rounds.communication_assessed(),
         budget: ReportCallBudget::new(),
         backoff,
         observer: None,
         run,
     };
-    generate_report_with_keys_at(calls, prompt, problem, rounds(true)).await
+    generate_report_with_keys_at(calls, prompt, problem, rounds).await
 }
 
 pub(crate) fn valid_report() -> Value {
@@ -3179,6 +3233,477 @@ async fn open_live_session_sends_setup_and_waits_for_setup_complete() {
     session.close().await.unwrap();
 }
 
+thread_local! {
+    static CONSTRAIN_STARTUP_SOCKET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static STARTUP_OUTPUT_PAUSE: std::cell::RefCell<Option<StartupOutputPause>> = const { std::cell::RefCell::new(None) };
+}
+
+pub(super) struct StartupOutputPause {
+    decoded: tokio::sync::oneshot::Sender<(std::time::Instant, GeminiEvent)>,
+    resume: tokio::sync::oneshot::Receiver<()>,
+}
+
+pub(super) fn take_startup_output_pause() -> Option<StartupOutputPause> {
+    STARTUP_OUTPUT_PAUSE.take()
+}
+
+pub(super) async fn pause_startup_output(
+    pause: &mut Option<StartupOutputPause>,
+    received_at: std::time::Instant,
+    event: &GeminiEvent,
+) {
+    if model_output(event)
+        && let Some(pause) = pause.take()
+    {
+        pause.decoded.send((received_at, event.clone())).unwrap();
+        let _ = pause.resume.await;
+    }
+}
+
+// Consumed once on this test's current-thread runtime; other sockets keep their
+// production settings. The reader and writer themselves remain unchanged.
+pub(super) fn constrain_startup_socket(stream: &super::socket::Socket) {
+    if CONSTRAIN_STARTUP_SOCKET.replace(false) {
+        let tokio_tungstenite::MaybeTlsStream::Plain(tcp) = stream.get_ref() else {
+            panic!("startup backpressure fixture requires a loopback socket");
+        };
+        socket2::SockRef::from(tcp)
+            .set_send_buffer_size(4096)
+            .unwrap();
+    }
+}
+
+impl GeminiLiveSession {
+    pub(crate) fn startup_test_events(
+        &mut self,
+    ) -> tokio::sync::mpsc::Sender<(std::time::Instant, GeminiEvent)> {
+        let (send, events) = channel(GEMINI_EVENT_QUEUE);
+        self.events = events;
+        send
+    }
+
+    pub(crate) fn pause_next_startup_test_output() -> (
+        tokio::sync::oneshot::Receiver<(std::time::Instant, GeminiEvent)>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (decoded, received) = tokio::sync::oneshot::channel();
+        let (resume, release) = tokio::sync::oneshot::channel();
+        STARTUP_OUTPUT_PAUSE.set(Some(StartupOutputPause {
+            decoded,
+            resume: release,
+        }));
+        (received, resume)
+    }
+
+    pub(crate) fn startup_test_queue_len(&self) -> usize {
+        self.events.len()
+    }
+
+    pub(crate) fn constrain_next_startup_test_socket() {
+        CONSTRAIN_STARTUP_SOCKET.set(true);
+    }
+
+    pub(crate) fn startup_reader_observer(
+        &self,
+    ) -> (impl Fn() -> usize + use<>, tokio::task::AbortHandle) {
+        let usage = Arc::clone(&self.usage);
+        (
+            move || usage.lock().unwrap().len(),
+            self.reader.abort_handle(),
+        )
+    }
+}
+
+#[tokio::test]
+async fn startup_go_away_is_replayed_before_output_with_original_timestamps() {
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(socket).await.unwrap();
+        socket.next().await.unwrap().unwrap();
+        socket
+            .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+            .await
+            .unwrap();
+        let request = socket.next().await.unwrap().unwrap();
+        let request: Value = serde_json::from_str(request.to_text().unwrap()).unwrap();
+        assert_eq!(request["clientContent"]["turnComplete"], true);
+        socket
+            .send(Message::Text(r#"{"goAway":{"timeLeft":"9.5s"}}"#.into()))
+            .await
+            .unwrap();
+        socket
+            .send(Message::Text(
+                r#"{"serverContent":{"modelTurn":{"parts":[{"text":"Hello"}]}}}"#.into(),
+            ))
+            .await
+            .unwrap();
+        let mut generations = 1;
+        while let Some(Ok(message)) = socket.next().await {
+            if message.is_close() {
+                break;
+            }
+            if message.is_text() {
+                generations += 1;
+            }
+        }
+        generations
+    });
+    let mut session = open_live_session_at(&url, &boot, None).await.unwrap();
+
+    // Tap the real reader, retaining its timestamps rather than inventing the
+    // observations the replay is supposed to preserve.
+    let (send, recv) = channel(GEMINI_EVENT_QUEUE);
+    let mut events = std::mem::replace(&mut session.events, recv);
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let captured = observed.clone();
+    let forwarding = tokio::spawn(async move {
+        while let Some(event) = events.recv().await {
+            captured.lock().unwrap().push(event.clone());
+            if send.send(event).await.is_err() {
+                break;
+            }
+        }
+    });
+    session.send_context("opening", true).await.unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        session.wait_for_model_output(&mut tokio::time::interval(KEEPALIVE_INTERVAL)),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let expected = observed.lock().unwrap().clone();
+    assert_eq!(expected.len(), 2);
+    assert!(matches!(&expected[0].1, GeminiEvent::GoAway { time_left } if time_left == "9.5s"));
+    assert_eq!(expected[1].1, GeminiEvent::Text("Hello".into()));
+    // Replay later, so stamping at consumption cannot accidentally pass.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    for (received_at, event) in expected {
+        assert_eq!(session.next_event().await, Some(event));
+        assert_eq!(session.event_received_at(), Some(received_at));
+    }
+    session.shutdown().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), forwarding)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn startup_speech_extraction_preserves_remaining_events_and_timestamps() {
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "startup-extract", Some("two-sum"), 45);
+    let (address, _frames) = stalled_live_server(false).await;
+    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+        .await
+        .unwrap();
+    let events = [
+        GeminiEvent::InputTranscript("first candidate turn".into()),
+        GeminiEvent::TurnComplete,
+        GeminiEvent::InputTranscript("second candidate turn".into()),
+        GeminiEvent::UsageRecorded,
+        GeminiEvent::Text("opening".into()),
+    ];
+    let began = std::time::Instant::now();
+    for (index, event) in events.iter().enumerate() {
+        session
+            .buffer_startup_event((began + Duration::from_millis(index as u64), event.clone()))
+            .unwrap();
+    }
+    assert_eq!(session.take_buffered_startup_speech(), events[..3]);
+    assert_eq!(
+        session.take_buffered_startup_speech(),
+        [GeminiEvent::TurnComplete]
+    );
+    for index in [1, 3, 4] {
+        assert_eq!(session.next_event().await, Some(events[index].clone()));
+        assert_eq!(
+            session.event_received_at(),
+            Some(began + Duration::from_millis(index as u64))
+        );
+    }
+    assert!(session.pending_events.is_empty());
+    session.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn startup_output_requires_content_and_keeps_a_bounded_replay() {
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let (address, _frames) = stalled_live_server(false).await;
+    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+        .await
+        .unwrap();
+    let empty = [
+        GeminiEvent::Audio {
+            bytes: vec![],
+            mime_type: "audio/pcm".into(),
+        },
+        GeminiEvent::Text(" ".into()),
+        GeminiEvent::OutputTranscript("\n".into()),
+        GeminiEvent::ToolCall(vec![]),
+        GeminiEvent::InputTranscript("candidate".into()),
+        GeminiEvent::CandidateVoiceActivity {
+            active: true,
+            audio_offset: None,
+        },
+        GeminiEvent::CandidateVoiceActivity {
+            active: false,
+            audio_offset: None,
+        },
+        GeminiEvent::UsageRecorded,
+        GeminiEvent::TurnComplete,
+        GeminiEvent::Interrupted,
+    ];
+    let (send, recv) = channel(16);
+    session.events = recv;
+    for event in &empty {
+        send.send((std::time::Instant::now(), event.clone()))
+            .await
+            .unwrap();
+    }
+    drop(send);
+    assert!(
+        session
+            .wait_for_model_output(&mut tokio::time::interval(KEEPALIVE_INTERVAL))
+            .await
+            .is_err()
+    );
+    for output in [
+        GeminiEvent::Audio {
+            bytes: vec![1, 2],
+            mime_type: "audio/pcm".into(),
+        },
+        GeminiEvent::Text("answer".into()),
+        GeminiEvent::OutputTranscript("answer".into()),
+        GeminiEvent::ToolCall(vec![GeminiFunctionCall {
+            id: "1".into(),
+            name: "read_editor".into(),
+            args: json!({}),
+        }]),
+    ] {
+        session.pending_events.clear();
+        let (send, recv) = channel(16);
+        session.events = recv;
+        let received_at = std::time::Instant::now() - Duration::from_secs(2);
+        for event in &empty {
+            send.send((received_at, event.clone())).await.unwrap();
+        }
+        send.send((received_at + Duration::from_millis(10), output.clone()))
+            .await
+            .unwrap();
+        drop(send);
+        assert_eq!(
+            session
+                .wait_for_model_output(&mut tokio::time::interval(KEEPALIVE_INTERVAL))
+                .await
+                .unwrap(),
+            received_at + Duration::from_millis(10)
+        );
+        for expected in &empty {
+            assert_eq!(session.next_event().await.as_ref(), Some(expected));
+            assert_eq!(session.event_received_at(), Some(received_at));
+        }
+        assert_eq!(session.next_event().await, Some(output));
+        assert_eq!(
+            session.event_received_at(),
+            Some(received_at + Duration::from_millis(10))
+        );
+        // The live queue after replay must retain its own receive time too.
+        let (send, recv) = channel(1);
+        session.events = recv;
+        let next_received_at = received_at + Duration::from_millis(20);
+        send.send((next_received_at, GeminiEvent::TurnComplete))
+            .await
+            .unwrap();
+        assert_eq!(session.next_event().await, Some(GeminiEvent::TurnComplete));
+        assert_eq!(session.event_received_at(), Some(next_received_at));
+    }
+    let (send, recv) = channel(GEMINI_EVENT_QUEUE + 1);
+    session.events = recv;
+    for _ in 0..=GEMINI_EVENT_QUEUE {
+        send.send((std::time::Instant::now(), GeminiEvent::TurnComplete))
+            .await
+            .unwrap();
+    }
+    drop(send);
+    assert!(
+        session
+            .wait_for_model_output(&mut tokio::time::interval(KEEPALIVE_INTERVAL))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("event limit")
+    );
+    assert_eq!(session.pending_events.len(), GEMINI_EVENT_QUEUE);
+    let reader = session.reader.abort_handle();
+    drop(session);
+    tokio::task::yield_now().await;
+    assert!(
+        reader.is_finished(),
+        "startup cancellation must retire the reader"
+    );
+}
+
+#[tokio::test]
+async fn startup_buffered_rescue_uses_an_exclusive_fixed_deadline() {
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "startup-cutoff", Some("two-sum"), 45);
+    let (address, _frames) = stalled_live_server(false).await;
+    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now();
+    for pending in [false, true] {
+        for received_at in [
+            deadline - Duration::from_nanos(1),
+            deadline,
+            deadline + Duration::from_nanos(1),
+        ] {
+            for output in [
+                GeminiEvent::Audio {
+                    bytes: vec![1, 2],
+                    mime_type: "audio/pcm".into(),
+                },
+                GeminiEvent::Text("opening".into()),
+                GeminiEvent::OutputTranscript("opening".into()),
+                GeminiEvent::ToolCall(vec![GeminiFunctionCall {
+                    id: "1".into(),
+                    name: "read_editor".into(),
+                    args: json!({}),
+                }]),
+            ] {
+                let expected = [
+                    GeminiEvent::TurnComplete,
+                    output,
+                    GeminiEvent::UsageRecorded,
+                    GeminiEvent::Interrupted,
+                ];
+                let (send, recv) = channel(GEMINI_EVENT_QUEUE);
+                session.events = recv;
+                for event in &expected {
+                    if pending {
+                        session
+                            .buffer_startup_event((received_at, event.clone()))
+                            .unwrap();
+                    } else {
+                        send.send((received_at, event.clone())).await.unwrap();
+                    }
+                }
+                assert_eq!(
+                    session.buffered_startup_output(deadline).unwrap(),
+                    (received_at < deadline).then_some(received_at)
+                );
+                for event in expected {
+                    assert_eq!(session.next_event().await, Some(event));
+                    assert_eq!(session.event_received_at(), Some(received_at));
+                }
+                assert!(session.pending_events.is_empty());
+                assert!(session.events.is_empty());
+            }
+        }
+    }
+    let (send, recv) = channel(GEMINI_EVENT_QUEUE + 1);
+    session.events = recv;
+    for _ in 0..=GEMINI_EVENT_QUEUE {
+        send.send((
+            deadline - Duration::from_nanos(1),
+            GeminiEvent::TurnComplete,
+        ))
+        .await
+        .unwrap();
+    }
+    assert!(
+        session
+            .buffered_startup_output(deadline)
+            .unwrap_err()
+            .to_string()
+            .contains("event limit")
+    );
+    assert_eq!(session.pending_events.len(), GEMINI_EVENT_QUEUE);
+    session.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn startup_reader_observation_keeps_the_cutoff_and_prefix_bound() {
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "startup-observation", Some("two-sum"), 45);
+    let (address, _frames) = stalled_live_server(false).await;
+    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now();
+    // No published state cannot be rescued without waiting for the reader.
+    assert_eq!(session.buffered_startup_output(deadline).unwrap(), None);
+    for received_at in [
+        deadline - Duration::from_nanos(1),
+        deadline,
+        deadline + Duration::from_nanos(1),
+    ] {
+        session.first_output = Arc::new(OnceLock::new());
+        session.first_output.set(received_at).unwrap();
+        assert_eq!(
+            session.buffered_startup_output(deadline).unwrap(),
+            (received_at < deadline).then_some(received_at)
+        );
+        assert!(session.pending_events.is_empty());
+        assert!(
+            session.events.is_empty(),
+            "observation must not manufacture replay events"
+        );
+    }
+    session.first_output = Arc::new(OnceLock::new());
+    session
+        .first_output
+        .set(deadline - Duration::from_nanos(1))
+        .unwrap();
+
+    // A failed write aborts the reader and can discard its in-flight event.
+    // Metadata alone cannot substitute for replay once that owner is gone.
+    session.dead = true;
+    assert_eq!(session.buffered_startup_output(deadline).unwrap(), None);
+    session.dead = false;
+    let (send, recv) = channel(GEMINI_EVENT_QUEUE + 1);
+    session.events = recv;
+    for _ in 0..=GEMINI_EVENT_QUEUE {
+        send.send((
+            deadline - Duration::from_nanos(1),
+            GeminiEvent::TurnComplete,
+        ))
+        .await
+        .unwrap();
+    }
+    assert!(
+        session
+            .buffered_startup_output(deadline)
+            .unwrap_err()
+            .to_string()
+            .contains("event limit"),
+        "metadata must not bypass the bounded replay prefix"
+    );
+    assert_eq!(session.pending_events.len(), GEMINI_EVENT_QUEUE);
+    session.pending_events.clear();
+    session.reader.abort();
+    let _ = (&mut session.reader).await;
+    assert_eq!(
+        session.buffered_startup_output(deadline).unwrap(),
+        None,
+        "an ended reader no longer owns an event to enqueue"
+    );
+    session.shutdown().await.unwrap();
+}
+
 /// The clock the restart budget reads. It has to start at the socket, not
 /// at zero and not at the interview: a session that always reports no age
 /// makes every close look like an endpoint that will not stay up, and the
@@ -3491,6 +4016,122 @@ async fn open_live_session_delivers_server_events_from_reader_task() {
     );
     session.close().await.unwrap();
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn startup_output_wait_keeps_a_late_first_reply_alive() {
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (asked, request) = tokio::sync::oneshot::channel();
+    let (release, mut output) = tokio::sync::oneshot::channel();
+    let (acknowledged, mut acks) = tokio::sync::mpsc::unbounded_channel();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(socket).await.unwrap();
+        socket.next().await.unwrap().unwrap();
+        socket
+            .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+            .await
+            .unwrap();
+        let frame = socket.next().await.unwrap().unwrap();
+        let input: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+        assert_eq!(input["realtimeInput"]["text"], "opening");
+        asked.send(()).unwrap();
+        let mut generations = 1;
+        let mut pings = 0;
+        let mut sent_output = false;
+        loop {
+            tokio::select! {
+                _ = &mut output, if !sent_output => {
+                    socket.send(Message::Text(r#"{"serverContent":{"modelTurn":{"parts":[{"text":"late answer"}]}}}"#.into())).await.unwrap();
+                    sent_output = true;
+                }
+                frame = socket.next() => match frame.unwrap().unwrap() {
+                    Message::Ping(payload) => {
+                        socket.send(Message::Pong(payload)).await.unwrap();
+
+                        // The observation acknowledges receipt by the reader,
+                        // not just completion of the server's loopback write.
+                        socket.send(Message::Text(r#"{"usageMetadata":{"promptTokenCount":0}}"#.into())).await.unwrap();
+                        pings += 1;
+                        acknowledged.send(pings).unwrap();
+                    }
+                    Message::Text(_) => generations += 1,
+                    Message::Close(_) => break,
+                    _ => {},
+                }
+            }
+        }
+        (generations, pings)
+    });
+    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+        .await
+        .unwrap();
+    session.send_text("opening").await.unwrap();
+    let request = tokio::time::timeout(Duration::from_secs(5), request).await;
+    if !matches!(request, Ok(Ok(()))) {
+        let _ = session.shutdown().await;
+        server.abort();
+        let _ = server.await;
+        panic!("startup fixture never received the opening request: {request:?}");
+    }
+    let observed = Arc::clone(&session.usage);
+    let waiting = tokio::spawn(async move {
+        let result = tokio::time::timeout(
+            Duration::from_secs(90),
+            session.wait_for_model_output(&mut tokio::time::interval(KEEPALIVE_INTERVAL)),
+        )
+        .await;
+        (session, result)
+    });
+    tokio::task::yield_now().await;
+    let began = tokio::time::Instant::now();
+    for count in 1..=3 {
+        tokio::time::pause();
+        tokio::time::advance(KEEPALIVE_INTERVAL).await;
+        tokio::time::resume();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), acks.recv())
+                .await
+                .unwrap(),
+            Some(count)
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while observed.lock().unwrap().len() < count {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!waiting.is_finished(), "no model output has been sent yet");
+    }
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(10)).await;
+    tokio::time::resume();
+    assert!(began.elapsed() > READ_IDLE_LIMIT);
+    release.send(()).unwrap();
+    let (mut session, result) = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    result.unwrap().unwrap();
+    for _ in 0..3 {
+        assert_eq!(session.next_event().await, Some(GeminiEvent::UsageRecorded));
+    }
+    assert_eq!(
+        session.next_event().await,
+        Some(GeminiEvent::Text("late answer".into()))
+    );
+    session.shutdown().await.unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap(),
+        (1, 3)
+    );
 }
 
 /// The whole point of reading the update: the handle has to still be

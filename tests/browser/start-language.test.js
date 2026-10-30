@@ -137,6 +137,75 @@ async function holdJudges(page) {
   return () => release();
 }
 
+for (const settle of ["judge", "timeout"]) {
+  test(`Practice End during the ${settle} language wait never requests a token`, async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const page = await browser.newPage();
+    const releaseJudge = await holdJudges(page);
+    let tokens = 0;
+    await page.addInitScript(() => {
+      window.startupTokenRequests = 0;
+      const fetch = window.fetch.bind(window);
+      window.fetch = (...args) => {
+        if (args[0] === "/api/token") window.startupTokenRequests++;
+        return fetch(...args);
+      };
+    });
+    await page.route("**/api/token", (route) => {
+      tokens++;
+      return route.fulfill({
+        status: 503,
+        json: { error: "No token may be requested after End." },
+      });
+    });
+    try {
+      await page.goto(
+        `${base}/interview.html?problem=chargeback-pair-match&language=c`,
+        { waitUntil: "domcontentloaded" },
+      );
+      await page.locator("#audio-heard").click();
+      await page.locator("#camera-skip").click();
+      await page.waitForFunction(
+        () => !document.querySelector("#audio-check-join").disabled,
+      );
+      await page.clock.install({ time: new Date("2030-01-01T00:00:00Z") });
+      // End must win before the language timeout, even on a stalled runner.
+      await page.clock.pauseAt(new Date("2030-01-01T00:01:00Z"));
+      await page.locator("#audio-check-join").click();
+      await page.waitForFunction(
+        () => document.querySelector("#audio-check").hidden,
+      );
+      assert.equal(tokens, 0);
+      const timer = await page.locator("#timer").textContent();
+      await page.locator("#end").click();
+      await page.clock.resume();
+      await page.waitForFunction(
+        () => !document.querySelector("#report-modal").hidden,
+      );
+      if (settle === "judge") {
+        releaseJudge();
+        await page.waitForFunction(
+          () =>
+            !document.querySelector('#language-select option[value="c"]')
+              .disabled,
+        );
+      }
+      await page.clock.fastForward(5_001);
+      assert.equal(await page.evaluate(() => window.startupTokenRequests), 0);
+      assert.equal(tokens, 0);
+      assert.equal(await page.locator("#ending-overlay").isVisible(), false);
+      assert.equal(await page.locator("#timer").textContent(), timer);
+      assert.match(
+        await page.locator("#report-modal").textContent(),
+        /No interviewer joined and this session produced no evaluation/,
+      );
+    } finally {
+      releaseJudge();
+      await page.close();
+    }
+  });
+}
+
 for (const [query, expected] of [
   ["", "python"],
   ["&language=java", "java"],

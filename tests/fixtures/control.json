@@ -8,6 +8,12 @@
       }
     },
     {
+      "name": "startup sync",
+      "payload": {
+        "type": "startup_sync"
+      }
+    },
+    {
       "name": "retry report",
       "payload": {
         "type": "retry_report"

@@ -1,5 +1,5 @@
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -55,7 +55,7 @@ pub(crate) const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 /// How often the room loop pings. A socket nobody is writing to cannot fail a
 /// write, so without a ping a peer that went away would not be noticed until
 /// something was finally said.
-const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+pub(crate) const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 /// Silence the reader accepts before it treats the peer as gone. Gemini answers
 /// a ping within milliseconds, so three missed intervals is not a slow network;
 /// it is a socket that will never deliver another event, and ending the reader
@@ -129,6 +129,11 @@ pub struct GeminiLiveSession {
     reader: JoinHandle<()>,
     events: Receiver<(std::time::Instant, GeminiEvent)>,
     event_received_at: Option<std::time::Instant>,
+    pending_events: std::collections::VecDeque<(std::time::Instant, GeminiEvent)>,
+    /// The reader's first classified output, published after its preceding
+    /// events but before the output's async queue send. One timestamp lets
+    /// startup observe it without waiting for reader or queue progress.
+    first_output: Arc<OnceLock<std::time::Instant>>,
     /// When this socket was opened, which is how the caller tells Gemini's
     /// ordinary connection cap from an endpoint that will not stay up. It lives
     /// here rather than in the loop that reconnects because it is a fact about
@@ -166,6 +171,10 @@ pub struct GeminiLiveSession {
     /// room loop stalled five seconds at a time while the close waits behind
     /// it. A reader that has ended counts the same way, see [`Self::gone`].
     dead: bool,
+    /// Audio is sink-owned while its write is awaiting a flush.
+    /// If startup cancels it, the sink still owns that message: resending the
+    /// media buffer on this socket would duplicate the candidate's samples.
+    queued_audio: bool,
     last_ping: tokio::time::Instant,
     /// What asked for a reply since this socket's last completed turn, for the
     /// room's usage lines. Held on the socket, beside the sends that set it,
@@ -198,17 +207,41 @@ impl GeminiLiveSession {
 
     pub(crate) fn recovery_handle(&self, keys: &GeminiKeys) -> Option<(String, String)> {
         let key = self.credential.as_ref()?;
-        if let Some(failure) = *self
-            .failure
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-        {
-            keys.failed(key, failure, ApiSurface::Live);
-        }
+        self.record_failure(keys);
         if keys.select().ok().as_ref() != Some(key) {
             return None;
         }
         Some((key.clone(), self.resumption_handle()?))
+    }
+
+    pub(crate) fn record_failure(&self, keys: &GeminiKeys) {
+        if let Some(failure) = *self
+            .failure
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            && let Some(key) = &self.credential
+        {
+            keys.failed(key, failure, ApiSurface::Live);
+        }
+    }
+
+    pub(crate) fn startup_error(
+        &self,
+        error: Box<dyn std::error::Error + Send + Sync>,
+    ) -> Box<dyn std::error::Error + Send + Sync> {
+        match *self
+            .failure
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+        {
+            Some(failure) => ApiFailure {
+                status: 0,
+                credential: Some(failure),
+                detail: Some("Gemini refused startup".to_string()),
+            }
+            .into(),
+            None => error,
+        }
     }
 
     pub async fn send_text(
@@ -250,7 +283,15 @@ impl GeminiLiveSession {
         &mut self,
         bytes: &[u8],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.send_json(realtime_audio_message(bytes)).await
+        self.write(
+            Message::Text(serde_json::to_string(&realtime_audio_message(bytes))?.into()),
+            true,
+        )
+        .await
+    }
+
+    pub(crate) fn audio_write_queued(&self) -> bool {
+        self.queued_audio
     }
 
     pub async fn end_audio_turn(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -278,13 +319,117 @@ impl GeminiLiveSession {
     }
 
     pub async fn next_event(&mut self) -> Option<GeminiEvent> {
-        let (received_at, event) = self.events.recv().await?;
+        let (received_at, event) = match self.pending_events.pop_front() {
+            Some(event) => event,
+            None => self.events.recv().await?,
+        };
         self.event_received_at = Some(received_at);
         Some(event)
     }
 
     pub(crate) fn event_received_at(&self) -> Option<std::time::Instant> {
         self.event_received_at
+    }
+
+    /// End can win before the room loop replays the bounded startup prefix.
+    /// Take its speech once, with copies of its turn boundaries and tool calls,
+    /// without polling the reader or consuming output, usage or their receive
+    /// times. Empty tool batches still disarm the runtime's boundary guards.
+    pub(crate) fn take_buffered_startup_speech(&mut self) -> Vec<GeminiEvent> {
+        let mut speech = Vec::new();
+        self.pending_events.retain_mut(|(_, event)| match event {
+            GeminiEvent::InputTranscript(text) => {
+                speech.push(GeminiEvent::InputTranscript(std::mem::take(text)));
+                false
+            }
+            GeminiEvent::TurnComplete | GeminiEvent::Interrupted | GeminiEvent::ToolCall(_) => {
+                speech.push(event.clone());
+                true
+            }
+            _ => true,
+        });
+        speech
+    }
+
+    /// A failed or cancelled input write may hide an already received answer.
+    /// Inspect received events with their order, timestamps and queue bound.
+    /// Only receive times strictly before the original deadline qualify; the
+    /// deadline itself is expired. Never wait or request another generation.
+    pub(crate) fn buffered_startup_output(
+        &mut self,
+        deadline: std::time::Instant,
+    ) -> Result<Option<std::time::Instant>, Box<dyn std::error::Error + Send + Sync>> {
+        // Snapshot before draining: publication guarantees every preceding
+        // event is already queued. Reading it afterwards could miss that
+        // prefix, including candidate speech that End must preserve before
+        // replay.
+        let observed = self
+            .first_output
+            .get()
+            .copied()
+            .filter(|at| *at < deadline && !self.gone());
+        if let Some((at, _)) = self
+            .pending_events
+            .iter()
+            .find(|(at, event)| *at < deadline && model_output(event))
+        {
+            return Ok(Some(*at));
+        }
+        while let Ok(event) = self.events.try_recv() {
+            if let Some(at) = self.buffer_startup_event(event)?
+                && at < deadline
+            {
+                return Ok(Some(at));
+            }
+        }
+        Ok(observed)
+    }
+
+    fn buffer_startup_event(
+        &mut self,
+        (received_at, event): (std::time::Instant, GeminiEvent),
+    ) -> Result<Option<std::time::Instant>, Box<dyn std::error::Error + Send + Sync>> {
+        let ready = model_output(&event);
+        if self.pending_events.len() == GEMINI_EVENT_QUEUE {
+            return Err(io::Error::other("Gemini startup event limit reached").into());
+        }
+        self.pending_events.push_back((received_at, event));
+        Ok(ready.then_some(received_at))
+    }
+
+    /// The startup gate observes output without consuming the greeting. The
+    /// room loop must still deliver it and account for earlier usage frames.
+    /// Return its receive time, not the time a delayed wait dequeues it.
+    /// Until that loop starts, this wait must also ping: the reader's idle
+    /// watchdog can be shorter than the configured reply timeout.
+    pub(crate) async fn wait_for_model_output(
+        &mut self,
+        keepalive: &mut tokio::time::Interval,
+    ) -> Result<std::time::Instant, Box<dyn std::error::Error + Send + Sync>> {
+        loop {
+            let event = tokio::select! {
+                event = self.events.recv() => event,
+                _ = keepalive.tick() => {
+                    self.keep_alive().await?;
+                    continue;
+                }
+            };
+            let Some((received_at, event)) = event else {
+                break;
+            };
+            if let Some(at) = self.buffer_startup_event((received_at, event))? {
+                return Ok(at);
+            }
+        }
+        Err(ApiFailure {
+            status: 0,
+            credential: *self
+                .failure
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+            detail: Some("Gemini ended before producing startup output".to_string()),
+        }
+        .into())
     }
 
     /// How long this socket has been up.
@@ -382,20 +527,24 @@ impl GeminiLiveSession {
             return Ok(());
         }
         self.last_ping = tokio::time::Instant::now();
-        self.write(Message::Ping(Default::default())).await
+        self.write(Message::Ping(Default::default()), false).await
     }
 
     async fn send_json(
         &mut self,
         message: Value,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.write(Message::Text(serde_json::to_string(&message)?.into()))
-            .await
+        self.write(
+            Message::Text(serde_json::to_string(&message)?.into()),
+            false,
+        )
+        .await
     }
 
     async fn write(
         &mut self,
         message: Message,
+        audio: bool,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if self.gone() {
             return Err(io::Error::new(
@@ -404,7 +553,16 @@ impl GeminiLiveSession {
             )
             .into());
         }
-        let Ok(sent) = tokio::time::timeout(WRITE_TIMEOUT, self.writer.send(message)).await else {
+        self.queued_audio = false;
+        let Ok(sent) = tokio::time::timeout(WRITE_TIMEOUT, async {
+            // As with send(), feed and flush share one write budget. Retain
+            // ownership evidence if the enclosing startup future is cancelled.
+            self.writer.feed(message).await?;
+            self.queued_audio = audio;
+            self.writer.flush().await
+        })
+        .await
+        else {
             // Every caller in the room loop logs a failed write and waits for
             // `next_event` to report the close, which a peer that stopped
             // answering never sends. Ending the reader drops its sender, and
@@ -414,9 +572,12 @@ impl GeminiLiveSession {
                 WRITE_TIMEOUT.as_secs()
             );
             self.dead = true;
+            self.queued_audio = false;
             self.reader.abort();
             return Err(io::Error::new(io::ErrorKind::TimedOut, "Gemini write timed out").into());
         };
+
+        self.queued_audio = false;
 
         // A write that fails outright ends the session the same way. Left open,
         // the callers that log and wait would wait on the read half: a
@@ -436,6 +597,15 @@ impl GeminiLiveSession {
     /// flush wins the `select!` against `next_event`.
     fn gone(&self) -> bool {
         self.dead || self.reader.is_finished()
+    }
+}
+
+fn model_output(event: &GeminiEvent) -> bool {
+    match event {
+        GeminiEvent::Audio { bytes, .. } => !bytes.is_empty(),
+        GeminiEvent::Text(text) | GeminiEvent::OutputTranscript(text) => !text.trim().is_empty(),
+        GeminiEvent::ToolCall(calls) => !calls.is_empty(),
+        _ => false,
     }
 }
 
@@ -712,6 +882,24 @@ pub(crate) fn is_billing_failure(error: &(dyn std::error::Error + 'static)) -> b
         || credentials::exhausted_by_billing(error)
 }
 
+/// Machine-owned reasons only; silence and an internal provider error do not
+/// identify quota or billing. The browser uses these on interviewer_state.
+pub(crate) fn startup_failure_reason(error: &(dyn std::error::Error + 'static)) -> &'static str {
+    if credentials::exhausted_by_billing(error) {
+        return "billing";
+    }
+    if credentials::exhausted_until(error).is_some() {
+        return "quota";
+    }
+    match credential_failure(error) {
+        Some(CredentialFailure::Quota) => "quota",
+        Some(CredentialFailure::Billing) => "billing",
+        Some(CredentialFailure::Invalid) => "credentials",
+        Some(CredentialFailure::Refused) => "refused",
+        None => "unavailable",
+    }
+}
+
 /// Bounds `open` by `limit`, the way `FIRST_OPEN_LIMIT` bounds a first open.
 pub(crate) async fn first_open_within<T>(
     limit: Duration,
@@ -726,14 +914,12 @@ pub(crate) async fn first_open_within<T>(
     })
 }
 
-/// Opens one Live session the way an interview's first open would choose its
-/// key, moving past keys Gemini rejects while backups remain.
+/// Checks configured Live credentials, moving past keys Gemini rejects while
+/// backups remain.
 ///
 /// For `check-gemini`, which should pass whenever an interview could start.
-/// It makes at most one attempt per configured key, and no more than the
-/// interview's first open could: that open gets one attempt plus the restart
-/// budget, all inside `FIRST_OPEN_LIMIT`, so a key past either passes a check
-/// but never runs an interview.
+/// It makes at most one attempt per configured key under its diagnostic budget,
+/// all inside `FIRST_OPEN_LIMIT`.
 /// Marking a rejected key unavailable is not a bound on its own: a quota
 /// cooldown lasts a minute, and slow rejections from enough keys outlast it,
 /// putting the first key back in rotation. Other failures return at once: a
@@ -1739,6 +1925,8 @@ async fn open_live_session_redacted_at(
     )
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Gemini setup timed out"))??;
+    #[cfg(test)]
+    tests::constrain_startup_socket(&stream);
     let (writer, mut reader) = stream.split();
     let (sender, events) = channel(GEMINI_EVENT_QUEUE);
 
@@ -1755,6 +1943,10 @@ async fn open_live_session_redacted_at(
     let closed_with = Arc::clone(&failure);
     let usage = Arc::new(Mutex::new(std::collections::VecDeque::new()));
     let ledger = Arc::clone(&usage);
+    let first_output = Arc::new(OnceLock::new());
+    let observed_output = Arc::clone(&first_output);
+    #[cfg(test)]
+    let mut output_pause = tests::take_startup_output_pause();
     let reader = tokio::spawn(async move {
         loop {
             let Ok(next) = tokio::time::timeout(READ_IDLE_LIMIT, reader.next()).await else {
@@ -1838,6 +2030,16 @@ async fn open_live_session_redacted_at(
                     .push_back(observation);
             }
             for event in message.events {
+                // Publish only after the ordered prefix has been sent. The
+                // snapshot is nonblocking, unlike this event's queue insertion.
+                // Descheduling before publication remains unobservable to a
+                // timeout that cannot wait or extend its original deadline.
+                if observed_output.get().is_none() && model_output(&event) {
+                    let _ = observed_output.set(received_at);
+                }
+                #[cfg(test)]
+                tests::pause_startup_output(&mut output_pause, received_at, &event).await;
+
                 // Bounded on purpose: a stalled main loop must slow the socket
                 // down, not let inbound audio pile up without a ceiling.
                 if sender.send((received_at, event)).await.is_err() {
@@ -1851,6 +2053,8 @@ async fn open_live_session_redacted_at(
         writer,
         reader,
         events,
+        pending_events: std::collections::VecDeque::new(),
+        first_output,
         resumption,
         usage,
         checkpoint_at,
@@ -1859,6 +2063,7 @@ async fn open_live_session_redacted_at(
         failure,
         opened_at: std::time::Instant::now(),
         dead: false,
+        queued_audio: false,
         last_ping: tokio::time::Instant::now(),
         input_cause: None,
     })

@@ -31,6 +31,386 @@ fn report_test_config() -> crate::config::AgentConfig {
     .unwrap()
 }
 
+#[tokio::test]
+async fn startup_speech_is_frozen_when_end_wins_before_replay() {
+    use crate::gemini::TokenUsage;
+    use crate::livekit::{packets, room_link::RoomLink, tests, *};
+    use futures_util::{FutureExt, SinkExt, StreamExt};
+    use std::sync::Arc;
+    use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+    const FIRST: &str = "I would track the cobalt invoice in a hash map.";
+    const SECOND: &str = "The violet receipt is the matching entry.";
+    let occurrences = |state: &RuntimeState, text: &str| {
+        state
+            .transcript
+            .iter()
+            .filter(|line| line.contains(text))
+            .count()
+    };
+    for (interrupted, replayed, spoken) in [
+        (false, 0),
+        (false, 1),
+        (false, 2),
+        (false, 5),
+        (true, 0),
+        (true, 1),
+        (true, 2),
+        (true, 3),
+        (true, 4),
+        (true, 7),
+    ]
+    .into_iter()
+    .map(|(interrupted, replayed)| (interrupted, replayed, true))
+    .chain([(false, 0, false), (false, 1, false), (false, 2, false)])
+    {
+        let config = report_test_config();
+        let keys = Arc::new(GeminiKeys::from_config(&config));
+        let boot = bootstrap(&config, "startup-end-evidence", Some("two-sum"), 45);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(socket).await.unwrap();
+            socket.next().await.unwrap().unwrap();
+            socket
+                .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+                .await
+                .unwrap();
+            let mut generations = 0;
+            while let Some(Ok(message)) = socket.next().await {
+                if message.is_close() {
+                    break;
+                }
+                if let Message::Text(text) = message {
+                    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    if value["clientContent"]["turnComplete"] == true {
+                        generations += 1;
+                        let mut frames = if spoken {
+                            vec![
+                                serde_json::json!({"serverContent":{"inputTranscription":{"text":FIRST}}}),
+                            ]
+                        } else {
+                            vec![serde_json::json!({"serverContent":{"turnComplete":true}})]
+                        };
+                        if spoken && interrupted {
+                            frames.extend([
+                                serde_json::json!({"serverContent":{"interrupted":true}}),
+                                serde_json::json!({"serverContent":{"inputTranscription":{"text":"The violet receipt"}}}),
+                                serde_json::json!({"serverContent":{"turnComplete":true}}),
+                                serde_json::json!({"serverContent":{"inputTranscription":{"text":" is the matching entry."}}}),
+                            ]);
+                        } else if spoken {
+                            frames.extend([
+                                serde_json::json!({"serverContent":{"turnComplete":true}}),
+                                serde_json::json!({"serverContent":{"inputTranscription":{"text":SECOND}}}),
+                            ]);
+                        }
+                        frames.extend([
+                            serde_json::json!({"usageMetadata":{"promptTokenCount":7,"responseTokenCount":3,"totalTokenCount":10}}),
+                            serde_json::json!({"serverContent":{"outputTranscription":{"text":"Welcome to the interview."}}}),
+                        ]);
+                        for frame in frames {
+                            socket
+                                .send(Message::Text(frame.to_string().into()))
+                                .await
+                                .unwrap();
+                        }
+                    }
+                }
+            }
+            assert!(
+                listener.accept().now_or_never().is_none(),
+                "no replacement socket"
+            );
+            generations
+        });
+        let mut gemini = crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None)
+            .await
+            .unwrap();
+        let mut turn = tests::hold_turn(initial_runtime_state(&boot, Instant::now()));
+        let mut media = CandidateMedia::new();
+        media.identity = Some("candidate".into());
+        let greeting = with_timer(&turn.state, boot.greeting.clone());
+        let requested_at = Instant::now();
+        let (_input, mut input) = tokio::sync::mpsc::unbounded_channel();
+        let started_at = probe_live_output(
+            &mut gemini,
+            &mut turn.state,
+            &greeting,
+            Duration::from_secs(5),
+            &mut StartupContext {
+                media: &mut media,
+                candidate_identity: "candidate",
+                candidate_video: false,
+                deferred_events: &mut Vec::new(),
+                room_closed: &mut false,
+            },
+            &mut input,
+        )
+        .await
+        .unwrap();
+        turn.state.started_at = started_at;
+        turn.activity = ready_runtime_activity(
+            &config,
+            boot.room_name,
+            started_at,
+            requested_at,
+            7,
+            &greeting,
+        );
+        let (room, sent) = RoomLink::recording(boot.room_name);
+        let mut usage = TokenUsage::default();
+        let ready = startup_ready_notice(started_at, turn.activity.startup_ready_at);
+        tests::publish_startup_readiness(
+            &mut gemini,
+            &mut usage,
+            publish_interviewer_state(&room, &ready),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(&sent.take()[0], room_link::Sent::Data { message, .. } if message["startup"] == "ready")
+        );
+        assert!(
+            turn.state.transcript.is_empty(),
+            "the probe must buffer, not assess"
+        );
+
+        let (_events, events) = tokio::sync::mpsc::unbounded_channel();
+        let events = tokio::sync::Mutex::new(RoomEventReader::from(events));
+        let interview = InterviewContext {
+            config: &config,
+            keys: &keys,
+            boot: &boot,
+            started_at,
+            candidate_identity: "candidate",
+            events: &events,
+            slot: None,
+        };
+        let (mut audio, _frames) = tests::test_output_audio();
+        let mut board = Board::new();
+        let mut loops = RoomLoop {
+            restarts: 3,
+            deferred_restart: DeferredRestart::default(),
+            resume_recovery: ResumeRecovery::default(),
+            interim_review: SideCall::default(),
+            presence: CandidatePresence::default(),
+        };
+        let restarts_before_end;
+        let mut frozen = {
+            let mut context = turn.context(&mut audio, &mut gemini, &mut board, &mut media);
+            for _ in 0..replayed {
+                let event = context.gemini.next_event().await.unwrap();
+                assert!(
+                    on_gemini_event(&room, &mut context, Some(event), &mut loops, interview)
+                        .await
+                        .unwrap()
+                        .is_continue()
+                );
+            }
+            restarts_before_end = loops.restarts;
+
+            // Select the room's End arm ahead of the remaining Gemini events.
+            // These are the production reducer and pre-farewell freeze path;
+            // neither transcript delivery nor a fake report supplies evidence.
+            let ended = packets::reduce_data_packet(
+                context.state,
+                context.activity,
+                crate::runtime::TOPIC_CONTROL,
+                &serde_json::json!({"type":"end_interview", "reason":"candidate_ended"}),
+                true,
+                crate::current_epoch_millis(),
+            );
+            assert!(ended.finish_interview.is_some());
+            assert!(context.state.ended);
+            packets::finish_assessment(&room, &mut context, interview).await
+        };
+        assert_eq!(
+            occurrences(&frozen.state, FIRST),
+            usize::from(spoken),
+            "frozen candidate evidence was lost (replayed={replayed})"
+        );
+        assert_eq!(occurrences(&frozen.state, SECOND), usize::from(spoken));
+        let expected_turns = if spoken { 2 } else { 0 };
+        assert_eq!(
+            frozen.state.evidence_ledger.conversation.candidate_turns,
+            expected_turns
+        );
+        assert_eq!(frozen.rounds().candidate_turns, expected_turns);
+        assert_eq!(frozen.rounds().communication_assessed(), spoken);
+        assert!(
+            frozen
+                .prompt
+                .contains(&format!("CANDIDATE TURNS: {expected_turns}"))
+        );
+        assert_eq!(frozen.prompt.matches(FIRST).count(), usize::from(spoken));
+        assert_eq!(frozen.prompt.matches(SECOND).count(), usize::from(spoken));
+        assert!(
+            !frozen.prompt.contains("Welcome to the interview.")
+                || replayed == if interrupted { 7 } else { 5 }
+        );
+
+        // A farewell may still consume the rest of the buffer. It cannot add a
+        // second candidate turn or retroactively repair the frozen snapshot.
+        while turn
+            .state
+            .transcript
+            .iter()
+            .all(|line| !line.contains("Welcome"))
+        {
+            let event = tokio::time::timeout(Duration::from_secs(5), gemini.next_event())
+                .await
+                .unwrap()
+                .unwrap();
+            let mut context = turn.context(&mut audio, &mut gemini, &mut board, &mut media);
+            session::handle_gemini_event(&room, &mut context, event, Interruptible::No)
+                .await
+                .unwrap();
+        }
+        session::close_turns(
+            &room,
+            &mut turn.context(&mut audio, &mut gemini, &mut board, &mut media),
+        );
+        assert_eq!(
+            turn.state.evidence_ledger.conversation.candidate_turns,
+            expected_turns
+        );
+        assert_eq!(occurrences(&turn.state, FIRST), usize::from(spoken));
+        assert_eq!(occurrences(&turn.state, SECOND), usize::from(spoken));
+        session::drain_live_usage(
+            &room,
+            &mut turn.context(&mut audio, &mut gemini, &mut board, &mut media),
+        );
+        assert_eq!(turn.activity.live_usage.samples, 1);
+        assert_eq!(turn.activity.live_usage.total, 10);
+        assert_eq!(loops.restarts, restarts_before_end);
+        assert_eq!(turn.activity.live_socket, 1);
+        gemini.shutdown().await.unwrap();
+        assert_eq!(server.await.unwrap(), 1, "the opening is generated once");
+
+        // Farewell/live mutations cannot change the already frozen eligibility.
+        turn.state
+            .evidence_ledger
+            .record_conversation_turn(100, "candidate");
+        turn.state
+            .transcript
+            .push("Candidate: a late crimson comment".into());
+        assert_eq!(
+            turn.state.evidence_ledger.conversation.candidate_turns,
+            expected_turns + 1
+        );
+        assert_frozen_startup_report(&boot, &keys, &mut frozen, spoken).await;
+    }
+}
+
+async fn assert_frozen_startup_report(
+    boot: &RuntimeBootstrap<'_>,
+    keys: &GeminiKeys,
+    frozen: &mut FrozenAssessment,
+    spoken: bool,
+) {
+    let mut answer = crate::gemini::tests::valid_report();
+    answer["improvementPlan"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(2);
+    answer["communicationFeedback"]["improvements"] =
+        answer["codingFeedback"]["improvements"].clone();
+    if !spoken {
+        answer["communicationScore"] = serde_json::Value::Null;
+        answer["communicationFeedback"]["strengths"] = serde_json::json!([]);
+        answer["communicationFeedback"]["improvements"] = serde_json::json!([]);
+    }
+    let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let received = requests.clone();
+    let response = answer.clone();
+    let app = axum::Router::new().route("/", axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+        received.lock().unwrap().push(body);
+        let response = response.clone();
+        async move {
+            axum::Json(serde_json::json!({"candidates":[{"content":{"parts":[{"text":response.to_string()}]}}]}))
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let http = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
+            .unwrap()
+    });
+    let generated = crate::gemini::tests::generate_report_for_round_at(
+        keys,
+        &endpoint,
+        std::time::Duration::ZERO,
+        &frozen.prompt,
+        boot.problem,
+        frozen.rounds(),
+        crate::gemini::ReportRun {
+            scope: boot.room_name,
+            seed: crate::gemini::GENERATION_SEED,
+            refused: &frozen.refused,
+        },
+    )
+    .await
+    .unwrap();
+    stop.send(()).unwrap();
+    http.await.unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1, "no semantic repair should be needed");
+    assert_eq!(
+        requests[0]["contents"][0]["parts"][0]["text"],
+        frozen.prompt
+    );
+    assert!(!frozen.prompt.contains("late crimson comment"));
+    let schema = &requests[0]["generationConfig"]["responseSchema"];
+    assert_eq!(*schema, crate::agent::report_response_schema(spoken));
+    assert_eq!(
+        schema["properties"]["communicationFeedback"]["properties"]["strengths"]["minItems"],
+        if spoken { 2 } else { 0 }
+    );
+    assert_eq!(
+        schema["properties"]["communicationScore"]["nullable"]
+            .as_bool()
+            .unwrap_or(false),
+        !spoken
+    );
+    let report = report_value(
+        boot,
+        &mut frozen.state,
+        "candidate_ended",
+        keys,
+        Ok(Ok(generated)),
+    );
+    assert!(report.get("incomplete").is_none(), "{report}");
+    assert_eq!(report["codingScore"], 82);
+    assert_eq!(report["decision"], "HIRE");
+    assert_eq!(report["communicationScore"], answer["communicationScore"]);
+    assert_eq!(
+        report["communicationFeedback"],
+        answer["communicationFeedback"]
+    );
+
+    // Final publication independently rejects the opposite eligibility policy.
+    answer["communicationScore"] = if spoken {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!(74)
+    };
+    let invalid = report_value(
+        boot,
+        &mut frozen.state,
+        "candidate_ended",
+        keys,
+        Ok(Ok(answer)),
+    );
+    assert_eq!(invalid["incomplete"], true);
+}
+
 #[test]
 fn reports_take_the_execution_choice_from_session_state_not_model_output() {
     let config = report_test_config();
@@ -1633,7 +2013,7 @@ fn recovery_offer_matches_browser_limits_and_generation_deadline() {
 /// stream must not make it finish either.
 #[tokio::test]
 async fn skip_wait_does_not_finish_without_candidate_authorization() {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
     tx.send(::livekit::RoomEvent::Reconnecting).unwrap();
     tx.send(::livekit::RoomEvent::DataReceived {
@@ -1648,7 +2028,7 @@ async fn skip_wait_does_not_finish_without_candidate_authorization() {
 
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(50),
-        wait_for_skip(&mut rx, "candidate-original"),
+        wait_for_skip(&mut rx.into(), "candidate-original"),
     )
     .await;
 
@@ -1656,6 +2036,103 @@ async fn skip_wait_does_not_finish_without_candidate_authorization() {
         result.is_err(),
         "an unattributed skip or closed stream must not cancel the report"
     );
+}
+
+#[tokio::test]
+async fn deferred_report_reader_keeps_skip_authorization_and_recovery_order() {
+    use crate::livekit::{RoomEventReader, tests::startup::publication::candidate_room};
+    use futures_util::FutureExt;
+    let (room, _sdk_events, _arrive, server) = candidate_room("candidate", "{}", true).await;
+    let candidate = room.remote_participants().into_values().next().unwrap();
+    let packet = |kind, topic: &str, participant| RoomEvent::DataReceived {
+        topic: Some(topic.into()),
+        payload: std::sync::Arc::new(
+            serde_json::to_vec(&serde_json::json!({"type":kind})).unwrap(),
+        ),
+        kind: ::livekit::DataPacketKind::Reliable,
+        participant,
+    };
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let at = std::time::Instant::now();
+    let mut events = RoomEventReader {
+        events: rx,
+        deferred: [
+            (at, packet("skip_report", "control", None)),
+            (
+                at,
+                packet("skip_report", "wrong-topic", Some(candidate.clone())),
+            ),
+        ]
+        .into(),
+    };
+    assert!(
+        wait_for_skip(&mut events, "candidate")
+            .now_or_never()
+            .is_none()
+    );
+    tx.send(packet("skip_report", "control", Some(candidate.clone())))
+        .unwrap();
+    assert!(
+        wait_for_skip(&mut events, "candidate")
+            .now_or_never()
+            .is_some()
+    );
+
+    events
+        .deferred
+        .push_back((at, packet("retry_report", "control", Some(candidate))));
+    tx.send(RoomEvent::Disconnected {
+        reason: ::livekit::DisconnectReason::ClientInitiated,
+    })
+    .unwrap();
+    let mut recovery = LiveRecoveryRoom {
+        room: &room,
+        room_name: "handoff-recovery",
+        candidate: "candidate",
+        events: &mut events,
+    };
+    assert_eq!(recovery.next().await, RecoveryEvent::Retry);
+    assert_eq!(recovery.next().await, RecoveryEvent::Left);
+    room.close().await.unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn deferred_report_receipt_precedes_new_events_even_after_departure() {
+    use crate::livekit::RoomEventReader;
+    for present in [true, false] {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let payload = br#"{"codingScore":80}"#.to_vec();
+        let id = crate::sha256_hex(&[&payload]);
+        let receipt = |sender| ReceiptTestEvent {
+            sender,
+            payload: receipt_bytes(&id),
+        };
+        let at = std::time::Instant::now();
+        let mut events = RoomEventReader {
+            events: rx,
+            deferred: [(at, receipt("peer")), (at, receipt("candidate"))].into(),
+        };
+        tx.send(receipt("newer-event")).unwrap();
+        let mut publishes = 0;
+        assert!(
+            deliver_report(
+                |_| {
+                    publishes += 1;
+                    std::future::ready(Ok::<_, std::io::Error>(()))
+                },
+                &mut events,
+                "candidate",
+                "handoff-receipt",
+                || present,
+                delivery_test_packet(payload),
+            )
+            .await
+            .unwrap()
+        );
+        assert_eq!(publishes, 1);
+        assert_eq!(events.try_recv().unwrap().sender, "newer-event");
+    }
 }
 
 #[tokio::test]
@@ -2167,7 +2644,7 @@ fn report_receipt_requires_the_candidate_and_matching_delivery() {
 
 #[tokio::test(start_paused = true)]
 async fn report_delivery_retries_identical_bytes_after_a_publish_failure() {
-    let (_sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    let (_sender, events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
     let payload = br#"{"codingScore":80}"#.to_vec();
     let mut published = Vec::new();
     let started = tokio::time::Instant::now();
@@ -2182,7 +2659,7 @@ async fn report_delivery_retries_identical_bytes_after_a_publish_failure() {
                 Ok(())
             })
         },
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || true,
@@ -2196,7 +2673,7 @@ async fn report_delivery_retries_identical_bytes_after_a_publish_failure() {
 
 #[tokio::test(start_paused = true)]
 async fn a_hung_report_publish_is_bounded_and_retried() {
-    let (_sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    let (_sender, events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
     let mut attempts = 0;
     let started = tokio::time::Instant::now();
     let result = deliver_report(
@@ -2204,7 +2681,7 @@ async fn a_hung_report_publish_is_bounded_and_retried() {
             attempts += 1;
             std::future::pending::<Result<(), std::io::Error>>()
         },
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || true,
@@ -2236,7 +2713,7 @@ impl DeliveryEvent for ReceiptTestEvent {
 
 #[tokio::test(start_paused = true)]
 async fn delivery_stops_on_the_candidate_receipt_after_retry() {
-    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, events) = tokio::sync::mpsc::unbounded_channel();
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("../../fixtures/report-receipt.json")).unwrap();
     let receipt = serde_json::to_vec(&fixture["cases"][0]["payload"]).unwrap();
@@ -2270,7 +2747,7 @@ async fn delivery_stops_on_the_candidate_receipt_after_retry() {
                 Ok(())
             })
         },
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || true,
@@ -2284,7 +2761,7 @@ async fn delivery_stops_on_the_candidate_receipt_after_retry() {
 #[tokio::test(start_paused = true)]
 async fn a_lost_packet_is_retransmitted_until_receipt() {
     for acknowledged_on in [1, 2] {
-        let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+        let (sender, events) = tokio::sync::mpsc::unbounded_channel();
         let payload = br#"{"codingScore":80}"#.to_vec();
         let id = crate::sha256_hex(&[&payload]);
         let mut published = Vec::new();
@@ -2302,7 +2779,7 @@ async fn a_lost_packet_is_retransmitted_until_receipt() {
                 }
                 std::future::ready(Ok::<(), std::io::Error>(()))
             },
-            &mut events,
+            &mut events.into(),
             "candidate",
             "room",
             || true,
@@ -2320,7 +2797,7 @@ async fn a_lost_packet_is_retransmitted_until_receipt() {
 
 #[tokio::test(start_paused = true)]
 async fn a_disconnected_room_stops_waiting_without_claiming_delivery_failure() {
-    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, events) = tokio::sync::mpsc::unbounded_channel();
     sender
         .send(RoomEvent::Disconnected {
             reason: ::livekit::DisconnectReason::ClientInitiated,
@@ -2333,7 +2810,7 @@ async fn a_disconnected_room_stops_waiting_without_claiming_delivery_failure() {
             attempts += 1;
             std::future::ready(Ok::<(), std::io::Error>(()))
         },
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || true,
@@ -2347,14 +2824,14 @@ async fn a_disconnected_room_stops_waiting_without_claiming_delivery_failure() {
 
 #[tokio::test(start_paused = true)]
 async fn failed_report_publishes_are_retried_and_reported_as_failure() {
-    let (_sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    let (_sender, events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
     let mut attempts = 0;
     let result = deliver_report(
         |_| {
             attempts += 1;
             std::future::ready(Err::<(), _>("transport"))
         },
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || true,
@@ -2388,7 +2865,7 @@ fn delivery_test_packet(payload: Vec<u8>) -> DataPacket {
 
 #[tokio::test(start_paused = true)]
 async fn a_candidate_already_absent_gets_one_publish_without_a_receipt_wait() {
-    let (_sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    let (_sender, events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
     let started = tokio::time::Instant::now();
     let mut attempts = 0;
     let result = deliver_report(
@@ -2396,7 +2873,7 @@ async fn a_candidate_already_absent_gets_one_publish_without_a_receipt_wait() {
             attempts += 1;
             std::future::ready(Ok::<(), std::io::Error>(()))
         },
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || false,
@@ -2410,7 +2887,7 @@ async fn a_candidate_already_absent_gets_one_publish_without_a_receipt_wait() {
 
 #[tokio::test(start_paused = true)]
 async fn failed_publication_followed_by_disconnect_is_a_delivery_failure() {
-    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, events) = tokio::sync::mpsc::unbounded_channel();
     sender
         .send(RoomEvent::Disconnected {
             reason: ::livekit::DisconnectReason::ClientInitiated,
@@ -2418,7 +2895,7 @@ async fn failed_publication_followed_by_disconnect_is_a_delivery_failure() {
         .unwrap();
     let result = deliver_report(
         |_| std::future::ready(Err::<(), _>("transport")),
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || true,
@@ -2437,7 +2914,7 @@ async fn failed_publication_followed_by_disconnect_is_a_delivery_failure() {
 // participant map is supplied through the presence probe rather than faked.
 #[tokio::test(start_paused = true)]
 async fn a_candidate_leaving_during_the_receipt_wait_stops_retries() {
-    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, events) = tokio::sync::mpsc::unbounded_channel();
     sender
         .send(ReceiptTestEvent {
             sender: "peer",
@@ -2452,7 +2929,7 @@ async fn a_candidate_leaving_during_the_receipt_wait_stops_retries() {
             attempts += 1;
             std::future::ready(Ok::<(), std::io::Error>(()))
         },
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || {
@@ -2506,7 +2983,7 @@ async fn a_receipt_queued_before_the_candidate_left_is_still_acknowledged() {
     };
     // Gone before the wait starts, and gone while an unrelated event is read.
     for unrelated_first in [false, true] {
-        let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+        let (sender, events) = tokio::sync::mpsc::unbounded_channel();
         if unrelated_first {
             sender
                 .send(ReceiptTestEvent {
@@ -2519,7 +2996,7 @@ async fn a_receipt_queued_before_the_candidate_left_is_still_acknowledged() {
         let presence_reads = std::cell::Cell::new(0);
         let result = deliver_report(
             |_| std::future::ready(Ok::<(), std::io::Error>(())),
-            &mut events,
+            &mut events.into(),
             "candidate",
             "room",
             || {
@@ -2579,7 +3056,7 @@ async fn a_candidate_gone_when_the_wait_begins_gets_only_the_rejoin_grace() {
 async fn an_unattributed_receipt_that_reveals_the_departure_is_acknowledged() {
     let payload = br#"{"codingScore":80}"#.to_vec();
     let id = crate::sha256_hex(&[&payload]);
-    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, events) = tokio::sync::mpsc::unbounded_channel();
     sender
         .send(RoomEvent::DataReceived {
             payload: std::sync::Arc::new(receipt_bytes(&id)),
@@ -2591,7 +3068,7 @@ async fn an_unattributed_receipt_that_reveals_the_departure_is_acknowledged() {
     let presence_reads = std::cell::Cell::new(0);
     let result = deliver_report(
         |_| std::future::ready(Ok::<(), std::io::Error>(())),
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || {

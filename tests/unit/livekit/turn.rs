@@ -3285,6 +3285,20 @@ fn audio_after_the_longest_honest_wait_is_not_timed_as_the_replacement() {
 
 const SILENCE: Duration = Duration::from_millis(1_500);
 
+#[test]
+fn output_settles_both_startup_progress_and_the_handoff_reply_wait() {
+    let start = Instant::now();
+    let mut activity = RuntimeActivity::new(start);
+    activity.buffered_startup_output_at = Some(start);
+    activity.arm_handoff_reply(start);
+    let due = start + SILENCE + HANDOFF_REPLY_MARGIN;
+    assert!(activity.handoff_reply_due(due, SILENCE, false));
+
+    activity.note_output(start + Duration::from_millis(1));
+    assert!(activity.buffered_startup_output_at.is_none());
+    assert!(!activity.handoff_reply_due(due, SILENCE, false));
+}
+
 /// The listening note requests no reply, so a handoff socket whose candidate
 /// has already finished has nothing to answer. It is asked once the silence
 /// window and the margin have both passed, and not before.

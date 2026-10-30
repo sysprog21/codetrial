@@ -205,14 +205,17 @@ export function memoryStorage() {
 /// A LiveKit room that connects to nothing and records what the page
 /// publishes. Shared by browser flows that must prove an editor action does or
 /// does not send a code_update packet; one fake keeps those publication tests
-/// on the same room contract.
-export const FAKE_LIVEKIT = `
+/// on the same room contract. Readiness is opt-in for flows that need a started
+/// interview rather than only an available publication transport.
+export function fakeLiveKit({ startupReady = false } = {}) {
+  return `
 window.LivekitClient = {
   RoomEvent: new Proxy({}, { get: (_, name) => String(name) }),
   Track: { Source: { Microphone: "microphone", Camera: "camera" } },
   Room: class {
     constructor() {
-      this.remoteParticipants = new Map();
+      const agent = ${startupReady ? JSON.stringify({ identity: "agent-fake-room", kind: "AGENT", attributes: {} }) : "null"};
+      this.remoteParticipants = new Map(agent ? [[agent.identity, agent]] : []);
       this.name = "fake-room";
       this.localParticipant = {
         identity: "candidate",
@@ -222,6 +225,15 @@ window.LivekitClient = {
             topic: options.topic,
             payload: JSON.parse(new TextDecoder().decode(bytes)),
           });
+          if (agent && options.topic === "integrity" && !this.ready) {
+            this.ready = true;
+            window.__handlers.DataReceived(
+              new TextEncoder().encode(JSON.stringify({
+                type: "interviewer_state", reconnecting: false, startup: "ready",
+              })),
+              agent, undefined, "control",
+            );
+          }
         },
         streamBytes: async () => ({ write: async () => {}, close: async () => {} }),
       };
@@ -235,6 +247,9 @@ window.LivekitClient = {
     async disconnect() {}
   },
 };`;
+}
+
+export const FAKE_LIVEKIT = fakeLiveKit();
 
 // Speech as the fake microphone, not Chromium's built-in beep: under a local
 // sound server the beep is too short for the microphone check that enables

@@ -84,6 +84,8 @@ sha2 = "0.11.1"
 livekit-protocol = "0.8.2"
 # LiveKit's transport, reached directly to check the vendored proxy path.
 livekit-net = "0.1.4"
+# Bound loopback startup backpressure without oversized microphone frames.
+socket2 = "0.6.5"
 # The paused clock, so the Live socket's keepalive and idle limits are tested
 # at their real values instead of waiting them out.
 tokio = { version = "1.54.1", features = ["test-util"] }

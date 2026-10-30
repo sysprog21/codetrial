@@ -432,21 +432,7 @@ pub(super) async fn apply_data_packet(
     // turns go out as a LiveKit text stream and the report as a data packet, so
     // the one failing says nothing about the other, and a final segment the
     // panel never saw is cosmetic where a missing report is not.
-    close_turns(room, context);
-    context.transcripts.flush(TRANSCRIPT_FLUSH_LIMIT).await;
-
-    // The board the browser sent just before ending can still be on its way;
-    // see `BOARD_FINAL_WAIT`. Copied out rather than borrowed: the farewell
-    // below holds the context, board and all, for as long as the report call
-    // runs beside it, and a regeneration grades the same boards. Phase
-    // checkpoints preserve work the candidate cleared before the final board.
-    context.board.settle_for_report(context.state).await;
-    let assessment = freeze_assessment(
-        interview.boot,
-        context.state,
-        interview.elapsed_min(),
-        context.board.report_boards(),
-    );
+    let assessment = finish_assessment(room, context, interview).await;
     let report_boards = assessment.report_boards();
     let mut recovery_events = interview.events.lock().await;
     let api_key = &**interview.keys;
@@ -543,6 +529,29 @@ pub(super) async fn apply_data_packet(
     // nothing the candidate has not acknowledged or stopped listening for.
     leave_room(room).await;
     Ok(ControlFlow::Break(()))
+}
+
+pub(super) async fn finish_assessment(
+    room: &RoomLink,
+    context: &mut GeminiEventContext<'_>,
+    interview: InterviewContext<'_>,
+) -> report::FrozenAssessment {
+    session::preserve_startup_speech(room, context);
+    close_turns(room, context);
+    context.transcripts.flush(TRANSCRIPT_FLUSH_LIMIT).await;
+
+    // The board the browser sent just before ending can still be on its way;
+    // see `BOARD_FINAL_WAIT`. Copied out rather than borrowed: the farewell
+    // holds the context, board and all, while the report call runs beside it,
+    // and a regeneration grades the same boards. Phase checkpoints preserve
+    // work the candidate cleared before the final board.
+    context.board.settle_for_report(context.state).await;
+    freeze_assessment(
+        interview.boot,
+        context.state,
+        interview.elapsed_min(),
+        context.board.report_boards(),
+    )
 }
 
 /// The `tests:` log line for a packet, which only a test-results packet has:

@@ -654,22 +654,26 @@ pub(super) fn ends_turn(event: &GeminiEvent) -> bool {
 /// A `TurnComplete` the interruption guard swallows ends the discard too. With
 /// both armed they wait on the same old turn, which sends one ending, and a
 /// discard left behind it eats the next reply.
-pub(super) fn accept_gemini_event(
+enum TurnBoundary {
+    Current,
+    Stale,
+    InterruptedTail,
+}
+
+fn turn_boundary(
     event: &GeminiEvent,
-    activity: &mut RuntimeActivity,
+    socket: &mut super::turn::SocketWork,
     held: bool,
-    now: Instant,
-) -> bool {
-    if activity.socket.stale_turn_pending && ends_turn(event) {
+) -> TurnBoundary {
+    if socket.stale_turn_pending && ends_turn(event) {
         // An `Interrupted` is followed by the same turn's `TurnComplete`, which
         // ends the wait.
-        activity.socket.stale_turn_pending = matches!(event, GeminiEvent::Interrupted);
-        return false;
+        socket.stale_turn_pending = matches!(event, GeminiEvent::Interrupted);
+        return TurnBoundary::Stale;
     }
     if matches!(event, GeminiEvent::Interrupted) {
-        activity.socket.interrupted_turn_pending = true;
-        activity.turn_completed_at = None;
-    } else if answers_prompt(event) && !activity.socket.discarding_output && !held {
+        socket.interrupted_turn_pending = true;
+    } else if answers_prompt(event) && !socket.discarding_output && !held {
         // Not under a hold, even for a tool call, which is still delivered then
         // and counted as output below. The generation a hold cut off can keep
         // calling tools, and those calls are no sign that a newer turn began;
@@ -677,14 +681,38 @@ pub(super) fn accept_gemini_event(
         // falls on a newer turn under a hold that only calls tools: its ending
         // is swallowed, and `generating` stays set until the stall check clears
         // it.
-        activity.socket.interrupted_turn_pending = false;
-        activity.socket.stale_turn_pending = false;
+        socket.interrupted_turn_pending = false;
+        socket.stale_turn_pending = false;
     }
     if matches!(event, GeminiEvent::TurnComplete)
-        && std::mem::take(&mut activity.socket.interrupted_turn_pending)
+        && std::mem::take(&mut socket.interrupted_turn_pending)
     {
-        activity.end_discard(false);
-        return false;
+        return TurnBoundary::InterruptedTail;
+    }
+    TurnBoundary::Current
+}
+
+pub(super) fn accept_gemini_event(
+    event: &GeminiEvent,
+    activity: &mut RuntimeActivity,
+    held: bool,
+    now: Instant,
+) -> bool {
+    // Even a hold that drops the queued greeting has consumed the probe's
+    // observation. Subsequent work uses the normal output and recovery clocks.
+    if answers_prompt(event) {
+        activity.buffered_startup_output_at = None;
+    }
+    match turn_boundary(event, &mut activity.socket, held) {
+        TurnBoundary::Stale => return false,
+        TurnBoundary::InterruptedTail => {
+            activity.end_discard(false);
+            return false;
+        }
+        TurnBoundary::Current => {}
+    }
+    if matches!(event, GeminiEvent::Interrupted) {
+        activity.turn_completed_at = None;
     }
     match output_disposition(event, activity.socket.discarding_output, held) {
         OutputDisposition::Drop => false,
@@ -1327,17 +1355,13 @@ async fn on_input_transcript(
         if context.agent_state.current() == AGENT_STATE_THINKING {
             set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING);
         }
-        let whole =
-            context
-                .turns
-                .candidate
-                .record(&mut context.state.transcript, CANDIDATE_SPEAKER, text);
+        let segment = record_candidate_transcript(context, text, identity);
         let was_thinking = context.state.thinking_hold.is_active();
         let was_requested = context.state.thinking_hold.is_requested();
         if interruptible == Interruptible::Yes {
             context.activity.observe_thinking_fragment(
                 context.state,
-                &whole,
+                &segment.text,
                 Instant::now(),
                 crate::current_epoch_millis(),
             );
@@ -1384,15 +1408,64 @@ async fn on_input_transcript(
                 }
             }
         }
-        let segment = Segment {
-            id: context.turns.candidate.segment_id("candidate"),
-            text: whole,
-            final_segment: false,
-            identity: Some(identity.to_string()),
-        };
         context.transcripts.publish(room, segment);
     }
     Ok(())
+}
+
+fn record_candidate_transcript(
+    context: &mut GeminiEventContext<'_>,
+    text: &str,
+    identity: &str,
+) -> Segment {
+    let text =
+        context
+            .turns
+            .candidate
+            .record(&mut context.state.transcript, CANDIDATE_SPEAKER, text);
+    Segment {
+        id: context.turns.candidate.segment_id("candidate"),
+        text,
+        final_segment: false,
+        identity: Some(identity.to_string()),
+    }
+}
+
+/// Only evidence is owed before freezing an End that overtook startup replay.
+/// Do not play queued output, execute tools, request a reply or wait for more
+/// transcription. Closing at the original boundaries keeps separate utterances
+/// separate; removing only their input events prevents farewell replay doubling
+/// them while leaving the ordinary output and usage path intact.
+pub(super) fn preserve_startup_speech(room: &RoomLink, context: &mut GeminiEventContext<'_>) {
+    let identity = context.media.identity.clone();
+    let mut socket = context.activity.socket.clone();
+    let held = context.state.interviewer_silenced();
+    for event in context.gemini.take_buffered_startup_speech() {
+        match turn_boundary(&event, &mut socket, held) {
+            TurnBoundary::Stale => continue,
+            TurnBoundary::InterruptedTail => {
+                socket.discarding_output = false;
+                continue;
+            }
+            TurnBoundary::Current => {}
+        }
+        if let GeminiEvent::InputTranscript(text) = &event {
+            if let Some(identity) = identity.as_deref()
+                && transcript_text(text).is_some()
+            {
+                let segment = record_candidate_transcript(context, text, identity);
+                context.transcripts.publish(room, segment);
+            }
+        } else if ends_turn(&event) {
+            if output_disposition(&event, socket.discarding_output, held)
+                == OutputDisposition::Deliver
+            {
+                close_turns(room, context);
+            } else {
+                socket.discarding_output = false;
+            }
+        }
+    }
 }
 
 /// Most events emit nothing, and some arrive per audio chunk or per loop step,
