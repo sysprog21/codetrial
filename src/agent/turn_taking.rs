@@ -191,6 +191,12 @@ fn thinking_debt(state: &RuntimeState) -> Vec<String> {
     if state.needs_cold_brief {
         prompts.push(super::cold_restart(state));
     }
+    prompts.extend(reply_debt(state));
+    prompts
+}
+
+fn reply_debt(state: &RuntimeState) -> Vec<String> {
+    let mut prompts = Vec::new();
     if state.thinking_unheard_reply {
         prompts.push(THINKING_UNHEARD.to_string());
     }
@@ -201,6 +207,11 @@ fn thinking_debt(state: &RuntimeState) -> Vec<String> {
         prompts.push(super::owed_reply(owed.as_deref()));
     }
     prompts
+}
+
+/// The reply obligations after a full cold briefing has already been added.
+pub(crate) fn owed_context_after_briefing(state: &RuntimeState) -> String {
+    reply_debt(state).join("\n")
 }
 
 /// Whether ending a hold owes the model anything beyond what ends it.

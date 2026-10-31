@@ -21,7 +21,13 @@ BROWSER_CHECK_AGENT=${BROWSER_CHECK_AGENT:-home}
 #
 # A soak exits 77 when Gemini sent no GoAway during the window: it learned
 # nothing about the handover, which is neither a pass nor a failure of it. Any
-# other nonzero status is a failure.
+# other nonzero status is a failure, a structural one included.
+#
+# BROWSER_CHECK_SOAK_VERDICT_MODE is strict (the default) or pilot. Strict holds
+# the soak to the one-watchdog-rebuild cap and is the qualification. Pilot
+# leaves only that cap out of its verdict, reports the strict outcome beside the
+# structural one, and prints qualification=not_evaluated, so a pilot that
+# completed is never read as having qualified.
 BROWSER_CHECK_FLOW=${BROWSER_CHECK_FLOW:-voice}
 case $BROWSER_CHECK_FLOW in
     voice | report | barge | avatar | soak) ;;
@@ -57,6 +63,22 @@ if [ "${BROWSER_CHECK_REQUIRE_MODEL:-}" = "1" ]; then
 elif [ -n "${BROWSER_CHECK_REQUIRE_MODEL:-}" ]; then
     echo "BROWSER_CHECK_REQUIRE_MODEL must be 1 when set." >&2
     exit 2
+fi
+if [ "$BROWSER_CHECK_FLOW" = soak ]; then
+    SOAK_VERDICT_MODE=${BROWSER_CHECK_SOAK_VERDICT_MODE:-strict}
+    case $SOAK_VERDICT_MODE in
+        strict | pilot) ;;
+        *)
+            echo "BROWSER_CHECK_SOAK_VERDICT_MODE must be strict or pilot." >&2
+            exit 2
+            ;;
+    esac
+elif [ -n "${BROWSER_CHECK_SOAK_VERDICT_MODE:-}" ]; then
+    echo "BROWSER_CHECK_SOAK_VERDICT_MODE applies to BROWSER_CHECK_FLOW=soak," >&2
+    echo "not to $BROWSER_CHECK_FLOW." >&2
+    exit 2
+else
+    SOAK_VERDICT_MODE=
 fi
 case $SOAK_SECONDS in
     *[!0-9]*)
@@ -298,6 +320,7 @@ BASE_URL="$BASE_URL" \
     BROWSER_CHECK_AGENT="$BROWSER_CHECK_AGENT" \
     BROWSER_CHECK_FLOW="$BROWSER_CHECK_FLOW" \
     BROWSER_CHECK_SOAK_SECONDS="$SOAK_SECONDS" \
+    BROWSER_CHECK_SOAK_VERDICT_MODE="$SOAK_VERDICT_MODE" \
     BROWSER_CHECK_REQUIRE_MODEL="${BROWSER_CHECK_REQUIRE_MODEL:-}" \
     BROWSER_CHECK_CAPTURE="${BROWSER_CHECK_CAPTURE:-}" \
     BROWSER_CHECK_BARGE_AUDIO_FILE="$BARGE_AUDIO_FILE" \

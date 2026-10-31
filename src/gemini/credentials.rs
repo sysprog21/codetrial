@@ -318,6 +318,11 @@ fn exhausted(retry_at: Option<Instant>, billing: bool) -> io::Error {
     io::Error::other(Exhausted { retry_at, billing })
 }
 
+#[cfg(test)]
+pub(super) fn exhausted_for_test(retry_at: Instant) -> io::Error {
+    exhausted(Some(retry_at), false)
+}
+
 fn as_exhausted<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Exhausted> {
     error
         .downcast_ref::<io::Error>()?

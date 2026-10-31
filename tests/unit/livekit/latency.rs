@@ -1135,3 +1135,272 @@ fn a_queued_end_at_the_pending_instant_rolls_nothing_back() {
     assert_eq!(record["provider_voice_end_ms"], 0);
     assert_eq!(record["candidate_yield_ms"], 5);
 }
+
+// Obligation identity. Declared before running: an owed reply is numbered by
+// its trace, keeps its origin and start across replacement episodes, records
+// them, and ends exactly one of answered, superseded or ended.
+
+#[test]
+fn an_owed_reply_keeps_its_obligation_origin_and_start_across_episodes() {
+    let (start, mut trace) = traced();
+    trace.anchor(start);
+    trace.prompt(ms(start, 100));
+    assert_eq!(trace.owed_origin(), Some("prompt"));
+    let (first, obligation) = trace.begin_episode();
+    assert_eq!((first, obligation), (1, Some(1)));
+    trace.set_socket(2);
+    let record = trace
+        .boundary(Boundary::SocketReplaced, ms(start, 300))
+        .unwrap();
+    assert_eq!(record["continuing"], true);
+    assert_eq!(record["obligation_outcome"], "open");
+    let (second, same) = trace.begin_episode();
+    assert_eq!((second, same), (2, Some(1)));
+    trace.output(ms(start, 700), false);
+    let audio = trace.audio(ms(start, 800)).unwrap();
+    assert_eq!(audio["obligation"], 1);
+    assert_eq!(audio["turn"], 1);
+    assert_eq!(audio["origin"], "prompt");
+    assert_eq!(audio["origin_socket"], 1);
+    assert_eq!(audio["socket"], 2);
+    assert_eq!(audio["owed_start_interview_ms"], 100);
+    assert_eq!(audio["interview_ms"], 800);
+    assert_eq!(audio["obligation_episodes"], serde_json::json!([1, 2]));
+    assert_eq!(audio["obligation_episode_count"], 2);
+    assert_eq!(audio["first_accept_ms"], 700);
+    assert_eq!(audio["first_accept_socket"], 2);
+    assert_eq!(audio["obligation_outcome"], "open");
+    let done = trace
+        .boundary(Boundary::TurnComplete, ms(start, 900))
+        .unwrap();
+    assert_eq!(done["obligation"], 1);
+    assert_eq!(done["obligation_outcome"], "answered");
+}
+
+#[test]
+fn an_obligation_ends_answered_superseded_or_ended_and_never_both() {
+    for (boundary, accepted, outcome) in [
+        (Boundary::TurnComplete, true, "answered"),
+        (Boundary::TurnComplete, false, "ended"),
+        (Boundary::Held, false, "superseded"),
+        (Boundary::Interrupted, false, "superseded"),
+        (Boundary::Interrupted, true, "answered"),
+    ] {
+        let (start, mut trace) = traced();
+        trace.prompt(start);
+        trace.output(ms(start, 10), false);
+        if accepted {
+            trace.audio(ms(start, 20)).unwrap();
+        }
+        let record = trace.boundary(boundary, ms(start, 50)).unwrap();
+        assert_eq!(record["obligation_outcome"], outcome, "{boundary:?}");
+        assert!(
+            trace.boundary(boundary, ms(start, 60)).is_none(),
+            "a resolved obligation is not resolved twice"
+        );
+    }
+}
+
+#[test]
+fn output_nothing_asked_for_is_no_obligation() {
+    let (start, mut trace) = traced();
+    trace.anchor(start);
+    trace.output(start, false);
+    assert_eq!(trace.owed_origin(), None);
+    assert_eq!(trace.begin_episode(), (1, None));
+    let record = trace.audio(ms(start, 5)).unwrap();
+    assert_eq!(record["origin"], "provider_event");
+    assert_eq!(record["obligation"], Value::Null);
+    assert_eq!(record["obligation_outcome"], Value::Null);
+    assert_eq!(record["obligation_episode_count"], 0);
+}
+
+#[test]
+fn episodes_remembered_per_obligation_are_bounded_but_counted() {
+    let (start, mut trace) = traced();
+    trace.prompt(start);
+    for _ in 0..(EPISODES_KEPT + 4) {
+        trace.begin_episode();
+    }
+    trace.output(ms(start, 5), false);
+    let record = trace.audio(ms(start, 6)).unwrap();
+    let kept = record["obligation_episodes"].as_array().unwrap();
+    assert_eq!(kept.len(), EPISODES_KEPT);
+    assert_eq!(kept[EPISODES_KEPT - 1], (EPISODES_KEPT + 4) as u64);
+    assert_eq!(
+        record["obligation_episode_count"],
+        (EPISODES_KEPT + 4) as u64
+    );
+}
+
+#[test]
+fn episode_and_replacement_numbers_only_grow() {
+    let (start, mut trace) = traced();
+    trace.prompt(start);
+    let episodes = (0..4).map(|_| trace.begin_episode().0).collect::<Vec<_>>();
+    assert_eq!(episodes, [1, 2, 3, 4]);
+    // A failed episode consumes an episode number and no replacement number.
+    let replacements = (0..2)
+        .map(|_| trace.installed_replacement())
+        .collect::<Vec<_>>();
+    assert_eq!(replacements, [1, 2]);
+}
+
+#[test]
+fn the_interview_clock_is_anchored_once_and_sampled_each_minute() {
+    let (start, mut trace) = traced();
+    assert_eq!(trace.interview_ms(start), None);
+    assert!(trace.clock_sample(ms(start, 120_000)).is_none());
+    let anchor = trace.anchor(start);
+    let fields = |line: &str| {
+        line.trim_end_matches(" room=room")
+            .split_whitespace()
+            .filter_map(|token| token.split_once('='))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect::<std::collections::HashMap<_, _>>()
+    };
+    assert!(anchor.starts_with("interview clock: pid="), "{anchor}");
+    let first = fields(&anchor);
+    assert_eq!(first["session"], "4");
+    assert_eq!(first["elapsed_ms"], "0");
+    assert_eq!(first["sample"], "0");
+    let unix: u64 = first["start_unix_ms"].parse().unwrap();
+    assert!(unix > 1_600_000_000_000, "{anchor}");
+    assert!(trace.clock_sample(ms(start, 59_999)).is_none());
+    let minute = trace.clock_sample(ms(start, 60_000)).unwrap();
+    let minute = fields(&minute);
+    assert_eq!(minute["elapsed_ms"], "60000");
+    assert_eq!(minute["sample"], "1");
+    assert_eq!(minute["start_unix_ms"], first["start_unix_ms"]);
+    assert!(trace.clock_sample(ms(start, 61_000)).is_none());
+    // A tick delayed past several minutes yields one sample, not a burst.
+    let late = fields(&trace.clock_sample(ms(start, 300_500)).unwrap());
+    assert_eq!(late["sample"], "5");
+    assert!(trace.clock_sample(ms(start, 300_600)).is_none());
+}
+
+#[test]
+fn repeated_advisories_print_a_doubling_run_and_keep_the_raw_count() {
+    let (_, mut trace) = traced();
+    let printed = (0..9)
+        .map(|n| trace.note_advisory(n > 0))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        printed,
+        [
+            Some(1),
+            Some(2),
+            None,
+            Some(4),
+            None,
+            None,
+            None,
+            Some(8),
+            None
+        ]
+    );
+    assert_eq!(trace.take_advisories(), 9);
+    assert_eq!(trace.take_advisories(), 0);
+    // An advisory with none held starts a new run.
+    assert_eq!(trace.note_advisory(false), Some(1));
+}
+
+#[test]
+fn episode_lines_carry_scope_ids_and_keep_the_milestones_apart() {
+    let start = EpisodeStart {
+        room: "room one",
+        session: 4,
+        episode: 7,
+        trigger: "goaway",
+        old_socket: 3,
+        obligation: Some(12),
+        obligation_origin: Some("last_voiced_pcm"),
+        advisories: 5,
+        interview_ms: Some(61_000),
+    };
+    let line = episode_start_line(&start);
+    assert!(line.starts_with("replacement start: pid="), "{line}");
+    for field in [
+        "session=4",
+        "episode=7",
+        "trigger=goaway",
+        "old_socket=3",
+        "obligation=12",
+        "obligation_origin=last_voiced_pcm",
+        "advisories=5",
+        "interview_ms=61000",
+    ] {
+        assert!(
+            line.split_whitespace().any(|token| token == field),
+            "{line}"
+        );
+    }
+    assert!(line.ends_with(" room=room one"), "{line}");
+    let end = episode_end_line(&EpisodeEnd {
+        start,
+        result: EpisodeResult::Installed,
+        new_socket: Some(4),
+        replacement: Some(2),
+        attempt: 1,
+        resume_tried: true,
+        milestones: EpisodeMilestones {
+            notice_ms: Some(900),
+            setup_ms: Some(200),
+            connected_ms: Some(1_150),
+            opener_ms: Some(1_400),
+            install_ms: Some(1_410),
+        },
+        interview_ms: Some(62_410),
+    });
+    for field in [
+        "result=installed",
+        "new_socket=4",
+        "replacement=2",
+        "attempt=1",
+        "resume_tried=true",
+        "notice_ms=900",
+        "setup_ms=200",
+        "connected_ms=1150",
+        "opener_ms=1400",
+        "install_ms=1410",
+        "interview_ms=62410",
+    ] {
+        assert!(end.split_whitespace().any(|token| token == field), "{end}");
+    }
+    let none = episode_end_line(&EpisodeEnd {
+        start: EpisodeStart {
+            room: "r",
+            session: 1,
+            episode: 1,
+            trigger: "close",
+            old_socket: 1,
+            obligation: None,
+            obligation_origin: None,
+            advisories: 0,
+            interview_ms: None,
+        },
+        result: EpisodeResult::NoSetup,
+        new_socket: None,
+        replacement: None,
+        attempt: 6,
+        resume_tried: false,
+        milestones: EpisodeMilestones::default(),
+        interview_ms: None,
+    });
+    assert!(none.contains(" result=no_setup "), "{none}");
+    assert!(none.contains(" setup_ms=none "), "{none}");
+}
+
+#[test]
+fn a_reply_already_answered_is_not_owed_to_a_later_episode() {
+    let (start, mut trace) = traced();
+    trace.prompt(start);
+    trace.output(ms(start, 10), false);
+    trace.audio(ms(start, 20)).unwrap();
+    assert_eq!(trace.begin_episode(), (1, None));
+    let record = trace
+        .boundary(Boundary::SocketReplaced, ms(start, 30))
+        .unwrap();
+    assert_eq!(record["obligation_outcome"], "answered");
+    assert_eq!(record["obligation_episode_count"], 0);
+}

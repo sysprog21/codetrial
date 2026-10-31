@@ -26,11 +26,24 @@ const {
 } = require("./livekit-room-service.cjs");
 const { problemPages, judgeCaseCount } = require("./judge-case-counts.cjs");
 const {
+  clockEvidenceLines,
   completeLines,
+  episodeEvidenceLines,
+  installedSwapKeys,
   isRotation,
+  judgeEpisodeReplies,
   judgeSoak,
+  judgeSwapAudio,
+  parseClock,
+  parseEpisodes,
+  parseObligations,
   parseReplacements,
+  parseVerdictMode,
+  replacementKey,
+  replacementsWithoutEpisode,
   roomLogged,
+  soakExposure,
+  soakResult,
 } = require("./soak-judge.cjs");
 
 const floorLogPath = process.env.BROWSER_CHECK_FLOOR_LOG || null;
@@ -46,6 +59,7 @@ function writeIncompleteCapture(fields) {
         flow: process.env.BROWSER_CHECK_FLOW,
         status: "incomplete",
         floorLogPath,
+        ...(soakSummary ? { soak: soakSummary } : {}),
         ...fields,
       },
       null,
@@ -53,6 +67,10 @@ function writeIncompleteCapture(fields) {
     ),
   );
 }
+
+// What the soak made of itself, kept for the capture so a run that fails later
+// still names the verdict it had reached.
+let soakSummary = null;
 
 if (process.env.BROWSER_CHECK_CAPTURE && floorLogPath) writeIncompleteCapture();
 
@@ -420,6 +438,11 @@ async function checkEditorNewlines(page) {
 
 const soakSeconds = Number(process.env.BROWSER_CHECK_SOAK_SECONDS || "0");
 const requireModel = process.env.BROWSER_CHECK_REQUIRE_MODEL === "1";
+// strict is the qualification, with the one-watchdog cap; pilot leaves the cap
+// out of its verdict and says it did not evaluate qualification.
+const soakVerdictMode = parseVerdictMode(
+  process.env.BROWSER_CHECK_SOAK_VERDICT_MODE,
+);
 if (!Number.isSafeInteger(soakSeconds) || soakSeconds < 0) {
   throw new Error(
     "BROWSER_CHECK_SOAK_SECONDS must be a whole number of seconds",
@@ -615,6 +638,44 @@ function readServerLog() {
   return redact(fs.readFileSync(process.env.SERVER_LOG, "utf8"));
 }
 
+/// The lines SERVER_LOG gained since the last call, complete ones only and
+/// redacted, so a swap can be noticed within a fraction of a second without
+/// reading the whole file each time.
+function serverLogTail() {
+  let offset = 0;
+  let rest = Buffer.alloc(0);
+  return () => {
+    const file = process.env.SERVER_LOG;
+    if (!file) return "";
+    let size;
+    try {
+      size = fs.statSync(file).size;
+    } catch {
+      return "";
+    }
+    if (size < offset) {
+      offset = 0;
+      rest = Buffer.alloc(0);
+    }
+    if (size > offset) {
+      const fresh = Buffer.alloc(size - offset);
+      const fd = fs.openSync(file, "r");
+      try {
+        fs.readSync(fd, fresh, 0, fresh.length, offset);
+      } finally {
+        fs.closeSync(fd);
+      }
+      offset = size;
+      rest = Buffer.concat([rest, fresh]);
+    }
+    const cut = rest.lastIndexOf(10);
+    if (cut < 0) return "";
+    const lines = rest.subarray(0, cut + 1).toString("utf8");
+    rest = rest.subarray(cut + 1);
+    return redact(lines);
+  };
+}
+
 /// Prints each timing line a socket replacement of this room logged, once, as
 /// the soak sees it. A pass otherwise leaves nothing to read them from, and the
 /// agent's output is a rolling window, so they are taken on the way past. The
@@ -628,15 +689,6 @@ function reportRotationLines(log, room, reported) {
     reported.add(line);
     console.log(line);
   }
-}
-
-/// How many turns the interviewer has taken, as the transcript panel shows
-/// them. The page accumulates these client-side, so it keeps counting across a
-/// handover the browser never sees. Only Jim's: the looped microphone clip adds
-/// candidate turns however silent the interviewer is, so counting them would
-/// let a handover that left Jim mute pass.
-function jimTurns(page) {
-  return page.locator(".transcript-row.alex").count();
 }
 
 /// Raised when a soak learned nothing about the handover, so a runner can tell
@@ -653,9 +705,18 @@ class InconclusiveSoak extends Error {}
 /// Presence is only the first thing that has to be true: the interviewer stays
 /// in the room whether the transport was replaced early, replaced late, or
 /// rebuilt without the conversation. What the runtime logs about each
-/// replacement (soak-judge.cjs) says which it was, and the interviewer taking
-/// new turns afterwards says whether it went on.
-async function soakInterview(page, roomName, agentIdentity, agentOutput) {
+/// replacement (soak-judge.cjs) says which it was, and the reply that
+/// replacement owed, matched by obligation and episode ids, says whether the
+/// interview went on. The transcript the page shows is not evidence of it: a
+/// row from before the swap, or from another recovery, would satisfy any
+/// count.
+async function soakInterview(
+  page,
+  roomName,
+  agentIdentity,
+  agentOutput,
+  probing,
+) {
   const deadline = Date.now() + soakSeconds * 1000;
 
   // Latched on the way past rather than read at the end: agentOutput is a
@@ -664,7 +725,12 @@ async function soakInterview(page, roomName, agentIdentity, agentOutput) {
   const seen = { goAway: false, expired: false };
   const replacements = [];
   const reported = new Set();
-  let jimAtHandover = null;
+  // Every complete line of this room that the per-episode judge reads, kept
+  // as it goes past for the same reason: the agent's output is a rolling
+  // window.
+  const evidence = new Map();
+  // The installed swaps already handed to the page to sample again.
+  const marked = new Set();
 
   // One read per call rather than one per signal: this is the whole server
   // log, and the loop runs for minutes.
@@ -674,83 +740,205 @@ async function soakInterview(page, roomName, agentIdentity, agentOutput) {
       seen[name] ||= roomLogged(log, needle, roomName);
     }
     reportRotationLines(log, roomName, reported);
-    const known = new Set(replacements.map((r) => r.at));
+    for (const line of [
+      ...episodeEvidenceLines(log, roomName),
+      ...clockEvidenceLines(log, roomName),
+    ]) {
+      evidence.set(line, true);
+    }
+    const known = new Set(replacements.map(replacementKey));
     for (const r of parseReplacements(log, roomName)) {
-      if (!known.has(r.at)) replacements.push(r);
+      if (!known.has(replacementKey(r))) replacements.push(r);
     }
   };
-  // The count the handover is measured against is the last one taken before
-  // the rotation was read. Taken when the line is first read, it would count
-  // the reply to the briefing, which lands within seconds, as before the
-  // handover and ask for a second one. The cost is that a turn Jim took in the
-  // tick before the rotation counts as growth, a bound of one tick on how
-  // loose the check is.
-  let jimPrev = await jimTurns(page);
-  const sampleJim = async () => {
-    if (jimAtHandover !== null) return;
-    if (replacements.some(isRotation)) jimAtHandover = jimPrev;
-    else jimPrev = await jimTurns(page);
+  const evidenceText = () => `${[...evidence.keys()].join("\n")}\n`;
+  const coverage = (final) =>
+    judgeEpisodeReplies(
+      parseEpisodes(evidenceText(), roomName),
+      parseObligations(evidenceText(), roomName),
+      final,
+    );
+  // Each installed swap is marked in the page once, as soon as its end line is
+  // read, so the sample that answers it can only open on a Speaking transition
+  // after this point. Read late, never early: a transition between the install
+  // and this call is missed and the next one is used instead, which can fail
+  // a swap whose reply was quicker than a poll but never passes one on audio
+  // from before it.
+  const newLines = serverLogTail();
+  const markNewSwaps = async () => {
+    if (!probing) return;
+    for (const key of installedSwapKeys(
+      `${agentOutput.join("")}\n${newLines()}`,
+      roomName,
+    )) {
+      if (marked.has(key)) continue;
+      marked.add(key);
+      await page.evaluate((swap) => globalThis.__markJimSwap?.(swap), key);
+    }
   };
   const failure = (reasons) =>
     new Error(`${reasons.join("; ")} during ${soakSeconds}s soak`);
+  const judge = (final) =>
+    judgeSoak({ replacements, ...seen, final, mode: soakVerdictMode });
+  const exposureNow = () => soakExposure(parseClock(evidenceText(), roomName));
+  const record = (soak, replies, audio) => {
+    soakSummary = soakResult({
+      soak,
+      replies,
+      audio,
+      exposure: exposureNow(),
+    });
+    if (process.env.BROWSER_CHECK_SOAK_RESULT) {
+      fs.writeFileSync(
+        process.env.BROWSER_CHECK_SOAK_RESULT,
+        `${JSON.stringify(soakSummary, null, 2)}\n`,
+      );
+    }
+    return soakSummary;
+  };
 
-  while (Date.now() < deadline) {
-    await sleep(Math.min(15_000, deadline - Date.now()));
-    const participants = await listRoomParticipants(roomName);
-    if (!agentParticipantIdentities(participants).includes(agentIdentity)) {
-      throw new Error(`interviewer left during ${soakSeconds}s soak`);
+  // Marked on its own clock, not the loops' below: those wait on log parsing
+  // and room-service calls, and a swap read late can miss the transition that
+  // answered it.
+  let marking = true;
+  let markError = null;
+  const marker = (async () => {
+    while (marking) {
+      await sleep(250);
+      if (!marking) break;
+      try {
+        await markNewSwaps();
+      } catch (error) {
+        markError = error;
+        marking = false;
+      }
+    }
+  })();
+  const stopMarking = async () => {
+    marking = false;
+    await marker;
+    if (markError) throw markError;
+    await markNewSwaps();
+  };
+
+  try {
+    let nextRefresh = 0;
+    let nextHealthCheck = 0;
+    while (Date.now() < deadline) {
+      await sleep(Math.min(1000, deadline - Date.now()));
+      if (Date.now() < nextRefresh) continue;
+      nextRefresh = Date.now() + 5_000;
+      refresh();
+      if (Date.now() < nextHealthCheck) continue;
+      nextHealthCheck = Date.now() + 15_000;
+      const participants = await listRoomParticipants(roomName);
+      if (!agentParticipantIdentities(participants).includes(agentIdentity)) {
+        throw new Error(`interviewer left during ${soakSeconds}s soak`);
+      }
+
+      // Reported where it happened rather than as a missing handover at the end.
+      // Not yet final: a GoAway is seen up to its notice before the replacement
+      // it asks for, and a soak that has seen no GoAway has not failed.
+      const so_far = judge(false);
+      if (so_far.verdict === "fail") {
+        record(so_far, null, null);
+        throw failure(so_far.reasons);
+      }
+    }
+
+    // A GoAway read on the last tick has not had its notice to be acted on, so
+    // its replacement gets a bounded window of its own before its absence counts.
+    const handoverBy = Date.now() + RESUME_GRACE_MS;
+    refresh();
+    while (
+      seen.goAway &&
+      !replacements.some(isRotation) &&
+      judge(false).verdict !== "fail" &&
+      Date.now() < handoverBy
+    ) {
+      await sleep(1000);
+      refresh();
+    }
+    const final = judge(true);
+    if (final.verdict === "inconclusive") {
+      record(final, null, null);
+      throw new InconclusiveSoak(final.reasons.join("; "));
+    }
+    if (final.verdict === "fail") {
+      record(final, null, null);
+      throw failure(final.reasons);
+    }
+    if (final.watchdogRebuildsTotal > 0) {
+      console.log(
+        `soak: ${final.watchdogRebuildsTotal} rebuild(s) from local state after a reply timeout, ${final.strictCapEligibleTotal} counting toward the strict cap`,
+      );
+    }
+    for (const note of final.diagnostics) console.log(`soak: ${note}`);
+
+    // Each replacement is held to the reply it owed. The last one may have been
+    // read on the final tick and its reply still be on the way, so it gets a
+    // bounded window before a reply that has not finished counts against it.
+    const replyBy = Date.now() + RESUME_GRACE_MS;
+    while (coverage(false).verdict === "pending" && Date.now() < replyBy) {
+      await sleep(1000);
+      refresh();
     }
     refresh();
+    await stopMarking();
+    const replies = coverage(true);
+    const parsedEpisodes = parseEpisodes(evidenceText(), roomName);
+    const unaccounted = replacementsWithoutEpisode(
+      replacements,
+      parsedEpisodes.episodes,
+    );
+    if (parsedEpisodes.episodes.length === 0 || unaccounted.length > 0) {
+      replies.verdict = "fail";
+      replies.ok = false;
+      replies.reasons.push(
+        unaccounted.length > 0
+          ? `${unaccounted.length} logged replacement(s) have no installed start/end episode: ${unaccounted.map((r) => r.episode).join(",")}`
+          : "a rotation was logged but no replacement start/end lines were",
+      );
+    }
+    for (const e of replies.episodes) {
+      console.log(
+        `soak episode ${e.episode} trigger=${e.trigger} result=${e.result}: ${e.status} (${e.class}) ${e.reasons.join("; ")}`,
+      );
+    }
 
-    // Reported where it happened rather than as a missing handover at the end.
-    // Not yet final: a GoAway is seen up to its notice before the replacement
-    // it asks for, and a soak that has seen no GoAway has not failed.
-    const so_far = judgeSoak({ replacements, ...seen, final: false });
-    if (so_far.verdict === "fail") throw failure(so_far.reasons);
-    await sampleJim();
-  }
+    // The decoded audio each answered swap owes. The page is given the rest of
+    // the grace for the first Speaking transition after the last swap, then
+    // cancels what still waits, and an unsampled swap counts against the soak.
+    let audio = null;
+    if (probing) {
+      const rearms = await page.evaluate(
+        (waitMs) => globalThis.__settleJimSwapAudio(waitMs),
+        RESUME_GRACE_MS,
+      );
+      audio = judgeSwapAudio(replies, rearms);
+      for (const e of audio.episodes) {
+        console.log(
+          `soak episode ${e.episode} audio: ${e.status} ${e.reasons.join("; ")}`.trimEnd(),
+        );
+      }
+    }
 
-  // A GoAway read on the last tick has not had its notice to be acted on, so
-  // its replacement gets a bounded window of its own before its absence counts.
-  const handoverBy = Date.now() + RESUME_GRACE_MS;
-  refresh();
-  while (
-    seen.goAway &&
-    !replacements.some(isRotation) &&
-    judgeSoak({ replacements, ...seen, final: false }).verdict !== "fail" &&
-    Date.now() < handoverBy
-  ) {
-    await sleep(3000);
-    refresh();
-  }
-  await sampleJim();
-  const final = judgeSoak({ replacements, ...seen, final: true });
-  if (final.verdict === "inconclusive") {
-    throw new InconclusiveSoak(final.reasons.join("; "));
-  }
-  if (final.verdict === "fail") throw failure(final.reasons);
-  if (final.watchdogRebuilds > 0) {
+    const result = record(final, replies, audio);
+    const detail = [...replies.reasons, ...(audio?.reasons ?? [])];
     console.log(
-      `soak: ${final.watchdogRebuilds} rebuild from local state after a reply timeout, recovered`,
+      `soak verdict mode=${result.mode} verdict=${result.verdict} structural=${result.structural_verdict} strict=${result.strict_verdict} qualification=${result.qualification} watchdog_rebuilds_total=${result.watchdog_rebuilds_total} strict_cap_eligible_total=${result.strict_cap_eligible_total} exposure_s=${result.exposure_s ?? "unknown"}`,
     );
-  }
-
-  // A handover that nothing was said across is not one anybody would notice
-  // working. Jim nudges an idle candidate, so turns keep arriving without the
-  // browser speaking.
-  // A handover first seen on the last tick has had no time to say anything, so
-  // the replacement gets a bounded window of its own before its silence
-  // counts against it.
-  let jimAtEnd = await jimTurns(page);
-  const graceUntil = Date.now() + RESUME_GRACE_MS;
-  while (jimAtEnd <= jimAtHandover && Date.now() < graceUntil) {
-    await sleep(3000);
-    jimAtEnd = await jimTurns(page);
-  }
-  if (jimAtEnd <= jimAtHandover) {
-    throw new Error(
-      `the interviewer said nothing after the handover: ${jimAtHandover} turns before, ${jimAtEnd} after`,
-    );
+    if (result.mode === "pilot") {
+      console.log(
+        `soak pilot: structural ${result.structural_verdict}, strict ${result.strict_verdict}; qualification was not evaluated, so this run does not qualify the soak`,
+      );
+    }
+    if (result.verdict !== "pass") {
+      throw failure(detail.length > 0 ? detail : final.reasons);
+    }
+  } finally {
+    marking = false;
+    await marker;
   }
 }
 
@@ -2471,7 +2659,7 @@ PatternLexicon.prototype.search = function(word) {
     }
 
     await page.goto(interviewUrl(PROBLEM_IDS.twoSum));
-    probingAudio = credentialed && ["voice", "barge"].includes(flow);
+    probingAudio = credentialed && ["voice", "barge", "soak"].includes(flow);
     if (probingAudio) {
       await page.evaluate(mediaProbeSource());
     }
@@ -2569,7 +2757,13 @@ PatternLexicon.prototype.search = function(word) {
           .getByText("No conversation yet")
           .waitFor({ state: "detached", timeout: 120000 });
         if (flow === "soak") {
-          await soakInterview(page, roomName, rustAgentIdentity, agentOutput);
+          await soakInterview(
+            page,
+            roomName,
+            rustAgentIdentity,
+            agentOutput,
+            probingAudio,
+          );
         }
         let testResultText = null;
         let candidateSegmentCount = null;
@@ -2717,6 +2911,7 @@ PatternLexicon.prototype.search = function(word) {
                   : [],
                 bargeReplay,
                 jimAudio,
+                soak: soakSummary,
                 latencyLog: (agentOutput.join("") + "\n" + readServerLog())
                   .split("\n")
                   .filter((line) => line.includes("codetrial latency "))

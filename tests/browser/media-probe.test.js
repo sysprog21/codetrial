@@ -618,3 +618,387 @@ test("unknown aggregate observations remain null and superseded empty generation
     /superseded/,
   );
 });
+
+// Re-armed sampling after a socket swap. The sample taken before the swap is
+// older than the socket under test, so a swap is sampled again from its own
+// counter baseline, on the first Speaking transition after it was marked, and
+// within a finite number of samples.
+
+function runWith(f, options) {
+  return f.sampler(
+    f.track,
+    9,
+    () => true,
+    () => true,
+    () => false,
+    options,
+  );
+}
+
+test("a re-armed window stays shut until a Speaking transition after the mark", async () => {
+  let ticks = 0;
+  let edges = 3;
+  const f = fixture({
+    counts: [0, 10, 20, 30],
+    timeoutMs: 1000,
+    speakingWaitMs: 1000,
+    onDelay: () => {
+      if (++ticks === 5) edges = 4;
+    },
+  });
+  let statsCalls = 0;
+  const stats = f.track.getRTCStatsReport;
+  f.track.getRTCStatsReport = (...args) => {
+    statsCalls++;
+    return stats(...args);
+  };
+  const result = await runWith(f, {
+    afterEdge: () => edges > 3,
+    edgeNow: () => edges,
+    maxSamples: 50,
+  });
+  assert.equal(result.status, "ok");
+  assert.equal(result.windowEdge, 4);
+  assert.ok(ticks >= 5, "waited out the audio that was already playing");
+  assert.equal(statsCalls, 2, "no receiver sample was taken before the edge");
+  assert.equal(result.bytesReceived, 10, "the baseline starts at the window");
+});
+
+test("a re-armed window that never sees a transition is unavailable and takes no sample", async () => {
+  const f = fixture({ timeoutMs: 100, speakingWaitMs: 60 });
+  const result = await runWith(f, {
+    afterEdge: () => false,
+    edgeNow: () => 99,
+    maxSamples: 50,
+  });
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.reason, "no-speaking-samples");
+  assert.equal(result.samples, 0);
+  assert.equal(result.windowEdge, null);
+  assert.equal(
+    f.closed(),
+    0,
+    "no audio context for a window that never opened",
+  );
+});
+
+test("cumulative counters from before the swap are not counted by a re-armed baseline", async () => {
+  const f = fixture({ counts: [900000, 900010, 900020] });
+  const result = await runWith(f, {
+    afterEdge: () => true,
+    edgeNow: () => 7,
+    maxSamples: 50,
+  });
+  assert.equal(result.status, "ok");
+  assert.equal(result.bytesReceived, 10);
+  assert.equal(result.packetsReceived, 10);
+  assert.equal(result.windowEdge, 7);
+});
+
+test("the sample bound ends a re-armed window that never proves anything", async () => {
+  const f = fixture({
+    counts: [9],
+    timeoutMs: 1_000_000,
+    speakingWaitMs: 1_000_000,
+  });
+  const result = await runWith(f, {
+    afterEdge: () => true,
+    edgeNow: () => 1,
+    maxSamples: 3,
+  });
+  assert.equal(result.samples, 3);
+  assert.equal(result.boundHit, true);
+  assert.equal(result.status, "transport-silent");
+  const unbounded = await fixture({ counts: [0, 10, 20] }).run();
+  assert.equal(unbounded.boundHit, false);
+  assert.equal(unbounded.windowEdge, null);
+});
+
+async function swapHarness(t) {
+  const { EventEmitter } = await import("node:events");
+  const names = [
+    "LivekitClient",
+    "__createMediaSampler",
+    "__finishJimAudioProbe",
+    "__markJimSwap",
+    "__settleJimSwapAudio",
+    "__summarizeJimAudio",
+    "document",
+  ];
+  const previous = names.map((name) => [
+    name,
+    Object.getOwnPropertyDescriptor(globalThis, name),
+  ]);
+  t.after(() => {
+    for (const [name, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete globalThis[name];
+    }
+  });
+  const events = { TrackSubscribed: "sub", TrackUnsubscribed: "unsub" };
+  globalThis.LivekitClient = { Room: EventEmitter, RoomEvent: events };
+  // `hold` makes a wait yield to the event loop, so a swap that never sees a
+  // transition is still waiting when the test settles it.
+  const h = {
+    state: "Speaking",
+    tick: 0,
+    clock: 0,
+    calls: 0,
+    hold: false,
+    rms: 0.1,
+    hooks: new Map(),
+  };
+  const mediaStreamTrack = {};
+  let attached = mediaStreamTrack;
+  globalThis.document = {
+    querySelector: (selector) =>
+      selector === "#jim-audio"
+        ? { srcObject: { getAudioTracks: () => [attached] } }
+        : selector === "#audio-playback-notice"
+          ? { hidden: true }
+          : { textContent: h.state },
+  };
+  const makeTrack = (mediaStreamTrack) => ({
+    kind: "audio",
+    mediaStreamTrack,
+    getRTCStatsReport: async () => {
+      h.calls++;
+      const value = 5_000_000 + h.calls * 100;
+      return new Map([
+        [
+          "inbound",
+          {
+            type: "inbound-rtp",
+            kind: "audio",
+            id: "inbound",
+            bytesReceived: value,
+            packetsReceived: value,
+          },
+        ],
+      ]);
+    },
+  });
+  const track = makeTrack(mediaStreamTrack);
+  globalThis.__createMediaSampler = (options) =>
+    createMediaSampler({
+      ...options,
+      now: () => h.clock,
+      delay: async (ms) => {
+        h.clock += ms;
+        h.hooks.get(++h.tick)?.();
+        if (h.hold) await new Promise((resolve) => setTimeout(resolve, 1));
+      },
+      makeContext: () => ({
+        state: "running",
+        resume: async () => {},
+        close: async () => {},
+        createMediaStreamSource: () => ({
+          connect: () => {},
+          disconnect: () => {},
+        }),
+        createAnalyser: () => ({
+          fftSize: 0,
+          getFloatTimeDomainData: (values) => values.fill(h.rms),
+          disconnect: () => {},
+        }),
+      }),
+      makeStream: () => ({}),
+      intervalMs: 10,
+    });
+  globalThis.__summarizeJimAudio = summarizeJimAudio;
+  installMediaProbe();
+  const room = new globalThis.LivekitClient.Room();
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  room.emit("sub", track);
+  await new Promise((resolve) => queueMicrotask(resolve));
+  await flush();
+  h.room = room;
+  h.track = track;
+  h.flush = flush;
+  // A second subscription, attached to the page as Jim's track.
+  h.resubscribe = async () => {
+    const next = makeTrack({});
+    attached = next.mediaStreamTrack;
+    room.emit("sub", next);
+    await new Promise((resolve) => queueMicrotask(resolve));
+    return next;
+  };
+  return h;
+}
+
+test("a swap is sampled again on the first Speaking transition after it was marked", async (t) => {
+  const h = await swapHarness(t);
+  // The first subscription already proved decoded audio before any swap.
+  const callsBefore = h.calls;
+  assert.ok(callsBefore >= 2);
+  // Speaking continues across the mark: that is the old socket's audio.
+  assert.deepEqual(globalThis.__markJimSwap("7:1:2"), { armed: true });
+  const tickAtMark = h.tick;
+  let callsWhileGated = null;
+  h.hooks.set(tickAtMark + 4, () => {
+    callsWhileGated = h.calls;
+    h.state = "Thinking";
+  });
+  h.hooks.set(tickAtMark + 7, () => {
+    h.state = "Speaking";
+  });
+  await h.flush();
+  const rearms = await globalThis.__settleJimSwapAudio(0);
+  assert.equal(rearms.length, 1);
+  const [one] = rearms;
+  assert.equal(one.swap, "7:1:2");
+  assert.equal(one.status, "ok");
+  assert.ok(one.windowEdge > one.edgesAtMark);
+  assert.equal(
+    callsWhileGated,
+    callsBefore,
+    "no receiver sample was taken while the old audio played on",
+  );
+  assert.ok(one.bytesReceived > 0 && one.bytesReceived < 5_000_000);
+  const summary = await globalThis.__finishJimAudioProbe();
+  assert.equal(summary.status, "ok");
+  assert.equal(summary.rearms.length, 1);
+  assert.equal(summary.generations.length, 1);
+});
+
+test("a later swap supersedes an earlier one that has not been sampled", async (t) => {
+  const h = await swapHarness(t);
+  h.hold = true;
+  globalThis.__markJimSwap("7:1:2");
+  globalThis.__markJimSwap("7:1:3");
+  const rearms = await globalThis.__settleJimSwapAudio(0);
+  const [first, second] = rearms;
+  assert.equal(first.status, "superseded");
+  assert.equal(first.reason, "superseded-by-later-swap");
+  assert.equal(second.swap, "7:1:3");
+  assert.ok(second.seq > first.seq);
+  assert.equal(second.reason, "sampling-cancelled");
+});
+
+test("a swap still waiting for Speaking is cancelled at settle and reported unavailable", async (t) => {
+  const h = await swapHarness(t);
+  h.hold = true;
+  globalThis.__markJimSwap("7:1:2");
+  const rearms = await globalThis.__settleJimSwapAudio(0);
+  assert.equal(rearms.length, 1);
+  assert.equal(rearms[0].status, "unavailable");
+  assert.equal(rearms[0].reason, "sampling-cancelled");
+  assert.equal(rearms[0].windowEdge, null);
+  // The probe takes no further marks once settled.
+  assert.deepEqual(globalThis.__markJimSwap("7:1:3"), { armed: false });
+  await h.flush();
+});
+
+test("a swap marked with no attached track is recorded, not dropped", async (t) => {
+  const h = await swapHarness(t);
+  h.room.emit("unsub", h.track);
+  assert.deepEqual(globalThis.__markJimSwap("7:1:2"), { armed: false });
+  const rearms = await globalThis.__settleJimSwapAudio(0);
+  assert.equal(rearms[0].status, "unavailable");
+  assert.equal(rearms[0].reason, "no-attached-agent-track");
+  assert.throws(() => assertJimAudio({ generations: [] }), /no-attached/);
+});
+
+test("marks past the observation limit are recorded as unavailable", async (t) => {
+  const h = await swapHarness(t);
+  h.hold = true;
+  for (let swap = 0; swap < 66; swap++) globalThis.__markJimSwap(`7:1:${swap}`);
+  const rearms = await globalThis.__settleJimSwapAudio(0);
+  assert.equal(rearms.length, 66);
+  assert.equal(rearms.at(-1).reason, "swap-observation-limit");
+  await h.flush();
+});
+
+test("the summary carries re-armed samples but the track verdict does not read them", () => {
+  const silent = {
+    swap: "7:1:2",
+    status: "decoded-silent",
+    reason: "packets-arrived-without-decoded-signal",
+  };
+  const summary = summarizeJimAudio(
+    [{ generation: 1, status: "ok", bytesReceived: 5, packetsReceived: 1 }],
+    false,
+    [silent],
+  );
+  assert.deepEqual(summary.rearms, [silent]);
+  assert.equal(summary.status, "ok");
+  assert.deepEqual(summarizeJimAudio([]).rearms, []);
+});
+
+test("a later swap does not cut short a sample that has already opened its window", async (t) => {
+  const h = await swapHarness(t);
+  h.hold = true;
+  // Undecoded, so the first swap's sample stays open until its time bound.
+  h.rms = 0;
+  globalThis.__markJimSwap("7:1:2");
+  const tickAtMark = h.tick;
+  h.hooks.set(tickAtMark + 3, () => {
+    h.state = "Thinking";
+  });
+  h.hooks.set(tickAtMark + 6, () => {
+    h.state = "Speaking";
+  });
+  h.hooks.set(tickAtMark + 20, () => {
+    // An idle swap, marked while the first one is mid-window.
+    globalThis.__markJimSwap("7:1:3");
+  });
+  const rearms = await globalThis.__settleJimSwapAudio(3000);
+  const [first, second] = rearms;
+  assert.equal(first.swap, "7:1:2");
+  assert.notEqual(first.reason, "superseded-by-later-swap");
+  assert.notEqual(first.status, "superseded");
+  assert.ok(first.windowEdge > first.edgesAtMark, "its window had opened");
+  assert.ok(first.samples > 5, "it kept sampling past the later mark");
+  assert.equal(second.swap, "7:1:3");
+  assert.equal(second.windowEdge, null);
+});
+
+test("a swap whose track was resubscribed is sampled again on the new track from the same mark", async (t) => {
+  const h = await swapHarness(t);
+  h.hold = true;
+  globalThis.__markJimSwap("7:1:2");
+  h.room.emit("unsub", h.track);
+  const next = await h.resubscribe();
+  assert.ok(next);
+  const tickNow = h.tick;
+  h.hooks.set(tickNow + 5, () => {
+    h.state = "Thinking";
+  });
+  h.hooks.set(tickNow + 8, () => {
+    h.state = "Speaking";
+  });
+  const rearms = await globalThis.__settleJimSwapAudio(5000);
+  assert.equal(rearms.length, 1);
+  const [one] = rearms;
+  assert.equal(one.swap, "7:1:2");
+  assert.equal(one.status, "ok");
+  assert.ok(one.windowEdge > one.edgesAtMark);
+});
+
+test("a swap marked while no track was attached is sampled once one arrives", async (t) => {
+  const h = await swapHarness(t);
+  h.hold = true;
+  h.room.emit("unsub", h.track);
+  assert.deepEqual(globalThis.__markJimSwap("7:1:2"), { armed: false });
+  await h.resubscribe();
+  const tickNow = h.tick;
+  h.hooks.set(tickNow + 5, () => {
+    h.state = "Thinking";
+  });
+  h.hooks.set(tickNow + 8, () => {
+    h.state = "Speaking";
+  });
+  const [one] = await globalThis.__settleJimSwapAudio(5000);
+  assert.equal(one.status, "ok");
+  assert.equal(one.swap, "7:1:2");
+});
+
+test("a track that never returns leaves the swap unsampled and failing", async (t) => {
+  const h = await swapHarness(t);
+  h.hold = true;
+  globalThis.__markJimSwap("7:1:2");
+  h.room.emit("unsub", h.track);
+  const [one] = await globalThis.__settleJimSwapAudio(200);
+  assert.notEqual(one.status, "ok");
+  assert.equal(one.windowEdge, null);
+});

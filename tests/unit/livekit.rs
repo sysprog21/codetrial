@@ -9,6 +9,8 @@ use super::packets::{
 };
 use super::session::accept_gemini_event;
 use super::*;
+#[path = "livekit/handoff.rs"]
+mod handoff;
 use crate::agent::ThinkingHold;
 use ::livekit::webrtc::audio_source::AudioSourceOptions;
 use ::livekit::webrtc::audio_source::native::NativeAudioSource;
@@ -232,8 +234,16 @@ fn a_published_packet_carries_its_topic_and_arrives_reliably() {
 /// the reason the interview clock is, one test below.
 #[test]
 fn both_ways_a_live_socket_opens_count_its_instruction() {
-    let source = include_str!("../../src/livekit.rs");
-    for opener in ["async fn open_session", "async fn replace_gemini_session"] {
+    for (source, opener) in [
+        (
+            include_str!("../../src/livekit.rs"),
+            "async fn open_session",
+        ),
+        (
+            include_str!("../../src/livekit/recovery.rs"),
+            "async fn replace(",
+        ),
+    ] {
         let body = source
             .split(opener)
             .nth(1)
@@ -256,10 +266,29 @@ fn both_ways_a_live_socket_opens_count_its_instruction() {
 /// connected.
 #[test]
 fn only_a_replacement_publishes_its_reconnect_wait() {
-    let source = include_str!("../../src/livekit.rs");
-    for (opener, room) in [
-        ("async fn open_session", "None"),
-        ("async fn replace_gemini_session", "Some(room)"),
+    let startup = include_str!("../../src/livekit.rs")
+        .split("async fn open_session")
+        .nth(1)
+        .expect("the startup owner is still defined");
+    let startup = startup.split("\n}\n").next().unwrap_or_default();
+    assert!(
+        !startup.contains("open_cold_session_into("),
+        "startup must use the silent return-by-value wrapper"
+    );
+
+    // The startup wrapper has no room argument; its internal open must stay
+    // silent. Recovery supplies its room and retains the caller-owned slot.
+    for (source, opener, room) in [
+        (
+            include_str!("../../src/livekit.rs"),
+            "async fn open_cold_session(",
+            "None",
+        ),
+        (
+            include_str!("../../src/livekit/recovery.rs"),
+            "async fn replace(",
+            "Some(room)",
+        ),
     ] {
         let body = source
             .split(opener)
@@ -268,11 +297,11 @@ fn only_a_replacement_publishes_its_reconnect_wait() {
         let body = body.split("\n}\n").next().unwrap_or_default();
         let call = body
             .lines()
-            .find(|line| line.contains("open_cold_session("))
+            .find(|line| line.contains("open_cold_session_into("))
             .unwrap_or_else(|| panic!("{opener} still opens a cold session"));
         assert!(
-            call.contains(&format!(", {room})")),
-            "{opener} must pass {room} to open_cold_session: {call}"
+            call.contains(&format!(", {room},")),
+            "{opener} must pass {room} to its cold opener: {call}"
         );
     }
 }
@@ -1481,11 +1510,19 @@ fn the_browser_escape_hatch_outlasts_the_report_deadline() {
 #[test]
 fn the_ending_leaves_only_after_the_report_delivery_settles() {
     let source = include_str!("../../src/livekit/packets.rs");
-    // To the next item at column zero, as the source tests above read a body.
-    let ending = source
+    let application = source
         .split("async fn apply_data_packet(")
         .nth(1)
-        .expect("apply_data_packet is still defined here")
+        .unwrap()
+        .split("\n}\n")
+        .next()
+        .unwrap();
+    assert!(application.contains("finish_interview(room, context, interview, reason)"));
+    // To the next item at column zero, as the source tests above read a body.
+    let ending = source
+        .split("async fn finish_interview(")
+        .nth(1)
+        .expect("finish_interview is still defined here")
         .split("\n}\n")
         .next()
         .unwrap_or_default();
@@ -1521,9 +1558,9 @@ fn the_ending_leaves_only_after_the_report_delivery_settles() {
 fn a_skip_is_acknowledged_before_the_agent_leaves() {
     let source = include_str!("../../src/livekit/packets.rs");
     let ending = source
-        .split("async fn apply_data_packet(")
+        .split("async fn finish_interview(")
         .nth(1)
-        .expect("apply_data_packet is still defined here")
+        .expect("finish_interview is still defined here")
         .split("\n}\n")
         .next()
         .unwrap_or_default();
@@ -3070,7 +3107,7 @@ async fn speech_handoff_finalizes_prefix_and_cancels_unheard_reply() {
     let mut state = RuntimeState::default();
     let handoff = tokio::time::timeout(
         Duration::from_secs(3),
-        session::finalize_speech_handoff(&mut gemini, &mut state, &mut Vec::new()),
+        finalize_speech_handoff_for_test(&mut gemini, &mut state, &mut Vec::new()),
     )
     .await
     .unwrap()
@@ -3421,7 +3458,7 @@ async fn a_failed_speech_handoff_reports_the_events_it_discarded() {
         .unwrap();
     let mut state = RuntimeState::default();
     let Err(error) =
-        session::finalize_speech_handoff(&mut gemini, &mut state, &mut Vec::new()).await
+        finalize_speech_handoff_for_test(&mut gemini, &mut state, &mut Vec::new()).await
     else {
         panic!("a handoff with no transcription must fail");
     };
@@ -3429,7 +3466,59 @@ async fn a_failed_speech_handoff_reports_the_events_it_discarded() {
     server.await.unwrap();
 }
 
-async fn fake_recording_socket(
+async fn finalize_speech_handoff_for_test(
+    gemini: &mut GeminiLiveSession,
+    state: &mut RuntimeState,
+    audio: &mut Vec<u8>,
+) -> Result<session::SpeechHandoff, Box<dyn std::error::Error + Send + Sync>> {
+    let config = packet_config();
+    let keys = Arc::new(GeminiKeys::from_config(&config));
+    let boot = crate::runtime::bootstrap(&config, "prefix-test", Some("two-sum"), 45);
+    let (_sender, receiver) = mpsc::unbounded_channel();
+    let events = tokio::sync::Mutex::new(receiver);
+    let interview = InterviewContext {
+        config: &config,
+        keys: &keys,
+        boot: &boot,
+        live_endpoint: None,
+        started_at: Instant::now(),
+        candidate_identity: "candidate",
+        events: &events,
+        slot: None,
+    };
+    let mut loops = RoomLoop {
+        pending_round_notice: None,
+        recovery_terminal: None,
+        recovery_inputs: None,
+        recovery_phase: None,
+        recovery_reader: None,
+        recovery_writes: Default::default(),
+        recovery_after: Default::default(),
+        deadline_at: tokio::time::Instant::now() + Duration::from_secs(3600),
+        restarts: 0,
+        deferred_restart: Default::default(),
+        resume_recovery: Default::default(),
+        interim_review: Default::default(),
+        presence: Default::default(),
+    };
+    let mut turn = hold_turn(std::mem::take(state));
+    let (mut output, _frames) = test_output_audio();
+    let mut board = board::Board::new();
+    let mut media = CandidateMedia::new();
+    media.identity = Some("candidate".into());
+    let (room, _recorder) = room_link::RoomLink::recording("prefix-test");
+    let mut old = gemini.retire();
+    let result = {
+        let mut context = turn.context(&mut output, gemini, &mut board, &mut media);
+        let mut driver = recovery::Driver::new(&room, &mut context, &mut loops, interview);
+        driver.prefix(&mut old, audio).await
+    };
+    *gemini = old;
+    *state = turn.state;
+    result.map_err(|_| std::io::Error::other("prefix recovery cancelled"))?
+}
+
+pub(super) async fn fake_recording_socket(
     handle: Option<&str>,
     count: usize,
 ) -> (
@@ -4170,10 +4259,10 @@ async fn choosing_thinking_ends_the_audio_stream_and_ignores_the_transcript_it_r
     let mut activity = RuntimeActivity::new(click);
     activity.note_candidate_voice_activity(true, click);
     let (mut gemini, server) = fake_resumed_socket().await;
-    let mut audio = Vec::new();
+    let mut media = CandidateMedia::new();
     begin_button_hold(
         &mut gemini,
-        &mut audio,
+        &mut media,
         &mut activity,
         click,
         THINKING_TRANSCRIPT_GRACE,
@@ -5954,14 +6043,17 @@ fn the_room_loop_settles_the_end_and_holds_the_transition_before_applying_them()
         .find("settle_phase_judge(context")
         .expect("the end settles");
     let hold = packet
-        .find("pending_round_transition")
+        .find("park_round_transition(")
         .expect("a transition is held");
     let apply = packet
         .find("apply_data_packet(")
         .expect("packets are applied");
     assert!(settle < apply && hold < apply);
     assert!(packet[hold..apply].contains("return Ok(ControlFlow::Continue(()))"));
-    assert!(packet[..hold].contains("reserve_phase_judge("));
+    let parked = body("fn park_round_transition(");
+    assert!(parked.contains("reserve_phase_judge("));
+    assert!(parked.contains("pending_round_transition"));
+    assert!(parked.contains("return true;"));
     assert!(body("async fn settle_phase_judge(").contains("reserve_phase_judge("));
 
     let tick = body("async fn on_watch_tick(");
@@ -7082,7 +7174,7 @@ async fn a_button_hold_closes_latency_while_waiting_or_in_a_tool_only_reply() {
         let (mut gemini, server) = fake_resumed_socket().await;
         begin_button_hold(
             &mut gemini,
-            &mut Vec::new(),
+            &mut CandidateMedia::new(),
             &mut activity,
             start + Duration::from_millis(200),
             THINKING_TRANSCRIPT_GRACE,
@@ -7317,6 +7409,241 @@ fn packet_config() -> AgentConfig {
 }
 
 #[tokio::test]
+async fn an_idle_goaway_resumes_on_a_replacement_socket() {
+    const EDITOR_CODE: &str = "def two_sum(values, target):\n    return []\n";
+    if std::env::var_os("CODETRIAL_GOAWAY_TEST_CHILD").is_none() {
+        // Capture the real lifecycle line without a production logging hook. An
+        // ignored test endpoint must never connect to the live provider.
+        let guard = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        guard.set_nonblocking(true).unwrap();
+        let proxy = format!("http://{}", guard.local_addr().unwrap());
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
+            .args([
+                "--exact",
+                "livekit::tests::an_idle_goaway_resumes_on_a_replacement_socket",
+                "--nocapture",
+            ])
+            .env("CODETRIAL_GOAWAY_TEST_CHILD", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .env("NO_PROXY", "")
+            .env("no_proxy", "");
+        for name in [
+            "HTTPS_PROXY",
+            "https_proxy",
+            "HTTP_PROXY",
+            "http_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+        ] {
+            child.env(name, &proxy);
+        }
+        let mut child = child.spawn().unwrap();
+        let started = Instant::now();
+        let output = loop {
+            if child.try_wait().unwrap().is_some() {
+                break child.wait_with_output().unwrap();
+            }
+            if started.elapsed() >= Duration::from_secs(20) {
+                child.kill().unwrap();
+                let output = child.wait_with_output().unwrap();
+                panic!(
+                    "GoAway test child hung: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(
+            guard.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "the replacement must not attempt an external endpoint"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        let replacements: Vec<_> = stderr
+            .lines()
+            .filter(|line| line.starts_with("replacement: "))
+            .collect();
+        assert_eq!(replacements.len(), 1, "{stderr}");
+        assert!(replacements[0].contains("trigger=goaway handover=resumed fallback=none"));
+        assert!(replacements[0].ends_with(" room=room-test"));
+        let fields: std::collections::HashMap<_, _> = replacements[0]
+            .split_whitespace()
+            .filter_map(|field| field.split_once('='))
+            .collect();
+        assert!(
+            fields["checkpoint_age"]
+                .strip_suffix('s')
+                .is_some_and(|seconds| seconds.parse::<u64>().is_ok())
+        );
+        assert_eq!(fields["owed"], "false");
+        assert_eq!(fields["owed_chars"], "0");
+        assert_eq!(
+            fields["editor_chars"],
+            EDITOR_CODE.chars().count().to_string()
+        );
+        let usage: Vec<_> = stderr
+            .lines()
+            .filter(|line| line.starts_with("codetrial live_turn_usage "))
+            .collect();
+        assert_eq!(usage.len(), 1, "{stderr}");
+        let usage_fields: std::collections::HashMap<_, _> = usage[0]
+            .split_whitespace()
+            .filter_map(|field| field.split_once('='))
+            .collect();
+        assert_eq!(usage_fields["cause"], "tool");
+        assert_eq!(usage_fields["prompt_tokens"], "42");
+        assert_eq!(usage_fields["socket"], "1");
+        assert_eq!(usage_fields["usage_event"], "1");
+        return;
+    }
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+
+        async fn receive_json(
+            socket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+        ) -> serde_json::Value {
+            let frame = tokio::time::timeout(Duration::from_secs(5), socket.next())
+                .await
+                .expect("the client must send the expected setup or briefing")
+                .unwrap()
+                .unwrap();
+            serde_json::from_str(frame.to_text().unwrap()).unwrap()
+        }
+
+        let config = packet_config();
+        let keys = Arc::new(GeminiKeys::from_config(&config));
+        let boot = crate::runtime::bootstrap(&config, "room-test", Some("two-sum"), 45);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut first = tokio_tungstenite::accept_async(socket).await.unwrap();
+            let initial = receive_json(&mut first).await;
+            first
+                .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+                .await
+                .unwrap();
+            first
+                .send(Message::Text(
+                    r#"{"sessionResumptionUpdate":{"resumable":true,"newHandle":"goaway-checkpoint"},"usageMetadata":{"promptTokenCount":42}}"#
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            first
+                .send(Message::Text(r#"{"goAway":{"timeLeft":"9s"}}"#.into()))
+                .await
+                .unwrap();
+            assert!(first.next().await.unwrap().unwrap().is_close());
+            drop(first);
+
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut second = tokio_tungstenite::accept_async(socket).await.unwrap();
+            let setup = receive_json(&mut second).await;
+            second
+                .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+                .await
+                .unwrap();
+            let briefing = receive_json(&mut second).await;
+            assert!(second.next().await.unwrap().unwrap().is_close());
+            (initial, setup, briefing)
+        });
+        let mut gemini = crate::gemini::live_session_with_keys_at(&endpoint, &keys, &boot, None)
+            .await
+            .unwrap();
+        gemini.input_cause = Some("tool");
+
+        // Leave the observation unaccounted, as queued usage abandoned by a
+        // replacement would be. The actual replacement must drain its owner.
+        assert!(matches!(gemini.next_event().await, Some(GeminiEvent::UsageRecorded)));
+        let event = gemini.next_event().await.unwrap();
+        assert!(matches!(event, GeminiEvent::GoAway { .. }));
+        let (_sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let events = tokio::sync::Mutex::new(receiver);
+        let interview = InterviewContext {
+            config: &config,
+            keys: &keys,
+            boot: &boot,
+            live_endpoint: Some(&endpoint),
+            started_at: Instant::now(),
+            candidate_identity: "candidate",
+            events: &events,
+            slot: None,
+        };
+        let code = EDITOR_CODE;
+        let mut turn = hold_turn(RuntimeState {
+            code: code.into(),
+            ..RuntimeState::default()
+        });
+        let initial_socket = turn.activity.live_socket;
+        let (mut output, _frames) = test_output_audio();
+        let mut board = board::Board::new();
+        let mut media = CandidateMedia::new();
+        let (room, recorder) = room_link::RoomLink::recording("room-test");
+        let mut loops = RoomLoop { pending_round_notice: None,
+            recovery_terminal: None, recovery_inputs: None, recovery_phase: None, recovery_reader: None, recovery_writes: Default::default(), recovery_after: Default::default(),
+            deadline_at: tokio::time::Instant::now() + Duration::from_secs(3600),
+            restarts: 0,
+            deferred_restart: DeferredRestart::default(),
+            resume_recovery: ResumeRecovery::default(),
+            interim_review: SideCall::default(),
+            presence: CandidatePresence::default(),
+        };
+        let flow = on_gemini_event(
+            &room,
+            &mut turn.context(&mut output, &mut gemini, &mut board, &mut media),
+            Some(event),
+            &mut loops,
+            interview,
+        )
+        .await
+        .unwrap();
+        assert!(flow.is_continue());
+        assert_eq!(loops.restarts, 1);
+        assert!(loops.resume_recovery.resumed);
+        assert!(!loops.deferred_restart.is_armed());
+        assert_eq!(turn.activity.live_socket, initial_socket + 1);
+        assert_eq!(turn.activity.live_usage.samples, 1);
+        assert_eq!(turn.activity.live_usage.prompt, 42);
+        assert!(!turn.activity.reply_unfinished());
+        assert_eq!(turn.state.code, code);
+        assert_eq!(turn.state.evidence_ledger.metrics.live_setup_count, 1);
+        let records = recorder.take();
+        assert!(!records.iter().any(|record| matches!(record, room_link::Sent::Left)));
+        let notices: Vec<_> = records
+            .iter()
+            .filter_map(|record| match record {
+                room_link::Sent::Data { topic, message }
+                    if topic.as_deref() == Some(TOPIC_CONTROL)
+                        && message["type"] == "interviewer_state" =>
+                {
+                    message["reconnecting"].as_bool()
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(notices, [true, false]);
+        gemini.shutdown().await.unwrap();
+        let (initial, setup, briefing) = server.await.unwrap();
+        assert_eq!(initial["setup"]["sessionResumption"], serde_json::json!({}));
+        assert_eq!(setup["setup"]["sessionResumption"]["handle"], "goaway-checkpoint");
+        assert_eq!(briefing["clientContent"]["turnComplete"], false);
+        let context = sent_text(&briefing);
+        for line in code.lines() {
+            assert!(context.contains(line.trim()), "missing editor line: {line}");
+        }
+    })
+    .await
+    .expect("the actual GoAway handler must complete its local replacement");
+}
+
+#[tokio::test]
 async fn only_a_packet_that_starts_a_hold_flushes_the_open_floor_overlap() {
     use crate::livekit::floor::Event;
     let config = packet_config();
@@ -7335,6 +7662,7 @@ async fn only_a_packet_that_starts_a_hold_flushes_the_open_floor_overlap() {
             config: &config,
             keys: &keys,
             boot: &boot,
+            live_endpoint: None,
             started_at: Instant::now(),
             candidate_identity: "candidate",
             events: &events,
@@ -7411,6 +7739,7 @@ fn the_interview_length_is_counted_in_minutes() {
         config: &config,
         keys: &keys,
         boot: &boot,
+        live_endpoint: None,
         started_at: Instant::now().checked_sub(Duration::from_secs(90)).unwrap(),
         candidate_identity: "candidate",
         events: &events,

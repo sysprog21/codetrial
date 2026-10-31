@@ -5887,9 +5887,7 @@ async fn actual_stale_playout_drop_settles_the_open_floor_overlap() {
         &mut harness.board,
         &mut harness.media,
     );
-    drop_stale_playout(&harness.room, &mut context, Interruptible::Yes)
-        .await
-        .unwrap();
+    drop_stale_playout(&harness.room, &mut context, Interruptible::Yes);
 
     // A drain after the drop must not turn the settled overlap into a
     // continuation; END then emits it with the outcome the drop chose.
@@ -5925,9 +5923,7 @@ async fn stale_playout_drop_after_activity_end_emits_the_overlap() {
         &mut harness.board,
         &mut harness.media,
     );
-    drop_stale_playout(&harness.room, &mut context, Interruptible::Yes)
-        .await
-        .unwrap();
+    drop_stale_playout(&harness.room, &mut context, Interruptible::Yes);
     let mut records = Vec::new();
     harness
         .turn

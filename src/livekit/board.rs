@@ -133,6 +133,22 @@ pub(super) struct Board {
 }
 
 impl Board {
+    pub(super) fn recovery_image(&self) -> Option<Vec<u8>> {
+        self.latest.clone()
+    }
+
+    #[cfg(test)]
+    pub(super) fn seed_recovery_image(&mut self, bytes: Vec<u8>) {
+        self.latest = Some(bytes);
+    }
+
+    pub(super) fn recovered_image(&mut self, bytes: &[u8], at: Instant) {
+        self.last_sent = Some(at);
+        if self.latest.as_deref() == Some(bytes) {
+            self.unsent = false;
+        }
+    }
+
     pub(super) fn new() -> Self {
         let (tx, rx) = channel(BOARD_QUEUE);
         Self {

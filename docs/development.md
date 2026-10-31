@@ -635,7 +635,7 @@ only that the room stayed up. `BROWSER_CHECK_SOAK_SECONDS` lengthens it and
 belongs to this flow alone; naming it on another one fails rather than being
 ignored, and so does a value under the cap.
 
-Presence is the weakest of the four things it judges, because the interviewer
+Presence is the weakest of the things it judges, because the interviewer
 stays in the room through every way this can go wrong. So the flow also
 requires, from the runtime log and the transcript panel:
 
@@ -645,8 +645,59 @@ requires, from the runtime log and the transcript panel:
 - The replacement resumed rather than restarting cold. A cold one keeps the
   interviewer in the room having lost the conversation.
 - No degraded restart at any point, reported where it happened.
-- The transcript grew after the handover. Jim nudges an idle candidate, so
-  turns keep arriving without the browser having to speak.
+- Every replacement episode is held to the reply it owed, matched by ids and
+  not by the transcript panel. An episode that began with a reply owed passes
+  only when that same reply (same pid, session and obligation) was answered
+  with audio first accepted on a socket at or after the one the episode
+  installed; audio taken on the replaced socket, an earlier recovery's answer
+  and another room's or session's reply satisfy nothing. An episode that began
+  with nothing owed is classified idle, and one whose reply a hold, cut or
+  barge-in ended before any audio is classified held; neither is made to speak.
+  A start with no end, a swap whose reply never finished and a cut log fail.
+  Each episode is printed with its status and reason, and
+  `BROWSER_CHECK_SOAK_RESULT` names a file that receives the same as JSON.
+- Every swap that was answered with audio is followed by decoded audio on the
+  track. The track is reused across Gemini sockets, so the sample taken when it
+  was first subscribed is older than the socket under test and covers nothing.
+  The page marks each installed swap, waits for the first Speaking transition
+  after the mark (audio already playing when it was marked is the old socket's),
+  and samples the track again from a fresh counter baseline, within a fixed
+  number of samples. A swap passes with such a sample of its own that has
+  received packets and a decoded signal, or when a later swap's sample covers
+  it after the later mark replaced a sample that had not opened its window. A
+  missing, stale, silent or unavailable sample fails, as does one whose window
+  did not open after its mark. If the track is resubscribed before the sample
+  is taken, it is taken again on the new track from the same mark. A swap that
+  owed no audio, or whose reply was held, is not made to speak. The sample
+  proves decoded audio on the receiving track after the mark, ordered by the
+  page's Speaking transitions; it is not tied to the swap's own reply, which the
+  reply check above settles, and a reply that began between the install and the
+  mark (the log is read every quarter second) is missed, so the next
+  transition is used and may not come within the grace. It is not evidence
+  that anything was physically audible and it does not time when the audio
+  began.
+
+`BROWSER_CHECK_SOAK_VERDICT_MODE` is `strict` (the default) or `pilot`, and
+belongs to the soak alone. Strict is the qualification and keeps the cap of one
+rebuild from local state after a reply timeout. Only a degraded watchdog
+rebuild whose fallback is `no_handle` or `resume_suppressed` counts toward the
+cap; a natural GoAway swap never does, and a watchdog swap that resumed the
+session is reported apart and counts for nothing. Pilot leaves that cap alone
+out of its verdict, so its verdict is the structural one: a reply, audio,
+GoAway or handover failure still exits 1, and a soak without a GoAway still
+exits 77. A pilot prints `qualification=not_evaluated` and both outcomes, so a
+pilot that completed is not a pass of the strict check.
+
+`BROWSER_CHECK_SOAK_RESULT` receives `mode`, `verdict`, `structural_verdict`,
+`strict_verdict`, `qualification`, `watchdog_rebuilds_total` (every degraded
+watchdog rebuild), `strict_cap_eligible_total` (those that count toward the
+cap), `watchdog_resumed_total`, `goaway_swaps_total`, `exposure_s`, the
+per-episode reply and audio results, and the capture file holds the same under
+`soak`. `exposure_s` is the largest assessment clock of the `interview clock:`
+samples when they are anchored and in order; when they are missing or
+inconsistent it is `null` (with `exposure_basis` saying why), never zero. A
+rate per hour of any of these totals is meaningful only with a known positive
+`exposure_s`.
 
 Checks that need credentials or a running service stay out of the gate and are
 run on their own: `scripts/server-check.sh`, `gemini-check.sh`,

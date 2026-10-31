@@ -58,6 +58,15 @@ interruption policy are preserved. A raw level crossing is never enough to
 reopen a frozen measurement. Output transcripts received after turn completion
 cannot create another measurement for the completed reply.
 
+The same transcripts do not make the session generating again when nothing is
+owed: within the late-transcript window after a completion, with no reply,
+prompt or tool continuation owed and no candidate speech heard since the
+completion, an output transcript does not set `generating`. No completion
+follows it, so a replacement would otherwise ask for a reply that had already
+finished. With a reply owed, or after candidate speech, the transcript still
+counts as output, since it may be the answer. Text, audio and tool calls after
+a completion are a new generation and are owed until it completes.
+
 Durations are rounded down to whole milliseconds. A fast tool may report zero
 milliseconds while still incrementing `tool_calls`. Tools handled during a
 thinking hold or a discarded generation are excluded, as are calls after
