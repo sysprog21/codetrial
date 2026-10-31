@@ -667,16 +667,16 @@ pub fn gemini_candidate_video_enabled(value: Option<&str>) -> bool {
 /// The commit `CODETRIAL_UPDATE_CHECK` compares against the `latest` release,
 /// or `None` when nothing is compared: the setting is off, the binary was not
 /// built by CI (`release_commit` is empty, see `CODETRIAL_RELEASE_COMMIT` in
-/// build.rs), or it is not the macOS build, the only one the notice is for.
+/// build.rs), or the platform does not support the notice.
 ///
 /// The platform is an argument rather than a `cfg!` here so the rule can be
 /// tested on the Linux runners that run the suite.
 pub fn update_check_commit(
     value: Option<&str>,
     release_commit: &str,
-    macos: bool,
+    supported_platform: bool,
 ) -> Option<String> {
-    (parse_bool(value, DEFAULT_UPDATE_CHECK) && macos && !release_commit.is_empty())
+    (parse_bool(value, DEFAULT_UPDATE_CHECK) && supported_platform && !release_commit.is_empty())
         .then(|| release_commit.to_string())
 }
 

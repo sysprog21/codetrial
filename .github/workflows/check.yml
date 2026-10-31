@@ -805,6 +805,7 @@ jobs:
         if: runner.os != 'Linux'
         env:
           CODETRIAL_GITHUB_CLIENT_ID: ${{ vars.CODETRIAL_GITHUB_CLIENT_ID }}
+          GITHUB_SHA: ${{ github.sha }}
         run: cargo build --release --locked -p codetrial --target ${{ matrix.target }}
       # GitHub retired the Ubuntu 20.04 runner, but its glibc 2.31 remains the
       # useful Linux release baseline. Build inside Bullseye, which carries the
