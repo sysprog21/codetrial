@@ -1188,9 +1188,30 @@ impl<'a> LiveEffects<'a> {
         }
     }
 
+    // LiveKit closes a room that only agents remain in once its departure
+    // timeout passes (the server default is 20 s), long before the interview's
+    // 90 s absence grace: the first live run of this scenario saw `RoomClosed`
+    // about 28 s after the candidate left. Production now creates its rooms
+    // explicitly in `/api/token`; this scenario uses that same call, so it
+    // exercises the departure timeout production actually sends.
+    async fn create_room_for_absence(&self) -> Result<(), String> {
+        super::super::super::room_service::create_interview_room(
+            &self.config.livekit_url,
+            &self.config.livekit_api_key,
+            &self.config.livekit_api_secret,
+            &self.room_name,
+            crate::current_epoch_seconds(),
+        )
+        .await
+        .map_err(|error| redact(&error.to_string()))
+    }
+
     async fn join(&mut self) -> Result<(), String> {
         let began = std::time::Instant::now();
         self.joined = true;
+        if matches!(self.scenario.end_mode, EndMode::Absence) {
+            self.create_room_for_absence().await?;
+        }
         let config = self.config.clone();
         let room = self.room_name.clone();
         let finished = self.agent_finished.clone();

@@ -58,6 +58,42 @@ const CANDIDATE_JOIN_LIMIT: Duration = Duration::from_secs(300);
 /// interview's full deadline.
 const CANDIDATE_ABSENCE_LIMIT: Duration = Duration::from_secs(90);
 
+/// Whole seconds, rounded up, because LiveKit takes integers and a timeout
+/// rounded down could undercut the grace it is derived from.
+fn ceil_secs(duration: Duration) -> u32 {
+    let whole = duration.as_secs() + u64::from(duration.subsec_nanos() > 0);
+    u32::try_from(whole).unwrap_or(u32::MAX)
+}
+
+/// What the room's departure timeout adds to the absence limit and one watch
+/// tick. LiveKit starts its clock when it removes the candidate and the agent
+/// starts its own when it hears of it, then checks only on a tick, so without
+/// slack the room could close just before the agent ends the interview.
+const ROOM_DEPARTURE_MARGIN: Duration = Duration::from_secs(8);
+
+/// How long LiveKit keeps an interview room open after the last candidate
+/// leaves: the absence limit plus one watch tick plus a margin, so the agent's
+/// own check fires and ends the interview before the room is closed under it.
+/// LiveKit's default of 20 seconds closed the room long before the limit.
+fn interview_room_departure_timeout_secs() -> u32 {
+    ceil_secs(
+        CANDIDATE_ABSENCE_LIMIT + Duration::from_secs_f64(WATCH_TICK_S) + ROOM_DEPARTURE_MARGIN,
+    )
+}
+
+/// What the room's empty timeout adds to the agent's wait for its candidate.
+/// The room is created in `/api/token`, before dispatch, agent start and the
+/// agent's connection, and LiveKit counts an agent-only room as empty, so a
+/// timeout equal to [`CANDIDATE_JOIN_LIMIT`] could close the room just before
+/// the agent's own no-show deadline and turn that outcome into `RoomClosed`.
+const ROOM_EMPTY_MARGIN: Duration = Duration::from_secs(30);
+
+/// How long LiveKit keeps a room nobody joined: the agent's own wait for its
+/// candidate plus a margin, so the agent's no-show path decides first.
+fn interview_room_empty_timeout_secs() -> u32 {
+    ceil_secs(CANDIDATE_JOIN_LIMIT + ROOM_EMPTY_MARGIN)
+}
+
 use crate::gemini::{
     GeminiEvent, GeminiKeys, GeminiLiveSession, generate_interim_review_with_keys,
     generate_phase_judgment_with_keys, live_session_with_keys,
@@ -99,6 +135,8 @@ use rooms::{evict_duplicate_agent, isolate_local_agent};
 // Re-exported rather than merely used: `web::setup` calls this to check the
 // credentials a Setup form was given, and it names it through this module.
 pub(crate) use rooms::validate_livekit_credentials;
+
+pub(crate) use room_service::create_interview_room;
 
 // The test module reaches every item of these two through `use super::*`, so
 // the hub keeps the globs instead of a list that grows with each test.

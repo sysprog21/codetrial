@@ -221,6 +221,7 @@ impl Server {
             allowed_hosts: Vec::new(),
             recording: None,
             probe_provider_quota: false,
+            provision_rooms: false,
             update_check_commit: None,
             tasks: None,
             task_mode_requested: false,

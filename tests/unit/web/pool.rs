@@ -37,6 +37,7 @@ fn config_with(ids: &[&str]) -> WebServerConfig {
         recording: None,
         probe_provider_quota: false,
         update_check_commit: None,
+        provision_rooms: false,
         pool: ProviderPool {
             providers: ids
                 .iter()

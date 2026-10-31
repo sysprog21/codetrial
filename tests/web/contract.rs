@@ -65,6 +65,7 @@ async fn static_home_markup_matches_frontend_contract() {
         pool: Default::default(),
         probe_provider_quota: false,
         update_check_commit: None,
+        provision_rooms: false,
     })
     .await;
     let html = http_client()
@@ -124,6 +125,7 @@ async fn static_interview_markup_exposes_offline_surface() {
         pool: Default::default(),
         probe_provider_quota: false,
         update_check_commit: None,
+        provision_rooms: false,
     })
     .await;
     let html = http_client()

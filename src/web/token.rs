@@ -662,6 +662,10 @@ async fn claim_and_dispatch(
         return Some(response);
     }
 
+    if state.config.provision_rooms {
+        provision_room(&provider, &room_name).await;
+    }
+
     dispatch_or_release_consent(
         &state,
         owner.as_ref(),
@@ -671,6 +675,30 @@ async fn claim_and_dispatch(
         &identity,
     )
     .await
+}
+
+/// Creates the room with the interview's timeouts before the agent or the
+/// candidate can join it and let LiveKit create it with its own defaults.
+///
+/// After the consent claim, so a refused claim creates nothing, and before
+/// the dispatcher spawns the agent, which would otherwise race the call. A
+/// failure is logged and ignored: the interview then runs on LiveKit's default
+/// departure timeout, which is the behaviour before this call existed, and
+/// refusing to start would turn a cosmetic LiveKit hiccup into an outage. A
+/// dispatch refused after this leaves an empty room until its timeout. The
+/// message carries the room and LiveKit's error, never a token.
+async fn provision_room(provider: &crate::config::Provider, room_name: &str) {
+    if let Err(error) = crate::livekit::create_interview_room(
+        &provider.url,
+        &provider.api_key,
+        &provider.api_secret,
+        room_name,
+        current_epoch_seconds(),
+    )
+    .await
+    {
+        eprintln!("codetrial room_create_failed room={room_name}: {error}");
+    }
 }
 
 fn minted_token(

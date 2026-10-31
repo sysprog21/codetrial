@@ -275,6 +275,49 @@ Each reads at most 6 KiB of transcript tail and 6 KiB of editor. A rate limit on
 a judgment does not cool the key, so the judge cannot leave the final report
 without one.
 
+## Candidate absence and room lifetime
+
+The agent ends an interview whose candidate has been gone for 90 seconds
+(`CANDIDATE_ABSENCE_LIMIT`), checked on the 2-second watch tick, on top of
+LiveKit's own reconnect window. That limit only holds if the room is still
+there. LiveKit closes a room `departure_timeout` seconds after its last
+non-agent participant leaves, and the agent is a dependent participant that
+does not hold a room open. A room LiveKit creates on first join gets the
+default of 20 seconds, so a live run closed an agent-only room with
+`RoomClosed` about 28 seconds after the candidate left and the interview ended
+with no report, well inside the grace.
+
+`/api/token` therefore creates the room itself, with RoomService `CreateRoom`,
+before the agent is dispatched and before the token is returned, so neither
+the agent nor the candidate can create it with the default first. The request
+is `{"name": room, "empty_timeout": 330, "departure_timeout": 100}`. The
+departure timeout is derived from the absence limit plus one watch tick plus
+an 8-second margin for LiveKit and the agent starting their clocks at slightly
+different moments (rounded up to whole seconds); the empty timeout is the agent's wait for a
+candidate (`CANDIDATE_JOIN_LIMIT`) plus a 30-second margin, because the room
+is created before the agent connects and LiveKit counts an agent-only room as
+empty, so the agent's own no-show deadline must fire first. Both timeouts are computed in
+`livekit.rs` from those constants; tests pin the literal request body and that
+the departure timeout stays at or above the limit plus a tick.
+
+The call runs on the web server under a `roomCreate` token signed with the
+project's secret, the same grant as room deletion, which is unchanged and still
+owns cleanup. LiveKit answers a create for an existing room with that room, so
+a repeat, or an `already_exists` or 409 answer, is a success; a pinned
+development room that already exists keeps the timeouts it was made with. A
+transport error, 429 or 5xx is retried once, each attempt bounded to 3 seconds
+with a 250 ms pause, so the candidate waits at most about 6.3 seconds. Any
+failure is logged with the room name and LiveKit's error (never a token) and
+ignored: the interview starts and runs on LiveKit's default timeouts, which is
+the previous behaviour, rather than failing a start over a cosmetic setting.
+A start refused after the call (capacity, a report still finishing) leaves an
+empty room that LiveKit removes after the empty timeout, and its create call
+is made before the refusal is known, so refused requests under load still cost
+one RoomService call each.
+
+`provision_rooms` in the web configuration turns the call on; the binaries set
+it and the test servers do not, so no test reaches LiveKit.
+
 ## Live recovery wait ownership
 
 Recovery has a room-owned driver. Pending transport futures own their socket

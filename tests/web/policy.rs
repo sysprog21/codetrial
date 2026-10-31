@@ -20,6 +20,7 @@ async fn production_promises_the_browser_it_will_stay_on_https() {
         web_dir: Path::new("web").to_path_buf(),
         pool: primary_pool("wss://example.livekit.cloud:443", "devkey", "devsecret"),
         probe_provider_quota: false,
+        provision_rooms: false,
         production: true,
         ..web_config()
     })
@@ -48,6 +49,7 @@ async fn only_the_face_worker_may_evaluate_a_string() {
         web_dir: Path::new("web").to_path_buf(),
         pool: primary_pool("wss://example.livekit.cloud:443", "devkey", "devsecret"),
         probe_provider_quota: false,
+        provision_rooms: false,
         ..web_config()
     })
     .await;
@@ -87,6 +89,7 @@ async fn responses_carry_baseline_security_headers() {
         web_dir: Path::new("web").to_path_buf(),
         pool: primary_pool("wss://example.livekit.cloud:443", "devkey", "devsecret"),
         probe_provider_quota: false,
+        provision_rooms: false,
         ..web_config()
     })
     .await;

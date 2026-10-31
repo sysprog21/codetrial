@@ -366,6 +366,7 @@ fn web_server_config(
             env!("CODETRIAL_RELEASE_COMMIT"),
             cfg!(target_os = "macos"),
         ),
+        provision_rooms: true,
     })
 }
 
