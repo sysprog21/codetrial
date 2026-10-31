@@ -1,6 +1,14 @@
 //! Room-owned transport waits. No mutable interview state crosses into the
 //! pending operation; terminal intents run the report only after its cleanup.
 
+// The test module reaches every item of the hub through `use super::*`.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::wildcard_imports,
+        reason = "tests read the hub through super::*"
+    )
+)]
 use super::*;
 use ::livekit::prelude::RemoteTrack;
 use ::livekit::webrtc::audio_frame::AudioFrame;
@@ -15,7 +23,6 @@ pub(super) enum Terminal {
         topic: String,
         payload: serde_json::Value,
     },
-    Finish(String),
     Deadline,
     Absent,
     RoomClosed,
@@ -26,7 +33,6 @@ impl Terminal {
     pub(super) fn name(&self) -> &'static str {
         match self {
             Self::End { .. } => "End",
-            Self::Finish(_) => "Finish",
             Self::Deadline => "Deadline",
             Self::Absent => "Absent",
             Self::RoomClosed => "RoomClosed",
@@ -43,9 +49,16 @@ pub(super) struct Packet {
     pub(super) payload: Vec<u8>,
 }
 
-const INGRESS_FRAMES: usize = 4000;
-const INGRESS_BYTES: usize = 40 * 16_000 * 2;
+/// How many unsent context summaries a recovery keeps, and their total size.
+const MAX_HELD_CONTEXTS: usize = 32;
+const MAX_HELD_BYTES: usize = 64 * 1024;
+
+const INGRESS_FRAMES: usize = super::media::CANDIDATE_AUDIO_QUEUE_FRAMES;
 const INGRESS_AGE: Duration = Duration::from_secs(40);
+/// The same window in bytes of 16-bit mono input, so the age and size bounds
+/// cannot drift apart.
+const INGRESS_BYTES: usize =
+    INGRESS_AGE.as_secs() as usize * super::media::GEMINI_AUDIO_SAMPLE_RATE as usize * 2;
 
 #[derive(Default)]
 pub(super) struct Ingress {
@@ -53,9 +66,19 @@ pub(super) struct Ingress {
     bytes: usize,
     leading_yield: bool,
     pub(super) dropped_bytes: usize,
+    logged_dropped_bytes: usize,
 }
 
 impl Ingress {
+    /// The drops since the last time this was asked for. `dropped_bytes` is
+    /// cumulative across replacements, and the analyzer sums the log line per
+    /// room, so each line carries only what the previous one did not.
+    fn take_unlogged_drops(&mut self) -> usize {
+        let new = self.dropped_bytes.saturating_sub(self.logged_dropped_bytes);
+        self.logged_dropped_bytes = self.dropped_bytes;
+        new
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.frames.is_empty() && !self.leading_yield
     }
@@ -299,25 +322,32 @@ impl<'r, 'c, 'i> Driver<'r, 'c, 'i> {
                     self.held_steps.push(step);
                 }
             }
-            if context.len() > 64 * 1024 {
-                self.held_omitted += 1;
-                self.held_omitted_total += 1;
-            } else {
-                while self.held_contexts.len() >= 32 || self.held_bytes + context.len() > 64 * 1024
-                {
-                    if let Some(old) = self.held_contexts.pop_front() {
-                        self.held_bytes -= old.len();
-                        self.held_omitted += 1;
-                        self.held_omitted_total += 1;
-                    }
-                }
-                self.held_bytes += context.len();
-                self.held_contexts.push_back(context);
-            }
+            self.retain_held_context(context);
         }
-        if let Some(reason) = result.finish_interview {
-            self.terminal = Some(Terminal::Finish(reason));
+    }
+
+    /// Keeps a context the model has not been told yet, within a count and a
+    /// byte bound. One larger than the byte bound is not kept at all, and the
+    /// oldest are dropped to make room for one that fits; both are counted,
+    /// and the briefing says how many were left out.
+    fn retain_held_context(&mut self, context: String) {
+        if context.len() > MAX_HELD_BYTES {
+            self.held_omitted += 1;
+            self.held_omitted_total += 1;
+            return;
         }
+        while self.held_contexts.len() >= MAX_HELD_CONTEXTS
+            || self.held_bytes + context.len() > MAX_HELD_BYTES
+        {
+            let Some(old) = self.held_contexts.pop_front() else {
+                break;
+            };
+            self.held_bytes -= old.len();
+            self.held_omitted += 1;
+            self.held_omitted_total += 1;
+        }
+        self.held_bytes += context.len();
+        self.held_contexts.push_back(context);
     }
 
     fn preserve_room_work(&mut self) {
@@ -732,7 +762,15 @@ impl<'r, 'c, 'i> Driver<'r, 'c, 'i> {
                 session::Transport::Context,
             );
             if self.send("held_action", input, session).await?.is_err() {
+                // The action is no longer queued and the model never saw it, so
+                // the next replacement has to be briefed from scratch. The
+                // reply itself stays owed from when the packet was reduced. A
+                // hold that began during the write carries the reply in the
+                // resume debt instead.
                 self.restore_steps(action.earlier);
+                if !self.context.state.interviewer_silenced() {
+                    self.context.state.needs_cold_brief = true;
+                }
                 return Ok((false, spoke));
             }
             if self.context.activity.prompt_sequence == action.sequence {
@@ -751,7 +789,17 @@ impl<'r, 'c, 'i> Driver<'r, 'c, 'i> {
                 }
             }
             if deferred {
-                self.ingress.yielded(Instant::now());
+                let now = Instant::now();
+                self.ingress.yielded(now);
+
+                // The buffered audio can be silence, which gives Gemini no turn
+                // to answer; the fallback asks for the reply the way a released
+                // hold does, and any output disarms it.
+                if !self.context.activity.socket.discarding_output {
+                    self.context
+                        .activity
+                        .arm_thinking_reply_fallback(now, &action.text);
+                }
             } else {
                 spoke = true;
             }
@@ -1240,7 +1288,7 @@ pub(super) async fn replace(
     }
     eprintln!(
         "recovery ingress: dropped_bytes={} unconfirmed_bytes={} unsent_bytes={} omitted_contexts={} omitted_evictions={} room={}",
-        driver.ingress.dropped_bytes,
+        driver.ingress.take_unlogged_drops(),
         unconfirmed_bytes,
         audio.len(),
         driver.held_omitted_total,
@@ -1284,9 +1332,6 @@ pub(super) async fn replace(
                         true,
                     )
                     .await
-                }
-                Terminal::Finish(reason) => {
-                    packets::finish_interview(room, driver.context, interview, reason).await
                 }
                 Terminal::Deadline => {
                     on_hard_deadline(room, driver.context, driver.loops, interview).await
@@ -1339,13 +1384,8 @@ pub(super) async fn replace(
                 std::process::id(),
                 driver.context.activity.live_session_id,
                 driver.context.activity.live_socket,
-                obligation.map_or_else(|| "none".to_string(), |id| id.to_string()),
-                driver
-                    .context
-                    .activity
-                    .latency
-                    .interview_ms(installed_at)
-                    .map_or_else(|| "none".to_string(), |ms| ms.to_string()),
+                latency::opt(obligation),
+                latency::opt(driver.context.activity.latency.interview_ms(installed_at)),
             );
             end.log(
                 latency::EpisodeResult::Installed,

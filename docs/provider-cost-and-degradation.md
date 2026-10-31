@@ -283,9 +283,9 @@ LiveKit's own reconnect window. That limit only holds if the room is still
 there. LiveKit closes a room `departure_timeout` seconds after its last
 non-agent participant leaves, and the agent is a dependent participant that
 does not hold a room open. A room LiveKit creates on first join gets the
-default of 20 seconds, so a live run closed an agent-only room with
-`RoomClosed` about 28 seconds after the candidate left and the interview ended
-with no report, well inside the grace.
+default of 20 seconds, so an agent-only room closed with `RoomClosed` shortly
+after the candidate left and the interview ended with no report, well inside
+the grace.
 
 `/api/token` therefore creates the room itself, with RoomService `CreateRoom`,
 before the agent is dispatched and before the token is returned, so neither
@@ -372,7 +372,7 @@ different: its entire retry sequence already has a 30-second outer deadline.
 The local matrices drive this loop over a recorded room, so they cannot show
 that the real SDK delivers a participant leaving, a control packet or a report
 receipt to the driver while a replacement pends. The native SDK recovery
-fixture in `docs/development.md` (four ignored, budgeted sessions) is the check
+fixture in `docs/development.md` (ignored tests, each run with budgeted sessions) is the check
 for that boundary, and a crossing it did not observe stays uncovered: a normal
 live ending does not show that a cancel during recovery is correct.
 

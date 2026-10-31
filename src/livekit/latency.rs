@@ -451,7 +451,7 @@ impl ReplyLatency {
             "runtime tasks: pid={} session={} elapsed_ms={elapsed} sample={period} alive_tasks={} room={}",
             std::process::id(),
             self.session,
-            alive.map_or_else(|| "none".to_string(), |count| count.to_string()),
+            opt(alive),
             self.room
         ))
     }
@@ -461,8 +461,7 @@ impl ReplyLatency {
             "interview clock: pid={} session={} start_unix_ms={} elapsed_ms={elapsed_ms} sample={sample} {} room={}",
             std::process::id(),
             self.session,
-            self.start_unix_ms
-                .map_or_else(|| "none".to_string(), |ms| ms.to_string()),
+            opt(self.start_unix_ms),
             self.mic.fields(),
             self.room
         )
@@ -1066,7 +1065,7 @@ pub(super) struct EpisodeStart<'a> {
     pub(super) interview_ms: Option<i64>,
 }
 
-fn opt<T: std::fmt::Display>(value: Option<T>) -> String {
+pub(super) fn opt<T: std::fmt::Display>(value: Option<T>) -> String {
     value.map_or_else(|| "none".to_string(), |value| value.to_string())
 }
 

@@ -213,8 +213,8 @@ impl Drop for Installed {
 /// Installs `probe` for every room loop in this process. A fixture that does
 /// this runs alone in its process: the hooks are process-wide.
 pub(super) fn install(probe: &Arc<ContinuityProbe>) -> Installed {
-    *ACTIVE.lock().unwrap() = Some(probe.clone());
-    Installed(probe.clone())
+    *ACTIVE.lock().unwrap() = Some(std::sync::Arc::clone(probe));
+    Installed(std::sync::Arc::clone(probe))
 }
 
 fn active() -> Option<Arc<ContinuityProbe>> {

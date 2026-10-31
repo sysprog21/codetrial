@@ -14,7 +14,7 @@ takes its path explicitly. A row is one of:
 
 The SDK column (`sdk_report`) of a covered row is one of:
 
-  "uncovered required T4b.4"      open work (a gap)
+  "uncovered required native SDK run"      open work (a gap)
   {run_id, action_id}             the row's own phase was driven by that run
   {status: "sdk_representative",  a live run drove the SAME cause class at a
    run_id, action_id, reason}     representative phase; the reason states, with
@@ -82,7 +82,7 @@ from pathlib import Path
 
 CAUSES = ("End", "Deadline", "RoomDisconnected", "Absent", "Finish", "RoomEventsEof")
 STATUSES = ("covered_local_terminal_cleanup", "covered_shared", "N/A", "uncovered")
-SDK_PENDING = "uncovered required T4b.4"
+SDK_PENDING = "uncovered required native SDK run"
 RECEIPT_SCHEMA = 1
 SDK_REPRESENTATIVE = "sdk_representative"
 

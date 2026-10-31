@@ -235,7 +235,9 @@ interviewer does, changes both together.
 
 Three audio stores can lose candidate speech: the SDK's receive queue, the
 room loop's own ingress buffer, and the audio quarantined for an unconfirmed
-send. Only the last two are counted by the room loop, and today only as byte
+send. A write that returns an error is unconfirmed too, because it may have
+reached Gemini before the socket closed; the room loop prefers losing those
+bytes to speaking them twice. Only the last two are counted by the room loop, and today only as byte
 totals with no interval and no record of whether the bytes were voiced. The
 SDK's queue drops its oldest frame when full, counts the drops where a caller
 cannot read them, and carries no capture time, so an SDK drop is **unknown**:

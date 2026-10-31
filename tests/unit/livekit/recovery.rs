@@ -214,7 +214,7 @@ impl Rig {
                 match frame {
                     Ok(frame) if frame.is_close() => break,
                     Ok(frame) => {
-                        messages.push(serde_json::from_str(frame.to_text().unwrap()).unwrap())
+                        messages.push(serde_json::from_str(frame.to_text().unwrap()).unwrap());
                     }
                     Err(WsError::Protocol(ProtocolError::ResetWithoutClosingHandshake)) => break,
                     Err(WsError::Io(error))
@@ -513,14 +513,45 @@ fn ingress_has_independent_frame_byte_and_age_bounds() {
     ring.push(frame(INGRESS_BYTES / 2 + 1), now);
     assert!(ring.is_empty());
     ring.push(frame(INGRESS_BYTES / 2), now);
+    // Exactly the byte bound is kept: only one past it is refused.
+    assert_eq!(ring.bytes, INGRESS_BYTES);
     ring.push(frame(160), now);
     assert_eq!(ring.frames.len(), 1);
     assert_eq!(ring.bytes, 320);
     assert!(
         matches!(ring.pop(now), Some(CandidateInput::BufferedFrame(frame)) if frame.data.len() == 160)
     );
+    assert_eq!(ring.bytes, 0, "popping a frame gives its bytes back");
     ring.push(frame(0), now);
     assert!(ring.is_empty());
+}
+
+/// The analyzer sums the `recovery ingress` line per room, and the ingress
+/// count is cumulative across replacements, so a line must carry only the
+/// drops the previous line did not.
+#[test]
+fn each_ingress_log_line_carries_only_new_drops() {
+    let now = Instant::now();
+    let frame = |samples| AudioFrame {
+        data: std::borrow::Cow::Owned(vec![1; samples]),
+        sample_rate: 16000,
+        num_channels: 1,
+        samples_per_channel: samples as u32,
+    };
+    let mut ring = Ingress::default();
+    assert_eq!(ring.take_unlogged_drops(), 0);
+    for _ in 0..4001 {
+        ring.push(frame(1), now);
+    }
+    assert_eq!(ring.take_unlogged_drops(), 2);
+    assert_eq!(
+        ring.take_unlogged_drops(),
+        0,
+        "asking again repeats nothing"
+    );
+    assert!(ring.pop(now + INGRESS_AGE).is_none());
+    assert_eq!(ring.take_unlogged_drops(), 8000);
+    assert_eq!(ring.dropped_bytes, 8002, "the cumulative count is kept");
 }
 
 #[tokio::test]
@@ -565,7 +596,7 @@ async fn an_end_control_cancels_retry_backoff_before_the_next_open() {
     }
     let (listener, endpoint) = listener().await;
     let mut rig = Rig::new(endpoint).await;
-    let recorder = rig.recorder.clone();
+    let recorder = std::sync::Arc::clone(&rig.recorder);
     let tx = rig.tx.clone();
     let (probe, mut observed) = mpsc::unbounded_channel();
     rig.loops.recovery_terminal = Some(probe);
@@ -1068,6 +1099,7 @@ async fn a_release_during_a_notice_requests_a_reply_when_only_markers_are_buffer
         assert!(replied.unwrap());
         assert!(!driver.context.state.interviewer_silenced());
         assert!(!driver.ingress.has_audio());
+        assert_eq!(driver.context.state.earlier_steps_named, ["design"]);
         assert!(driver.context.activity.owes_prompt());
         assert!(driver.context.state.owed_reply_on_resume.is_none());
         assert!(!driver.pending());
@@ -1086,6 +1118,365 @@ async fn a_release_during_a_notice_requests_a_reply_when_only_markers_are_buffer
     fresh.shutdown().await.unwrap();
     rig.gemini = old;
     rig.finish().await;
+}
+
+/// `pending` is what keeps the drain loop going, so each kind of unfinished
+/// work must make it true on its own, and a failure the driver already
+/// reported must not keep it true.
+#[tokio::test]
+async fn pending_is_true_for_each_kind_of_unfinished_work_and_false_once_it_failed() {
+    if isolated("pending_is_true_for_each_kind_of_unfinished_work_and_false_once_it_failed") {
+        return;
+    }
+    let mut rig = Rig::new("ws://127.0.0.1:9/".into()).await;
+    let boot = crate::runtime::bootstrap(&rig.config, "recovery-test", Some("two-sum"), 45);
+    let interview = InterviewContext {
+        config: &rig.config,
+        keys: &rig.keys,
+        boot: &boot,
+        live_endpoint: Some(&rig.endpoint),
+        started_at: Instant::now(),
+        candidate_identity: "candidate",
+        events: &rig.events,
+        slot: None,
+    };
+    let mut context = rig.turn.context(
+        &mut rig.output,
+        &mut rig.gemini,
+        &mut rig.board,
+        &mut rig.media,
+    );
+    let mut driver = Driver::new(&rig.room, &mut context, &mut rig.loops, interview);
+    assert!(!driver.pending(), "nothing is waiting");
+
+    // A queued action is work, unless a hold means it is not to be sent yet.
+    driver.action = Some(Action {
+        sequence: 0,
+        text: "reply".into(),
+        earlier: Vec::new(),
+    });
+    assert!(driver.pending());
+    driver.context.state.thinking_hold = crate::agent::ThinkingHold::Held {
+        since: Instant::now(),
+    };
+    assert!(!driver.pending(), "a held action waits for the release");
+    driver.context.state.thinking_hold = crate::agent::ThinkingHold::default();
+    driver.action = None;
+    assert!(!driver.pending());
+
+    // A Thinking notice is work until it has been tried and failed.
+    driver.context.state.thinking_notice = Some(true);
+    assert!(driver.pending());
+    driver.failed_thinking = Some(true);
+    assert!(!driver.pending(), "the same notice already failed");
+    driver.failed_thinking = Some(false);
+    assert!(driver.pending(), "a different notice has not been tried");
+    driver.context.state.thinking_notice = None;
+    assert!(!driver.pending(), "no notice, nothing to publish");
+    driver.failed_thinking = None;
+
+    // The checklist is work when the page has not been told it, and not once
+    // that exact checklist failed to publish.
+    driver.context.state.framework_published = vec!["design"];
+    assert!(driver.pending());
+    driver.failed_framework = Some(Vec::new());
+    assert!(!driver.pending(), "this checklist already failed");
+    driver.failed_framework = Some(vec!["design"]);
+    assert!(driver.pending(), "a different checklist has not been tried");
+    drop(driver);
+    rig.finish().await;
+}
+
+/// What a packet may change in the driver is exactly what it names: a packet
+/// that does nothing moves no revision, a Thinking hold the interviewer was
+/// not holding the floor through owes nothing unheard, and a code edit that
+/// only switches the language still queues the reply it asks for.
+#[tokio::test]
+async fn a_recovery_packet_changes_only_what_it_names() {
+    if isolated("a_recovery_packet_changes_only_what_it_names") {
+        return;
+    }
+    let mut rig = Rig::new("ws://127.0.0.1:9/".into()).await;
+    let boot = crate::runtime::bootstrap(&rig.config, "recovery-test", Some("two-sum"), 45);
+    let interview = InterviewContext {
+        config: &rig.config,
+        keys: &rig.keys,
+        boot: &boot,
+        live_endpoint: Some(&rig.endpoint),
+        started_at: Instant::now(),
+        candidate_identity: "candidate",
+        events: &rig.events,
+        slot: None,
+    };
+    let mut context = rig.turn.context(
+        &mut rig.output,
+        &mut rig.gemini,
+        &mut rig.board,
+        &mut rig.media,
+    );
+    let mut driver = Driver::new(&rig.room, &mut context, &mut rig.loops, interview);
+    let control = |driver: &mut Driver<'_, '_, '_>, body: &[u8]| {
+        driver.packet(Some(TOPIC_CONTROL), Some("candidate"), body);
+    };
+
+    // A packet that names nothing moves no revision, and leaves a reply the
+    // candidate was already waiting on exactly where it was.
+    driver.context.activity.awaiting_reply_since = Some(Instant::now() - Duration::from_secs(10));
+    let waiting = driver.context.activity.awaiting_reply_since;
+    control(&mut driver, br#"{"type":"unknown"}"#);
+    assert_eq!(driver.revision, 0);
+    assert_eq!(driver.obligation_revision, 0);
+    assert_eq!(driver.context.activity.awaiting_reply_since, waiting);
+    driver.context.activity.awaiting_reply_since = None;
+
+    // Taking the floor back with Thinking owes the unheard note only when the
+    // interviewer held the floor, and records no reply debt of its own.
+    assert_eq!(driver.context.activity.floor, Floor::Listening);
+    control(&mut driver, br#"{"type":"thinking","thinking":true}"#);
+    assert_eq!(
+        driver.revision, 1,
+        "a packet with an effect moves the revision"
+    );
+    assert!(!driver.context.state.thinking_unheard_reply);
+    assert!(driver.context.state.owed_reply_on_resume.is_none());
+    control(&mut driver, br#"{"type":"thinking","thinking":false}"#);
+    driver.context.activity.mark_speaking();
+    control(&mut driver, br#"{"type":"thinking","thinking":true}"#);
+    assert!(driver.context.state.thinking_unheard_reply);
+
+    // A language switch alone asks for a reply, which is an obligation change.
+    driver.context.state.thinking_hold = crate::agent::ThinkingHold::default();
+    let before = driver.obligation_revision;
+    driver.packet(
+        Some(crate::runtime::TOPIC_CODE_UPDATE),
+        Some("candidate"),
+        br#"{"code":"let x = 1;","language":"javascript"}"#,
+    );
+    assert!(driver.obligation_revision > before);
+    drop(driver);
+    rig.finish().await;
+}
+
+/// A Thinking notice that reached the page is done: nothing is left to
+/// announce and nothing is recorded as failed, so the drain does not retry it.
+#[tokio::test]
+async fn a_published_thinking_notice_is_neither_retried_nor_recorded_as_failed() {
+    if isolated("a_published_thinking_notice_is_neither_retried_nor_recorded_as_failed") {
+        return;
+    }
+    let mut rig = Rig::new("ws://127.0.0.1:9/".into()).await;
+    let boot = crate::runtime::bootstrap(&rig.config, "recovery-test", Some("two-sum"), 45);
+    let interview = InterviewContext {
+        config: &rig.config,
+        keys: &rig.keys,
+        boot: &boot,
+        live_endpoint: Some(&rig.endpoint),
+        started_at: Instant::now(),
+        candidate_identity: "candidate",
+        events: &rig.events,
+        slot: None,
+    };
+    let mut context = rig.turn.context(
+        &mut rig.output,
+        &mut rig.gemini,
+        &mut rig.board,
+        &mut rig.media,
+    );
+    let mut driver = Driver::new(&rig.room, &mut context, &mut rig.loops, interview);
+    driver.context.state.thinking_notice = Some(true);
+    driver.flush_notices().await.unwrap();
+    assert!(driver.context.state.thinking_notice.is_none());
+    assert!(driver.failed_thinking.is_none());
+    assert!(!driver.pending());
+    drop(driver);
+    rig.finish().await;
+}
+
+/// Prefix speech finalized during a handoff can start a Thinking hold by
+/// itself. When it does with a reply owed, the owed request moves into the
+/// resume debt and the driver is told the hold changed; plain speech changes
+/// nothing and says so.
+#[tokio::test]
+async fn prefix_speech_that_starts_a_hold_moves_an_owed_reply_into_the_resume_debt() {
+    if isolated("prefix_speech_that_starts_a_hold_moves_an_owed_reply_into_the_resume_debt") {
+        return;
+    }
+    for (owed, speech, changed) in [
+        (true, "Wait, let me think", true),
+        (false, "Wait, let me think", true),
+        (true, "The answer is two sum", false),
+    ] {
+        let mut rig = Rig::new("ws://127.0.0.1:9/".into()).await;
+        rig.media.identity = Some("candidate".into());
+        if owed {
+            rig.turn
+                .activity
+                .owe_prompt(Instant::now(), Some("Answer the question.".into()));
+        }
+        let mut context = rig.turn.context(
+            &mut rig.output,
+            &mut rig.gemini,
+            &mut rig.board,
+            &mut rig.media,
+        );
+        assert!(!context.state.interviewer_silenced());
+        let told =
+            session::apply_recovery_transcript(&rig.room, &mut context, speech, Instant::now());
+        assert_eq!(told, changed, "owed={owed} speech={speech:?}");
+        assert_eq!(context.state.interviewer_silenced(), changed);
+        assert_eq!(
+            context.state.owed_reply_on_resume.is_some(),
+            owed && changed,
+            "owed={owed} speech={speech:?}"
+        );
+        rig.finish().await;
+    }
+}
+
+/// Contexts the model has not been told are kept up to a count and a byte
+/// bound, the oldest dropped to make room, and what was left out is counted
+/// once. The bound is inclusive: a summary of exactly the bound fits.
+#[tokio::test]
+async fn held_contexts_are_kept_within_a_count_and_a_byte_bound() {
+    if isolated("held_contexts_are_kept_within_a_count_and_a_byte_bound") {
+        return;
+    }
+    let mut rig = Rig::new("ws://127.0.0.1:9/".into()).await;
+    let boot = crate::runtime::bootstrap(&rig.config, "recovery-test", Some("two-sum"), 45);
+    let interview = InterviewContext {
+        config: &rig.config,
+        keys: &rig.keys,
+        boot: &boot,
+        live_endpoint: Some(&rig.endpoint),
+        started_at: Instant::now(),
+        candidate_identity: "candidate",
+        events: &rig.events,
+        slot: None,
+    };
+    let mut context = rig.turn.context(
+        &mut rig.output,
+        &mut rig.gemini,
+        &mut rig.board,
+        &mut rig.media,
+    );
+    let mut driver = Driver::new(&rig.room, &mut context, &mut rig.loops, interview);
+    let kept = |driver: &Driver<'_, '_, '_>| {
+        (
+            driver.held_contexts.len(),
+            driver.held_bytes,
+            driver.held_omitted,
+            driver.held_omitted_total,
+        )
+    };
+
+    // One of exactly the bound fits; one past it is left out and counted once.
+    driver.retain_held_context("x".repeat(MAX_HELD_BYTES));
+    assert_eq!(kept(&driver), (1, MAX_HELD_BYTES, 0, 0));
+    driver.retain_held_context("y".repeat(MAX_HELD_BYTES + 1));
+    assert_eq!(kept(&driver), (1, MAX_HELD_BYTES, 1, 1));
+
+    // A modest summary is kept, and making room for it drops the oldest.
+    driver.retain_held_context("z".repeat(2_000));
+    assert_eq!(kept(&driver), (1, 2_000, 2, 2));
+    assert_eq!(driver.held_contexts[0].len(), 2_000);
+
+    // Two that together reach the bound exactly are both kept; one more byte
+    // drops the first and only the first.
+    driver.held_contexts.clear();
+    (
+        driver.held_bytes,
+        driver.held_omitted,
+        driver.held_omitted_total,
+    ) = (0, 0, 0);
+    driver.retain_held_context("a".repeat(40_000));
+    driver.retain_held_context("b".repeat(MAX_HELD_BYTES - 40_000));
+    assert_eq!(kept(&driver), (2, MAX_HELD_BYTES, 0, 0));
+    driver.retain_held_context("c".into());
+    assert_eq!(kept(&driver), (2, MAX_HELD_BYTES - 40_000 + 1, 1, 1));
+    assert!(driver.held_contexts[0].starts_with('b'));
+
+    // The count bound drops the oldest, one at a time.
+    driver.held_contexts.clear();
+    (
+        driver.held_bytes,
+        driver.held_omitted,
+        driver.held_omitted_total,
+    ) = (0, 0, 0);
+    for n in 0..MAX_HELD_CONTEXTS {
+        driver.retain_held_context(format!("{n}"));
+    }
+    assert_eq!(driver.held_contexts.len(), MAX_HELD_CONTEXTS);
+    assert_eq!(driver.held_omitted, 0);
+    driver.retain_held_context("new".into());
+    assert_eq!(driver.held_contexts.len(), MAX_HELD_CONTEXTS);
+    assert_eq!((driver.held_omitted, driver.held_omitted_total), (1, 1));
+    assert_eq!(driver.held_contexts[0], "1");
+    assert_eq!(
+        driver.held_bytes,
+        driver.held_contexts.iter().map(String::len).sum::<usize>()
+    );
+    drop(driver);
+    rig.finish().await;
+}
+
+/// A socket that stayed up past the healthy age resets the restart count, so
+/// a provider that closes idle sockets after a minute never exhausts the
+/// budget. One the watchdog found silent is not healthy because it stayed
+/// connected: the same age must not reset the count, or a provider that
+/// swallows replies a minute in would never let the budget end the interview.
+#[tokio::test(flavor = "current_thread")]
+async fn only_a_socket_the_watchdog_did_not_find_silent_resets_the_restart_count() {
+    if isolated("only_a_socket_the_watchdog_did_not_find_silent_resets_the_restart_count") {
+        return;
+    }
+    for (trigger, expected) in [(Trigger::GoAway, 1), (Trigger::Watchdog, 4)] {
+        let mut rig = Rig::with_old_resumption("ws://127.0.0.1:9/".into(), Some(11), None).await;
+        let (fresh, endpoint) = listener().await;
+        rig.endpoint = endpoint;
+        rig.gemini
+            .age_for_test(crate::livekit::HEALTHY_GEMINI_SOCKET + Duration::from_secs(1));
+        let old = rig.gemini.inspect_reader_for_test().unwrap();
+        wait_for_received_usage(&old).await;
+        rig.loops.restarts = 3;
+        let server = tokio::spawn(scripted_fresh_gemini(fresh, vec![FreshStep::Ready]));
+        let boot = crate::runtime::bootstrap(&rig.config, "recovery-test", Some("two-sum"), 45);
+        let interview = InterviewContext {
+            config: &rig.config,
+            keys: &rig.keys,
+            boot: &boot,
+            live_endpoint: Some(&rig.endpoint),
+            started_at: Instant::now(),
+            candidate_identity: "candidate",
+            events: &rig.events,
+            slot: None,
+        };
+        {
+            let mut context = rig.turn.context(
+                &mut rig.output,
+                &mut rig.gemini,
+                &mut rig.board,
+                &mut rig.media,
+            );
+            let flow = tokio::time::timeout(
+                Duration::from_secs(10),
+                replace_gemini_session(
+                    &rig.room,
+                    &mut context,
+                    interview,
+                    &mut rig.loops,
+                    trigger,
+                    None,
+                ),
+            )
+            .await
+            .expect("the replacement is bounded")
+            .unwrap();
+            assert!(flow.is_continue());
+        }
+        assert_eq!(rig.loops.restarts, expected, "{trigger:?}");
+        rig.finish().await;
+        server.await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -1303,8 +1694,8 @@ async fn the_last_correction_keeps_its_reply_and_preserves_newer_editor_debt() {
         let release = std::sync::Arc::new(tokio::sync::Notify::new());
         rig.loops.recovery_writes.push_back(WriteBarrier {
             phase: "recovery_brief",
-            entered: entered.clone(),
-            release: release.clone(),
+            entered: std::sync::Arc::clone(&entered),
+            release: std::sync::Arc::clone(&release),
         });
         signals.push((entered, release));
     }
@@ -1959,7 +2350,7 @@ async fn terminal_matrix_joins_readers_at_pending_open_boundaries() {
                 let presence_now = std::sync::Arc::new(std::sync::Mutex::new(Instant::now()));
                 if matches!(cause, OpenStop::Absent) {
                     rig.loops.presence.left(*presence_now.lock().unwrap());
-                    rig.loops.presence.test_now = Some(presence_now.clone());
+                    rig.loops.presence.test_now = Some(std::sync::Arc::clone(&presence_now));
                 }
                 let after_setup = matches!(phase, Some(PendingOpen::ReconnectedNotice));
                 let (probe, mut observed) = mpsc::unbounded_channel();
@@ -2245,7 +2636,7 @@ async fn terminal_matrix_cancels_a_physically_blocked_close() {
         let presence_now = std::sync::Arc::new(std::sync::Mutex::new(Instant::now()));
         if matches!(cause, OpenStop::Absent) {
             rig.loops.presence.left(*presence_now.lock().unwrap());
-            rig.loops.presence.test_now = Some(presence_now.clone());
+            rig.loops.presence.test_now = Some(std::sync::Arc::clone(&presence_now));
         }
         let (phase, mut phases) = mpsc::unbounded_channel();
         rig.loops.recovery_phase = Some(phase);
@@ -2570,8 +2961,8 @@ async fn prefix_terminal_matrix_preserves_received_evidence_before_any_restart()
                 let release = std::sync::Arc::new(tokio::sync::Notify::new());
                 rig.loops.recovery_writes.push_back(WriteBarrier {
                     phase: "prefix_listening_context",
-                    entered: entered.clone(),
-                    release: release.clone(),
+                    entered: std::sync::Arc::clone(&entered),
+                    release: std::sync::Arc::clone(&release),
                 });
                 Some((entered, release))
             } else {
@@ -2583,7 +2974,7 @@ async fn prefix_terminal_matrix_preserves_received_evidence_before_any_restart()
             let presence_now = std::sync::Arc::new(std::sync::Mutex::new(Instant::now()));
             if matches!(cause, OpenStop::Absent) {
                 rig.loops.presence.left(*presence_now.lock().unwrap());
-                rig.loops.presence.test_now = Some(presence_now.clone());
+                rig.loops.presence.test_now = Some(std::sync::Arc::clone(&presence_now));
             }
             let (probe, mut observed) = mpsc::unbounded_channel();
             rig.loops.recovery_terminal = Some(probe);
@@ -2721,7 +3112,7 @@ async fn a_ready_retry_session_remains_owned_when_its_attempt_notice_is_cancelle
     let boot = crate::runtime::bootstrap(&config, "retry-owned", Some("two-sum"), 45);
     let (listener, endpoint) = listener().await;
     let accepts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let seen_accepts = accepts.clone();
+    let seen_accepts = std::sync::Arc::clone(&accepts);
     let instructions = boot.instructions.clone();
     let (finish, finished) = oneshot::channel();
     let server = tokio::spawn(async move {
@@ -2792,7 +3183,7 @@ async fn a_ready_retry_session_remains_owned_when_its_attempt_notice_is_cancelle
                     }
                 },
                 |message| {
-                    let notice = notice.clone();
+                    let notice = std::sync::Arc::clone(&notice);
                     async move {
                         if message.get("waitSeconds").is_none() {
                             notice.notify_one();
@@ -2900,7 +3291,7 @@ async fn retry_wait_case_matrix(phase: RetryWait) {
         let old = rig.gemini.inspect_reader_for_test().unwrap();
         wait_for_received_usage(&old).await;
         let accepts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let server_accepts = accepts.clone();
+        let server_accepts = std::sync::Arc::clone(&accepts);
         let instructions =
             crate::runtime::bootstrap(&rig.config, "recovery-test", Some("two-sum"), 45)
                 .instructions;
@@ -2975,7 +3366,7 @@ async fn retry_wait_case_matrix(phase: RetryWait) {
         let presence_now = std::sync::Arc::new(std::sync::Mutex::new(Instant::now()));
         if matches!(cause, OpenStop::Absent) {
             rig.loops.presence.left(*presence_now.lock().unwrap());
-            rig.loops.presence.test_now = Some(presence_now.clone());
+            rig.loops.presence.test_now = Some(std::sync::Arc::clone(&presence_now));
         }
         let (probe, mut observed) = mpsc::unbounded_channel();
         rig.loops.recovery_terminal = Some(probe);
@@ -2984,7 +3375,7 @@ async fn retry_wait_case_matrix(phase: RetryWait) {
         let (unused, _) = mpsc::unbounded_channel();
         let mut room = Some(std::mem::replace(&mut rig._room_sender, unused));
         let tx = rig.tx.clone();
-        let recorder = rig.recorder.clone();
+        let recorder = std::sync::Arc::clone(&rig.recorder);
         let fresh_state = std::cell::RefCell::new(None::<crate::gemini::LiveReaderInspection>);
         let running = async {
             let result = rig.run().await;
@@ -3117,7 +3508,7 @@ async fn retry_wait_case_matrix(phase: RetryWait) {
 #[tokio::test(flavor = "current_thread")]
 async fn cold_retry_wait_notice_remains_cancellable() {
     if isolated_checked("cold_retry_wait_notice_remains_cancellable", |out| {
-        retry_usage(out, false)
+        retry_usage(out, false);
     }) {
         return;
     }
@@ -3126,7 +3517,7 @@ async fn cold_retry_wait_notice_remains_cancellable() {
 #[tokio::test(flavor = "current_thread")]
 async fn cold_retry_backoff_remains_cancellable() {
     if isolated_checked("cold_retry_backoff_remains_cancellable", |out| {
-        retry_usage(out, false)
+        retry_usage(out, false);
     }) {
         return;
     }
@@ -3135,7 +3526,7 @@ async fn cold_retry_backoff_remains_cancellable() {
 #[tokio::test(flavor = "current_thread")]
 async fn cold_retry_attempt_notice_cancels_pending_open() {
     if isolated_checked("cold_retry_attempt_notice_cancels_pending_open", |out| {
-        retry_usage(out, false)
+        retry_usage(out, false);
     }) {
         return;
     }
@@ -3144,7 +3535,7 @@ async fn cold_retry_attempt_notice_cancels_pending_open() {
 #[tokio::test(flavor = "current_thread")]
 async fn cold_retry_attempt_notice_owns_completed_setup() {
     if isolated_checked("cold_retry_attempt_notice_owns_completed_setup", |out| {
-        retry_usage(out, true)
+        retry_usage(out, true);
     }) {
         return;
     }
@@ -3208,7 +3599,7 @@ async fn queued_terminals_preempt_the_replacement_entry_before_any_charge() {
             }
             OpenStop::Absent => {
                 rig.loops.presence.left(*presence_now.lock().unwrap());
-                rig.loops.presence.test_now = Some(presence_now.clone());
+                rig.loops.presence.test_now = Some(std::sync::Arc::clone(&presence_now));
                 *presence_now.lock().unwrap() += CANDIDATE_ABSENCE_LIMIT;
             }
         }
@@ -3399,10 +3790,35 @@ async fn pending_eviction_service() -> PendingEviction {
         assert!(
             header.starts_with("POST /twirp/livekit.RoomService/RemoveParticipant HTTP/1.1\r\n")
         );
-        assert!(header.lines().any(|line| {
-            line.to_ascii_lowercase()
-                .starts_with("authorization: bearer ")
-        }));
+        let bearer = "authorization: bearer ";
+        let token = header
+            .lines()
+            .find_map(|line| {
+                line.get(..bearer.len())
+                    .filter(|head| head.eq_ignore_ascii_case(bearer))
+                    .map(|_| line[bearer.len()..].trim())
+            })
+            .expect("the removal is authorized");
+
+        // Signed now, for a short while: a clock read in the wrong unit would
+        // sign a token that has already expired or one that never does.
+        let claims: serde_json::Value = serde_json::from_slice(
+            &base64::Engine::decode(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                token.split('.').nth(1).unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let (exp, now) = (
+            claims["exp"].as_u64().unwrap(),
+            crate::current_epoch_seconds(),
+        );
+        let ttl = crate::token::TOKEN_TTL_SECONDS;
+        assert!(
+            exp >= now && exp <= now + ttl && exp + 60 > now + ttl,
+            "exp {exp} against now {now}"
+        );
         let length: usize = header
             .lines()
             .find_map(|line| {
@@ -3554,7 +3970,7 @@ async fn room_wait_terminal_matrix(phase: RoomWait) {
                 match frame {
                     Ok(frame) if frame.is_close() => break,
                     Ok(frame) => {
-                        messages.push(serde_json::from_str(frame.to_text().unwrap()).unwrap())
+                        messages.push(serde_json::from_str(frame.to_text().unwrap()).unwrap());
                     }
                     Err(WsError::Protocol(ProtocolError::ResetWithoutClosingHandshake)) => break,
                     Err(WsError::Io(error))
@@ -3590,7 +4006,7 @@ async fn room_wait_terminal_matrix(phase: RoomWait) {
         let presence_now = std::sync::Arc::new(std::sync::Mutex::new(Instant::now()));
         if matches!(cause, OpenStop::Absent) {
             rig.loops.presence.left(*presence_now.lock().unwrap());
-            rig.loops.presence.test_now = Some(presence_now.clone());
+            rig.loops.presence.test_now = Some(std::sync::Arc::clone(&presence_now));
         }
         let (unused, _) = mpsc::unbounded_channel();
         let mut room = Some(std::mem::replace(&mut rig._room_sender, unused));
@@ -3625,7 +4041,7 @@ async fn room_wait_terminal_matrix(phase: RoomWait) {
                     serde_json::json!({"type":"round_transition", "round":"behavioral"}),
                 ),
                 RoomWait::Thinking => {
-                    control(&tx, serde_json::json!({"type":"thinking", "thinking":true}))
+                    control(&tx, serde_json::json!({"type":"thinking", "thinking":true}));
                 }
                 _ => {}
             }
@@ -3966,7 +4382,7 @@ async fn write_site_terminal_matrix(site: WriteSite, physical: bool, after: bool
                 match frame {
                     Ok(frame) if frame.is_close() => break,
                     Ok(frame) => {
-                        messages.push(serde_json::from_str(frame.to_text().unwrap()).unwrap())
+                        messages.push(serde_json::from_str(frame.to_text().unwrap()).unwrap());
                     }
                     Err(WsError::Protocol(ProtocolError::ResetWithoutClosingHandshake)) => break,
                     Err(WsError::Io(error))
@@ -3988,7 +4404,7 @@ async fn write_site_terminal_matrix(site: WriteSite, physical: bool, after: bool
             let entered = std::sync::Arc::new(tokio::sync::Notify::new());
             rig.loops.recovery_writes.push_back(WriteBarrier {
                 phase: site.label(),
-                entered: entered.clone(),
+                entered: std::sync::Arc::clone(&entered),
                 release: std::sync::Arc::new(tokio::sync::Notify::new()),
             });
             entered
@@ -4001,8 +4417,8 @@ async fn write_site_terminal_matrix(site: WriteSite, physical: bool, after: bool
             let release = std::sync::Arc::new(tokio::sync::Notify::new());
             rig.loops.recovery_writes.push_front(WriteBarrier {
                 phase: "held_context",
-                entered: entered.clone(),
-                release: release.clone(),
+                entered: std::sync::Arc::clone(&entered),
+                release: std::sync::Arc::clone(&release),
             });
             (entered, release)
         });
@@ -4017,7 +4433,7 @@ async fn write_site_terminal_matrix(site: WriteSite, physical: bool, after: bool
         let presence_now = std::sync::Arc::new(std::sync::Mutex::new(Instant::now()));
         if matches!(cause, OpenStop::Absent) {
             rig.loops.presence.left(*presence_now.lock().unwrap());
-            rig.loops.presence.test_now = Some(presence_now.clone());
+            rig.loops.presence.test_now = Some(std::sync::Arc::clone(&presence_now));
         }
         let (unused, _) = mpsc::unbounded_channel();
         let mut room = Some(std::mem::replace(&mut rig._room_sender, unused));
@@ -4030,7 +4446,7 @@ async fn write_site_terminal_matrix(site: WriteSite, physical: bool, after: bool
                 OpenStop::RoomDisconnected => room.clone(),
                 _ => None,
             };
-            let presence_now = presence_now.clone();
+            let presence_now = std::sync::Arc::clone(&presence_now);
             rig.loops.recovery_after.push_back(AfterWrite {
                 phase: site.label(),
                 action: Box::new(move || match cause {
@@ -4138,7 +4554,6 @@ async fn write_site_terminal_matrix(site: WriteSite, physical: bool, after: bool
             let terminal = observed.try_recv().expect("the queued terminal was taken");
             let shown = match &terminal {
                 Terminal::End { .. } => "End",
-                Terminal::Finish(_) => "Finish",
                 Terminal::Deadline => "Deadline",
                 Terminal::Absent => "Absent",
                 Terminal::RoomClosed => "RoomClosed",
@@ -4300,8 +4715,8 @@ async fn a_held_action_settles_only_the_revision_it_carried() {
         let release = std::sync::Arc::new(tokio::sync::Notify::new());
         rig.loops.recovery_writes.push_back(WriteBarrier {
             phase,
-            entered: entered.clone(),
-            release: release.clone(),
+            entered: std::sync::Arc::clone(&entered),
+            release: std::sync::Arc::clone(&release),
         });
         gates.push((entered, release));
     }
@@ -4379,7 +4794,10 @@ struct Accepted {
 // Plays one scripted step per accepted connection and records what the client
 // asked for. Connections beyond the script are never accepted. The handshake
 // callback's error type is a full HTTP response.
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "the handshake callback's error type is a full HTTP response"
+)]
 async fn scripted_fresh_gemini(
     listener: tokio::net::TcpListener,
     script: Vec<FreshStep>,
@@ -4615,14 +5033,36 @@ async fn replacement_classification_follows_the_declared_table() {
         "replacement_classification_follows_the_declared_table",
         |output| {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let observed = stderr
+            let lines = stderr
                 .lines()
                 .filter(|line| line.starts_with("replacement: "))
-                .filter_map(|line| {
-                    line.split_whitespace()
-                        .find_map(|field| field.strip_prefix("fallback="))
+                .collect::<Vec<_>>();
+            let field = |line: &&str, name: &str| {
+                line.split_whitespace()
+                    .find_map(|field| field.strip_prefix(name))
+                    .map(str::to_owned)
+            };
+            let observed = lines
+                .iter()
+                .filter_map(|line| field(line, "fallback="))
+                .collect::<Vec<_>>();
+            // A replacement that offered no handle has no checkpoint to age.
+            let offered = replacement_cases()
+                .iter()
+                .filter(|case| case.fallback.is_some())
+                .map(|case| {
+                    case.accepts
+                        .first()
+                        .is_some_and(|accepted| accepted.1.is_some())
                 })
                 .collect::<Vec<_>>();
+            for (line, offered) in lines.iter().zip(offered) {
+                assert_eq!(
+                    field(line, "checkpoint_age=").as_deref() == Some("none"),
+                    !offered,
+                    "{line}"
+                );
+            }
             let expected = replacement_cases()
                 .iter()
                 .filter_map(|case| case.fallback)
@@ -4687,6 +5127,22 @@ async fn replacement_classification_follows_the_declared_table() {
             }
         }
         assert_eq!(rig.loops.restarts, case.restarts_after, "{}", case.name);
+        if case.outcome == Replaced::Ready {
+            // A resumed socket with nothing owed asks for no reply, and a
+            // speech handoff never does; every other cold briefing does.
+            assert_eq!(
+                rig.turn.state.recovery_reply_pending,
+                case.fallback != Some("none") && !case.stale_checkpoint,
+                "{}",
+                case.name
+            );
+            // A handoff with nothing owed leaves nothing owed.
+            assert!(
+                !case.stale_checkpoint || !rig.turn.activity.owes_prompt(),
+                "{}",
+                case.name
+            );
+        }
         rig.finish().await;
         let (seen, listener) = server.await.unwrap();
         let seen = seen
@@ -5253,7 +5709,7 @@ async fn tool_cancel_matrix(stage: ToolStage) {
                 listener
             });
             let tx = rig.tx.clone();
-            let recorder = rig.recorder.clone();
+            let recorder = std::sync::Arc::clone(&rig.recorder);
             let stimulus = async {
                 pending.await.unwrap();
                 if matches!(stage, ToolStage::ColdBackoff) {
@@ -5619,7 +6075,7 @@ async fn closable_fresh_peer(
             frame = socket.next() => match frame {
                 Some(Ok(frame)) if frame.is_close() => break,
                 Some(Ok(frame)) => {
-                    messages.push(serde_json::from_str(frame.to_text().unwrap()).unwrap())
+                    messages.push(serde_json::from_str(frame.to_text().unwrap()).unwrap());
                 }
                 _ => break,
             },
@@ -5690,8 +6146,8 @@ async fn gated_final_send(
     let release = std::sync::Arc::new(tokio::sync::Notify::new());
     rig.loops.recovery_writes.push_back(WriteBarrier {
         phase,
-        entered: entered.clone(),
-        release: release.clone(),
+        entered: std::sync::Arc::clone(&entered),
+        release: std::sync::Arc::clone(&release),
     });
     let (reader, mut readers) = mpsc::unbounded_channel();
     rig.loops.recovery_reader = Some(reader);
@@ -5815,8 +6271,8 @@ async fn a_failed_final_send_settles_nothing_it_did_not_deliver() {
         );
         rig.loops.recovery_writes.push_back(WriteBarrier {
             phase: next,
-            entered: entered.clone(),
-            release: open.clone(),
+            entered: std::sync::Arc::clone(&entered),
+            release: std::sync::Arc::clone(&open),
         });
         tokio::spawn(async move {
             entered.notified().await;
@@ -5962,7 +6418,7 @@ async fn input_during_a_final_send_settles_only_what_that_send_carried() {
             release_in_context: false,
             during: |tx| {
                 tx.send(test_result_packet(3, "def solve(): return 7"))
-                    .unwrap()
+                    .unwrap();
             },
         },
         FinalSendRow {
@@ -5995,7 +6451,7 @@ async fn input_during_a_final_send_settles_only_what_that_send_carried() {
                 control(
                     tx,
                     serde_json::json!({"type":"round_transition", "round":"behavioral"}),
-                )
+                );
             },
         },
         FinalSendRow {
@@ -6007,7 +6463,7 @@ async fn input_during_a_final_send_settles_only_what_that_send_carried() {
                 control(
                     tx,
                     serde_json::json!({"type":"round_transition", "round":"behavioral"}),
-                )
+                );
             },
         },
         FinalSendRow {
@@ -6017,7 +6473,7 @@ async fn input_during_a_final_send_settles_only_what_that_send_carried() {
             release_in_context: true,
             during: |tx| {
                 tx.send(test_result_packet(5, "def solve(): return 7"))
-                    .unwrap()
+                    .unwrap();
             },
         },
     ];
@@ -6053,8 +6509,8 @@ async fn input_during_a_final_send_settles_only_what_that_send_carried() {
             );
             rig.loops.recovery_writes.push_back(WriteBarrier {
                 phase: "held_context",
-                entered: entered.clone(),
-                release: open.clone(),
+                entered: std::sync::Arc::clone(&entered),
+                release: std::sync::Arc::clone(&open),
             });
             let tx = rig.tx.clone();
             tokio::spawn(async move {
@@ -6155,6 +6611,99 @@ async fn input_during_a_final_send_settles_only_what_that_send_carried() {
     }
 }
 
+/// A release arrives while the first held write is on the wire, so the
+/// action the held test result queued is flushed by the same drain. With
+/// `fail` the peer drops the fresh socket at that write; with `buffered` the
+/// ingress already holds candidate audio, so the reply is deferred behind it.
+/// Nothing is owed when the replacement starts, so the only reply in play is
+/// the one the action carries. No newer hold ever silences the interviewer.
+async fn held_action_scenario(fail: bool, buffered: bool) -> (Rig, GatedRun) {
+    let (listener, endpoint) = listener().await;
+    let mut rig = Rig::with_old_usage(endpoint, Some(11)).await;
+    rig.gemini.input_cause = Some("tool");
+    let old = rig.gemini.inspect_reader_for_test().unwrap();
+    wait_for_received_usage(&old).await;
+    rig.turn.state.thinking_hold = crate::agent::ThinkingHold::Held {
+        since: Instant::now(),
+    };
+    rig.turn.state.code = "def solve(): return 7".into();
+    rig.turn.state.language = "python".into();
+    rig.turn.activity.last_test_reaction = Instant::now() - Duration::from_secs(100);
+    if buffered {
+        rig.media.recovery_audio.push(
+            AudioFrame {
+                data: std::borrow::Cow::Owned(vec![0; 160]),
+                sample_rate: 16000,
+                num_channels: 1,
+                samples_per_channel: 160,
+            },
+            Instant::now(),
+        );
+    }
+    rig.tx
+        .send(test_result_packet(0, "def solve(): return 7"))
+        .unwrap();
+    let (entered, open) = (
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+    );
+    rig.loops.recovery_writes.push_back(WriteBarrier {
+        phase: "held_context",
+        entered: std::sync::Arc::clone(&entered),
+        release: std::sync::Arc::clone(&open),
+    });
+    let tx = rig.tx.clone();
+    tokio::spawn(async move {
+        entered.notified().await;
+        control(
+            &tx,
+            serde_json::json!({"type":"thinking", "thinking":false}),
+        );
+        open.notify_one();
+    });
+    let run = gated_final_send(&mut rig, listener, "held_action", fail.then_some(2), |tx| {
+        tx.send(code_packet(LATE_EDIT)).unwrap();
+    })
+    .await;
+    assert!(run.flow.is_continue());
+    assert!(!rig.turn.state.interviewer_silenced());
+    (rig, run)
+}
+
+/// The action leaves the driver when its write is attempted, so a write that
+/// fails must leave the next socket briefed from scratch, with the reply
+/// still owed.
+#[tokio::test(flavor = "current_thread")]
+async fn a_failed_held_action_leaves_its_reply_owed_to_the_next_socket() {
+    if isolated("a_failed_held_action_leaves_its_reply_owed_to_the_next_socket") {
+        return;
+    }
+    let (rig, _run) = held_action_scenario(true, false).await;
+    assert!(rig.turn.state.needs_cold_brief);
+    assert!(rig.turn.activity.owes_prompt());
+}
+
+/// A reply deferred behind buffered audio is asked for by the audio, unless
+/// the audio is only silence and gives Gemini no turn to answer, so the same
+/// fallback a released hold arms must be waiting.
+#[tokio::test(flavor = "current_thread")]
+async fn a_reply_deferred_behind_buffered_audio_arms_the_reply_fallback() {
+    if isolated("a_reply_deferred_behind_buffered_audio_arms_the_reply_fallback") {
+        return;
+    }
+    let (rig, _run) = held_action_scenario(false, true).await;
+    assert!(rig.turn.activity.socket.thinking_reply_fallback.is_some());
+
+    // Without buffered audio the reply is requested outright, so nothing is
+    // left to fall back to.
+    let (rig, _run) = held_action_scenario(false, false).await;
+    assert!(rig.turn.activity.socket.thinking_reply_fallback.is_none());
+
+    // The reply was marked as a prompt when it was queued and again when it
+    // went out, which is two; a send that skips the second leaves it at one.
+    assert_eq!(rig.turn.activity.prompt_sequence, 2);
+}
+
 // Declared before running. The fresh peer drops while the targeted held write
 // is gated, after newer input reached the driver; the write then takes its Err
 // branch.
@@ -6211,8 +6760,8 @@ async fn a_failed_held_write_keeps_newer_input_and_unsettled_debt() {
             );
             rig.loops.recovery_writes.push_back(WriteBarrier {
                 phase: "held_context",
-                entered: entered.clone(),
-                release: open.clone(),
+                entered: std::sync::Arc::clone(&entered),
+                release: std::sync::Arc::clone(&open),
             });
             let tx = rig.tx.clone();
             tokio::spawn(async move {
@@ -6531,8 +7080,8 @@ async fn the_last_briefing_does_not_settle_a_debt_a_newer_hold_made_current() {
         );
         rig.loops.recovery_writes.push_back(WriteBarrier {
             phase: "recovery_brief",
-            entered: entered.clone(),
-            release: open.clone(),
+            entered: std::sync::Arc::clone(&entered),
+            release: std::sync::Arc::clone(&open),
         });
         let tx = rig.tx.clone();
         tokio::spawn(async move {
@@ -7459,7 +8008,7 @@ async fn queued_mixed_frames_are_accounted_once_when_a_stop_cancels_the_resume_o
     }
 }
 
-// Candidate-audio stores, characterized separately (T5b.1). The SDK queue is in
+// Candidate-audio stores, characterized separately. The SDK queue is in
 // `media.rs` tests; this block covers the owned ingress, the attempted versus
 // never-attempted tails, and the boundaries between them.
 
@@ -8011,7 +8560,7 @@ async fn outage_episode(schedule: &Schedule) -> Episode {
         &keys,
         &mut charges,
         &mut ready,
-        || plant_open(plant.clone()),
+        || plant_open(std::rc::Rc::clone(&plant)),
         |_| async {},
         tokio::time::sleep_until,
     );

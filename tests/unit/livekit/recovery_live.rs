@@ -427,7 +427,7 @@ impl Scenario {
 }
 
 /// The interview length the run asks the product for. It follows the rules the
-/// token endpoint applies in T8a.1: a whole number of minutes in the product's
+/// token endpoint applies: a whole number of minutes in the product's
 /// range, not above what the recording cap would clamp a token to. A
 /// server-deadline run must also observe exactly the server's own deadline,
 /// taken from `interview_hard_deadline`, not restated here.
@@ -581,8 +581,8 @@ impl RecoveryGate {
             .unwrap()
             .push_back(super::super::WriteBarrier {
                 phase: RECOVERY_GATE_PHASE,
-                entered: entered.clone(),
-                release: release.clone(),
+                entered: std::sync::Arc::clone(&entered),
+                release: std::sync::Arc::clone(&release),
             });
         Self { entered, release }
     }
@@ -1055,7 +1055,7 @@ async fn connect_candidate(
         .map_err(|_| "candidate connect timed out".to_owned())?
         .map_err(|error| format!("candidate connect failed: {}", redact(&error.to_string())))?;
     let observer = spawn_observer(
-        shared.clone(),
+        std::sync::Arc::clone(shared),
         events,
         room.local_participant(),
         agent_identity.to_owned(),
@@ -1158,7 +1158,10 @@ impl<'a> LiveEffects<'a> {
             ));
         }
         let (probe, readers) = tokio::sync::mpsc::unbounded_channel();
-        *super::super::super::LIVE_READER_PROBE.lock().unwrap() = Some(probe);
+        super::super::super::LIVE_READER_PROBES
+            .lock()
+            .unwrap()
+            .push((room_name.clone(), probe));
         let (terminal_probe, terminals) = tokio::sync::mpsc::unbounded_channel();
         super::super::super::LIVE_TERMINAL_PROBES
             .lock()
@@ -1172,7 +1175,7 @@ impl<'a> LiveEffects<'a> {
             stop_file,
             room_name,
             candidate_identity,
-            token: minted.token.clone(),
+            token: minted.token,
             shared: Shared::new(),
             link: None,
             agent: None,
@@ -1287,10 +1290,10 @@ impl<'a> LiveEffects<'a> {
         ) {
             self.create_production_room().await?;
         }
-        let config = self.config.clone();
+        let config = std::sync::Arc::clone(&self.config);
         let room = self.room_name.clone();
-        let finished = self.agent_finished.clone();
-        let shared = self.shared.clone();
+        let finished = std::sync::Arc::clone(&self.agent_finished);
+        let shared = std::sync::Arc::clone(&self.shared);
         self.agent = Some(tokio::spawn(async move {
             let outcome = super::super::super::run_room_with_slot(
                 &config,
@@ -2028,14 +2031,22 @@ fn start_service(
     let allowed: Vec<String> = allowed.iter().map(|id| (*id).to_owned()).collect();
     let (run_id, digest) = (identity.run_id.clone(), identity.digest.clone());
     let task = tokio::spawn({
-        let (permits, connections, events) = (permits.clone(), connections.clone(), events.clone());
+        let (permits, connections, events) = (
+            std::sync::Arc::clone(&permits),
+            std::sync::Arc::clone(&connections),
+            std::sync::Arc::clone(&events),
+        );
         async move {
             loop {
                 let Ok((mut stream, _)) = listener.accept().await else {
                     return;
                 };
                 connections.fetch_add(1, Ordering::SeqCst);
-                let (permits, events, granted) = (permits.clone(), events.clone(), granted.clone());
+                let (permits, events, granted) = (
+                    std::sync::Arc::clone(&permits),
+                    std::sync::Arc::clone(&events),
+                    std::sync::Arc::clone(&granted),
+                );
                 let (allowed, run_id, digest) = (allowed.clone(), run_id.clone(), digest.clone());
                 tokio::spawn(async move {
                     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -2362,7 +2373,7 @@ async fn the_permit_client_refuses_an_incomplete_or_mismatched_environment() {
 #[tokio::test]
 async fn the_permit_is_taken_before_the_side_effect() {
     let (_scratch, service, mut client) = joined(Reply::Faithful, &["candidate_join"]).await;
-    let events = service.events.clone();
+    let events = std::sync::Arc::clone(&service.events);
     client
         .guarded("candidate_join", async {
             events.lock().unwrap().push("effect:candidate_join".into());
@@ -2375,7 +2386,7 @@ async fn the_permit_is_taken_before_the_side_effect() {
     );
 
     let (_scratch, service, mut denied) = joined(Reply::Denies, &["candidate_join"]).await;
-    let events = service.events.clone();
+    let events = std::sync::Arc::clone(&service.events);
     let outcome = denied
         .guarded("candidate_join", async {
             events.lock().unwrap().push("effect:candidate_join".into());
@@ -2715,7 +2726,7 @@ fn the_launcher_validates_each_scenarios_manifest() {
 }
 
 /// Declared before running: the bootstrap duration comes from the validated
-/// manifest by the T8a.1 rules, and the real hard-deadline helper turns the
+/// manifest by the duration rules, and the real hard-deadline helper turns the
 /// server-deadline case's 10 minutes into 12 minutes.
 #[test]
 fn the_deadline_scenario_bootstrap_has_a_twelve_minute_hard_deadline() {
@@ -2740,7 +2751,8 @@ fn the_deadline_scenario_bootstrap_has_a_twelve_minute_hard_deadline() {
     assert_eq!(manifest["observation_target_s"], 12 * 60);
 }
 
-/// Declared before running: the duration rules are T8a.1's. Outside 10..=90,
+/// Declared before running: the duration rules are the token endpoint's.
+/// Outside 10..=90,
 /// a fraction, a string, a missing field, a recording cap below the request, a
 /// deadline run whose observation is not the server's deadline and a manual run
 /// observing longer than its interview are all refused; a cap below the floor
@@ -2967,7 +2979,7 @@ async fn the_armed_recovery_gate_reaches_the_room_loops_barrier_queue() {
     assert!(gate.entered(Duration::from_millis(20)).await.is_err());
     queued[0].entered.notify_one();
     gate.entered(Duration::from_secs(1)).await.unwrap();
-    let released = queued[0].release.clone();
+    let released = std::sync::Arc::clone(&queued[0].release);
     let waiter = tokio::spawn(async move { released.notified().await });
     tokio::task::yield_now().await;
     gate.release();
@@ -3313,8 +3325,8 @@ fn private_gate() -> (RecoveryGate, super::super::WriteBarrier) {
     let release = Arc::new(tokio::sync::Notify::new());
     (
         RecoveryGate {
-            entered: entered.clone(),
-            release: release.clone(),
+            entered: std::sync::Arc::clone(&entered),
+            release: std::sync::Arc::clone(&release),
         },
         super::super::WriteBarrier {
             phase: RECOVERY_GATE_PHASE,
@@ -3429,7 +3441,7 @@ async fn the_live_effects_sign_a_candidate_token_locally() {
         claims["metadata"].as_str().unwrap()
     ));
     assert!(
-        super::super::super::take_live_reader_probe().is_some(),
+        super::super::super::take_live_reader_probe(&effects.room_name).is_some(),
         "the reader probe is armed for the loop that starts"
     );
     assert!(
@@ -3699,12 +3711,11 @@ fn the_live_terminal_probe_is_keyed_by_room_and_carries_the_terminal_name() {
             payload: Value::Null,
         }
         .name(),
-        Terminal::Finish(String::new()).name(),
         Terminal::Deadline.name(),
         Terminal::Absent.name(),
         Terminal::RoomClosed.name(),
     ];
-    assert_eq!(names, ["End", "Finish", "Deadline", "Absent", "RoomClosed"]);
+    assert_eq!(names, ["End", "Deadline", "Absent", "RoomClosed"]);
 }
 
 /// Declared before running: with the recovery write held, the SDK's
@@ -3760,7 +3771,7 @@ async fn a_room_disconnect_while_the_recovery_write_is_held_is_reported_as_room_
     server.abort();
 }
 
-// The speech-continuity arms (T5b.2): a stalled microphone consumer against the
-// real room loop, one clip arm per invocation.
+// The speech-continuity arms: a stalled microphone consumer against the real
+// room loop, one clip arm per invocation.
 #[path = "recovery_continuity.rs"]
 mod continuity;

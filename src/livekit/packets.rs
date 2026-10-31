@@ -518,7 +518,7 @@ pub(super) async fn apply_data_packet(
     finish_interview(room, context, interview, reason).await
 }
 
-pub(super) async fn finish_interview(
+async fn finish_interview(
     room: &RoomLink,
     context: &mut GeminiEventContext<'_>,
     interview: InterviewContext<'_>,

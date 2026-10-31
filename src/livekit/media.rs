@@ -31,6 +31,10 @@ pub(super) const GEMINI_AUDIO_SAMPLE_RATE: i32 = 16_000;
 
 pub(super) const GEMINI_AUDIO_CHANNELS: i32 = 1;
 
+/// Forty seconds of ten-millisecond frames: the SDK queue and the recovery
+/// buffer hold the same span so neither drops what the other keeps.
+pub(super) const CANDIDATE_AUDIO_QUEUE_FRAMES: usize = 4000;
+
 pub(super) fn candidate_audio_stream(track: RtcAudioTrack) -> NativeAudioStream {
     NativeAudioStream::with_options(
         track,
@@ -39,7 +43,7 @@ pub(super) fn candidate_audio_stream(track: RtcAudioTrack) -> NativeAudioStream 
         NativeAudioStreamOptions {
             // Forty seconds covers partial transcription and a bounded
             // connection/setup attempt without the default 100 ms overflow.
-            queue_size_frames: Some(4000),
+            queue_size_frames: Some(CANDIDATE_AUDIO_QUEUE_FRAMES),
         },
     )
 }

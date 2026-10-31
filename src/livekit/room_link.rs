@@ -265,8 +265,8 @@ impl Recorder {
             reconnecting,
             wait_seconds,
             require_reason,
-            entered: entered.clone(),
-            release: release.clone(),
+            entered: std::sync::Arc::clone(&entered),
+            release: std::sync::Arc::clone(&release),
         });
         (entered, release)
     }

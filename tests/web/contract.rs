@@ -1372,7 +1372,7 @@ fn long_cases() -> Vec<LongCase> {
     let mut cases = vec![
         // Accepted.
         long_case("qualification_90", &[], json!({}), None),
-        long_case("pilot_60", &at("60"), pilot.clone(), None),
+        long_case("pilot_60", &at("60"), pilot, None),
         long_case("experiment_20", &at("20"), experiment(20), None),
         long_case("experiment_30", &at("30"), experiment(30), None),
         long_case(

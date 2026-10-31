@@ -278,7 +278,7 @@ class Incremental(Base):
             status="uncovered",
             test="",
             reason="open: needs a seam",
-            sdk_report="uncovered required T4b.4",
+            sdk_report="uncovered required native SDK run",
         )
         code, report, _ = self.fx.run("incremental")
         self.assertEqual(code, 0)
@@ -294,7 +294,7 @@ class Incremental(Base):
     def test_pending_sdk_rows_pass_incremental_and_fail_strict(self):
         for row in self.fx.rows:
             if "sdk_report" in row:
-                row["sdk_report"] = "uncovered required T4b.4"
+                row["sdk_report"] = "uncovered required native SDK run"
         code, report, _ = self.fx.run("incremental")
         self.assertEqual((code, kinds(report)), (0, ["sdk_pending"]))
         self.assertEqual(len(report["gaps"]), 10)
@@ -543,7 +543,7 @@ class SdkReceipts(Base):
         self.assertFails("fabricated_sdk", sdk=False)
 
     def test_free_text_coverage_claims_are_fabricated(self):
-        self.fx.rows[0]["sdk_report"] = "covered by T4b.4b"
+        self.fx.rows[0]["sdk_report"] = "covered by the native SDK fixture"
         self.assertFails("fabricated_sdk")
 
     def test_a_fabricated_claim_fails_incremental_too(self):
@@ -1232,7 +1232,7 @@ class RepresentativeSdk(Base):
             "shares": "RoomDisconnected",
             "reason": EOF_REASON,
         }
-        fx.rows[ROW_DISCONNECTED]["sdk_report"] = "uncovered required T4b.4"
+        fx.rows[ROW_DISCONNECTED]["sdk_report"] = "uncovered required native SDK run"
         code, report, _ = self.strict()
         self.assertEqual(code, 1)
         self.assertEqual(

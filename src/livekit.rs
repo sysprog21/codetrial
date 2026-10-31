@@ -1790,18 +1790,27 @@ fn take_live_write_barriers() -> std::collections::VecDeque<recovery::WriteBarri
 
 /// Where a test hosting the real room loop is told about each Live reader the
 /// loop owns: the first socket's once the interview has started, then each
-/// replacement's. Taken once by the loop that starts. It is how a fixture
+/// replacement's. Keyed by the room it hosts, so parallel tests never take one
+/// another's, and taken once by the loop that starts. It is how a fixture
 /// reaches the first reader to end it, which is the loop's own Close path, and
 /// how it later sees that every reader has finished.
 #[cfg(test)]
-static LIVE_READER_PROBE: std::sync::Mutex<
-    Option<tokio::sync::mpsc::UnboundedSender<crate::gemini::LiveReaderInspection>>,
-> = std::sync::Mutex::new(None);
+type LiveReaderProbe = (
+    String,
+    tokio::sync::mpsc::UnboundedSender<crate::gemini::LiveReaderInspection>,
+);
 
 #[cfg(test)]
-fn take_live_reader_probe()
--> Option<tokio::sync::mpsc::UnboundedSender<crate::gemini::LiveReaderInspection>> {
-    LIVE_READER_PROBE.lock().unwrap().take()
+static LIVE_READER_PROBES: std::sync::Mutex<Vec<LiveReaderProbe>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn take_live_reader_probe(
+    room: &str,
+) -> Option<tokio::sync::mpsc::UnboundedSender<crate::gemini::LiveReaderInspection>> {
+    let mut probes = LIVE_READER_PROBES.lock().unwrap();
+    let at = probes.iter().position(|(name, _)| name == room)?;
+    Some(probes.remove(at).1)
 }
 
 /// Where a test hosting the real room loop is told which terminal cancelled a
@@ -2800,7 +2809,7 @@ pub(crate) async fn run_room_with_slot(
     } = *session;
 
     #[cfg(test)]
-    let reader_probe = take_live_reader_probe();
+    let reader_probe = take_live_reader_probe(room_name);
     #[cfg(test)]
     if let Some(probe) = &reader_probe
         && let Some(reader) = gemini.inspect_reader_for_test()

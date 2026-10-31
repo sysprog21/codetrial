@@ -697,3 +697,22 @@ async fn the_boards_that_arrived_include_one_still_being_read() {
     assert!(board.arrived(Duration::from_millis(100)).await.is_empty());
     assert_eq!(started.elapsed(), Duration::from_millis(100));
 }
+
+/// A recovery briefing that carried the latest drawing settles it; one that
+/// carried an older drawing must leave the newer one still to be sent. Either
+/// way the send time moves, because the model has just been written to.
+#[test]
+fn a_recovered_image_settles_only_the_drawing_it_carried() {
+    let mut board = Board::new();
+    let at = Instant::now();
+    board.seed_recovery_image(vec![1, 2, 3]);
+    board.unsent = true;
+    board.recovered_image(&[1, 2, 3], at);
+    assert!(!board.unsent);
+    assert_eq!(board.last_sent, Some(at));
+
+    board.seed_recovery_image(vec![4, 5, 6]);
+    board.unsent = true;
+    board.recovered_image(&[1, 2, 3], at);
+    assert!(board.unsent, "a newer drawing is still owed");
+}

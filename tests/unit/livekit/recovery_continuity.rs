@@ -1,4 +1,4 @@
-//! Speech continuity across a held microphone consumer (T5b.2).
+//! Speech continuity across a held microphone consumer.
 //!
 //! STATUS: THE LIVE ARMS IN THIS FILE HAVE NOT BEEN RUN. Nothing here was
 //! observed against LiveKit or Gemini. `live_sdk_clip_continuity_arm` is
@@ -1170,7 +1170,7 @@ fn compare(observations: &[Observation]) -> Vec<ArmReport> {
 fn render_report(observations: &[Observation]) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
-    let _ = writeln!(out, "SPEECH CONTINUITY REPORT (T5b.2)");
+    let _ = writeln!(out, "SPEECH CONTINUITY REPORT");
     let _ = writeln!(out, "{DESCRIPTIVE_NOTICE}");
     let _ = writeln!(
         out,
@@ -1888,11 +1888,11 @@ fn the_clip_loader_checks_speech_digests_format_and_the_answer_keys_text() {
             (|m: &mut Value| m["contains_speech"] = json!(false)) as fn(&mut Value),
         ),
         ("digest", |m| {
-            m["clips"][0]["sha256"] = json!("0".repeat(64))
+            m["clips"][0]["sha256"] = json!("0".repeat(64));
         }),
         ("rate", |m| m["format"]["sample_rate"] = json!(48000)),
         ("text", |m| {
-            m["clips"][1]["parts"][2] = json!("something else")
+            m["clips"][1]["parts"][2] = json!("something else");
         }),
         ("path", |m| m["clips"][0]["file"] = json!("../x.wav")),
         ("missing", |m| m["clips"] = json!([])),
@@ -2230,7 +2230,7 @@ fn a_miss_also_present_in_the_control_is_inconclusive_not_a_loss() {
     let mut lost_three = without_two.clone();
     lost_three.remove(1);
     let lost = observation(&ARMS[4], &lost_three);
-    let reports = compare(&[control.clone(), stalled.clone(), lost.clone()]);
+    let reports = compare(&[control, stalled.clone(), lost]);
     assert_eq!(statuses(&reports[0])[1], [Status::Baseline(Kind::Missing)]);
     assert_eq!(
         statuses(&reports[3])[1],
@@ -2314,7 +2314,7 @@ fn the_report_reads_the_log_and_states_its_limits_for_every_arm() {
     }
     log.push_str("LIVE_OBS {\"kind\":\"transcript_line\",\"fields\":{}}\nother\n");
     let parsed = parse_arm_results(&log);
-    assert_eq!(parsed, [control.clone(), lost.clone()]);
+    assert_eq!(parsed, [control.clone(), lost]);
 
     let report = render_report(&parsed);
     assert!(report.contains("One clip per arm is descriptive evidence only"));
@@ -2361,7 +2361,7 @@ async fn a_held_dequeue_takes_nothing_while_the_runtime_keeps_running() {
     gate.hold();
     let ticks = Arc::new(AtomicUsize::new(0));
     let ticker = tokio::spawn({
-        let ticks = ticks.clone();
+        let ticks = std::sync::Arc::clone(&ticks);
         async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(5)).await;
@@ -2383,7 +2383,7 @@ async fn a_held_dequeue_takes_nothing_while_the_runtime_keeps_running() {
     assert_eq!(gate.stats().frames, 0);
 
     let consumer = tokio::spawn({
-        let gate = gate.clone();
+        let gate = std::sync::Arc::clone(&gate);
         async move {
             let mut taken = Vec::new();
             while taken.len() < 5 {
@@ -2539,7 +2539,7 @@ async fn the_recording_peer_sees_nothing_while_held_and_the_retained_frames_afte
         let _installed = probe::install(&probe);
         let (peer, endpoint) = listener().await;
         let wire = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let server = recording_peer(peer, wire.clone());
+        let server = recording_peer(peer, std::sync::Arc::clone(&wire));
         let mut rig = Rig::new("ws://127.0.0.1:9/".into()).await;
         let boot = crate::runtime::bootstrap(&rig.config, "recovery-test", Some("two-sum"), 45);
         let session = crate::gemini::live_session_with_keys_at(&endpoint, &rig.keys, &boot, None)
@@ -2603,7 +2603,7 @@ async fn the_recording_peer_sees_nothing_while_held_and_the_retained_frames_afte
                     if probe.gate.stats().frames == u64::from(retained.unsigned_abs()) {
                         let since = *quiet_since.get_or_insert_with(tokio::time::Instant::now);
                         if since.elapsed() > Duration::from_millis(300)
-                            && wire.lock().unwrap().len() == retained as usize
+                            && wire.lock().unwrap().len() == usize::try_from(retained).unwrap()
                         {
                             break;
                         }
@@ -2619,7 +2619,7 @@ async fn the_recording_peer_sees_nothing_while_held_and_the_retained_frames_afte
         let wire = wire.lock().unwrap();
         assert_eq!(
             wire.len(),
-            retained as usize,
+            usize::try_from(retained).unwrap(),
             "{label}: one message per retained frame"
         );
         assert!(wire.iter().all(|item| item.bytes == 320), "{label}");
@@ -2765,7 +2765,7 @@ fn the_arm_verdict_names_each_departure_and_ignores_the_transcript() {
     let mut good = observation(arm, &[]);
     good.frames_after_release = 5;
     assert!(judge_arm(arm, Some(&good), &clean_teardown(), &Ok(())).is_empty());
-    let mut bad = good.clone();
+    let mut bad = good;
     bad.frames_published = 10;
     bad.complete = false;
     bad.held_arrivals = 0;
@@ -3066,7 +3066,8 @@ fn the_report_prints_overflow_lines_and_says_they_are_not_frame_identity() {
     assert_eq!(report.matches("SDK overflow log (").count(), 3);
 }
 
-/// Declared before running: the real room-loop dequeue behind the T5b.2 gate.
+/// Declared before running: the real room-loop dequeue behind the
+/// speech-continuity gate.
 /// 100 frames are taken at once (so no gap above a few hundred ms), the gate
 /// is then held for 1300 ms while 100 more are captured and the loop's timer
 /// arm keeps running, and then released. The interview's measured maximum gap
@@ -3087,7 +3088,7 @@ async fn the_measured_microphone_gap_follows_the_held_dequeue_gate() {
         let _installed = probe::install(&probe);
         let (peer, endpoint) = listener().await;
         let wire = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let server = recording_peer(peer, wire.clone());
+        let server = recording_peer(peer, std::sync::Arc::clone(&wire));
         let mut rig = Rig::new("ws://127.0.0.1:9/".into()).await;
         let boot = crate::runtime::bootstrap(&rig.config, "recovery-test", Some("two-sum"), 45);
         let session = crate::gemini::live_session_with_keys_at(&endpoint, &rig.keys, &boot, None)

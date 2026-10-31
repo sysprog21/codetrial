@@ -168,6 +168,25 @@ async fn a_failed_flush_is_an_error_the_caller_can_see() {
     );
 }
 
+/// A flush that errored may still have reached the provider, so its bytes are
+/// marked unconfirmed and kept; one with nothing to send marks nothing.
+#[tokio::test]
+async fn a_failed_flush_marks_the_bytes_it_may_have_sent_as_unconfirmed() {
+    let mut sink = RecordingSink {
+        fail: true,
+        ..RecordingSink::default()
+    };
+    let mut media = CandidateMedia::new();
+    media.audio_bytes.extend_from_slice(&[1, 2]);
+    assert!(flush_candidate_audio(&mut sink, &mut media).await.is_err());
+    assert!(media.audio_unconfirmed);
+    assert_eq!(media.audio_bytes, [1, 2]);
+
+    let mut empty = CandidateMedia::new();
+    assert!(flush_candidate_audio(&mut sink, &mut empty).await.is_ok());
+    assert!(!empty.audio_unconfirmed);
+}
+
 /// Bytes a socket refused with an error are still held, and a later flush on
 /// another sink sends them. This pins the retention after a reported failure,
 /// not delivery of everything said during a gap, and nothing about a write the

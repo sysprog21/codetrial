@@ -281,6 +281,12 @@ impl GeminiLiveSession {
         self.reader = None;
     }
 
+    /// Makes this socket look `age` old, which a test cannot wait for.
+    #[cfg(test)]
+    pub(crate) fn age_for_test(&mut self, age: std::time::Duration) {
+        self.opened_at = std::time::Instant::now() - age;
+    }
+
     #[cfg(test)]
     pub(crate) fn inspect_reader_for_test(&self) -> Option<LiveReaderInspection> {
         self.reader.as_ref().map(|reader| LiveReaderInspection {
@@ -1981,13 +1987,19 @@ async fn open_live_session_redacted_at(
                 // wait is counted apart from the idle limit above, which only
                 // covers the read: a reader parked here is not idle.
                 counts.received();
+
+                // Sampled before the send: the consumer can only shrink the
+                // queue, so sampling afterwards could miss the send that filled
+                // it. A drain in between can make this one high.
+                let held = GEMINI_EVENT_QUEUE - sender.capacity();
                 match sender.try_send((received_at, event)) {
-                    Ok(()) => {}
+                    Ok(()) => counts.queued(held + 1),
                     Err(TrySendError::Closed(_)) => {
                         counts.end(ReaderEnd::ReceiverClosed);
                         return;
                     }
                     Err(TrySendError::Full(item)) => {
+                        counts.queued(GEMINI_EVENT_QUEUE);
                         let waiting = counts.block();
                         let sent = sender.send(item).await;
                         drop(waiting);
@@ -1997,7 +2009,6 @@ async fn open_live_session_redacted_at(
                         }
                     }
                 }
-                counts.queued(GEMINI_EVENT_QUEUE - sender.capacity());
             }
         }
     });

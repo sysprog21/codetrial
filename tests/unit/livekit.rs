@@ -3227,6 +3227,46 @@ async fn resumed_speech_handoff_sends_only_the_note_and_names_the_owed_request()
     assert_eq!(state.code_shown, "const seen = null;");
 }
 
+/// A reply the hold dropped or a replaced socket owed is still owed when the
+/// candidate resumes speaking, so the note names it, unless the interviewer is
+/// silenced, in which case the hold's own release pays it.
+#[tokio::test]
+async fn a_speech_handoff_names_the_reply_debt_the_hold_left() {
+    for (silenced, names_debt) in [(false, true), (true, false)] {
+        let (mut gemini, server) = fake_recording_socket(None, 1).await;
+        let mut state = RuntimeState {
+            thinking_unheard_reply: true,
+            owed_reply_on_resume: Some(Some("[SYSTEM EVENT] Answer the question.".into())),
+            ..RuntimeState::default()
+        };
+        if silenced {
+            state.thinking_hold = crate::agent::ThinkingHold::Held {
+                since: Instant::now(),
+            };
+        }
+        session::send_listening_handoff(
+            &mut gemini,
+            &mut state,
+            &session::SpeechHandoff {
+                checkpoint_after: Instant::now(),
+                discarded: 0,
+                transcript_fragments: vec!["Does sorting".into()],
+            },
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+        let messages = server.await.unwrap();
+        let body = sent_text(&messages[0]);
+        assert_eq!(
+            body.contains("Answer the question."),
+            names_debt,
+            "silenced={silenced}: {body}"
+        );
+    }
+}
+
 /// A completed `clientContent` turn interrupts the provider's generation, so a
 /// timed request made while a reply is still being generated goes as realtime
 /// text, answered after it; the clock stays non-generating context. Once the
