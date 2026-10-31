@@ -103,12 +103,18 @@ impl Ingress {
         }
     }
 
+    /// Trimming drops from the front at most once per frame held, so a
+    /// condition that could never become false ends with the queue empty
+    /// instead of spinning.
     fn expire(&mut self, now: Instant) {
-        while self
-            .frames
-            .front()
-            .is_some_and(|(at, _)| now.saturating_duration_since(*at) >= INGRESS_AGE)
-        {
+        for _ in 0..self.frames.len() {
+            let expired = self
+                .frames
+                .front()
+                .is_some_and(|(at, _)| now.saturating_duration_since(*at) >= INGRESS_AGE);
+            if !expired {
+                break;
+            }
             self.discard_front();
         }
     }
@@ -123,7 +129,10 @@ impl Ingress {
             self.dropped_bytes = self.dropped_bytes.saturating_add(bytes);
             return;
         }
-        while self.frames.len() >= INGRESS_FRAMES || self.bytes + bytes > INGRESS_BYTES {
+        for _ in 0..self.frames.len() {
+            if self.frames.len() < INGRESS_FRAMES && self.bytes + bytes <= INGRESS_BYTES {
+                break;
+            }
             self.discard_front();
         }
         self.bytes += bytes;
@@ -153,7 +162,10 @@ impl Ingress {
         {
             return;
         }
-        while self.frames.len() >= INGRESS_FRAMES {
+        for _ in 0..self.frames.len() {
+            if self.frames.len() < INGRESS_FRAMES {
+                break;
+            }
             self.discard_front();
         }
         self.frames.push_back((now, CandidateInput::Yield));
@@ -261,8 +273,6 @@ impl<'r, 'c, 'i> Driver<'r, 'c, 'i> {
             self.revision = self.revision.saturating_add(1);
             return;
         }
-        let code_revision = self.context.state.evidence_ledger.code.revision;
-        let language = self.context.state.language.clone();
         let held_debt = self.context.state.owed_reply_on_resume.clone();
         let result = packets::reduce_recovery_packet(
             self.room,
@@ -274,10 +284,7 @@ impl<'r, 'c, 'i> Driver<'r, 'c, 'i> {
         if result.thinking_changed == Some(true) && self.last_action_toggle {
             self.context.state.owed_reply_on_resume = held_debt.or(Some(None));
         }
-        if result != crate::agent::DataEventResult::default()
-            || code_revision != self.context.state.evidence_ledger.code.revision
-            || language != self.context.state.language
-        {
+        if result != crate::agent::DataEventResult::default() {
             self.revision = self.revision.saturating_add(1);
         }
         if result.yield_turn || result.thinking_changed.is_some() {

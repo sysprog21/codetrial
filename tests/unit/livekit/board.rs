@@ -392,9 +392,13 @@ async fn live_session() -> (
             }
         }
     });
-    let session = crate::gemini::open_live_session_at(&format!("ws://{address}"), &boot, None)
-        .await
-        .unwrap();
+    let session = tokio::time::timeout(
+        Duration::from_secs(2),
+        crate::gemini::open_live_session_at(&format!("ws://{address}"), &boot, None),
+    )
+    .await
+    .expect("the fixture provider must complete setup")
+    .unwrap();
     (session, received)
 }
 

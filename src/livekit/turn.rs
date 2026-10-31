@@ -21,6 +21,8 @@ use crate::agent::{
     proactive_review, silence_nudge, timing_decision, unreviewed_from, with_timer,
 };
 
+mod trailing;
+
 /// How long the room has to be quiet before a pause is worth reading into.
 ///
 /// Well under `SILENCE_THRESHOLD_S`, and that is the point: this is meant to
@@ -1497,42 +1499,6 @@ impl RuntimeActivity {
         if !self.is_late_transcript(now) {
             self.latency.transcript(now);
         }
-    }
-
-    /// An output transcript with nothing generating and nothing owed, just
-    /// after a completion: the provider can send a generation's transcription
-    /// after its `TurnComplete`, and no completion follows it. Counting it as
-    /// output would leave `generating` set for good, and a replacement would
-    /// ask again for a reply that had already finished.
-    ///
-    /// Only with nothing owed, and the candidate silent since the completion.
-    /// Nothing tells the transcription from the next generation's first words,
-    /// so with a reply owed, or speech heard after the completion (which
-    /// `note_candidate_finished` leaves unarmed inside the window), it is taken
-    /// as the answer it may be, as before, rather than dropped on a guess; a
-    /// generation that really began is marked generating by its audio, text
-    /// or tool call, and is still owed when it is cut off.
-    pub(super) fn is_trailing_transcript(&self, now: Instant) -> bool {
-        !self.generating
-            && !self.owes_reply()
-            && self.is_late_transcript(now)
-            && self
-                .turn_completed_at
-                .is_some_and(|completed| self.last_user_speech <= completed)
-    }
-
-    /// What `note_output` settles that a trailing transcript still settles:
-    /// the turn it trails was answered, so a continuation's fallback and a
-    /// handoff's wait for a reply are over. It starts no generation.
-    pub(super) fn note_trailing_transcript(&mut self) {
-        self.drop_handoff_reply();
-        self.socket.thinking_reply_fallback = None;
-        self.tool_response_at = None;
-    }
-
-    fn is_late_transcript(&self, now: Instant) -> bool {
-        self.turn_completed_at
-            .is_some_and(|at| now.saturating_duration_since(at) < LATE_TRANSCRIPT_GRACE)
     }
 
     /// Gemini has transcribed something the candidate said, so they have
