@@ -239,7 +239,7 @@ async fn live_fixture(
             }
         }
     });
-    let gemini = crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None)
+    let gemini = crate::livekit::tests::fixture_session_at(&url, &keys, &boot, None)
         .await
         .unwrap();
     (gemini, received)

@@ -11,6 +11,24 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+/// Episodes remembered on one obligation. A reply that outlives more
+/// replacements than this still reports the true count in
+/// `obligation_episode_count`.
+const EPISODES_KEPT: usize = 8;
+
+/// Spacing of `interview clock:` samples on the assessment clock.
+const CLOCK_SAMPLE_MS: u64 = 60_000;
+
+/// Spacing of `runtime tasks:` samples on the assessment clock, the same
+/// cadence as the harness's process resource samples.
+const TASK_SAMPLE_MS: u64 = 30_000;
+
+/// The microphone dequeue gaps counted as stalls, in `mic_gap_over_*`. A gap
+/// is counted when it is strictly longer than the threshold.
+const MIC_GAP_OVER_1S: Duration = Duration::from_secs(1);
+const MIC_GAP_OVER_10S: Duration = Duration::from_secs(10);
+const MIC_GAP_OVER_30S: Duration = Duration::from_secs(30);
+
 /// Version 1 never shipped; 2 keys turns by process and interview session, not
 /// by socket, so a reply that survives a socket replacement stays one turn.
 const SCHEMA_VERSION: u64 = 2;
@@ -98,6 +116,37 @@ struct Trace {
     tool_batches: u64,
     tool_handler_ms: u64,
     audio_accepted: bool,
+    /// The first audio the handler queued for native capture, and the socket
+    /// that produced it.
+    first_accept: Option<(Instant, u64)>,
+    /// Replacement episodes that began while this reply was owed, oldest first
+    /// and bounded; `episode_count` keeps the true number.
+    episodes: Vec<u64>,
+    episode_count: u64,
+}
+
+/// How an owed reply ended. `Open` is every record before its terminal one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Outcome {
+    Open,
+    /// Native capture accepted audio for it and its turn then ended.
+    Answered,
+    /// Something local cut it off, or a barge-in ended its generation, before
+    /// any audio was captured.
+    Superseded,
+    /// Its turn completed with no captured audio.
+    Ended,
+}
+
+impl Outcome {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Answered => "answered",
+            Self::Superseded => "superseded",
+            Self::Ended => "ended",
+        }
+    }
 }
 
 /// Input for the next reply, held while the current one is still under way.
@@ -115,8 +164,65 @@ struct Pending {
     yielded: Option<Instant>,
 }
 
+/// The gap between consecutive microphone-frame dequeues in one interview: the
+/// longest, and how many exceeded 1, 10 and 30 seconds. Counters only: no
+/// frame, time series or content is kept.
+///
+/// A gap is measured between two frames dequeued from one subscribed audio
+/// stream, on the monotonic clock. The SDK keeps delivering (silence) frames
+/// while a track is published, so a long gap there means the consumer, not the
+/// candidate, was not dequeuing. The span between two streams (a track that
+/// was unsubscribed and a later one) and the span after a stream ended are not
+/// dequeue stalls and are never counted: [`Self::stream_broken`] forgets the
+/// last dequeue. It belongs to the interview, so a socket replacement does not
+/// reset it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct MicGaps {
+    last: Option<Instant>,
+    /// Whether any gap has been measured; before that nothing is known.
+    measured: bool,
+    max: Duration,
+    over_1s: u64,
+    over_10s: u64,
+    over_30s: u64,
+}
+
+impl MicGaps {
+    pub(super) fn dequeued(&mut self, now: Instant) {
+        if let Some(previous) = self.last.replace(now) {
+            let gap = now.saturating_duration_since(previous);
+            self.measured = true;
+            self.max = self.max.max(gap);
+            self.over_1s += u64::from(gap > MIC_GAP_OVER_1S);
+            self.over_10s += u64::from(gap > MIC_GAP_OVER_10S);
+            self.over_30s += u64::from(gap > MIC_GAP_OVER_30S);
+        }
+    }
+
+    pub(super) fn stream_broken(&mut self) {
+        self.last = None;
+    }
+
+    /// The four fields, `none` before any gap was measured (unknown, never
+    /// zero).
+    pub(super) fn fields(&self) -> String {
+        if !self.measured {
+            return "mic_gap_max_ms=none mic_gap_over_1s=none mic_gap_over_10s=none mic_gap_over_30s=none".to_string();
+        }
+        format!(
+            "mic_gap_max_ms={} mic_gap_over_1s={} mic_gap_over_10s={} mic_gap_over_30s={}",
+            crate::agent::saturating_ms(self.max),
+            self.over_1s,
+            self.over_10s,
+            self.over_30s
+        )
+    }
+}
+
 #[derive(Default)]
 pub(super) struct ReplyLatency {
+    /// The microphone dequeue gaps of this interview.
+    mic: MicGaps,
     room: String,
     session: u64,
     socket: u64,
@@ -124,6 +230,22 @@ pub(super) struct ReplyLatency {
     /// separates from the rest of the wait before END.
     silence_window_ms: u32,
     sequence: u64,
+    /// Replacement episodes begun in this interview session, one per attempt to
+    /// bring up a new socket whatever its result.
+    episodes: u64,
+    /// Sockets installed by a replacement.
+    replacements: u64,
+    /// `GoAway` advisories received since a replacement last took the count.
+    advisories: u32,
+    /// The interview's start, the one clock every numeric `interview_ms` reads.
+    anchor: Option<Instant>,
+    /// Wall-clock milliseconds at the anchor, `None` if the system clock reads
+    /// before the epoch.
+    start_unix_ms: Option<u64>,
+    /// The last whole minute a clock sample was logged for.
+    sampled: u64,
+    /// The last whole 30 second period a task sample was logged for.
+    task_sampled: u64,
     clock: Option<Instant>,
     voice_ended: bool,
     voice_started: bool,
@@ -227,8 +349,154 @@ impl ReplyLatency {
         self.silence_window_ms = silence_window_ms;
     }
 
+    /// A microphone frame was dequeued at `now`.
+    pub(super) fn mic_dequeued(&mut self, now: Instant) {
+        self.mic.dequeued(now);
+    }
+
+    /// The microphone stream ended or a new one began: no gap spans it.
+    pub(super) fn mic_stream_broken(&mut self) {
+        self.mic.stream_broken();
+    }
+
+    #[cfg(test)]
+    pub(super) fn mic_gaps(&self) -> MicGaps {
+        self.mic
+    }
+
+    /// The once-per-interview `mic gaps:` line, written as the interview ends
+    /// with the same fields the clock samples carry.
+    pub(super) fn mic_summary(&self, now: Instant) -> Option<String> {
+        let elapsed = u64::try_from(self.interview_ms(now)?).ok()?;
+        Some(format!(
+            "mic gaps: pid={} session={} elapsed_ms={elapsed} {} room={}",
+            std::process::id(),
+            self.session,
+            self.mic.fields(),
+            self.room
+        ))
+    }
+
     pub(super) fn set_socket(&mut self, socket: u64) {
         self.socket = socket;
+    }
+
+    /// Milliseconds on the assessment clock, `None` before it is anchored.
+    pub(super) fn interview_ms(&self, now: Instant) -> Option<i64> {
+        self.anchor.map(|anchor| offset_ms(now, anchor))
+    }
+
+    /// Starts a replacement episode and ties it to the reply still owed, which
+    /// keeps its origin, start and number across the swap. Returns the episode
+    /// number and that reply's obligation, if any.
+    pub(super) fn begin_episode(&mut self) -> (u64, Option<u64>) {
+        self.episodes += 1;
+        let episode = self.episodes;
+        let obligation = self.trace.as_mut().and_then(|trace| {
+            // Audio already accepted means the debt is paid: the swap that
+            // follows ends an answered reply and owes it nothing.
+            if trace.origin == Origin::ProviderEvent || trace.audio_accepted {
+                return None;
+            }
+            trace.episode_count += 1;
+            if trace.episodes.len() == EPISODES_KEPT {
+                trace.episodes.remove(0);
+            }
+            trace.episodes.push(episode);
+            Some(trace.turn)
+        });
+        (episode, obligation)
+    }
+
+    /// Anchors the clock and returns the line that says where it started.
+    ///
+    /// `start_unix_ms` is the wall clock at the interview's start, repeated on
+    /// every sample so a log cut short or joined from two files still knows it.
+    pub(super) fn anchor(&mut self, started: Instant) -> String {
+        self.anchor = Some(started);
+        self.start_unix_ms = std::time::SystemTime::now()
+            .checked_sub(started.elapsed())
+            .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(crate::agent::saturating_ms);
+        self.sampled = 0;
+        self.task_sampled = 0;
+        self.clock_line(0, 0)
+    }
+
+    /// One bounded elapsed sample per whole minute of the assessment clock, at
+    /// most. A tick late by several minutes yields one sample, not a burst.
+    pub(super) fn clock_sample(&mut self, now: Instant) -> Option<String> {
+        let elapsed = u64::try_from(self.interview_ms(now)?).ok()?;
+        let minute = elapsed / CLOCK_SAMPLE_MS;
+        if minute <= self.sampled {
+            return None;
+        }
+        self.sampled = minute;
+        Some(self.clock_line(elapsed, minute))
+    }
+
+    /// One `runtime tasks:` sample per whole 30 seconds of the assessment
+    /// clock, at most. `alive` is the runtime's own count of tasks spawned and
+    /// not yet finished, or `None` where no runtime answers; that is logged as
+    /// `none`, never as zero. On a multithreaded runtime the count is
+    /// approximate, and it does not replace joining a reader task.
+    pub(super) fn task_sample(&mut self, now: Instant, alive: Option<usize>) -> Option<String> {
+        let elapsed = u64::try_from(self.interview_ms(now)?).ok()?;
+        let period = elapsed / TASK_SAMPLE_MS;
+        if period <= self.task_sampled {
+            return None;
+        }
+        self.task_sampled = period;
+        Some(format!(
+            "runtime tasks: pid={} session={} elapsed_ms={elapsed} sample={period} alive_tasks={} room={}",
+            std::process::id(),
+            self.session,
+            opt(alive),
+            self.room
+        ))
+    }
+
+    fn clock_line(&self, elapsed_ms: u64, sample: u64) -> String {
+        format!(
+            "interview clock: pid={} session={} start_unix_ms={} elapsed_ms={elapsed_ms} sample={sample} {} room={}",
+            std::process::id(),
+            self.session,
+            opt(self.start_unix_ms),
+            self.mic.fields(),
+            self.room
+        )
+    }
+
+    /// Counts a `GoAway` advisory and says whether to print it. `held` is
+    /// whether an earlier advisory is still waiting on this socket: only then
+    /// does this one repeat it. The first of a run prints and then each
+    /// doubling, so a server repeating itself cannot flood the log; the raw
+    /// count is kept for [`Self::take_advisories`].
+    pub(super) fn note_advisory(&mut self, held: bool) -> Option<u32> {
+        if !held {
+            self.advisories = 0;
+        }
+        self.advisories = self.advisories.saturating_add(1);
+        self.advisories.is_power_of_two().then_some(self.advisories)
+    }
+
+    /// The raw advisory count the replacement that starts now is spending.
+    pub(super) fn take_advisories(&mut self) -> u32 {
+        std::mem::take(&mut self.advisories)
+    }
+
+    /// Numbers a socket a replacement installed.
+    pub(super) fn installed_replacement(&mut self) -> u64 {
+        self.replacements += 1;
+        self.replacements
+    }
+
+    /// The origin of the reply owed now, for the line that starts an episode.
+    pub(super) fn owed_origin(&self) -> Option<&'static str> {
+        self.trace
+            .as_ref()
+            .filter(|trace| trace.origin != Origin::ProviderEvent && !trace.audio_accepted)
+            .map(|trace| trace.origin.label())
     }
 
     /// A usage report. One that includes tool rounds sums several
@@ -266,6 +534,9 @@ impl ReplyLatency {
             tool_batches: 0,
             tool_handler_ms: 0,
             audio_accepted: false,
+            first_accept: None,
+            episodes: Vec::new(),
+            episode_count: 0,
         })
     }
 
@@ -646,7 +917,7 @@ impl ReplyLatency {
             trace.tool_batches += 1;
             trace.tool_handler_ms = trace.tool_handler_ms.saturating_add(handler_ms);
         }
-        self.record("tool_response", now)
+        self.record("tool_response", now, Outcome::Open)
     }
 
     /// The first accepted audio chunk of this reply, or `None` after it.
@@ -663,7 +934,8 @@ impl ReplyLatency {
         if std::mem::replace(&mut trace.audio_accepted, true) {
             return None;
         }
-        Some(self.record("audio_accepted", now))
+        trace.first_accept = Some((now, self.socket));
+        Some(self.record("audio_accepted", now, Outcome::Open))
     }
 
     pub(super) fn boundary(&mut self, boundary: Boundary, now: Instant) -> Option<Value> {
@@ -688,13 +960,18 @@ impl ReplyLatency {
             // The reply this input is owed now comes from the new socket, and
             // the stall belongs in its total.
             Boundary::SocketReplaced if !accepted => {
-                let mut record = self.record(boundary.label(), now);
+                let mut record = self.record(boundary.label(), now, Outcome::Open);
                 record["continuing"] = true.into();
                 return Some(record);
             }
             _ => {}
         }
-        let mut record = self.record(boundary.label(), now);
+        let outcome = match boundary {
+            _ if accepted => Outcome::Answered,
+            Boundary::TurnComplete => Outcome::Ended,
+            _ => Outcome::Superseded,
+        };
+        let mut record = self.record(boundary.label(), now, outcome);
         if boundary == Boundary::SocketReplaced {
             record["continuing"] = false.into();
         }
@@ -734,9 +1011,10 @@ impl ReplyLatency {
     }
 
     /// Every caller has just made sure a trace exists.
-    fn record(&self, stage: &str, now: Instant) -> Value {
+    fn record(&self, stage: &str, now: Instant, outcome: Outcome) -> Value {
         let trace = self.trace.as_ref().expect("a trace to record");
         let at = |milestone: Option<Instant>| milestone.map(|at| offset_ms(at, trace.start));
+        let owed = trace.origin != Origin::ProviderEvent;
         json!({
             "event": "reply_latency", "version": SCHEMA_VERSION,
             "pid": std::process::id(), "room": self.room,
@@ -757,8 +1035,194 @@ impl ReplyLatency {
             "tool_batches": trace.tool_batches,
             "tool_handler_ms": trace.tool_handler_ms,
             "context_tokens": self.context_tokens,
+            "interview_ms": self.interview_ms(now),
+            "obligation": owed.then_some(trace.turn),
+            "obligation_outcome": owed.then(|| outcome.label()),
+            "owed_start_interview_ms": self.interview_ms(trace.start).filter(|_| owed),
+            "obligation_episodes": if owed { trace.episodes.clone() } else { Vec::new() },
+            "obligation_episode_count": if owed { trace.episode_count } else { 0 },
+            "first_accept_ms": trace.first_accept.map(|(at, _)| offset_ms(at, trace.start)),
+            "first_accept_socket": trace.first_accept.map(|(_, socket)| socket),
         })
     }
+}
+
+/// What identifies one replacement episode on its lines. Episodes are numbered
+/// from 1 in order within one `(pid, room, session)`; two lines of one episode
+/// carry the same `episode`, and the same number from another scope is another
+/// episode.
+pub(super) struct EpisodeStart<'a> {
+    pub(super) room: &'a str,
+    pub(super) session: u64,
+    pub(super) episode: u64,
+    pub(super) trigger: &'a str,
+    pub(super) old_socket: u64,
+    /// The reply owed when the episode began, kept across the swap.
+    pub(super) obligation: Option<u64>,
+    pub(super) obligation_origin: Option<&'a str>,
+    /// Advisories received on the replaced socket, before coalescing.
+    pub(super) advisories: u32,
+    pub(super) interview_ms: Option<i64>,
+}
+
+pub(super) fn opt<T: std::fmt::Display>(value: Option<T>) -> String {
+    value.map_or_else(|| "none".to_string(), |value| value.to_string())
+}
+
+/// `replacement start:` -- logged once as an episode begins, so a log cut
+/// short before its `replacement end:` shows an unresolved episode and not
+/// nothing.
+pub(super) fn episode_start_line(start: &EpisodeStart<'_>) -> String {
+    format!(
+        "replacement start: pid={} session={} episode={} trigger={} old_socket={} obligation={} obligation_origin={} advisories={} interview_ms={} room={}",
+        std::process::id(),
+        start.session,
+        start.episode,
+        start.trigger,
+        start.old_socket,
+        opt(start.obligation),
+        start.obligation_origin.unwrap_or("none"),
+        start.advisories,
+        opt(start.interview_ms),
+        start.room
+    )
+}
+
+/// How an episode ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EpisodeResult {
+    /// The new socket was installed.
+    Installed,
+    /// Setup was tried and no socket was installed.
+    Failed,
+    /// No setup was tried: the restart budget or billing refused first.
+    NoSetup,
+    /// A terminal intent (end, deadline, absence, room closed) took over.
+    Cancelled,
+}
+
+impl EpisodeResult {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Installed => "installed",
+            Self::Failed => "failed",
+            Self::NoSetup => "no_setup",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+/// Milestones of one episode, each in milliseconds from the moment the close
+/// was handled (the same start as `rotation_gap_ms`). They are separate on
+/// purpose: `connected_ms` ends when the provider finished setup, and the
+/// reconnect notice before it, the opener after it and the installation each
+/// have their own, so notice delay is not read as provider setup.
+#[derive(Default, Clone, Copy)]
+pub(super) struct EpisodeMilestones {
+    /// The "reconnecting" notice returned.
+    pub(super) notice_ms: Option<u64>,
+    /// Physical setup took this long: from opening the replacement connection
+    /// to its setup completing. The notice and the old socket's close are
+    /// outside it.
+    pub(super) setup_ms: Option<u64>,
+    /// Setup completed and was counted; equal to `rotation_gap_ms`.
+    pub(super) connected_ms: Option<u64>,
+    /// The briefing, board resend and queued work were written and the opener
+    /// returned.
+    pub(super) opener_ms: Option<u64>,
+    /// The new socket was installed.
+    pub(super) install_ms: Option<u64>,
+}
+
+pub(super) struct EpisodeEnd<'a> {
+    pub(super) start: EpisodeStart<'a>,
+    pub(super) result: EpisodeResult,
+    /// The socket number the installed replacement has.
+    pub(super) new_socket: Option<u64>,
+    pub(super) replacement: Option<u64>,
+    /// The consecutive restart attempt the episode reached.
+    pub(super) attempt: usize,
+    pub(super) resume_tried: bool,
+    pub(super) milestones: EpisodeMilestones,
+    /// The assessment clock when the episode ended.
+    pub(super) interview_ms: Option<i64>,
+}
+
+/// `replacement end:` -- the one terminal line of an episode.
+pub(super) fn episode_end_line(end: &EpisodeEnd<'_>) -> String {
+    let m = &end.milestones;
+    format!(
+        "replacement end: pid={} session={} episode={} result={} trigger={} old_socket={} new_socket={} replacement={} attempt={} resume_tried={} obligation={} notice_ms={} setup_ms={} connected_ms={} opener_ms={} install_ms={} interview_ms={} room={}",
+        std::process::id(),
+        end.start.session,
+        end.start.episode,
+        end.result.label(),
+        end.start.trigger,
+        end.start.old_socket,
+        opt(end.new_socket),
+        opt(end.replacement),
+        end.attempt,
+        end.resume_tried,
+        opt(end.start.obligation),
+        opt(m.notice_ms),
+        opt(m.setup_ms),
+        opt(m.connected_ms),
+        opt(m.opener_ms),
+        opt(m.install_ms),
+        opt(end.interview_ms),
+        end.start.room
+    )
+}
+
+/// Why a socket's pressure summary was written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PressureEnd {
+    /// The socket was replaced by a new one.
+    Replacement,
+    /// The interview ended with this socket installed.
+    Terminal,
+    /// A socket set up for a replacement was dropped before it was installed.
+    Discarded,
+}
+
+impl PressureEnd {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Replacement => "replacement",
+            Self::Terminal => "terminal",
+            Self::Discarded => "discarded",
+        }
+    }
+}
+
+/// `socket_pressure` -- the one summary of how full a socket's event channel
+/// got and how long its reader waited for a slot. Written when the socket is
+/// let go, never per frame, and made only of counts and durations. The wait is
+/// time blocked on the channel; a reader that ended on the 45 second read
+/// limit says so in `reader_end` and has no blocked time for it.
+pub(super) fn pressure_record(
+    room: &str,
+    session: u64,
+    socket: u64,
+    end: PressureEnd,
+    interview_ms: Option<i64>,
+    pressure: &crate::gemini::SocketPressure,
+) -> Value {
+    let ms = crate::agent::saturating_ms;
+    json!({
+        "event": "socket_pressure", "version": SCHEMA_VERSION,
+        "pid": std::process::id(), "room": room,
+        "session": session, "socket": socket,
+        "end": end.label(), "reader_end": pressure.end.label(),
+        "interview_ms": interview_ms,
+        "capacity": pressure.capacity,
+        "occupancy_high_water": pressure.high_water,
+        "blocked_sends": pressure.blocked_sends,
+        "blocked_ms_total": ms(pressure.blocked_total),
+        "blocked_ms_max": ms(pressure.blocked_max),
+        "received": pressure.received,
+        "consumed": pressure.consumed,
+    })
 }
 
 #[cfg(test)]

@@ -4,46 +4,13 @@
 //!
 //! Still the largest module in the tree, so here is its shape.
 //!
-//! Seven regions are out. `media` holds the buffers, pumps and codecs that
-//! carry audio and video in both directions, and `turn` holds the state a turn
-//! is made of, which explains what stayed behind with the loop. `rooms` is the
-//! only region that talks to LiveKit over HTTP rather than over the room's
-//! event stream, `report` is the packet an ending interview produces, and
-//! `session` is everything that hangs off one inbound Gemini event or one
-//! outbound text: the handlers, the tool dispatch and the turn procedures that
-//! end a turn. `packets` is what the browser sends, from the Thinking button's
-//! hold to the ending an `end_interview` control writes the report from, and
-//! `transcripts` is the writer that sends the transcript to the page.
-//!
-//! What is left is the room and the loop that drives it:
-//!
-//! - `run_room` and `join_room`: the lifecycle, and the only entry point.
-//! - Session setup and restart (`take_restart_attempt` through `open_session`):
-//!   what runs once before the loop, and what the loop calls when the Gemini
-//!   socket dies under it.
-//! - The loop's three sources, each drained by a handler elsewhere:
-//!   `handle_data_packet` in `packets`, `handle_gemini_event` in `session`,
-//!   `handle_media_event` in `media`.
-//!
-//! Session setup is the region that looks separable and is not, which is worth
-//! writing down so the next reader does not spend the afternoon finding out.
-//! `open_session` and `replace_gemini_session` name `InterviewContext`,
-//! `GeminiEventContext`, `OutputAudio`, `CandidateMedia` and `TurnState`, and
-//! call `join_room`, `close_turns`, `cut_off_turn`, `set_agent_state`,
-//! `publish_interviewer_state` and `candidate_bootstrap`. Moving it out moves
-//! the loop's own vocabulary with it, and what is gained is a file boundary
-//! rather than a seam.
-//!
-//! `session` is the one region that came out naming more of this file than the
-//! four the others each named, and the only one this file names back: seven
-//! each way, in the two `use` blocks below. It earns the boundary a different
-//! way. The loop reaches into it at exactly one point, `GeminiEventContext`,
-//! which is the borrow handed over for the length of one event and handed
-//! straight back; the names on both lists are what that one handover needs,
-//! not fourteen separate threads between the two halves. It is a file boundary
-//! rather than a layer, and saying so is the point of this paragraph.
-//! `packets` crosses at the same handover, one packet at a time, and reaches
-//! back through `super` for what the ending needs.
+//! `media` owns buffers and codecs, `turn` owns turn state, `rooms` talks to
+//! the management API, and `report` builds the ending packet. `session` handles
+//! Gemini events and outbound inputs; `packets` reduces browser controls and
+//! dispatches their effects; `transcripts` queues publication to the page.
+//! `recovery` drives owned transport work while continuing to reduce room
+//! events against the same interview state. This file owns the room lifecycle,
+//! the main select loop, and the policy deciding when recovery starts.
 
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -91,6 +58,42 @@ const CANDIDATE_JOIN_LIMIT: Duration = Duration::from_secs(300);
 /// interview's full deadline.
 const CANDIDATE_ABSENCE_LIMIT: Duration = Duration::from_secs(90);
 
+/// Whole seconds, rounded up, because LiveKit takes integers and a timeout
+/// rounded down could undercut the grace it is derived from.
+fn ceil_secs(duration: Duration) -> u32 {
+    let whole = duration.as_secs() + u64::from(duration.subsec_nanos() > 0);
+    u32::try_from(whole).unwrap_or(u32::MAX)
+}
+
+/// What the room's departure timeout adds to the absence limit and one watch
+/// tick. LiveKit starts its clock when it removes the candidate and the agent
+/// starts its own when it hears of it, then checks only on a tick, so without
+/// slack the room could close just before the agent ends the interview.
+const ROOM_DEPARTURE_MARGIN: Duration = Duration::from_secs(8);
+
+/// How long LiveKit keeps an interview room open after the last candidate
+/// leaves: the absence limit plus one watch tick plus a margin, so the agent's
+/// own check fires and ends the interview before the room is closed under it.
+/// LiveKit's default of 20 seconds closed the room long before the limit.
+fn interview_room_departure_timeout_secs() -> u32 {
+    ceil_secs(
+        CANDIDATE_ABSENCE_LIMIT + Duration::from_secs_f64(WATCH_TICK_S) + ROOM_DEPARTURE_MARGIN,
+    )
+}
+
+/// What the room's empty timeout adds to the agent's wait for its candidate.
+/// The room is created in `/api/token`, before dispatch, agent start and the
+/// agent's connection, and LiveKit counts an agent-only room as empty, so a
+/// timeout equal to [`CANDIDATE_JOIN_LIMIT`] could close the room just before
+/// the agent's own no-show deadline and turn that outcome into `RoomClosed`.
+const ROOM_EMPTY_MARGIN: Duration = Duration::from_secs(30);
+
+/// How long LiveKit keeps a room nobody joined: the agent's own wait for its
+/// candidate plus a margin, so the agent's no-show path decides first.
+fn interview_room_empty_timeout_secs() -> u32 {
+    ceil_secs(CANDIDATE_JOIN_LIMIT + ROOM_EMPTY_MARGIN)
+}
+
 use crate::gemini::{
     GeminiEvent, GeminiKeys, GeminiLiveSession, generate_interim_review_with_keys,
     generate_phase_judgment_with_keys, live_session_with_keys,
@@ -103,6 +106,9 @@ mod floor;
 mod latency;
 mod media;
 mod packets;
+#[cfg(test)]
+mod probe;
+mod recovery;
 mod report;
 mod room_link;
 mod room_service;
@@ -120,8 +126,8 @@ pub use session::execute_tool_call;
 use session::{
     ContinuityScope, GeminiEventContext, TestRunLine, TurnCause, close_turns, cut_off_turn,
     handle_gemini_event, log_clock, prompt_fields, prompt_line, publish_control,
-    send_model_context, send_model_context_scoped, send_model_text, send_model_text_scoped,
-    send_wrap_up_and_wait, set_agent_state,
+    send_model_context, send_model_context_scoped, send_model_text, send_wrap_up_and_wait,
+    set_agent_state,
 };
 
 use board::{Board, MAX_BOARD_BYTES, handle_board_event};
@@ -131,6 +137,8 @@ use rooms::{evict_duplicate_agent, isolate_local_agent};
 // Re-exported rather than merely used: `web::setup` calls this to check the
 // credentials a Setup form was given, and it names it through this module.
 pub(crate) use rooms::validate_livekit_credentials;
+
+pub(crate) use room_service::create_interview_room;
 
 // The test module reaches every item of these two through `use super::*`, so
 // the hub keeps the globs instead of a list that grows with each test.
@@ -221,6 +229,11 @@ pub(super) const REPORT_TIMEOUT: Duration = Duration::from_secs(125);
 #[derive(Debug, Default)]
 struct CandidatePresence {
     left_at: Option<Instant>,
+
+    // Recovery tests advance this std-clock observation after entering a real
+    // pending operation. It does not simulate SDK participant or tick delivery.
+    #[cfg(test)]
+    test_now: Option<Arc<std::sync::Mutex<Instant>>>,
 }
 
 impl CandidatePresence {
@@ -234,6 +247,11 @@ impl CandidatePresence {
 
     /// Present, or absent for less than the grace, both mean carry on.
     fn gave_up(&self, now: Instant) -> bool {
+        #[cfg(test)]
+        let now = self
+            .test_now
+            .as_ref()
+            .map_or(now, |clock| *clock.lock().unwrap());
         self.deadline(CANDIDATE_ABSENCE_LIMIT)
             .is_some_and(|deadline| now >= deadline)
     }
@@ -269,15 +287,12 @@ fn interview_packet<'a>(
 /// Decides whether the interview may be put back on a fresh Gemini socket, and
 /// spends one of the budgeted attempts when it may.
 ///
-/// This is the half of restarting that can be judged. `cargo test` cannot open
-/// a Gemini session, but every rule about when not to try one is arithmetic
-/// over a counter and a clock, so it lives here where tests can reach it rather
-/// than inside the reconnect it authorises.
+/// The failure budget must be testable even when no replacement can open, so
+/// its counter and age policy stays independent of socket I/O.
 ///
 /// The budget counts restarts, not resumptions, and says nothing about whether
-/// a handle exists. Missing one costs the conversation so far, not the
-/// interview, so it is the caller's choice between two kinds of restart rather
-/// than a reason to stop.
+/// a handle exists. Without one the caller rebuilds from bounded local state;
+/// the same budget guards both recovery paths rather than blocking fallback.
 ///
 /// The counter resets for a socket that lived a while, because the ceiling is
 /// there to stop a socket that fails instantly from spinning, and a socket that
@@ -510,12 +525,30 @@ fn runtime_activity(config: &AgentConfig, started_at: Instant, session_id: u64) 
 async fn open_cold_session(
     interview: InterviewContext<'_>,
     restarts: &mut usize,
-    room: Option<&RoomLink>,
 ) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
-    retry_cold_open(
+    let mut ready = None;
+    open_cold_session_into(interview, restarts, None, &mut ready).await?;
+    Ok(ready.take().expect("successful open owns its session"))
+}
+
+async fn open_cold_session_into(
+    interview: InterviewContext<'_>,
+    restarts: &mut usize,
+    room: Option<&RoomLink>,
+    ready: &mut Option<GeminiLiveSession>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    retry_cold_open_into(
         interview.keys,
         restarts,
-        || live_session_with_keys(interview.keys, interview.boot, None),
+        ready,
+        || async {
+            let opened = interview.open_live(None).await;
+            #[cfg(test)]
+            if let (Some(room), Ok(session)) = (room, &opened) {
+                room.observe_live_reader(session);
+            }
+            opened
+        },
         async |notice| {
             let Some(room) = room else { return };
             match tokio::time::timeout(
@@ -529,21 +562,56 @@ async fn open_cold_session(
                 Err(_) => eprintln!("publishing reconnect wait timed out; retrying without it"),
             }
         },
+        |until| {
+            let sleep = tokio::time::sleep_until(until);
+            #[cfg(test)]
+            let sleep = room_link::observe_retry_backoff(room, until, sleep);
+            sleep
+        },
     )
     .await
 }
 
-/// The loop of `open_cold_session`, with the opener passed in so tests can
-/// point it at a local socket.
+/// Test convenience wrapper for the caller-owned cold-open retry loop.
+#[cfg(test)]
 async fn retry_cold_open<F, Fut, N, NFut>(
     keys: &GeminiKeys,
     restarts: &mut usize,
-    mut open: F,
-    mut notify: N,
+    open: F,
+    notify: N,
 ) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>>
 where
     N: FnMut(serde_json::Value) -> NFut,
     NFut: Future<Output = ()>,
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>>>,
+{
+    let mut ready = None;
+    retry_cold_open_into(
+        keys,
+        restarts,
+        &mut ready,
+        open,
+        notify,
+        tokio::time::sleep_until,
+    )
+    .await?;
+    Ok(ready.take().expect("successful open owns its session"))
+}
+
+async fn retry_cold_open_into<F, Fut, N, NFut, B, BFut>(
+    keys: &GeminiKeys,
+    restarts: &mut usize,
+    ready: &mut Option<GeminiLiveSession>,
+    mut open: F,
+    mut notify: N,
+    mut backoff: B,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    N: FnMut(serde_json::Value) -> NFut,
+    NFut: Future<Output = ()>,
+    B: FnMut(tokio::time::Instant) -> BFut,
+    BFut: Future<Output = ()>,
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>>>,
 {
@@ -553,13 +621,24 @@ where
     let mut attempt_notice = None;
     loop {
         let announce = attempt_notice.take().map(&mut notify);
-        let (opened, ()) = tokio::join!(open(), async {
+        let opening = async {
+            match open().await {
+                Ok(session) => {
+                    // The caller owns a successful setup before another await,
+                    // even while its concurrent room notice remains pending.
+                    *ready = Some(session);
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
+        };
+        let (opened, ()) = tokio::join!(opening, async {
             if let Some(announce) = announce {
                 announce.await;
             }
         });
         let (reason, until) = match opened {
-            Ok(session) => return Ok(session),
+            Ok(()) => return Ok(()),
 
             // Every key is out on quota. A sole key would ride out the same
             // rate limit under this budget, so a rotation waits too.
@@ -600,7 +679,7 @@ where
         if !wait.is_zero() {
             notify(reconnect_wait(reason, Some(wait))).await;
         }
-        tokio::time::sleep_until(until).await;
+        backoff(until).await;
 
         // The estimate has run out, but the attempt it led to can take a
         // connect and a setup timeout, so the page drops the number rather than
@@ -682,280 +761,16 @@ async fn replace_gemini_session(
     trigger: Trigger,
     speech_handoff: Option<session::SpeechHandoff>,
 ) -> Result<ControlFlow<()>, Box<dyn std::error::Error + Send + Sync>> {
-    // The gap the candidate sat through starts when the close is handled, not
-    // when the new socket is asked for: the budget checks and the resume
-    // attempt that fails before a cold open are part of it.
-    let rotation_started = Instant::now();
-
-    // Neither a resume nor a cold open on the same key can get past a project
-    // that cannot pay, so the budget is not spent learning that twice more.
-    session::finish_turn_timing(
-        room.name(),
-        context.activity,
-        &log_clock(context.state),
-        timing::TimingOutcome::Replaced,
-        &mut std::io::stderr().lock(),
-    );
-    if context.gemini.closed_for_billing(interview.keys) {
-        context.activity.live_exit = LiveOutcome::Billing;
-        eprintln!(
-            "Gemini closed the session because the project cannot pay; ending interview room={}",
-            interview.boot.room_name
-        );
-        leave_room(room).await;
-        return Ok(ControlFlow::Break(()));
-    }
-
-    // Reading the handle also records closing-key failures for cold opens and
-    // reporting, even when the handle or the restart budget cannot be used.
-    let handle = context.gemini.recovery_handle(interview.keys);
-    let age = replaced_socket_age(
-        context.gemini.age(),
-        trigger == Trigger::Watchdog,
-        context.activity,
-    );
-    if !take_restart_attempt(&mut loops.restarts, age) {
-        context.activity.live_exit = LiveOutcome::GeminiUnreachable;
-        eprintln!(
-            "Gemini closed {} sockets in a row without one of them lasting; ending interview with a report room={}",
-            loops.restarts, interview.boot.room_name
-        );
-        return end_without_interviewer(room, context, interview, loops).await;
-    }
-
-    // Judged before the handle is looked at: `Option::filter` skips its closure
-    // on `None`, which would leave suppression stale across a replacement that
-    // had no handle to offer.
-    let allow_resume = loops.resume_recovery.allow_resume(context.gemini.age());
-    let had_handle = handle.is_some();
-    let handle = handle.filter(|_| {
-        allow_resume
-            && speech_handoff.as_ref().is_none_or(|handoff| {
-                context
-                    .gemini
-                    .checkpoint_age()
-                    .is_some_and(|age| age <= handoff.checkpoint_after.elapsed())
-            })
-    });
-    let handle_offered = handle.is_some();
-
-    // The cold-rebuild line tells the two causes of a 1011 run apart: a resumed
-    // conversation that keeps failing stops failing once it is rebuilt, while
-    // input that fails on any socket fails the rebuild too.
-    if loops.resume_recovery.suppressed {
-        eprintln!(
-            "{}; rebuilding from local state room={}",
-            if loops.resume_recovery.resumed {
-                "Gemini resumed socket was replaced young, so resumption is suppressed"
-            } else {
-                "Gemini cold socket was replaced young"
-            },
-            interview.boot.room_name
-        );
-    }
-
-    // Said before the attempt, not after it: the whole point is to cover the
-    // gap, and the gap starts here. Connect and setup are bounded at fifteen
-    // seconds each, and for that long the candidate is talking to a socket that
-    // is gone.
-    publish_control(room, &interviewer_state(true), "the reconnect notice").await;
-
-    // Closes the writer half and the reader task. A socket that is already gone
-    // errors on the close, and that error says nothing the caller can act on;
-    // one being replaced ahead of its `GoAway` is still live and this is the
-    // orderly hang-up. Ignored either way for that reason. A socket that
-    // resumed and was offered nothing new still holds the checkpoint it
-    // inherited, whose age this process does not know. A checkpoint that is not
-    // offered is not the one the replacement starts from, so it is not named.
-    let checkpoint_age = match (&handle, context.gemini.checkpoint_age()) {
-        (None, _) => "none".to_string(),
-        (Some(_), Some(age)) => format!("{}s", age.as_secs()),
-        (Some(_), None) => "inherited".to_string(),
-    };
-    let _ = context.gemini.shutdown().await;
-    session::drain_live_usage(room, context);
-
-    // A handle is worth one try and no more: one the server refuses fails
-    // identically every time, so retrying it under the budget would spend the
-    // whole budget learning the same thing. Both ways of not having a resumable
-    // session -- no handle, and a handle that was refused -- leave a `None` for
-    // the cold start below to answer, which is why neither is a branch of its
-    // own here.
-    let resumed_session = match handle {
-        Some((key, handle)) => {
-            live_session_with_keys(interview.keys, interview.boot, Some((&key, &handle)))
-                .await
-                .inspect_err(|error| {
-                    eprintln!(
-                        "Gemini refused to resume ({error}); starting a fresh session instead"
-                    );
-                })
-                .ok()
-        }
-        None => None,
-    };
-
-    let resumed = resumed_session.is_some();
-    let fallback = fallback_reason(
-        resumed,
-        speech_handoff.is_some(),
-        allow_resume,
-        had_handle,
-        handle_offered,
-    );
-    let handover = handover_kind(fallback);
-    let session = match resumed_session {
-        Some(session) => Ok(session),
-        None => open_cold_session(interview, &mut loops.restarts, Some(room)).await,
-    };
-    let session = match session {
-        Ok(session) => session,
-        Err(error) => {
-            let outcome = LiveOutcome::from_error(error.as_ref(), LiveOutcome::GeminiUnreachable);
-            context.activity.live_exit = outcome;
-
-            // A project that cannot pay would be billed for the report too, so
-            // it leaves the way the billing check above does.
-            if outcome == LiveOutcome::Billing {
-                eprintln!(
-                    "Gemini could not be reached: the project cannot pay; ending interview room={}",
-                    interview.boot.room_name
-                );
-                leave_room(room).await;
-                return Ok(ControlFlow::Break(()));
-            }
-            eprintln!(
-                "Gemini could not be reached; ending interview with a report room={}",
-                interview.boot.room_name
-            );
-            return end_without_interviewer(room, context, interview, loops).await;
-        }
-    };
-    context
-        .state
-        .evidence_ledger
-        .record_model_input(ModelInputKind::LiveSetup, &interview.boot.instructions);
-
-    *context.gemini = session;
-    context.media.presence_frame_sent = false;
-    loops.resume_recovery.connected(resumed);
-    context.activity.live_socket += 1;
-    context.activity.reset_context_observations(resumed);
-    context.activity.sync_cut_plausible(context.state);
-
-    // `rotation_gap_ms` ends at setup, before the briefing goes out. The
-    // first-audio line follows only when the briefing asked for a reply, and
-    // counts the briefing and any board resend too, so the difference between
-    // them is what those and the model's reply cost. Named apart from the
-    // `gap_ms` the floor lines carry, which measures something else.
-    let connected = Instant::now();
-    let gap = connected.saturating_duration_since(rotation_started);
-    let (owed, debt, owed_prompt) =
-        hand_over(context.state, context.activity, context.output_audio);
-
-    // The one line that ties a replacement to what the new socket is missing:
-    // how old the checkpoint it resumed from is, what was owed, and what the
-    // local record holds that the checkpoint may predate.
-    eprintln!(
-        "replacement: at={} resumed={resumed} {} rotation_gap_ms={} checkpoint_age={checkpoint_age} owed={owed} ({debt}) owed_chars={} editor_chars={} {} room={}",
-        log_clock(context.state),
-        replacement_fields(trigger, handover, fallback),
-        crate::agent::saturating_ms(gap),
-        owed_prompt
-            .as_deref()
-            .map_or(0, |prompt| prompt.chars().count()),
-        context.state.code.chars().count(),
-        prompt_fields(context.state, context.activity),
-        interview.boot.room_name
-    );
-    close_turns(room, context);
-    set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING);
-    publish_control(room, &interviewer_state(false), "the reconnected notice").await;
-    eprintln!("{}", replacement_notice_line(handover, room.name()));
-    let spoke = if let Some(handoff) = speech_handoff {
-        let listening = match session::send_listening_handoff(
-            context.gemini,
-            context.state,
-            &handoff,
-            resumed,
-            owed_prompt.as_deref(),
-        )
-        .await
-        {
-            Ok(()) => {
-                context.activity.commit_silent_editor(context.state);
-                true
-            }
-            Err(error) => {
-                context.state.needs_cold_brief = true;
-                eprintln!(
-                    "speech-handoff briefing failed ({error}); waiting for the close to be reported"
-                );
-                false
-            }
-        };
-
-        // Still owed after the handoff: the next output clears it, and a socket
-        // that drops first names it in its own briefing. A reply owed to
-        // candidate speech has no prompt text and is still owed.
-        if owed || owed_prompt.is_some() {
-            context
-                .activity
-                .owe_prompt(Instant::now(), owed_prompt.clone());
-
-            // Only a socket that was told to keep listening, and owes a reply
-            // to what it was listening to: one that never got the note has no
-            // prefix to answer, and one owing nothing has no reply to ask for.
-            if listening {
-                context.activity.arm_handoff_reply(Instant::now());
-            }
-        }
-        false
-    } else {
-        brief_replacement(
-            context.gemini,
-            context.state,
-            context.activity,
-            if resumed {
-                Replacement::Resumed { owed }
-            } else {
-                Replacement::Cold { owed }
-            },
-            owed_prompt.as_deref(),
-        )
-        .await
-    };
-
-    // A cold session remembers none of the drawing, and the briefing's text
-    // cannot carry it, so the board follows the briefing and the session that
-    // speaks next has seen it.
-    if !resumed
-        && context.state.interview_mode.is_whiteboard()
-        && let Err(error) = board::resend(context.board, context.gemini).await
-    {
-        eprintln!("cold-restart board failed ({error}); waiting for the close to be reported");
-    }
-    context.activity.begin_rotation_watch(
-        spoke,
-        turn::RotationWatch {
-            started: rotation_started,
-            connected,
-            resumed,
-            candidate_spoke_at: None,
-        },
-    );
-    if spoke {
-        eprintln!(
-            "{}",
-            prompt_line(
-                context.state,
-                context.activity,
-                "kind=briefing",
-                interview.boot.room_name,
-            )
-        );
-    }
-    Ok(ControlFlow::Continue(()))
+    recovery::replace(
+        room,
+        context,
+        interview,
+        loops,
+        trigger,
+        speech_handoff,
+        false,
+    )
+    .await
 }
 
 /// The Live socket cannot be kept, so the interview ends the way the deadline
@@ -1209,6 +1024,7 @@ fn replacement_notice_line(handover: Handover, room: &str) -> String {
 /// so it may predate the latest test run or spoken answer; a cold one knows
 /// nothing. Both get the local record. Kept apart from `replace_gemini_session`
 /// so a test drives the same branch production does.
+#[cfg(test)]
 async fn brief_replacement(
     gemini: &mut GeminiLiveSession,
     state: &mut RuntimeState,
@@ -1253,6 +1069,7 @@ async fn brief_replacement(
 /// socket replaces this one. Teardown already cleared the old socket's pending
 /// work, so without this the next replacement is told nothing was owed: a cold
 /// briefing is retried as one, and an owed reply is owed again.
+#[cfg(test)]
 fn keep_recovery_debt(
     state: &mut RuntimeState,
     activity: &mut RuntimeActivity,
@@ -1275,86 +1092,112 @@ fn keep_recovery_debt(
 /// be discarded: it is briefed as context that asks for no answer instead. A
 /// resumed socket whose cold predecessor still owed its briefing gets that
 /// briefing, since its memory starts from the cold session.
+fn earlier_references(steps: &[&str]) -> String {
+    if steps.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n[SYSTEM EVENT] Earlier step references carried with this request: {}. Use current evidence to decide what remains open; do not repeat completed work.",
+            steps.join(", ")
+        )
+    }
+}
+
+struct RecoveryBrief {
+    input: session::PreparedInput,
+    reply: bool,
+    clear_debt: bool,
+    clear_cold: bool,
+}
+
+fn prepare_recovery_brief(
+    state: &mut RuntimeState,
+    replacement: Replacement,
+    owed_prompt: Option<&str>,
+) -> RecoveryBrief {
+    let owed = replacement.owed();
+    let held = state.interviewer_silenced();
+    if owed && held {
+        hold_owed_reply(state, owed_prompt);
+    }
+    let (text, reply, transport, scope, clear_debt, clear_cold) =
+        if matches!(replacement, Replacement::Resumed { .. }) && !state.needs_cold_brief {
+            let reply = owed && !held;
+            let mut text = crate::agent::resumed_context(state, reply, owed_prompt);
+            if reply {
+                text = crate::agent::with_thinking_debt(state, &text);
+            }
+            (
+                text,
+                reply,
+                session::Transport::Context,
+                ContinuityScope::Resumed,
+                reply,
+                false,
+            )
+        } else if held {
+            (
+                crate::agent::cold_restart(state),
+                false,
+                session::Transport::Context,
+                ContinuityScope::ColdOrCheckpoint,
+                false,
+                true,
+            )
+        } else {
+            (
+                crate::agent::with_owed_reply(
+                    crate::agent::cold_restart(state),
+                    owed.then_some(owed_prompt),
+                ),
+                true,
+                session::Transport::Realtime,
+                ContinuityScope::ColdOrCheckpoint,
+                true,
+                false,
+            )
+        };
+    let text = format!("{text}{}", earlier_references(&state.earlier_steps_pending));
+    let text = crate::agent::with_timer(state, text);
+    let input = session::prepare_input(
+        state,
+        ModelInputKind::Turn,
+        &text,
+        reply.then_some(TurnCause::Recovery),
+        scope,
+        transport,
+    );
+    RecoveryBrief {
+        input,
+        reply,
+        clear_debt,
+        clear_cold,
+    }
+}
+
+#[cfg(test)]
 async fn send_recovery_brief(
     gemini: &mut GeminiLiveSession,
     state: &mut RuntimeState,
     replacement: Replacement,
     owed_prompt: Option<&str>,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    // A reply owed during a hold cannot be asked for yet, since it would be
-    // dropped; ending the hold asks for it instead, on either kind of socket.
-    let owed = replacement.owed();
-    let held = state.interviewer_silenced();
-    if owed && held {
-        hold_owed_reply(state, owed_prompt);
+    let code = state.code.clone();
+    let RecoveryBrief {
+        input,
+        reply,
+        clear_debt,
+        clear_cold,
+    } = prepare_recovery_brief(state, replacement, owed_prompt);
+    input.send(gemini).await?;
+    state.code_shown = code;
+    if clear_debt {
+        state.clear_thinking_debt();
     }
-    if matches!(replacement, Replacement::Resumed { .. }) && !state.needs_cold_brief {
-        let reply = owed && !held;
-        let mut context = crate::agent::resumed_context(state, reply, owed_prompt);
-
-        // A resumed session keeps what a hold dropped in its history. The reply
-        // asked for here pays whatever the hold left owed, so it carries it,
-        // built by the function whose debt `clear_thinking_debt` clears.
-        if reply {
-            context = crate::agent::with_thinking_debt(state, &context);
-        }
-        let context = crate::agent::with_timer(state, context);
-        // The briefing carries the whole editor, so the model has now seen it.
-        state.code_shown = state.code.clone();
-        send_model_context_scoped(
-            gemini,
-            state,
-            ModelInputKind::Turn,
-            &context,
-            reply.then_some(TurnCause::Recovery),
-            ContinuityScope::Resumed,
-        )
-        .await?;
-        if reply {
-            state.clear_thinking_debt();
-        }
-        return Ok(reply);
-    }
-    if held {
-        // The reply the old socket owed was held above, since `hand_over` has
-        // already taken the prompt off the activity; it is asked for when the
-        // hold ends.
-        //
-        // The candidate's audio still reaches the new socket during a hold, and
-        // it could answer them knowing nothing of the interview. Briefed now,
-        // as context that asks for no answer.
-        let briefing = crate::agent::with_timer(state, crate::agent::cold_restart(state));
-        state.code_shown = state.code.clone();
-        send_model_context_scoped(
-            gemini,
-            state,
-            ModelInputKind::Turn,
-            &briefing,
-            None,
-            ContinuityScope::ColdOrCheckpoint,
-        )
-        .await?;
-        // Delivered, so releasing the hold must not brief this socket again.
+    if clear_cold {
         state.needs_cold_brief = false;
-        return Ok(false);
     }
-    let briefing = crate::agent::with_owed_reply(
-        crate::agent::cold_restart(state),
-        owed.then_some(owed_prompt),
-    );
-    let briefing = crate::agent::with_timer(state, briefing);
-    state.code_shown = state.code.clone();
-    send_model_text_scoped(
-        gemini,
-        state,
-        ModelInputKind::Turn,
-        TurnCause::Recovery,
-        &briefing,
-        ContinuityScope::ColdOrCheckpoint,
-    )
-    .await?;
-    state.clear_thinking_debt();
-    Ok(true)
+    Ok(reply)
 }
 
 /// Keeps a reply a replaced socket owed during a hold for the hold's release to
@@ -1835,6 +1678,8 @@ async fn open_session<'a>(
                 config,
                 keys,
                 boot: &boot,
+                #[cfg(test)]
+                live_endpoint: None,
                 started_at: setup_began,
                 candidate_identity: &candidate_identity,
                 events: &events,
@@ -1842,7 +1687,7 @@ async fn open_session<'a>(
             };
             let opened = crate::gemini::first_open_within(
                 crate::gemini::FIRST_OPEN_LIMIT,
-                open_cold_session(interview, &mut restarts, None),
+                open_cold_session(interview, &mut restarts),
             )
             .await;
             gemini_ready = setup_began.elapsed();
@@ -1882,6 +1727,7 @@ async fn open_session<'a>(
         turn.activity.live_socket,
         config.gemini_silence_ms,
     );
+    eprintln!("{}", turn.activity.latency.anchor(started_at));
     turn.state
         .evidence_ledger
         .record_model_input(ModelInputKind::LiveSetup, &boot.instructions);
@@ -1929,12 +1775,88 @@ async fn open_session<'a>(
     })))
 }
 
+/// Prepared-write gates a test hosting the real room loop arms before it
+/// starts. `run_room_with_slot` builds its own `RoomLoop`, so this is the only
+/// way a fixture reaches the gates the recovery matrices set on a hand-built
+/// one. Empty unless a test fills it, and taken once by the loop that starts.
+#[cfg(test)]
+static LIVE_WRITE_BARRIERS: std::sync::Mutex<std::collections::VecDeque<recovery::WriteBarrier>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+
+#[cfg(test)]
+fn take_live_write_barriers() -> std::collections::VecDeque<recovery::WriteBarrier> {
+    std::mem::take(&mut *LIVE_WRITE_BARRIERS.lock().unwrap())
+}
+
+/// Where a test hosting the real room loop is told about each Live reader the
+/// loop owns: the first socket's once the interview has started, then each
+/// replacement's. Keyed by the room it hosts, so parallel tests never take one
+/// another's, and taken once by the loop that starts. It is how a fixture
+/// reaches the first reader to end it, which is the loop's own Close path, and
+/// how it later sees that every reader has finished.
+#[cfg(test)]
+type LiveReaderProbe = (
+    String,
+    tokio::sync::mpsc::UnboundedSender<crate::gemini::LiveReaderInspection>,
+);
+
+#[cfg(test)]
+static LIVE_READER_PROBES: std::sync::Mutex<Vec<LiveReaderProbe>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn take_live_reader_probe(
+    room: &str,
+) -> Option<tokio::sync::mpsc::UnboundedSender<crate::gemini::LiveReaderInspection>> {
+    let mut probes = LIVE_READER_PROBES.lock().unwrap();
+    let at = probes.iter().position(|(name, _)| name == room)?;
+    Some(probes.remove(at).1)
+}
+
+/// Where a test hosting the real room loop is told which terminal cancelled a
+/// recovery wait, keyed by the room it hosts so parallel tests never see one
+/// another's. Unlike the hand-built loop's `recovery_terminal`, it observes the
+/// terminal and lets the loop handle it as production does.
+#[cfg(test)]
+type LiveTerminalProbe = (
+    String,
+    tokio::sync::mpsc::UnboundedSender<(&'static str, std::time::Instant)>,
+);
+
+#[cfg(test)]
+static LIVE_TERMINAL_PROBES: std::sync::Mutex<Vec<LiveTerminalProbe>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn note_live_terminal(room: &str, terminal: &'static str) {
+    for (name, probe) in LIVE_TERMINAL_PROBES.lock().unwrap().iter() {
+        if name == room {
+            let _ = probe.send((terminal, std::time::Instant::now()));
+        }
+    }
+}
+
 /// The room loop's own bookkeeping, distinct from the session it runs on.
 ///
 /// Four things only the loop reads, bundled so an arm that needs three of them
 /// takes one parameter rather than three.
 struct RoomLoop {
-    /// How many sockets this interview has been through.
+    pending_round_notice: Option<&'static str>,
+    deadline_at: tokio::time::Instant,
+    #[cfg(test)]
+    recovery_terminal: Option<tokio::sync::mpsc::UnboundedSender<recovery::Terminal>>,
+    #[cfg(test)]
+    recovery_inputs: Option<tokio::sync::mpsc::UnboundedReceiver<recovery::Packet>>,
+    #[cfg(test)]
+    recovery_phase: Option<tokio::sync::mpsc::UnboundedSender<&'static str>>,
+    #[cfg(test)]
+    recovery_reader:
+        Option<tokio::sync::mpsc::UnboundedSender<crate::gemini::LiveReaderInspection>>,
+    #[cfg(test)]
+    recovery_writes: std::collections::VecDeque<recovery::WriteBarrier>,
+    #[cfg(test)]
+    recovery_after: std::collections::VecDeque<recovery::AfterWrite>,
+    /// Consecutive charged restart attempts, including cancelled opens.
     restarts: usize,
     deferred_restart: DeferredRestart,
     resume_recovery: ResumeRecovery,
@@ -2032,6 +1954,15 @@ async fn on_watch_tick(
     // instants microseconds apart, so a cooldown stamped from one and tested
     // against another was answering a question nobody asked.
     let tick_at = Instant::now();
+    if let Some(line) = context.activity.latency.clock_sample(tick_at) {
+        eprintln!("{line}");
+    }
+    let alive_tasks = tokio::runtime::Handle::try_current()
+        .ok()
+        .map(|handle| handle.metrics().num_alive_tasks());
+    if let Some(line) = context.activity.latency.task_sample(tick_at, alive_tasks) {
+        eprintln!("{line}");
+    }
     if loops.presence.gave_up(tick_at) {
         // No report: it would be graded from a session the candidate walked out
         // of, and there is nobody in the room to receive it. The browser writes
@@ -2049,6 +1980,18 @@ async fn on_watch_tick(
         }
         leave_room(room).await;
         return Ok(ControlFlow::Break(()));
+    }
+
+    if let Some(status) = loops.pending_round_notice {
+        let message =
+            serde_json::json!({"type":"round_state", "round":"behavioral", "status":status});
+        if let Ok(packet) = browser_packet(TOPIC_CONTROL, &message)
+            && tokio::time::timeout(RECONNECT_NOTICE_LIMIT, room.publish_data(packet))
+                .await
+                .is_ok_and(|result| result.is_ok())
+        {
+            loops.pending_round_notice = None;
+        }
     }
 
     // A board the send interval held back goes out here once nothing stops it.
@@ -2496,6 +2439,53 @@ async fn send_watched_prompt<E>(
     Ok(())
 }
 
+async fn on_candidate_input(
+    context: &mut GeminiEventContext<'_>,
+    input: CandidateInput,
+    silence_ms: u32,
+) {
+    let (frame, observed) = match input {
+        CandidateInput::Frame(frame) => (Some(frame), true),
+        CandidateInput::BufferedFrame(frame) => (Some(frame), false),
+        CandidateInput::Yield => {
+            if context.state.interviewer_silenced() {
+                context.activity.ignore_input_before_hold(
+                    Instant::now(),
+                    thinking_transcript_grace(silence_ms),
+                );
+            }
+            if let Err(error) = flush_candidate_audio(context.gemini, context.media).await {
+                eprintln!(
+                    "Gemini recovered audio flush failed ({error}); waiting for the close to be reported"
+                );
+                return;
+            }
+            if let Err(error) = context.gemini.end_audio_turn().await {
+                eprintln!(
+                    "Gemini recovered audio end failed ({error}); waiting for the close to be reported"
+                );
+            }
+            return;
+        }
+        CandidateInput::End => (None, true),
+    };
+    let ended = frame.is_none();
+    let now = Instant::now();
+    if observed {
+        context
+            .media
+            .note_mic_dequeue(&mut context.activity.latency, frame.is_some(), now);
+    }
+    if observed && note_candidate_audio_frame(context.state, context.activity, frame.as_ref(), now)
+    {
+        context.media.voiced_at = Some(now);
+    }
+    if let Err(error) = pump_audio(context.media, context.gemini, frame).await {
+        eprintln!("Gemini audio write failed ({error}); waiting for the close to be reported");
+    }
+    release_if_ended(&mut context.media.audio, ended);
+}
+
 /// One Gemini event, plus the two restarts only this arm can decide.
 async fn on_gemini_event(
     room: &RoomLink,
@@ -2539,10 +2529,16 @@ async fn on_gemini_event(
         .note_event(&mut loops.restarts, context.state, context.activity, &event);
 
     if let GeminiEvent::GoAway { time_left } = &event {
-        eprintln!(
-            "Gemini requested a transport restart in {time_left}; room={}",
-            interview.boot.room_name
-        );
+        if let Some(notice) = context
+            .activity
+            .latency
+            .note_advisory(loops.deferred_restart.is_armed())
+        {
+            eprintln!(
+                "Gemini requested a transport restart in {time_left} (notice {notice}); room={}",
+                interview.boot.room_name
+            );
+        }
 
         // A turn still generating can be carrying a tool call or an audio
         // fragment that has not reached the room. Generated audio is also still
@@ -2651,42 +2647,7 @@ async fn spend_deferred_restart(
         && output_settled(context.activity.floor, context.output_audio.is_playing())
         && !context.activity.socket.tool_response_outstanding
     {
-        let handoff = session::finalize_speech_handoff(
-            context.gemini,
-            context.state,
-            &mut context.media.audio_bytes,
-        )
-        .await;
-        loops.deferred_restart.cancel();
-        let handoff = match handoff {
-            Ok(handoff) => {
-                for text in &handoff.transcript_fragments {
-                    handle_gemini_event(
-                        room,
-                        context,
-                        GeminiEvent::InputTranscript(text.clone()),
-                        Interruptible::Yes,
-                    )
-                    .await?;
-                }
-                eprintln!(
-                    "speech handoff: prefix_fragments={} discarded_events={} at={} room={}",
-                    handoff.transcript_fragments.len(),
-                    handoff.discarded,
-                    log_clock(context.state),
-                    interview.boot.room_name
-                );
-                Some(handoff)
-            }
-            Err(error) => {
-                eprintln!(
-                    "speech handoff failed ({error}); recovering transport room={}",
-                    interview.boot.room_name
-                );
-                None
-            }
-        };
-        return replace_gemini_session(room, context, interview, loops, Trigger::GoAway, handoff)
+        return recovery::replace(room, context, interview, loops, Trigger::GoAway, None, true)
             .await;
     }
     if !loops
@@ -2847,10 +2808,20 @@ pub(crate) async fn run_room_with_slot(
         restarts,
     } = *session;
 
+    #[cfg(test)]
+    let reader_probe = take_live_reader_probe(room_name);
+    #[cfg(test)]
+    if let Some(probe) = &reader_probe
+        && let Some(reader) = gemini.inspect_reader_for_test()
+    {
+        let _ = probe.send(reader);
+    }
     let interview = InterviewContext {
         config,
         keys: &keys,
         boot: &boot,
+        #[cfg(test)]
+        live_endpoint: None,
         started_at,
         candidate_identity: &candidate_identity,
         events: &events,
@@ -2862,7 +2833,22 @@ pub(crate) async fn run_room_with_slot(
         candidate: &candidate_identity,
         now_seconds,
     };
+    let deadline_at = tokio::time::Instant::now() + interview_hard_deadline(boot.duration_min);
     let mut loops = RoomLoop {
+        pending_round_notice: None,
+        deadline_at,
+        #[cfg(test)]
+        recovery_terminal: None,
+        #[cfg(test)]
+        recovery_inputs: None,
+        #[cfg(test)]
+        recovery_phase: None,
+        #[cfg(test)]
+        recovery_reader: reader_probe,
+        #[cfg(test)]
+        recovery_writes: take_live_write_barriers(),
+        #[cfg(test)]
+        recovery_after: Default::default(),
         restarts,
         deferred_restart: DeferredRestart::default(),
         resume_recovery: ResumeRecovery::default(),
@@ -2886,9 +2872,7 @@ pub(crate) async fn run_room_with_slot(
     //
     // The grace is deliberate: the browser normally ends the interview itself,
     // and this only has to catch the case where it never does.
-    let hard_deadline = tokio::time::sleep_until(
-        (Instant::now() + interview_hard_deadline(boot.duration_min)).into(),
-    );
+    let hard_deadline = tokio::time::sleep_until(deadline_at);
     tokio::pin!(hard_deadline);
 
     let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
@@ -2991,30 +2975,9 @@ pub(crate) async fn run_room_with_slot(
                     );
                     on_playout_settled(&room, &mut context, &mut loops, interview).await?
                 }
-                frame = next_audio_frame(&mut media.audio), if media.audio.is_some() => {
-                    // The fastest writer in the loop, and so the one that
-                    // reaches a closed socket first: a flush leaves every ten
-                    // milliseconds of speech. Dropping the frame costs a frame
-                    // of audio the resumed session did not need; propagating
-                    // cost the interview.
-                    let ended = frame.is_none();
-
-                    // Read by checkpoints and the idle timers before the first
-                    // transcription, and during provider speech to distinguish
-                    // ongoing input from its transcription tail.
-                    let now = Instant::now();
-                    if note_candidate_audio_frame(&turn.state, &mut turn.activity, frame.as_ref(), now) {
-                        media.voiced_at = Some(now);
-                    }
-                    if let Err(error) = pump_audio(&mut media, &mut gemini, frame).await {
-                        eprintln!("Gemini audio write failed ({error}); waiting for the close to be reported");
-                    }
-
-                    // One release for the arm, past every branch above it.
-                    // Sitting inside a branch is what let a failed final flush
-                    // keep an ended stream, and there is no path through here
-                    // that wants to hold on to one.
-                    release_if_ended(&mut media.audio, ended);
+                input = next_candidate_input(&mut media.audio, &mut media.recovery_audio), if media.audio.is_some() || !media.recovery_audio.is_empty() => {
+                    let mut context = turn.context(&mut output_audio, &mut gemini, &mut board, &mut media);
+                    on_candidate_input(&mut context, input, boot.silence_ms).await;
                     ControlFlow::Continue(())
                 }
                 Some(snapshot) = board.rx.recv(), if !turn.state.ended => {
@@ -3045,7 +3008,16 @@ pub(crate) async fn run_room_with_slot(
                     ControlFlow::Continue(())
                 }
             };
-            if media.audio.is_none() {
+            #[cfg(test)]
+            probe::note_retention(
+                media.recovery_audio.dropped_bytes,
+                media.quarantined_audio_bytes,
+            );
+            if media.quarantined_audio_bytes != 0 {
+                eprintln!("candidate audio quarantine: bytes={} room={}",
+                    std::mem::take(&mut media.quarantined_audio_bytes), room.name());
+            }
+            if media.audio.is_none() && media.recovery_audio.is_empty() {
                 turn.activity.clear_candidate_voice_activity();
             }
             if step.is_break() {
@@ -3096,6 +3068,9 @@ pub(crate) async fn run_room_with_slot(
         &room,
         &mut turn.context(&mut output_audio, &mut gemini, &mut board, &mut media),
     );
+    if let Some(line) = turn.activity.latency.mic_summary(Instant::now()) {
+        eprintln!("{line}");
+    }
     eprintln!("{}", turn.state.evidence_ledger.metrics.cost_line());
     let outcome = match &result {
         Err(error) => LiveOutcome::from_error(error.as_ref(), LiveOutcome::Error),
@@ -3487,6 +3462,8 @@ struct InterviewContext<'a> {
     config: &'a AgentConfig,
     keys: &'a Arc<GeminiKeys>,
     boot: &'a RuntimeBootstrap<'a>,
+    #[cfg(test)]
+    live_endpoint: Option<&'a str>,
     started_at: Instant,
     candidate_identity: &'a str,
     events: &'a tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<RoomEvent>>,
@@ -3494,6 +3471,20 @@ struct InterviewContext<'a> {
 }
 
 impl InterviewContext<'_> {
+    async fn open_live(
+        self,
+        handle: Option<(&str, &str)>,
+    ) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
+        #[cfg(test)]
+        if let Some(endpoint) = self.live_endpoint {
+            return crate::gemini::live_session_with_keys_at(
+                endpoint, self.keys, self.boot, handle,
+            )
+            .await;
+        }
+        live_session_with_keys(self.keys, self.boot, handle).await
+    }
+
     /// Minutes since the interview started, as the report states its length.
     fn elapsed_min(&self) -> f64 {
         self.started_at.elapsed().as_secs_f64() / 60.0

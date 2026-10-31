@@ -6,7 +6,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt, stream::SplitSink};
 use serde_json::{Value, json};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::{Receiver, channel};
+use tokio::sync::mpsc::{Receiver, channel, error::TrySendError};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::protocol::Message};
 
@@ -18,8 +18,18 @@ use crate::runtime::{
 };
 
 mod credentials;
+mod lifecycle;
+mod pressure;
+mod setup;
 mod socket;
 pub use credentials::GeminiKeys;
+#[cfg(test)]
+pub(crate) use lifecycle::{
+    LiveReaderInspection, provider_failure_for_test, quota_exhausted_for_test,
+};
+pub(crate) use pressure::SocketPressure;
+use pressure::{Pressure, ReaderEnd};
+use setup::complete_live_setup;
 
 /// What every image this process sends Gemini is encoded as: a camera frame, a
 /// whiteboard on the live socket, and the board attached to a report request.
@@ -125,9 +135,12 @@ const MAX_REPORT_RESPONSE_BYTES: usize = 256 * 1024;
 const GEMINI_EVENT_QUEUE: usize = 256;
 
 pub struct GeminiLiveSession {
-    writer: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
-    reader: JoinHandle<()>,
+    writer: Option<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>,
+    reader: Option<JoinHandle<()>>,
     events: Receiver<(std::time::Instant, GeminiEvent)>,
+    /// Counts of the event channel's fill and of the reader's waits on it,
+    /// reported once when the socket is let go.
+    pressure: Pressure,
     event_received_at: Option<std::time::Instant>,
     /// When this socket was opened, which is how the caller tells Gemini's
     /// ordinary connection cap from an endpoint that will not stay up. It lives
@@ -180,7 +193,12 @@ pub struct GeminiLiveSession {
 /// the orderly close.
 impl Drop for GeminiLiveSession {
     fn drop(&mut self) {
-        self.reader.abort();
+        // A cancelled owner cannot await teardown. Keep a dropped session from
+        // detaching its reader; orderly shutdown still joins before usage
+        // drain.
+        if let Some(reader) = &self.reader {
+            reader.abort();
+        }
     }
 }
 
@@ -279,6 +297,7 @@ impl GeminiLiveSession {
 
     pub async fn next_event(&mut self) -> Option<GeminiEvent> {
         let (received_at, event) = self.events.recv().await?;
+        self.pressure.consumed();
         self.event_received_at = Some(received_at);
         Some(event)
     }
@@ -363,13 +382,12 @@ impl GeminiLiveSession {
         // behind.
         let closed = if self.gone() {
             Ok(Ok(()))
+        } else if let Some(writer) = &mut self.writer {
+            tokio::time::timeout(CLOSE_TIMEOUT, writer.close()).await
         } else {
-            tokio::time::timeout(CLOSE_TIMEOUT, self.writer.close()).await
+            Ok(Ok(()))
         };
-        if !self.reader.is_finished() {
-            self.reader.abort();
-            let _ = (&mut self.reader).await;
-        }
+        self.stop_reader().await;
         closed.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Gemini close timed out"))??;
         Ok(())
     }
@@ -404,7 +422,12 @@ impl GeminiLiveSession {
             )
             .into());
         }
-        let Ok(sent) = tokio::time::timeout(WRITE_TIMEOUT, self.writer.send(message)).await else {
+        let Some(writer) = &mut self.writer else {
+            return Err(
+                io::Error::new(io::ErrorKind::NotConnected, "Gemini transport retired").into(),
+            );
+        };
+        let Ok(sent) = tokio::time::timeout(WRITE_TIMEOUT, writer.send(message)).await else {
             // Every caller in the room loop logs a failed write and waits for
             // `next_event` to report the close, which a peer that stopped
             // answering never sends. Ending the reader drops its sender, and
@@ -414,7 +437,9 @@ impl GeminiLiveSession {
                 WRITE_TIMEOUT.as_secs()
             );
             self.dead = true;
-            self.reader.abort();
+            if let Some(reader) = &self.reader {
+                reader.abort();
+            }
             return Err(io::Error::new(io::ErrorKind::TimedOut, "Gemini write timed out").into());
         };
 
@@ -423,7 +448,9 @@ impl GeminiLiveSession {
         // `READ_IDLE_LIMIT` away at best, never while frames still arrive.
         if let Err(error) = sent {
             self.dead = true;
-            self.reader.abort();
+            if let Some(reader) = &self.reader {
+                reader.abort();
+            }
             return Err(error.into());
         }
         Ok(())
@@ -435,7 +462,7 @@ impl GeminiLiveSession {
     /// `WRITE_TIMEOUT` or `CLOSE_TIMEOUT` when the room loop's next audio
     /// flush wins the `select!` against `next_event`.
     fn gone(&self) -> bool {
-        self.dead || self.reader.is_finished()
+        self.dead || self.reader.as_ref().is_none_or(JoinHandle::is_finished)
     }
 }
 
@@ -1734,19 +1761,12 @@ async fn open_live_session_redacted_at(
     let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, socket::connect(url))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Gemini connect timed out"))??;
-    stream
-        .send(Message::Text(
-            serde_json::to_string(&live_setup_message(boot, resume))?.into(),
-        ))
-        .await?;
-    tokio::time::timeout(
-        SETUP_TIMEOUT,
-        wait_for_setup_complete(&mut stream, &api_keys),
-    )
-    .await
-    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Gemini setup timed out"))??;
+    let setup = Message::Text(serde_json::to_string(&live_setup_message(boot, resume))?.into());
+    complete_live_setup(&mut stream, setup, &api_keys, SETUP_TIMEOUT).await?;
     let (writer, mut reader) = stream.split();
     let (sender, events) = channel(GEMINI_EVENT_QUEUE);
+    let pressure = Pressure::new(GEMINI_EVENT_QUEUE);
+    let counts = pressure.clone();
 
     // Seeded with the handle we resumed from: the server does not always
     // re-issue one immediately, and losing it here would turn the next
@@ -1768,9 +1788,11 @@ async fn open_live_session_redacted_at(
                     "Gemini socket silent for {}s, ending the session",
                     READ_IDLE_LIMIT.as_secs()
                 );
+                counts.end(ReaderEnd::ReadIdle);
                 break;
             };
             let Some(message) = next else {
+                counts.end(ReaderEnd::Closed);
                 break;
             };
 
@@ -1787,6 +1809,7 @@ async fn open_live_session_redacted_at(
                         "Gemini socket failed, ending the session: {}",
                         redact_api_keys(&error.to_string(), &api_keys)
                     );
+                    counts.end(ReaderEnd::Failed);
                     break;
                 }
             };
@@ -1805,6 +1828,7 @@ async fn open_live_session_redacted_at(
                     }
                     None => eprintln!("Gemini closed the session without a reason"),
                 }
+                counts.end(ReaderEnd::Closed);
                 break;
             }
             let Some(text) = websocket_message_text(message) else {
@@ -1821,6 +1845,7 @@ async fn open_live_session_redacted_at(
                     .lock()
                     .unwrap_or_else(|error| error.into_inner()) = error.credential;
                 eprintln!("Gemini ended the session: {error}");
+                counts.end(ReaderEnd::Credential);
                 break;
             }
             let message = parse_server_message(&text);
@@ -1845,18 +1870,41 @@ async fn open_live_session_redacted_at(
             }
             for event in message.events {
                 // Bounded on purpose: a stalled main loop must slow the socket
-                // down, not let inbound audio pile up without a ceiling.
-                if sender.send((received_at, event)).await.is_err() {
-                    return;
+                // down, not let inbound audio pile up without a ceiling. The
+                // wait is counted apart from the idle limit above, which only
+                // covers the read: a reader parked here is not idle.
+                counts.received();
+
+                // Sampled before the send: the consumer can only shrink the
+                // queue, so sampling afterwards could miss the send that filled
+                // it. A drain in between can make this one high.
+                let held = GEMINI_EVENT_QUEUE - sender.capacity();
+                match sender.try_send((received_at, event)) {
+                    Ok(()) => counts.queued(held + 1),
+                    Err(TrySendError::Closed(_)) => {
+                        counts.end(ReaderEnd::ReceiverClosed);
+                        return;
+                    }
+                    Err(TrySendError::Full(item)) => {
+                        counts.queued(GEMINI_EVENT_QUEUE);
+                        let waiting = counts.block();
+                        let sent = sender.send(item).await;
+                        drop(waiting);
+                        if sent.is_err() {
+                            counts.end(ReaderEnd::ReceiverClosed);
+                            return;
+                        }
+                    }
                 }
             }
         }
     });
     Ok(GeminiLiveSession {
         event_received_at: None,
-        writer,
-        reader,
+        writer: Some(writer),
+        reader: Some(reader),
         events,
+        pressure,
         resumption,
         usage,
         checkpoint_at,
@@ -2572,58 +2620,6 @@ fn generate_report_request(
     }
     parts.push(prompt);
     request
-}
-
-async fn wait_for_setup_complete(
-    stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-    api_keys: &[String],
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    while let Some(message) = stream.next().await {
-        let message = message?;
-        let text = match &message {
-            Message::Text(text) => Some(text.as_str()),
-            Message::Binary(bytes) => std::str::from_utf8(bytes).ok(),
-            _ => None,
-        };
-        if let Some(error) = text.and_then(server_api_failure) {
-            return Err(error.into());
-        }
-        match message {
-            Message::Text(text) if is_setup_complete_text(text.as_str()) => return Ok(()),
-            Message::Binary(bytes) if is_setup_complete_text(std::str::from_utf8(&bytes)?) => {
-                return Ok(());
-            }
-            Message::Close(frame) => {
-                let detail = match &frame {
-                    Some(frame) => format!(
-                        "Gemini closed before setupComplete: code={} reason={}",
-                        u16::from(frame.code),
-                        redact_api_keys(&frame.reason, api_keys)
-                    ),
-                    None => "Gemini closed before setupComplete without a reason".to_string(),
-                };
-                if let Some(failure) = frame
-                    .as_ref()
-                    .and_then(|frame| failure_from_reason(&frame.reason))
-                {
-                    return Err(ApiFailure {
-                        status: 0,
-                        credential: Some(failure),
-                        detail: Some(detail),
-                    }
-                    .into());
-                }
-                return Err(io::Error::new(io::ErrorKind::ConnectionAborted, detail).into());
-            }
-            _ => {}
-        }
-    }
-
-    Err(io::Error::new(
-        io::ErrorKind::UnexpectedEof,
-        "Gemini WebSocket ended before setupComplete",
-    )
-    .into())
 }
 
 fn server_api_failure(text: &str) -> Option<ApiFailure> {

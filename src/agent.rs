@@ -18,8 +18,8 @@ mod turn_taking;
 pub(crate) use turn_taking::THINKING_REQUEST_SETTLE;
 pub use turn_taking::ThinkingHold;
 pub(crate) use turn_taking::{
-    owed_context, thinking_change, thinking_check_in, thinking_owes_context, thinking_resume,
-    with_thinking_debt,
+    owed_context, owed_context_after_briefing, thinking_change, thinking_check_in,
+    thinking_owes_context, thinking_resume, with_thinking_debt,
 };
 mod evidence;
 mod integrity;

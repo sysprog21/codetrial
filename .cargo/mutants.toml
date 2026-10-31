@@ -1,7 +1,7 @@
 # Functions the mutation gate cannot judge, because `cargo test` cannot reach
 # them. Matched against the mutant names that `cargo mutants --list` prints.
 #
-# EXCLUSIONS: 94
+# EXCLUSIONS: 95
 #
 # That number is checked by `scripts/test.sh`, so adding an entry means editing
 # this line too. The point is not the count, it is that the list only ever grows
@@ -179,6 +179,20 @@
 # anything to do. Their decisions are tested where they are made:
 # `is_interview_participant`, `candidate_video_frames_go_to_gemini`,
 # `should_send_video_frame`, `frame_to_rgba` and `encode_rgba_jpeg`.
+#
+# `Driver::event` is the recovery driver's reading of one `RoomEvent` while a
+# replacement is pending: a participant leaving or joining, a track starting or
+# stopping, a data packet with its sender. Every arm that does anything reads a
+# `RemoteParticipant` or a remote track, whose constructors the SDK keeps
+# `pub(crate)`, and the one event a test can build, a data packet with no
+# participant, is refused by `interview_packet` for want of a sender, so even
+# deleting that arm cannot be seen. The identity decision is tested where it is
+# made, in `is_interview_participant`, and the packet handling in
+# `Driver::packet`, which is judged. What this leaves unjudged is the duplicate
+# agent check and the cap on the eviction queue inside the arm, and the ignored
+# live fixture's `candidate_rejoin` reaches only the leaving and returning arms.
+# Splitting the arm bodies from the event match, as `recovery_event` was, would
+# bring them back under test.
 #
 # `handle_board_event` is the whiteboard's counterpart to `handle_media_event`:
 # it takes a `ByteStreamOpened` room event, and the reader that event carries
@@ -439,4 +453,5 @@ exclude_re = [
     "^src/livekit/tasks\\.rs:\\d+:\\d+: replace silence_output ",
     "LiveUsage::drain",
     "owner_only_dacl",
+    "^src/livekit/recovery\\.rs:\\d+:\\d+: .* in Driver<'r, 'c, 'i>::event$",
 ]

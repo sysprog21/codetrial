@@ -18,6 +18,12 @@ function createMediaSampler({
     isCurrent,
     isSpeaking,
     isStopped = () => false,
+    // Only a re-armed sample passes these. `afterEdge` holds the window shut
+    // until a Speaking transition after the swap was marked has happened, so
+    // audio already playing when the swap was marked cannot open it.
+    // `edgeNow` names the transition the window opened on, and `maxSamples` is
+    // the finite bound on Speaking samples, beside the time bound.
+    { afterEdge = null, edgeNow = () => null, maxSamples = Infinity } = {},
   ) {
     const began = now();
     const result = {
@@ -30,6 +36,8 @@ function createMediaSampler({
       peakRms: null,
       status: "unavailable",
       reason: null,
+      windowEdge: null,
+      boundHit: false,
     };
     let context, source, analyser;
     let windowBegan = null;
@@ -62,17 +70,24 @@ function createMediaSampler({
     };
     try {
       while (
+        result.samples < maxSamples &&
         now() - (windowBegan ?? began) <
           (windowBegan === null ? speakingWaitMs : timeoutMs) &&
         isCurrent() &&
         !isStopped()
       ) {
-        if (!isSpeaking()) {
+        if (
+          !isSpeaking() ||
+          (windowBegan === null && afterEdge && !afterEdge())
+        ) {
           previous = null;
           await delay(intervalMs);
           continue;
         }
-        windowBegan ??= now();
+        if (windowBegan === null) {
+          windowBegan = now();
+          result.windowEdge = edgeNow();
+        }
         result.samples++;
         if (!context) {
           try {
@@ -151,6 +166,7 @@ function createMediaSampler({
         if (proven()) break;
         await delay(intervalMs);
       }
+      result.boundHit = !proven() && result.samples >= maxSamples;
       if (isStopped()) {
         result.reason = "sampling-cancelled";
       } else if (
@@ -224,7 +240,33 @@ function installMediaProbe() {
     generation++;
   };
   const speaking = () =>
-    document.querySelector("#agent-state")?.textContent.includes("Speaking");
+    document.querySelector("#agent-state")?.textContent.includes("Speaking") ===
+    true;
+  // Speaking transitions, counted as the page makes them. A swap is marked at
+  // the count then, and only a later count can open its window.
+  let edges = 0;
+  let wasSpeaking = false;
+  const observeSpeaking = () => {
+    const now = speaking();
+    if (now && !wasSpeaking) edges++;
+    wasSpeaking = now;
+    return now;
+  };
+  if (typeof MutationObserver === "function" && document.documentElement) {
+    new MutationObserver(observeSpeaking).observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
+  }
+  observeSpeaking();
+  // A re-armed sample is bounded in samples as well as time, so a track that
+  // never speaks again ends as a result and not a wait.
+  const REARM_MAX_SAMPLES = 600;
+  const REARM_LIMIT = 64;
+  const marks = [];
+  let rearmSeq = 0;
+  let rearmCancelled = false;
   sdk.Room = class extends OriginalRoom {
     constructor(...args) {
       super(...args);
@@ -257,6 +299,7 @@ function installMediaProbe() {
               () => stopped,
             ),
           );
+          retryLostMark();
         });
       });
       this.on(sdk.RoomEvent.TrackUnsubscribed, (track) => {
@@ -265,10 +308,104 @@ function installMediaProbe() {
       this.on(sdk.RoomEvent.Disconnected, retire);
     }
   };
+  const unavailable = (m, reason) => ({
+    swap: m.swap,
+    seq: m.seq,
+    edgesAtMark: m.edgesAtMark,
+    status: "unavailable",
+    reason,
+    windowEdge: null,
+    bytesReceived: null,
+    packetsReceived: null,
+    peakRms: null,
+  });
+  // One sample of the current track for mark `m`, from a fresh counter
+  // baseline, whose window opens only on a Speaking transition after the mark.
+  // A later mark replaces a sample that has not opened its window; one that
+  // has is left to finish, since only swaps that owed audio need it and a
+  // later idle swap must not cut it short.
+  const run = (m) => {
+    if (!active)
+      return Promise.resolve(unavailable(m, "no-attached-agent-track"));
+    const mine = generation;
+    return sample(
+      active,
+      mine,
+      () => mine === generation && (m.opened || m.seq === rearmSeq),
+      observeSpeaking,
+      () => stopped || rearmCancelled,
+      {
+        afterEdge: () => {
+          observeSpeaking();
+          return edges > m.edgesAtMark;
+        },
+        edgeNow: () => {
+          m.opened = true;
+          return edges;
+        },
+        maxSamples: REARM_MAX_SAMPLES,
+      },
+    ).then((result) => ({
+      ...result,
+      swap: m.swap,
+      seq: m.seq,
+      edgesAtMark: m.edgesAtMark,
+      reason:
+        result.status === "superseded" && m.seq !== rearmSeq
+          ? "superseded-by-later-swap"
+          : result.reason,
+    }));
+  };
+  // The track was lost before the latest mark could be sampled: the sample ran
+  // out with it, or the mark found no track. It is taken again on the track
+  // that replaces it, from the same mark, so a resubscription neither fails a
+  // swap nor lets an earlier sample stand in for it.
+  const lost = (r, m) =>
+    r.reason === "no-attached-agent-track" ||
+    (r.status === "superseded" && m.seq === rearmSeq);
+  const retryLostMark = () => {
+    const m = marks.at(-1);
+    if (!m || rearmCancelled) return;
+    m.result = m.result.then((r) =>
+      lost(r, m) && !rearmCancelled ? run(m) : r,
+    );
+  };
+  // Marks an installed swap and samples the track again. The sample taken
+  // before the swap is never reused: the track is the same across sockets, so
+  // its proof is older than the socket under test.
+  globalThis.__markJimSwap = (swap) => {
+    if (!accepting || rearmCancelled) return { armed: false };
+    observeSpeaking();
+    const m = { swap, seq: ++rearmSeq, edgesAtMark: edges, opened: false };
+    marks.push(m);
+    if (marks.length > REARM_LIMIT) {
+      m.result = Promise.resolve(unavailable(m, "swap-observation-limit"));
+      return { armed: false };
+    }
+    m.result = run(m);
+    return { armed: active !== null };
+  };
+  const results = () => Promise.all(marks.map((m) => m.result));
+  // Waits up to `waitMs` for the marked swaps to be sampled, then cancels what
+  // is still waiting and returns every re-armed result.
+  globalThis.__settleJimSwapAudio = async (waitMs = 0) => {
+    let timer;
+    await Promise.race([
+      results(),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, waitMs);
+      }),
+    ]);
+    clearTimeout(timer);
+    rearmCancelled = true;
+    return results();
+  };
   globalThis.__finishJimAudioProbe = async (cancel = false) => {
     accepting = false;
     if (cancel) stopped = true;
+    rearmCancelled = true;
     sdk.Room = OriginalRoom;
+    const rearms = await results();
     const generations = await Promise.all(jobs);
     if (overflow)
       generations.push({
@@ -282,11 +419,12 @@ function installMediaProbe() {
     return globalThis.__summarizeJimAudio(
       generations,
       document.querySelector("#audio-playback-notice")?.hidden === false,
+      rearms,
     );
   };
 }
 
-function summarizeJimAudio(generations, playbackBlocked = null) {
+function summarizeJimAudio(generations, playbackBlocked = null, rearms = []) {
   const last = generations.at(-1);
   const failure =
     generations.find((entry) => !["ok", "superseded"].includes(entry.status)) ??
@@ -305,6 +443,10 @@ function summarizeJimAudio(generations, playbackBlocked = null) {
     packetsReceived: sum("packetsReceived"),
     peakRms: peaks.length ? Math.max(...peaks) : null,
     generations,
+    // Samples taken after each marked swap, judged against the swaps they
+    // follow by scripts/soak-judge.cjs; the verdict above is about the track's
+    // subscriptions and does not read them.
+    rearms,
   };
 }
 

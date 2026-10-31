@@ -124,6 +124,13 @@ pub struct WebServerConfig {
     /// config rather than from the build, so a test can run the check from a
     /// build no CI made, pointed at a stub through `github_api_base_url`.
     pub update_check_commit: Option<String>,
+    /// Whether `/api/token` creates the room on LiveKit, with the interview's
+    /// own departure and empty timeouts, before it hands out the token.
+    ///
+    /// Opt-in for the reason `probe_provider_quota` is: `web_router` is also
+    /// what the tests build against placeholder hosts, and a call there would
+    /// be live egress from a unit test. The binaries set it.
+    pub provision_rooms: bool,
 }
 
 /// Redacting by hand, because the derive printed `session_secret` and
@@ -164,6 +171,7 @@ impl fmt::Debug for WebServerConfig {
             pool,
             probe_provider_quota,
             update_check_commit,
+            provision_rooms,
         } = self;
         formatter
             .debug_struct("WebServerConfig")
@@ -193,6 +201,7 @@ impl fmt::Debug for WebServerConfig {
             .field("pool", pool)
             .field("probe_provider_quota", probe_provider_quota)
             .field("update_check_commit", update_check_commit)
+            .field("provision_rooms", provision_rooms)
             .finish()
     }
 }

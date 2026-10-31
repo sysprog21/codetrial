@@ -8,14 +8,15 @@
 //! `super` for that one handover.
 
 use super::{
-    AGENT_STATE_LISTENING, ControlFlow, Duration, Floor, GeminiEventContext, GeminiLiveSession,
-    Instant, InterviewContext, ModelInputKind, PHASE_JUDGE_SETTLE, ParkedPacket, RoomLink,
-    RuntimeActivity, RuntimeState, SideCall, TOPIC_CONTROL, TRANSCRIPT_FLUSH_LIMIT, TestRunLine,
-    TurnCause, apply_data_event_at, close_turns, defers_round_transition, floor, flush_audio,
-    freeze_assessment, generate_report_bounded, latency, leave_room, log_clock, prompt_line,
-    publish_control, record_event_prompt, record_interim_notes, report, send_model_context,
-    send_model_text, send_wrap_up_and_wait, session, set_agent_state, settle_phase_judge,
-    settles_phase_judge, should_send_wrap_up, spawn_phase_judge, thinking_transcript_grace,
+    AGENT_STATE_LISTENING, CandidateMedia, ControlFlow, Duration, Floor, GeminiEventContext,
+    GeminiLiveSession, Instant, InterviewContext, ModelInputKind, PHASE_JUDGE_SETTLE, ParkedPacket,
+    RoomLink, RuntimeActivity, RuntimeState, SideCall, TOPIC_CONTROL, TRANSCRIPT_FLUSH_LIMIT,
+    TestRunLine, TurnCause, apply_data_event_at, close_turns, defers_round_transition, floor,
+    flush_candidate_audio, freeze_assessment, generate_report_bounded, hold_owed_reply, latency,
+    leave_room, log_clock, prompt_line, publish_control, record_event_prompt, record_interim_notes,
+    report, send_model_context, send_model_text, send_wrap_up_and_wait, session, set_agent_state,
+    settle_phase_judge, settles_phase_judge, should_send_wrap_up, spawn_phase_judge,
+    thinking_transcript_grace,
 };
 
 /// The candidate chose Thinking at `at`. Ending the audio stream makes Gemini
@@ -25,7 +26,7 @@ use super::{
 /// reply Gemini starts for it is dropped by the hold.
 pub(super) async fn begin_button_hold(
     gemini: &mut GeminiLiveSession,
-    candidate_audio: &mut Vec<u8>,
+    media: &mut CandidateMedia,
     activity: &mut RuntimeActivity,
     at: Instant,
     grace: Duration,
@@ -33,7 +34,7 @@ pub(super) async fn begin_button_hold(
     activity.clear_candidate_voice_activity();
     activity.ignore_input_before_hold(at, grace);
     activity.latency.close(latency::Boundary::Held, at);
-    flush_audio(gemini, candidate_audio).await?;
+    flush_candidate_audio(gemini, media).await?;
     gemini.end_audio_turn().await
 }
 
@@ -71,14 +72,8 @@ pub(super) async fn settle_hold(
 ) -> HoldEffects {
     let mut effects = HoldEffects::default();
     if result.thinking_changed == Some(true) {
-        if let Err(error) = begin_button_hold(
-            context.gemini,
-            &mut context.media.audio_bytes,
-            context.activity,
-            at,
-            grace,
-        )
-        .await
+        if let Err(error) =
+            begin_button_hold(context.gemini, context.media, context.activity, at, grace).await
         {
             eprintln!(
                 "Gemini audio stream end failed ({error}); waiting for the close to be reported"
@@ -119,7 +114,7 @@ pub(super) async fn settle_hold(
     }
     let finalize_prompt = reply.clone();
     let finalize = async {
-        flush_audio(context.gemini, &mut context.media.audio_bytes).await?;
+        flush_candidate_audio(context.gemini, context.media).await?;
         if context.turns_candidate_open()
             && let Some(prompt) = reply.as_deref()
         {
@@ -206,6 +201,19 @@ pub(super) async fn handle_data_packet(
     if settles_phase_judge(context.state, topic, payload) {
         settle_phase_judge(context, interview).await;
     }
+    if park_round_transition(context, interview, topic, payload, received) {
+        return Ok(ControlFlow::Continue(()));
+    }
+    apply_data_packet(room, context, interview, topic, payload, received).await
+}
+
+pub(super) fn park_round_transition(
+    context: &mut GeminiEventContext<'_>,
+    interview: InterviewContext<'_>,
+    topic: &str,
+    payload: &serde_json::Value,
+    received: bool,
+) -> bool {
     let judge_running = context.activity.phase_judge.is_running();
     if defers_round_transition(context.state, judge_running, topic, payload)
         && (judge_running || context.activity.reserve_phase_judge(Instant::now()))
@@ -223,9 +231,93 @@ pub(super) async fn handle_data_packet(
                 received,
                 deadline: Instant::now() + PHASE_JUDGE_SETTLE,
             });
-        return Ok(ControlFlow::Continue(()));
+        return true;
     }
-    apply_data_packet(room, context, interview, topic, payload, received).await
+    false
+}
+
+/// Transport is owned by recovery while these effects are reduced. Keep the
+/// current obligation without constructing a send against the placeholder.
+pub(super) fn reduce_recovery_packet(
+    room: &RoomLink,
+    context: &mut GeminiEventContext<'_>,
+    interview: InterviewContext<'_>,
+    topic: &str,
+    payload: &serde_json::Value,
+) -> crate::agent::DataEventResult {
+    let at = Instant::now();
+    let was_requested = context.state.thinking_hold.is_requested();
+    let result = reduce_data_packet(
+        context.state,
+        context.activity,
+        topic,
+        payload,
+        true,
+        crate::current_epoch_millis(),
+    );
+    if result.update_last_code_change {
+        context.activity.last_code_change = at;
+    }
+    if result.update_last_test_reaction {
+        context.activity.last_test_reaction = at;
+    }
+    if result.update_last_interjection {
+        context.activity.last_interjection = at;
+    }
+    context
+        .activity
+        .settle_thinking_request(was_requested, context.state, &result);
+    if let Some(summary) = context
+        .activity
+        .turn_timing
+        .finish_thinking_change(at, result.thinking_changed)
+    {
+        session::log_turn_timing(
+            room.name(),
+            context.activity,
+            &log_clock(context.state),
+            summary,
+            &mut std::io::stderr().lock(),
+        );
+    }
+    if result.thinking_changed == Some(true) {
+        if context.activity.reply_unfinished() {
+            let prompt = context.activity.prompt_text.clone();
+            hold_owed_reply(context.state, prompt.as_deref());
+        }
+        let had_floor = context.activity.floor != Floor::Listening;
+        context.activity.clear_candidate_voice_activity();
+        context
+            .activity
+            .ignore_input_before_hold(at, thinking_transcript_grace(interview.boot.silence_ms));
+        context.activity.latency.close(latency::Boundary::Held, at);
+        session::cut_off_for_hold(context.state, context.activity, context.output_audio);
+        context.state.thinking_unheard_reply |= had_floor;
+        close_turns(room, context);
+        set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING);
+    } else if result.thinking_changed == Some(false) {
+        context.activity.resume_reply_wait(at);
+    }
+    if result.yield_turn {
+        context.activity.clear_candidate_voice_activity();
+        context.activity.latency.yielded(at);
+    }
+    if let Some(prompt) = result.generate_reply.as_deref() {
+        context.activity.mark_recovery_prompted(at, Some(prompt));
+    }
+    if let Some(judged) = test_run_line(
+        topic,
+        context.state,
+        &result,
+        result.generate_reply.is_some(),
+    ) {
+        eprintln!(
+            "tests: at={} {judged} room={}",
+            log_clock(context.state),
+            room.name()
+        );
+    }
+    result
 }
 
 pub(super) fn reduce_data_packet(
@@ -423,6 +515,15 @@ pub(super) async fn apply_data_packet(
     let Some(reason) = result.finish_interview else {
         return Ok(ControlFlow::Continue(()));
     };
+    finish_interview(room, context, interview, reason).await
+}
+
+async fn finish_interview(
+    room: &RoomLink,
+    context: &mut GeminiEventContext<'_>,
+    interview: InterviewContext<'_>,
+    reason: String,
+) -> Result<ControlFlow<()>, Box<dyn std::error::Error + Send + Sync>> {
     if let Some(slot) = interview.slot {
         slot.assessment_finished();
     }

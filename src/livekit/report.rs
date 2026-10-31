@@ -172,6 +172,40 @@ fn is_report_receipt(
             .is_ok_and(|value| value["type"] == "report_received" && value["deliveryId"] == id)
 }
 
+/// What the candidate's page sends back for an agent packet, from the topic and
+/// bytes alone so a recorded packet and a live `DataReceived` decode alike.
+///
+/// The digest is taken over the received bytes, as `reportReceipt` in
+/// `web/lib.js` does, so a re-encoded copy would not acknowledge the report it
+/// was made from. The page hashes whatever arrives on the report topic; this
+/// helper is stricter and also requires a JSON object, which every report is,
+/// so a test cannot pass by acknowledging a malformed packet.
+#[cfg(test)]
+pub(super) fn candidate_ack(topic: Option<&str>, payload: &[u8]) -> Option<DataPacket> {
+    if topic != Some(crate::runtime::TOPIC_REPORT) {
+        return None;
+    }
+    serde_json::from_slice::<serde_json::Value>(payload)
+        .ok()
+        .filter(serde_json::Value::is_object)?;
+    super::browser_packet(
+        crate::runtime::TOPIC_CONTROL,
+        &serde_json::json!({
+            "type": "report_received",
+            "deliveryId": crate::sha256_hex(&[payload]),
+        }),
+    )
+    .ok()
+}
+
+/// Whether a report payload is the final report, not the provisional one that
+/// offers regeneration.
+#[cfg(test)]
+pub(super) fn is_final_report(payload: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(payload)
+        .is_ok_and(|value| value.is_object() && value.get("reportRecovery").is_none())
+}
+
 pub(super) trait DeliveryEvent {
     fn acknowledges(&self, candidate: &str, id: &str, candidate_gone: bool) -> bool;
     fn disconnected(&self) -> bool {

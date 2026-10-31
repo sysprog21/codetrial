@@ -31,7 +31,11 @@ pub(super) const GEMINI_AUDIO_SAMPLE_RATE: i32 = 16_000;
 
 pub(super) const GEMINI_AUDIO_CHANNELS: i32 = 1;
 
-fn candidate_audio_stream(track: RtcAudioTrack) -> NativeAudioStream {
+/// Forty seconds of ten-millisecond frames: the SDK queue and the recovery
+/// buffer hold the same span so neither drops what the other keeps.
+pub(super) const CANDIDATE_AUDIO_QUEUE_FRAMES: usize = 4000;
+
+pub(super) fn candidate_audio_stream(track: RtcAudioTrack) -> NativeAudioStream {
     NativeAudioStream::with_options(
         track,
         GEMINI_AUDIO_SAMPLE_RATE,
@@ -39,7 +43,7 @@ fn candidate_audio_stream(track: RtcAudioTrack) -> NativeAudioStream {
         NativeAudioStreamOptions {
             // Forty seconds covers partial transcription and a bounded
             // connection/setup attempt without the default 100 ms overflow.
-            queue_size_frames: Some(4000),
+            queue_size_frames: Some(CANDIDATE_AUDIO_QUEUE_FRAMES),
         },
     )
 }
@@ -80,7 +84,7 @@ pub(super) async fn pump_audio<S: AudioSink>(
         // at once, ends again and fails again. Both `select!` arms are guarded
         // on the stream still being present, so that is a busy loop for as long
         // as the room lasts, not a lost frame.
-        flush_audio(gemini, &mut media.audio_bytes).await?;
+        flush_candidate_audio(gemini, media).await?;
         return Ok(());
     };
 
@@ -91,7 +95,7 @@ pub(super) async fn pump_audio<S: AudioSink>(
     // `InputTranscript`, where Gemini has already decided that words were said.
     append_pcm16_bytes(&frame, &mut media.audio_bytes);
     if media.audio_bytes.len() >= GEMINI_AUDIO_BUFFER_BYTES {
-        flush_audio(gemini, &mut media.audio_bytes).await?;
+        flush_candidate_audio(gemini, media).await?;
     }
     Ok(())
 }
@@ -147,9 +151,12 @@ pub(super) async fn pump_video(
 /// The candidate's inbound media, plus the identity their tracks arrived on.
 /// Bundled because every track event touches two or three of these together.
 pub(super) struct CandidateMedia {
+    pub(super) recovery_audio: super::recovery::Ingress,
     pub(super) audio: Option<NativeAudioStream>,
     pub(super) video: Option<NativeVideoStream>,
     pub(super) audio_bytes: Vec<u8>,
+    pub(super) audio_unconfirmed: bool,
+    pub(super) quarantined_audio_bytes: usize,
     pub(super) identity: Option<String>,
     last_video_frame: Instant,
     /// Whether the current socket has a camera frame yet. A replacement clears
@@ -159,14 +166,20 @@ pub(super) struct CandidateMedia {
     /// camera gate reads this rather than provider speech events, which a
     /// session may never receive.
     pub(super) voiced_at: Option<Instant>,
+    /// Set when a new audio stream is attached, so the first frame taken from
+    /// it is not measured against the last frame of an earlier stream.
+    mic_stream_fresh: bool,
 }
 
 impl CandidateMedia {
     pub(super) fn new() -> Self {
         Self {
+            recovery_audio: super::recovery::Ingress::default(),
             audio: None,
             video: None,
             audio_bytes: Vec::new(),
+            audio_unconfirmed: false,
+            quarantined_audio_bytes: 0,
             identity: None,
 
             // Seeded in the past so the first frame sends immediately. The
@@ -177,6 +190,31 @@ impl CandidateMedia {
                 .unwrap_or_else(Instant::now),
             presence_frame_sent: false,
             voiced_at: None,
+            mic_stream_fresh: false,
+        }
+    }
+
+    /// A new audio stream is about to be attached: its first frame is not
+    /// measured against the last frame of an earlier one.
+    pub(super) fn begin_mic_stream(&mut self) {
+        self.mic_stream_fresh = true;
+    }
+
+    /// Accounts for one microphone dequeue, `frame` being whether it yielded a
+    /// frame (`false` is the stream's end). Called from every place that takes
+    /// a frame from the SDK queue and from no place that replays a buffered
+    /// one.
+    pub(super) fn note_mic_dequeue(
+        &mut self,
+        latency: &mut super::latency::ReplyLatency,
+        frame: bool,
+        now: Instant,
+    ) {
+        if std::mem::take(&mut self.mic_stream_fresh) || !frame {
+            latency.mic_stream_broken();
+        }
+        if frame {
+            latency.mic_dequeued(now);
         }
     }
 
@@ -187,11 +225,30 @@ impl CandidateMedia {
         })
     }
 
-    fn attach_audio(&mut self, track: &RemoteAudioTrack, participant: &RemoteParticipant) {
-        // Drop any half-buffered frame from a previous publication so the new
-        // stream does not start mid-sample.
-        self.audio_bytes.clear();
+    /// Never-attempted samples and whole retained frames still precede a new
+    /// publication if republish wins the select just after recovery commits.
+    /// Only an ambiguous attempted write is quarantined instead of replayed.
+    pub(super) fn begin_audio_publication(&mut self) {
+        if self.audio_unconfirmed {
+            self.quarantined_audio_bytes = self
+                .quarantined_audio_bytes
+                .saturating_add(self.audio_bytes.len());
+            self.audio_bytes.clear();
+            self.audio_unconfirmed = false;
+        }
+        if !self.recovery_audio.is_empty() {
+            self.recovery_audio.yielded(Instant::now());
+        }
+    }
+
+    pub(super) fn attach_audio(
+        &mut self,
+        track: &RemoteAudioTrack,
+        participant: &RemoteParticipant,
+    ) {
+        self.begin_audio_publication();
         self.identity = Some(participant.identity().to_string());
+        self.begin_mic_stream();
         self.audio = Some(candidate_audio_stream(track.rtc_track()));
     }
 }
@@ -233,7 +290,7 @@ pub(super) async fn handle_media_event(
             participant,
             ..
         } if is_interview_participant(Some(&participant.identity().0), candidate_identity) => {
-            flush_audio(gemini, &mut media.audio_bytes).await?;
+            flush_candidate_audio(gemini, media).await?;
             media.audio = None;
         }
         RoomEvent::TrackUnsubscribed {
@@ -280,6 +337,18 @@ impl AudioSink for GeminiLiveSession {
     }
 }
 
+/// Keep provenance before the first suspension: a failed or cancelled write
+/// cannot be replayed as if no bytes could have reached the provider.
+pub(super) async fn flush_candidate_audio<S: AudioSink>(
+    gemini: &mut S,
+    media: &mut CandidateMedia,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    media.audio_unconfirmed |= !media.audio_bytes.is_empty();
+    flush_audio(gemini, &mut media.audio_bytes).await?;
+    media.audio_unconfirmed = false;
+    Ok(())
+}
+
 pub(super) async fn flush_audio<S: AudioSink>(
     gemini: &mut S,
     bytes: &mut Vec<u8>,
@@ -291,10 +360,41 @@ pub(super) async fn flush_audio<S: AudioSink>(
     Ok(())
 }
 
+pub(super) enum CandidateInput {
+    Frame(AudioFrame<'static>),
+    BufferedFrame(AudioFrame<'static>),
+    Yield,
+    End,
+}
+
+pub(super) async fn next_candidate_input(
+    audio: &mut Option<NativeAudioStream>,
+    pending: &mut super::recovery::Ingress,
+) -> CandidateInput {
+    if let Some(input) = pending.pop(Instant::now()) {
+        return input;
+    }
+    match next_audio_frame(audio).await {
+        Some(frame) => CandidateInput::Frame(frame),
+        None => CandidateInput::End,
+    }
+}
+
 pub(super) async fn next_audio_frame(
     stream: &mut Option<NativeAudioStream>,
 ) -> Option<AudioFrame<'static>> {
-    stream.as_mut()?.next().await
+    let stream = stream.as_mut()?;
+
+    // A test hosting the room loop may hold this one dequeue; the loop's other
+    // arms keep running, and a cancelled wait has taken no frame.
+    #[cfg(test)]
+    {
+        super::probe::next_through_probe(stream).await
+    }
+    #[cfg(not(test))]
+    {
+        stream.next().await
+    }
 }
 
 pub(super) async fn next_video_frame(

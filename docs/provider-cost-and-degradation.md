@@ -275,6 +275,223 @@ Each reads at most 6 KiB of transcript tail and 6 KiB of editor. A rate limit on
 a judgment does not cool the key, so the judge cannot leave the final report
 without one.
 
+## Candidate absence and room lifetime
+
+The agent ends an interview whose candidate has been gone for 90 seconds
+(`CANDIDATE_ABSENCE_LIMIT`), checked on the 2-second watch tick, on top of
+LiveKit's own reconnect window. That limit only holds if the room is still
+there. LiveKit closes a room `departure_timeout` seconds after its last
+non-agent participant leaves, and the agent is a dependent participant that
+does not hold a room open. A room LiveKit creates on first join gets the
+default of 20 seconds, so an agent-only room closed with `RoomClosed` shortly
+after the candidate left and the interview ended with no report, well inside
+the grace.
+
+`/api/token` therefore creates the room itself, with RoomService `CreateRoom`,
+before the agent is dispatched and before the token is returned, so neither
+the agent nor the candidate can create it with the default first. The request
+is `{"name": room, "empty_timeout": 330, "departure_timeout": 100}`. The
+departure timeout is derived from the absence limit plus one watch tick plus
+an 8-second margin for LiveKit and the agent starting their clocks at slightly
+different moments (rounded up to whole seconds); the empty timeout is the agent's wait for a
+candidate (`CANDIDATE_JOIN_LIMIT`) plus a 30-second margin, because the room
+is created before the agent connects and LiveKit counts an agent-only room as
+empty, so the agent's own no-show deadline must fire first. Both timeouts are computed in
+`livekit.rs` from those constants; tests pin the literal request body and that
+the departure timeout stays at or above the limit plus a tick.
+
+The call runs on the web server under a `roomCreate` token signed with the
+project's secret, the same grant as room deletion, which is unchanged and still
+owns cleanup. LiveKit answers a create for an existing room with that room, so
+a repeat, or an `already_exists` or 409 answer, is a success; a pinned
+development room that already exists keeps the timeouts it was made with. A
+transport error, 429 or 5xx is retried once, each attempt bounded to 3 seconds
+with a 250 ms pause, so the candidate waits at most about 6.3 seconds. Any
+failure is logged with the room name and LiveKit's error (never a token) and
+ignored: the interview starts and runs on LiveKit's default timeouts, which is
+the previous behaviour, rather than failing a start over a cosmetic setting.
+A start refused after the call (capacity, a report still finishing) leaves an
+empty room that LiveKit removes after the empty timeout, and its create call
+is made before the refusal is known, so refused requests under load still cost
+one RoomService call each.
+
+`provision_rooms` in the web configuration turns the call on; the binaries set
+it and the test servers do not, so no test reaches LiveKit.
+
+## Live recovery wait ownership
+
+Recovery has a room-owned driver. Pending transport futures own their socket
+and immutable bootstrap inputs; they do not own mutable interview state. While
+prefix, notice, close, open, retry or commit work waits, the driver polls room
+controls, participant presence, board snapshots and candidate media. It uses
+the original interview deadline (selected duration plus 120 seconds), rather
+than restarting a duration timer for each replacement. Manual end and deadline
+cancel transport work before the existing ending route; absence expiry and room
+disconnection leave without generating a report. Cleanup and reporting are
+separate waits, so this does not establish an end-to-report latency bound.
+
+| Wait and owner | Current local bound | Accounting and outcome |
+| --- | --- | --- |
+| Optional speech-prefix finalization, `livekit::recovery::Driver::prefix` | One buffered-audio write, one audio-end write, then a two-second event window. Each write has the five-second established-write limit; the first nonempty transcript may cause one additional five-second context write inside the window. At most 17 seconds of these waits, excluding scheduling and local processing. | The extra context counts as constructed input before send. Failure falls back to ordinary transport recovery; received usage remains separately drainable. |
+| Prefix transcript application, `livekit::session::apply_recovery_transcript` | Synchronous state/evidence update and transcript enqueue; no additional model write. | Uses reader receipt time for the Thinking grace. Raw reply debt is retained for the fresh briefing; publication is handled by the transcript writer. |
+| Initial reconnect notice, `livekit::replace_gemini_session` | No local timeout on `publish_control`. | Best effort on returned errors; room controls and the original deadline remain live during an unresolved publish. It spends no model call. |
+| Retiring socket, `GeminiLiveSession::shutdown` | Writer close has a two-second timeout or is skipped when already gone. Reader abort is followed by a join with no separate timer. | Abort/join precedes the room's usage drain. A failed close does not prevent replacement or draining already-received usage. |
+| One resumed or cold open, `gemini::live_session_with_keys` | Up to 15 seconds to connect, then one 15-second deadline shared by setup send and `setupComplete`. Credential selection can fail without opening a socket. | Resume is offered once, on its original credential; failure proceeds to cold recovery. A cold failure is classified before any retry. |
+| Cold retry and notices, `livekit::retry_cold_open` | Ordinary backoff is two seconds. Its wait notice has a one-second limit overlapping that wait; a shorter remaining cooldown can therefore stretch to the notice limit; the subsequent attempt notice runs alongside the open and is joined before returning. | Each permitted retry is charged before its wait. Retryable failures consume the same consecutive restart budget as the initial replacement. |
+| Exhausted quota rotation, `gemini::credentials` and `livekit::retry_cold_open` | Wait until the earliest eligible quota deadline, normally at most the remaining 60-second cooldown when selected. Other interviews can extend shared cooldowns before the next selection. | A quota-only exhausted rotation can wait under the restart budget. A sole key's quota failure uses the ordinary retry path. Invalid, refused and billing credentials do not become quota-only waits. |
+| Replacement commit, `livekit::replace_gemini_session` | Reconnected notice has no local timeout. Briefing/listening context and a cold whiteboard resend use the five-second established-write limit per write. | Every successful setup is recorded before installation and advances the physical socket counter, including a socket later discarded on end. Prepared inputs settle only the editor/debt snapshots they carried. Newly received obligations are drained before installation. Failed briefing retains the required cold brief or reply debt. |
+| Failure exit, `livekit::end_without_interviewer` | Clearing the reconnect notice has no local timeout. Ending can first settle phase judgment within a shared five-second result-wait window and apply its model update, then flush transcripts and settle final board evidence. Report generation has its own 125-second limit. Farewell, delivery and teardown are separate operations; 125 seconds does not bound the whole ending. | Exhausted recovery reports from the evidence already held. Billing leaves without a report; those HTTP calls could not be paid for either. |
+| Billing or absence leave, `livekit::leave_room` | `RoomLink::close` has no caller-supplied local timeout. | Ends the agent participant without a report; it does not delete the candidate's room. |
+
+The consecutive restart limit is eight charges, not eight sockets over an
+interview's lifetime. `take_restart_attempt` first clears the count for a
+healthy-age socket, then charges the initial replacement. Watchdog failure or
+an unfinished reply makes that age zero even for an old socket. One refused
+resume and its first cold fallback share the initial charge; each additional
+cold retry spends another charge before waiting. A credential-selection failure
+can therefore consume a charge without producing a network connection.
+Completed recovery scaffolding alone does not clear a failure run. The
+resume-suppression and reply-progress rules above still decide real recovery.
+
+For a fresh failure run with a resumable handle, there can be at most one
+resume attempt and eight cold attempts, with seven retry waits. Without quota
+waits, their connect/setup/backoff limits sum to
+`30 + 8 * 30 + 7 * 2 = 284` seconds. With each retry wait bounded by a remaining
+60-second quota cooldown instead, the corresponding conservative sum is
+`30 + 8 * 30 + 7 * 60 = 690` seconds. Add up to two seconds for the old writer
+close and, on the speech path, the prefix waits above. These are conditional
+sums of provider-operation limits, not unconditional wall-clock bounds: they
+exclude notices without local timeouts, the untimed reader join,
+commit, report/delivery, scheduling and local processing. The driver can cancel
+these provider waits earlier on a room terminal event or the original deadline.
+Concurrent credential failures can change the selected
+cooldown between retries, but cannot add retry charges beyond the same budget.
+An already partly spent failure run permits fewer attempts. First startup is
+different: its entire retry sequence already has a 30-second outer deadline.
+
+The local matrices drive this loop over a recorded room, so they cannot show
+that the real SDK delivers a participant leaving, a control packet or a report
+receipt to the driver while a replacement pends. The native SDK recovery
+fixture in `docs/development.md` (ignored tests, each run with budgeted sessions) is the check
+for that boundary, and a crossing it did not observe stays uncovered: a normal
+live ending does not show that a cancel during recovery is correct.
+
+Microphone retention is a separate limit. `NativeAudioStream` is configured
+with 4000 frames, roughly 40 seconds at its nominal ten-millisecond cadence,
+and drops the oldest when full. That SDK queue exposes no occupancy, enqueue
+age or drop count through the pinned public API. The recovery driver drains
+available frames into its own queue, capped at 4000 entries and 1,280,000 PCM
+bytes, with a 40-second age limit measured from local dequeue, not capture.
+Only drops from this owned queue can be counted. Ordered end/yield boundaries
+survive trimming before later retained audio. Replaying retained frames does
+not refresh live voice or latency timestamps. A never-attempted byte tail can
+be retained; an interrupted or failed write is ambiguous and is quarantined
+rather than replayed as if Gemini certainly received none of it. These limits
+do not prove lossless microphone delivery or a shorter recovery SLO.
+
+Held context summaries have a separate FIFO cap of 32 entries and 64 KiB.
+Overflow is counted and explicitly described to the model as omitted context;
+it is not reconstructed as candidate evidence. Successful transport recovery
+alone therefore cannot qualify speech continuity or complete context delivery.
+
+Old and discarded fresh readers are stopped and joined before their received
+usage is drained. Each drain uses that socket's input cause. The replacement
+is installed once, after the final room poll and obligation check. The local
+control seam tests cancellation independently of SDK packet construction;
+connected room delivery, terminal/report races and the full usage/budget matrix
+also require their dedicated integration and live checks.
+
+### Decision record: a provider-recovery episode deadline
+
+Status: rejected. The existing policy stays: the restart budget, the
+two-second backoff, the quota-cooldown wait and the original interview deadline
+are the only limits on a replacement. No setting, constant or code path for an
+episode deadline exists in the product.
+
+Problem. A replacement that cannot reach Gemini retries silently under the
+eight-charge budget. The conditional sums above (284 and 690 seconds) are
+upper bounds; the question was whether a shorter, fixed cap on the whole
+episode would cut the candidate's silent wait without losing outages that end.
+
+Candidate. A 120-second deadline measured from the first replacement intent
+(the start of `livekit::recovery::replace`). On exhaustion the open is
+cancelled, no further open starts, and the existing no-interviewer ending runs
+with `LiveOutcome::GeminiUnreachable`. Key cooldowns, the eight charges, the
+single-socket rule and the exactly-once usage drain are unchanged, and room
+terminals remain earlier limits, because `Driver::wait` already polls them
+while the open is pending.
+
+Evidence. `provider_outage_schedules_follow_the_declared_table` runs the real
+`retry_cold_open_into` loop against a fake provider on a paused clock, with the
+initial charge spent as `replace` spends it. A failed open is answered after
+100 ms (`fast`), after the 30-second connect and setup limit (`slow`), or by a
+quota rotation whose keys cool for 60 seconds after each failed contact
+(`quota`). Values are the logical seconds from the start of the cold-open loop
+to the end of the episode, with open counts and final charges in parentheses.
+The loop starts after the reconnect notice, the old writer close and any resume
+attempt (up to 30 seconds), so a deadline measured from the first intent would
+bite that much earlier than these rows show, which only worsens the recoverable
+cases below. The control and
+candidate rows are asserted exactly.
+
+| Provider recovers | Fast: control = candidate | Slow: control = candidate | Quota: control | Quota: candidate |
+| --- | --- | --- | --- | --- |
+| 1 s | opened at 2.2 (2 opens, 2 charges) | opened at 32.1 (2, 2) | opened at 60.2 (2, 2) | same |
+| 30 s | budget refused at 14.8 (8, 8) | opened at 32.1 (2, 2) | opened at 60.2 (2, 2) | same |
+| 60 s | budget refused at 14.8 (8, 8) | opened at 64.1 (3, 3) | opened at 60.2 (2, 2) | same |
+| 90 s | budget refused at 14.8 (8, 8) | opened at 96.1 (4, 4) | opened at 120.3 (3, 3) | deadline at 120.0 (2 opens, 3 charges) |
+| never | budget refused at 14.8 (8, 8) | control budget refused at 254.0 (8, 8); candidate deadline at 120.0 (4, 4) | budget refused at 420.8 (8, 8) | deadline at 120.0 (2, 3) |
+| healthy at 1 s, keys re-cooled to 150 s by another interview | n/a | n/a | opened at 150.1 (3, 3) | deadline at 120.0 (2, 3) |
+
+Findings.
+
+- Failure exposure is reduced only where the control waits longest: the
+  maximum provider wait for a provider that never recovers falls from 254 to 120
+  seconds on the slow schedule and from 421 to 120 on the quota schedule. The
+  fast schedule never reaches the deadline, because eight quick refusals spend
+  the budget in under 15 seconds.
+- Recoverable cases are not all preserved. Every recovery at or before 90
+  seconds that the control catches on the slow schedule survives the candidate,
+  and the fast schedule is identical under both policies (only the 1-second
+  recovery is caught before the budget is spent). On the quota
+  schedule a recovery at 90 seconds is opened by the control at 120.3 seconds,
+  because the cooldown wakes the loop on a 60-second grid; the candidate cuts it
+  off at 120.0 and ends an interview the control would have saved. A key cooldown
+  another interview extends to 150 seconds is lost the same way. A limit of
+  121 seconds keeps the 90-second case but is then tuned to the grid, and any
+  limit that admits an open at the edge also admits that open's connect and
+  setup time, up to 30 more seconds.
+- Terminal controls stay earlier limits. A terminal at 50 seconds (slow) or 100
+  seconds (quota) ends both policies identically. A terminal at 130 seconds is
+  never seen by the candidate, which has already ended at 120 with the provider
+  reason; the control keeps retrying until the terminal and spends one more
+  open (5 against 4 on the slow schedule, 3 against 2 on the quota schedule).
+- Repeated GoAway is untouched. Each replacement in such a series is a short
+  healthy episode, so a per-episode deadline never fires. The series is bounded
+  by the restart budget and its age reset only (see the age table in the unit
+  tests): idle sockets that live 61 seconds are never refused over an hour, and
+  replacements that owe a reply are refused on the ninth close.
+  `repeated_goaway_episodes_are_not_bounded_by_an_episode_limit` pins that. A
+  per-episode cap does not bound a series of separate healthy-age sockets.
+
+Ending path. Exhaustion would stop opening and reach
+`livekit::end_without_interviewer` with `LiveOutcome::GeminiUnreachable`, the
+same outcome as a spent budget, so the summary line could not tell the two
+apart without a new outcome value or log field.
+
+Decision. Reject. The candidate cuts the maximum wait but gives up recoverable
+outages on the one schedule that waits longest, and the cooldown grid makes the
+cut point arbitrary. Nothing here shows how long real provider outages last, so
+no value of the limit can be defended. Reopen only with measured recovery times
+from live sessions or a change to how cooldown wakes are scheduled.
+
+Candidate-facing consequence of keeping the current policy. A candidate
+can sit behind the reconnecting notice for up to the sums above, hearing
+nothing, before the interview ends without an interviewer and their report is
+written from the evidence already held. A candidate whose provider recovers is
+reconnected on the next permitted open. Nothing new is shown or asked of the
+candidate.
+
 ## What bounds concurrency
 
 The server admits at most `CODETRIAL_MAX_CONCURRENT_INTERVIEWS` live local
@@ -805,9 +1022,16 @@ restarts its first-output deadline at the recovery minimum and keeps whatever
 platform request it still owed. It is one extra request per speech handoff
 whose replacement stayed silent through the wait, instead of waiting out the
 reply timeout and being replaced again; a replacement that answers earlier
-costs none. With a silence window past about seven seconds the reply timeout
-comes first and the request never lands. Provider events the replaced socket emits while the prefix is finalized
-are discarded, and their count is logged. A failed
+costs none. Before that request, the configured first-output deadline still
+applies. The two-second watch tick checks the handoff request before the reply
+watchdog: when both are due on the same tick, a successful request renews the
+wait. A failed send consumes the one-shot request without renewing the original
+deadline. With a longer silence window or later candidate speech, the watchdog
+can become due on an earlier tick and replace the socket before the request.
+The crossover depends on the first-output setting, the latest quiet origin
+and the tick phase, rather than a fixed silence-window threshold. Provider
+events the replaced socket emits while the prefix is finalized are discarded,
+and their count is logged. A failed
 briefing leaves the local cold briefing due rather than ending the interview.
 Microphone ingress buffers up to 40 seconds while the room loop reconnects,
 about 1.3 MB of PCM plus queue overhead at 16 kHz mono. The oldest frames still

@@ -2155,7 +2155,7 @@ async fn recall_probe_records_spoken_output_before_a_tool_continuation() {
             .await
             .unwrap();
     });
-    let mut session = crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None)
+    let mut session = crate::livekit::tests::fixture_session_at(&url, &keys, &boot, None)
         .await
         .unwrap();
     let mut state = RuntimeState {

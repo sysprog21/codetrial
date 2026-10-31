@@ -315,6 +315,7 @@ dependencies = [
  "livekit",
  "livekit-net",
  "livekit-protocol",
+ "log",
  "reqwest 0.13.5",
  "ring",
  "rusqlite",

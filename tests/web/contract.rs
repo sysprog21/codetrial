@@ -65,6 +65,7 @@ async fn static_home_markup_matches_frontend_contract() {
         pool: Default::default(),
         probe_provider_quota: false,
         update_check_commit: None,
+        provision_rooms: false,
     })
     .await;
     let html = http_client()
@@ -124,6 +125,7 @@ async fn static_interview_markup_exposes_offline_surface() {
         pool: Default::default(),
         probe_provider_quota: false,
         update_check_commit: None,
+        provision_rooms: false,
     })
     .await;
     let html = http_client()
@@ -1265,41 +1267,4 @@ fn browser_interview_duration_matches_the_server_clamp() {
     // relation and the other is what a browser paints.
 }
 
-/// A card the filter cannot show is a problem nobody can reach.
-///
-/// web/app.js hides every card whose `data-difficulty` is not among the checked
-/// boxes, so a generated card carrying a level the fieldset never offers is
-/// invisible for good, is never recommended, and nothing fails to say so. The
-/// cards come from problem-bank/problems.json through
-/// scripts/gen-problem-cards.py and the boxes are hand-written, which is
-/// exactly the seam a new difficulty string would slip through.
-///
-/// Both sides are read off the rendered page rather than restated here, because
-/// a third copy of the level names is a third place to forget one.
-#[test]
-fn browser_every_problem_card_has_a_difficulty_the_filter_offers() {
-    let page = fs::read_to_string("web/index.html").unwrap();
-
-    // Each `<input>` start tag read whole, so the check does not care what
-    // order its attributes are written in.
-    let offered: std::collections::BTreeSet<&str> = page
-        .split("<input")
-        .skip(1)
-        .map(|tag| &tag[..tag.find('>').unwrap_or(tag.len())])
-        .filter(|tag| tag.contains("name=\"difficulty\""))
-        .filter_map(|tag| tag.split("value=\"").nth(1))
-        .filter_map(|value| value.split('"').next())
-        .collect();
-    assert!(
-        !offered.is_empty(),
-        "web/index.html offers no difficulty filter at all"
-    );
-
-    for chunk in page.split("data-difficulty=\"").skip(1) {
-        let level = chunk.split('"').next().expect("data-difficulty is quoted");
-        assert!(
-            offered.contains(level),
-            "web/index.html has a {level} problem card, which the difficulty filter never shows"
-        );
-    }
-}
+include!("contract_parts/browser_checks_and_long_interview_range.rs");

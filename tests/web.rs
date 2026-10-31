@@ -149,6 +149,7 @@ fn web_config() -> WebServerConfig {
         pool: primary_pool("wss://example.livekit.cloud", "devkey", "devsecret"),
         probe_provider_quota: false,
         update_check_commit: None,
+        provision_rooms: false,
     }
 }
 

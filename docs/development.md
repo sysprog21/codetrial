@@ -635,7 +635,7 @@ only that the room stayed up. `BROWSER_CHECK_SOAK_SECONDS` lengthens it and
 belongs to this flow alone; naming it on another one fails rather than being
 ignored, and so does a value under the cap.
 
-Presence is the weakest of the four things it judges, because the interviewer
+Presence is the weakest of the things it judges, because the interviewer
 stays in the room through every way this can go wrong. So the flow also
 requires, from the runtime log and the transcript panel:
 
@@ -645,8 +645,59 @@ requires, from the runtime log and the transcript panel:
 - The replacement resumed rather than restarting cold. A cold one keeps the
   interviewer in the room having lost the conversation.
 - No degraded restart at any point, reported where it happened.
-- The transcript grew after the handover. Jim nudges an idle candidate, so
-  turns keep arriving without the browser having to speak.
+- Every replacement episode is held to the reply it owed, matched by ids and
+  not by the transcript panel. An episode that began with a reply owed passes
+  only when that same reply (same pid, session and obligation) was answered
+  with audio first accepted on a socket at or after the one the episode
+  installed; audio taken on the replaced socket, an earlier recovery's answer
+  and another room's or session's reply satisfy nothing. An episode that began
+  with nothing owed is classified idle, and one whose reply a hold, cut or
+  barge-in ended before any audio is classified held; neither is made to speak.
+  A start with no end, a swap whose reply never finished and a cut log fail.
+  Each episode is printed with its status and reason, and
+  `BROWSER_CHECK_SOAK_RESULT` names a file that receives the same as JSON.
+- Every swap that was answered with audio is followed by decoded audio on the
+  track. The track is reused across Gemini sockets, so the sample taken when it
+  was first subscribed is older than the socket under test and covers nothing.
+  The page marks each installed swap, waits for the first Speaking transition
+  after the mark (audio already playing when it was marked is the old socket's),
+  and samples the track again from a fresh counter baseline, within a fixed
+  number of samples. A swap passes with such a sample of its own that has
+  received packets and a decoded signal, or when a later swap's sample covers
+  it after the later mark replaced a sample that had not opened its window. A
+  missing, stale, silent or unavailable sample fails, as does one whose window
+  did not open after its mark. If the track is resubscribed before the sample
+  is taken, it is taken again on the new track from the same mark. A swap that
+  owed no audio, or whose reply was held, is not made to speak. The sample
+  proves decoded audio on the receiving track after the mark, ordered by the
+  page's Speaking transitions; it is not tied to the swap's own reply, which the
+  reply check above settles, and a reply that began between the install and the
+  mark (the log is read every quarter second) is missed, so the next
+  transition is used and may not come within the grace. It is not evidence
+  that anything was physically audible and it does not time when the audio
+  began.
+
+`BROWSER_CHECK_SOAK_VERDICT_MODE` is `strict` (the default) or `pilot`, and
+belongs to the soak alone. Strict is the qualification and keeps the cap of one
+rebuild from local state after a reply timeout. Only a degraded watchdog
+rebuild whose fallback is `no_handle` or `resume_suppressed` counts toward the
+cap; a natural GoAway swap never does, and a watchdog swap that resumed the
+session is reported apart and counts for nothing. Pilot leaves that cap alone
+out of its verdict, so its verdict is the structural one: a reply, audio,
+GoAway or handover failure still exits 1, and a soak without a GoAway still
+exits 77. A pilot prints `qualification=not_evaluated` and both outcomes, so a
+pilot that completed is not a pass of the strict check.
+
+`BROWSER_CHECK_SOAK_RESULT` receives `mode`, `verdict`, `structural_verdict`,
+`strict_verdict`, `qualification`, `watchdog_rebuilds_total` (every degraded
+watchdog rebuild), `strict_cap_eligible_total` (those that count toward the
+cap), `watchdog_resumed_total`, `goaway_swaps_total`, `exposure_s`, the
+per-episode reply and audio results, and the capture file holds the same under
+`soak`. `exposure_s` is the largest assessment clock of the `interview clock:`
+samples when they are anchored and in order; when they are missing or
+inconsistent it is `null` (with `exposure_basis` saying why), never zero. A
+rate per hour of any of these totals is meaningful only with a known positive
+`exposure_s`.
 
 Checks that need credentials or a running service stay out of the gate and are
 run on their own: `scripts/server-check.sh`, `gemini-check.sh`,
@@ -678,3 +729,305 @@ target/task-tools/bin/pip install -r scripts/requirements-task.txt
 render-prompt, preview, build and publish-scan;
 [task-mode.md](task-mode.md#instructor-workflow) says what each does. The
 tooling never uploads or pushes files.
+
+## Run budget for live validation
+
+A live validation run spends provider money from the moment a candidate joins,
+and a worker that keeps its own count can lose it in a page reload. The budget
+lives in a separate process instead: `scripts/interview-run-budget.py` launches
+the worker, owns the count of scripted actions, samples the clock and reaps what
+the run started. Nothing here calls a provider; the fixture suite
+`tests/test_interview_run_budget.py` runs in the gate with fake workers and a
+Unix socket.
+
+The manifest is a JSON file with `schema_version` 1. It names the run, pins
+every executable by absolute path and sha256 (the candidate, and a control or a
+test worker if the run uses one), and records the settings and fixture hashes,
+`selected_duration_s`, `outer_wall_cap_s`, `cleanup_reserve_s` (at least 60),
+`end_mode`, the integer `limits`, the declared `scopes` and the exact `actions`
+list. The list holds the nonfinal action IDs, common setup such as
+`candidate_join` included. `action_ceiling` must equal that count plus one: the
+extra permit is the reserved `end`, which finalization spends whether or not the
+scenario displays an explicit End. A duplicate ID, a listed `end`, or a count
+that does not match is refused, and so is a list without `candidate_join`, the
+action that gates the re-check of the pinned executables. Executables are built
+and hashed before the run; the launcher re-hashes them before the join permit,
+and `browser-check.sh` runs the pinned candidate, for the server and for the
+agent, instead of building one. Each run needs an empty artifact directory, so
+a rerun cannot start from a fresh count.
+
+Proposed launcher command, run from the repository root:
+
+```bash
+python3 scripts/interview-run-budget.py validate \
+    --manifest run/manifest.json --verify-binaries
+python3 scripts/interview-run-budget.py run \
+    --manifest run/manifest.json --artifact-dir run/artifacts \
+    [--resource-cleaner PATH] -- \
+    scripts/browser-check.sh
+```
+
+`validate` is free and should always precede `run`. `run` passes the worker
+`BROWSER_CHECK_RUN_MANIFEST`, `BROWSER_CHECK_RUN_ID`,
+`BROWSER_CHECK_RUN_MANIFEST_SHA256` (the hash of the manifest bytes),
+`BROWSER_CHECK_BUDGET_SOCKET`, `BROWSER_CHECK_BUDGET_TELEMETRY` and
+`BROWSER_CHECK_BUDGET_STOP`. `scripts/browser-check.sh` refuses a partial set, a
+run ID or hash that disagrees with the manifest, a binary whose sha256 changed,
+and `CODETRIAL_WEB_URL`, since an external server is shared and was not built
+from the pinned executable. With `BROWSER_CHECK_VALIDATE_ENV_ONLY=1` it stops
+after those checks, so they are testable without a browser.
+
+`BROWSER_CHECK_FLOW=long-interview` holds one real interview for a duration the
+manifest names and judges that it ran that long. It needs a budgeted run and
+`BROWSER_CHECK_AGENT=rust` or `dispatch`. The manifest adds `run_kind`
+(`smoke`, `pilot`, `qualification`, `experiment` or `clip`), `duration_min` and
+`observation_target_s`, and `end_mode` gains `manual`, `server_deadline`,
+`absence`, `room_closed`, `terminal_cancel` beside `native_close`; `explicit_end` is the older
+spelling of `manual` and is not a long interview. `interview-run-budget.py`
+checks only their shape. `scripts/long-interview-plan.cjs` owns what they mean
+for a browser run, and `browser-check.sh` and `browser-check.cjs` both call it
+under `BROWSER_CHECK_VALIDATE_ENV_ONLY=1`, before anything is built or started:
+
+- `BROWSER_CHECK_DURATION_MIN` is harness-only, 20 when unset, and must be 10,
+  20, 30, 60 or 90, inside the product's 10 to 90 minute range. It sets the
+  page URL, the token request, the agent's bootstrap and the countdown, and the
+  run fails if the token, the bootstrap line or the countdown disagrees. A
+  recording cap (`CODETRIAL_RECORDING_MAX_MINUTES`, from the environment or the
+  config file) below the duration is refused rather than clamped. Every other
+  flow refuses the variable, so a 660 second soak never becomes a long
+  interview by selecting 60 or 90.
+- A pilot runs 60 minutes and a qualification 90, both with a manual End and
+  `observation_target_s` equal to `duration_min * 60`. An experiment names its
+  frozen length in `experiment_profile_min` (20 or 30), which must equal
+  `duration_min`; no document in this repository defines that profile, so it is
+  a manifest field instead of a constant. A smoke may observe a shorter positive
+  target. A `server_deadline` smoke sends nothing, so the real route ends the
+  interview, and observes the duration plus the agent's 120 second grace.
+- `clip` and `native_close` belong to the native worker and are refused for a
+  browser run, as are `absence`, `room_closed` and `terminal_cancel`, which this
+  flow does not drive. A clip emits no assessment report and satisfies no report gate.
+- A run with no bootstrap line, token response, countdown or interview clock
+  sample (for a target of two minutes or more) fails instead of passing on
+  nothing, and so does a clock whose origin is missing, moves or lies outside
+  the time the run was alive.
+
+A long interview's wall windows are separate and sit outside the selected
+duration: 300 seconds of setup, 300 of end and report, 60 of teardown, so
+`outer_wall_cap_s` is `selected_duration_s` plus 660 and `cleanup_reserve_s` is
+360. These are harness ceilings, not production latency guarantees, and the
+report generator's own 125 second limit bounds one step of the end window, not
+evidence settlement, the farewell, delivery or cleanup.
+`scripts/long-interview-timing.cjs` names three moments that must not be read
+as one: the last-stimulus boundary (the duration less a 120 second reserve, the
+90 seconds of serial handover and progress grace the harness already allows
+plus a 30 second margin; the final question starts 30 seconds before it), the
+end of the full interview observation (the whole selected duration, which is
+the only thing that may be called a full 60 or 90 minute interview), and the
+completion of the end and report work. Stimuli stop at the boundary, the
+connected session and the observation continue to the end of the duration, and
+then the harness deliberately ends. The run is anchored to the interview
+clock's `start_unix_ms`, or failing that the first token request, so a page
+reload cannot reset it, and the exposure it actually had is recorded. The
+reserve is revalidated before launch against the resolved handover grace
+(`BROWSER_CHECK_HANDOVER_GRACE_S`, 90 when unset). A GoAway rotation that begins
+at or after the boundary is `late_idle` or `late_terminal_preempted` and never
+counts toward the two completed rotations a run needs.
+
+`run` also samples the owned process tree (RSS, open descriptors and threads
+for every process, keyed by PID and start time so a reused PID is another
+process) every 30 seconds into `resource-samples.jsonl`, for either arm of a
+comparison (`--arm candidate|baseline`). The file is appended as the run goes,
+so nothing depends on a final tail. A value that could not be read is `null`,
+a tree total is the sum of the values that were read with the number of
+processes that gave none, and a tree with none readable has a `null` total:
+unknown, never zero. The manifest's `max_archive_bytes` bounds the whole
+artifact directory. It must lie between a floor (the sampler's worst case,
+`floor(wall_cap / 30) + 2` samples of at most 4096 bytes, plus 256 KiB for the
+controller's own files) and that floor plus 256 MiB, so the bound is finite and
+derived, and a manifest that names a `duration_min` must carry one. A run
+that would exceed it, or whose sampler would outgrow its own
+bound, stops, writes `incomplete_artifact.json` and exits 6; nothing is
+evicted to make room. Exit codes: 1 a structural failure, 4
+`incomplete_budget`, 5 `incomplete_cleanup`, 6 `incomplete_artifact`, 77 no
+GoAway (inconclusive). When several apply the exit names the most serious in
+that order (5, 6, 4, 1, 77) and each class still has its own artifact.
+
+A worker asks for each scripted action by ID and sequence before dispatching it
+(`scripts/run-budget-guard.cjs` for the browser, `WorkerGuard` in the launcher
+script for Python). The launcher writes the grant to `budget-ledger.jsonl`
+before it replies, so an action is granted at most once and a lost reply still
+counts as spent. A duplicate, unknown, out-of-sequence or malformed request, a
+reply that is not an exact grant, a lost connection and a timeout over one
+second all deny and are never retried. Counts live in the launcher, so a page
+reload or a reconnecting worker asks for the current count instead of restarting
+it. The launcher stops granting new work at `outer_wall_cap_s` minus
+`cleanup_reserve_s` and grants only the reserved `end` after that, until the
+reap starts; it then sends TERM and, if needed, KILL to the processes it
+started, recorded at each sample, and to nothing else. A SIGTERM, SIGINT or
+SIGHUP to the launcher takes the same path at once. A killed launcher leaves
+the worker unable to get a permit, and `WorkerGuard.watch_launcher` lets it run
+its own bounded cleanup; a dead worker leaves the launcher to reap what it
+leaked.
+
+What is enforced and what is only observed:
+
+- Hard: scripted actions (permits), wall time (the stop-new-work deadline is
+  also checked in each permit, so a stalled sampler cannot open the cleanup
+  window to new work), and agent-alive exposure when the manifest declares it
+  hard. Exposure is wall time measured from the worker's `agent_alive`
+  telemetry, a conservative bound under the single-socket invariant and not a
+  bill. If its heartbeat stops, the run fails rather than continuing blind.
+- Observed: model turns, tool calls, HTTP requests, audio frames and restarts,
+  reported from the worker's telemetry as a count, or as `unknown` when none
+  arrived, never as zero. A manifest may not declare any of these hard, and
+  `provider_invoice` may only be `not_measured`; the preflight refuses a
+  manifest that asks for a limit nothing can enforce, as it does a run with
+  named resources and no `--resource-cleaner`, a sampler slower than one second
+  or a pin too large to re-hash inside the permit timeout.
+
+Exit codes: 0 complete, 1 the worker failed inside its budget, 2 preflight
+refused the run before anything started, 4 `incomplete_budget`, 5
+`incomplete_cleanup` (a surviving owned process, a failed resource cleanup or a
+reap over its budget). The artifact directory keeps `budget-result.json`,
+`budget-ledger.jsonl`, and `incomplete_budget.json` or `incomplete_cleanup.json`
+when either applies.
+
+Limits of the process tracking: it reads `/proc`, or `ps` elsewhere, and on
+Linux marks the launcher a child subreaper so orphans stay in the tree; without
+that mark a daemon that reparents and changes session between two samples is not
+found. The KILL stage cannot remove a process stuck in uninterruptible sleep; it
+is reported as a survivor.
+
+### Native SDK recovery fixture
+
+`tests/unit/livekit/recovery_live.rs` holds the one credentialed recovery
+check that needs no browser: an ignored test,
+`live_sdk_control_presence_and_report_delivery`, that hosts the real room loop
+in the test process with a real LiveKit SDK candidate and the configured
+Gemini. It is a worker for the controller above and refuses to start without the
+four budget variables. Real: the LiveKit room and transport on both ends, the
+candidate's data packets, the room loop and recovery driver, Gemini Live and the
+report call. Not real: speech (nothing is spoken; the editor state is authored
+text on the code topic), the page (the report receipt is the digest the page
+sends), and the recovery trigger, which ends the first Live reader through a
+test-only inspection so the loop takes its own Close path and reaches the
+prepared recovery write that a test-only gate holds. Every effect, including
+starting the room loop, is taken behind a permit; reads and waits are not
+actions. The candidate token is minted by the token endpoint's own function,
+so durations follow the same 10 to 90 minute and recording-cap rules.
+
+```bash
+scripts/live-sdk-fixture.sh build DIR            # once; pins DIR/live-fixture
+CODETRIAL_LIVE_CONFIG=PATH scripts/live-sdk-fixture.sh run a DIR
+```
+
+`CODETRIAL_LIVE_CONFIG` is a config file for an isolated LiveKit project and a
+Gemini key with an agreed quota. `run` takes one scenario letter, writes that
+scenario's manifest from the test binary, validates it with the pinned hash,
+and launches the controller; a scenario runs once per `DIR`, and nothing reruns
+it. The log is `DIR/worker-<letter>.log` with URL credentials redacted, and the
+fixture's observations are its `LIVE_OBS` lines. The controller re-hashes the
+pin inside the join permit, and by default refuses a pin that takes over 0.5
+seconds to hash. A stripped release pin is large enough that a shared host
+under load can hash it slower than that, and a debug pin is far over, so
+`build` makes a release build, strips the copy and prints the hash time. `run`
+and `run-clip` pass `--max-join-hash-s 0.7` (the ceiling below) and print the
+hash time they measure; nothing else raises the limit.
+
+The `run` subcommand takes `--max-join-hash-s SECONDS` (default 0.5). A value
+that is not finite and positive, or is over 0.7, is refused at preflight. The
+ceiling is the permit timeout (1 s) minus a 0.3 s margin for everything else a
+join permit does (reading the request, one fsynced ledger line, the reply), so
+a hash at the ceiling still leaves the client 0.3 s of its 1 s. A result whose
+limit differs from the default carries `"overrides": {"max_join_hash_s": N}` in
+`budget-result.json`; a default run has no `overrides` key. At the join permit
+each pinned binary is hashed once, and the whole hash is timed: one over the
+limit is denied as `join_hash_too_slow` and moves the run to draining, never
+granted after the client has given up.
+
+| Letter | Script | Terminal | Report |
+| --- | --- | --- | --- |
+| a | join, seed, trigger, leave, return, End | manual End while recovery pends | one |
+| b | join, seed, trigger | the loop's own 12 minute deadline (10 + 120 s) | one |
+| c | join, seed, trigger, leave | absence grace (90 s) expires | none |
+| d | join, seed, Thinking hold, trigger, release, End | manual End while the recovery write is still held | one |
+| e | join, seed, trigger, room_delete | the server closes the room while the recovery write is held: the agent's SDK reports `Disconnected` and the loop takes `Terminal::RoomClosed` | none |
+
+Case e creates its room through `create_interview_room`, as production does,
+and its `room_delete` action deletes that room with the existing RoomService
+helper only after the prepared recovery write is held; the End permit stays
+reserved and unspent. Besides the conditions below, its verdict requires that
+the loop's own recovery terminal, read from a test-only probe keyed by the room,
+was `RoomClosed` (not End, Absent or Deadline) and arrived after the delete. A
+participants listing that finds no room is acceptable, since the room is
+already gone. The recovery matrix gate (`scripts/check-recovery-matrix.py`)
+accepts run `e-room-closed-during-recovery` (end mode `room_closed`, with
+`controlled_recovery_trigger` and `room_delete` granted and no End permit) as
+the representative RoomDisconnected observation, and RoomEventsEof's SDK column
+stands only on a validated RoomDisconnected claim, plain or representative.
+
+The pass conditions are the fixture's `judge`: the gate was entered, the loop
+returned, exactly the declared number of final report receipts (a second copy
+counts), the End or the automatic terminal came while recovery was pending and
+not early, no participant is in the room before the fixture deletes its own
+named room, the room is gone afterwards, and every Live reader has finished. A
+passing run shows one crossing for one session. It does not show that a
+recovery-time cancel is correct for any other timing, and what it did not reach
+stays uncovered.
+
+### Native speech-continuity arms
+
+The same file family holds a second ignored fixture,
+`live_sdk_clip_continuity_arm` in `tests/unit/livekit/recovery_continuity.rs`.
+It asks whether the SDK's bounded microphone queue keeps what a candidate said
+while the room loop is not reading it. A real SDK candidate publishes two
+authored, numbered speech clips (`c01_say_plan` and `c01_say_loop` of the
+10-minute coding smoke schedule, six numbered turns) through a real audio track
+into the real room loop and the configured Gemini. A test-only gate in front of
+the loop's microphone dequeue (`src/livekit/probe.rs`, compiled only for tests;
+there is no production fault flag and no network rule) holds that one dequeue
+from about the clip's first frame (a consumer already waiting on the
+stream may take one more frame) while the room controls, the Gemini reader
+and the keepalive polling keep running, and releases it after the arm's stall. The
+queue holds 4000 ten-millisecond frames (40 s) and drops the oldest when full.
+
+| Arm | Dequeue held | Expected if the SDK keeps its documented rule |
+| --- | --- | --- |
+| s0 | never (matched control) | everything arrives as it is spoken |
+| s20 | 20 s | all frames retained |
+| s39 | 39 s | all frames retained |
+| s41 | 41 s | the oldest 1 s of audio is dropped |
+| s60 | 60 s | the oldest 20 s is dropped, so the first clip is lost |
+
+Each arm is one invocation under the B0.1 manifest: `run_kind` `clip`,
+`end_mode` `native_close`, 60 s of setup, 180 s for the clip, the hold and the
+drain, 60 s of cleanup (a 300 s cap), the planned actions `candidate_join` and
+`clip_start`, and the reserved close permit as the third. The fixture closes the
+candidate's connection and the interviewer's task itself and deletes its own
+room; it sends no End, so no assessment report is generated, and the arm cannot
+certify end or report behavior. The spoken clips live outside the checkout; the
+answer key is authored on the `smoke-coding` set, and the loader refuses a set
+whose clip text differs (the whiteboard set does).
+
+```bash
+scripts/live-sdk-fixture.sh build DIR
+CODETRIAL_LIVE_CONFIG=PATH CODETRIAL_LIVE_CLIPS=/path/to/clips/out/smoke-coding \
+    scripts/live-sdk-fixture.sh run-clip s0 DIR      # then s20, s39, s41, s60
+scripts/live-sdk-fixture.sh clip-report DIR          # reads DIR/worker-s*.log
+```
+
+Each arm runs once per `DIR` and nothing reruns it. `grep LIVE_OBS
+DIR/worker-<arm>.log` shows the raw clip and turn IDs, the times the frames were
+actually taken from the SDK queue (a per-second tally, the first frame after the
+release), the Gemini input transcript lines as the room loop received them, and
+the room loop's own retention counters (ingress `dropped_bytes`, quarantined
+bytes). `clip-report` compares each arm's transcript with the answer key and
+counts missing, repeated and delayed turns per arm; a miss, repeat or delay the
+unstalled control shows too is reported as inconclusive, not as a loss, and an
+arm with no result is listed as not run. One clip per arm is descriptive
+evidence only: it is no estimate of a loss rate, and exact SDK drops are not
+inferred from the transcript, because the SDK counts them nowhere a caller can
+read and a transcript can lack words that were sent. The local recording-peer
+test (`the_recording_peer_sees_nothing_while_held_and_the_retained_frames_after`)
+runs the same gate against a fake Gemini socket offline and asserts the wire:
+nothing during the hold, then one message per retained frame, in order.

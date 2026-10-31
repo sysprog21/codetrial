@@ -7,6 +7,12 @@
 // becoming visible and then hidden, or by a `waitFor` on the heading the flow
 // cares about. Those wait for the thing being tested; `networkidle` waited for
 // the whole page and cost the offline flow about fifty seconds of it.
+// Validation only, ahead of Playwright, which this entry point must not need to
+// refuse a configuration. scripts/browser-check.sh stops at the same checks.
+if (process.env.BROWSER_CHECK_VALIDATE_ENV_ONLY) {
+  require("./long-interview-plan.cjs").validateOnly(process.env);
+  process.exit(0);
+}
 const { chromium } = require(process.env.PLAYWRIGHT_PATH);
 const assert = require("node:assert/strict");
 const fs = require("fs");
@@ -24,13 +30,52 @@ const {
   listRoomParticipants,
   removeParticipant,
 } = require("./livekit-room-service.cjs");
+const {
+  BudgetDenied,
+  loadRunBudget,
+  watchLauncher,
+} = require("./run-budget-guard.cjs");
+const {
+  DriverRefused,
+  finalizeLongRun,
+  prepareLongRun,
+  runLongInterview,
+  writeArtifacts,
+} = require("./long-interview-driver.cjs");
+const {
+  installMicrophone,
+  pageController,
+  silenceGateTone,
+} = require("./long-interview-page.cjs");
 const { problemPages, judgeCaseCount } = require("./judge-case-counts.cjs");
 const {
+  bootstrapMinutes,
+  deadlineMinutes,
+  judgeObservation,
+  pageDurationMin,
+  parseCountdown,
+  planFromEnv,
+  validateEnvironment,
+} = require("./long-interview-plan.cjs");
+const {
+  clockEvidenceLines,
   completeLines,
+  episodeEvidenceLines,
+  installedSwapKeys,
   isRotation,
+  judgeEpisodeReplies,
   judgeSoak,
+  judgeSwapAudio,
+  parseClock,
+  parseEpisodes,
+  parseObligations,
   parseReplacements,
+  parseVerdictMode,
+  replacementKey,
+  replacementsWithoutEpisode,
   roomLogged,
+  soakExposure,
+  soakResult,
 } = require("./soak-judge.cjs");
 
 const floorLogPath = process.env.BROWSER_CHECK_FLOOR_LOG || null;
@@ -46,6 +91,7 @@ function writeIncompleteCapture(fields) {
         flow: process.env.BROWSER_CHECK_FLOW,
         status: "incomplete",
         floorLogPath,
+        ...(soakSummary ? { soak: soakSummary } : {}),
         ...fields,
       },
       null,
@@ -53,6 +99,14 @@ function writeIncompleteCapture(fields) {
     ),
   );
 }
+
+// What the soak made of itself, kept for the capture so a run that fails later
+// still names the verdict it had reached.
+let soakSummary = null;
+
+// The long interview's capture holds its report. The generic failure path
+// below must not replace it with an incomplete one.
+let longCaptureWritten = false;
 
 if (process.env.BROWSER_CHECK_CAPTURE && floorLogPath) writeIncompleteCapture();
 
@@ -124,7 +178,7 @@ async function selectLanguage(page, language) {
 
 function interviewUrl(problemId, mode) {
   const surface = mode ? `&mode=${mode}` : "";
-  return `${process.env.BASE_URL}/interview?problem=${scenario(problemId).page}&duration=20${surface}`;
+  return `${process.env.BASE_URL}/interview?problem=${scenario(problemId).page}&duration=${pageDurationMin(process.env)}${surface}`;
 }
 
 async function checkEditorNewlines(page) {
@@ -418,8 +472,24 @@ async function checkEditorNewlines(page) {
   );
 }
 
+// The same refusals as the shell entry point, for a run that reaches this
+// script without it. A long interview's plan is what the flow below runs.
+const environmentErrors = validateEnvironment(process.env);
+if (environmentErrors.length) {
+  throw new Error(environmentErrors.join("; "));
+}
+const longPlan =
+  process.env.BROWSER_CHECK_FLOW === "long-interview"
+    ? planFromEnv(process.env).plan
+    : null;
+
 const soakSeconds = Number(process.env.BROWSER_CHECK_SOAK_SECONDS || "0");
 const requireModel = process.env.BROWSER_CHECK_REQUIRE_MODEL === "1";
+// strict is the qualification, with the one-watchdog cap; pilot leaves the cap
+// out of its verdict and says it did not evaluate qualification.
+const soakVerdictMode = parseVerdictMode(
+  process.env.BROWSER_CHECK_SOAK_VERDICT_MODE,
+);
 if (!Number.isSafeInteger(soakSeconds) || soakSeconds < 0) {
   throw new Error(
     "BROWSER_CHECK_SOAK_SECONDS must be a whole number of seconds",
@@ -485,6 +555,24 @@ function stopProcessGroup(child) {
   } catch {
     child.kill();
   }
+}
+
+/// Stops a detached child's process group and waits for it to close, for at
+/// most `graceMs`. With `escalate`, a group still running after that gets
+/// SIGKILL. A child that already exited is left alone: its group id may belong
+/// to something else by now.
+async function stopAgentGroup(child, graceMs, escalate) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  stopProcessGroup(child);
+  const exited = await Promise.race([
+    closed.then(() => true),
+    sleep(graceMs).then(() => false),
+  ]);
+  if (exited || !escalate) return;
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {}
 }
 
 /// The whiteboard interview, as far as a run with no credentials can take it.
@@ -566,7 +654,7 @@ async function checkWhiteboardInterview(page, pageErrors) {
 /// The interview page gates the room join on local media, with no bypass, so
 /// every run clears it the way a candidate would. Fake browser devices drive
 /// the level meter.
-async function clearMediaGate(page) {
+async function clearMediaGate(page, guard = (dispatch) => dispatch()) {
   const gate = page.locator("#audio-check");
   await gate.waitFor({ state: "visible", timeout: 30000 });
   await page.getByRole("button", { name: "Play test tone" }).click();
@@ -584,7 +672,8 @@ async function clearMediaGate(page) {
       `media gate never opened: ${await page.locator("#audio-check-status").textContent()}`,
     );
   }
-  await join.click();
+  // The long interview's join is its first budgeted action.
+  await guard(() => join.click());
   await gate.waitFor({ state: "hidden" });
 }
 
@@ -615,6 +704,44 @@ function readServerLog() {
   return redact(fs.readFileSync(process.env.SERVER_LOG, "utf8"));
 }
 
+/// The lines SERVER_LOG gained since the last call, complete ones only and
+/// redacted, so a swap can be noticed within a fraction of a second without
+/// reading the whole file each time.
+function serverLogTail() {
+  let offset = 0;
+  let rest = Buffer.alloc(0);
+  return () => {
+    const file = process.env.SERVER_LOG;
+    if (!file) return "";
+    let size;
+    try {
+      size = fs.statSync(file).size;
+    } catch {
+      return "";
+    }
+    if (size < offset) {
+      offset = 0;
+      rest = Buffer.alloc(0);
+    }
+    if (size > offset) {
+      const fresh = Buffer.alloc(size - offset);
+      const fd = fs.openSync(file, "r");
+      try {
+        fs.readSync(fd, fresh, 0, fresh.length, offset);
+      } finally {
+        fs.closeSync(fd);
+      }
+      offset = size;
+      rest = Buffer.concat([rest, fresh]);
+    }
+    const cut = rest.lastIndexOf(10);
+    if (cut < 0) return "";
+    const lines = rest.subarray(0, cut + 1).toString("utf8");
+    rest = rest.subarray(cut + 1);
+    return redact(lines);
+  };
+}
+
 /// Prints each timing line a socket replacement of this room logged, once, as
 /// the soak sees it. A pass otherwise leaves nothing to read them from, and the
 /// agent's output is a rolling window, so they are taken on the way past. The
@@ -630,13 +757,192 @@ function reportRotationLines(log, room, reported) {
   }
 }
 
-/// How many turns the interviewer has taken, as the transcript panel shows
-/// them. The page accumulates these client-side, so it keeps counting across a
-/// handover the browser never sees. Only Jim's: the looped microphone clip adds
-/// candidate turns however silent the interviewer is, so counting them would
-/// let a handover that left Jim mute pass.
-function jimTurns(page) {
-  return page.locator(".transcript-row.alex").count();
+/// Raised to leave with a specific exit code rather than the plain failure's.
+class LongInterviewExit extends Error {
+  constructor(message, exitCode) {
+    super(message);
+    this.exitCode = exitCode;
+  }
+}
+
+/// Plays the long interview's schedule into one real session, holds it to the
+/// plan's observation target, ends it deliberately and judges the run from its
+/// evidence (scripts/long-interview-driver.cjs). The driver dispatches every
+/// scripted action through the run budget; this function only lets it reach
+/// the page and the logs.
+async function longInterview(
+  page,
+  roomName,
+  agentOutput,
+  tokenDurations,
+  failure,
+  runStartMs,
+  prepared,
+  runBudget,
+  tokenRequestsMs,
+  joinGuarded,
+  tokenExpiredNow,
+) {
+  const plan = longPlan;
+  const countdownStartS = parseCountdown(
+    await page.locator("#timer").innerText(),
+  );
+  const readAtMs = Date.now();
+  // The interview began when the page's own countdown began, so the target is
+  // measured on that clock rather than from whenever this function was called.
+  const interviewStartMs =
+    readAtMs - (plan.durationMin * 60 - (countdownStartS ?? 0)) * 1000;
+
+  // Latched as they go past: the agent's output is a rolling window, and a
+  // 90 minute interview outlasts it many times over.
+  const bootstrap = new Set();
+  const deadline = new Set();
+  const evidence = new Map();
+  const episodeLines = new Map();
+  let ended = false;
+  let browserDisconnected = false;
+  page.once("close", () => {
+    browserDisconnected = !ended;
+  });
+  const refresh = () => {
+    const log = `${agentOutput.join("")}\n${readServerLog()}`;
+    for (const minutes of bootstrapMinutes(log, roomName))
+      bootstrap.add(minutes);
+    for (const minutes of deadlineMinutes(log, roomName)) deadline.add(minutes);
+    for (const line of clockEvidenceLines(log, roomName))
+      evidence.set(line, true);
+    // The agent's output is a rolling window, so the rotation lines are kept
+    // as they go past for the end-of-run classes.
+    for (const line of episodeEvidenceLines(log, roomName))
+      episodeLines.set(line, true);
+  };
+  let nextProgress = 0;
+  const observe = async () => {
+    refresh();
+    const elapsedS = Math.floor((Date.now() - interviewStartMs) / 1000);
+    if (elapsedS >= nextProgress) {
+      console.log(
+        `long-interview: ${elapsedS}s of ${plan.observationTargetS}s observed`,
+      );
+      nextProgress = elapsedS + 300;
+    }
+  };
+
+  const pageSide = pageController(page, {
+    selectLanguage,
+    mode: prepared.mode,
+  });
+  const controller = {
+    ...pageSide,
+    // The server-deadline route sends nothing: it waits for the agent's own
+    // deadline line, then for what the page shows after it.
+    async awaitServerDeadline() {
+      const until = Date.now() + 30000;
+      while (!deadline.size && Date.now() < until) {
+        refresh();
+        await sleep(500);
+      }
+      return pageSide.awaitServerDeadline();
+    },
+  };
+  // The schedule's clock starts here: connected, greeted, the join already
+  // dispatched through the budget by the media gate.
+  const run = await runLongInterview({
+    plan,
+    schedule: prepared.schedule,
+    playback: prepared.playback,
+    clipSource: prepared.clipSource,
+    budget: runBudget,
+    controller,
+    joinedAtMs: Date.now(),
+    interviewStartMs,
+    joinDispatched: joinGuarded,
+    observe,
+    failure: failure() ?? new Promise(() => {}),
+  });
+  ended = true;
+  refresh();
+  const clock = parseClock(`${[...evidence.keys()].join("\n")}\n`, roomName);
+  const observation = judgeObservation(plan, {
+    tokenDurationsMin: tokenDurations,
+    bootstrapDurationsMin: [...bootstrap],
+    deadlineDurationsMin: [...deadline],
+    countdownStartS,
+    countdownSlackS: (readAtMs - runStartMs) / 1000 + 5,
+    clock,
+    harnessStartMs: runStartMs,
+    nowMs: Date.now(),
+    observedS: Math.floor(
+      ((run.observationEndMs ?? Date.now()) - interviewStartMs) / 1000,
+    ),
+    graceStimuli: 0,
+  });
+  const log = `${agentOutput.join("")}\n${readServerLog()}`;
+  const serverLog = process.env.SERVER_LOG;
+  const logsComplete =
+    Boolean(serverLog) &&
+    fs.existsSync(serverLog) &&
+    fs.statSync(serverLog).size > 0 &&
+    log.endsWith("\n");
+  const finished = finalizeLongRun({
+    plan,
+    schedule: prepared.schedule,
+    playback: prepared.playback,
+    clipSource: prepared.clipSource,
+    run,
+    observation,
+    clock,
+    tokenRequestsMs,
+    episodes: parseEpisodes(
+      `${[...episodeLines.keys()].join("\n")}\n`,
+      roomName,
+    ).episodes,
+    logs: { truncated: false, evicted: false, complete: logsComplete },
+    browserDisconnected,
+    tokenExpired: tokenExpiredNow(),
+    launchMs: runStartMs,
+    // The worker's own end. The process-level teardown and the check for what
+    // was left active belong after it, so cleanup is reported unknown until a
+    // reader that runs after teardown supplies it.
+    teardownEndMs: Date.now(),
+    cleanup: undefined,
+  });
+  const { report } = finished;
+  console.log(
+    `long-interview verdict=${finished.exitCode === 0 ? "pass" : "fail"} status=${report.status} run_kind=${plan.runKind} end_mode=${plan.endMode} duration_min=${plan.durationMin} observation_target_s=${plan.observationTargetS} clip_source=${report.clip_source} speech_run=${report.speech_run} full_interview=${report.full_interview} assessment_scope=${report.assessment_scope} qualification=${report.qualification}`,
+  );
+  if (report.validation_fixture) {
+    console.log(
+      "long-interview: TONE VALIDATION FIXTURE, no speech was played and no model answer was asked for; this is not a speech run",
+    );
+  }
+  if (process.env.BROWSER_CHECK_CAPTURE) {
+    longCaptureWritten = true;
+    fs.writeFileSync(
+      process.env.BROWSER_CHECK_CAPTURE,
+      JSON.stringify(
+        {
+          mode: process.env.BROWSER_CHECK_AGENT,
+          flow: "long-interview",
+          plan,
+          result: observation,
+          report,
+        },
+        null,
+        2,
+      ),
+    );
+  }
+  writeArtifacts(process.env, finished.resolved);
+  if (finished.exitCode !== 0) {
+    const reasons = finished.failures.concat(
+      finished.resolved.artifacts.flatMap((a) => a.reasons),
+    );
+    throw new LongInterviewExit(
+      `long interview ${report.status}: ${reasons.join("; ")}`,
+      finished.exitCode,
+    );
+  }
 }
 
 /// Raised when a soak learned nothing about the handover, so a runner can tell
@@ -653,9 +959,18 @@ class InconclusiveSoak extends Error {}
 /// Presence is only the first thing that has to be true: the interviewer stays
 /// in the room whether the transport was replaced early, replaced late, or
 /// rebuilt without the conversation. What the runtime logs about each
-/// replacement (soak-judge.cjs) says which it was, and the interviewer taking
-/// new turns afterwards says whether it went on.
-async function soakInterview(page, roomName, agentIdentity, agentOutput) {
+/// replacement (soak-judge.cjs) says which it was, and the reply that
+/// replacement owed, matched by obligation and episode ids, says whether the
+/// interview went on. The transcript the page shows is not evidence of it: a
+/// row from before the swap, or from another recovery, would satisfy any
+/// count.
+async function soakInterview(
+  page,
+  roomName,
+  agentIdentity,
+  agentOutput,
+  probing,
+) {
   const deadline = Date.now() + soakSeconds * 1000;
 
   // Latched on the way past rather than read at the end: agentOutput is a
@@ -664,7 +979,12 @@ async function soakInterview(page, roomName, agentIdentity, agentOutput) {
   const seen = { goAway: false, expired: false };
   const replacements = [];
   const reported = new Set();
-  let jimAtHandover = null;
+  // Every complete line of this room that the per-episode judge reads, kept
+  // as it goes past for the same reason: the agent's output is a rolling
+  // window.
+  const evidence = new Map();
+  // The installed swaps already handed to the page to sample again.
+  const marked = new Set();
 
   // One read per call rather than one per signal: this is the whole server
   // log, and the loop runs for minutes.
@@ -674,83 +994,205 @@ async function soakInterview(page, roomName, agentIdentity, agentOutput) {
       seen[name] ||= roomLogged(log, needle, roomName);
     }
     reportRotationLines(log, roomName, reported);
-    const known = new Set(replacements.map((r) => r.at));
+    for (const line of [
+      ...episodeEvidenceLines(log, roomName),
+      ...clockEvidenceLines(log, roomName),
+    ]) {
+      evidence.set(line, true);
+    }
+    const known = new Set(replacements.map(replacementKey));
     for (const r of parseReplacements(log, roomName)) {
-      if (!known.has(r.at)) replacements.push(r);
+      if (!known.has(replacementKey(r))) replacements.push(r);
     }
   };
-  // The count the handover is measured against is the last one taken before
-  // the rotation was read. Taken when the line is first read, it would count
-  // the reply to the briefing, which lands within seconds, as before the
-  // handover and ask for a second one. The cost is that a turn Jim took in the
-  // tick before the rotation counts as growth, a bound of one tick on how
-  // loose the check is.
-  let jimPrev = await jimTurns(page);
-  const sampleJim = async () => {
-    if (jimAtHandover !== null) return;
-    if (replacements.some(isRotation)) jimAtHandover = jimPrev;
-    else jimPrev = await jimTurns(page);
+  const evidenceText = () => `${[...evidence.keys()].join("\n")}\n`;
+  const coverage = (final) =>
+    judgeEpisodeReplies(
+      parseEpisodes(evidenceText(), roomName),
+      parseObligations(evidenceText(), roomName),
+      final,
+    );
+  // Each installed swap is marked in the page once, as soon as its end line is
+  // read, so the sample that answers it can only open on a Speaking transition
+  // after this point. Read late, never early: a transition between the install
+  // and this call is missed and the next one is used instead, which can fail
+  // a swap whose reply was quicker than a poll but never passes one on audio
+  // from before it.
+  const newLines = serverLogTail();
+  const markNewSwaps = async () => {
+    if (!probing) return;
+    for (const key of installedSwapKeys(
+      `${agentOutput.join("")}\n${newLines()}`,
+      roomName,
+    )) {
+      if (marked.has(key)) continue;
+      marked.add(key);
+      await page.evaluate((swap) => globalThis.__markJimSwap?.(swap), key);
+    }
   };
   const failure = (reasons) =>
     new Error(`${reasons.join("; ")} during ${soakSeconds}s soak`);
+  const judge = (final) =>
+    judgeSoak({ replacements, ...seen, final, mode: soakVerdictMode });
+  const exposureNow = () => soakExposure(parseClock(evidenceText(), roomName));
+  const record = (soak, replies, audio) => {
+    soakSummary = soakResult({
+      soak,
+      replies,
+      audio,
+      exposure: exposureNow(),
+    });
+    if (process.env.BROWSER_CHECK_SOAK_RESULT) {
+      fs.writeFileSync(
+        process.env.BROWSER_CHECK_SOAK_RESULT,
+        `${JSON.stringify(soakSummary, null, 2)}\n`,
+      );
+    }
+    return soakSummary;
+  };
 
-  while (Date.now() < deadline) {
-    await sleep(Math.min(15_000, deadline - Date.now()));
-    const participants = await listRoomParticipants(roomName);
-    if (!agentParticipantIdentities(participants).includes(agentIdentity)) {
-      throw new Error(`interviewer left during ${soakSeconds}s soak`);
+  // Marked on its own clock, not the loops' below: those wait on log parsing
+  // and room-service calls, and a swap read late can miss the transition that
+  // answered it.
+  let marking = true;
+  let markError = null;
+  const marker = (async () => {
+    while (marking) {
+      await sleep(250);
+      if (!marking) break;
+      try {
+        await markNewSwaps();
+      } catch (error) {
+        markError = error;
+        marking = false;
+      }
+    }
+  })();
+  const stopMarking = async () => {
+    marking = false;
+    await marker;
+    if (markError) throw markError;
+    await markNewSwaps();
+  };
+
+  try {
+    let nextRefresh = 0;
+    let nextHealthCheck = 0;
+    while (Date.now() < deadline) {
+      await sleep(Math.min(1000, deadline - Date.now()));
+      if (Date.now() < nextRefresh) continue;
+      nextRefresh = Date.now() + 5_000;
+      refresh();
+      if (Date.now() < nextHealthCheck) continue;
+      nextHealthCheck = Date.now() + 15_000;
+      const participants = await listRoomParticipants(roomName);
+      if (!agentParticipantIdentities(participants).includes(agentIdentity)) {
+        throw new Error(`interviewer left during ${soakSeconds}s soak`);
+      }
+
+      // Reported where it happened rather than as a missing handover at the end.
+      // Not yet final: a GoAway is seen up to its notice before the replacement
+      // it asks for, and a soak that has seen no GoAway has not failed.
+      const so_far = judge(false);
+      if (so_far.verdict === "fail") {
+        record(so_far, null, null);
+        throw failure(so_far.reasons);
+      }
+    }
+
+    // A GoAway read on the last tick has not had its notice to be acted on, so
+    // its replacement gets a bounded window of its own before its absence counts.
+    const handoverBy = Date.now() + RESUME_GRACE_MS;
+    refresh();
+    while (
+      seen.goAway &&
+      !replacements.some(isRotation) &&
+      judge(false).verdict !== "fail" &&
+      Date.now() < handoverBy
+    ) {
+      await sleep(1000);
+      refresh();
+    }
+    const final = judge(true);
+    if (final.verdict === "inconclusive") {
+      record(final, null, null);
+      throw new InconclusiveSoak(final.reasons.join("; "));
+    }
+    if (final.verdict === "fail") {
+      record(final, null, null);
+      throw failure(final.reasons);
+    }
+    if (final.watchdogRebuildsTotal > 0) {
+      console.log(
+        `soak: ${final.watchdogRebuildsTotal} rebuild(s) from local state after a reply timeout, ${final.strictCapEligibleTotal} counting toward the strict cap`,
+      );
+    }
+    for (const note of final.diagnostics) console.log(`soak: ${note}`);
+
+    // Each replacement is held to the reply it owed. The last one may have been
+    // read on the final tick and its reply still be on the way, so it gets a
+    // bounded window before a reply that has not finished counts against it.
+    const replyBy = Date.now() + RESUME_GRACE_MS;
+    while (coverage(false).verdict === "pending" && Date.now() < replyBy) {
+      await sleep(1000);
+      refresh();
     }
     refresh();
+    await stopMarking();
+    const replies = coverage(true);
+    const parsedEpisodes = parseEpisodes(evidenceText(), roomName);
+    const unaccounted = replacementsWithoutEpisode(
+      replacements,
+      parsedEpisodes.episodes,
+    );
+    if (parsedEpisodes.episodes.length === 0 || unaccounted.length > 0) {
+      replies.verdict = "fail";
+      replies.ok = false;
+      replies.reasons.push(
+        unaccounted.length > 0
+          ? `${unaccounted.length} logged replacement(s) have no installed start/end episode: ${unaccounted.map((r) => r.episode).join(",")}`
+          : "a rotation was logged but no replacement start/end lines were",
+      );
+    }
+    for (const e of replies.episodes) {
+      console.log(
+        `soak episode ${e.episode} trigger=${e.trigger} result=${e.result}: ${e.status} (${e.class}) ${e.reasons.join("; ")}`,
+      );
+    }
 
-    // Reported where it happened rather than as a missing handover at the end.
-    // Not yet final: a GoAway is seen up to its notice before the replacement
-    // it asks for, and a soak that has seen no GoAway has not failed.
-    const so_far = judgeSoak({ replacements, ...seen, final: false });
-    if (so_far.verdict === "fail") throw failure(so_far.reasons);
-    await sampleJim();
-  }
+    // The decoded audio each answered swap owes. The page is given the rest of
+    // the grace for the first Speaking transition after the last swap, then
+    // cancels what still waits, and an unsampled swap counts against the soak.
+    let audio = null;
+    if (probing) {
+      const rearms = await page.evaluate(
+        (waitMs) => globalThis.__settleJimSwapAudio(waitMs),
+        RESUME_GRACE_MS,
+      );
+      audio = judgeSwapAudio(replies, rearms);
+      for (const e of audio.episodes) {
+        console.log(
+          `soak episode ${e.episode} audio: ${e.status} ${e.reasons.join("; ")}`.trimEnd(),
+        );
+      }
+    }
 
-  // A GoAway read on the last tick has not had its notice to be acted on, so
-  // its replacement gets a bounded window of its own before its absence counts.
-  const handoverBy = Date.now() + RESUME_GRACE_MS;
-  refresh();
-  while (
-    seen.goAway &&
-    !replacements.some(isRotation) &&
-    judgeSoak({ replacements, ...seen, final: false }).verdict !== "fail" &&
-    Date.now() < handoverBy
-  ) {
-    await sleep(3000);
-    refresh();
-  }
-  await sampleJim();
-  const final = judgeSoak({ replacements, ...seen, final: true });
-  if (final.verdict === "inconclusive") {
-    throw new InconclusiveSoak(final.reasons.join("; "));
-  }
-  if (final.verdict === "fail") throw failure(final.reasons);
-  if (final.watchdogRebuilds > 0) {
+    const result = record(final, replies, audio);
+    const detail = [...replies.reasons, ...(audio?.reasons ?? [])];
     console.log(
-      `soak: ${final.watchdogRebuilds} rebuild from local state after a reply timeout, recovered`,
+      `soak verdict mode=${result.mode} verdict=${result.verdict} structural=${result.structural_verdict} strict=${result.strict_verdict} qualification=${result.qualification} watchdog_rebuilds_total=${result.watchdog_rebuilds_total} strict_cap_eligible_total=${result.strict_cap_eligible_total} exposure_s=${result.exposure_s ?? "unknown"}`,
     );
-  }
-
-  // A handover that nothing was said across is not one anybody would notice
-  // working. Jim nudges an idle candidate, so turns keep arriving without the
-  // browser speaking.
-  // A handover first seen on the last tick has had no time to say anything, so
-  // the replacement gets a bounded window of its own before its silence
-  // counts against it.
-  let jimAtEnd = await jimTurns(page);
-  const graceUntil = Date.now() + RESUME_GRACE_MS;
-  while (jimAtEnd <= jimAtHandover && Date.now() < graceUntil) {
-    await sleep(3000);
-    jimAtEnd = await jimTurns(page);
-  }
-  if (jimAtEnd <= jimAtHandover) {
-    throw new Error(
-      `the interviewer said nothing after the handover: ${jimAtHandover} turns before, ${jimAtEnd} after`,
-    );
+    if (result.mode === "pilot") {
+      console.log(
+        `soak pilot: structural ${result.structural_verdict}, strict ${result.strict_verdict}; qualification was not evaluated, so this run does not qualify the soak`,
+      );
+    }
+    if (result.verdict !== "pass") {
+      throw failure(detail.length > 0 ? detail : final.reasons);
+    }
+  } finally {
+    marking = false;
+    await marker;
   }
 }
 
@@ -813,11 +1255,81 @@ async function isolateRustAgent(
   let rustAgent;
   let compilerExplorerMock;
   let agentDone = false;
+
+  // Before a browser or an agent exists: a run launched by
+  // scripts/interview-run-budget.py joins its budget here, and a manifest the
+  // launcher did not hash, or a launcher that cannot be reached, ends the check
+  // while nothing has been spent. Scripted actions are dispatched through
+  // `runBudget.guarded(id, ...)`: the long-interview flow below does that for
+  // every action of its schedule, and any other flow only proves the run is
+  // permitted to start.
+  let runBudget = null;
+  try {
+    // Unbudgeted checks must not gain an await before the browser launches.
+    if (
+      Object.keys(process.env).some(
+        (name) =>
+          name.startsWith("BROWSER_CHECK_RUN_") ||
+          name === "BROWSER_CHECK_BUDGET_SOCKET",
+      )
+    ) {
+      runBudget = await loadRunBudget(process.env);
+    }
+  } catch (error) {
+    if (!(error instanceof BudgetDenied)) throw error;
+    console.error(`run budget refused the check: ${error.message}`);
+    process.exit(2);
+  }
+  if (runBudget) {
+    console.log(
+      `run budget joined: ${runBudget.runId}, ${runBudget.actions.length} scripted actions`,
+    );
+    // The worker runs in its own session, so a killed launcher does not take
+    // it down; between scheduled permits nothing else would notice.
+    watchLauncher(runBudget, {
+      onLost: async () => {
+        console.error("run budget launcher is gone; stopping the check");
+        // The agent is detached, so neither this exit nor the shell reaches
+        // it, and the launcher that would have reaped it is the one that died.
+        await stopAgentGroup(rustAgent, 1500, true);
+        const closing = browser ? browser.close().catch(() => {}) : null;
+        await Promise.race([closing, new Promise((r) => setTimeout(r, 2000))]);
+        process.exit(4);
+      },
+    }).unref();
+  }
+  // The schedule, its clips and their pin in the budget are judged here, with
+  // nothing spent and no browser open, so a run that has no recorded speech
+  // stops before it joins a room.
+  let longPrepared = null;
+  if (longPlan) {
+    try {
+      longPrepared = prepareLongRun({
+        env: process.env,
+        plan: longPlan,
+        budget: runBudget,
+      });
+    } catch (error) {
+      if (!(error instanceof DriverRefused)) throw error;
+      console.error(redact(error.message));
+      process.exit(2);
+    }
+    console.log(
+      `long-interview clips: ${longPrepared.clipSource.kind}, ${longPrepared.schedule.steps.length} scripted steps, ${longPrepared.schedule.actions.length} budgeted actions`,
+    );
+  }
+
   try {
     browser = await chromium.launch({
       args: [
         "--use-fake-device-for-media-stream",
         "--use-fake-ui-for-media-stream",
+        // The long interview's injected microphone is an AudioContext, which
+        // Chromium holds suspended until a gesture; the media gate would read
+        // it as a microphone that carries no sound.
+        ...(process.env.BROWSER_CHECK_FLOW === "long-interview"
+          ? ["--autoplay-policy=no-user-gesture-required"]
+          : []),
         ...(process.env.BROWSER_CHECK_BARGE_AUDIO_FILE &&
         process.env.BROWSER_CHECK_FLOW !== "barge"
           ? [
@@ -1007,17 +1519,19 @@ async function isolateRustAgent(
       // The same `--config` the server was started with. `provider_dir` is
       // the config file's directory, so an agent left to find its own would
       // route against a different pool than the server it is answering for.
+      //
+      // A budgeted run starts the executable its manifest pinned. Building one
+      // here would spend the paid window on a binary nobody hashed.
+      const prebuilt = process.env.BROWSER_CHECK_PREBUILT_BIN;
+      const agentArguments = [
+        "run-livekit",
+        room,
+        "--config",
+        process.env.BROWSER_CHECK_CONFIG_PATH,
+      ];
       rustAgent = spawn(
-        "cargo",
-        [
-          "run",
-          "--quiet",
-          "--",
-          "run-livekit",
-          room,
-          "--config",
-          process.env.BROWSER_CHECK_CONFIG_PATH,
-        ],
+        prebuilt || "cargo",
+        prebuilt ? agentArguments : ["run", "--quiet", "--", ...agentArguments],
         {
           cwd: process.env.ROOT,
           detached: true,
@@ -1032,7 +1546,11 @@ async function isolateRustAgent(
         stream.on("data", (chunk) => {
           streamCapture?.push(chunk);
           const text = redact(chunk);
-          if (text.includes("problem=two-sum duration=20min"))
+          if (
+            text.includes(
+              `problem=two-sum duration=${pageDurationMin(process.env)}min`,
+            )
+          )
             sawRustMetadataConfig = true;
           agentOutput.push(text);
           while (agentOutput.join("").length > 12000) agentOutput.shift();
@@ -2470,12 +2988,48 @@ PatternLexicon.prototype.search = function(word) {
       }
     }
 
-    await page.goto(interviewUrl(PROBLEM_IDS.twoSum));
-    probingAudio = credentialed && ["voice", "barge"].includes(flow);
+    // What the server actually granted, which is the length the agent, the
+    // countdown and the deadline all follow. A clamp shows up here.
+    const tokenDurations = [];
+    const tokenRequestsMs = [];
+    const longRunStartMs = Date.now();
+    if (flow === "long-interview") {
+      await installMicrophone(page);
+      page.on("request", (request) => {
+        if (request.url().endsWith("/api/token")) {
+          tokenRequestsMs.push(Date.now());
+        }
+      });
+      page.on("response", (response) => {
+        if (!response.url().endsWith("/api/token") || !response.ok()) return;
+        response
+          .json()
+          .then((body) => tokenDurations.push(body?.durationMin))
+          .catch(() => {});
+      });
+    }
+    await page.goto(
+      interviewUrl(
+        PROBLEM_IDS.twoSum,
+        longPrepared?.mode === "whiteboard" ? "whiteboard" : undefined,
+      ),
+    );
+    probingAudio = credentialed && ["voice", "barge", "soak"].includes(flow);
     if (probingAudio) {
       await page.evaluate(mediaProbeSource());
     }
-    await clearMediaGate(page);
+    let joinGuarded = false;
+    await clearMediaGate(
+      page,
+      flow === "long-interview"
+        ? (dispatch) =>
+            runBudget.guarded("candidate_join", async () => {
+              await dispatch();
+              await silenceGateTone(page);
+              joinGuarded = true;
+            })
+        : undefined,
+    );
     if (credentialed && !rustAgentIdentity) {
       roomName = await page
         .waitForFunction(
@@ -2569,7 +3123,31 @@ PatternLexicon.prototype.search = function(word) {
           .getByText("No conversation yet")
           .waitFor({ state: "detached", timeout: 120000 });
         if (flow === "soak") {
-          await soakInterview(page, roomName, rustAgentIdentity, agentOutput);
+          await soakInterview(
+            page,
+            roomName,
+            rustAgentIdentity,
+            agentOutput,
+            probingAudio,
+          );
+        }
+        if (flow === "long-interview") {
+          await longInterview(
+            page,
+            roomName,
+            agentOutput,
+            tokenDurations,
+            () => agentFailure,
+            longRunStartMs,
+            longPrepared,
+            runBudget,
+            tokenRequestsMs,
+            joinGuarded,
+            () =>
+              consoleErrors.some((line) =>
+                /token.*(expired|invalid)|expired.*token/i.test(line),
+              ),
+          );
         }
         let testResultText = null;
         let candidateSegmentCount = null;
@@ -2667,7 +3245,7 @@ PatternLexicon.prototype.search = function(word) {
             }
           }
         }
-        if (process.env.BROWSER_CHECK_CAPTURE) {
+        if (process.env.BROWSER_CHECK_CAPTURE && flow !== "long-interview") {
           if (mode === "rust" && flow !== "report") {
             rustAgentParticipants = await isolateRustAgent(
               roomName,
@@ -2717,6 +3295,7 @@ PatternLexicon.prototype.search = function(word) {
                   : [],
                 bargeReplay,
                 jimAudio,
+                soak: soakSummary,
                 latencyLog: (agentOutput.join("") + "\n" + readServerLog())
                   .split("\n")
                   .filter((line) => line.includes("codetrial latency "))
@@ -2736,7 +3315,11 @@ PatternLexicon.prototype.search = function(word) {
           .evaluate(() => globalThis.__finishJimAudioProbe(true))
           .catch(() => null);
       }
-      if (process.env.BROWSER_CHECK_CAPTURE && (floorLogPath || probingAudio))
+      if (
+        process.env.BROWSER_CHECK_CAPTURE &&
+        (floorLogPath || probingAudio) &&
+        !longCaptureWritten
+      )
         writeIncompleteCapture({
           floorRecords: floorLogPath ? readFloorRecords(floorLogPath) : [],
           bargeReplay,
@@ -2766,15 +3349,7 @@ PatternLexicon.prototype.search = function(word) {
     agentDone = true;
   } finally {
     agentDone = true;
-    if (
-      rustAgent &&
-      rustAgent.exitCode === null &&
-      rustAgent.signalCode === null
-    ) {
-      const closed = new Promise((resolve) => rustAgent.once("close", resolve));
-      stopProcessGroup(rustAgent);
-      await Promise.race([closed, sleep(5000)]);
-    }
+    await stopAgentGroup(rustAgent, 5000, false);
     if (compilerExplorerMock)
       await new Promise((resolve) =>
         compilerExplorerMock.server.close(resolve),
@@ -2786,6 +3361,12 @@ PatternLexicon.prototype.search = function(word) {
   // resort, so it is also the one that prints a `fetch` failure verbatim, and
   // a LiveKit URL or a bearer token in a CI log outlives the run that wrote it.
   console.error(redact(error?.stack ?? error));
+  // A long interview leaves with its failure class's code, and a permit
+  // refused anywhere in a budgeted run, the join included, is the exhausted
+  // budget class and not a plain failure. The soak's mapping is below, as it
+  // was.
+  if (error instanceof LongInterviewExit) process.exit(error.exitCode);
+  if (error instanceof BudgetDenied) process.exit(4);
   process.exit(error instanceof InconclusiveSoak ? SOAK_INCONCLUSIVE_EXIT : 1);
 });
 

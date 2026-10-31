@@ -7,6 +7,228 @@ use super::*;
 use crate::config::load_from_pairs;
 use crate::runtime::bootstrap;
 
+async fn setup_duplex() -> (
+    WebSocketStream<tokio::io::DuplexStream>,
+    WebSocketStream<tokio::io::DuplexStream>,
+) {
+    use tokio_tungstenite::tungstenite::protocol::Role;
+    let (client, server) = tokio::io::duplex(64);
+    (
+        WebSocketStream::from_raw_socket(client, Role::Client, None).await,
+        WebSocketStream::from_raw_socket(server, Role::Server, None).await,
+    )
+}
+
+fn assert_setup_timeout(error: &(dyn std::error::Error + 'static), phase: &str) {
+    let error = error.downcast_ref::<io::Error>().expect("a setup timeout");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert_eq!(error.to_string(), format!("Gemini setup {phase} timed out"));
+    assert!(!error.to_string().contains("setup-fixture-secret"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn setup_deadline_includes_a_write_the_peer_never_reads() {
+    let (mut client, mut server) = setup_duplex().await;
+    let start = tokio::time::Instant::now();
+    let keys = ["setup-fixture-secret".to_string()];
+    let error = {
+        let open = complete_live_setup(
+            &mut client,
+            Message::Text("setup-fixture-secret".repeat(1024).into()),
+            &keys,
+            SETUP_TIMEOUT,
+        );
+        tokio::pin!(open);
+        assert!(
+            std::future::poll_fn(|cx| {
+                std::task::Poll::Ready(open.as_mut().poll(cx).is_pending())
+            })
+            .await
+        );
+        tokio::time::advance(SETUP_TIMEOUT - Duration::from_millis(1)).await;
+        assert!(
+            std::future::poll_fn(|cx| {
+                std::task::Poll::Ready(open.as_mut().poll(cx).is_pending())
+            })
+            .await
+        );
+        tokio::time::advance(Duration::from_millis(1)).await;
+        tokio::time::timeout(Duration::from_secs(1), open)
+            .await
+            .expect("a blocked send must finish at its deadline")
+            .unwrap_err()
+    };
+    assert_setup_timeout(error.as_ref(), "send");
+    assert_eq!(start.elapsed(), SETUP_TIMEOUT);
+
+    // The opener drops a failed exchange instead of trying to flush its partial
+    // frame.
+    drop(client);
+    assert!(server.next().await.unwrap().is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn setup_response_timeout_drops_the_transport_without_a_close_wait() {
+    let (mut client, mut server) = setup_duplex().await;
+    let peer = tokio::spawn(async move {
+        let setup = server.next().await.unwrap().unwrap();
+        assert_eq!(setup, Message::Text("setup".into()));
+        assert!(server.next().await.is_none_or(|frame| frame.is_err()));
+    });
+    let start = tokio::time::Instant::now();
+    let error = tokio::time::timeout(SETUP_TIMEOUT + Duration::from_secs(1), async {
+        complete_live_setup(
+            &mut client,
+            Message::Text("setup".into()),
+            &["setup-fixture-secret".into()],
+            SETUP_TIMEOUT,
+        )
+        .await
+    })
+    .await
+    .expect("a missing setup response must time out")
+    .unwrap_err();
+    assert_setup_timeout(error.as_ref(), "response");
+    assert_eq!(start.elapsed(), SETUP_TIMEOUT);
+    drop(client);
+    peer.await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn delayed_setup_send_does_not_grant_a_fresh_response_timeout() {
+    let (mut client, mut server) = setup_duplex().await;
+    let (received, setup_received) = tokio::sync::oneshot::channel();
+    let start = tokio::time::Instant::now();
+    let peer = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        let setup = server.next().await.unwrap().unwrap();
+        assert_eq!(setup.len(), 4096);
+        received.send(()).unwrap();
+        assert!(server.next().await.is_none_or(|frame| frame.is_err()));
+    });
+    let open = tokio::spawn(async move {
+        complete_live_setup(
+            &mut client,
+            Message::Text("x".repeat(4096).into()),
+            &[],
+            SETUP_TIMEOUT,
+        )
+        .await
+    });
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(10)).await;
+    tokio::time::timeout(Duration::from_secs(1), setup_received)
+        .await
+        .expect("the peer must receive setup after its read resumes")
+        .unwrap();
+    assert_eq!(start.elapsed(), Duration::from_secs(10));
+    tokio::time::advance(Duration::from_millis(4999)).await;
+    assert!(!open.is_finished());
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert_setup_timeout(
+        tokio::time::timeout(Duration::from_secs(1), open)
+            .await
+            .expect("a delayed send cannot extend the exchange")
+            .unwrap()
+            .unwrap_err()
+            .as_ref(),
+        "response",
+    );
+    assert_eq!(start.elapsed(), SETUP_TIMEOUT);
+    peer.await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn setup_response_must_arrive_within_the_original_exchange_deadline() {
+    for (response_at, succeeds) in [(14_999, true), (15_001, false)] {
+        let (mut client, mut server) = setup_duplex().await;
+        let start = tokio::time::Instant::now();
+        let peer = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            server.next().await.unwrap().unwrap();
+            tokio::time::sleep_until(start + Duration::from_millis(response_at)).await;
+            let _ = server
+                .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+                .await;
+        });
+        let result = complete_live_setup(
+            &mut client,
+            Message::Text("x".repeat(4096).into()),
+            &[],
+            SETUP_TIMEOUT,
+        )
+        .await;
+        if succeeds {
+            result.unwrap();
+            assert_eq!(start.elapsed(), Duration::from_millis(response_at));
+        } else {
+            assert_setup_timeout(result.unwrap_err().as_ref(), "response");
+            assert_eq!(start.elapsed(), SETUP_TIMEOUT);
+        }
+        drop(client);
+        peer.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn setup_write_timeout_reaches_the_real_opener_and_releases_its_peer() {
+    let listener = tokio::net::TcpSocket::new_v4().unwrap();
+    listener.set_recv_buffer_size(1024).unwrap();
+    listener.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let listener = listener.listen(1).unwrap();
+    let url = format!("ws://{}/", listener.local_addr().unwrap());
+    let peer = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let socket = accept_async(socket).await.unwrap();
+
+        // Observe the first setup byte before pausing time: the TCP handshake
+        // and the real opener's setup deadline have both started by then.
+        assert_eq!(socket.get_ref().peek(&mut [0]).await.unwrap(), 1);
+        socket
+    });
+    let open = tokio::spawn(async move {
+        let config = live_config(&[]);
+        let mut boot = bootstrap(&config, "setup-timeout", Some("two-sum"), 45);
+
+        // A small receive window and a frame larger than the TCP send buffer
+        // force the production send to wait without reading setup on the peer.
+        boot.instructions = "x".repeat(32 * 1024 * 1024);
+        open_live_session_at(&url, &boot, None).await
+    });
+    let mut peer = tokio::time::timeout(Duration::from_secs(10), peer)
+        .await
+        .expect("the real opener must start its setup frame")
+        .unwrap();
+    assert!(!open.is_finished());
+    tokio::time::pause();
+    tokio::time::advance(SETUP_TIMEOUT).await;
+    let error = tokio::time::timeout(Duration::from_secs(1), open)
+        .await
+        .expect("the real opener must bound the setup write")
+        .unwrap()
+        .err()
+        .expect("a blocked setup write cannot open a session");
+    assert_setup_timeout(error.as_ref(), "send");
+    tokio::time::resume();
+
+    // Read TCP directly: a WebSocket frame-size rejection would say nothing
+    // about whether the failed opener released its end of the transport.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        use tokio::io::AsyncReadExt;
+        let mut bytes = [0; 8192];
+        loop {
+            match peer.get_mut().read(&mut bytes).await {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::ConnectionReset => break,
+                Err(error) => panic!("unexpected TCP failure: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("the failed opener must release its TCP transport");
+}
+
 /// An editor interview's report material: the editor's rules, nothing attached.
 pub(crate) const EDITOR: ReportMaterial<'static> = ReportMaterial {
     example_drawing_enabled: false,
@@ -318,7 +540,7 @@ async fn live_noncredential_errors_do_not_end_the_reader() {
         // themselves.
         let _ = socket.next().await;
     });
-    let mut session = open_live_session_at(&url, &boot, None).await.unwrap();
+    let mut session = open_fixture_at(&url, &boot, None).await.unwrap();
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(2), session.next_event())
             .await
@@ -356,7 +578,7 @@ async fn report_failover_preserves_the_live_key_and_resumption_handle() {
             .unwrap();
         let _ = socket.next().await;
     });
-    let mut session = open_live_session_at(&url, &boot, Some("working-handle"))
+    let mut session = open_fixture_at(&url, &boot, Some("working-handle"))
         .await
         .unwrap();
     session.credential = Some(keys.select().unwrap());
@@ -960,7 +1182,7 @@ async fn setup_errors_are_classified_without_returning_server_text() {
             socket.next().await.unwrap().unwrap();
             socket.send(message).await.unwrap();
         });
-        let error = open_live_session_at(&url, &boot, None).await.err().unwrap();
+        let error = open_fixture_at(&url, &boot, None).await.err().unwrap();
         assert_eq!(
             credential_failure(error.as_ref()),
             Some(CredentialFailure::Invalid)
@@ -3172,10 +3394,10 @@ async fn open_live_session_sends_setup_and_waits_for_setup_complete() {
         setup
     });
 
-    let session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+    let session = open_fixture_at(&format!("ws://{address}"), &boot, None)
         .await
         .unwrap();
-    let setup: Value = serde_json::from_str(&server.await.unwrap()).unwrap();
+    let setup: Value = serde_json::from_str(&bounded(server).await).unwrap();
 
     assert_eq!(setup["setup"]["model"], "models/gemini-live");
     assert_eq!(
@@ -3208,10 +3430,10 @@ async fn a_live_session_ages_from_the_moment_its_socket_opened() {
         socket
     });
 
-    let session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+    let session = open_fixture_at(&format!("ws://{address}"), &boot, None)
         .await
         .unwrap();
-    let held = server.await.unwrap();
+    let held = bounded(server).await;
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     assert!(
@@ -3252,16 +3474,165 @@ async fn shutdown_ends_the_reader_task() {
         std::future::pending::<()>().await;
     });
 
-    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+    let mut session = open_fixture_at(&format!("ws://{address}"), &boot, None)
         .await
         .unwrap();
+    let reader = session.reader.as_ref().unwrap().abort_handle();
     tokio::time::timeout(Duration::from_secs(5), session.shutdown())
         .await
         .expect("shutdown must finish rather than detach the reader")
         .unwrap();
-    assert!(session.reader.is_finished());
+    assert!(session.reader.is_none());
+    assert!(reader.is_finished());
     session.shutdown().await.unwrap();
     assert!(session.drain_usage().is_empty());
+}
+
+/// A replacement can finish setup just as its owner is cancelled. No caller
+/// remains to run shutdown, so dropping it must release the live read half.
+#[tokio::test]
+async fn dropping_a_live_session_aborts_its_reader_and_releases_the_socket() {
+    use tokio::io::AsyncReadExt;
+
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "dropped-replacement", Some("two-sum"), 45);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(socket).await.unwrap();
+        socket.next().await.unwrap().unwrap();
+        socket
+            .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+            .await
+            .unwrap();
+        let mut socket = socket.into_inner();
+        let mut byte = [0];
+        match socket.read(&mut byte).await {
+            Ok(0) => {}
+            Err(error) if error.kind() == io::ErrorKind::ConnectionReset => {}
+            other => panic!("dropping the session must release TCP, got {other:?}"),
+        }
+    });
+    let session = open_fixture_at(&format!("ws://{address}"), &boot, None)
+        .await
+        .unwrap();
+    let reader = session.reader.as_ref().unwrap().abort_handle();
+    assert!(
+        !reader.is_finished(),
+        "the peer is still holding an idle socket"
+    );
+    drop(session);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !reader.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        server.await.unwrap();
+    })
+    .await
+    .expect("a dropped replacement must not retain its reader or TCP socket");
+}
+
+#[tokio::test]
+async fn retiring_a_session_keeps_its_usage_and_leaves_a_closed_placeholder() {
+    use tokio::io::AsyncReadExt;
+
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "retired-transport", Some("two-sum"), 45);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(socket).await.unwrap();
+        socket.next().await.unwrap().unwrap();
+        socket
+            .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+            .await
+            .unwrap();
+        socket
+            .send(Message::Text(
+                r#"{"sessionResumptionUpdate":{"resumable":true,"newHandle":"retired-checkpoint"},"usageMetadata":{"promptTokenCount":42}}"#.into(),
+            ))
+            .await
+            .unwrap();
+        let mut socket = socket.into_inner();
+        let mut byte = [0];
+        match socket.read(&mut byte).await {
+            Ok(0) => {}
+            Err(error) if error.kind() == io::ErrorKind::ConnectionReset => {}
+            other => panic!("retired transport must release TCP, got {other:?}"),
+        }
+    });
+    let mut session = open_fixture_at(&format!("ws://{address}"), &boot, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), session.next_event())
+            .await
+            .unwrap(),
+        Some(GeminiEvent::UsageRecorded),
+    );
+    session.input_cause = Some("turn");
+    session.credential = Some("retirement-fixture-key".into());
+    let mut retired = session.retire();
+    let keys = GeminiKeys::single("retirement-fixture-key");
+    assert_eq!(
+        retired.recovery_handle(&keys),
+        Some(("retirement-fixture-key".into(), "retired-checkpoint".into())),
+    );
+    assert_eq!(retired.input_cause, Some("turn"));
+    assert!(!retired.gone());
+    assert!(session.gone());
+    assert!(!session.busy());
+    assert!(session.resumption_handle().is_none());
+    assert!(session.input_cause.is_none());
+    assert!(session.drain_usage().is_empty());
+    tokio::time::timeout(Duration::from_millis(50), async {
+        assert_eq!(session.next_event().await, None);
+        let error = session
+            .send_context("closed-placeholder", true)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::NotConnected
+        );
+        session.shutdown().await.unwrap();
+    })
+    .await
+    .expect("placeholder operations must never wait on the retired socket");
+    let reader = retired.reader.as_ref().unwrap().abort_handle();
+    {
+        let stop = retired.stop_reader();
+        tokio::pin!(stop);
+        assert!(
+            std::future::poll_fn(|cx| std::task::Poll::Ready(std::future::Future::poll(
+                stop.as_mut(),
+                cx
+            )))
+            .await
+            .is_pending()
+        );
+    }
+    assert!(
+        retired.reader.is_some(),
+        "cancelling the join must keep its owner"
+    );
+    tokio::time::timeout(Duration::from_secs(2), retired.stop_reader())
+        .await
+        .unwrap();
+    assert!(reader.is_finished());
+    assert!(retired.reader.is_none());
+    retired.stop_reader().await;
+    let usage = retired.drain_usage();
+    assert_eq!(usage.len(), 1);
+    assert_eq!(usage[0].prompt, 42);
+    assert!(retired.drain_usage().is_empty());
+    drop(retired);
+    tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 /// A peer that finished setup and then stopped reading without closing: the
@@ -3306,7 +3677,7 @@ async fn a_write_the_peer_never_takes_ends_the_session() {
     let config = live_config(&[]);
     let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
     let (address, _frames) = stalled_live_server(false).await;
-    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+    let mut session = open_fixture_at(&format!("ws://{address}"), &boot, None)
         .await
         .unwrap();
 
@@ -3356,7 +3727,7 @@ async fn a_close_the_peer_never_takes_is_bounded() {
     let config = live_config(&[]);
     let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
     let (address, _frames) = stalled_live_server(false).await;
-    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+    let mut session = open_fixture_at(&format!("ws://{address}"), &boot, None)
         .await
         .unwrap();
 
@@ -3365,18 +3736,24 @@ async fn a_close_the_peer_never_takes_is_bounded() {
     let chunk = vec![0u8; 1 << 16];
     while tokio::time::timeout(
         Duration::from_millis(200),
-        session.writer.send(Message::Binary(chunk.clone().into())),
+        session
+            .writer
+            .as_mut()
+            .unwrap()
+            .send(Message::Binary(chunk.clone().into())),
     )
     .await
     .is_ok_and(|sent| sent.is_ok())
     {}
 
+    let reader = session.reader.as_ref().unwrap().abort_handle();
     let closed = tokio::time::timeout(CLOSE_TIMEOUT * 2, session.shutdown())
         .await
         .expect("shutdown must not wait on a peer that stopped reading");
     assert!(closed.is_err(), "a close that did not land must say so");
+    assert!(session.reader.is_none());
     assert!(
-        session.reader.is_finished(),
+        reader.is_finished(),
         "the reader must end even when close fails"
     );
 }
@@ -3390,7 +3767,7 @@ async fn a_silent_peer_ends_the_reader() {
     let config = live_config(&[]);
     let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
     let (address, _frames) = stalled_live_server(false).await;
-    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+    let mut session = open_fixture_at(&format!("ws://{address}"), &boot, None)
         .await
         .unwrap();
 
@@ -3425,7 +3802,7 @@ async fn keep_alive_pings_once_an_interval() {
     let config = live_config(&[]);
     let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
     let (address, mut frames) = stalled_live_server(true).await;
-    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+    let mut session = open_fixture_at(&format!("ws://{address}"), &boot, None)
         .await
         .unwrap();
 
@@ -3487,7 +3864,7 @@ async fn open_live_session_delivers_server_events_from_reader_task() {
             .unwrap();
     });
 
-    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+    let mut session = open_fixture_at(&format!("ws://{address}"), &boot, None)
         .await
         .unwrap();
 
@@ -3533,7 +3910,7 @@ async fn the_reader_keeps_the_latest_handle_after_the_socket_closes() {
         socket.close(None).await.unwrap();
     });
 
-    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+    let mut session = open_fixture_at(&format!("ws://{address}"), &boot, None)
         .await
         .unwrap();
 
@@ -3572,7 +3949,7 @@ async fn a_resumed_session_keeps_its_handle_until_a_new_one_arrives() {
         socket.close(None).await.unwrap();
     });
 
-    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, Some("handle-in"))
+    let mut session = open_fixture_at(&format!("ws://{address}"), &boot, Some("handle-in"))
         .await
         .unwrap();
 
@@ -3583,7 +3960,7 @@ async fn a_resumed_session_keeps_its_handle_until_a_new_one_arrives() {
         None,
         "an inherited checkpoint is not one this socket can date"
     );
-    server.await.unwrap();
+    bounded(server).await;
 }
 
 /// The idle-window call is not the report call, and the difference is the whole
@@ -3714,7 +4091,7 @@ async fn tool_answers_leave_on_the_socket_in_one_frame() {
             .unwrap()
     });
 
-    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+    let mut session = open_fixture_at(&format!("ws://{address}"), &boot, None)
         .await
         .unwrap();
     let call = |id: &str| GeminiFunctionCall {
@@ -3865,7 +4242,7 @@ async fn usage_is_recorded_before_the_frame_waits_on_a_full_queue() {
         std::future::pending::<()>().await;
     });
 
-    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+    let mut session = open_fixture_at(&format!("ws://{address}"), &boot, None)
         .await
         .unwrap();
     let observed = tokio::time::timeout(Duration::from_secs(5), async {
@@ -3912,7 +4289,7 @@ async fn each_usage_marker_takes_its_own_frames_observation() {
         std::future::pending::<()>().await;
     });
 
-    let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+    let mut session = open_fixture_at(&format!("ws://{address}"), &boot, None)
         .await
         .unwrap();
     // Both frames decoded before the first event is read.
@@ -3963,7 +4340,7 @@ async fn a_billing_close_is_final_only_for_a_sole_key() {
                 .await
                 .unwrap();
         });
-        let mut session = open_live_session_at(&format!("ws://{address}"), &boot, None)
+        let mut session = open_fixture_at(&format!("ws://{address}"), &boot, None)
             .await
             .unwrap();
         // The close is recorded by the reader, which then ends the stream.
@@ -4621,636 +4998,4 @@ fn every_failing_path_is_named_before_a_second_error_on_one() {
     assert!(found.is_sorted(), "{found:?}");
 }
 
-#[test]
-fn a_self_review_check_with_multiple_policy_violations_is_dropped_once() {
-    let mut report = valid_report();
-    report["improvementPlan"][0]["selfReview"] = json!([
-        "Speak clearly in English without nervous filler words.",
-        "Verify the loop invariant"
-    ]);
-    let salvage = salvage_report(
-        report,
-        0,
-        report_problem(),
-        rounds(true),
-        InterviewMode::Coding,
-        true,
-    )
-    .unwrap();
-    assert_eq!(salvage.removed.checks, 1);
-    assert_eq!(
-        salvage.report["improvementPlan"][0]["selfReview"],
-        json!(["Verify the loop invariant"])
-    );
-}
-
-/// The phase judge asks for JSON under its own instruction and hands back the
-/// text the server then checks. One key cannot tell the pools apart; which
-/// pool it spends, and what a failure does to it, is
-/// `a_rate_limited_phase_judge_does_not_cool_the_report_key`'s to show.
-#[tokio::test]
-async fn the_phase_judge_requests_json_under_its_own_instruction() {
-    let keys = GeminiKeys::single("phase-judge-key");
-    let bodies = Arc::new(Mutex::new(Vec::new()));
-    let seen = Arc::clone(&bodies);
-    let app = axum::Router::new().route(
-        "/",
-        axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
-            let seen = Arc::clone(&seen);
-            async move {
-                seen.lock().unwrap().push(body);
-                axum::Json(
-                    json!({"candidates":[{"content":{"parts":[{"text":"{\"steps\": []}"}]}}]}),
-                )
-            }
-        }),
-    );
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    assert_eq!(
-        generate_phase_judgment_at(&keys, &url, "prompt", "test-room")
-            .await
-            .unwrap(),
-        "{\"steps\": []}"
-    );
-    server.abort();
-    let body = bodies.lock().unwrap()[0].clone();
-    assert_eq!(
-        body["generationConfig"]["responseMimeType"],
-        "application/json"
-    );
-    assert_eq!(
-        body["systemInstruction"]["parts"][0]["text"],
-        crate::agent::phase_judge_system_instruction()
-    );
-    assert_eq!(body["contents"][0]["parts"][0]["text"], "prompt");
-}
-
-/// A rate limit on the phase judge leaves the key on the report surface, where
-/// the same limit on an interim review cools it: the judge runs dozens of
-/// times an interview and must not be what leaves the final report keyless.
-#[tokio::test]
-async fn a_rate_limited_phase_judge_does_not_cool_the_report_key() {
-    for (judge, cools) in [(true, false), (false, true)] {
-        let first = format!("side-quota-{judge}-first");
-        let second = format!("side-quota-{judge}-second");
-        let config = live_config(&[("GOOGLE_API_KEYS", &format!("{first},{second}"))]);
-        let keys = GeminiKeys::from_config(&config);
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}/", listener.local_addr().unwrap());
-        let app = axum::Router::new().route(
-            "/",
-            axum::routing::post(|| async { axum::http::StatusCode::TOO_MANY_REQUESTS }),
-        );
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let result = if judge {
-            generate_phase_judgment_at(&keys, &url, "prompt", "test-room").await
-        } else {
-            generate_interim_review_at(&keys, &url, "prompt", "test-room").await
-        };
-        assert!(result.is_err());
-        server.abort();
-        let expected = if cools { &second } else { &first };
-        assert_eq!(&keys.select_report().unwrap(), expected, "judge={judge}");
-    }
-}
-
-#[test]
-fn provider_voice_activity_parses_only_known_activity_types() {
-    for (kind, expected) in [
-        ("ACTIVITY_START", Some(true)),
-        ("ACTIVITY_END", Some(false)),
-        ("UNKNOWN", None),
-    ] {
-        let parsed = parse_server_message(
-            &serde_json::json!({"voiceActivity": {"type": kind, "audioOffset": "0.320s"}})
-                .to_string(),
-        );
-        assert_eq!(
-            parsed.events,
-            expected
-                .into_iter()
-                .map(|active| GeminiEvent::CandidateVoiceActivity {
-                    active,
-                    audio_offset: Some(Duration::from_millis(320))
-                })
-                .collect::<Vec<_>>()
-        );
-    }
-}
-
-#[test]
-fn coding_only_tool_schema_excludes_behavioral_phases_on_both_surfaces() {
-    // Only a whiteboard is offered the tool at all.
-    for mode in [InterviewMode::Coding, InterviewMode::Whiteboard] {
-        if !crate::agent::evidence_tool_declared(mode) {
-            let tools =
-                live_tool_declarations(crate::agent::InterviewLoop::CodingBehavioral, mode, false);
-            assert!(
-                tools
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .all(|tool| tool["name"] != TOOL_RECORD_FRAMEWORK_EVIDENCE)
-            );
-            continue;
-        }
-        let coding = live_tool_declarations(crate::agent::InterviewLoop::CodingOnly, mode, false);
-        let full =
-            live_tool_declarations(crate::agent::InterviewLoop::CodingBehavioral, mode, false);
-        let find = |tools: Value| {
-            tools
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|tool| tool["name"] == TOOL_RECORD_FRAMEWORK_EVIDENCE)
-                .unwrap()
-                .clone()
-        };
-        let coding = find(coding);
-        let full = find(full);
-        assert_eq!(
-            coding["parameters"]["properties"]["phase"]["enum"],
-            json!([
-                "repeat",
-                "example",
-                "algorithm",
-                "coding",
-                "test",
-                "optimizations"
-            ])
-        );
-        assert_eq!(
-            full["parameters"]["properties"]["phase"]["enum"]
-                .as_array()
-                .unwrap()
-                .len(),
-            10
-        );
-        assert!(!coding["description"].as_str().unwrap().contains("STAR"));
-        assert_eq!(
-            coding["parameters"]["properties"]["source"],
-            full["parameters"]["properties"]["source"]
-        );
-        assert_eq!(
-            coding["parameters"]["required"],
-            full["parameters"]["required"]
-        );
-    }
-}
-
-#[tokio::test]
-async fn bounded_http_diagnostic_preserves_real_connect_error_and_hides_url() {
-    // A connected socket reserves its source port without accepting new
-    // connections. A merely bound socket times out on macOS; dropping a
-    // listener instead lets another test take its port before the request.
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let reserved = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
-        .await
-        .unwrap();
-    let (_peer, _) = listener.accept().await.unwrap();
-    let address = reserved.local_addr().unwrap();
-    let error = generate_content_once(
-        "SECRET_KEY_SENTINEL",
-        &format!("http://{address}/SECRET_URL_SENTINEL"),
-        &json!({}),
-        Duration::from_secs(1),
-        "diagnostic",
-    )
-    .await
-    .unwrap_err();
-    assert!(error.downcast_ref::<reqwest::Error>().unwrap().is_connect());
-    assert!(is_retryable(error.as_ref()));
-    let detail = http_failure_diagnostic(
-        error.as_ref(),
-        "send",
-        Duration::from_millis(7),
-        Duration::from_secs(1),
-    );
-    assert_eq!(detail["connect"], true);
-    assert_eq!(detail["elapsed_ms"], 7);
-    assert_eq!(detail["timeout_ms"], 1000);
-    assert!(detail["source_depth"].as_u64().unwrap() <= 8);
-    for secret in ["SECRET_KEY_SENTINEL", "SECRET_URL_SENTINEL", "127.0.0.1"] {
-        assert!(!detail.to_string().contains(secret));
-    }
-}
-
-#[tokio::test]
-async fn bounded_http_diagnostic_distinguishes_actual_timeout_decode_and_provider() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    for scenario in ["timeout", "decode", "provider"] {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = [0; 4096];
-            let _ = socket.read(&mut request).await.unwrap();
-            if scenario == "timeout" {
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                return;
-            }
-            let (status, body) = if scenario == "decode" {
-                ("200 OK", "not JSON")
-            } else {
-                (
-                    "503 Service Unavailable",
-                    "{\"error\":{\"message\":\"SECRET_BODY_SENTINEL\"}}",
-                )
-            };
-            let response = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            socket.write_all(response.as_bytes()).await.unwrap();
-        });
-        let limit = if scenario == "timeout" {
-            Duration::from_millis(50)
-        } else {
-            Duration::from_secs(1)
-        };
-        let error = generate_content_once(
-            "SECRET_KEY_SENTINEL",
-            &format!("http://{address}/SECRET_URL_SENTINEL"),
-            &json!({}),
-            limit,
-            "diagnostic",
-        )
-        .await
-        .unwrap_err();
-        let stage = if scenario == "decode" {
-            "decode"
-        } else if scenario == "provider" {
-            "http_status"
-        } else {
-            "send"
-        };
-        let detail = http_failure_diagnostic(error.as_ref(), stage, limit, limit);
-        match scenario {
-            "timeout" => {
-                assert_eq!(detail["timeout"], true);
-                assert!(is_retryable(error.as_ref()));
-            }
-            "decode" => {
-                assert_eq!(detail["decode"], true);
-                assert!(!is_retryable(error.as_ref()));
-            }
-            _ => {
-                assert_eq!(detail["status"], 503);
-                assert!(error.downcast_ref::<ApiFailure>().is_some());
-                assert!(is_retryable(error.as_ref()));
-            }
-        }
-        for secret in [
-            "SECRET_KEY_SENTINEL",
-            "SECRET_URL_SENTINEL",
-            "SECRET_BODY_SENTINEL",
-            "127.0.0.1",
-        ] {
-            assert!(!detail.to_string().contains(secret));
-        }
-        server.await.unwrap();
-    }
-}
-
-#[test]
-fn bounded_http_diagnostic_emission_child() {
-    if std::env::var_os("CODETRIAL_HTTP_DIAGNOSTIC_TEST_CHILD").is_none() {
-        return;
-    }
-    bounded_http_diagnostic_preserves_real_connect_error_and_hides_url();
-    bounded_http_diagnostic_distinguishes_actual_timeout_decode_and_provider();
-}
-
-#[test]
-fn bounded_http_diagnostic_actual_stderr_preserves_stage_and_privacy() {
-    let output = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "gemini::tests::bounded_http_diagnostic_emission_child",
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env("CODETRIAL_HTTP_DIAGNOSTIC_TEST_CHILD", "1")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "child failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    let events = stderr
-        .lines()
-        .filter_map(|line| line.strip_prefix("codetrial http_failure "))
-        .map(|json| serde_json::from_str::<Value>(json).unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(events.len(), 4, "{stderr}");
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event["stage"] == "send")
-            .count(),
-        2
-    );
-    let connect = events
-        .iter()
-        .find(|event| event["connect"] == true)
-        .unwrap();
-    assert_eq!(connect["stage"], "send");
-    let timeout = events
-        .iter()
-        .find(|event| event["timeout"] == true)
-        .unwrap();
-    assert_eq!(timeout["stage"], "send");
-    assert_eq!(timeout["timeout_ms"], 50);
-    assert!(timeout["elapsed_ms"].as_u64().unwrap() >= 40);
-    let decode = events
-        .iter()
-        .find(|event| event["stage"] == "decode")
-        .unwrap();
-    assert_eq!(decode["decode"], true);
-    let provider = events
-        .iter()
-        .find(|event| event["stage"] == "http_status")
-        .unwrap();
-    assert_eq!(provider["status"], 503);
-    for event in &events {
-        assert!(event["elapsed_ms"].as_u64().unwrap() < 5000);
-        assert!(event["source_depth"].as_u64().unwrap() <= 8);
-        assert!(event["timeout_ms"] == 50 || event["timeout_ms"] == 1000);
-    }
-    for sentinel in [
-        "SECRET_KEY_SENTINEL",
-        "SECRET_URL_SENTINEL",
-        "SECRET_BODY_SENTINEL",
-        "127.0.0.1",
-    ] {
-        assert!(!stderr.contains(sentinel));
-    }
-}
-
-/// A reply is owed from the first sign of candidate speech, before any output:
-/// a completed client turn sent in that gap would interrupt it. Only a turn's
-/// completion clears it, unless an interruption beside it says the candidate
-/// is speaking again; trailing output transcription says nothing either way.
-#[test]
-fn busy_spans_candidate_speech_to_turn_completion() {
-    let busy = |frame: &str| parse_server_message(frame).busy;
-    assert_eq!(
-        busy(r#"{"voiceActivity":{"type":"ACTIVITY_END"}}"#),
-        Some(true)
-    );
-    assert_eq!(
-        busy(r#"{"serverContent":{"inputTranscription":{"text":"done"}}}"#),
-        Some(true)
-    );
-    assert_eq!(
-        busy(r#"{"serverContent":{"modelTurn":{"parts":[{"text":"ok"}]}}}"#),
-        Some(true)
-    );
-    assert_eq!(
-        busy(r#"{"serverContent":{"turnComplete":true}}"#),
-        Some(false)
-    );
-    assert_eq!(
-        busy(r#"{"serverContent":{"interrupted":true,"turnComplete":true}}"#),
-        Some(true)
-    );
-    assert_eq!(
-        busy(r#"{"serverContent":{"outputTranscription":{"text":"late"}}}"#),
-        None
-    );
-}
-
-/// A reply this server asked for stays owed through the longest reply
-/// deadline: a later frame of evidence extends the window but never shortens
-/// it to its own ten seconds.
-#[test]
-fn evidence_never_shortens_a_requested_reply_window() {
-    let busy = Mutex::new(None);
-    extend_busy(&busy, BUSY_REQUEST_LIMIT);
-    let requested = busy.lock().unwrap().unwrap();
-    extend_busy(&busy, BUSY_EVIDENCE_LIMIT);
-    assert_eq!(busy.lock().unwrap().unwrap(), requested);
-    assert!(requested >= std::time::Instant::now() + Duration::from_secs(100));
-
-    let observed = Mutex::new(None);
-    extend_busy(&observed, BUSY_EVIDENCE_LIMIT);
-    assert!(
-        observed.lock().unwrap().unwrap() < std::time::Instant::now() + Duration::from_secs(11)
-    );
-}
-
-/// A busy deadline holds until it arrives, and not at the instant itself.
-#[test]
-fn a_busy_deadline_lapses_at_its_own_instant() {
-    let now = std::time::Instant::now();
-    assert!(busy_at(Some(now + Duration::from_millis(1)), now));
-    assert!(!busy_at(Some(now), now));
-    assert!(!busy_at(None, now));
-}
-
-/// The diagnostic walks at most eight sources: an I/O cause at the eighth is
-/// named, one at the ninth is not, so a cyclic or endless chain stays bounded.
-#[test]
-fn http_diagnostic_walks_eight_sources_and_no_further() {
-    #[derive(Debug)]
-    struct Wrap(Box<dyn std::error::Error + Send + Sync>);
-    impl std::fmt::Display for Wrap {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("wrapped")
-        }
-    }
-    impl std::error::Error for Wrap {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            Some(self.0.as_ref())
-        }
-    }
-    let chain = |depth: usize| {
-        let mut error: Box<dyn std::error::Error + Send + Sync> =
-            Box::new(io::Error::from(io::ErrorKind::ConnectionReset));
-        for _ in 0..depth {
-            error = Box::new(Wrap(error));
-        }
-        error
-    };
-    let diagnose = |depth: usize| {
-        http_failure_diagnostic(
-            chain(depth).as_ref(),
-            "send",
-            Duration::from_millis(1),
-            Duration::from_secs(1),
-        )
-    };
-    let reached = diagnose(8);
-    assert_eq!(reached["io_kind"], "ConnectionReset");
-    assert_eq!(reached["source_depth"], 8);
-    let beyond = diagnose(9);
-    assert_eq!(beyond["io_kind"], serde_json::Value::Null);
-    assert_eq!(beyond["source_depth"], 8);
-}
-
-#[test]
-fn reconnect_setup_preserves_resolved_voice_and_accent() {
-    let config = live_config(&[("GEMINI_VOICE", "Aoede")]);
-    for voice in crate::agent::INTERVIEWER_VOICES {
-        for accent in crate::agent::INTERVIEWER_ACCENTS {
-            let boot = crate::runtime::bootstrap_with_rounds(
-                &config,
-                "room",
-                Some("two-sum"),
-                45,
-                crate::runtime::RuntimeOptions {
-                    voice: Some(voice),
-                    accent: Some(accent),
-                    ..Default::default()
-                },
-            );
-            assert_eq!(boot.accent, Some(*accent));
-            for resume in [None, Some("resume-handle"), None] {
-                let setup = live_setup_message(&boot, resume);
-                assert_eq!(
-                    setup["setup"]["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]
-                        ["voiceName"],
-                    *voice
-                );
-                assert_eq!(
-                    setup["setup"]["systemInstruction"]["parts"][0]["text"],
-                    boot.instructions
-                );
-                assert!(
-                    boot.instructions
-                        .contains(&format!("natural {accent} accent"))
-                );
-            }
-        }
-    }
-}
-
-#[tokio::test]
-async fn queued_transcripts_keep_the_provider_receipt_time() {
-    let config = live_config(&[]);
-    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("ws://{}", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move {
-        let (socket, _) = listener.accept().await.unwrap();
-        let mut socket = accept_async(socket).await.unwrap();
-        socket.next().await.unwrap().unwrap();
-        for frame in [
-            r#"{"setupComplete":{}}"#,
-            r#"{"serverContent":{"inputTranscription":{"text":"finished"},"turnComplete":true}}"#,
-        ] {
-            socket.send(Message::Text(frame.into())).await.unwrap();
-        }
-        std::future::pending::<()>().await;
-    });
-    let mut session = open_live_session_at(&url, &boot, None).await.unwrap();
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while session.events.len() < 2 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    let queued_at = std::time::Instant::now();
-    assert!(matches!(
-        session.next_event().await,
-        Some(GeminiEvent::InputTranscript(_))
-    ));
-    let transcript_at = session.event_received_at().unwrap();
-    assert!(transcript_at <= queued_at);
-    assert!(matches!(
-        session.next_event().await,
-        Some(GeminiEvent::TurnComplete)
-    ));
-    assert_eq!(session.event_received_at(), Some(transcript_at));
-    session.shutdown().await.unwrap();
-    server.abort();
-}
-
-/// The acknowledgement is played straight into the output track, so audio at
-/// any other rate is refused rather than played at the wrong speed.
-#[test]
-fn a_tool_acknowledgement_is_taken_only_at_the_output_rate() {
-    let response = |mime: &str| {
-        json!({"candidates": [{"content": {"parts": [{"inlineData": {
-            "mimeType": mime, "data": STANDARD.encode([1u8, 0, 2, 0])
-        }}]}}]})
-    };
-    assert_eq!(
-        tool_ack_pcm(&response("audio/L16;codec=pcm;rate=24000"), 24_000).unwrap(),
-        [1, 0, 2, 0]
-    );
-    assert!(tool_ack_pcm(&response("audio/pcm;rate=24000"), 24_000).is_ok());
-    // What the speech model actually sends: lower case, spaced, with channels.
-    assert!(tool_ack_pcm(&response("audio/l16; rate=24000; channels=1"), 24_000).is_ok());
-    assert!(tool_ack_pcm(&response("audio/L16;codec=pcm;rate=16000"), 24_000).is_err());
-    assert!(tool_ack_pcm(&response("audio/L16;codec=pcm;rate=240000"), 24_000).is_err());
-    assert!(tool_ack_pcm(&response("audio/wav;rate=24000"), 24_000).is_err());
-    assert!(tool_ack_pcm(&json!({}), 24_000).is_err());
-}
-
-/// The acknowledgement is asked for in the interview's accent when it has one,
-/// so it does not sound like another speaker in front of the reply.
-#[test]
-fn a_tool_acknowledgement_is_spoken_in_the_interviews_accent() {
-    assert_eq!(
-        tool_ack_text(None),
-        "Say briefly, in a natural, thinking tone: Mm, okay."
-    );
-    assert_eq!(
-        tool_ack_text(Some("Irish")),
-        "Say briefly, in a natural, thinking tone, with a natural Irish accent: Mm, okay."
-    );
-}
-
-/// The acknowledgement is one speech request in the session's voice, with the
-/// key in a header, and comes back as the decoded samples.
-#[tokio::test]
-async fn a_tool_acknowledgement_is_one_speech_request_in_the_sessions_voice() {
-    let keys = GeminiKeys::single("tool-ack-key");
-    let requests = Arc::new(Mutex::new(Vec::new()));
-    let seen = Arc::clone(&requests);
-    let app = axum::Router::new().route(
-        "/",
-        axum::routing::post(
-            move |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<Value>| {
-                let seen = Arc::clone(&seen);
-                async move {
-                    let key = headers["x-goog-api-key"].to_str().unwrap().to_string();
-                    seen.lock().unwrap().push((key, body));
-                    axum::Json(
-                        json!({"candidates": [{"content": {"parts": [{"inlineData": {
-                            "mimeType": "audio/L16;codec=pcm;rate=24000",
-                            "data": STANDARD.encode([7u8, 0, 9, 0])
-                        }}]}}]}),
-                    )
-                }
-            },
-        ),
-    );
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let clip = tool_ack_clip_at(&keys, &url, "Charon", None, 24_000)
-        .await
-        .unwrap();
-    server.abort();
-    assert_eq!(clip, [7, 0, 9, 0]);
-    assert_eq!(requests.lock().unwrap().len(), 1);
-    let (key, body) = requests.lock().unwrap()[0].clone();
-    assert_eq!(key, "tool-ack-key");
-    assert_eq!(body["contents"][0]["parts"][0]["text"], tool_ack_text(None));
-    assert_eq!(
-        body["generationConfig"]["responseModalities"],
-        json!(["AUDIO"])
-    );
-    assert_eq!(
-        body["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"],
-        "Charon"
-    );
-}
+include!("gemini_parts/tool_policy_and_reader_pressure.rs");

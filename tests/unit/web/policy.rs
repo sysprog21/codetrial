@@ -39,6 +39,7 @@ fn policy_for(url: &str) -> String {
         },
         probe_provider_quota: false,
         update_check_commit: None,
+        provision_rooms: false,
     })
 }
 

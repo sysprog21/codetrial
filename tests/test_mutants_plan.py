@@ -122,14 +122,14 @@ done
         self.assertFalse(self.output.exists())
 
     def test_mutant_counts_assign_every_shard(self):
-        for count in (0, 1, 25, 26, 400, 401, 1200, 1201):
+        for count in (0, 1, 15, 16, 400, 401, 720, 721):
             with self.subTest(count=count):
                 self.output.unlink(missing_ok=True)
                 self.env["FAKE_COUNT"] = str(count)
                 result = self.run_step("Count the mutants this diff is worth")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 outputs = self.outputs()
-                width = min(48, max(1, (count + 24) // 25))
+                width = min(48, max(1, (count + 14) // 15))
                 self.assertEqual(int(outputs["count"]), count)
                 self.assertEqual(int(outputs["width"]), width)
                 self.assertEqual(

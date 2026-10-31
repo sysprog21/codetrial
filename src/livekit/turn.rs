@@ -21,6 +21,8 @@ use crate::agent::{
     proactive_review, silence_nudge, timing_decision, unreviewed_from, with_timer,
 };
 
+mod trailing;
+
 /// How long the room has to be quiet before a pause is worth reading into.
 ///
 /// Well under `SILENCE_THRESHOLD_S`, and that is the point: this is meant to
@@ -1497,11 +1499,6 @@ impl RuntimeActivity {
         if !self.is_late_transcript(now) {
             self.latency.transcript(now);
         }
-    }
-
-    fn is_late_transcript(&self, now: Instant) -> bool {
-        self.turn_completed_at
-            .is_some_and(|at| now.saturating_duration_since(at) < LATE_TRANSCRIPT_GRACE)
     }
 
     /// Gemini has transcribed something the candidate said, so they have

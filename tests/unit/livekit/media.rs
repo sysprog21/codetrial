@@ -168,6 +168,25 @@ async fn a_failed_flush_is_an_error_the_caller_can_see() {
     );
 }
 
+/// A flush that errored may still have reached the provider, so its bytes are
+/// marked unconfirmed and kept; one with nothing to send marks nothing.
+#[tokio::test]
+async fn a_failed_flush_marks_the_bytes_it_may_have_sent_as_unconfirmed() {
+    let mut sink = RecordingSink {
+        fail: true,
+        ..RecordingSink::default()
+    };
+    let mut media = CandidateMedia::new();
+    media.audio_bytes.extend_from_slice(&[1, 2]);
+    assert!(flush_candidate_audio(&mut sink, &mut media).await.is_err());
+    assert!(media.audio_unconfirmed);
+    assert_eq!(media.audio_bytes, [1, 2]);
+
+    let mut empty = CandidateMedia::new();
+    assert!(flush_candidate_audio(&mut sink, &mut empty).await.is_ok());
+    assert!(!empty.audio_unconfirmed);
+}
+
 /// Bytes a socket refused with an error are still held, and a later flush on
 /// another sink sends them. This pins the retention after a reported failure,
 /// not delivery of everything said during a gap, and nothing about a write the
@@ -204,12 +223,12 @@ async fn a_refused_flush_keeps_its_bytes_for_the_replacement_socket() {
 fn an_ended_audio_track_is_released_even_when_the_flush_fails() {
     let loop_source = include_str!("../../../src/livekit.rs");
     let arm = loop_source
-        .split("frame = next_audio_frame")
+        .split("async fn on_candidate_input(")
         .nth(1)
-        .expect("the room loop still has an audio arm");
+        .expect("the room loop still has a shared audio handler");
     let pump = arm.find("pump_audio").expect("the arm still pumps audio");
     let release = arm
-        .find("release_if_ended(&mut media.audio")
+        .find("release_if_ended(&mut context.media.audio")
         .expect("the arm must let go of an ended audio stream itself");
     assert!(
         release > pump,
@@ -916,4 +935,139 @@ async fn cancellation_during_successful_capture_clears_before_next_frame() {
         actual.push(event);
     }
     assert_eq!(actual, ["ack capture", "clear", "reply capture"]);
+}
+
+/// The first of the three candidate-audio stores: the SDK's own queue, which
+/// the owned recovery ingress and the socket write buffer sit behind.
+///
+/// `libwebrtc-0.3.53/src/native/audio_stream.rs` builds a bounded ring of
+/// `queue_size_frames` and, when it is full, `push_bounded` (line 160) pops
+/// the oldest frame and `record_drop` bumps a private counter that only
+/// reaches a log line. Nothing on `NativeAudioStream` exposes that count and
+/// `AudioFrame` carries no capture time. The capture below stalls the reader
+/// for the whole run, as a blocked room loop would, and reads afterwards.
+async fn sdk_frames_after_a_stalled_reader(captured: i16) -> Vec<i16> {
+    let source = NativeAudioSource::new(
+        AudioSourceOptions::default(),
+        u32::try_from(GEMINI_AUDIO_SAMPLE_RATE).unwrap(),
+        u32::try_from(GEMINI_AUDIO_CHANNELS).unwrap(),
+        0,
+    );
+    let track = LocalAudioTrack::create_audio_track(
+        "sdk-store-characterization",
+        RtcAudioSource::Native(source.clone()),
+    );
+    let mut stream = candidate_audio_stream(track.rtc_track());
+    for marker in 1..=captured {
+        let mut frame = frame_of(160);
+        frame.data.to_mut().fill(marker);
+        source.capture_frame(&frame).await.unwrap();
+    }
+
+    // Capture hands frames to the sink on the calling thread, so all of them
+    // are queued by now; each expected frame is still awaited generously and
+    // the quiet period afterwards only proves that nothing extra is queued.
+    let mut delivered = Vec::new();
+    for _ in 0..captured.min(4000) {
+        let frame = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("a retained frame never arrived")
+            .unwrap();
+
+        // Every sample of a numbered frame carries its number, so a split or
+        // merged frame would show here rather than only as a count.
+        assert_eq!(frame.data.len(), 160);
+        assert!(frame.data.iter().all(|sample| *sample == frame.data[0]));
+        delivered.push(frame.data[0]);
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), stream.next())
+            .await
+            .is_err(),
+        "the queue holds more than its bound"
+    );
+    delivered
+}
+
+/// A stall of the room loop up to 40 s of ten millisecond frames loses
+/// nothing; past it the SDK drops the oldest numbered frames, so the oldest
+/// frame
+/// delivered is `captured - 3999`. The only trace is an SDK log line; no
+/// count or error reaches the caller.
+#[tokio::test]
+async fn sdk_queue_keeps_the_newest_4000_frames_and_drops_the_oldest_with_no_count() {
+    let exact = sdk_frames_after_a_stalled_reader(4000).await;
+    assert_eq!(exact, (1..=4000).collect::<Vec<i16>>());
+
+    let over = sdk_frames_after_a_stalled_reader(4010).await;
+    assert_eq!(over.len(), 4000);
+    assert_eq!(
+        over,
+        (11..=4010).collect::<Vec<i16>>(),
+        "frames 1..=10 were dropped oldest-first and the rest keep their order"
+    );
+
+    // The frame type has no capture-time field. Destructuring without `..`
+    // stops compiling if the SDK ever adds one, which is when the local 40 s
+    // figure could start to say something about capture age.
+    let AudioFrame {
+        data: _,
+        sample_rate: _,
+        num_channels: _,
+        samples_per_channel: _,
+    } = frame_of(160);
+}
+
+/// The stores stack: the SDK queue holds up to 40 s of audio of unknown age,
+/// and each frame is stamped afresh with the local clock when the room loop
+/// finally moves it into the owned ingress, which then keeps it for up to
+/// another 40 s. The 40 s ingress age bounds only the local dwell, not
+/// capture-to-send age, and the SDK's own losses never reach the local
+/// dropped-byte count.
+#[tokio::test]
+async fn stacked_sdk_and_ingress_stores_exceed_the_local_age_bound_in_capture_age() {
+    use super::super::recovery::Ingress;
+
+    let capture_start = Instant::now();
+    let capture_time = |marker: i16| {
+        capture_start + Duration::from_millis(10 * (u64::try_from(marker).unwrap() - 1))
+    };
+    // 40.10 s of audio captured while the loop does not read the stream.
+    let stalled = sdk_frames_after_a_stalled_reader(4010).await;
+    let drained_at = capture_start + Duration::from_millis(40_100);
+    let fill = |ingress: &mut Ingress| {
+        for marker in &stalled {
+            let mut frame = frame_of(160);
+            frame.data.to_mut().fill(*marker);
+            ingress.push(frame, drained_at);
+        }
+    };
+
+    // 39 s of ingress dwell: every retained frame is delivered, oldest first.
+    let mut ingress = Ingress::default();
+    fill(&mut ingress);
+    assert_eq!(ingress.dropped_bytes, 0);
+    let delivered_at = drained_at + Duration::from_secs(39);
+    let Some(CandidateInput::BufferedFrame(first)) = ingress.pop(delivered_at) else {
+        panic!("a frame within the local age bound is delivered");
+    };
+    assert_eq!(first.data[0], 11, "the oldest delivered numbered frame");
+    let age = delivered_at.duration_since(capture_time(first.data[0]));
+    assert_eq!(age, Duration::from_millis(79_000));
+    assert!(
+        age > Duration::from_secs(40),
+        "local dwell under 40 s still lets capture-to-send age pass 40 s"
+    );
+    assert_eq!(
+        ingress.dropped_bytes, 0,
+        "SDK drops are not locally counted"
+    );
+
+    // At 40 s of dwell the whole ingress expires, counted in bytes. The ten
+    // frames the SDK dropped before it are not in this figure.
+    let mut ingress = Ingress::default();
+    fill(&mut ingress);
+    assert!(ingress.pop(drained_at + Duration::from_secs(40)).is_none());
+    assert_eq!(ingress.dropped_bytes, 4000 * 320);
+    assert!(ingress.is_empty());
 }

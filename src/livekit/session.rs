@@ -13,6 +13,14 @@
 //! send them and go out from the parent, through [`send_model_text`], which is
 //! here because counting them is this half's job.
 
+mod recovery;
+
+use recovery::log_socket_pressure;
+pub(super) use recovery::{
+    apply_recovery_transcript, drain_retired_usage, prepare_input, prepare_listening_handoff,
+    prepare_plain_context,
+};
+
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -85,7 +93,7 @@ pub(super) async fn send_model_text_scoped(
 /// How an input without a timed reply travels: realtime text the model answers
 /// as live input, or a `clientContent` turn appended to the history.
 #[derive(Clone, Copy)]
-enum Transport {
+pub(super) enum Transport {
     Realtime,
     Context,
 }
@@ -95,6 +103,32 @@ enum Transport {
 /// constructed, which is a fact about the session either way; a socket that
 /// dies mid-send is the transport's business and the note above
 /// `EvidenceMetrics` says these numbers are not about transport.
+pub(super) struct PreparedInput {
+    text: String,
+    clock: Option<String>,
+    reply: Option<TurnCause>,
+    transport: Transport,
+}
+
+impl PreparedInput {
+    pub(super) async fn send(
+        self,
+        gemini: &mut GeminiLiveSession,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(cause) = self.reply {
+            gemini.input_cause = Some(cause.label());
+        }
+        if let Some(clock) = self.clock {
+            send_timed_reply(gemini, &clock, &self.text).await
+        } else {
+            match self.transport {
+                Transport::Realtime => gemini.send_text(&self.text).await,
+                Transport::Context => gemini.send_context(&self.text, self.reply.is_some()).await,
+            }
+        }
+    }
+}
+
 async fn send_input(
     gemini: &mut GeminiLiveSession,
     state: &mut RuntimeState,
@@ -104,22 +138,9 @@ async fn send_input(
     scope: ContinuityScope,
     transport: Transport,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let text = continuity_input_for(state, text, scope);
-    if let Some(cause) = reply {
-        gemini.input_cause = Some(cause.label());
-    }
-    if let Some((clock, body)) = reply.and_then(|_| ordered_private_clock(&text)) {
-        state
-            .evidence_ledger
-            .record_model_input(kind, &[clock.as_str(), body].concat());
-        send_timed_reply(gemini, &clock, body).await
-    } else {
-        state.evidence_ledger.record_model_input(kind, &text);
-        match transport {
-            Transport::Realtime => gemini.send_text(&text).await,
-            Transport::Context => gemini.send_context(&text, reply.is_some()).await,
-        }
-    }
+    prepare_input(state, kind, text, reply, scope, transport)
+        .send(gemini)
+        .await
 }
 
 /// One timed request. A completed `clientContent` turn interrupts the reply
@@ -139,18 +160,12 @@ async fn send_timed_reply(
     }
 }
 
-/// Silent context counted at the same door as every other input, but never
-/// given continuity: for text that already says all the socket needs, or is
-/// going to a socket about to be replaced.
 pub(super) async fn send_plain_context(
     gemini: &mut GeminiLiveSession,
     state: &mut RuntimeState,
     text: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    state
-        .evidence_ledger
-        .record_model_input(ModelInputKind::Turn, text);
-    gemini.send_context(text, false).await
+    prepare_plain_context(state, text).send(gemini).await
 }
 
 /// Keep a stage direction's private clock out of the requested utterance, on
@@ -174,62 +189,7 @@ pub(super) struct SpeechHandoff {
     pub(super) discarded: usize,
 }
 
-pub(super) async fn finalize_speech_handoff(
-    gemini: &mut GeminiLiveSession,
-    state: &mut RuntimeState,
-    audio: &mut Vec<u8>,
-) -> Result<SpeechHandoff, Box<dyn std::error::Error + Send + Sync>> {
-    super::flush_audio(gemini, audio).await?;
-    gemini.end_audio_turn().await?;
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut fragments = Vec::new();
-    let mut checkpoint_after = None;
-    let mut discarded = 0usize;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        let wait = if fragments.is_empty() {
-            remaining
-        } else {
-            remaining.min(Duration::from_millis(200))
-        };
-        match tokio::time::timeout(wait, gemini.next_event()).await {
-            Ok(Some(GeminiEvent::InputTranscript(text))) if !text.trim().is_empty() => {
-                fragments.push(text);
-                if checkpoint_after.is_none() {
-                    checkpoint_after = Some(Instant::now());
-
-                    // Straight to the socket being replaced: the continuity an
-                    // ordinary send attaches would be billed there for nothing,
-                    // as the replacement is briefed on its own.
-                    let note = "[SYSTEM EVENT] The candidate continues speaking. Keep listening; no reply is requested.";
-                    send_plain_context(gemini, state, note).await?;
-                }
-            }
-
-            // Usage is safe here: the reader queued it apart from the events.
-            // Anything else belongs to a socket being replaced, but a tool call
-            // or reply dropped here should still show in the log.
-            Ok(Some(GeminiEvent::UsageRecorded | GeminiEvent::InputTranscript(_))) => {}
-            Ok(Some(_)) => discarded += 1,
-            Ok(None) | Err(_) => break,
-        }
-    }
-    let Some(checkpoint_after) = checkpoint_after else {
-        return Err(std::io::Error::other(format!(
-            "speech handoff received no transcription; discarded_events={discarded}"
-        ))
-        .into());
-    };
-    Ok(SpeechHandoff {
-        checkpoint_after,
-        transcript_fragments: fragments,
-        discarded,
-    })
-}
-
+#[cfg(test)]
 pub(super) async fn send_listening_handoff(
     gemini: &mut GeminiLiveSession,
     state: &mut RuntimeState,
@@ -237,31 +197,8 @@ pub(super) async fn send_listening_handoff(
     resumed: bool,
     owed_prompt: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let prefix = serde_json::to_string(&handoff.transcript_fragments.join(" "))?;
-
-    // Only a checkpoint taken after the cancellation resumes a handoff, so a
-    // resumed socket already holds the record and needs the note alone. A cold
-    // one holds nothing and gets the full cold briefing, not the shorter
-    // checkpoint context. A resumed socket whose cold predecessor never got its
-    // briefing remembers no more than a cold one, so it gets that briefing.
-    let briefed = !resumed || state.needs_cold_brief;
-    let record = if briefed {
-        format!("{}\n", crate::agent::cold_restart(state))
-    } else {
-        String::new()
-    };
-
-    // The owed event's own clock is stale by now, so it is not passed on.
-    let owed = owed_prompt.map_or_else(String::new, |prompt| {
-        format!(
-            " After they finish, the platform request the replaced connection had not answered is still owed: {}",
-            crate::agent::unstamped_event(prompt)
-        )
-    });
-    let body = format!(
-        "{record}[SYSTEM EVENT] The candidate is still speaking across a transport change. Any reply to the finalized prefix was not heard. Keep listening; answer only after their remaining audio finishes.{owed} Untrusted partial candidate speech (JSON): {prefix}",
-    );
-    send_plain_context(gemini, state, &body).await?;
+    let (input, briefed) = prepare_listening_handoff(state, handoff, resumed, owed_prompt)?;
+    input.send(gemini).await?;
     if briefed {
         state.code_shown = state.code.clone();
     }
@@ -619,8 +556,15 @@ fn output_disposition(event: &GeminiEvent, discarding: bool, held: bool) -> Outp
 /// Logs and sums every usage observation the socket recorded and the room
 /// never reached, for a socket being let go.
 pub(super) fn drain_live_usage(room: &RoomLink, context: &mut GeminiEventContext<'_>) {
+    log_socket_pressure(
+        room,
+        context,
+        context.activity.live_socket,
+        latency::PressureEnd::Terminal,
+        None,
+    );
     for usage in context.gemini.drain_usage() {
-        record_live_usage(room, context, usage);
+        record_live_usage(room, context, usage, context.gemini.input_cause);
     }
 }
 
@@ -628,6 +572,7 @@ fn record_live_usage(
     room: &RoomLink,
     context: &mut GeminiEventContext<'_>,
     usage: crate::gemini::TokenUsage,
+    input_cause: Option<&'static str>,
 ) {
     context
         .activity
@@ -636,7 +581,7 @@ fn record_live_usage(
     let line = context.activity.account_live_usage(
         room.name(),
         &super::log_clock(context.state),
-        context.gemini.input_cause,
+        input_cause,
         context.state.context_compression,
         usage,
     );
@@ -698,7 +643,13 @@ pub(super) fn accept_gemini_event(
             // Old tool calls still need responses, but their generation cannot
             // answer the resume prompt or refresh its progress clock.
             if !activity.socket.discarding_output {
-                if answers_prompt(event) {
+                if matches!(event, GeminiEvent::OutputTranscript(_))
+                    && answers_prompt(event)
+                    && activity.is_trailing_transcript(now)
+                {
+                    activity.note_trailing_transcript();
+                    activity.turn_timing.note_output_transcript();
+                } else if answers_prompt(event) {
                     activity.note_output(now);
                     match event {
                         GeminiEvent::OutputTranscript(_) => {
@@ -942,7 +893,7 @@ pub(super) async fn handle_gemini_event(
             }
             GeminiEvent::UsageRecorded => {
                 if let Some(usage) = context.gemini.take_usage() {
-                    record_live_usage(room, context, usage);
+                    record_live_usage(room, context, usage, context.gemini.input_cause);
                 }
                 Ok(())
             }
@@ -1299,13 +1250,20 @@ fn on_output_transcript(room: &RoomLink, context: &mut GeminiEventContext<'_>, t
 }
 
 /// What the candidate said, and the playout it cuts short.
-async fn on_input_transcript(
+struct PreparedTranscript {
+    segment: Segment,
+    release: Option<String>,
+}
+
+fn prepare_input_transcript(
     room: &RoomLink,
     context: &mut GeminiEventContext<'_>,
     text: &str,
     interruptible: Interruptible,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let transcript_received_at = received_at(context.gemini);
+    transcript_received_at: Instant,
+    thinking_at: Option<Instant>,
+) -> Option<PreparedTranscript> {
+    let mut release = None;
     let candidate_identity = context.media.identity.clone();
     if let (Some(_), Some(identity)) = (transcript_text(text), candidate_identity.as_deref()) {
         // The candidate is talking over audio Gemini finished producing a while
@@ -1313,7 +1271,7 @@ async fn on_input_transcript(
         // is concerned that turn ended when it stopped generating; only this
         // side knows the queue is still draining. Cut it here or the reply
         // lands behind the rest of the old turn.
-        drop_stale_playout(room, context, interruptible).await?;
+        drop_stale_playout(room, context, interruptible);
         context
             .activity
             .note_candidate_finished(Instant::now(), context.output_audio.is_playing());
@@ -1338,7 +1296,7 @@ async fn on_input_transcript(
             context.activity.observe_thinking_fragment(
                 context.state,
                 &whole,
-                Instant::now(),
+                thinking_at.unwrap_or_else(Instant::now),
                 crate::current_epoch_millis(),
             );
         }
@@ -1362,8 +1320,39 @@ async fn on_input_transcript(
             && !context.state.thinking_hold.is_active()
             && crate::agent::thinking_owes_context(context.state)
         {
-            let briefing = speech_release_briefing(context.state, was_requested);
-            let briefing = crate::agent::with_timer(context.state, briefing);
+            release = Some(crate::agent::with_timer(
+                context.state,
+                speech_release_briefing(context.state, was_requested),
+            ));
+        }
+        let segment = Segment {
+            id: context.turns.candidate.segment_id("candidate"),
+            text: whole,
+            final_segment: false,
+            identity: Some(identity.to_string()),
+        };
+        return Some(PreparedTranscript { segment, release });
+    }
+    None
+}
+
+async fn on_input_transcript(
+    room: &RoomLink,
+    context: &mut GeminiEventContext<'_>,
+    text: &str,
+    interruptible: Interruptible,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    #[cfg(test)]
+    super::probe::note_transcript(text);
+    if let Some(prepared) = prepare_input_transcript(
+        room,
+        context,
+        text,
+        interruptible,
+        received_at(context.gemini),
+        None,
+    ) {
+        if let Some(briefing) = prepared.release {
             match send_model_context(
                 context.gemini,
                 context.state,
@@ -1384,13 +1373,7 @@ async fn on_input_transcript(
                 }
             }
         }
-        let segment = Segment {
-            id: context.turns.candidate.segment_id("candidate"),
-            text: whole,
-            final_segment: false,
-            identity: Some(identity.to_string()),
-        };
-        context.transcripts.publish(room, segment);
+        context.transcripts.publish(room, prepared.segment);
     }
     Ok(())
 }
@@ -1525,7 +1508,7 @@ async fn on_generated_audio(
     // `capture` rejects leaves the candidate with a sentence cut in half and no
     // reply behind it.
     if context.output_audio.prepare_reply(bytes, mime_type) {
-        drop_stale_playout(room, context, interruptible).await?;
+        drop_stale_playout(room, context, interruptible);
         if measured {
             context
                 .activity
@@ -2711,18 +2694,18 @@ pub(super) async fn send_wrap_up_and_wait(
 /// sides before setting this floor, and closing again would split one utterance
 /// across two transcript segments. An interviewer line the cut marks is sealed
 /// instead, and closed by `on_output_transcript` when more words arrive.
-async fn drop_stale_playout(
+fn drop_stale_playout(
     room: &RoomLink,
     context: &mut GeminiEventContext<'_>,
     interruptible: Interruptible,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) {
     let Some(dropped) = take_stale_playout(
         context.state,
         context.activity,
         context.output_audio,
         interruptible,
     ) else {
-        return Ok(());
+        return;
     };
     context_floor(room, context, super::floor::Event::Interrupted);
     eprintln!(
@@ -2730,7 +2713,6 @@ async fn drop_stale_playout(
         dropped.as_secs_f64()
     );
     set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING);
-    Ok(())
 }
 
 /// A hold took the floor while Jim was still talking: stop him, and drop the

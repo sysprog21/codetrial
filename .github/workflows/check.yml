@@ -137,12 +137,15 @@ jobs:
           - lane: browser
             shard: 1/3
             timeout: 20
+            packages: ffmpeg
           - lane: browser
             shard: 2/3
             timeout: 20
+            packages: ffmpeg
           - lane: browser
             shard: 3/3
             timeout: 20
+            packages: ffmpeg
     # Pinned rather than `ubuntu-latest`: that label moves to a new image on
     # GitHub's schedule, which turns an unrelated morning into a debugging
     # session. Bumping this is a commit somebody chose to make.
@@ -491,7 +494,7 @@ jobs:
   # one runner testing eight. `--list` parses the tree without building it, one
   # second here, so the count is cheap to ask for and the width can follow it.
   #
-  # One shard per 25 mutants, under the ceiling the step explains. The ceiling
+  # One shard per 15 mutants, under the ceiling the step explains. The ceiling
   # is not about arithmetic: past it the setup cost of another runner stops
   # paying for itself against the mutants it would take.
   #
@@ -558,18 +561,14 @@ jobs:
             cargo mutants --list --in-diff "$RUNNER_TEMP/pr.diff" >"$RUNNER_TEMP/list.txt"
             count=$(wc -l <"$RUNNER_TEMP/list.txt" | tr -d ' ')
           fi
-          width=$(( (count + 24) / 25 ))
+          width=$(( (count + 14) / 15 ))
           [ "$width" -lt 1 ] && width=1
 
-          # The ceiling is a runner budget, not a target. Twenty-five mutants a
-          # shard is what the line above asks for and what fits the job's
-          # timeout; a ceiling of four turned a 764-mutant diff into 191 a
-          # shard, which is seven times the design load and forty-five minutes
-          # of work reported as nothing at all. Sixteen did the same to a diff
-          # that adds a whole subsystem: every shard ran out of its budget
-          # before reporting. Forty-eight keeps the design load up to twelve
-          # hundred mutants; shards beyond the account's concurrent jobs queue
-          # rather than fail.
+          # On the recovery diff, 25 mutants took over 35 minutes on the
+          # slower runners. Fifteen leaves room for incremental builds and
+          # failing tests within the same budget. The ceiling permits that
+          # load up to 720 mutants; shards beyond the account's concurrency
+          # limit queue rather than fail.
           [ "$width" -gt 48 ] && width=48
           {
             echo "count=$count"
