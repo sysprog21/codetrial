@@ -24,7 +24,7 @@ pub(super) use recovery::{
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use ::livekit::data_stream::api::StreamTextOptions;
+use ::livekit::data_stream::api::SendTextOptions;
 
 use crate::agent::{
     CANDIDATE_SPEAKER, INTERVIEWER_SPEAKER, ModelInputKind, RecordOutcome, RuntimeState,
@@ -2607,8 +2607,8 @@ pub(super) fn transcript_stream_options(
     segment_id: String,
     final_segment: bool,
     sender_identity: Option<&str>,
-) -> StreamTextOptions {
-    let options = StreamTextOptions::new_with_topic(TOPIC_TRANSCRIPTION)
+) -> SendTextOptions {
+    let options = SendTextOptions::new_with_topic(TOPIC_TRANSCRIPTION)
         .with_attribute("lk.segment_id", &segment_id)
         .with_attribute(
             "lk.transcription_final",

@@ -342,6 +342,10 @@ async fn a_broken_or_empty_stream_is_no_board() {
         drained(vec![Ok(vec![1, 2]), Err("reset")]).await.is_none(),
         "half a JPEG is not shown"
     );
+
+    // A length mismatch against the declared total reaches `drain` as an error
+    // item, with no bytes or after all of them.
+    assert!(drained(vec![Err("length exceeded")]).await.is_none());
     assert!(drained(Vec::new()).await.is_none());
 }
 
