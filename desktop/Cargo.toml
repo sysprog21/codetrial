@@ -28,9 +28,9 @@ tauri-build = { version = "=2.7.4", features = [] }
 
 [dependencies]
 tauri = { version = "=2.12.5", features = [] }
-tauri-plugin-dialog = "=2.8.3"
+tauri-plugin-dialog = "=2.8.4"
 tauri-plugin-opener = "=2.7.2"
-tauri-plugin-single-instance = "=2.5.4"
+tauri-plugin-single-instance = "=2.5.5"
 
 # The two WebKitGTK settings wry leaves off, which the interview cannot run
 # without: `enable-media-stream` for the camera and microphone, `enable-webrtc`
