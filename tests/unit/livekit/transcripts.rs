@@ -88,3 +88,27 @@ async fn a_flush_behind_queued_segments_returns_once_they_are_sent() {
         .collect();
     assert_eq!(sent.last().map(String::as_str), Some("I will use a map"));
 }
+
+/// A candidate's own speech is published under their identity, an interviewer
+/// turn under the agent's own.
+#[tokio::test]
+async fn a_segment_is_sent_under_the_identity_it_carries() {
+    let (room, recorder) = crate::livekit::room_link::RoomLink::recording("room");
+    let mut writer = TranscriptWriter::default();
+    let mut candidate = segment("candidate-1", "I will use a map", true);
+    candidate.identity = Some("candidate-fixed".into());
+    writer.publish(&room, candidate);
+    writer.publish(&room, segment("interviewer-1", "Go ahead.", true));
+    writer.flush(Duration::from_secs(5)).await;
+    let identities: Vec<_> = recorder
+        .take()
+        .into_iter()
+        .filter_map(|sent| match sent {
+            crate::livekit::room_link::Sent::Text {
+                sender_identity, ..
+            } => Some(sender_identity),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(identities, [Some("candidate-fixed".to_string()), None]);
+}

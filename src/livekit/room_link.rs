@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 
-use ::livekit::data_stream::api::StreamTextOptions;
+use ::livekit::data_stream::api::SendTextOptions;
 use ::livekit::prelude::{DataPacket, LocalParticipant, Room};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -153,7 +153,7 @@ impl ParticipantLink {
     pub(super) async fn send_text(
         &self,
         text: &str,
-        options: StreamTextOptions,
+        options: SendTextOptions,
     ) -> Result<(), Error> {
         match self {
             Self::Live(participant) => {
@@ -166,6 +166,7 @@ impl ParticipantLink {
                     topic: options.topic,
                     text: text.to_string(),
                     attributes: options.attributes,
+                    sender_identity: options.sender_identity.map(|identity| identity.to_string()),
                 });
                 Ok(())
             }
@@ -186,6 +187,7 @@ pub(super) enum Sent {
         topic: String,
         text: String,
         attributes: HashMap<String, String>,
+        sender_identity: Option<String>,
     },
     Left,
 }
