@@ -80,7 +80,7 @@ futures-util = { version = "0.3.34", default-features = false, features = ["sink
 # builds these features.
 hyper-util = { version = "0.1.21", default-features = false, features = ["client-legacy", "client-proxy", "tokio"] }
 jpeg-encoder = "0.7.1"
-livekit = { version = "0.9.6", features = ["rustls-tls-webpki-roots"] }
+livekit = { version = "0.10.0", features = ["rustls-tls-webpki-roots"] }
 ring = "0.17.14"
 # Mozilla's roots compiled in, one rustls configuration shared by this HTTP
 # client and the Gemini WebSocket, so the binary verifies every host it talks
