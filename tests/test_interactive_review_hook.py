@@ -1090,7 +1090,9 @@ class QueueReviewTests(unittest.TestCase):
             with self.subTest(login=login, kind=kind, human=head == mine):
                 # A small change needs no label, so only the message tells
                 # whether the exemption applied.
-                self.assertNotIn("Dependabot's own", run(head, login, kind).stdout)
+                result = run(head, login, kind)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("Dependabot's own", result.stdout)
 
     def test_the_workflow_passes_only_flags_and_variables_that_exist(self):
         text = (ROOT / ".github/workflows/pr-description.yml").read_text()

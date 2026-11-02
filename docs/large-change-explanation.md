@@ -93,7 +93,9 @@ The pull request carries no review block. CI measures the commits and the diff
 itself, from the base branch's workflow and checker, so nothing in the
 description can be edited out and a pull request cannot change the check. A change
 under the thresholds passes. A change over them passes only once a maintainer has
-added the `explained` label, which only people with triage access can add. The
+added the `explained` label, which only people with triage access can add. A
+pull request that Dependabot opened and whose every commit is Dependabot's needs
+no label, however large; a person's commit on its branch removes the exemption. The
 label means a maintainer has seen the contributor explain the change. CI cannot
 see the local evidence, so the label is the maintainer's word and not a
 verification. It is not tied to a head: a later push keeps it, and the ruleset's
@@ -112,8 +114,8 @@ who wrote an answer or whether the contributor understands it.
 
 Each rejection names its reason in brackets.
 
-- `[interactive-review/required]`: the pull request reaches a threshold and has
-  no `explained` label. Finish the interactive review on the committed branch and
+- `[interactive-review/required]`: the pull request reaches a threshold, is not
+  Dependabot's own, and has no `explained` label. Finish the interactive review on the committed branch and
   show the explanation to a maintainer, who adds the label.
 - `Interactive review required` at push: the same thresholds, found before the
   pull request exists. Finish the explanation and durable report for the exact
