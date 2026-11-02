@@ -556,6 +556,61 @@ class HashchainTests(unittest.TestCase):
         self.assertNotIn("\n  pull_request:", text)
         self.assertIn("permissions:\n  contents: read", text)
         self.assertIn("../base/scripts/check-interactive-review.py", text)
+        self.assertIn("../base/scripts/check-queue-review.py", text)
+        self.assertIn("\n  merge_group:", text)
+        # A job its own condition skips counts as passing, so none may have one.
+        self.assertNotRegex(text, r"(?m)^    if:")
+        self.assertNotIn("continue-on-error", text)
+        self.assertIn("--guard", text)
+
+    def test_one_definition_decides_who_dependabot_is(self):
+        chain = importlib.util.module_from_spec(
+            importlib.util.spec_from_file_location(
+                "hashchain_under_test", ROOT / "scripts/hashchain.py"
+            )
+        )
+        chain.__spec__.loader.exec_module(chain)
+        for login, kind, expected in (
+            ("dependabot[bot]", "Bot", True),
+            ("dependabot[bot]", "User", False),
+            ("dependabot[bot]", None, False),
+            ("someone", "Bot", False),
+        ):
+            with self.subTest(login=login, kind=kind):
+                self.assertEqual(chain.exempt_pr(login, kind), expected)
+        for script in ("check-commit-log.sh", "check-interactive-review.py"):
+            self.assertNotIn(
+                "dependabot[bot]@", (ROOT / "scripts" / script).read_text(), script
+            )
+
+    def test_bots_lists_only_dependabot_authored_commits(self):
+        tree = self.git("rev-parse", "HEAD^{tree}").stdout.strip()
+        parent = self.git("rev-parse", "HEAD").stdout.strip()
+        made = []
+        for author in (
+            "49699333+dependabot[bot]@users.noreply.github.com",
+            "someone@example.test",
+        ):
+            env = {**self.env, "GIT_AUTHOR_EMAIL": author}
+            made.append(
+                subprocess.run(
+                    ["git", "commit-tree", tree, "-p", parent, "-m", "Bump a"],
+                    cwd=self.repo,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout.strip()
+            )
+        listed = self.chain("bots", data="\n".join(made) + "\n")
+        self.assertEqual(listed.stdout.split(), made[:1])
+        self.assertEqual(self.chain("bots", "--all", data=made[0] + "\n").returncode, 0)
+        self.assertEqual(
+            self.chain("bots", "--all", data="\n".join(made), check=False).returncode, 1
+        )
+        self.assertEqual(
+            self.chain("bots", "--all", data="", check=False).returncode, 1
+        )
 
     def test_message_only_amend_preserves_index_and_worktree(self):
         tree = self.git("rev-parse", "HEAD^{tree}").stdout

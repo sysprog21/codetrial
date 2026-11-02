@@ -1,7 +1,9 @@
 """Large-push rejection and durable interactive evidence using real Git objects."""
 
+import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import select
 import shutil
@@ -9,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "scripts/check-interactive-review.py"
@@ -729,3 +732,451 @@ app.save({'identity':s['identity'],'revision':s['revision'],'answers':s['answers
         self.git("init", "--bare", "-q", str(remote))
         self.git("remote", "add", "fork", str(remote))
         self.git("push", "-q", "fork", "HEAD:refs/heads/topic")
+
+
+class QueueReviewTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location(
+            "queue_review", ROOT / "scripts/check-queue-review.py"
+        )
+        self.queue = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.queue)
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.repo = Path(self.temp.name)
+        self.env = {
+            **os.environ,
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+        }
+        self.git("init", "-q")
+        self.git("config", "user.name", "Queue Test")
+        self.git("config", "user.email", "queue@example.test")
+        self.git("config", "commit.gpgsign", "false")
+        self.base = self.commit("base")
+        self.first = self.commit("first")
+        self.second = self.commit("second")
+        # Bind the subprocess cwd without changing the test runner's process.
+        self.queue.git = self.git
+
+    def git(self, *args):
+        return subprocess.check_output(
+            ["git", *args],
+            cwd=self.repo,
+            env=self.env,
+            text=True,
+            stderr=subprocess.PIPE,
+        ).strip()
+
+    def commit(self, value):
+        (self.repo / "file").write_text(value)
+        self.git("add", "file")
+        self.git("commit", "-qm", value)
+        return self.git("rev-parse", "HEAD")
+
+    def pull(self, number, tip, body="current"):
+        return {
+            "number": number,
+            "head": {"sha": tip},
+            "user": {"login": "contributor", "type": "User"},
+            "body": body,
+        }
+
+    def checker(self):
+        calls = []
+
+        def check_body(base, tip, body):
+            calls.append((base, tip, body))
+            if body != "current":
+                raise ValueError("stale description")
+
+        return (
+            SimpleNamespace(
+                check_body=check_body,
+                dependabot_exempt=lambda *a: a[2] == "dependabot[bot]",
+            ),
+            calls,
+        )
+
+    def test_every_included_head_is_checked_separately(self):
+        checker, calls = self.checker()
+        result = self.queue.check(
+            self.base,
+            self.second,
+            [
+                self.pull(1, self.first),
+                self.pull(2, self.second),
+                self.pull(3, self.base),
+            ],
+            checker,
+        )
+        self.assertEqual(result, [1, 2])
+        self.assertEqual(
+            calls,
+            [(self.base, self.first, "current"), (self.base, self.second, "current")],
+        )
+
+    def test_stale_description_in_any_pr_fails_the_group(self):
+        checker, _ = self.checker()
+        with self.assertRaisesRegex(ValueError, "stale"):
+            self.queue.check(
+                self.base,
+                self.second,
+                [
+                    self.pull(1, self.first, "stale"),
+                    self.pull(2, self.second),
+                ],
+                checker,
+            )
+
+    def test_missing_or_moved_pr_head_fails_closed(self):
+        checker, _ = self.checker()
+        for pulls in ([], [self.pull(1, self.first)], [self.pull(1, "0" * 40)]):
+            with self.subTest(pulls=pulls):
+                with self.assertRaisesRegex(ValueError, "matching"):
+                    self.queue.check(self.base, self.second, pulls, checker)
+
+    def test_a_group_that_does_not_descend_from_its_base_is_refused(self):
+        checker, _ = self.checker()
+        self.git("checkout", "-q", "--orphan", "unrelated")
+        self.git("commit", "-q", "--allow-empty", "-m", "unrelated")
+        stray = self.git("rev-parse", "HEAD")
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.queue.check(self.base, stray, [self.pull(1, stray)], checker)
+
+    def test_merge_commit_is_not_treated_as_a_pr_commit(self):
+        checker, calls = self.checker()
+        self.git("checkout", "-qb", "queue", self.base)
+        self.git("merge", "--no-ff", "--no-edit", self.second)
+        merged = self.git("rev-parse", "HEAD")
+        self.assertEqual(
+            self.queue.check(
+                self.base,
+                merged,
+                [
+                    self.pull(2, self.second),
+                ],
+                checker,
+            ),
+            [2],
+        )
+        self.assertEqual(len(calls), 1)
+
+    def note(self, head):
+        return subprocess.check_output(
+            [sys.executable, str(GATE), "note", "--base", self.base, "--head", head],
+            cwd=self.repo,
+            env=self.env,
+            text=True,
+        )
+
+    def run_queue(self, body=None, api_failure=False):
+        if body is None:
+            body = self.note(self.second)
+        binary = self.repo / "bin"
+        binary.mkdir(exist_ok=True)
+        stub = binary / "gh"
+        stub.write_text(
+            '#!/bin/sh\nif [ "$QUEUE_API_FAILURE" = 1 ]; then exit 1; fi\n'
+            'printf "%s" "$QUEUE_API_PAGES"\n'
+        )
+        stub.chmod(0o755)
+        return subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/check-queue-review.py"),
+                "--base",
+                self.base,
+                "--head",
+                self.second,
+                "--branch",
+                "main",
+                "--repo",
+                "owner/repo",
+            ],
+            cwd=self.repo,
+            text=True,
+            capture_output=True,
+            env={
+                **self.env,
+                "PATH": str(binary) + os.pathsep + self.env["PATH"],
+                "QUEUE_API_FAILURE": "1" if api_failure else "0",
+                "QUEUE_API_PAGES": json.dumps([[], [self.pull(2, self.second, body)]]),
+            },
+        )
+
+    def test_cli_checks_real_description_from_later_api_page(self):
+        result = self.run_queue()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[2]", result.stdout)
+
+    def test_cli_rejects_description_from_another_head(self):
+        body = self.note(self.first)
+        result = self.run_queue(body=body)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("interactive-review/stale", result.stderr)
+
+    def test_cli_does_not_pass_when_github_cannot_be_read(self):
+        result = self.run_queue(body="unused", api_failure=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("Verified", result.stdout)
+
+    def test_group_with_independent_pr_branches_checks_both(self):
+        checker, calls = self.checker()
+        self.git("checkout", "-qb", "other", self.base)
+        (self.repo / "other").write_text("independent change")
+        self.git("add", "other")
+        self.git("commit", "-qm", "other branch")
+        other = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-qb", "queue", self.base)
+        self.git("merge", "--no-ff", "--no-edit", self.first)
+        self.git("merge", "--no-ff", "--no-edit", other)
+        merged = self.git("rev-parse", "HEAD")
+        self.assertEqual(
+            self.queue.check(
+                self.base,
+                merged,
+                [
+                    self.pull(1, self.first),
+                    self.pull(2, other),
+                ],
+                checker,
+            ),
+            [1, 2],
+        )
+        self.assertEqual([call[1] for call in calls], [self.first, other])
+
+    def test_dependabot_pull_request_skips_only_its_own_description(self):
+        checker, calls = self.checker()
+        bot = self.pull(1, self.first, "unused")
+        bot["user"] = {"login": "dependabot[bot]", "type": "Bot"}
+        result = self.queue.check(
+            self.base, self.second, [bot, self.pull(2, self.second)], checker
+        )
+        self.assertEqual(result, [1, 2])
+        self.assertEqual([call[1] for call in calls], [self.second])
+
+    def commit_by(self, author, parent, text, *more):
+        tree = self.git("rev-parse", f"{parent}^{{tree}}")
+        parents = [arg for p in (parent, *more) for arg in ("-p", p)]
+        env = {**self.env, "GIT_AUTHOR_NAME": "x", "GIT_AUTHOR_EMAIL": author}
+        return subprocess.run(
+            ["git", "commit-tree", tree, *parents, "-m", text],
+            cwd=self.repo,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+
+    def test_dependabot_exemption_needs_the_opener_and_every_commit(self):
+        gate = self.queue_checker()
+        bot = "49699333+dependabot[bot]@users.noreply.github.com"
+        mine = self.commit_by(bot, self.base, "Bump a")
+        mixed = self.commit_by("person@example.test", mine, "Add a change")
+        self.git("update-ref", "refs/heads/probe", mixed)
+        # A merge a person resolved by hand is not Dependabot's work either.
+        merged = self.commit_by("person@example.test", mine, "Merge main", self.base)
+        # An address that only ends like Dependabot's is not Dependabot's.
+        spoofed = self.commit_by("x" + bot, self.base, "Bump a")
+        for tip, login, kind, exempt in (
+            (mine, "dependabot[bot]", "Bot", True),
+            (mine, "dependabot[bot]", "User", False),
+            (mine, "dependabot[bot]", None, False),
+            (mine, "contributor", "User", False),
+            (mixed, "dependabot[bot]", "Bot", False),
+            (merged, "dependabot[bot]", "Bot", False),
+            (spoofed, "dependabot[bot]", "Bot", False),
+            (self.base, "dependabot[bot]", "Bot", False),
+        ):
+            with self.subTest(tip=tip[:7], login=login, kind=kind):
+                self.assertEqual(
+                    gate.dependabot_exempt(self.base, tip, login, kind), exempt
+                )
+
+    def queue_checker(self):
+        spec = importlib.util.spec_from_file_location("gate_under_test", GATE)
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        gate.git = lambda *args, data=None: self.git(*args).encode()
+        gate.module(ROOT / "scripts/hashchain.py").git = lambda *a, **k: (
+            subprocess.run(
+                ["git", *a],
+                cwd=self.repo,
+                env=self.env,
+                input=k.get("data"),
+                stdout=subprocess.PIPE,
+                check=True,
+            ).stdout
+        )
+        return gate
+
+    def tree_with(self, parent, files, gate=True):
+        """A commit on `parent` whose workflow directory is exactly `files`."""
+        self.git("checkout", "-q", "--detach", parent)
+        shutil.rmtree(self.repo / ".github", ignore_errors=True)
+        folder = self.repo / ".github/workflows"
+        folder.mkdir(parents=True)
+        for name, text in files.items():
+            (folder / name).write_text(text)
+        for path in self.queue.GATE:
+            target = self.repo / path
+            if gate:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("# gate\n")
+            else:
+                target.unlink(missing_ok=True)
+        self.git("add", "-A")
+        self.git("commit", "-q", "--allow-empty", "-m", "workflows")
+        return self.git("rev-parse", "HEAD")
+
+    def test_guard_holds_the_queue_workflow_to_where_the_branch_began(self):
+        guarded = "name: pr-description\njobs:\n  interactive-review:\n    steps: []\n"
+        edited = guarded + "# edited\n"
+        claim = "jobs:\n  interactive-review:\n    steps: []\n"
+        named = "jobs:\n  x:\n    name: interactive-review # alternate\n"
+        quoted = "jobs:\n  'interactive-review': {runs-on: x}\n"
+        branch_point = self.tree_with(self.base, {"pr-description.yml": guarded})
+        # The base moved on with an approved edit; the older branch is untouched.
+        moved = self.tree_with(branch_point, {"pr-description.yml": edited})
+        cases = {
+            "unchanged": ({"pr-description.yml": guarded}, True),
+            "disabled": (
+                {"pr-description.yml": guarded.replace("steps: []", "if: false")},
+                False,
+            ),
+            "deleted": ({}, False),
+            "second job with the name": (
+                {"pr-description.yml": guarded, "other.yml": claim},
+                False,
+            ),
+            "second check with the name": (
+                {"pr-description.yml": guarded, "other.yml": named},
+                False,
+            ),
+            "quoted key": (
+                {"pr-description.yml": guarded, "other.yaml": quoted},
+                False,
+            ),
+            "unrelated workflow": (
+                {"pr-description.yml": guarded, "other.yml": "jobs:\n  t: {}\n"},
+                True,
+            ),
+        }
+        for name, (files, passes) in cases.items():
+            with self.subTest(name):
+                head = self.tree_with(branch_point, files)
+                self.assertEqual(self.queue.guard(moved, head, "") == [], passes)
+        with self.subTest("approved head"):
+            head = self.tree_with(
+                branch_point, {"pr-description.yml": guarded + "# the pull request\n"}
+            )
+            self.assertTrue(self.queue.guard(moved, head, ""))
+            self.assertEqual(self.queue.guard(moved, head, head), [])
+        with self.subTest("an approval for some other head"):
+            head = self.tree_with(
+                branch_point, {"pr-description.yml": guarded + "# the pull request\n"}
+            )
+            self.assertTrue(self.queue.guard(moved, head, branch_point))
+        with self.subTest("the name in other letters"):
+            head = self.tree_with(
+                branch_point,
+                {
+                    "pr-description.yml": guarded,
+                    "other.yml": "name: Interactive-Review\n",
+                },
+            )
+            self.assertTrue(self.queue.guard(moved, head, ""))
+        with self.subTest("a gate script removed"):
+            head = self.tree_with(
+                branch_point, {"pr-description.yml": guarded}, gate=False
+            )
+            found = self.queue.guard(moved, head, "")
+            self.assertEqual(len(found), len(self.queue.GATE), found)
+            self.assertIn("was removed", found[0])
+        with self.subTest("base moved, branch untouched"):
+            head = self.tree_with(branch_point, {"pr-description.yml": guarded})
+            self.assertEqual(self.queue.guard(moved, head, ""), [])
+
+    def test_cli_guard_passes_an_unchanged_workflow_and_refuses_a_changed_one(self):
+        text = "jobs:\n  interactive-review:\n    steps: []\n"
+        start = self.tree_with(self.base, {"pr-description.yml": text})
+        same = self.tree_with(start, {"pr-description.yml": text})
+        off = self.tree_with(start, {"pr-description.yml": text + "# off\n"})
+        script = str(ROOT / "scripts/check-queue-review.py")
+
+        def run(head, *extra):
+            return subprocess.run(
+                [
+                    sys.executable,
+                    script,
+                    "--base",
+                    start,
+                    "--head",
+                    head,
+                    "--guard",
+                    *extra,
+                ],
+                cwd=self.repo,
+                env=self.env,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertEqual(run(same).returncode, 0)
+        refused = run(off)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("was changed", refused.stderr)
+        self.assertEqual(run(off, "--approved", off).returncode, 0)
+        self.assertEqual(run(off, "--approved", same).returncode, 1)
+        # A head with no common history cannot be compared, which is not a pass.
+        self.git("checkout", "-q", "--orphan", "unrelated")
+        self.git("commit", "-q", "--allow-empty", "-m", "unrelated")
+        self.assertEqual(run(self.git("rev-parse", "HEAD")).returncode, 1)
+
+    def test_pr_body_excuses_only_a_dependabot_pull_request(self):
+        bot = "49699333+dependabot[bot]@users.noreply.github.com"
+        theirs = self.commit_by(bot, self.base, "Bump a")
+        mine = self.commit_by("person@example.test", self.base, "Change a")
+        empty = self.repo / "empty.md"
+        empty.write_text("")
+
+        def run(head, login, kind):
+            return subprocess.run(
+                [sys.executable, str(GATE), "pr-body", "--base", self.base]
+                + ["--head", head, "--body-file", str(empty)]
+                + ["--author-login", login, "--author-type", kind],
+                cwd=self.repo,
+                env=self.env,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertEqual(run(theirs, "dependabot[bot]", "Bot").returncode, 0)
+        for head, login, kind in (
+            (mine, "dependabot[bot]", "Bot"),
+            (theirs, "dependabot[bot]", "User"),
+            (theirs, "contributor", "User"),
+        ):
+            with self.subTest(login=login, kind=kind, human=head == mine):
+                self.assertNotEqual(run(head, login, kind).returncode, 0)
+
+    def test_the_workflow_passes_only_flags_and_variables_that_exist(self):
+        text = (ROOT / ".github/workflows/pr-description.yml").read_text()
+        step = text[text.index("- name: Compare the description") :]
+        env, run = step.split("        run: |", 1)
+        declared = set(re.findall(r"^          (\w+):", env, re.M))
+        for name in set(re.findall(r"\$\{?([A-Z_]+)", run)):
+            if name not in ("RUNNER_TEMP",):
+                self.assertIn(name, declared, name)
+        for script, source in (
+            ("check-queue-review.py", ROOT / "scripts/check-queue-review.py"),
+            ("check-interactive-review.py", GATE),
+        ):
+            calls = re.findall(script + r"((?: .*?\\\n)*[^\n]*)", run)
+            self.assertTrue(calls, script)
+            for flag in set(re.findall(r" (--[a-z-]+)", "".join(calls))):
+                self.assertIn(f'"{flag}"', source.read_text(), (script, flag))
+        # The guard runs on pull requests, and the branch name loses refs/heads/.
+        self.assertRegex(run, r"check-queue-review\.py[^\n]*\\\n[^\n]*--guard")
+        self.assertIn('--branch "${BASE_REF#refs/heads/}"', run)

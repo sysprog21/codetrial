@@ -283,7 +283,7 @@ corrections.
 The pull request template includes an interactive review block; the pre-push
 hook writes it to `.git/codetrial-review/pr-description.md` once the check
 passes (one file per pushed head when several branches go at once), and the
-`pr-description` check compares it with the diff.
+`interactive-review` check compares it with the diff.
 
 A review thread carries a correction, a measurement, or nothing: no pasted
 agent walkthroughs, no severity tables, no re-summarizing a diff that GitHub

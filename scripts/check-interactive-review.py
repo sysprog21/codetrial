@@ -571,6 +571,20 @@ def check_body(base, head, text):
         )
 
 
+def dependabot_exempt(base, head, login, kind):
+    """Whether this pull request is Dependabot's and nothing else is in it.
+
+    The opener comes from GitHub (a commit's author line can say anything), and
+    every commit must also be Dependabot's, so a person's commit pushed onto its
+    branch gets no exemption.
+    """
+    chain = module(ROOT / "scripts/hashchain.py")
+    if not chain.exempt_pr(login, kind):
+        return False
+    commits = git("rev-list", f"{base}..{head}").decode().split()
+    return bool(commits) and len(chain.bots(commits)) == len(commits)
+
+
 def write_note(path, text):
     try:
         path = Path(path)
@@ -593,6 +607,8 @@ def main():
     parser.add_argument("--bundle")
     parser.add_argument("--body-file", help="pr-body: the pull request description")
     parser.add_argument("--out", help="push, note: write the description block here")
+    parser.add_argument("--author-login", help="pr-body: the pull request opener")
+    parser.add_argument("--author-type", help="pr-body: the opener's account type")
     args = parser.parse_args()
     try:
         if args.command == "staged":
@@ -629,6 +645,11 @@ def main():
             if args.command == "pr-body":
                 if not args.body_file:
                     parser.error("pr-body requires --body-file")
+                if args.author_login and dependabot_exempt(
+                    args.base, args.head, args.author_login, args.author_type
+                ):
+                    print("Dependabot's own pull request; no description to compare.")
+                    return 0
                 check_body(args.base, args.head, Path(args.body_file).read_text())
                 print("The description matches this change's interactive review need.")
                 return 0

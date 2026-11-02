@@ -451,7 +451,15 @@ its event base policy.
 
 A commit authored by `dependabot[bot]` continues the chain without a
 Change-Id trailer, because the bot cannot run the hooks; the author line is
-unauthenticated, so this is a convenience and not a trust boundary. Its link is
+unauthenticated, so locally this is a convenience and not a trust boundary.
+`scripts/hashchain.py` is the only place that decides who Dependabot is: the
+commit-log check asks it for the commits to skip, and the description check
+excuses a pull request only when GitHub reports `dependabot[bot]` (account type
+`Bot`) as its opener and every commit in it is Dependabot's. A forged author
+address therefore buys nothing there for a contributor who cannot push to
+Dependabot's branches, and a person's commit on the branch is read like any
+other. The hashchain and commit-log checks in CI still go by the author line
+alone, so a forged address skips them. Its link is
 derived from the preceding link and its tree, including a consecutive run of bot
 commits; any trailer in a bot message is ignored consistently. A normal hooked
 commit or amend can follow such a parent directly. Rechain preserves accepted bot
@@ -494,9 +502,10 @@ instead is layer three things, each closing a different gap:
   pull request, and that the description's interactive review block matches the
   diff. It runs the base branch's checker, so a pull request cannot weaken it.
   It holds only if the repository requires it: make `check` and
-  `pr-description` required status checks, merge only through the merge queue,
+  `interactive-review` required status checks, merge only through the merge queue,
   allow no bypass for administrators, and require maintainer review for changes
   to `scripts/hashchain.py`, `scripts/check-interactive-review.py`,
+  `scripts/check-queue-review.py`, `.claude/skills/codetrial-review/commit-sizes.py`,
   `scripts/agent-guard.py`, `.claude/settings.json` and `.github/workflows/`.
 
 `pr-description.yml` runs on `pull_request_target`, so the workflow that runs is
@@ -509,13 +518,61 @@ trigger: `pr-description.yml` is the one workflow it names as reviewed, and only
 for `pull_request_target`. A new workflow on either base-token trigger needs the
 same review, and the script's tests fail until it has one.
 
+The required job is named `interactive-review` (the workflow is
+`pr-description`); require that job and `check` in the branch ruleset. The
+workflow also handles `merge_group`: using the base branch's checker, it lists
+open PRs targeting that branch, selects heads present in the group but absent
+from its base, and rechecks each description against its own head and its
+group base. Every ordinary commit in the group must belong to one of those heads;
+missing PRs, stale blocks and API errors fail the check. Merge commits are
+verified by the separate hashchain gate. This requires the merge method described
+below; squash and rebase queues are unsupported. A PR rebased onto a newer base
+needs a fresh description block. Queue checks use a read-only token with
+`pull-requests: read` to retrieve current descriptions, never local answers.
+
+Use GitHub's required-review rules as the independent approval boundary: require
+at least one non-author maintainer approval, require code-owner review for the
+policy files and all their checker dependencies, dismiss stale approvals when
+new commits are pushed, and require approval of the most recent reviewable push.
+Require these rules without bypass, including for administrators. A merge group
+runs the workflow file as the queue ref has it, edits from the pull request
+included, and a job its own `if:` skips counts as passing, so loading the checker
+from base is not enough. The pull-request run is the base branch's workflow, so
+it is where such an edit is stopped: the `--guard` step of
+`scripts/check-queue-review.py` fails when the pull request changes
+`pr-description.yml` from where its branch began, or adds another workflow that mentions
+`interactive-review` anywhere, or removes one of the checker scripts the workflow
+runs (it skips itself while the base has none of them, so a deletion would switch
+the check off). The workflow has no job-level
+condition for the same reason. A maintainer approves a deliberate change by
+setting the repository variable `CODETRIAL_POLICY_APPROVED_HEAD` to the exact
+head after reading it (one head at a time); Dependabot gets no exception, since
+its action bumps edit this file. The guard is a text check on one file. It does
+not protect `check.yml`, or a workflow that posts a status by API, so code-owner
+review of `.github/workflows/` and the organization's required-workflow rule
+remain the boundary for those.
+Repository owners must configure these settings; adding workflow code does not
+enable them. Land the workflow and the checkers
+on the protected base before enabling the new required check. Approval means a
+maintainer accepted the reviewed change; it does not certify that the author
+understood it.
+
 What remains open is proof that a person did the interactive review: CI cannot
 see the local evidence, and anything the page records, a script on the same
-machine can record too. Closing that needs a witness the contributor's machine
-cannot forge, such as a WebAuthn assertion from the person's authenticator over
-the diff hash, verified against a key they registered, or a maintainer
-sign-off. Neither exists here, and this section should not be read as
-claiming either.
+machine can record too. A WebAuthn assertion can bind a credential holder's
+confirmation to a server challenge containing the diff identity. It does not
+prove reading or understanding, and the author can confirm an unreviewed diff.
+It must not be presented as proof that the hooks or review ran.
+
+If independently recorded interaction becomes necessary, use a separate trusted
+service to record the exchange and issue a signed receipt containing the
+repository identity, PR number, exact head and base SHAs, canonical diff hash,
+policy version and a unique session ID. Keep its signing key outside contributor
+machines, and have CI verify the signature, issuer, policy, repository and every
+snapshot field against current data. Reject receipts copied between PRs or
+replayed after any snapshot change. Keep answers private. Such a receipt proves
+what the service observed, not comprehension. This service and receipt verifier
+are future work; the current `complete` field remains a contributor declaration.
 
 The chain is a checksum of each parent link and tree, not proof of review: a
 commit made with `--no-verify` can be restamped by `rechain` and still verify.

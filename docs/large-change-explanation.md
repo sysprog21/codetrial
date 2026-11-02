@@ -95,7 +95,7 @@ pre-push check passes it writes the block for the pushed head to
 branches are pushed at once; paste it in place of the placeholder. It names
 `complete` or `not required`, the head and base, a hash of the diff, and the line
 counts, and holds no answers or scores. A pull request carries the block even
-when it is small. The `pr-description` check compares the block with the pull
+when it is small. The `interactive-review` check compares the block with the pull
 request: a large change must say `complete`, and the block must name this pull
 request's head and base and carry the hash of its diff, so a change made after
 the review, or a block from another head, makes it stale. The check runs from the
@@ -137,3 +137,10 @@ Each rejection names its reason in brackets.
   upstream remote (or add it) and push again.
 - `Fetch complete history` or `cannot inspect local history`: the base is not
   fully present locally. Fetch upstream `main` and retry.
+
+The required status check is the `interactive-review` job in the `pr-description`
+workflow. Merge groups recheck each included PR's current description with the
+base checker; they do not carry a shared description or certify local evidence.
+An independent maintainer approval is a separate GitHub ruleset requirement,
+with stale approvals dismissed after a push. A contributor's `complete` declaration
+and any future signature must not be described as proof of understanding.

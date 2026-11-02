@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 
 POLICY = "scripts/hashchain-base"
@@ -97,11 +98,41 @@ def commit(sha):
     return headers, message, tree, parents
 
 
+# The one definition of "Dependabot" for commits: its bot account's address.
+# A commit's author is only a claim anyone can write, so on its own it proves
+# nothing; CI pairs it with the pull request opener (exempt_pr) before it
+# excuses anything that review evidence would otherwise cover.
+DEPENDABOT = "49699333+dependabot[bot]@users.noreply.github.com"
+
+
 def bot(headers):
     author = next((x for x in headers.splitlines() if x.startswith(b"author ")), b"")
-    return bool(
-        re.search(rb"<[0-9]*\+?dependabot\[bot\]@users\.noreply\.github\.com> ", author)
+    return bool(re.search(b"<" + re.escape(DEPENDABOT.encode()) + b"> ", author))
+
+
+def bots(commits):
+    """The commits among `commits` that name Dependabot as their author."""
+    if not commits:
+        return []
+    shown = git(
+        "log",
+        "--no-walk=unsorted",
+        "--stdin",
+        "--format=%H %ae",
+        data="\n".join(commits).encode(),
     )
+    pairs = (line.partition(" ") for line in shown.decode().splitlines())
+    return [sha for sha, _, email in pairs if email == DEPENDABOT]
+
+
+def exempt_pr(login, kind):
+    """Whether GitHub says a pull request was opened by Dependabot.
+
+    The opener comes from the API, which commit metadata cannot forge. The
+    caller still has to show that every commit is Dependabot's, or a person's
+    commit pushed onto its branch rides along.
+    """
+    return login == "dependabot[bot]" and kind == "Bot"
 
 
 def change_id(message):
@@ -536,9 +567,15 @@ def rechain():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "command", choices=["verify", "precommit", "message", "fix", "rechain"]
+        "command",
+        choices=["verify", "precommit", "message", "fix", "rechain", "bots"],
     )
     parser.add_argument("file", nargs="?")
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="bots: succeed only if every commit on standard input is Dependabot's",
+    )
     parser.add_argument("--tip", default="HEAD")
     parser.add_argument(
         "--anchor", help="Trusted verification anchor; overrides submitted policy"
@@ -556,6 +593,12 @@ def main():
             message(Path(args.file))
         elif args.command == "fix":
             fix()
+        elif args.command == "bots":
+            listed = sys.stdin.read().split()
+            found = bots(listed)
+            if args.all:
+                return 0 if listed and len(found) == len(listed) else 1
+            print("\n".join(found))
         else:
             rechain()
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:

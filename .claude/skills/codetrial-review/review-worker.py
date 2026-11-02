@@ -260,7 +260,6 @@ class Reviewer:
         large = [e for e in rest if len(e[1].encode()) > 4 * OPENING]
         # A count line is about 100 bytes; keep room for one per file.
         room = limit - 150 * len(entries)
-        pool = 0
         parts, condensed, opening, counted = {}, [], [], []
 
         def changed_only(text):
