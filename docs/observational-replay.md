@@ -14,14 +14,14 @@ it still requires Speaking followed by a measured interrupted overlap.
 
 ## Existing entry points and missing observations
 
-| Entry point | Observable today | Replay work required |
-| --- | --- | --- |
-| `scripts/barge-replay.cjs` | Page `#agent-state` text, microphone acquisition, decoded sample rate, duration and monotonic injection time; state rechecked after decoding/resume | Preserve this smoke; a separate named replay must support outcomes other than interruption and bound the gate wait. |
-| `scripts/browser-check.cjs` | Room identity, Rust agent streams before tail trimming, capture JSON | Retain full-run latency alongside floor records and correlate each trial to the provider clock/record opening, not emission order. |
-| `scripts/floor-capture.cjs` and its shell follower | Complete floor lines, including session/socket/sequence, retained beyond server cleanup | Reuse this writer. A highest *emitted* sequence is not an opening watermark. |
-| `src/livekit/session.rs` tool response diagnostics | Allowlisted tool name, accepted response and separately the latency record's send outcome | Hint/tool gates need fresh accepted-and-sent evidence and invalidation at the reply/socket boundary. A caption, old hint count or accepted-but-unsent response cannot open a gate. |
-| `tests/unit/livekit/cost.rs` spoken probes | Fixed restatement/question PCM, provider events and tool responses, streamed concurrently in 40 ms chunks | Add named input and a gated driver; these probes do not currently feed the production floor recorder or retain full-run latency. |
-| `src/livekit/session.rs` / `src/livekit/floor.rs` | Provider activity mapped through room eligibility checks to floor observations | A direct socket driver must preserve this eligibility/mapping or label its evidence as harness-mapped, never as room/LiveKit acceptance. |
+| Entry point                                        | Observable today                                                                                                                                    | Replay work required                                                                                                                                                               |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scripts/barge-replay.cjs`                         | Page `#agent-state` text, microphone acquisition, decoded sample rate, duration and monotonic injection time; state rechecked after decoding/resume | Preserve this smoke; a separate named replay must support outcomes other than interruption and bound the gate wait.                                                                |
+| `scripts/browser-check.cjs`                        | Room identity, Rust agent streams before tail trimming, capture JSON                                                                                | Retain full-run latency alongside floor records and correlate each trial to the provider clock/record opening, not emission order.                                                 |
+| `scripts/floor-capture.cjs` and its shell follower | Complete floor lines, including session/socket/sequence, retained beyond server cleanup                                                             | Reuse this writer. A highest _emitted_ sequence is not an opening watermark.                                                                                                       |
+| `src/livekit/session.rs` tool response diagnostics | Allowlisted tool name, accepted response and separately the latency record's send outcome                                                           | Hint/tool gates need fresh accepted-and-sent evidence and invalidation at the reply/socket boundary. A caption, old hint count or accepted-but-unsent response cannot open a gate. |
+| `tests/unit/livekit/cost.rs` spoken probes         | Fixed restatement/question PCM, provider events and tool responses, streamed concurrently in 40 ms chunks                                           | Add named input and a gated driver; these probes do not currently feed the production floor recorder or retain full-run latency.                                                   |
+| `src/livekit/session.rs` / `src/livekit/floor.rs`  | Provider activity mapped through room eligibility checks to floor observations                                                                      | A direct socket driver must preserve this eligibility/mapping or label its evidence as harness-mapped, never as room/LiveKit acceptance.                                           |
 
 ## Fixture version 1
 
@@ -66,10 +66,10 @@ Do not include transcript, credentials or candidate identity in a manifest.
 
 `audio.format` selects the transport and exact format:
 
-| Transport | Format | Sample rate | Limits |
-| --- | --- | --- | --- |
-| Browser | `wav_pcm_s16le` | 48,000 Hz, mono, signed 16-bit little-endian PCM in RIFF/WAVE | Positive duration up to 30 s; at most 2,945,536 file bytes (30 s plus 64 KiB for headers/chunks). |
-| Direct socket | `pcm_s16le` | 16,000 Hz, mono, headerless signed 16-bit little-endian PCM | Positive duration up to 30 s; at most 960,000 bytes; whole 2-byte frames. |
+| Transport     | Format          | Sample rate                                                   | Limits                                                                                            |
+| ------------- | --------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Browser       | `wav_pcm_s16le` | 48,000 Hz, mono, signed 16-bit little-endian PCM in RIFF/WAVE | Positive duration up to 30 s; at most 2,945,536 file bytes (30 s plus 64 KiB for headers/chunks). |
+| Direct socket | `pcm_s16le`     | 16,000 Hz, mono, headerless signed 16-bit little-endian PCM   | Positive duration up to 30 s; at most 960,000 bytes; whole 2-byte frames.                         |
 
 WAV must contain exactly one `fmt ` and one `data` chunk, consistent file/chunk
 lengths, PCM tag 1, 16 bits, block alignment 2 and byte rate 96,000. Ancillary
@@ -120,12 +120,12 @@ window cannot pass merely because its record arrived during finalization.
 
 Allowed expected pairs are:
 
-| Kind | Outcome | Scenario |
-| --- | --- | --- |
-| `overlap` | `continued` | Candidate backchannel during output; generation completes and playout estimate drains without interruption. |
-| `overlap` | `interrupted` | Provider interruption or an eligible local stale-playout drop resolves an observed overlap. |
-| `pause` | `respond` | New generation's tool call or accepted audio resolves the candidate pause. |
-| `pause` | `continue` | A new candidate START resumes after the clip's internal pause before a new interviewer response. |
+| Kind      | Outcome       | Scenario                                                                                                    |
+| --------- | ------------- | ----------------------------------------------------------------------------------------------------------- |
+| `overlap` | `continued`   | Candidate backchannel during output; generation completes and playout estimate drains without interruption. |
+| `overlap` | `interrupted` | Provider interruption or an eligible local stale-playout drop resolves an observed overlap.                 |
+| `pause`   | `respond`     | New generation's tool call or accepted audio resolves the candidate pause.                                  |
+| `pause`   | `continue`    | A new candidate START resumes after the clip's internal pause before a new interviewer response.            |
 
 For `pause/continue`, `audio.pause` is an object with integer `start_ms` and
 `end_ms`: a nonempty interval strictly inside the clip. Integer milliseconds at the
@@ -190,3 +190,41 @@ prints metadata and exits 0, or prints the input error and exits 2. Output
 includes the manifest-byte digest, decoded frame count/duration and byte count,
 not audio bytes. The tests generate deterministic WAV/PCM fixtures in temporary
 directories and remove them afterward; their outcomes prove validation mechanics.
+
+## Offline evidence correlation
+
+`scripts/replay-evidence.cjs` reads finalized, drained floor and latency
+artifacts with the same bounded input reader used by the fixture loader.
+Framing and capture-incomplete checks apply to the whole stream. Unknown
+numeric clocks remain visible as unusable evidence; malformed fields and
+ambiguous duplicate records refuse correlation. This utility is being
+integrated into the named adapters; its existence does not establish a working
+browser/socket replay or a trial verdict.
+
+The caller pins process, room, session and socket from pre-injection evidence.
+It supplies a trial-local span of producer clock samples and bracketing harness
+samples with an explicit clock identity. A Node clock and a page clock cannot
+be substituted for each other. `scripts/replay-clock.cjs` checks sampled offset
+intervals for consistency, then maps with their conservative hull rather than
+using their intersection as extra precision. Each projected event includes the
+producer's whole-millisecond quantization. Producer sampling uncertainty must
+include at least two milliseconds of rounding; harness uncertainty must include
+at least one. The trial window needs an additional full interval-width margin
+inside the harness samples so every potentially touching event stays bracketed. `uncertainty_ms` is the complete
+projected interval width, bounded by the caller's `maxUncertaintyMs`; a gate's
+maximum age is a separate condition for the adapter to enforce.
+
+The selected sample span must include every retained sample between its
+endpoints and bracket the trial; it cannot be chosen based on an expected
+outcome. Drift outside the trial span is not a veto on its own. Unsampled wall
+clock changes are not detectable from these samples. Missing brackets,
+excessive uncertainty or inconsistent sampled clocks cannot support a verdict.
+Record selection uses opening times, never arrival order or the largest emitted
+sequence. A record whose opening interval touches a trial endpoint is ambiguous.
+The utility returns all candidate, preexisting, unusable and invalidating
+evidence; choosing and judging the scenario remains the common judge's job.
+
+A floor record's socket identifies its emission context. Current room recovery
+flushes the floor tracker before advancing the socket; a consumer must still
+check replacement evidence rather than treating a matching socket as proof of
+an opening generation. No correlation result establishes physical audibility.

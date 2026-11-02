@@ -1,7 +1,7 @@
 // Offline input validation shared by the observational replay transports.
 const fs = require("node:fs");
 const path = require("node:path");
-const { TextDecoder } = require("node:util");
+const { readReplayFile, decodeReplayJson } = require("./replay-input.cjs");
 const { parseWav, sha256 } = require("./long-interview-schedule.cjs");
 
 const MANIFEST_BYTES = 16384;
@@ -113,32 +113,6 @@ function validateManifest(manifest) {
   return manifest;
 }
 
-// Read at most the cap plus one byte even if a file grows after open/fstat.
-function readBounded(filename, limit) {
-  const fd = fs.openSync(
-    filename,
-    fs.constants.O_RDONLY |
-      (fs.constants.O_NOFOLLOW ?? 0) |
-      (fs.constants.O_NONBLOCK ?? 0),
-  );
-  try {
-    const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.size > limit)
-      refuse("input is not a bounded regular file");
-    const bytes = Buffer.alloc(limit + 1);
-    let size = 0;
-    while (size <= limit) {
-      const count = fs.readSync(fd, bytes, size, limit + 1 - size, null);
-      if (!count) break;
-      size += count;
-    }
-    if (size > limit) refuse("input exceeds byte limit");
-    return bytes.subarray(0, size);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
 function inspectAudio(audio, bytes) {
   if (sha256(bytes) !== audio.sha256) refuse("audio digest mismatch");
   let frames;
@@ -206,41 +180,15 @@ function inspectAudio(audio, bytes) {
   return { frames, duration_ms: durationMs };
 }
 
-function parseManifest(bytes) {
-  let text;
-  let manifest;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    manifest = JSON.parse(text);
-  } catch {
-    refuse("manifest is not UTF-8 JSON");
-  }
-  const tokens = /"(?:\\[\s\S]|[^"\\])*"|[{}\[\]]/g;
-  const stack = [];
-  for (const match of text.matchAll(tokens)) {
-    const token = match[0];
-    if (token === "{") stack.push(new Set());
-    else if (token === "[") stack.push(null);
-    else if (token === "}" || token === "]") stack.pop();
-    else if (
-      text
-        .slice(match.index + token.length)
-        .trimStart()
-        .startsWith(":")
-    ) {
-      const key = JSON.parse(token);
-      if (stack.at(-1).has(key)) refuse("manifest has a duplicate object key");
-      stack.at(-1).add(key);
-    }
-  }
-  return manifest;
-}
-
 function loadFixture(filename, transport) {
   if (!["browser", "socket"].includes(transport))
     refuse("transport must be browser or socket");
-  const manifestBytes = readBounded(filename, MANIFEST_BYTES);
-  const manifest = parseManifest(manifestBytes);
+  const manifestBytes = readReplayFile(
+    filename,
+    MANIFEST_BYTES,
+    "replay fixture",
+  );
+  const manifest = decodeReplayJson(manifestBytes, "replay fixture");
   validateManifest(manifest);
   const expectedFormat =
     transport === "browser" ? "wav_pcm_s16le" : "pcm_s16le";
@@ -248,9 +196,10 @@ function loadFixture(filename, transport) {
     refuse("audio format does not match transport");
   const directory = path.dirname(fs.realpathSync(filename));
   const audioPath = path.join(directory, manifest.audio.file);
-  const bytes = readBounded(
+  const bytes = readReplayFile(
     audioPath,
     transport === "browser" ? WAV_BYTES : PCM_BYTES,
+    "replay fixture",
   );
   const audio = inspectAudio(manifest.audio, bytes);
   return {
